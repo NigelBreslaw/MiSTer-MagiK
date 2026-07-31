@@ -16,12 +16,11 @@ const FULL_COLUMNS: usize = 30;
 const FULL_ROWS: usize = 17;
 const FALLBACK_COLUMNS: usize = 20;
 const FALLBACK_ROWS: usize = 12;
-const FRAME_COUNT: usize = 26;
 const MAX_NEW_FLIPS_PER_FRAME: usize = 96;
-const DIAGONAL_BAND_Q16: i32 = 5_200;
+const DIAGONAL_BAND_Q16: i32 = 3_200;
 const DIAGONAL_Y_WEIGHT_Q16: i32 = 42_598;
 const DIAGONAL_HERO_BIAS_Q16: i32 = 2_950;
-const EXACT_DECAY_Q16: i32 = 600;
+const EXACT_DECAY_Q16: i32 = 2_600;
 const ENDPOINT_EPSILON_Q16: u16 = 1;
 const PALETTE: [Rgb565Pixel; 16] = [
     Rgb565Pixel(0x0022), // ink
@@ -57,6 +56,9 @@ pub(super) struct CharacterRomRenderer {
     width: usize,
     height: usize,
     destination_cells: Vec<CharacterCell>,
+    sorted_metrics: Vec<i32>,
+    cell_front: Option<i32>,
+    last_canonical: Option<u16>,
 }
 
 impl CharacterRomRenderer {
@@ -72,6 +74,9 @@ impl CharacterRomRenderer {
             width: 0,
             height: 0,
             destination_cells: Vec::new(),
+            sorted_metrics: Vec::new(),
+            cell_front: None,
+            last_canonical: None,
         }
     }
 
@@ -84,6 +89,9 @@ impl CharacterRomRenderer {
     ) {
         self.width = width;
         self.height = height;
+        self.cell_front = None;
+        self.last_canonical = None;
+        self.ensure_sorted_metrics();
         quantize_snapshot(
             destination,
             width,
@@ -99,9 +107,104 @@ impl CharacterRomRenderer {
         self.width == width && self.height == height && self.destination_cells.len() == count
     }
 
+    fn ensure_sorted_metrics(&mut self) {
+        let count = self.columns.saturating_mul(self.rows);
+        if self.sorted_metrics.len() == count {
+            return;
+        }
+        self.sorted_metrics.clear();
+        let columns = self.columns;
+        let rows = self.rows;
+        self.sorted_metrics.extend((0..count).map(|index| {
+            i32::from(diagonal_metric(
+                index % columns,
+                index / columns,
+                columns,
+                rows,
+            ))
+        }));
+        self.sorted_metrics.sort_unstable();
+    }
+
+    fn advance_cell_front(
+        &mut self,
+        target: i32,
+        direction: NavigationTransitionDirection,
+        canonical: u16,
+    ) -> (i32, usize) {
+        self.ensure_sorted_metrics();
+        if self.last_canonical == Some(canonical)
+            && let Some(cell_front) = self.cell_front
+        {
+            return (cell_front, 0);
+        }
+        let previous = self.cell_front.unwrap_or(match direction {
+            NavigationTransitionDirection::Forward => diagonal_front(0),
+            NavigationTransitionDirection::Reverse => diagonal_front(PROGRESS_MAX),
+        });
+        let previous_count = self
+            .sorted_metrics
+            .partition_point(|metric| *metric <= previous);
+        let target_count = self
+            .sorted_metrics
+            .partition_point(|metric| *metric <= target);
+        if previous_count.abs_diff(target_count) <= MAX_NEW_FLIPS_PER_FRAME {
+            self.cell_front = Some(target);
+            self.last_canonical = Some(canonical);
+            return (target, previous_count.abs_diff(target_count));
+        }
+
+        let (mut allowed_count, moving_forward) = if target_count > previous_count {
+            (
+                previous_count
+                    .saturating_add(MAX_NEW_FLIPS_PER_FRAME)
+                    .min(target_count),
+                true,
+            )
+        } else {
+            (
+                previous_count
+                    .saturating_sub(MAX_NEW_FLIPS_PER_FRAME)
+                    .max(target_count),
+                false,
+            )
+        };
+        if moving_forward {
+            while allowed_count > previous_count
+                && allowed_count < self.sorted_metrics.len()
+                && self.sorted_metrics[allowed_count - 1] == self.sorted_metrics[allowed_count]
+            {
+                allowed_count -= 1;
+            }
+        } else {
+            while allowed_count < previous_count
+                && allowed_count > 0
+                && allowed_count < self.sorted_metrics.len()
+                && self.sorted_metrics[allowed_count - 1] == self.sorted_metrics[allowed_count]
+            {
+                allowed_count += 1;
+            }
+        }
+        let limited = if allowed_count == 0 {
+            self.sorted_metrics.first().copied().unwrap_or(target) - 1
+        } else if allowed_count >= self.sorted_metrics.len() {
+            target.max(self.sorted_metrics.last().copied().unwrap_or(target))
+        } else {
+            self.sorted_metrics[allowed_count - 1]
+        };
+        self.cell_front = Some(limited);
+        self.last_canonical = Some(canonical);
+        (limited, previous_count.abs_diff(allowed_count))
+    }
+
     #[cfg(test)]
     fn cell_count(&self) -> usize {
         self.columns * self.rows
+    }
+
+    #[cfg(test)]
+    fn metric_count(&self) -> usize {
+        self.sorted_metrics.len()
     }
 }
 
@@ -153,7 +256,9 @@ pub(super) fn render_character_rom(
     }
 
     let canonical = canonical_progress(request.direction, frame.progress_q16);
-    if canonical == super::COVER_PROGRESS {
+    if canonical == super::CHARACTER_ROM_COVER_PROGRESS {
+        renderer.cell_front = Some(diagonal_front(0));
+        renderer.last_canonical = Some(canonical);
         render_procedural_covered(
             buffers.working.as_mut_slice(),
             width,
@@ -192,11 +297,12 @@ pub(super) fn render_character_rom(
             request.edge,
             renderer.columns,
             renderer.rows,
-            scale_segment(canonical, super::COVER_PROGRESS),
+            scale_segment(canonical, super::CHARACTER_ROM_COVER_PROGRESS),
             &mut stats,
         );
-        let cover_progress = scale_segment(canonical, super::COVER_PROGRESS);
-        if cover_progress < 45_000 && request.geometry.source_detail.fits(width, height) {
+        let cover_progress = scale_segment(canonical, super::CHARACTER_ROM_COVER_PROGRESS);
+        let title_progress = cover_title_progress(cover_progress);
+        if title_progress < PROGRESS_MAX && request.geometry.source_detail.fits(width, height) {
             super::move_label_pixels(
                 working,
                 source,
@@ -204,7 +310,7 @@ pub(super) fn render_character_rom(
                 height,
                 request.geometry.source_detail,
                 request.geometry.destination_detail,
-                smoothstep_q16(cover_progress),
+                title_progress,
                 false,
                 &mut stats,
             );
@@ -222,21 +328,22 @@ pub(super) fn render_character_rom(
         renderer.prepare(raw_source, destination, width, height);
     }
     if canonical == PROGRESS_MAX {
+        renderer.cell_front = Some(diagonal_front(PROGRESS_MAX));
+        renderer.last_canonical = Some(canonical);
         buffers.working.copy_from_slice(destination);
         stats.copied_pixels = destination.len() as u64;
         return Ok(stats);
     }
 
     let front = diagonal_front(reveal);
+    let (cell_front, new_flips) = renderer.advance_cell_front(front, request.direction, canonical);
     let requested_flips = (0..renderer.columns.saturating_mul(renderer.rows))
         .filter(|index| {
             let row = *index / renderer.columns;
             let column = *index % renderer.columns;
-            diagonal_metric(column, row, renderer.columns, renderer.rows) as i32 <= front
+            diagonal_metric(column, row, renderer.columns, renderer.rows) as i32 <= cell_front
         })
         .count();
-    let frame_index = usize::from(canonical) * (FRAME_COUNT - 1) / usize::from(PROGRESS_MAX.max(1));
-    let new_flips = flips_for_frame(frame_index, renderer.columns, renderer.rows);
     debug_assert!(new_flips <= MAX_NEW_FLIPS_PER_FRAME);
     let destination_cells = &renderer.destination_cells;
     let working = buffers.working.as_mut_slice();
@@ -251,6 +358,7 @@ pub(super) fn render_character_rom(
         request.edge,
         destination_cells,
         front,
+        cell_front,
         reveal,
         &mut stats,
     );
@@ -271,6 +379,7 @@ fn render_diagonal_recompile(
     edge: NavigationTransitionEdge,
     destination_cells: &[CharacterCell],
     front: i32,
+    cell_front: i32,
     reveal_q16: u16,
     stats: &mut NavigationTransitionRenderStats,
 ) {
@@ -282,26 +391,14 @@ fn render_diagonal_recompile(
         return;
     }
 
-    working.fill(PALETTE[0]);
-    stats.filled_pixels = stats.filled_pixels.saturating_add(working.len() as u64);
-    let full_stage = NavigationTransitionRect {
-        x: 8.min(width) as u16,
-        y: 8.min(height) as u16,
-        width: width.saturating_sub(16.min(width)).min(u16::MAX as usize) as u16,
-        height: height.saturating_sub(16.min(height)).min(u16::MAX as usize) as u16,
-    };
-    draw_link_field(
-        working,
-        width,
-        height,
-        full_stage,
-        columns,
-        rows,
-        PROGRESS_MAX,
-        reveal_q16 < 8_000,
-        stats,
-    );
-    draw_rom_landmarks(working, width, height, edge, stats);
+    // Keep a coherent, fully composed ROM surface ahead of the compiler wave.
+    // The old implementation replaced both views with a sparse 30x17 field,
+    // which read as a broken low-resolution redraw. The real destination now
+    // resolves behind a deliberately wide diagonal strip while the stylised
+    // bridge survives only ahead of it.
+    render_procedural_covered(working, width, height, geometry, edge, columns, rows, stats);
+
+    let exact_front = front.saturating_sub(EXACT_DECAY_Q16);
     let scaffold_mix = smoothstep_q16(
         ((u32::from(reveal_q16) * u32::from(PROGRESS_MAX) / 8_000).min(u32::from(PROGRESS_MAX)))
             as u16,
@@ -313,16 +410,18 @@ fn render_diagonal_recompile(
         destination_cells,
         columns,
         rows,
-        front,
+        cell_front,
+        exact_front,
         reveal_q16,
         scaffold_mix,
         stats,
     );
-    let exact_front = front.saturating_sub(EXACT_DECAY_Q16);
     for row in 0..rows {
         for column in 0..columns {
             let metric = diagonal_metric(column, row, columns, rows) as i32;
-            if metric.abs_diff(front) > DIAGONAL_BAND_Q16 as u32 {
+            if metric < exact_front.saturating_sub(1_800)
+                || metric > cell_front.saturating_add(DIAGONAL_BAND_Q16)
+            {
                 continue;
             }
             let index = row * columns + column;
@@ -330,7 +429,7 @@ fn render_diagonal_recompile(
             let x1 = (column + 1) * width / columns;
             let y0 = row * height / rows;
             let y1 = (row + 1) * height / rows;
-            let local = ((front
+            let local = ((cell_front
                 .saturating_sub(metric)
                 .saturating_add(DIAGONAL_BAND_Q16) as i64
                 * PROGRESS_MAX as i64)
@@ -350,25 +449,11 @@ fn render_diagonal_recompile(
         }
     }
 
-    draw_rom_frame(working, width, height, reveal_q16, front, stats);
-    fill_rect_565(
-        working,
-        width,
-        height,
-        geometry.destination_title,
-        PALETTE[0],
-        stats,
-    );
-    draw_rom_label(
-        working,
-        width,
-        height,
-        geometry.destination_title,
-        geometry,
-        PALETTE[11],
-        stats,
-    );
+    draw_diagonal_leaders(working, width, height, exact_front, reveal_q16, stats);
+    draw_diagonal_verification_beam(working, width, height, exact_front, reveal_q16, stats);
 
+    // Verification is the final write. Nothing from the animated corridor may
+    // contaminate pixels that telemetry reports as exact destination output.
     let mut fully_verified_rows = 0usize;
     for y in 0..height {
         let y_q16 = (((y.saturating_mul(2).saturating_add(1)) as u64 * PROGRESS_MAX as u64)
@@ -392,8 +477,6 @@ fn render_diagonal_recompile(
         }
     }
     stats.verified_rows = fully_verified_rows as u64;
-
-    draw_diagonal_verification_beam(working, width, height, exact_front, reveal_q16, stats);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -405,6 +488,7 @@ fn draw_destination_scaffold(
     columns: usize,
     rows: usize,
     front: i32,
+    exact_front: i32,
     reveal_q16: u16,
     mix_q16: u16,
     stats: &mut NavigationTransitionRenderStats,
@@ -419,20 +503,24 @@ fn draw_destination_scaffold(
             let hash = mix32(index as u32 ^ 0x5343_4146);
             let metric = diagonal_metric(column, row, columns, rows) as i32;
             let distance = metric.abs_diff(front);
+            if metric < exact_front {
+                continue;
+            }
             let foreground_weight = usize::from(cell.foreground);
             let structural =
                 cell.glyph != 0 || foreground_weight >= 4 || cell.background != 0 || hash & 15 == 0;
             if !structural {
                 continue;
             }
-            let density_limit = if cell.glyph != 0 {
+            let in_corridor = distance <= DIAGONAL_BAND_Q16 as u32 * 2;
+            let density_limit = if in_corridor && cell.glyph != 0 {
                 u32::from(u16::MAX)
+            } else if cell.glyph != 0 && (hash & 3 == 0) {
+                48_000
             } else if foreground_weight >= 6 || cell.background != 0 {
-                60_000
-            } else if distance < 8_000 {
-                24_000
+                if in_corridor { 52_000 } else { 16_000 }
             } else {
-                8_000
+                if in_corridor { 32_000 } else { 5_000 }
             };
             let density_limit =
                 density_limit.saturating_mul(u32::from(mix_q16)) / u32::from(PROGRESS_MAX);
@@ -448,7 +536,9 @@ fn draw_destination_scaffold(
             } else {
                 cell.glyph
             };
-            let color = if distance < 3_200 && hash & 7 == 0 {
+            let color = if distance < 1_100 && hash & 3 == 0 {
+                PALETTE[15]
+            } else if in_corridor && hash & 3 != 0 {
                 PALETTE[10]
             } else if foreground_weight >= 9 {
                 PALETTE[6]
@@ -457,7 +547,11 @@ fn draw_destination_scaffold(
             } else {
                 PALETTE[4]
             };
-            let travel = packet_travel(index, reveal_q16);
+            let travel = if in_corridor {
+                packet_travel(index, reveal_q16)
+            } else {
+                0
+            };
             draw_glyph_packet(
                 working,
                 width,
@@ -577,11 +671,11 @@ fn canonical_progress(direction: NavigationTransitionDirection, progress_q16: u1
 }
 
 fn diagonal_reveal_progress(canonical: u16) -> u16 {
-    if canonical <= super::COVER_PROGRESS {
+    if canonical <= super::CHARACTER_ROM_COVER_PROGRESS {
         0
     } else {
-        (((canonical - super::COVER_PROGRESS) as u32 * PROGRESS_MAX as u32)
-            / (PROGRESS_MAX - super::COVER_PROGRESS).max(1) as u32)
+        (((canonical - super::CHARACTER_ROM_COVER_PROGRESS) as u32 * PROGRESS_MAX as u32)
+            / (PROGRESS_MAX - super::CHARACTER_ROM_COVER_PROGRESS).max(1) as u32)
             .min(PROGRESS_MAX as u32) as u16
     }
 }
@@ -591,14 +685,48 @@ fn scale_segment(progress: u16, end: u16) -> u16 {
         as u16
 }
 
+fn cover_title_progress(progress_q16: u16) -> u16 {
+    if progress_q16 <= 38_000 {
+        0
+    } else {
+        smoothstep_q16(scale_segment(progress_q16 - 38_000, PROGRESS_MAX - 38_000))
+    }
+}
+
 fn diagonal_front(reveal_q16: u16) -> i32 {
-    let span = PROGRESS_MAX as i64 + i64::from(DIAGONAL_BAND_Q16) * 2;
-    let base = i64::from(reveal_q16) * span / PROGRESS_MAX as i64 - i64::from(DIAGONAL_BAND_Q16);
-    let doubled = i32::from(reveal_q16).saturating_mul(2);
-    let peak = i32::from(PROGRESS_MAX)
-        .saturating_sub(doubled.saturating_sub(i32::from(PROGRESS_MAX)).abs());
-    let bias = peak.saturating_mul(DIAGONAL_HERO_BIAS_Q16) / i32::from(PROGRESS_MAX);
-    base as i32 + bias
+    const HERO_FRONT: i32 = PROGRESS_MAX as i32 / 2 + DIAGONAL_HERO_BIAS_Q16;
+    let reveal = i32::from(reveal_q16);
+    if reveal <= 18_000 {
+        lerp_i32(-DIAGONAL_BAND_Q16, 34_000, reveal, 18_000)
+    } else if reveal <= PROGRESS_MAX as i32 / 2 {
+        lerp_i32(
+            34_000,
+            HERO_FRONT,
+            reveal - 18_000,
+            PROGRESS_MAX as i32 / 2 - 18_000,
+        )
+    } else if reveal <= 47_000 {
+        lerp_i32(
+            HERO_FRONT,
+            38_000,
+            reveal - PROGRESS_MAX as i32 / 2,
+            47_000 - PROGRESS_MAX as i32 / 2,
+        )
+    } else {
+        lerp_i32(
+            38_000,
+            PROGRESS_MAX as i32 + DIAGONAL_BAND_Q16,
+            reveal - 47_000,
+            PROGRESS_MAX as i32 - 47_000,
+        )
+    }
+}
+
+fn lerp_i32(start: i32, end: i32, progress: i32, duration: i32) -> i32 {
+    start.saturating_add(
+        ((i64::from(end.saturating_sub(start)) * i64::from(progress.max(0)))
+            / i64::from(duration.max(1))) as i32,
+    )
 }
 
 fn diagonal_metric(column: usize, row: usize, columns: usize, rows: usize) -> u16 {
@@ -650,10 +778,10 @@ fn render_procedural_covered(
         columns,
         rows,
         PROGRESS_MAX,
-        true,
+        false,
         stats,
     );
-    draw_rom_landmarks(working, width, height, edge, stats);
+    draw_rom_landmarks(working, width, height, geometry, edge, stats);
     draw_rom_frame(working, width, height, 0, diagonal_front(0), stats);
     fill_rect_565(
         working,
@@ -753,22 +881,24 @@ fn render_rom_cover(
         progress_q16,
         stats,
     );
-    draw_link_field(
-        working,
-        width,
-        height,
-        primary,
-        columns,
-        rows,
-        progress_q16,
-        true,
-        stats,
-    );
+    if progress_q16 > 38_000 {
+        draw_link_field(
+            working,
+            width,
+            height,
+            primary,
+            columns,
+            rows,
+            scale_segment(progress_q16 - 38_000, PROGRESS_MAX - 38_000),
+            true,
+            stats,
+        );
+    }
     if progress_q16 >= 45_000 {
-        draw_rom_landmarks(working, width, height, edge, stats);
+        draw_rom_landmarks(working, width, height, geometry, edge, stats);
     }
     draw_pixel_frame(working, width, height, primary, PALETTE[5], false, stats);
-    let title_progress = smoothstep_q16(progress_q16);
+    let title_progress = cover_title_progress(progress_q16);
     let title_carrier = lerp_rect(
         geometry.source_label,
         geometry.destination_title,
@@ -817,11 +947,14 @@ fn blit_scaled_card_carrier(
     {
         return;
     }
-    if progress_q16 >= 50_000 {
-        fill_rect_565(working, width, height, destination_rect, PALETTE[0], stats);
-        return;
-    }
-    let ink_mix = smoothstep_q16(progress_q16);
+    let ink_progress = if progress_q16 <= 12_000 {
+        0
+    } else {
+        ((u32::from(progress_q16 - 12_000) * u32::from(PROGRESS_MAX)
+            / u32::from(PROGRESS_MAX - 12_000))
+        .min(u32::from(PROGRESS_MAX))) as u16
+    };
+    let ink_mix = smoothstep_q16(ink_progress);
     let source_x_step =
         ((u64::from(source_rect.width) << 16) / u64::from(destination_rect.width.max(1))) as usize;
     let source_y_step = ((u64::from(source_rect.height) << 16)
@@ -881,7 +1014,7 @@ fn draw_link_field(
     };
     let wave = progress_q16 / 2;
     let base_density =
-        3_000u32.saturating_add(u32::from(progress_q16) * 10_000 / u32::from(PROGRESS_MAX));
+        14_000u32.saturating_add(u32::from(progress_q16) * 20_000 / u32::from(PROGRESS_MAX));
     for row in 0..rows {
         let y0 = rect.y as usize + row * rect.height as usize / rows;
         let y1 = rect.y as usize + (row + 1) * rect.height as usize / rows;
@@ -890,7 +1023,7 @@ fn draw_link_field(
             let hash = mix32(index as u32 ^ 0x4c49_4e4b);
             let metric = diagonal_metric(column, row, columns, rows);
             let wave_bonus = if metric.abs_diff(wave) < 18_000 {
-                17_000
+                42_000
             } else {
                 0
             };
@@ -904,7 +1037,7 @@ fn draw_link_field(
             if cell_width < 8 || cell_height < 8 {
                 continue;
             }
-            let scale = (cell_width / 10).min(cell_height / 10).clamp(1, 3);
+            let scale = (cell_width / 16).min(cell_height / 16).clamp(1, 2);
             let packet_width = 8 * scale;
             let packet_height = 8 * scale;
             let packet_x = x0 + cell_width.saturating_sub(packet_width) / 2;
@@ -939,6 +1072,7 @@ fn draw_rom_landmarks(
     working: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
+    geometry: NavigationTransitionGeometry,
     edge: NavigationTransitionEdge,
     stats: &mut NavigationTransitionRenderStats,
 ) {
@@ -990,54 +1124,40 @@ fn draw_rom_landmarks(
             }
         }
         NavigationTransitionEdge::HomeToArcade | NavigationTransitionEdge::ConsolesToSystem => {
-            let list = rect(
-                width / 50,
-                height * 19 / 100,
-                width * 49 / 100,
-                height * 72 / 100,
-            );
-            let preview = rect(
-                width * 57 / 100,
-                height * 19 / 100,
-                width * 39 / 100,
-                height * 61 / 100,
-            );
+            let list = geometry.destination_list;
+            let selected = geometry.destination_selected_row;
+            let preview = geometry.destination_preview;
             draw_pixel_frame(working, width, height, list, PALETTE[6], false, stats);
             draw_pixel_frame(working, width, height, preview, PALETTE[6], false, stats);
-            let row_height = list.height as usize / 7;
-            for row in 0..6 {
+            fill_rect_565(working, width, height, selected, PALETTE[3], stats);
+            draw_pixel_frame(working, width, height, selected, PALETTE[7], false, stats);
+            let row_height = usize::from(selected.height.max(1));
+            let row_count = usize::from(list.height).div_ceil(row_height).min(10);
+            for row in 0..row_count {
                 let y = list.y as usize + row * row_height;
-                let color = if row == 0 { PALETTE[7] } else { PALETTE[4] };
+                let in_selected =
+                    y >= usize::from(selected.y) && y < usize::from(selected.bottom());
+                let color = if in_selected { PALETTE[7] } else { PALETTE[4] };
                 for x in (list.x as usize..list.right() as usize).step_by(8) {
                     fill_rect_565(
                         working,
                         width,
                         height,
-                        rect(x, y, 4, if row == 0 { 3 } else { 2 }),
+                        rect(x, y, 4, if in_selected { 3 } else { 2 }),
                         color,
                         stats,
                     );
                 }
             }
-            for row in 0..5 {
-                let y = preview.y as usize
-                    + preview.height as usize / 6
-                    + row * preview.height as usize / 7;
-                let inset = preview.width as usize / 8 + (row & 1) * 6;
-                fill_rect_565(
-                    working,
-                    width,
-                    height,
-                    rect(
-                        preview.x as usize + inset,
-                        y,
-                        preview.width as usize - inset * 2,
-                        3,
-                    ),
-                    if row == 2 { PALETTE[6] } else { PALETTE[4] },
-                    stats,
-                );
-            }
+            draw_pixel_frame(
+                working,
+                width,
+                height,
+                geometry.destination_footer,
+                PALETTE[4],
+                false,
+                stats,
+            );
         }
     }
 }
@@ -1252,6 +1372,77 @@ fn draw_rom_corner_blocks(
     }
 }
 
+fn draw_diagonal_leaders(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    beam_front: i32,
+    reveal_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    const START_Q16: u16 = 14_000;
+    const END_Q16: u16 = 50_000;
+    const LEADER_COUNT: usize = 18;
+    const HERO_GLYPHS: [u8; LEADER_COUNT] = [
+        12, 14, 16, 13, 9, 8, 29, 28, 15, 6, 12, 14, 16, 13, 9, 8, 29, 28,
+    ];
+    const NORMAL_OFFSETS: [isize; LEADER_COUNT] = [
+        0, -8, 9, -15, 15, -3, 5, -11, 12, -6, 7, -13, 3, 10, -9, 14, -4, 5,
+    ];
+    if width == 0 || height == 0 || reveal_q16 < START_Q16 || reveal_q16 > END_Q16 {
+        return;
+    }
+    let travel = (u32::from(reveal_q16 - START_Q16) * u32::from(PROGRESS_MAX)
+        / u32::from(END_Q16 - START_Q16)) as i32;
+    let top_x_q16 = diagonal_x_q16(beam_front, 0);
+    let bottom_x_q16 = diagonal_x_q16(beam_front, i32::from(PROGRESS_MAX));
+    for leader in 0..LEADER_COUNT {
+        let trail = if leader < 7 {
+            leader as i32 * 520
+        } else {
+            3_200 + (leader - 7) as i32 * 720
+        };
+        let local = travel.saturating_sub(trail).clamp(0, PROGRESS_MAX as i32);
+        let normal = NORMAL_OFFSETS[leader];
+        let x_q16 = i64::from(bottom_x_q16)
+            + i64::from(local) * i64::from(top_x_q16.saturating_sub(bottom_x_q16))
+                / i64::from(PROGRESS_MAX);
+        let x = (x_q16 * width as i64 / i64::from(PROGRESS_MAX)) as isize + 22 + normal;
+        let y = height as isize
+            - (i64::from(local) * height as i64 / i64::from(PROGRESS_MAX)) as isize
+            + normal / 2;
+        if x < -32 || y < -32 || x >= width as isize + 32 || y >= height as isize + 32 {
+            continue;
+        }
+        let size = if leader < 7 { 56usize } else { 36usize };
+        let half = size as isize / 2;
+        let x0 = (x - half).clamp(0, width.saturating_sub(1) as isize) as usize;
+        let y0 = (y - half).clamp(0, height.saturating_sub(1) as isize) as usize;
+        let x1 = (x + half).clamp(0, width as isize) as usize;
+        let y1 = (y + half).clamp(0, height as isize) as usize;
+        if x1.saturating_sub(x0) < 8 || y1.saturating_sub(y0) < 8 {
+            continue;
+        }
+        draw_glyph_packet(
+            working,
+            width,
+            height,
+            (x0, y0, x1, y1),
+            HERO_GLYPHS[leader],
+            if leader < 3 {
+                PALETTE[15]
+            } else if leader < 7 {
+                PALETTE[12]
+            } else {
+                PALETTE[11]
+            },
+            PALETTE[8],
+            0,
+            stats,
+        );
+    }
+}
+
 fn draw_diagonal_verification_beam(
     working: &mut [Rgb565Pixel],
     width: usize,
@@ -1371,7 +1562,7 @@ fn draw_glyph_packet(
     if cell_width < 8 || cell_height < 8 {
         return;
     }
-    let scale = (cell_width / 10).min(cell_height / 10).clamp(1, 3);
+    let scale = (cell_width / 16).min(cell_height / 16).clamp(1, 3);
     let packet_width = 8 * scale;
     let packet_height = 8 * scale;
     let center_x = x0 + cell_width.saturating_sub(packet_width) / 2;
@@ -1530,22 +1721,6 @@ fn nearest_character_glyph(pattern: [u8; 8]) -> u8 {
         })
         .map(|(index, _)| index as u8)
         .unwrap_or(0)
-}
-
-fn flips_for_frame(frame_index: usize, columns: usize, rows: usize) -> usize {
-    let count_at = |index: usize| {
-        let canonical =
-            (index.min(FRAME_COUNT - 1) * usize::from(PROGRESS_MAX) / (FRAME_COUNT - 1)) as u16;
-        let front = diagonal_front(diagonal_reveal_progress(canonical));
-        (0..columns.saturating_mul(rows))
-            .filter(|cell| {
-                let row = *cell / columns.max(1);
-                let column = *cell % columns.max(1);
-                i32::from(diagonal_metric(column, row, columns, rows)) <= front
-            })
-            .count()
-    };
-    count_at(frame_index).abs_diff(count_at(frame_index.saturating_sub(1)))
 }
 
 fn nearest_palette(pixel: Rgb565Pixel) -> u8 {
@@ -1744,12 +1919,44 @@ mod tests {
     }
 
     #[test]
-    fn frame_flip_limit_is_bounded_in_both_grid_modes() {
-        for (columns, rows) in [(FULL_COLUMNS, FULL_ROWS), (FALLBACK_COLUMNS, FALLBACK_ROWS)] {
-            for frame in 0..FRAME_COUNT {
-                assert!(
-                    flips_for_frame(frame, columns, rows) <= MAX_NEW_FLIPS_PER_FRAME,
-                    "{columns}x{rows} frame {frame}"
+    fn rendered_flip_limit_survives_skipped_frames_in_both_directions() {
+        for fallback in [false, true] {
+            let mut renderer = CharacterRomRenderer::new(fallback);
+            renderer.cell_front = Some(diagonal_front(0));
+            for step in 0..8u16 {
+                let canonical = 40_000 + step;
+                let (front, flips) = renderer.advance_cell_front(
+                    diagonal_front(PROGRESS_MAX),
+                    NavigationTransitionDirection::Forward,
+                    canonical,
+                );
+                assert!(flips <= MAX_NEW_FLIPS_PER_FRAME);
+                assert_eq!(
+                    renderer.advance_cell_front(
+                        diagonal_front(PROGRESS_MAX),
+                        NavigationTransitionDirection::Forward,
+                        canonical,
+                    ),
+                    (front, 0)
+                );
+            }
+            renderer.cell_front = Some(diagonal_front(PROGRESS_MAX));
+            renderer.last_canonical = None;
+            for step in 0..8u16 {
+                let canonical = 30_000 - step;
+                let (front, flips) = renderer.advance_cell_front(
+                    diagonal_front(0),
+                    NavigationTransitionDirection::Reverse,
+                    canonical,
+                );
+                assert!(flips <= MAX_NEW_FLIPS_PER_FRAME);
+                assert_eq!(
+                    renderer.advance_cell_front(
+                        diagonal_front(0),
+                        NavigationTransitionDirection::Reverse,
+                        canonical,
+                    ),
+                    (front, 0)
                 );
             }
         }

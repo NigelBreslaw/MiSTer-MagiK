@@ -14,6 +14,7 @@ mod sprite_foundry;
 const PROGRESS_MAX: u16 = u16::MAX;
 const COVER_PROGRESS: u16 = 36_044;
 const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
+const CHARACTER_ROM_COVER_PROGRESS: u16 = 21_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
@@ -69,6 +70,7 @@ impl NavigationTransitionStyle {
     const fn cover_progress_q16(self) -> u16 {
         match self {
             Self::SuperScalerShell => SUPER_SCALER_COVER_PROGRESS,
+            Self::CharacterRomRecompile => CHARACTER_ROM_COVER_PROGRESS,
             _ => COVER_PROGRESS,
         }
     }
@@ -4269,6 +4271,10 @@ mod tests {
             NavigationTransitionStyle::SpriteFoundry.cover_progress_q16(),
             COVER_PROGRESS
         );
+        assert_eq!(
+            NavigationTransitionStyle::CharacterRomRecompile.cover_progress_q16(),
+            CHARACTER_ROM_COVER_PROGRESS
+        );
     }
 
     #[test]
@@ -6125,7 +6131,7 @@ mod tests {
         reverse.tick(reverse_cover_us);
         assert_eq!(
             reverse.frame().progress_q16,
-            PROGRESS_MAX.saturating_sub(COVER_PROGRESS)
+            PROGRESS_MAX.saturating_sub(CHARACTER_ROM_COVER_PROGRESS)
         );
         let covered_before_hydration = reverse.render().unwrap().to_vec();
         reverse.capture_destination(&source).unwrap();
@@ -6145,10 +6151,10 @@ mod tests {
             .unwrap();
         bridge.capture_destination(&destination).unwrap();
         bridge.tick(forward_cover_us);
-        assert_eq!(bridge.frame().progress_q16, COVER_PROGRESS);
+        assert_eq!(bridge.frame().progress_q16, CHARACTER_ROM_COVER_PROGRESS);
         let covered = bridge.render().unwrap().to_vec();
         bridge.tick(forward_cover_us.saturating_add(10));
-        assert!(bridge.frame().progress_q16 > COVER_PROGRESS);
+        assert!(bridge.frame().progress_q16 > CHARACTER_ROM_COVER_PROGRESS);
         let reveal_start = bridge.render().unwrap();
         let changed = covered
             .iter()
@@ -6166,5 +6172,6 @@ mod tests {
         assert!(poc.buffers.destination.is_empty());
         assert!(poc.buffers.working.is_empty());
         assert!(poc.hud_scratch.is_empty());
+        assert_eq!(poc.character_rom.metric_count(), 0);
     }
 }
