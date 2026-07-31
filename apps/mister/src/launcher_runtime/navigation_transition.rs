@@ -1202,6 +1202,10 @@ fn render_super_scaler_shell(
             return Ok(stats);
         }
     }
+    if frame.reveal_progress_q16 == 0 && frame.cover_progress_q16 == PROGRESS_MAX {
+        fill_rect_565(working, width, height, full, shell, &mut stats);
+        return Ok(stats);
+    }
     let needs_source_base = match request.direction {
         NavigationTransitionDirection::Forward => frame.reveal_progress_q16 == 0,
         NavigationTransitionDirection::Reverse => {
@@ -3317,7 +3321,7 @@ mod tests {
         assert_eq!(at_source.copied_pixels, source.len() as u64);
         assert_eq!(buffers.working(), source);
 
-        render_super_scaler_shell(
+        let covered_stats = render_super_scaler_shell(
             &mut buffers,
             request,
             NavigationTransitionFrame {
@@ -3329,6 +3333,8 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(covered_stats.copied_pixels, 0);
+        assert_eq!(covered_stats.filled_pixels, source.len() as u64);
         let final_cover = buffers.working().to_vec();
         render_super_scaler_shell(
             &mut buffers,
