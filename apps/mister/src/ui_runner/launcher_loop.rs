@@ -2513,11 +2513,7 @@ pub(super) fn run_launcher_loop(
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input =
             if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
-                Some(if navigation_snapshot_locked_at_loop_start {
-                    pad.poll_connected_with_debug_labels(setup_active)
-                } else {
-                    pad.poll_with_debug_labels(setup_active)
-                })
+                Some(pad.poll_with_debug_labels(setup_active))
             } else {
                 None
             };
@@ -4375,7 +4371,8 @@ pub(super) fn run_launcher_loop(
         let arcade_visual_changed_this_loop = nav.arcade.visual_index
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
-        let stream_motion_before_render = slint_animation_active
+        let stream_motion_before_render = navigation_transition.is_active()
+            || slint_animation_active
             || home_pan_present_active
             || home_horizontal_input_held
             || nav.licenses_scroll_active()
@@ -8016,6 +8013,14 @@ mod tests {
         let source = include_str!("launcher_loop.rs");
         let call = ["pacer", ".rearm_after_display_mode_change()"].concat();
         assert_eq!(source.matches(&call).count(), 3);
+    }
+
+    #[test]
+    fn navigation_motion_suppresses_full_stream_refinement() {
+        let source = include_str!("launcher_loop.rs");
+        assert!(
+            source.contains("let stream_motion_before_render = navigation_transition.is_active()")
+        );
     }
 
     #[test]

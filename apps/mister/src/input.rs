@@ -242,22 +242,12 @@ impl PadPool {
 
     /// Drain all pads; returns true if merged state changed.
     pub fn poll_with_debug_labels(&mut self, debug_labels: bool) -> bool {
-        self.poll_with_rescan(debug_labels, true)
-    }
-
-    /// Drain already-open input nodes without running hotplug discovery.
-    pub fn poll_connected_with_debug_labels(&mut self, debug_labels: bool) -> bool {
-        self.poll_with_rescan(debug_labels, false)
-    }
-
-    fn poll_with_rescan(&mut self, debug_labels: bool, allow_rescan: bool) -> bool {
         let mut changed = false;
         self.user_activity = false;
 
-        let now = Instant::now();
-        if input_rescan_due(self.last_rescan, now, allow_rescan) {
+        if self.last_rescan.elapsed() >= PAD_RESCAN_INTERVAL {
             changed |= self.rescan();
-            self.last_rescan = now;
+            self.last_rescan = Instant::now();
         }
 
         let mut i = 0;
@@ -457,10 +447,6 @@ impl PadPool {
         }];
         self.rebuild_merged_state();
     }
-}
-
-fn input_rescan_due(last_rescan: Instant, now: Instant, allow_rescan: bool) -> bool {
-    allow_rescan && now.saturating_duration_since(last_rescan) >= PAD_RESCAN_INTERVAL
 }
 
 fn open_mouse_activity() -> Option<File> {
@@ -1365,15 +1351,6 @@ mod tests {
         buf[offset + 2..offset + 4].copy_from_slice(&code.to_le_bytes());
         buf[offset + 4..offset + 8].copy_from_slice(&value.to_le_bytes());
         buf
-    }
-
-    #[test]
-    fn connected_only_poll_defers_hotplug_rescan() {
-        let now = Instant::now();
-        let overdue = now.checked_sub(PAD_RESCAN_INTERVAL).unwrap();
-        assert!(input_rescan_due(overdue, now, true));
-        assert!(!input_rescan_due(overdue, now, false));
-        assert!(!input_rescan_due(now, now, true));
     }
 
     struct PendingEventsThenWouldBlock {
