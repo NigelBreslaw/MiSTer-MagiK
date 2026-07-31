@@ -2459,7 +2459,8 @@ pub(super) fn run_launcher_loop(
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
         let arcade_filter_visual_index_at_loop_start = nav.arcade_filter.visual_index;
-        let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
+        let prepare_trace_enabled =
+            frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
         let mut prepare_trace = LauncherPrepareTrace::default();
         prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
@@ -2823,7 +2824,7 @@ pub(super) fn run_launcher_loop(
         }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
-        if preview_route.allows_preview_work() {
+        if preview_route.allows_preview_work() && !navigation_snapshot_locked_at_loop_start {
             scheduler.poll_media(&mut media_events);
             for message in media_events.drain() {
                 media_message_seen = true;
@@ -4055,7 +4056,7 @@ pub(super) fn run_launcher_loop(
         sync_startup_visibility(&app, &lifecycle);
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
-        {
+        if !navigation_snapshot_locked_at_loop_start {
             let media_gate = media_session.current_gate(
                 frame_accounting.first_visible_copy_done(),
                 scheduler.has_pending_launch() || launching,
@@ -4185,6 +4186,7 @@ pub(super) fn run_launcher_loop(
         }
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt
+            && !navigation_snapshot_locked_at_loop_start
             && !preview_scheduled_this_loop
             && !launching
             && preview_route.allows_preview_work()
@@ -4212,6 +4214,7 @@ pub(super) fn run_launcher_loop(
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
         let preview_apply_dirty = if !launching
+            && !navigation_snapshot_locked_at_loop_start
             && !arcade_search_active
             && !memory_guard.active()
             && preview_route.allows_preview_work()
