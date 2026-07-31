@@ -29,7 +29,7 @@ fn select_framebuffer_capture<T>(
 #[cfg(any(target_os = "linux", test))]
 use serde_json::{Value, json};
 
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 mod launcher_automation;
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
