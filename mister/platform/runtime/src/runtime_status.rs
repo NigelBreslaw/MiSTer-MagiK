@@ -49,6 +49,10 @@ launcher_status_types! {
         idle: bool,
         idle_loops: u64,
         status_sequence: u64,
+        state_revision: u64,
+        presented_state_revision: u64,
+        action_sequence: u64,
+        presented_action_sequence: u64,
         fps_estimate: f64,
         rolling_fps: f64,
         rolling_prepare_us: u64,
@@ -109,6 +113,14 @@ launcher_status_types! {
         screen,
         effective_view,
         return_screen,
+        menu_id,
+        selected_item_id,
+        active_collection_id,
+        selected_system_id,
+        selected_game_id,
+        selected_game_title,
+        preview_asset_key,
+        catalog_generation,
         output_route,
         vsync_source,
         present_backend,
@@ -638,6 +650,21 @@ fn write_launcher_status_json(
     field!("idle", status.idle);
     field!("idle_loops", status.idle_loops);
     field!("status_sequence", status.status_sequence);
+    field!("state_revision", status.state_revision);
+    field!("presented_state_revision", status.presented_state_revision);
+    field!("action_sequence", status.action_sequence);
+    field!(
+        "presented_action_sequence",
+        status.presented_action_sequence
+    );
+    field!("menu_id", status.menu_id);
+    field!("selected_item_id", status.selected_item_id);
+    field!("active_collection_id", status.active_collection_id);
+    field!("selected_system_id", status.selected_system_id);
+    field!("selected_game_id", status.selected_game_id);
+    field!("selected_game_title", status.selected_game_title);
+    field!("preview_asset_key", status.preview_asset_key);
+    field!("catalog_generation", status.catalog_generation);
     field!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     field!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     field!("rolling_prepare_us", status.rolling_prepare_us);
@@ -881,11 +908,26 @@ fn launcher_status_value(
     insert!("screen", status.screen);
     insert!("effective_view", status.effective_view);
     insert!("return_screen", status.return_screen);
+    insert!("menu_id", status.menu_id);
+    insert!("selected_item_id", status.selected_item_id);
+    insert!("active_collection_id", status.active_collection_id);
+    insert!("selected_system_id", status.selected_system_id);
+    insert!("selected_game_id", status.selected_game_id);
+    insert!("selected_game_title", status.selected_game_title);
+    insert!("preview_asset_key", status.preview_asset_key);
+    insert!("catalog_generation", status.catalog_generation);
     insert!("output_route", status.output_route);
     insert!("frames", status.frames);
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
     insert!("status_sequence", status.status_sequence);
+    insert!("state_revision", status.state_revision);
+    insert!("presented_state_revision", status.presented_state_revision);
+    insert!("action_sequence", status.action_sequence);
+    insert!(
+        "presented_action_sequence",
+        status.presented_action_sequence
+    );
     insert!("fps_estimate", (status.fps_estimate * 10.0).round() / 10.0);
     insert!("rolling_fps", (status.rolling_fps * 10.0).round() / 10.0);
     insert!("rolling_prepare_us", status.rolling_prepare_us);
@@ -1520,11 +1562,23 @@ mod tests {
                 screen: "home",
                 effective_view: "home",
                 return_screen: "home",
+                menu_id: "menu:root",
+                selected_item_id: "collection:arcade",
+                active_collection_id: "collection:arcade",
+                selected_system_id: "arcade",
+                selected_game_id: "/media/fat/_Arcade/1942.mra",
+                selected_game_title: "1942",
+                preview_asset_key: "1942",
+                catalog_generation: "generation-4",
                 output_route: "crt-576p50",
                 frames: 42,
                 idle: true,
                 idle_loops: 12,
                 status_sequence: 9,
+                state_revision: 12,
+                presented_state_revision: 12,
+                action_sequence: 4,
+                presented_action_sequence: 4,
                 fps_estimate: 59.94,
                 rolling_fps: 60.0,
                 rolling_prepare_us: 1,
@@ -1981,11 +2035,23 @@ mod tests {
             screen,
             effective_view: screen,
             return_screen: screen,
+            menu_id: "menu:root",
+            selected_item_id: "collection:arcade",
+            active_collection_id: "collection:arcade",
+            selected_system_id: "arcade",
+            selected_game_id: "/media/fat/_Arcade/1942.mra",
+            selected_game_title: "1942",
+            preview_asset_key: "1942",
+            catalog_generation: "generation-4",
             output_route: "crt-288p50",
             frames: 7,
             idle: false,
             idle_loops: 0,
             status_sequence,
+            state_revision: status_sequence,
+            presented_state_revision: status_sequence,
+            action_sequence: status_sequence,
+            presented_action_sequence: status_sequence,
             fps_estimate: 60.04,
             rolling_fps: 59.9,
             rolling_prepare_us: 11,

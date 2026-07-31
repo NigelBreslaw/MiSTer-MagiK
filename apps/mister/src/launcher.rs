@@ -1311,7 +1311,6 @@ impl LauncherNav {
         ordered
     }
 
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     pub fn current_menu_selected_item_id(&self) -> &str {
         self.current_menu_items()
             .get(self.selected)

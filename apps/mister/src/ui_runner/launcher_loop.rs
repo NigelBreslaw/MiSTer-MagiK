@@ -3292,6 +3292,7 @@ pub(super) fn run_launcher_loop(
         effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
+        frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         if bridge.get_effective_view().as_str() != effective_view.label() {
             bridge.set_effective_view(effective_view.label().into());
@@ -4418,6 +4419,7 @@ pub(super) fn run_launcher_loop(
         }
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
+        frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         if bridge.get_effective_view().as_str() != effective_view.label() {
             bridge.set_effective_view(effective_view.label().into());
