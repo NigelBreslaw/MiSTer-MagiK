@@ -22,14 +22,15 @@ static inline uint16x8_t darken_rgb565_7_8_vector(
     uint16x8_t packed,
     uint16x8_t red_blue_mask,
     uint16x8_t green_mask,
-    uint16x8_t seven
+    uint16x8_t rounding
 ) {
     uint16x8_t red = vshrq_n_u16(packed, 11);
     uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
     uint16x8_t blue = vandq_u16(packed, red_blue_mask);
-    red = vshrq_n_u16(vmulq_u16(red, seven), 3);
-    green = vshrq_n_u16(vmulq_u16(green, seven), 3);
-    blue = vshrq_n_u16(vmulq_u16(blue, seven), 3);
+    // floor(7*c/8) == c - ceil(c/8); add seven before shifting for exact ceil.
+    red = vsubq_u16(red, vshrq_n_u16(vaddq_u16(red, rounding), 3));
+    green = vsubq_u16(green, vshrq_n_u16(vaddq_u16(green, rounding), 3));
+    blue = vsubq_u16(blue, vshrq_n_u16(vaddq_u16(blue, rounding), 3));
     return vorrq_u16(
         vshlq_n_u16(red, 11),
         vorrq_u16(vshlq_n_u16(green, 5), blue)
@@ -44,7 +45,7 @@ void mister_magik_scanline_neon_darken_7_8_rows(
 ) {
     const uint16x8_t red_blue_mask = vdupq_n_u16(0x001f);
     const uint16x8_t green_mask = vdupq_n_u16(0x003f);
-    const uint16x8_t seven = vdupq_n_u16(7);
+    const uint16x8_t rounding = vdupq_n_u16(7);
     for (size_t row = 0; row < rows; row++) {
         uint16_t *row_pixels = pixels + row * stride;
         for (size_t vector = 0; vector < vector_count; vector++) {
@@ -56,7 +57,7 @@ void mister_magik_scanline_neon_darken_7_8_rows(
                     packed,
                     red_blue_mask,
                     green_mask,
-                    seven
+                    rounding
                 )
             );
         }
