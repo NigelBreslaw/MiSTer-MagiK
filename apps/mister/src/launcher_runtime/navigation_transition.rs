@@ -13,6 +13,7 @@ mod sprite_foundry;
 
 const PROGRESS_MAX: u16 = u16::MAX;
 const COVER_PROGRESS: u16 = 36_044;
+const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
@@ -62,6 +63,13 @@ impl NavigationTransitionStyle {
             Self::NeonCabinetDive => 417_000,
             Self::CrtCabinetBoot => 480_000,
             Self::CharacterRomRecompile => 433_000,
+        }
+    }
+
+    const fn cover_progress_q16(self) -> u16 {
+        match self {
+            Self::SuperScalerShell => SUPER_SCALER_COVER_PROGRESS,
+            _ => COVER_PROGRESS,
         }
     }
 }
@@ -208,10 +216,24 @@ pub fn hdmi_navigation_geometry(
             height: 16,
         }
     };
+    let source_detail = NavigationTransitionRect {
+        x: source_label.x,
+        y: source_label.bottom().saturating_add(3),
+        width: source_label.width,
+        height: 10,
+    };
+    let destination_detail = NavigationTransitionRect {
+        x: destination_title.x,
+        y: destination_title.bottom().saturating_add(2),
+        width: destination_title.width.max(80),
+        height: 10,
+    };
     NavigationTransitionGeometry {
         source_card,
         source_label,
+        source_detail,
         destination_title,
+        destination_detail,
         destination_list: NavigationTransitionRect {
             x: scale_hdmi_x(8, frame_width),
             y: scale_hdmi_y(56, frame_height),
@@ -257,11 +279,33 @@ fn scale_hdmi_y(value: usize, frame_height: usize) -> u16 {
 pub struct NavigationTransitionGeometry {
     pub source_card: NavigationTransitionRect,
     pub source_label: NavigationTransitionRect,
+    pub source_detail: NavigationTransitionRect,
     pub destination_title: NavigationTransitionRect,
+    pub destination_detail: NavigationTransitionRect,
     pub destination_list: NavigationTransitionRect,
     pub destination_selected_row: NavigationTransitionRect,
     pub destination_preview: NavigationTransitionRect,
     pub destination_footer: NavigationTransitionRect,
+}
+
+fn source_text_group(geometry: NavigationTransitionGeometry) -> NavigationTransitionRect {
+    if geometry.source_detail.width == 0 || geometry.source_detail.height == 0 {
+        return geometry.source_label;
+    }
+    let right = geometry
+        .source_label
+        .right()
+        .max(geometry.source_detail.right());
+    let bottom = geometry
+        .source_label
+        .bottom()
+        .max(geometry.source_detail.bottom());
+    NavigationTransitionRect {
+        x: geometry.source_label.x.min(geometry.source_detail.x),
+        y: geometry.source_label.y.min(geometry.source_detail.y),
+        width: right.saturating_sub(geometry.source_label.x.min(geometry.source_detail.x)),
+        height: bottom.saturating_sub(geometry.source_label.y.min(geometry.source_detail.y)),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -435,13 +479,14 @@ impl NavigationTransitionController {
             return NavigationTransitionFrame::default();
         };
         let total_us = request.duration_us.max(1);
-        let cover_us = total_us.saturating_mul(COVER_PROGRESS as u64) / PROGRESS_MAX as u64;
+        let cover_progress = request.style.cover_progress_q16();
+        let cover_us = total_us.saturating_mul(cover_progress as u64) / PROGRESS_MAX as u64;
 
         if self.phase == NavigationTransitionPhase::Expand {
             let elapsed = now_us.saturating_sub(self.phase_started_us);
-            self.progress_q16 = scale_progress(elapsed, cover_us, COVER_PROGRESS);
+            self.progress_q16 = scale_progress(elapsed, cover_us, cover_progress);
             if elapsed >= cover_us {
-                self.progress_q16 = COVER_PROGRESS;
+                self.progress_q16 = cover_progress;
                 self.phase = NavigationTransitionPhase::Covered;
                 self.covered_started_us = self.phase_started_us.saturating_add(cover_us);
                 self.phase_started_us = self.covered_started_us;
@@ -466,8 +511,8 @@ impl NavigationTransitionController {
         if self.phase == NavigationTransitionPhase::Reveal {
             let reveal_us = total_us.saturating_sub(cover_us).max(1);
             let elapsed = now_us.saturating_sub(self.phase_started_us);
-            let reveal_progress = scale_progress(elapsed, reveal_us, PROGRESS_MAX - COVER_PROGRESS);
-            self.progress_q16 = COVER_PROGRESS.saturating_add(reveal_progress);
+            let reveal_progress = scale_progress(elapsed, reveal_us, PROGRESS_MAX - cover_progress);
+            self.progress_q16 = cover_progress.saturating_add(reveal_progress);
             if elapsed >= reveal_us {
                 self.progress_q16 = PROGRESS_MAX;
                 self.phase = NavigationTransitionPhase::Settled;
@@ -516,7 +561,11 @@ impl NavigationTransitionController {
         if !self.is_active() {
             return None;
         }
-        let endpoint = if self.progress_q16 >= COVER_PROGRESS && destination_ready {
+        let cover_progress = self
+            .request
+            .map(|request| request.style.cover_progress_q16())
+            .unwrap_or(COVER_PROGRESS);
+        let endpoint = if self.progress_q16 >= cover_progress && destination_ready {
             NavigationTransitionEndpoint::Destination
         } else {
             NavigationTransitionEndpoint::Source
@@ -578,16 +627,20 @@ impl NavigationTransitionController {
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
-        let cover_progress_q16 = if self.progress_q16 >= COVER_PROGRESS {
+        let cover_progress = self
+            .request
+            .map(|request| request.style.cover_progress_q16())
+            .unwrap_or(COVER_PROGRESS);
+        let cover_progress_q16 = if self.progress_q16 >= cover_progress {
             PROGRESS_MAX
         } else {
-            ((self.progress_q16 as u32 * PROGRESS_MAX as u32) / COVER_PROGRESS as u32) as u16
+            ((self.progress_q16 as u32 * PROGRESS_MAX as u32) / cover_progress as u32) as u16
         };
-        let reveal_progress_q16 = if self.progress_q16 <= COVER_PROGRESS {
+        let reveal_progress_q16 = if self.progress_q16 <= cover_progress {
             0
         } else {
-            (((self.progress_q16 - COVER_PROGRESS) as u32 * PROGRESS_MAX as u32)
-                / (PROGRESS_MAX - COVER_PROGRESS) as u32) as u16
+            (((self.progress_q16 - cover_progress) as u32 * PROGRESS_MAX as u32)
+                / (PROGRESS_MAX - cover_progress) as u32) as u16
         };
         NavigationTransitionFrame {
             phase: self.phase,
@@ -1203,7 +1256,7 @@ fn render_super_scaler_shell(
         }
     }
     if frame.reveal_progress_q16 == 0 && frame.cover_progress_q16 == PROGRESS_MAX {
-        fill_rect_565(working, width, height, full, shell, &mut stats);
+        fill_super_scaler_shell_rows(working, width, height, full, shell, &mut stats);
         return Ok(stats);
     }
     let needs_source_base = match request.direction {
@@ -1233,7 +1286,9 @@ fn render_super_scaler_shell(
                             &mut stats,
                         );
                     } else {
-                        fill_rect_565(working, width, height, full, shell, &mut stats);
+                        fill_super_scaler_shell_rows(
+                            working, width, height, full, shell, &mut stats,
+                        );
                     }
                     reveal_destination_regions(
                         working,
@@ -1245,7 +1300,7 @@ fn render_super_scaler_shell(
                         &mut stats,
                     );
                 } else {
-                    fill_rect_565(working, width, height, full, shell, &mut stats);
+                    fill_super_scaler_shell_rows(working, width, height, full, shell, &mut stats);
                 }
             }
             let rect = super_scaler_card_rect(
@@ -1264,11 +1319,35 @@ fn render_super_scaler_shell(
                     source_background,
                     &mut stats,
                 );
+                fill_rect_565(working, width, height, rect, shell, &mut stats);
+                draw_super_scaler_speed_bands(
+                    working,
+                    width,
+                    height,
+                    rect,
+                    frame.cover_progress_q16,
+                    &mut stats,
+                );
+                blit_scaled_card_565(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.source_card,
+                    rect,
+                    source_text_group(request.geometry),
+                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                        frame.cover_progress_q16,
+                        10_000,
+                        26_000,
+                    ))),
+                    &mut stats,
+                );
                 if frame.cover_progress_q16 < 59_000 {
-                    for echo in (1..=3).rev() {
+                    for echo in (1..=2).rev() {
                         let delayed_cover = frame
                             .cover_progress_q16
-                            .saturating_sub((echo * 4_800) as u16);
+                            .saturating_sub((echo * 6_000) as u16);
                         let echo_rect = super_scaler_card_rect(
                             request.geometry.source_card,
                             full,
@@ -1280,30 +1359,13 @@ fn render_super_scaler_shell(
                             height,
                             echo_rect,
                             match echo {
-                                1 => mint,
-                                2 => violet,
+                                1 => violet,
                                 _ => deep_violet,
                             },
                             &mut stats,
                         );
                     }
                 }
-                fill_rect_565(working, width, height, rect, shell, &mut stats);
-                blit_scaled_card_565(
-                    working,
-                    source,
-                    width,
-                    height,
-                    request.geometry.source_card,
-                    rect,
-                    request.geometry.source_label,
-                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
-                        frame.cover_progress_q16,
-                        10_000,
-                        26_000,
-                    ))),
-                    &mut stats,
-                );
                 if frame.cover_progress_q16 < 62_000 {
                     draw_outline_565(working, width, height, rect, mint, &mut stats);
                 }
@@ -1330,10 +1392,10 @@ fn render_super_scaler_shell(
                     PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
                 );
                 if frame.reveal_progress_q16 > 6_000 {
-                    for echo in (1..=3).rev() {
+                    for echo in (1..=2).rev() {
                         let delayed = frame
                             .reveal_progress_q16
-                            .saturating_sub((echo * 4_200) as u16);
+                            .saturating_sub((echo * 6_000) as u16);
                         let echo_rect = super_scaler_card_rect(
                             request.geometry.source_card,
                             full,
@@ -1345,8 +1407,7 @@ fn render_super_scaler_shell(
                             height,
                             echo_rect,
                             match echo {
-                                1 => mint,
-                                2 => violet,
+                                1 => violet,
                                 _ => deep_violet,
                             },
                             &mut stats,
@@ -1354,6 +1415,14 @@ fn render_super_scaler_shell(
                     }
                 }
                 fill_rect_565(working, width, height, rect, shell, &mut stats);
+                draw_super_scaler_speed_bands(
+                    working,
+                    width,
+                    height,
+                    rect,
+                    PROGRESS_MAX.saturating_sub(frame.reveal_progress_q16),
+                    &mut stats,
+                );
                 blit_scaled_card_565(
                     working,
                     destination,
@@ -1361,7 +1430,7 @@ fn render_super_scaler_shell(
                     height,
                     request.geometry.source_card,
                     rect,
-                    request.geometry.source_label,
+                    source_text_group(request.geometry),
                     smoothstep_q16(window_q16(frame.reveal_progress_q16, 38_000, 60_000)),
                     &mut stats,
                 );
@@ -1607,27 +1676,36 @@ fn render_hero_label_last(
                         request.geometry.destination_title,
                         stats,
                     );
-                    return Ok(());
+                } else {
+                    erase_rect_from_snapshot_background(
+                        working,
+                        destination,
+                        width,
+                        height,
+                        request.geometry.destination_title,
+                        stats,
+                    );
+                    crossfade_labels(
+                        working,
+                        source,
+                        destination,
+                        width,
+                        height,
+                        request.geometry.source_label,
+                        request.geometry.destination_title,
+                        PROGRESS_MAX,
+                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 4_000, 14_000)),
+                        false,
+                        stats,
+                    );
                 }
-                erase_rect_from_snapshot_background(
+                redraw_detail_with_opacity(
                     working,
                     destination,
                     width,
                     height,
-                    request.geometry.destination_title,
-                    stats,
-                );
-                crossfade_labels(
-                    working,
-                    source,
-                    destination,
-                    width,
-                    height,
-                    request.geometry.source_label,
-                    request.geometry.destination_title,
-                    PROGRESS_MAX,
-                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 4_000, 14_000)),
-                    false,
+                    request.geometry.destination_detail,
+                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 18_000, 31_000)),
                     stats,
                 );
             } else {
@@ -1640,6 +1718,19 @@ fn render_hero_label_last(
                     request.geometry.destination_title,
                     smoothstep_q16(window_q16(frame.cover_progress_q16, 3_500, 60_000)),
                     false,
+                    stats,
+                );
+                draw_detail_pixels_with_opacity(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.source_detail,
+                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                        frame.cover_progress_q16,
+                        0,
+                        10_000,
+                    ))),
                     stats,
                 );
             }
@@ -1656,20 +1747,29 @@ fn render_hero_label_last(
                         request.geometry.source_label,
                         stats,
                     );
-                    return Ok(());
+                } else {
+                    let motion = smoothstep_q16(frame.reveal_progress_q16);
+                    crossfade_labels(
+                        working,
+                        source,
+                        destination,
+                        width,
+                        height,
+                        request.geometry.destination_title,
+                        request.geometry.source_label,
+                        motion,
+                        smoothstep_q16(window_q16(frame.reveal_progress_q16, 42_000, 60_000)),
+                        true,
+                        stats,
+                    );
                 }
-                let motion = smoothstep_q16(frame.reveal_progress_q16);
-                crossfade_labels(
+                redraw_detail_with_opacity(
                     working,
-                    source,
                     destination,
                     width,
                     height,
-                    request.geometry.destination_title,
-                    request.geometry.source_label,
-                    motion,
-                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 42_000, 60_000)),
-                    true,
+                    request.geometry.source_detail,
+                    smoothstep_q16(window_q16(frame.reveal_progress_q16, 48_000, 60_000)),
                     stats,
                 );
             } else {
@@ -1682,6 +1782,19 @@ fn render_hero_label_last(
                     request.geometry.source_label,
                     0,
                     true,
+                    stats,
+                );
+                redraw_detail_with_opacity(
+                    working,
+                    source,
+                    width,
+                    height,
+                    request.geometry.destination_detail,
+                    PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(
+                        frame.cover_progress_q16,
+                        0,
+                        18_000,
+                    ))),
                     stats,
                 );
             }
@@ -1743,12 +1856,12 @@ fn reveal_destination_regions(
             width,
             height,
             selected,
-            smoothstep_q16(window_q16(progress_q16, 14_000, 28_000)),
-            -28,
+            smoothstep_q16(window_q16(progress_q16, 10_000, 24_000)),
+            -(selected.right() as isize),
             stats,
         );
         for distance in 1usize..9 {
-            let start = 20_000u16.saturating_add(((distance - 1) * 3_200) as u16);
+            let start = 15_000u16.saturating_add(((distance - 1) * 2_800) as u16);
             for below in [true, false] {
                 let Some(y) = (if below {
                     (selected.y as usize).checked_add(distance.saturating_mul(row_height))
@@ -1778,7 +1891,7 @@ fn reveal_destination_regions(
                         start,
                         start.saturating_add(13_000),
                     )),
-                    -(28 + distance as isize * 5),
+                    -(list.width as isize + distance as isize * 12),
                     stats,
                 );
             }
@@ -1789,17 +1902,18 @@ fn reveal_destination_regions(
             width,
             height,
             request.geometry.destination_footer,
-            smoothstep_q16(window_q16(progress_q16, 32_000, 48_000)),
-            -20,
+            smoothstep_q16(window_q16(progress_q16, 28_000, 44_000)),
+            -(request.geometry.destination_footer.right() as isize),
             stats,
         );
         let preview = request.geometry.destination_preview;
-        draw_progressive_preview_frame(
+        draw_preview_transfer_beam(
             working,
             width,
             height,
+            selected,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 28_000, 42_000)),
+            progress_q16,
             stats,
         );
         copy_rect_center_aperture(
@@ -1808,7 +1922,15 @@ fn reveal_destination_regions(
             width,
             height,
             preview,
-            smoothstep_q16(window_q16(progress_q16, 38_000, 60_000)),
+            smoothstep_q16(window_q16(progress_q16, 22_000, 59_000)),
+            stats,
+        );
+        draw_progressive_preview_frame(
+            working,
+            width,
+            height,
+            preview,
+            preview_rail_envelope(progress_q16),
             stats,
         );
     } else {
@@ -1902,6 +2024,111 @@ fn super_scaler_card_rect(
         y: top,
         width: right.saturating_sub(left).max(1),
         height: bottom.saturating_sub(top).max(1),
+    }
+}
+
+fn super_scaler_shell_row_color(y: usize, height: usize, shell: Rgb565Pixel) -> Rgb565Pixel {
+    if height == 0 {
+        return shell;
+    }
+    let center = height / 2;
+    for band in 1usize..=3 {
+        let target = height.saturating_mul(band) / 8;
+        let color = match band {
+            1 => Rgb565Pixel(0x1848),
+            2 => Rgb565Pixel(0x28aa),
+            _ => Rgb565Pixel(0x40ed),
+        };
+        for band_y in [center.saturating_sub(target), center.saturating_add(target)] {
+            if y >= band_y && y < band_y.saturating_add(band) {
+                return color;
+            }
+        }
+    }
+    shell
+}
+
+fn draw_super_scaler_speed_bands(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    if progress_q16 < 8_000 {
+        return;
+    }
+    let local = smoothstep_q16(window_q16(progress_q16, 8_000, PROGRESS_MAX));
+    let center_y = rect.y as usize + rect.height as usize / 2;
+    let half_height = rect.height as usize / 2;
+    for band in 1usize..=3 {
+        let distance = half_height
+            .saturating_mul(band)
+            .saturating_mul(local as usize)
+            / 4
+            / PROGRESS_MAX as usize;
+        let inset = rect.width as usize
+            * (PROGRESS_MAX.saturating_sub(local) as usize)
+            * (4usize.saturating_sub(band))
+            / PROGRESS_MAX as usize
+            / 10;
+        let x = rect.x as usize + inset.min(rect.width as usize / 2);
+        let band_width = (rect.width as usize).saturating_sub(inset.saturating_mul(2));
+        let color = match band {
+            1 => Rgb565Pixel(0x1848),
+            2 => Rgb565Pixel(0x28aa),
+            _ => Rgb565Pixel(0x40ed),
+        };
+        for y in [
+            center_y.saturating_sub(distance),
+            center_y.saturating_add(distance),
+        ] {
+            fill_rect_565(
+                working,
+                width,
+                height,
+                NavigationTransitionRect {
+                    x: x as u16,
+                    y: y.min(height.saturating_sub(1)) as u16,
+                    width: band_width.max(1) as u16,
+                    height: band as u16,
+                },
+                color,
+                stats,
+            );
+        }
+    }
+}
+
+fn fill_super_scaler_shell_rows(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    shell: Rgb565Pixel,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    let Some(rect) = clip_rect_to_frame(rect, width, height) else {
+        return;
+    };
+    for y in rect.y as usize..rect.bottom() as usize {
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: rect.x,
+                y: y as u16,
+                width: rect.width,
+                height: 1,
+            },
+            super_scaler_shell_row_color(y, height, shell),
+            stats,
+        );
     }
 }
 
@@ -2113,11 +2340,8 @@ fn copy_rect_shifted_x(
     let remaining = PROGRESS_MAX.saturating_sub(progress_q16) as i64;
     let offset = initial_offset as i64 * remaining / PROGRESS_MAX as i64;
     let destination_x = rect.x as i64 + offset;
-    let visible_q16 = 8_192u32
-        .saturating_add(57_343u32.saturating_mul(progress_q16 as u32) / PROGRESS_MAX as u32);
-    let visible_width = (rect.width as u32).saturating_mul(visible_q16) / PROGRESS_MAX as u32;
     let unclipped_x0 = destination_x;
-    let unclipped_x1 = destination_x + visible_width.max(1) as i64;
+    let unclipped_x1 = destination_x + rect.width as i64;
     let destination_x0 = unclipped_x0.max(0).min(width as i64) as usize;
     let destination_x1 = unclipped_x1.max(0).min(width as i64) as usize;
     if destination_x1 <= destination_x0 {
@@ -2219,6 +2443,102 @@ fn draw_progressive_preview_frame(
     }
 }
 
+fn preview_rail_envelope(progress_q16: u16) -> u16 {
+    if progress_q16 <= 38_000 {
+        smoothstep_q16(window_q16(progress_q16, 22_000, 38_000))
+    } else {
+        PROGRESS_MAX.saturating_sub(smoothstep_q16(window_q16(progress_q16, 44_000, 58_000)))
+    }
+}
+
+fn reverse_preview_timeline(progress_q16: u16) -> u16 {
+    if progress_q16 >= 25_000 {
+        return 22_000;
+    }
+    62_000u32
+        .saturating_sub(progress_q16 as u32 * 40_000 / 25_000)
+        .min(PROGRESS_MAX as u32) as u16
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_preview_transfer_beam(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    selected: NavigationTransitionRect,
+    preview: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if progress_q16 <= 18_000 || progress_q16 >= 44_000 {
+        return;
+    }
+    let reveal = smoothstep_q16(window_q16(progress_q16, 18_000, 34_000));
+    let retract = smoothstep_q16(window_q16(progress_q16, 34_000, 44_000));
+    let start_x = selected.right() as usize;
+    let end_x = preview.x as usize;
+    if end_x <= start_x {
+        return;
+    }
+    let start_y = selected.y as usize + selected.height as usize / 2;
+    let end_y = preview.y as usize + preview.height as usize / 2;
+    const SEGMENTS: usize = 12;
+    let revealed_segments = SEGMENTS * reveal as usize / PROGRESS_MAX as usize;
+    let retracted_segments = SEGMENTS * retract as usize / PROGRESS_MAX as usize;
+    for segment in retracted_segments..revealed_segments {
+        let x = start_x + (end_x - start_x) * segment / SEGMENTS;
+        let y = if end_y >= start_y {
+            start_y + (end_y - start_y) * segment / SEGMENTS
+        } else {
+            start_y.saturating_sub((start_y - end_y) * segment / SEGMENTS)
+        };
+        fill_rect_565(
+            working,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: x as u16,
+                y: y.min(height.saturating_sub(1)) as u16,
+                width: ((end_x - start_x) / SEGMENTS).max(2) as u16,
+                height: if segment & 1 == 0 { 1 } else { 2 },
+            },
+            if segment & 1 == 0 {
+                Rgb565Pixel(0x07d6)
+            } else {
+                Rgb565Pixel(0x79b8)
+            },
+            stats,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_reverse_preview_transfer_beam(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    selected: NavigationTransitionRect,
+    preview: NavigationTransitionRect,
+    progress_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if progress_q16 >= 26_000 {
+        return;
+    }
+    let reverse = window_q16(progress_q16, 0, 26_000) as u32;
+    let forward_progress =
+        44_000u32.saturating_sub(reverse.saturating_mul(26_000) / PROGRESS_MAX as u32);
+    draw_preview_transfer_beam(
+        working,
+        width,
+        height,
+        selected,
+        preview,
+        forward_progress as u16,
+        stats,
+    );
+}
+
 fn clip_rect_to_frame(
     rect: NavigationTransitionRect,
     width: usize,
@@ -2268,7 +2588,7 @@ fn compose_system_background_scanlines(
     width: usize,
     height: usize,
     progress_q16: u16,
-    anchor_y: usize,
+    _anchor_y: usize,
     shell: Rgb565Pixel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
@@ -2279,12 +2599,11 @@ fn compose_system_background_scanlines(
     {
         return;
     }
-    let anchor_y = anchor_y.min(height - 1);
-    let maximum_distance = anchor_y.max(height - 1 - anchor_y).max(1);
-    let visible_distance = maximum_distance * progress_q16 as usize / PROGRESS_MAX as usize;
+    const BAND_ORDER: [u16; 8] = [0, 4, 2, 6, 1, 5, 3, 7];
     let split_x = width / 2;
     for y in 0..height {
-        if progress_q16 == 0 || y.abs_diff(anchor_y) > visible_distance {
+        let threshold = BAND_ORDER[y & 7].saturating_mul(8_192);
+        if progress_q16 <= threshold {
             fill_rect_565(
                 working,
                 width,
@@ -2295,7 +2614,7 @@ fn compose_system_background_scanlines(
                     width: width as u16,
                     height: 1,
                 },
-                shell,
+                super_scaler_shell_row_color(y, height, shell),
                 stats,
             );
             continue;
@@ -2337,7 +2656,7 @@ fn conceal_system_background_scanlines(
     width: usize,
     height: usize,
     progress_q16: u16,
-    anchor_y: usize,
+    _anchor_y: usize,
     shell: Rgb565Pixel,
     stats: &mut NavigationTransitionRenderStats,
 ) {
@@ -2348,12 +2667,10 @@ fn conceal_system_background_scanlines(
     {
         return;
     }
-    let anchor_y = anchor_y.min(height - 1);
-    let maximum_distance = anchor_y.max(height - 1 - anchor_y).max(1);
-    let covered_distance = maximum_distance * progress_q16 as usize / PROGRESS_MAX as usize;
-    let remaining_distance = maximum_distance.saturating_sub(covered_distance);
+    const BAND_ORDER: [u16; 8] = [0, 4, 2, 6, 1, 5, 3, 7];
     for y in 0..height {
-        if y.abs_diff(anchor_y) < remaining_distance {
+        let threshold = BAND_ORDER[y & 7].saturating_mul(8_192);
+        if progress_q16 <= threshold {
             continue;
         }
         fill_rect_565(
@@ -2366,7 +2683,7 @@ fn conceal_system_background_scanlines(
                 width: width as u16,
                 height: 1,
             },
-            shell,
+            super_scaler_shell_row_color(y, height, shell),
             stats,
         );
     }
@@ -2389,9 +2706,13 @@ fn slide_rect_out_left(
     if working.len() != source.len() || working.len() != width.saturating_mul(height) {
         return;
     }
+    if progress_q16 == 0 {
+        return;
+    }
     fill_rect_565(working, width, height, rect, shell, stats);
-    let displacement = rect.width as usize * progress_q16 as usize / PROGRESS_MAX as usize;
-    if displacement >= rect.width as usize {
+    let exit_distance = rect.right() as usize;
+    let displacement = exit_distance * progress_q16 as usize / PROGRESS_MAX as usize;
+    if displacement >= exit_distance {
         return;
     }
     let unclipped_destination_x = rect.x as isize - displacement as isize;
@@ -2429,10 +2750,13 @@ fn close_preview_aperture(
     if working.len() != source.len() || working.len() != width.saturating_mul(height) {
         return;
     }
+    if progress_q16 == 0 {
+        return;
+    }
     fill_rect_565(working, width, height, rect, shell, stats);
     let remaining = PROGRESS_MAX.saturating_sub(progress_q16);
     copy_rect_center_aperture(working, source, width, height, rect, remaining, stats);
-    if progress_q16 == 0 || progress_q16 == PROGRESS_MAX {
+    if progress_q16 == PROGRESS_MAX {
         return;
     }
     let visible_width = rect.width as usize * remaining as usize / PROGRESS_MAX as usize;
@@ -2563,6 +2887,23 @@ fn conceal_source_regions(
             shell,
             stats,
         );
+        draw_progressive_preview_frame(
+            working,
+            width,
+            height,
+            request.geometry.destination_preview,
+            preview_rail_envelope(reverse_preview_timeline(progress_q16)),
+            stats,
+        );
+        draw_reverse_preview_transfer_beam(
+            working,
+            width,
+            height,
+            selected,
+            request.geometry.destination_preview,
+            progress_q16,
+            stats,
+        );
         slide_rect_out_left(
             working,
             source,
@@ -2651,7 +2992,7 @@ fn conceal_source_regions(
             let x0 = column * width / 4;
             let x1 = (column + 1) * width / 4;
             let covered_height = height * local as usize / PROGRESS_MAX as usize;
-            fill_rect_565(
+            fill_super_scaler_shell_rows(
                 working,
                 width,
                 height,
@@ -2691,6 +3032,72 @@ fn erase_rect_from_snapshot_background(
             snapshot[sample_y * width + sample_x]
         });
     fill_rect_565(working, width, height, rect, background, stats);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redraw_detail_with_opacity(
+    working: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    if opacity_q16 == PROGRESS_MAX {
+        copy_rect_565(working, snapshot, width, height, rect, stats);
+        return;
+    }
+    erase_rect_from_snapshot_background(working, snapshot, width, height, rect, stats);
+    if opacity_q16 == 0 {
+        return;
+    }
+    let Some((content, background)) = opaque_content_bounds(snapshot, width, height, rect) else {
+        return;
+    };
+    blit_scaled_masked_dithered_565(
+        working,
+        snapshot,
+        width,
+        height,
+        content,
+        content,
+        background,
+        opacity_q16,
+        stats,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_detail_pixels_with_opacity(
+    working: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    rect: NavigationTransitionRect,
+    opacity_q16: u16,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if opacity_q16 == 0 || rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let Some((content, background)) = opaque_content_bounds(snapshot, width, height, rect) else {
+        return;
+    };
+    blit_scaled_masked_dithered_565(
+        working,
+        snapshot,
+        width,
+        height,
+        content,
+        content,
+        background,
+        opacity_q16,
+        stats,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3175,11 +3582,23 @@ mod tests {
                     width: 16,
                     height: 6,
                 },
+                source_detail: NavigationTransitionRect {
+                    x: 4,
+                    y: 53,
+                    width: 16,
+                    height: 4,
+                },
                 destination_title: NavigationTransitionRect {
                     x: 2,
                     y: 2,
                     width: 30,
                     height: 8,
+                },
+                destination_detail: NavigationTransitionRect {
+                    x: 2,
+                    y: 11,
+                    width: 30,
+                    height: 4,
                 },
                 destination_list: NavigationTransitionRect {
                     x: 8,
@@ -3228,6 +3647,14 @@ mod tests {
                 .duration_us(NavigationTransitionEdge::HomeToArcade),
             480_000
         );
+        assert_eq!(
+            NavigationTransitionStyle::SuperScalerShell.cover_progress_q16(),
+            SUPER_SCALER_COVER_PROGRESS
+        );
+        assert_eq!(
+            NavigationTransitionStyle::SpriteFoundry.cover_progress_q16(),
+            COVER_PROGRESS
+        );
     }
 
     #[test]
@@ -3240,7 +3667,7 @@ mod tests {
 
         let expanding = controller.tick(500_000, true);
         assert_eq!(expanding.phase, NavigationTransitionPhase::Expand);
-        assert!(expanding.progress_q16 < COVER_PROGRESS);
+        assert!(expanding.progress_q16 < SUPER_SCALER_COVER_PROGRESS);
 
         let settled = controller.tick(4_000_000, true);
         assert_eq!(settled.phase, NavigationTransitionPhase::Settled);
@@ -3326,7 +3753,7 @@ mod tests {
             request,
             NavigationTransitionFrame {
                 phase: NavigationTransitionPhase::Expand,
-                progress_q16: COVER_PROGRESS,
+                progress_q16: SUPER_SCALER_COVER_PROGRESS,
                 cover_progress_q16: PROGRESS_MAX,
                 owns_full_frame: true,
                 ..NavigationTransitionFrame::default()
@@ -3334,14 +3761,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(covered_stats.copied_pixels, 0);
-        assert_eq!(covered_stats.filled_pixels, source.len() as u64);
+        assert!(covered_stats.filled_pixels >= source.len() as u64);
         let final_cover = buffers.working().to_vec();
         render_super_scaler_shell(
             &mut buffers,
             request,
             NavigationTransitionFrame {
                 phase: NavigationTransitionPhase::Reveal,
-                progress_q16: COVER_PROGRESS + 1,
+                progress_q16: SUPER_SCALER_COVER_PROGRESS + 1,
                 cover_progress_q16: PROGRESS_MAX,
                 reveal_progress_q16: 1,
                 owns_full_frame: true,
@@ -3350,6 +3777,81 @@ mod tests {
         )
         .unwrap();
         assert_eq!(buffers.working(), final_cover);
+    }
+
+    #[test]
+    fn super_scaler_category_edges_keep_speed_bands_through_both_directions() {
+        let width = 32;
+        let height = 24;
+        let shell = Rgb565Pixel(0x1028);
+        let source = vec![Rgb565Pixel(0x1111); width * height];
+        let destination = vec![Rgb565Pixel(0x2222); width * height];
+        let mut buffers = NavigationTransitionBuffers::new(width, height);
+        buffers.capture_source(&source).unwrap();
+        buffers.capture_destination(&destination).unwrap();
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 2,
+                y: 4,
+                width: 8,
+                height: 16,
+            },
+            ..NavigationTransitionGeometry::default()
+        };
+        let request = NavigationTransitionRequest::new(
+            NavigationTransitionStyle::SuperScalerShell,
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry,
+        );
+
+        render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Expand,
+                progress_q16: SUPER_SCALER_COVER_PROGRESS,
+                cover_progress_q16: PROGRESS_MAX,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        let covered = buffers.working().to_vec();
+        render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Reveal,
+                progress_q16: SUPER_SCALER_COVER_PROGRESS + 1,
+                cover_progress_q16: PROGRESS_MAX,
+                reveal_progress_q16: 1,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(buffers.working(), covered);
+
+        let mut concealed = source.clone();
+        let mut stats = NavigationTransitionRenderStats::default();
+        conceal_source_regions(
+            &mut concealed,
+            &source,
+            width,
+            height,
+            60_000,
+            NavigationTransitionRequest {
+                direction: NavigationTransitionDirection::Reverse,
+                ..request
+            },
+            shell,
+            &mut stats,
+        );
+        assert_eq!(
+            concealed[21 * width],
+            super_scaler_shell_row_color(21, height, shell)
+        );
     }
 
     #[test]
@@ -3390,6 +3892,90 @@ mod tests {
 
         assert_eq!(destination[3 * width + 3], Rgb565Pixel(0x2222));
         assert_eq!(destination[1 * width + 1], Rgb565Pixel(0x1111));
+    }
+
+    #[test]
+    fn super_scaler_echoes_remain_visible_above_the_expanding_card() {
+        let width = 64;
+        let height = 48;
+        let source = vec![Rgb565Pixel(0x1111); width * height];
+        let mut buffers = NavigationTransitionBuffers::new(width, height);
+        buffers.capture_source(&source).unwrap();
+        let request = NavigationTransitionRequest::new(
+            NavigationTransitionStyle::SuperScalerShell,
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionGeometry {
+                source_card: NavigationTransitionRect {
+                    x: 10,
+                    y: 8,
+                    width: 18,
+                    height: 32,
+                },
+                ..NavigationTransitionGeometry::default()
+            },
+        );
+
+        render_super_scaler_shell(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Expand,
+                progress_q16: 20_000,
+                cover_progress_q16: 35_000,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+
+        assert!(
+            buffers
+                .working()
+                .iter()
+                .any(|pixel| *pixel == Rgb565Pixel(0x79b8))
+        );
+        assert!(
+            buffers
+                .working()
+                .iter()
+                .any(|pixel| *pixel == Rgb565Pixel(0x30aa))
+        );
+        assert!(
+            buffers
+                .working()
+                .iter()
+                .any(|pixel| *pixel == Rgb565Pixel(0x07d6))
+        );
+    }
+
+    #[test]
+    fn zero_opacity_detail_draw_does_not_erase_the_expanding_shell() {
+        let width = 12;
+        let height = 8;
+        let mut snapshot = vec![Rgb565Pixel(0x0000); width * height];
+        snapshot[3 * width + 5] = Rgb565Pixel(0xffff);
+        let mut working = vec![Rgb565Pixel(0x1028); width * height];
+        let original = working.clone();
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        draw_detail_pixels_with_opacity(
+            &mut working,
+            &snapshot,
+            width,
+            height,
+            NavigationTransitionRect {
+                x: 3,
+                y: 2,
+                width: 5,
+                height: 3,
+            },
+            0,
+            &mut stats,
+        );
+
+        assert_eq!(working, original);
+        assert_eq!(stats, NavigationTransitionRenderStats::default());
     }
 
     #[test]
@@ -3471,7 +4057,7 @@ mod tests {
             &destination,
             width,
             height,
-            12_000,
+            8_000,
             system_request(NavigationTransitionDirection::Forward),
             &mut stats,
         );
@@ -3485,7 +4071,7 @@ mod tests {
             &destination,
             width,
             height,
-            28_000,
+            22_000,
             system_request(NavigationTransitionDirection::Forward),
             &mut stats,
         );
@@ -3503,7 +4089,20 @@ mod tests {
             &mut stats,
         );
         assert_eq!(framed[18 * width + 77], Rgb565Pixel(0x79b8));
-        assert_eq!(framed[50 * width + 77], Rgb565Pixel(0));
+        assert_eq!(framed[50 * width + 77], Rgb565Pixel(0x1234));
+    }
+
+    #[test]
+    fn preview_rails_pulse_without_popping_at_forward_or_reverse_endpoints() {
+        assert_eq!(preview_rail_envelope(22_000), 0);
+        assert_eq!(preview_rail_envelope(38_000), PROGRESS_MAX);
+        assert_eq!(preview_rail_envelope(44_000), PROGRESS_MAX);
+        assert_eq!(preview_rail_envelope(58_000), 0);
+        assert_eq!(preview_rail_envelope(61_999), 0);
+        assert_eq!(preview_rail_envelope(reverse_preview_timeline(0)), 0);
+        assert_eq!(preview_rail_envelope(reverse_preview_timeline(1)), 0);
+        assert!(preview_rail_envelope(reverse_preview_timeline(10_000)) > 0);
+        assert_eq!(preview_rail_envelope(reverse_preview_timeline(25_000)), 0);
     }
 
     #[test]
@@ -3688,7 +4287,7 @@ mod tests {
         }
         let mut stats = NavigationTransitionRenderStats::default();
 
-        let mut at_start = vec![Rgb565Pixel(0); width * height];
+        let mut at_start = source.clone();
         slide_rect_out_left(
             &mut at_start,
             &source,
@@ -3715,9 +4314,23 @@ mod tests {
             shell,
             &mut stats,
         );
-        assert_eq!(halfway[6 * width + 4], Rgb565Pixel(8));
-        assert_eq!(halfway[6 * width + 11], Rgb565Pixel(15));
-        assert_eq!(halfway[7 * width + 4], Rgb565Pixel(8));
+        assert_eq!(halfway[6 * width], Rgb565Pixel(8));
+        assert_eq!(halfway[6 * width + 7], Rgb565Pixel(15));
+        assert_eq!(halfway[7 * width], Rgb565Pixel(8));
+
+        let mut nearly_gone = source.clone();
+        slide_rect_out_left(
+            &mut nearly_gone,
+            &source,
+            width,
+            height,
+            rect,
+            PROGRESS_MAX - 1,
+            shell,
+            &mut stats,
+        );
+        assert_eq!(nearly_gone[6 * width], Rgb565Pixel(15));
+        assert_eq!(nearly_gone[6 * width + 1], Rgb565Pixel(0));
 
         let mut at_end = vec![Rgb565Pixel(0); width * height];
         slide_rect_out_left(
@@ -3735,6 +4348,40 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == shell)
         );
+    }
+
+    #[test]
+    fn forward_row_translation_enters_from_the_first_screen_pixel() {
+        let width = 20;
+        let height = 8;
+        let rect = NavigationTransitionRect {
+            x: 8,
+            y: 6,
+            width: 8,
+            height: 2,
+        };
+        let mut source = vec![Rgb565Pixel(0); width * height];
+        for y in rect.y as usize..rect.bottom() as usize {
+            for x in rect.x as usize..rect.right() as usize {
+                source[y * width + x] = Rgb565Pixel(x as u16);
+            }
+        }
+        let mut working = vec![Rgb565Pixel(0); width * height];
+        let mut stats = NavigationTransitionRenderStats::default();
+
+        copy_rect_shifted_x(
+            &mut working,
+            &source,
+            width,
+            height,
+            rect,
+            1,
+            -(rect.right() as isize),
+            &mut stats,
+        );
+
+        assert_eq!(working[6 * width], Rgb565Pixel(15));
+        assert_eq!(working[6 * width + 1], Rgb565Pixel(0));
     }
 
     #[test]
@@ -3784,14 +4431,19 @@ mod tests {
 
         let covered = controller.tick(300_000, false);
         assert_eq!(covered.phase, NavigationTransitionPhase::Covered);
-        assert_eq!(covered.progress_q16, COVER_PROGRESS);
+        assert_eq!(covered.progress_q16, SUPER_SCALER_COVER_PROGRESS);
 
         let still_covered = controller.tick(500_000, false);
         assert_eq!(still_covered.phase, NavigationTransitionPhase::Covered);
 
         let reveal = controller.tick(510_000, true);
         assert_eq!(reveal.phase, NavigationTransitionPhase::Reveal);
-        assert_eq!(controller.telemetry().covered_hold_us, 277_002);
+        let cover_us =
+            request().duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+        assert_eq!(
+            controller.telemetry().covered_hold_us,
+            510_000 - (2_000 + cover_us)
+        );
     }
 
     #[test]
