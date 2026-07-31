@@ -3723,6 +3723,7 @@ const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchma
 const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_CYCLES: usize = 3;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
+const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
@@ -3773,6 +3774,7 @@ fn profile_installed_launch_return(
         let mut expected = wait_launch_return_state(&session, None, Duration::from_secs(20))?;
 
         for cycle_index in 0..LAUNCH_RETURN_CYCLES {
+            thread::sleep(Duration::from_secs(LAUNCH_RETURN_GAME_SETTLE_SECS));
             if cycle_index + 1 < LAUNCH_RETURN_CYCLES {
                 put_bytes(
                     &session,
@@ -3867,6 +3869,7 @@ fn profile_installed_launch_return(
             "scenario": "launch-return",
             "cycles": cycles.clone(),
             "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+            "game_settle_secs": LAUNCH_RETURN_GAME_SETTLE_SECS,
         }))
     })();
 
@@ -3888,6 +3891,7 @@ fn profile_installed_launch_return(
                 "scenario": "launch-return",
                 "cycles": cycles,
                 "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+                "game_settle_secs": LAUNCH_RETURN_GAME_SETTLE_SECS,
                 "error": error.to_string(),
             });
             fs::write(
