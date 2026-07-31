@@ -7167,7 +7167,6 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::arcade_game;
 
     fn crt_240_display() -> UiDisplay {
         let plan = UiDisplayPlan::from_mister_ini_text(
@@ -7214,7 +7213,7 @@ mod tests {
         let update = renderer
             .draw(ArcadeGameView::contiguous(&games), 0, 0.0, true)
             .expect("forced Arcade list composition");
-        let _ = target.compose_arcade_list_update(&mut renderer, update);
+        let _ = compose_arcade_list_update(&mut target, &mut renderer, update);
 
         let pixels = target.cached_frame_view().pixels();
         for band in [56..104, 416..448] {
