@@ -3838,7 +3838,7 @@ fn profile_installed_navigation_transition_run(
                 ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                    "wait:120,a,wait:120,b,wait:90,right,a,wait:120,a,wait:120,b,wait:90,b,wait:120".into(),
+                    "wait:120,a,wait:120,b,wait:90,right,a,wait:120,a,wait:30,a,wait:120,b,wait:120,b,wait:30,b,wait:120".into(),
                 ),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
