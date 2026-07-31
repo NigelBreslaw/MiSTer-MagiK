@@ -6,9 +6,13 @@
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Instant;
 
+#[path = "../experiments/navigation_transitions/character_rom.rs"]
 mod character_rom;
+#[path = "../experiments/navigation_transitions/crt_cabinet.rs"]
 mod crt_cabinet;
+#[path = "../experiments/navigation_transitions/neon_cabinet.rs"]
 mod neon_cabinet;
+#[path = "../experiments/navigation_transitions/sprite_foundry.rs"]
 mod sprite_foundry;
 
 const PROGRESS_MAX: u16 = u16::MAX;
