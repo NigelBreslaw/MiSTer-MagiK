@@ -1241,7 +1241,7 @@ fn darken_rgb565_rows_reference(
 
 #[cfg(target_arch = "arm")]
 mod scanline_neon {
-    use super::{Rgb565Pixel, darken_rgb565_7_8 as scalar_darken_rgb565_7_8};
+    use super::Rgb565Pixel;
 
     unsafe extern "C" {
         fn mister_magik_scanline_neon_darken_7_8_rows(
