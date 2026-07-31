@@ -1,0 +1,24 @@
+{
+  "format": "mister-magik-catalog-compat-fixture-v1",
+  "source_ref": "alpha",
+  "source_revision": "ef79bbb2a46fe35a7182db2161457129ae9fa7d2",
+  "source_date": "2026-07-28",
+  "descriptor": {
+    "canonical_schema_version": 66,
+    "catalog_build_version": 15,
+    "manifest_schema_version": 1,
+    "shard_schema_version": 3,
+    "navigation_schema_version": 1,
+    "binding_schema_version": 1,
+    "catalog_state_schema_version": 1,
+    "scanner_cache_schema_version": 1,
+    "builder_protocol_version": 1,
+    "projection_contract": "rich-game-v2"
+  },
+  "files": {
+    "catalog.binding.json": "cc7085e3774a4249cfabe887cd3c692fd38dcdc36a9477d225ed855fe00dd37c",
+    "manifest-a.json": "47ef5f99a94567a9a5c3f4cd5ae80a493cdd5538e480db543af4967f29d1dfec",
+    "navigation-v1.json": "8003fbb45bd3babd57f646af177a6fe41b619266a2c4906db25cbfcf6f486633",
+    "source/_Arcade/Alpha Fixture.mra": "b72a2b8e5fac50ebc2e02258d2507c444eeee96e05c9cb44a92a1bf2bf5cc52c"
+  }
+}
