@@ -1071,7 +1071,12 @@ impl NavigationTransitionPoc {
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
-        if self.style() == NavigationTransitionStyle::SpriteFoundry {
+        if self.style() == NavigationTransitionStyle::CharacterRomRecompile
+            && direction == NavigationTransitionDirection::Reverse
+        {
+            self.character_rom
+                .prepare(source, source, self.buffers.width, self.buffers.height);
+        } else if self.style() == NavigationTransitionStyle::SpriteFoundry {
             self.sprite_foundry.prepare_transition(
                 self.buffers.width,
                 self.buffers.height,
@@ -1157,14 +1162,21 @@ impl NavigationTransitionPoc {
                 request.edge,
             );
         }
-        if self.style() == NavigationTransitionStyle::CharacterRomRecompile {
+        if self.style() == NavigationTransitionStyle::CharacterRomRecompile
+            && let Some(request) = self.controller.request()
+            && request.direction == NavigationTransitionDirection::Forward
+        {
+            let source = self
+                .buffers
+                .source()
+                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+            let destination = self
+                .buffers
+                .destination()
+                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
             self.character_rom.prepare(
-                self.buffers
-                    .source()
-                    .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?,
-                self.buffers
-                    .destination()
-                    .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?,
+                source,
+                destination,
                 self.buffers.width,
                 self.buffers.height,
             );
@@ -6092,6 +6104,12 @@ mod tests {
         assert_eq!(verified.render().unwrap(), destination);
 
         let mut reverse = NavigationTransitionPoc::new_with_style(width, height, true, 4);
+        let character_duration = NavigationTransitionStyle::CharacterRomRecompile
+            .duration_us(NavigationTransitionEdge::HomeToConsoles);
+        let forward_cover_us = character_duration.saturating_mul(
+            NavigationTransitionStyle::CharacterRomRecompile.cover_progress_q16() as u64,
+        ) / PROGRESS_MAX as u64;
+        let reverse_cover_us = character_duration.saturating_sub(forward_cover_us);
         reverse
             .begin(
                 NavigationTransitionEdge::HomeToConsoles,
@@ -6101,9 +6119,43 @@ mod tests {
                 0,
             )
             .unwrap();
+        reverse.tick(100_000);
+        let cold_reverse = reverse.render().unwrap().to_vec();
+        assert_ne!(cold_reverse, destination);
+        reverse.tick(reverse_cover_us);
+        assert_eq!(
+            reverse.frame().progress_q16,
+            PROGRESS_MAX.saturating_sub(COVER_PROGRESS)
+        );
+        let covered_before_hydration = reverse.render().unwrap().to_vec();
         reverse.capture_destination(&source).unwrap();
+        assert_eq!(reverse.render().unwrap(), covered_before_hydration);
         reverse.tick(433_000);
         assert_eq!(reverse.render().unwrap(), source);
+
+        let mut bridge = NavigationTransitionPoc::new_with_style(width, height, true, 4);
+        bridge
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                geometry,
+                &source,
+                0,
+            )
+            .unwrap();
+        bridge.capture_destination(&destination).unwrap();
+        bridge.tick(forward_cover_us);
+        assert_eq!(bridge.frame().progress_q16, COVER_PROGRESS);
+        let covered = bridge.render().unwrap().to_vec();
+        bridge.tick(forward_cover_us.saturating_add(10));
+        assert!(bridge.frame().progress_q16 > COVER_PROGRESS);
+        let reveal_start = bridge.render().unwrap();
+        let changed = covered
+            .iter()
+            .zip(reveal_start)
+            .filter(|(before, after)| before != after)
+            .count();
+        assert!(changed < width * height / 20, "{changed} pixels changed");
     }
 
     #[test]
