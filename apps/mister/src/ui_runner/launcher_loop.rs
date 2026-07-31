@@ -301,6 +301,58 @@ fn navigation_transition_for_intent(
     }
 }
 
+fn settings_page_transition_direction(
+    source: Screen,
+    destination: Screen,
+) -> Option<NavigationTransitionDirection> {
+    let source_depth = settings_page_depth(source)?;
+    let destination_depth = settings_page_depth(destination)?;
+    let adjacent = matches!(
+        (source, destination),
+        (Screen::Home, Screen::Settings)
+            | (Screen::Settings, Screen::Home)
+            | (Screen::Settings, Screen::Screensaver | Screen::About)
+            | (Screen::Screensaver | Screen::About, Screen::Settings)
+            | (Screen::About, Screen::Info | Screen::Licenses)
+            | (Screen::Info | Screen::Licenses, Screen::About)
+    );
+    let direct_home = source != Screen::Home && destination == Screen::Home;
+    (adjacent || direct_home).then_some(if destination_depth > source_depth {
+        NavigationTransitionDirection::Forward
+    } else {
+        NavigationTransitionDirection::Reverse
+    })
+}
+
+const fn settings_page_depth(screen: Screen) -> Option<u8> {
+    match screen {
+        Screen::Home => Some(0),
+        Screen::Settings => Some(1),
+        Screen::Screensaver | Screen::About => Some(2),
+        Screen::Info | Screen::Licenses => Some(3),
+        Screen::Controller | Screen::Arcade => None,
+    }
+}
+
+fn settings_navigation_input_candidate(
+    screen: Screen,
+    now: &PadState,
+    previous: &PadState,
+) -> bool {
+    let activated = now.btn_a && !previous.btn_a;
+    let backed = now.btn_b && !previous.btn_b;
+    let went_home = now.btn_home && !previous.btn_home;
+    match screen {
+        Screen::Home => activated || went_home,
+        Screen::Settings
+        | Screen::Screensaver
+        | Screen::About
+        | Screen::Info
+        | Screen::Licenses => activated || backed || went_home,
+        Screen::Controller | Screen::Arcade => false,
+    }
+}
+
 fn sync_navigation_transition_poc_bridge(
     app: &slint_ui::launcher::Launcher,
     transition: &NavigationTransitionPoc,
@@ -3384,6 +3436,16 @@ pub(super) fn run_launcher_loop(
                             navigation_transition.request_reverse(now_us);
                         }
                     }
+                    let settings_transition_source = (!launch_failure_visible
+                        && !recovery_dialog_visible
+                        && !navigation_transition.is_active()
+                        && navigation_transition.enabled()
+                        && settings_navigation_input_candidate(
+                            nav.screen,
+                            &nav_state,
+                            &recovery_prev,
+                        ))
+                    .then(|| (nav.screen, nav.navigation_transition_state()));
                     let event = if launch_failure_visible {
                         if (nav_state.btn_a && !recovery_prev.btn_a)
                             || (nav_state.btn_b && !recovery_prev.btn_b)
@@ -3457,6 +3519,33 @@ pub(super) fn run_launcher_loop(
                     } else {
                         nav.handle_input_with_collection_intents(&nav_state, frame_now, &catalog)
                     };
+                    if let Some((source_screen, source_state)) = settings_transition_source
+                        && let Some(direction) =
+                            settings_page_transition_direction(source_screen, nav.screen)
+                    {
+                        let now_us = frame_now
+                            .saturating_duration_since(start)
+                            .as_micros()
+                            .min(u64::MAX as u128) as u64;
+                        if navigation_transition
+                            .begin_settings_page(direction, target.cached_565(), now_us)
+                            .unwrap_or(false)
+                        {
+                            pending_navigation_transition = Some(PendingNavigationTransition {
+                                event: launcher::LauncherEvent {
+                                    action: LauncherAction::NavigateBack,
+                                    path: None,
+                                    settings: None,
+                                },
+                                source_state,
+                                source_was_arcade: false,
+                                committed: true,
+                                status_quiesce_started_at: None,
+                            });
+                            full_bridge_dirty = true;
+                            request_launcher_redraw!();
+                        }
+                    }
                     if let Some(event) = event {
                         match event.action {
                             LauncherAction::OpenMenu
@@ -6871,6 +6960,38 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_page_routes_use_depth_for_forward_and_reverse_motion() {
+        assert_eq!(
+            settings_page_transition_direction(Screen::Home, Screen::Settings),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Settings, Screen::About),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::About, Screen::Licenses),
+            Some(NavigationTransitionDirection::Forward)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Licenses, Screen::About),
+            Some(NavigationTransitionDirection::Reverse)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Screensaver, Screen::Home),
+            Some(NavigationTransitionDirection::Reverse)
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Home, Screen::Arcade),
+            None
+        );
+        assert_eq!(
+            settings_page_transition_direction(Screen::Screensaver, Screen::About),
+            None
+        );
+    }
 
     #[test]
     fn navigation_destination_waits_for_exact_ready_preview_pixels() {

@@ -826,6 +826,20 @@ pub struct NavigationTransitionState {
     selected: usize,
     scroll_x: i32,
     settings_focused: bool,
+    settings_selected: usize,
+    about_selected: usize,
+    display_combo_open: bool,
+    display_selected: usize,
+    display_highlighted: usize,
+    display_confirm_remaining: u8,
+    display_confirm_busy: bool,
+    display_error: Option<String>,
+    screensaver_selected: usize,
+    licenses_selected: usize,
+    licenses_expanded: bool,
+    licenses_scroll: ArcadeNav,
+    confirm_action: Option<ConfirmAction>,
+    confirm_selected: usize,
     arcade: ArcadeNav,
     arcade_filter: ArcadeFilterState,
     arcade_search: ArcadeSearchState,
@@ -1708,6 +1722,20 @@ impl LauncherNav {
             selected: self.selected,
             scroll_x: self.scroll_x,
             settings_focused: self.settings_focused,
+            settings_selected: self.settings_selected,
+            about_selected: self.about_selected,
+            display_combo_open: self.display_combo_open,
+            display_selected: self.display_selected,
+            display_highlighted: self.display_highlighted,
+            display_confirm_remaining: self.display_confirm_remaining,
+            display_confirm_busy: self.display_confirm_busy,
+            display_error: self.display_error.clone(),
+            screensaver_selected: self.screensaver_selected,
+            licenses_selected: self.licenses_selected,
+            licenses_expanded: self.licenses_expanded,
+            licenses_scroll: self.licenses_scroll.clone(),
+            confirm_action: self.confirm_action,
+            confirm_selected: self.confirm_selected,
             arcade: self.arcade.clone(),
             arcade_filter: self.arcade_filter.clone(),
             arcade_search: self.arcade_search.clone(),
@@ -1731,6 +1759,20 @@ impl LauncherNav {
         self.selected = state.selected;
         self.scroll_x = state.scroll_x;
         self.settings_focused = state.settings_focused;
+        self.settings_selected = state.settings_selected;
+        self.about_selected = state.about_selected;
+        self.display_combo_open = state.display_combo_open;
+        self.display_selected = state.display_selected;
+        self.display_highlighted = state.display_highlighted;
+        self.display_confirm_remaining = state.display_confirm_remaining;
+        self.display_confirm_busy = state.display_confirm_busy;
+        self.display_error = state.display_error;
+        self.screensaver_selected = state.screensaver_selected;
+        self.licenses_selected = state.licenses_selected;
+        self.licenses_expanded = state.licenses_expanded;
+        self.licenses_scroll = state.licenses_scroll;
+        self.confirm_action = state.confirm_action;
+        self.confirm_selected = state.confirm_selected;
         self.arcade = state.arcade;
         self.arcade_filter = state.arcade_filter;
         self.arcade_search = state.arcade_search;

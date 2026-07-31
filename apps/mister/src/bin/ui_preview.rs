@@ -16,7 +16,8 @@ mod macos {
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
-        ArcadeSearchPane, ArcadeSearchStatus, LauncherAction, LauncherEvent, LauncherNav, Screen,
+        ArcadeSearchPane, ArcadeSearchStatus, LauncherAction, LauncherEvent, LauncherNav,
+        NavigationTransitionState, Screen,
     };
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::launcher_runtime::catalog::{
@@ -27,8 +28,8 @@ mod macos {
         start_screenshot_media_worker_with_config,
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
-        NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionPhase,
-        NavigationTransitionPoc, hdmi_navigation_geometry,
+        NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
+        NavigationTransitionPhase, NavigationTransitionPoc, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_taxonomy::{
@@ -378,6 +379,7 @@ mod macos {
         navigation_transition: NavigationTransitionPoc,
         pending_navigation_event: Option<LauncherEvent>,
         pending_navigation_committed: bool,
+        pending_navigation_source_state: Option<NavigationTransitionState>,
         navigation_previous_pad: PadState,
     }
 
@@ -500,6 +502,7 @@ mod macos {
                 ),
                 pending_navigation_event: None,
                 pending_navigation_committed: false,
+                pending_navigation_source_state: None,
                 navigation_previous_pad: PadState::default(),
             };
             application.select_scenario(scenario);
@@ -812,10 +815,7 @@ mod macos {
             self.navigation_previous_pad = self.launcher_pad.clone();
 
             if self.navigation_transition.is_active() {
-                if !self.pending_navigation_committed
-                    && self.launcher_pad.btn_b
-                    && !previous_pad.btn_b
-                {
+                if self.launcher_pad.btn_b && !previous_pad.btn_b {
                     self.navigation_transition.request_reverse(now_us);
                 }
                 self.launcher_nav.absorb_input(&self.launcher_pad);
@@ -837,6 +837,18 @@ mod macos {
                 return;
             }
 
+            let settings_transition_source = (self.navigation_transition.enabled()
+                && settings_navigation_input_candidate(
+                    self.launcher_nav.screen,
+                    &self.launcher_pad,
+                    &previous_pad,
+                ))
+            .then(|| {
+                (
+                    self.launcher_nav.screen,
+                    self.launcher_nav.navigation_transition_state(),
+                )
+            });
             let event = if self.navigation_transition.enabled() {
                 self.launcher_nav.handle_input_with_navigation_intents(
                     &self.launcher_pad,
@@ -847,12 +859,30 @@ mod macos {
                 self.launcher_nav
                     .handle_input(&self.launcher_pad, frame_now, &self.catalog)
             };
+            if let Some((source_screen, source_state)) = settings_transition_source
+                && let Some(direction) =
+                    settings_page_transition_direction(source_screen, self.launcher_nav.screen)
+                && self
+                    .navigation_transition
+                    .begin_settings_page(direction, self.frame_target.cached_565(), now_us)
+                    .unwrap_or(false)
+            {
+                self.pending_navigation_event = Some(LauncherEvent {
+                    action: LauncherAction::NavigateBack,
+                    path: None,
+                    settings: None,
+                });
+                self.pending_navigation_committed = true;
+                self.pending_navigation_source_state = Some(source_state);
+            }
             if let Some(event) = event {
                 match event.action {
                     LauncherAction::OpenMenu
                     | LauncherAction::OpenCollection
                     | LauncherAction::NavigateBack => {
                         if self.begin_navigation_transition(event.clone(), now_us) {
+                            self.pending_navigation_source_state =
+                                Some(self.launcher_nav.navigation_transition_state());
                             self.pending_navigation_event = Some(event);
                             self.pending_navigation_committed = false;
                         } else {
@@ -997,9 +1027,17 @@ mod macos {
                 self.frame_target.cached_565_mut().copy_from_slice(frame);
             }
             if self.navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
-                self.navigation_transition.complete();
+                let completion = self.navigation_transition.complete();
+                if completion.is_some_and(|completion| {
+                    completion.endpoint == NavigationTransitionEndpoint::Source
+                }) && let Some(source_state) = self.pending_navigation_source_state.take()
+                {
+                    self.launcher_nav
+                        .restore_navigation_transition_state(source_state);
+                }
                 self.pending_navigation_event = None;
                 self.pending_navigation_committed = false;
+                self.pending_navigation_source_state = None;
             }
             self.navigation_transition.note_frame_work_us(
                 frame_work_started
@@ -2080,6 +2118,58 @@ mod macos {
                 NavigationTransitionDirection::Reverse,
             )),
             _ => None,
+        }
+    }
+
+    fn settings_page_transition_direction(
+        source: Screen,
+        destination: Screen,
+    ) -> Option<NavigationTransitionDirection> {
+        let source_depth = settings_page_depth(source)?;
+        let destination_depth = settings_page_depth(destination)?;
+        let adjacent = matches!(
+            (source, destination),
+            (Screen::Home, Screen::Settings)
+                | (Screen::Settings, Screen::Home)
+                | (Screen::Settings, Screen::Screensaver | Screen::About)
+                | (Screen::Screensaver | Screen::About, Screen::Settings)
+                | (Screen::About, Screen::Info | Screen::Licenses)
+                | (Screen::Info | Screen::Licenses, Screen::About)
+        );
+        let direct_home = source != Screen::Home && destination == Screen::Home;
+        (adjacent || direct_home).then_some(if destination_depth > source_depth {
+            NavigationTransitionDirection::Forward
+        } else {
+            NavigationTransitionDirection::Reverse
+        })
+    }
+
+    const fn settings_page_depth(screen: Screen) -> Option<u8> {
+        match screen {
+            Screen::Home => Some(0),
+            Screen::Settings => Some(1),
+            Screen::Screensaver | Screen::About => Some(2),
+            Screen::Info | Screen::Licenses => Some(3),
+            Screen::Controller | Screen::Arcade => None,
+        }
+    }
+
+    fn settings_navigation_input_candidate(
+        screen: Screen,
+        now: &PadState,
+        previous: &PadState,
+    ) -> bool {
+        let activated = now.btn_a && !previous.btn_a;
+        let backed = now.btn_b && !previous.btn_b;
+        let went_home = now.btn_home && !previous.btn_home;
+        match screen {
+            Screen::Home => activated || went_home,
+            Screen::Settings
+            | Screen::Screensaver
+            | Screen::About
+            | Screen::Info
+            | Screen::Licenses => activated || backed || went_home,
+            Screen::Controller | Screen::Arcade => false,
         }
     }
 

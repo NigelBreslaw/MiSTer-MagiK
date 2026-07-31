@@ -22,6 +22,8 @@ const SYSTEM_SELECTED_ROW_START_Q16: u16 = 6_000;
 const SUPER_SCALER_TEXTURE_FADE_START_Q16: u16 = 8_000;
 const SUPER_SCALER_TEXTURE_FADE_END_Q16: u16 = 16_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
+const SETTINGS_PAGE_DURATION_US: u64 = 320_000;
+const SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR: isize = 4;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
 const HUD_MARGIN: usize = 8;
@@ -70,6 +72,13 @@ impl NavigationTransitionEdge {
 pub enum NavigationTransitionDirection {
     Forward,
     Reverse,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NavigationTransitionRenderer {
+    #[default]
+    SuperScaler,
+    SettingsPage,
 }
 
 impl NavigationTransitionDirection {
@@ -303,6 +312,7 @@ pub struct NavigationTransitionRequest {
     pub geometry: NavigationTransitionGeometry,
     pub duration_us: u64,
     pub preparation_timeout_us: u64,
+    renderer: NavigationTransitionRenderer,
 }
 
 impl NavigationTransitionRequest {
@@ -317,6 +327,18 @@ impl NavigationTransitionRequest {
             geometry,
             duration_us: edge.duration_us(),
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
+            renderer: NavigationTransitionRenderer::SuperScaler,
+        }
+    }
+
+    fn settings_page(direction: NavigationTransitionDirection) -> Self {
+        Self {
+            edge: NavigationTransitionEdge::HomeToConsoles,
+            direction,
+            geometry: NavigationTransitionGeometry::default(),
+            duration_us: SETTINGS_PAGE_DURATION_US,
+            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
+            renderer: NavigationTransitionRenderer::SettingsPage,
         }
     }
 }
@@ -740,7 +762,10 @@ impl NavigationTransitionController {
 }
 
 const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
-    let forward_cover = SUPER_SCALER_COVER_PROGRESS;
+    let forward_cover = match request.renderer {
+        NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
+        NavigationTransitionRenderer::SettingsPage => PROGRESS_MAX / 2,
+    };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
         NavigationTransitionDirection::Reverse => PROGRESS_MAX - forward_cover,
@@ -979,20 +1004,43 @@ impl NavigationTransitionPoc {
         source: &[Rgb565Pixel],
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
+        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        let started = self.begin_request(request, source, now_us)?;
+        if started && direction == NavigationTransitionDirection::Forward {
+            self.geometry_history.push((edge, geometry));
+        }
+        Ok(started)
+    }
+
+    pub fn begin_settings_page(
+        &mut self,
+        direction: NavigationTransitionDirection,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        let mut request = NavigationTransitionRequest::settings_page(direction);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        self.begin_request(request, source, now_us)
+    }
+
+    fn begin_request(
+        &mut self,
+        request: NavigationTransitionRequest,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
         if !self.enabled || self.is_active() {
             return Ok(false);
         }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
-        if direction == NavigationTransitionDirection::Forward {
-            self.geometry_history.push((edge, geometry));
-        }
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
-        if let Some(duration_us) = self.duration_override_us {
-            request.duration_us = duration_us;
-        }
         self.pending_request = Some(request);
         self.pending_capture_us = capture_us;
         self.pending_started_us = now_us;
@@ -1062,19 +1110,27 @@ impl NavigationTransitionPoc {
                 ..NavigationTransitionRenderStats::default()
             }
         } else {
-            let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
-            render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
-            stats
+            match request.renderer {
+                NavigationTransitionRenderer::SuperScaler => {
+                    let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
+                    render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+                    let overlay_started = Instant::now();
+                    apply_crt_scanline_overlay(
+                        self.buffers.working.as_mut_slice(),
+                        self.buffers.width,
+                        self.buffers.height,
+                        frame,
+                        &mut stats,
+                    );
+                    stats.overlay_us =
+                        overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                    stats
+                }
+                NavigationTransitionRenderer::SettingsPage => {
+                    render_settings_page_push(&mut self.buffers, request, frame)?
+                }
+            }
         };
-        let overlay_started = Instant::now();
-        apply_crt_scanline_overlay(
-            self.buffers.working.as_mut_slice(),
-            self.buffers.width,
-            self.buffers.height,
-            frame,
-            &mut stats,
-        );
-        stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller.telemetry.overlay_us = self
             .controller
@@ -1131,8 +1187,11 @@ impl NavigationTransitionPoc {
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
+        let renderer = self.request().map(|request| request.renderer);
         let completion = self.controller.complete()?;
-        if completion.endpoint == NavigationTransitionEndpoint::Source {
+        if completion.endpoint == NavigationTransitionEndpoint::Source
+            && renderer == Some(NavigationTransitionRenderer::SuperScaler)
+        {
             self.geometry_history.pop();
         }
         Some(completion)
@@ -1591,6 +1650,110 @@ fn render_super_scaler_shell(
         }
     }
     Ok(stats)
+}
+
+fn render_settings_page_push(
+    buffers: &mut NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    if !buffers.source_ready
+        || buffers.source.len() != buffers.width.saturating_mul(buffers.height)
+        || buffers.working.len() != buffers.source.len()
+    {
+        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+    }
+    let source = buffers.source.as_slice();
+    let destination = buffers
+        .destination_ready
+        .then_some(buffers.destination.as_slice());
+    let working = buffers.working.as_mut_slice();
+    let mut stats = NavigationTransitionRenderStats::default();
+
+    if frame.progress_q16 == 0 || destination.is_none() {
+        working.copy_from_slice(source);
+        stats.copied_pixels = source.len() as u64;
+        return Ok(stats);
+    }
+    let destination = destination.expect("checked destination snapshot");
+    if frame.progress_q16 == PROGRESS_MAX {
+        working.copy_from_slice(destination);
+        stats.copied_pixels = destination.len() as u64;
+        return Ok(stats);
+    }
+
+    let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
+    let width = buffers.width as isize;
+    let source_travel = width / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
+    working.fill(Rgb565Pixel(0));
+    match request.direction {
+        NavigationTransitionDirection::Forward => {
+            let source_x = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
+            let destination_x = width - width * travel_q16 / PROGRESS_MAX as isize;
+            stats.copied_pixels = stats
+                .copied_pixels
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    source,
+                    buffers.width,
+                    buffers.height,
+                    source_x,
+                ))
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    destination,
+                    buffers.width,
+                    buffers.height,
+                    destination_x,
+                ));
+        }
+        NavigationTransitionDirection::Reverse => {
+            let destination_x = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
+            let source_x = width * travel_q16 / PROGRESS_MAX as isize;
+            stats.copied_pixels = stats
+                .copied_pixels
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    destination,
+                    buffers.width,
+                    buffers.height,
+                    destination_x,
+                ))
+                .saturating_add(blit_snapshot_x(
+                    working,
+                    source,
+                    buffers.width,
+                    buffers.height,
+                    source_x,
+                ));
+        }
+    }
+    Ok(stats)
+}
+
+fn blit_snapshot_x(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    offset_x: isize,
+) -> u64 {
+    if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
+        return 0;
+    }
+    let destination_x = offset_x.max(0) as usize;
+    let source_x = offset_x.saturating_neg().max(0) as usize;
+    if destination_x >= width || source_x >= width {
+        return 0;
+    }
+    let copy_width = (width - destination_x).min(width - source_x);
+    for y in 0..height {
+        let destination_start = y * width + destination_x;
+        let source_start = y * width + source_x;
+        output[destination_start..destination_start + copy_width]
+            .copy_from_slice(&snapshot[source_start..source_start + copy_width]);
+    }
+    copy_width.saturating_mul(height) as u64
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3920,6 +4083,120 @@ fn lerp_u16(from: u16, to: u16, progress_q16: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
+        let width = 16;
+        let height = 3;
+        let source = vec![Rgb565Pixel(0xf800); width * height];
+        let destination = vec![Rgb565Pixel(0x07e0); width * height];
+        let mut buffers = NavigationTransitionBuffers::new(width, height);
+        buffers.begin_capture();
+        buffers.capture_source(&source).unwrap();
+        buffers.capture_destination(&destination).unwrap();
+
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            let request = NavigationTransitionRequest::settings_page(direction);
+            render_settings_page_push(
+                &mut buffers,
+                request,
+                NavigationTransitionFrame {
+                    progress_q16: 0,
+                    ..NavigationTransitionFrame::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(buffers.working(), source);
+
+            render_settings_page_push(
+                &mut buffers,
+                request,
+                NavigationTransitionFrame {
+                    progress_q16: PROGRESS_MAX,
+                    ..NavigationTransitionFrame::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(buffers.working(), destination);
+        }
+    }
+
+    #[test]
+    fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
+        let width = 8;
+        let height = 2;
+        let source: Vec<_> = (0..width * height)
+            .map(|index| Rgb565Pixel(index as u16))
+            .collect();
+        let mut output = vec![Rgb565Pixel(0xffff); width * height];
+
+        assert_eq!(
+            blit_snapshot_x(&mut output, &source, width, height, -3),
+            ((width - 3) * height) as u64
+        );
+        assert_eq!(&output[..width - 3], &source[3..width]);
+        assert_eq!(
+            &output[width..width + width - 3],
+            &source[width + 3..width * 2]
+        );
+
+        output.fill(Rgb565Pixel(0xffff));
+        assert_eq!(
+            blit_snapshot_x(&mut output, &source, width, height, 3),
+            ((width - 3) * height) as u64
+        );
+        assert_eq!(&output[3..width], &source[..width - 3]);
+        assert_eq!(&output[width + 3..width * 2], &source[width..width * 2 - 3]);
+    }
+
+    #[test]
+    fn cancelled_settings_push_does_not_consume_super_scaler_geometry_history() {
+        let width = 16;
+        let height = 8;
+        let snapshot = vec![Rgb565Pixel(0); width * height];
+        let geometry = NavigationTransitionGeometry {
+            source_card: NavigationTransitionRect {
+                x: 1,
+                y: 1,
+                width: 4,
+                height: 4,
+            },
+            ..NavigationTransitionGeometry::default()
+        };
+        let mut transition = NavigationTransitionPoc::new(width, height, true);
+        assert!(
+            transition
+                .begin(
+                    NavigationTransitionEdge::HomeToConsoles,
+                    NavigationTransitionDirection::Forward,
+                    geometry,
+                    &snapshot,
+                    0,
+                )
+                .unwrap()
+        );
+        transition.capture_destination(&snapshot, 0).unwrap();
+        transition.settle_at_destination();
+        transition.complete();
+
+        assert!(
+            transition
+                .begin_settings_page(NavigationTransitionDirection::Forward, &snapshot, 1)
+                .unwrap()
+        );
+        assert_eq!(
+            transition.cancel_for_exclusive_view(),
+            Some(NavigationTransitionEndpoint::Source)
+        );
+        transition.complete();
+        assert_eq!(
+            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
+            Some(geometry)
+        );
+    }
 
     fn geometry() -> NavigationTransitionGeometry {
         NavigationTransitionGeometry {
