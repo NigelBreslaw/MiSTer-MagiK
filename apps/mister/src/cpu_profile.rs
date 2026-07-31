@@ -89,6 +89,10 @@ fn bounded_profile_trigger() -> Option<BoundedProfileTrigger> {
     )
 }
 
+pub fn navigation_transition_profile_requested() -> bool {
+    bounded_profile_trigger() == Some(BoundedProfileTrigger::NavigationTransitions)
+}
+
 fn bounded_profile_trigger_from_values(
     enabled: Option<&str>,
     trigger: Option<&str>,

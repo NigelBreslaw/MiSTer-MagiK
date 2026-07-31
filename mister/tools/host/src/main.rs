@@ -3835,7 +3835,6 @@ fn profile_installed_navigation_transition_run(
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
                     "wait:120,a,wait:120,b,wait:90,right,a,wait:120,a,wait:30,a,wait:120,b,wait:120,b,wait:30,b,wait:120".into(),

@@ -29,7 +29,7 @@ mod macos {
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
         CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
-        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionPoc,
+        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRuntime,
         crt_navigation_geometry, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
@@ -124,7 +124,8 @@ mod macos {
             !options.no_scan,
             !options.no_download,
             options.display_profile,
-            options.navigation_transition_poc,
+            options.navigation_transition_demo.is_some()
+                || options.navigation_transition_duration_ms.is_some(),
         )?;
         application
             .navigation_transition
@@ -171,16 +172,14 @@ mod macos {
                     application.compose_frame();
                     application.launcher_pad.btn_b = false;
                     application.launcher_pad.rebuild_pressed_now();
-                    if let Some((count, min_x, min_y, max_x, max_y)) =
-                        frame_difference_outside_navigation_hud(
-                            &reverse_origin,
-                            application.frame_target.cached_565(),
-                            frame_width,
-                            frame_height,
-                        )
-                    {
+                    if let Some((count, min_x, min_y, max_x, max_y)) = frame_difference(
+                        &reverse_origin,
+                        application.frame_target.cached_565(),
+                        frame_width,
+                        frame_height,
+                    ) {
                         return Err(format!(
-                            "reverse demo frame 0 differs from its destination origin outside the POC HUD: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
+                            "reverse demo frame 0 differs from its destination origin: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
                         )
                         .into());
                     }
@@ -213,16 +212,15 @@ mod macos {
                     .into());
                 }
                 if let Some(origin) = demo_origin_frame.as_deref()
-                    && let Some((count, min_x, min_y, max_x, max_y)) =
-                        frame_difference_outside_navigation_hud(
-                            origin,
-                            application.frame_target.cached_565(),
-                            frame_width,
-                            frame_height,
-                        )
+                    && let Some((count, min_x, min_y, max_x, max_y)) = frame_difference(
+                        origin,
+                        application.frame_target.cached_565(),
+                        frame_width,
+                        frame_height,
+                    )
                 {
                     return Err(format!(
-                        "reverse demo endpoint differs from its originating frame outside the POC HUD: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
+                        "reverse demo endpoint differs from its originating frame: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
                     )
                     .into());
                 }
@@ -377,7 +375,7 @@ mod macos {
         display_profile: DisplayProfile,
         card_connected: bool,
         next_card_check_at: Instant,
-        navigation_transition: NavigationTransitionPoc,
+        navigation_transition: NavigationTransitionRuntime,
         pending_navigation_event: Option<LauncherEvent>,
         pending_navigation_committed: bool,
         pending_navigation_source_state: Option<NavigationTransitionState>,
@@ -396,7 +394,7 @@ mod macos {
             scan_card: bool,
             download_media: bool,
             display_profile: DisplayProfile,
-            _navigation_transition_poc: bool,
+            force_navigation_motion: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
@@ -432,7 +430,8 @@ mod macos {
             launcher
                 .global::<MisterBridge>()
                 .set_build_label(format!("Mac visual preview · {}", content.label()).into());
-            let navigation_motion_enabled = !launcher_nav.settings.reduce_motion;
+            let navigation_motion_enabled =
+                force_navigation_motion || !launcher_nav.settings.reduce_motion;
             let mut application = Self {
                 launcher,
                 slint_window,
@@ -496,7 +495,7 @@ mod macos {
                 display_profile,
                 card_connected,
                 next_card_check_at: now + Duration::from_secs(1),
-                navigation_transition: NavigationTransitionPoc::new(
+                navigation_transition: NavigationTransitionRuntime::new(
                     frame_width,
                     frame_height,
                     navigation_motion_enabled,
@@ -880,7 +879,8 @@ mod macos {
                 match event.action {
                     LauncherAction::OpenMenu
                     | LauncherAction::OpenCollection
-                    | LauncherAction::NavigateBack => {
+                    | LauncherAction::NavigateBack
+                    | LauncherAction::NavigateHome => {
                         if self.begin_navigation_transition(event.clone(), now_us) {
                             self.pending_navigation_source_state =
                                 Some(self.launcher_nav.navigation_transition_state());
@@ -993,7 +993,7 @@ mod macos {
             let previous = self.scenario;
             self.scenario = Scenario::from_screen(self.launcher_nav.screen);
             self.sync_launcher_navigation();
-            self.sync_navigation_transition_bridge();
+            self.sync_navigation_transition_active();
             if self.scenario != previous
                 && let Some(window) = self.native_window.as_ref()
             {
@@ -1001,36 +1001,12 @@ mod macos {
             }
         }
 
-        fn sync_navigation_transition_bridge(&self) {
-            if !self.navigation_transition.enabled() {
-                return;
-            }
+        fn sync_navigation_transition_active(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
-            let frame = self.navigation_transition.frame();
-            bridge.set_nav_transition_hud_visible(false);
-            bridge.set_nav_transition_phase(frame.phase as i32);
-            bridge.set_nav_transition_edge(
-                self.navigation_transition
-                    .request()
-                    .map_or(-1, |request| request.edge as i32),
-            );
-            bridge.set_nav_transition_cover_progress(
-                frame.cover_progress_q16 as f32 / u16::MAX as f32,
-            );
-            bridge.set_nav_transition_reveal_progress(
-                frame.reveal_progress_q16 as f32 / u16::MAX as f32,
-            );
-            bridge.set_nav_transition_frame_us(
-                self.navigation_transition.last_frame_work_us() as i32,
-            );
-            let stats = self.navigation_transition.last_render_stats();
-            bridge.set_nav_transition_overlay_us(stats.overlay_us.min(i32::MAX as u64) as i32);
-            bridge.set_nav_transition_phosphor_pixels(
-                stats.phosphor_pixels.min(i32::MAX as u64) as i32
-            );
-            bridge.set_nav_transition_scanline_pixels(
-                stats.scanline_pixels.min(i32::MAX as u64) as i32
-            );
+            let active = self.navigation_transition.is_active();
+            if bridge.get_navigation_transition_active() != active {
+                bridge.set_navigation_transition_active(active);
+            }
         }
 
         fn compose_navigation_transition(&mut self) {
@@ -1038,8 +1014,6 @@ mod macos {
                 return;
             }
             let frame_work_started = Instant::now();
-            self.navigation_transition
-                .capture_hud(self.frame_target.cached_565());
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
             let mut render_transition_frame = true;
             if self.pending_navigation_committed && !self.navigation_transition.destination_ready()
@@ -1060,6 +1034,15 @@ mod macos {
             if self.navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 let completion = self.navigation_transition.complete();
                 if completion.is_some_and(|completion| {
+                    completion.endpoint == NavigationTransitionEndpoint::Destination
+                }) && self
+                    .pending_navigation_event
+                    .as_ref()
+                    .is_some_and(|event| event.action == LauncherAction::NavigateHome)
+                {
+                    self.navigation_transition.clear_geometry_history();
+                }
+                if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) && let Some(source_state) = self.pending_navigation_source_state.take()
                 {
@@ -1076,7 +1059,7 @@ mod macos {
                     .as_micros()
                     .min(u64::MAX as u128) as u64,
             );
-            self.sync_navigation_transition_bridge();
+            self.sync_navigation_transition_active();
         }
 
         fn exit_screenshot_tiles(&mut self) {
@@ -2148,6 +2131,22 @@ mod macos {
                 NavigationTransitionEdge::ConsolesToSystem,
                 NavigationTransitionDirection::Reverse,
             )),
+            LauncherAction::NavigateHome if nav.screen == Screen::Home => Some((
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Reverse,
+            )),
+            LauncherAction::NavigateHome
+                if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
+            {
+                Some((
+                    NavigationTransitionEdge::HomeToArcade,
+                    NavigationTransitionDirection::Reverse,
+                ))
+            }
+            LauncherAction::NavigateHome if nav.screen == Screen::Arcade => Some((
+                NavigationTransitionEdge::ConsolesToSystem,
+                NavigationTransitionDirection::Reverse,
+            )),
             _ => None,
         }
     }
@@ -2215,7 +2214,6 @@ mod macos {
         no_scan: bool,
         no_download: bool,
         display_profile: DisplayProfile,
-        navigation_transition_poc: bool,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
@@ -2233,7 +2231,6 @@ mod macos {
             let mut no_scan = false;
             let mut no_download = false;
             let mut display_profile = DisplayProfile::Hdmi;
-            let mut navigation_transition_poc = false;
             let mut navigation_transition_demo = None;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
@@ -2281,7 +2278,6 @@ mod macos {
                     }
                     "--no-scan" => no_scan = true,
                     "--no-download" => no_download = true,
-                    "--navigation-transition-poc" => navigation_transition_poc = true,
                     "--navigation-transition-duration-ms" => {
                         let value = arguments
                             .next()
@@ -2295,7 +2291,6 @@ mod macos {
                             );
                         }
                         navigation_transition_duration_ms = Some(duration);
-                        navigation_transition_poc = true;
                     }
                     "--navigation-transition-demo" => {
                         let value = arguments
@@ -2307,11 +2302,9 @@ mod macos {
                                     "invalid navigation transition edge {value:?}; expected home-consoles, home-arcade, or consoles-system"
                                 )
                             })?);
-                        navigation_transition_poc = true;
                     }
                     "--navigation-transition-demo-reverse" => {
                         navigation_transition_demo_reverse = true;
-                        navigation_transition_poc = true;
                     }
                     "--display-profile" => {
                         let value = arguments
@@ -2323,7 +2316,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2350,7 +2343,6 @@ mod macos {
                 no_scan,
                 no_download,
                 display_profile,
-                navigation_transition_poc,
                 navigation_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
@@ -2586,28 +2578,20 @@ mod macos {
         Ok(())
     }
 
-    fn frame_difference_outside_navigation_hud(
+    fn frame_difference(
         first: &[Rgb565Pixel],
         second: &[Rgb565Pixel],
         width: usize,
         height: usize,
     ) -> Option<(usize, usize, usize, usize, usize)> {
-        const HUD_WIDTH: usize = 286;
-        const HUD_HEIGHT: usize = 28;
-        const HUD_MARGIN: usize = 8;
         if first.len() != width.saturating_mul(height) || second.len() != first.len() {
             return Some((usize::MAX, 0, 0, width, height));
         }
-        let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
-        let hud_x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
-        let hud_bottom = HUD_MARGIN.saturating_add(HUD_HEIGHT).min(height);
         let mut difference = None;
         for (offset, pair) in first.iter().zip(second).enumerate() {
             let x = offset % width.max(1);
             let y = offset / width.max(1);
-            let inside_hud =
-                y >= HUD_MARGIN && y < hud_bottom && x >= hud_x && x < hud_x + hud_width;
-            if !inside_hud && pair.0 != pair.1 {
+            if pair.0 != pair.1 {
                 let (count, min_x, min_y, max_x, max_y) = difference.get_or_insert((0, x, y, x, y));
                 *count += 1;
                 *min_x = (*min_x).min(x);
@@ -3136,7 +3120,6 @@ mod macos {
             )
             .unwrap();
 
-            assert!(options.navigation_transition_poc);
             assert_eq!(
                 options.navigation_transition_demo,
                 Some(NavigationTransitionEdge::HomeToArcade)
@@ -3321,21 +3304,21 @@ mod macos {
         }
 
         #[test]
-        fn reverse_endpoint_comparison_ignores_only_the_navigation_hud() {
+        fn reverse_endpoint_comparison_checks_the_complete_frame() {
             let width = 320;
             let height = 64;
             let first = vec![Rgb565Pixel(0x1234); width * height];
             let mut second = first.clone();
             second[8 * width + 26] = Rgb565Pixel(0xabcd);
             assert_eq!(
-                frame_difference_outside_navigation_hud(&first, &second, width, height),
-                None
+                frame_difference(&first, &second, width, height),
+                Some((1, 26, 8, 26, 8))
             );
 
             second[40 * width + 26] = Rgb565Pixel(0xabcd);
             assert_eq!(
-                frame_difference_outside_navigation_hud(&first, &second, width, height),
-                Some((1, 26, 40, 26, 40))
+                frame_difference(&first, &second, width, height),
+                Some((2, 26, 8, 26, 40))
             );
         }
 

@@ -278,6 +278,7 @@ pub enum LauncherAction {
     OpenMenu,
     OpenCollection,
     NavigateBack,
+    NavigateHome,
     LaunchGame,
     ExitToMister,
     RebuildDatabase,
@@ -1930,6 +1931,17 @@ impl LauncherNav {
                 self.leave_arcade(false, &collection_id);
                 self.screen != before
             }
+            LauncherAction::NavigateHome if self.screen == Screen::Home => {
+                let before = self.current_menu_id().to_string();
+                self.go_root();
+                self.current_menu_id() != before
+            }
+            LauncherAction::NavigateHome if self.screen == Screen::Arcade => {
+                let collection_id = self.active_collection_scope_id(catalog).to_string();
+                let before = self.screen;
+                self.leave_arcade(true, &collection_id);
+                self.screen != before
+            }
             _ => false,
         }
     }
@@ -1994,6 +2006,12 @@ impl LauncherNav {
                 self.settings_selected = 0;
                 self.settings_focused = false;
                 self.screen = Screen::Settings;
+            } else if emit_navigation_intents && self.menu_path.len() > 1 {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
             } else {
                 self.go_root();
             }
@@ -2230,6 +2248,13 @@ impl LauncherNav {
         }
 
         if rising(now.btn_home, self.prev.btn_home) {
+            if emit_navigation_intents {
+                return Some(LauncherEvent {
+                    action: LauncherAction::NavigateHome,
+                    path: None,
+                    settings: None,
+                });
+            }
             self.leave_arcade(true, &collection_id);
             return None;
         }
@@ -6707,6 +6732,28 @@ mod tests {
         assert_eq!(back.action, LauncherAction::NavigateBack);
         assert_eq!(nav.current_menu_id(), "menu:consoles");
         assert!(nav.commit_navigation_intent(&back, &catalog));
+        assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
+    }
+
+    #[test]
+    fn home_intent_defers_direct_root_navigation() {
+        let catalog = hierarchy_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles"));
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+
+        let home = nav
+            .handle_input_with_navigation_intents(
+                &pad_with(|pad| pad.btn_home = true),
+                t0,
+                &catalog,
+            )
+            .expect("home intent");
+        assert_eq!(home.action, LauncherAction::NavigateHome);
+        assert_eq!(nav.current_menu_id(), "menu:consoles:nintendo");
+        assert!(nav.commit_navigation_intent(&home, &catalog));
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
     }
 

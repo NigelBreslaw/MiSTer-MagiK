@@ -97,16 +97,8 @@ export global MisterBridge {
     // Current launcher hierarchy level. Root uses the product name and no breadcrumb.
     in-out property <string> menu-title: "MiSTer MagiK";
     in-out property <string> menu-breadcrumb;
-    // Development-only navigation-transition comparison HUD.
-    in-out property <bool> nav-transition-hud-visible;
-    in-out property <int> nav-transition-phase;
-    in-out property <int> nav-transition-edge;
-    in-out property <float> nav-transition-cover-progress;
-    in-out property <float> nav-transition-reveal-progress;
-    in-out property <int> nav-transition-frame-us;
-    in-out property <int> nav-transition-overlay-us;
-    in-out property <int> nav-transition-phosphor-pixels;
-    in-out property <int> nav-transition-scanline-pixels;
+    // Destination hydration must not start an unrelated chrome tween behind a snapshot transition.
+    in-out property <bool> navigation-transition-active;
     // Set asynchronously after comparing the configured Downloader feed with the installed build.
     in-out property <bool> update-available;
     // Derived from the executable's fixed public/development installation layout.

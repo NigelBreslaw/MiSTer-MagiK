@@ -297,6 +297,22 @@ fn navigation_transition_for_intent(
             NavigationTransitionEdge::ConsolesToSystem,
             NavigationTransitionDirection::Reverse,
         )),
+        LauncherAction::NavigateHome if nav.screen == Screen::Home => Some((
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Reverse,
+        )),
+        LauncherAction::NavigateHome
+            if nav.screen == Screen::Arcade && nav.current_menu_id() == ROOT_MENU_ID =>
+        {
+            Some((
+                NavigationTransitionEdge::HomeToArcade,
+                NavigationTransitionDirection::Reverse,
+            ))
+        }
+        LauncherAction::NavigateHome if nav.screen == Screen::Arcade => Some((
+            NavigationTransitionEdge::ConsolesToSystem,
+            NavigationTransitionDirection::Reverse,
+        )),
         _ => None,
     }
 }
@@ -353,29 +369,15 @@ fn settings_navigation_input_candidate(
     }
 }
 
-fn sync_navigation_transition_poc_bridge(
+fn sync_navigation_transition_active(
     app: &slint_ui::launcher::Launcher,
-    transition: &NavigationTransitionPoc,
+    transition: &NavigationTransitionRuntime,
 ) {
-    if !transition.enabled() || transition.snapshot_locked() {
-        return;
-    }
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let frame = transition.frame();
-    bridge.set_nav_transition_hud_visible(false);
-    bridge.set_nav_transition_phase(frame.phase as i32);
-    bridge.set_nav_transition_edge(
-        transition
-            .request()
-            .map_or(-1, |request| request.edge as i32),
-    );
-    bridge.set_nav_transition_cover_progress(frame.cover_progress_q16 as f32 / u16::MAX as f32);
-    bridge.set_nav_transition_reveal_progress(frame.reveal_progress_q16 as f32 / u16::MAX as f32);
-    bridge.set_nav_transition_frame_us(transition.last_frame_work_us() as i32);
-    let stats = transition.last_render_stats();
-    bridge.set_nav_transition_overlay_us(stats.overlay_us.min(i32::MAX as u64) as i32);
-    bridge.set_nav_transition_phosphor_pixels(stats.phosphor_pixels.min(i32::MAX as u64) as i32);
-    bridge.set_nav_transition_scanline_pixels(stats.scanline_pixels.min(i32::MAX as u64) as i32);
+    let active = transition.is_active();
+    if bridge.get_navigation_transition_active() != active {
+        bridge.set_navigation_transition_active(active);
+    }
 }
 
 fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
@@ -1864,8 +1866,10 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
+    let navigation_motion_enabled =
+        !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
     let mut navigation_transition =
-        NavigationTransitionPoc::new(ui.render_w(), ui.render_h(), !nav.settings.reduce_motion);
+        NavigationTransitionRuntime::new(ui.render_w(), ui.render_h(), navigation_motion_enabled);
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
     let (display_confirm_tx, display_confirm_rx) =
@@ -3550,7 +3554,8 @@ pub(super) fn run_launcher_loop(
                         match event.action {
                             LauncherAction::OpenMenu
                             | LauncherAction::OpenCollection
-                            | LauncherAction::NavigateBack => {
+                            | LauncherAction::NavigateBack
+                            | LauncherAction::NavigateHome => {
                                 let collection_id = (event.action
                                     == LauncherAction::OpenCollection)
                                     .then(|| event.path.clone())
@@ -4476,7 +4481,7 @@ pub(super) fn run_launcher_loop(
         for event in composition_decision.events.iter() {
             runtime_status::event(event.name, event.detail.as_str());
         }
-        sync_navigation_transition_poc_bridge(&app, &navigation_transition);
+        sync_navigation_transition_active(&app, &navigation_transition);
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
         }
@@ -5146,7 +5151,6 @@ pub(super) fn run_launcher_loop(
         let mut navigation_transition_render_us = 0u128;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
-            navigation_transition.capture_hud(layer_target.cached_frame_view().pixels());
             let now_us = loop_start
                 .saturating_duration_since(start)
                 .as_micros()
@@ -5234,6 +5238,14 @@ pub(super) fn run_launcher_loop(
                 let completion = navigation_transition.complete();
                 let pending = pending_navigation_transition.take();
                 if completion.is_some_and(|completion| {
+                    completion.endpoint == NavigationTransitionEndpoint::Destination
+                }) && pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.event.action == LauncherAction::NavigateHome)
+                {
+                    navigation_transition.clear_geometry_history();
+                }
+                if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {
                     if let Some(entry) = pending_collection_entry.take() {
@@ -5257,7 +5269,7 @@ pub(super) fn run_launcher_loop(
                 .as_micros();
             navigation_transition
                 .note_frame_work_us(navigation_transition_render_us.min(u64::MAX as u128) as u64);
-            sync_navigation_transition_poc_bridge(&app, &navigation_transition);
+            sync_navigation_transition_active(&app, &navigation_transition);
         }
         let effect_label_us = navigation_transition_render_us;
         let navigation_telemetry = navigation_transition.telemetry();

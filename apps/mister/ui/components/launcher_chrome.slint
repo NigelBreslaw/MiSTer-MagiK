@@ -96,7 +96,7 @@ export component LauncherTile inherits Rectangle {
             wrap: word-wrap;
 
             animate color {
-                duration: MisterBridge.nav-transition-phase == 0 ? 100ms : 0ms;
+                duration: MisterBridge.navigation-transition-active ? 0ms : 100ms;
                 easing: Easing.ease-in-out;
             }
         }
@@ -120,7 +120,7 @@ export component LauncherTile inherits Rectangle {
             // In the RGB565 software-renderer launcher mock, animating color alpha
             // was slightly faster than animating Text opacity for this subtitle fade.
             animate color {
-                duration: MisterBridge.nav-transition-phase == 0 ? 100ms : 0ms;
+                duration: MisterBridge.navigation-transition-active ? 0ms : 100ms;
                 easing: Easing.ease-in-out;
             }
         }

@@ -24,9 +24,6 @@ const SUPER_SCALER_TEXTURE_FADE_END_Q16: u16 = 16_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const SETTINGS_PAGE_DURATION_US: u64 = 320_000;
 const SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR: isize = 4;
-const HUD_WIDTH: usize = 286;
-const HUD_HEIGHT: usize = 28;
-const HUD_MARGIN: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationTransitionEdge {
@@ -1137,7 +1134,7 @@ pub struct NavigationTransitionRenderStats {
 }
 
 #[derive(Debug)]
-pub struct NavigationTransitionPoc {
+pub struct NavigationTransitionRuntime {
     enabled: bool,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
@@ -1151,10 +1148,9 @@ pub struct NavigationTransitionPoc {
     geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
-    hud_scratch: Vec<Rgb565Pixel>,
 }
 
-impl NavigationTransitionPoc {
+impl NavigationTransitionRuntime {
     pub fn new(width: usize, height: usize, enabled: bool) -> Self {
         if enabled {
             warm_smooth_spring_curve();
@@ -1174,14 +1170,6 @@ impl NavigationTransitionPoc {
             geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
-            hud_scratch: vec![
-                Rgb565Pixel(0);
-                if enabled {
-                    HUD_WIDTH.saturating_mul(HUD_HEIGHT)
-                } else {
-                    0
-                }
-            ],
         }
     }
 
@@ -1205,11 +1193,8 @@ impl NavigationTransitionPoc {
         if enabled {
             warm_smooth_spring_curve();
             self.buffers.resize(width, height);
-            self.hud_scratch
-                .resize(HUD_WIDTH.saturating_mul(HUD_HEIGHT), Rgb565Pixel(0));
         } else {
             self.buffers.resize(0, 0);
-            self.hud_scratch.clear();
         }
     }
 
@@ -1368,12 +1353,6 @@ impl NavigationTransitionPoc {
             .telemetry_mut()
             .note_render(stats.render_us, false);
         self.last_render_stats = stats;
-        restore_hud_pixels(
-            &self.hud_scratch,
-            self.buffers.width,
-            self.buffers.height,
-            self.buffers.working.as_mut_slice(),
-        );
         Ok(self.buffers.working())
     }
 
@@ -1404,14 +1383,28 @@ impl NavigationTransitionPoc {
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
-        let renderer = self.request().map(|request| request.renderer);
+        let request = self.request();
         let completion = self.controller.complete()?;
-        if completion.endpoint == NavigationTransitionEndpoint::Source
-            && renderer == Some(NavigationTransitionRenderer::SuperScaler)
-        {
+        if request.is_some_and(|request| {
+            request.renderer == NavigationTransitionRenderer::SuperScaler
+                && matches!(
+                    (request.direction, completion.endpoint),
+                    (
+                        NavigationTransitionDirection::Forward,
+                        NavigationTransitionEndpoint::Source
+                    ) | (
+                        NavigationTransitionDirection::Reverse,
+                        NavigationTransitionEndpoint::Destination
+                    )
+                )
+        }) {
             self.geometry_history.pop();
         }
         Some(completion)
+    }
+
+    pub fn clear_geometry_history(&mut self) {
+        self.geometry_history.clear();
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
@@ -1461,36 +1454,6 @@ impl NavigationTransitionPoc {
         self.pending_status_quiesce_timeout = timed_out;
     }
 
-    pub fn capture_hud(&mut self, frame: &[Rgb565Pixel]) {
-        let width = self.buffers.width;
-        let height = self.buffers.height;
-        let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
-        if !self.enabled
-            || hud_width == 0
-            || height < HUD_MARGIN.saturating_add(HUD_HEIGHT)
-            || frame.len() != width.saturating_mul(height)
-            || self.hud_scratch.len() < hud_width.saturating_mul(HUD_HEIGHT)
-        {
-            return;
-        }
-        let x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
-        for row in 0..HUD_HEIGHT {
-            let source = (HUD_MARGIN + row) * width + x;
-            let target = row * hud_width;
-            self.hud_scratch[target..target + hud_width]
-                .copy_from_slice(&frame[source..source + hud_width]);
-        }
-    }
-
-    pub fn restore_hud(&self, frame: &mut [Rgb565Pixel]) {
-        restore_hud_pixels(
-            &self.hud_scratch,
-            self.buffers.width,
-            self.buffers.height,
-            frame,
-        );
-    }
-
     pub const fn telemetry(&self) -> NavigationTransitionTelemetry {
         self.controller.telemetry()
     }
@@ -1510,28 +1473,6 @@ impl NavigationTransitionPoc {
             telemetry.status_quiesce_timeout = self.pending_status_quiesce_timeout;
         }
         captured
-    }
-}
-
-fn restore_hud_pixels(
-    hud_scratch: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    frame: &mut [Rgb565Pixel],
-) {
-    let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
-    if hud_width == 0
-        || height < HUD_MARGIN.saturating_add(HUD_HEIGHT)
-        || frame.len() != width.saturating_mul(height)
-        || hud_scratch.len() < hud_width.saturating_mul(HUD_HEIGHT)
-    {
-        return;
-    }
-    let x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
-    for row in 0..HUD_HEIGHT {
-        let source = row * hud_width;
-        let target = (HUD_MARGIN + row) * width + x;
-        frame[target..target + hud_width].copy_from_slice(&hud_scratch[source..source + hud_width]);
     }
 }
 
@@ -4443,7 +4384,7 @@ mod tests {
             },
             ..NavigationTransitionGeometry::default()
         };
-        let mut transition = NavigationTransitionPoc::new(width, height, true);
+        let mut transition = NavigationTransitionRuntime::new(width, height, true);
         assert!(
             transition
                 .begin(
@@ -4472,6 +4413,25 @@ mod tests {
         assert_eq!(
             transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
             Some(geometry)
+        );
+
+        assert!(
+            transition
+                .begin(
+                    NavigationTransitionEdge::HomeToConsoles,
+                    NavigationTransitionDirection::Reverse,
+                    geometry,
+                    &snapshot,
+                    2,
+                )
+                .unwrap()
+        );
+        transition.capture_destination(&snapshot, 2).unwrap();
+        transition.settle_at_destination();
+        transition.complete();
+        assert_eq!(
+            transition.geometry_for_reverse(NavigationTransitionEdge::HomeToConsoles),
+            None
         );
     }
 
@@ -6065,14 +6025,14 @@ mod tests {
 
     #[test]
     fn mac_preview_configuration_selects_debug_duration() {
-        let mut poc = NavigationTransitionPoc::new(960, 540, true);
+        let mut poc = NavigationTransitionRuntime::new(960, 540, true);
         poc.configure_preview(Some(4_000));
         assert_eq!(poc.duration_override_us, Some(4_000_000));
     }
 
     #[test]
     fn super_scaler_endpoints_are_exact_snapshots() {
-        let mut poc = NavigationTransitionPoc::new(16, 12, true);
+        let mut poc = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         let geometry = NavigationTransitionGeometry {
@@ -6109,7 +6069,7 @@ mod tests {
         poc.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(poc.render().unwrap(), destination);
 
-        let mut reverse = NavigationTransitionPoc::new(16, 12, true);
+        let mut reverse = NavigationTransitionRuntime::new(16, 12, true);
         reverse
             .begin(
                 NavigationTransitionEdge::HomeToConsoles,
@@ -6124,7 +6084,7 @@ mod tests {
         reverse.tick(20_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert_eq!(reverse.render().unwrap(), source);
 
-        let mut cancelled = NavigationTransitionPoc::new(16, 12, true);
+        let mut cancelled = NavigationTransitionRuntime::new(16, 12, true);
         cancelled
             .begin(
                 NavigationTransitionEdge::HomeToConsoles,
@@ -6146,7 +6106,7 @@ mod tests {
 
     #[test]
     fn destination_preparation_does_not_advance_the_animation_clock() {
-        let mut poc = NavigationTransitionPoc::new(16, 12, true);
+        let mut poc = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
         let geometry = NavigationTransitionGeometry {
@@ -6265,8 +6225,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_poc_does_not_allocate_frame_buffers() {
-        let poc = NavigationTransitionPoc::new(960, 540, false);
+    fn disabled_runtime_does_not_allocate_frame_buffers() {
+        let poc = NavigationTransitionRuntime::new(960, 540, false);
         assert!(!poc.enabled());
         assert!(poc.buffers.source.is_empty());
         assert!(poc.buffers.destination.is_empty());
@@ -6275,6 +6235,5 @@ mod tests {
         assert!(poc.buffers.scale_source_y.is_empty());
         assert!(poc.buffers.scale_excluded_x.is_empty());
         assert!(poc.buffers.scale_dither_x.is_empty());
-        assert!(poc.hud_scratch.is_empty());
     }
 }
