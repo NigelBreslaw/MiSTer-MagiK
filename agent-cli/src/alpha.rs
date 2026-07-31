@@ -243,7 +243,15 @@ fn require_sha(field: &'static str, value: &str) -> AgentResult<()> {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    digest.iter().fold(
+        String::with_capacity(digest.len() * 2),
+        |mut output, byte| {
+            let _ = write!(output, "{byte:02x}");
+            output
+        },
+    )
 }
 
 fn digest_file(path: &Path) -> AgentResult<String> {

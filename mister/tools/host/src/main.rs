@@ -10274,10 +10274,10 @@ fn agent_sd_list(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-pub(super) struct PngCapture {
-    pub(super) result: Value,
-    pub(super) png: Vec<u8>,
-    pub(super) elapsed_ms: u128,
+struct PngCapture {
+    result: Value,
+    png: Vec<u8>,
+    elapsed_ms: u128,
 }
 
 fn capture_buffer(args: &[String]) -> Result<()> {
@@ -10360,7 +10360,7 @@ fn delivery_smoke_capture_detail(capture: &PngCapture) -> Result<String> {
     ))
 }
 
-pub(super) fn capture_source_label(result: &Value) -> Result<&str> {
+fn capture_source_label(result: &Value) -> Result<&str> {
     result
         .get("source")
         .and_then(Value::as_str)
@@ -10433,7 +10433,7 @@ fn validate_capture_contract_schema(result: &Value, expected_schema: &str) -> Re
     Ok(())
 }
 
-pub(super) fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
+fn validate_visible_launcher_capture(capture: &PngCapture) -> Result<()> {
     let result = &capture.result;
     if capture_source_label(result)? != "fpga-latched-scanout-slots"
         || result.get("authoritative_scanout").and_then(Value::as_bool) != Some(true)
@@ -10509,7 +10509,7 @@ fn request_framebuffer_png_at(agent: &AgentEndpoint) -> Result<PngCapture> {
     })
 }
 
-pub(super) fn request_framebuffer_png_at_when_latched(
+fn request_framebuffer_png_at_when_latched(
     agent: &AgentEndpoint,
     timeout: Duration,
 ) -> Result<PngCapture> {

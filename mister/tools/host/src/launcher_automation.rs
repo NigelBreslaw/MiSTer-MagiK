@@ -5,7 +5,7 @@
 
 use super::agent_client::agent_request_at;
 use super::{
-    NativeDeviceConfig, PngCapture, Result, capture_source_label,
+    NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
     request_framebuffer_png_at_when_latched, validate_visible_launcher_capture,
 };
 use mister_tool::transport::{AutomationAction, AutomationButton};
@@ -301,7 +301,7 @@ fn validate_checkpoint_label(label: &str) -> Result<()> {
 fn sha256_hex(bytes: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(bytes);
-    format!("{:x}", digest.finalize())
+    encode_hex(&digest.finalize())
 }
 
 #[cfg(test)]
