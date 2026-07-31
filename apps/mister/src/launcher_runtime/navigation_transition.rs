@@ -9,6 +9,8 @@ use std::time::Instant;
 
 const PROGRESS_MAX: u16 = u16::MAX;
 const SUPER_SCALER_COVER_PROGRESS: u16 = 31_457;
+const CRT_SWEEP_END_Q16: u16 = 13_107;
+const CRT_CLEAR_START_Q16: u16 = 52_428;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
 const HUD_WIDTH: usize = 286;
 const HUD_HEIGHT: usize = 28;
@@ -367,6 +369,9 @@ pub struct NavigationTransitionTelemetry {
     pub covered_hold_us: u64,
     pub frames: u64,
     pub reused_frames: u64,
+    pub overlay_us: u64,
+    pub phosphor_pixels: u64,
+    pub scanline_pixels: u64,
 }
 
 impl NavigationTransitionTelemetry {
@@ -386,6 +391,8 @@ pub struct NavigationTransitionFrame {
     pub owns_full_frame: bool,
     pub endpoint: Option<NavigationTransitionEndpoint>,
     pub failure: Option<NavigationTransitionFailure>,
+    pub reverse_origin_q16: u16,
+    pub reverse_leg_progress_q16: u16,
 }
 
 impl Default for NavigationTransitionFrame {
@@ -398,6 +405,8 @@ impl Default for NavigationTransitionFrame {
             owns_full_frame: false,
             endpoint: None,
             failure: None,
+            reverse_origin_q16: 0,
+            reverse_leg_progress_q16: 0,
         }
     }
 }
@@ -663,6 +672,15 @@ impl NavigationTransitionController {
                 .then(|| self.endpoint())
                 .flatten(),
             failure: self.failure,
+            reverse_origin_q16: self.reverse_origin_q16,
+            reverse_leg_progress_q16: if self.phase == NavigationTransitionPhase::Reversing
+                && self.reverse_origin_q16 > 0
+            {
+                (((self.reverse_origin_q16 - self.progress_q16) as u32 * PROGRESS_MAX as u32)
+                    / self.reverse_origin_q16 as u32) as u16
+            } else {
+                0
+            },
         }
     }
 
@@ -850,6 +868,9 @@ pub struct NavigationTransitionRenderStats {
     pub copied_pixels: u64,
     pub filled_pixels: u64,
     pub outline_pixels: u64,
+    pub overlay_us: u64,
+    pub phosphor_pixels: u64,
+    pub scanline_pixels: u64,
 }
 
 #[derive(Debug)]
@@ -969,7 +990,31 @@ impl NavigationTransitionPoc {
         let started = Instant::now();
         let mut stats = render_super_scaler_shell(&mut self.buffers, request, frame)?;
         render_hero_label_last(&mut self.buffers, request, frame, &mut stats)?;
+        let overlay_started = Instant::now();
+        apply_crt_scanline_overlay(
+            self.buffers.working.as_mut_slice(),
+            self.buffers.width,
+            self.buffers.height,
+            frame,
+            &mut stats,
+        );
+        stats.overlay_us = overlay_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        self.controller.telemetry.overlay_us = self
+            .controller
+            .telemetry
+            .overlay_us
+            .saturating_add(stats.overlay_us);
+        self.controller.telemetry.phosphor_pixels = self
+            .controller
+            .telemetry
+            .phosphor_pixels
+            .saturating_add(stats.phosphor_pixels);
+        self.controller.telemetry.scanline_pixels = self
+            .controller
+            .telemetry
+            .scanline_pixels
+            .saturating_add(stats.scanline_pixels);
         self.controller
             .telemetry_mut()
             .note_render(stats.render_us, false);
@@ -1098,6 +1143,120 @@ fn env_flag(name: &str) -> bool {
             )
         })
         .unwrap_or(false)
+}
+
+fn apply_crt_scanline_overlay(
+    working: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    frame: NavigationTransitionFrame,
+    stats: &mut NavigationTransitionRenderStats,
+) {
+    if width == 0
+        || height == 0
+        || working.len() != width.saturating_mul(height)
+        || matches!(
+            frame.phase,
+            NavigationTransitionPhase::Idle | NavigationTransitionPhase::Settled
+        )
+        || frame.progress_q16 == 0
+        || frame.progress_q16 == PROGRESS_MAX
+    {
+        return;
+    }
+
+    let reversing = frame.phase == NavigationTransitionPhase::Reversing;
+    let clearing = reversing && frame.reverse_leg_progress_q16 >= CRT_CLEAR_START_Q16;
+    let clear_y = clearing.then(|| {
+        sweep_y(
+            spring_ease_q16(window_q16(
+                frame.reverse_leg_progress_q16,
+                CRT_CLEAR_START_Q16,
+                PROGRESS_MAX,
+            )),
+            height,
+        )
+    });
+
+    for y in (1..height).step_by(2) {
+        let covered = if reversing {
+            overlay_row_covered(frame.reverse_origin_q16, y, height)
+                && clear_y.map_or(true, |line_y| y as isize >= line_y)
+        } else {
+            overlay_row_covered(frame.progress_q16, y, height)
+        };
+        if !covered {
+            continue;
+        }
+        let start = y * width;
+        for pixel in &mut working[start..start + width] {
+            *pixel = darken_rgb565_7_8(*pixel);
+        }
+        stats.phosphor_pixels = stats.phosphor_pixels.saturating_add(width as u64);
+    }
+
+    let line_y = if reversing {
+        clear_y
+    } else if frame.progress_q16 < CRT_SWEEP_END_Q16 {
+        Some(sweep_y(
+            spring_ease_q16(window_q16(frame.progress_q16, 0, CRT_SWEEP_END_Q16)),
+            height,
+        ))
+    } else if frame.progress_q16 > CRT_CLEAR_START_Q16 {
+        Some(sweep_y(
+            spring_ease_q16(window_q16(
+                frame.progress_q16,
+                CRT_CLEAR_START_Q16,
+                PROGRESS_MAX,
+            )),
+            height,
+        ))
+    } else {
+        None
+    };
+    if let Some(line_y) = line_y {
+        const COLORS: [u16; 5] = [0x781f, 0x7bff, 0xffff, 0x7bff, 0x781f];
+        for (offset, color) in (-2_isize..=2).zip(COLORS) {
+            let y = line_y + offset;
+            if !(0..height as isize).contains(&y) {
+                continue;
+            }
+            working[y as usize * width..(y as usize + 1) * width].fill(Rgb565Pixel(color));
+            stats.scanline_pixels = stats.scanline_pixels.saturating_add(width as u64);
+        }
+    }
+}
+
+fn overlay_row_covered(progress_q16: u16, y: usize, height: usize) -> bool {
+    if progress_q16 < CRT_SWEEP_END_Q16 {
+        y as isize
+            <= sweep_y(
+                spring_ease_q16(window_q16(progress_q16, 0, CRT_SWEEP_END_Q16)),
+                height,
+            )
+    } else if progress_q16 <= CRT_CLEAR_START_Q16 {
+        true
+    } else {
+        y as isize
+            >= sweep_y(
+                spring_ease_q16(window_q16(progress_q16, CRT_CLEAR_START_Q16, PROGRESS_MAX)),
+                height,
+            )
+    }
+}
+
+fn sweep_y(progress_q16: u16, height: usize) -> isize {
+    let start = -3_isize;
+    let distance = height.saturating_add(6) as isize;
+    start + distance * progress_q16 as isize / PROGRESS_MAX as isize
+}
+
+fn darken_rgb565_7_8(pixel: Rgb565Pixel) -> Rgb565Pixel {
+    let value = pixel.0;
+    let red = ((value >> 11) & 0x1f) * 7 / 8;
+    let green = ((value >> 5) & 0x3f) * 7 / 8;
+    let blue = (value & 0x1f) * 7 / 8;
+    Rgb565Pixel((red << 11) | (green << 5) | blue)
 }
 
 fn render_super_scaler_shell(
@@ -5293,6 +5452,69 @@ mod tests {
             Some(NavigationTransitionEndpoint::Source)
         );
         assert_eq!(cancelled.render().unwrap(), source);
+    }
+
+    #[test]
+    fn crt_overlay_sweeps_holds_clears_and_preserves_endpoints() {
+        let width = 12;
+        let height = 10;
+        let original = vec![Rgb565Pixel(0xffff); width * height];
+        let full_phosphor_pixels = (height / 2 * width) as u64;
+        for (progress, expected_full) in [
+            (0, false),
+            (CRT_SWEEP_END_Q16 / 2, false),
+            (CRT_SWEEP_END_Q16, true),
+            (PROGRESS_MAX / 2, true),
+            (CRT_CLEAR_START_Q16, true),
+            (
+                ((CRT_CLEAR_START_Q16 as u32 + PROGRESS_MAX as u32) / 2) as u16,
+                false,
+            ),
+            (PROGRESS_MAX, false),
+        ] {
+            let mut pixels = original.clone();
+            let mut stats = NavigationTransitionRenderStats::default();
+            apply_crt_scanline_overlay(
+                &mut pixels,
+                width,
+                height,
+                NavigationTransitionFrame {
+                    phase: NavigationTransitionPhase::Reveal,
+                    progress_q16: progress,
+                    ..NavigationTransitionFrame::default()
+                },
+                &mut stats,
+            );
+            if progress == 0 || progress == PROGRESS_MAX {
+                assert_eq!(pixels, original);
+                assert_eq!(stats.phosphor_pixels, 0);
+                assert_eq!(stats.scanline_pixels, 0);
+            } else if expected_full {
+                assert_eq!(stats.phosphor_pixels, full_phosphor_pixels);
+                assert_eq!(stats.scanline_pixels, 0);
+            } else {
+                assert!(stats.phosphor_pixels < full_phosphor_pixels);
+                assert!(stats.scanline_pixels <= width as u64 * 5);
+            }
+        }
+
+        let mut reversing = original.clone();
+        let mut stats = NavigationTransitionRenderStats::default();
+        apply_crt_scanline_overlay(
+            &mut reversing,
+            width,
+            height,
+            NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Reversing,
+                progress_q16: 20_000,
+                reverse_origin_q16: PROGRESS_MAX / 2,
+                reverse_leg_progress_q16: PROGRESS_MAX / 2,
+                ..NavigationTransitionFrame::default()
+            },
+            &mut stats,
+        );
+        assert_eq!(stats.phosphor_pixels, full_phosphor_pixels);
+        assert_eq!(stats.scanline_pixels, 0);
     }
 
     #[test]

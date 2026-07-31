@@ -333,6 +333,10 @@ fn sync_navigation_transition_poc_bridge(
     bridge.set_nav_transition_cover_progress(frame.cover_progress_q16 as f32 / u16::MAX as f32);
     bridge.set_nav_transition_reveal_progress(frame.reveal_progress_q16 as f32 / u16::MAX as f32);
     bridge.set_nav_transition_frame_us(transition.last_frame_work_us() as i32);
+    let stats = transition.last_render_stats();
+    bridge.set_nav_transition_overlay_us(stats.overlay_us.min(i32::MAX as u64) as i32);
+    bridge.set_nav_transition_phosphor_pixels(stats.phosphor_pixels.min(i32::MAX as u64) as i32);
+    bridge.set_nav_transition_scanline_pixels(stats.scanline_pixels.min(i32::MAX as u64) as i32);
 }
 
 fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {

@@ -956,6 +956,14 @@ mod macos {
             bridge.set_nav_transition_frame_us(
                 self.navigation_transition.last_frame_work_us() as i32,
             );
+            let stats = self.navigation_transition.last_render_stats();
+            bridge.set_nav_transition_overlay_us(stats.overlay_us.min(i32::MAX as u64) as i32);
+            bridge.set_nav_transition_phosphor_pixels(
+                stats.phosphor_pixels.min(i32::MAX as u64) as i32
+            );
+            bridge.set_nav_transition_scanline_pixels(
+                stats.scanline_pixels.min(i32::MAX as u64) as i32
+            );
         }
 
         fn compose_navigation_transition(&mut self) {
