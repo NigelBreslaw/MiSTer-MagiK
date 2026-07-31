@@ -229,6 +229,7 @@ pub fn hdmi_navigation_geometry(
         height: 10,
     };
     NavigationTransitionGeometry {
+        label_signature: navigation_label_signature(selected_label),
         source_card,
         source_label,
         source_detail,
@@ -277,6 +278,7 @@ fn scale_hdmi_y(value: usize, frame_height: usize) -> u16 {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigationTransitionGeometry {
+    pub label_signature: u64,
     pub source_card: NavigationTransitionRect,
     pub source_label: NavigationTransitionRect,
     pub source_detail: NavigationTransitionRect,
@@ -286,6 +288,12 @@ pub struct NavigationTransitionGeometry {
     pub destination_selected_row: NavigationTransitionRect,
     pub destination_preview: NavigationTransitionRect,
     pub destination_footer: NavigationTransitionRect,
+}
+
+fn navigation_label_signature(label: &str) -> u64 {
+    label.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ byte.to_ascii_lowercase() as u64).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 fn source_text_group(geometry: NavigationTransitionGeometry) -> NavigationTransitionRect {
@@ -436,6 +444,7 @@ pub struct NavigationTransitionController {
     request: Option<NavigationTransitionRequest>,
     phase_started_us: u64,
     covered_started_us: u64,
+    covered_observed_us: u64,
     progress_q16: u16,
     reverse_origin_q16: u16,
     queued_input: Option<NavigationTransitionInput>,
@@ -452,6 +461,7 @@ impl NavigationTransitionController {
         self.request = Some(request);
         self.phase_started_us = now_us;
         self.covered_started_us = 0;
+        self.covered_observed_us = 0;
         self.progress_q16 = 0;
         self.reverse_origin_q16 = 0;
         self.queued_input = None;
@@ -479,16 +489,33 @@ impl NavigationTransitionController {
             return NavigationTransitionFrame::default();
         };
         let total_us = request.duration_us.max(1);
-        let cover_progress = request.style.cover_progress_q16();
-        let cover_us = total_us.saturating_mul(cover_progress as u64) / PROGRESS_MAX as u64;
+        let cover_progress = request_cover_progress_q16(request);
+        let forward_cover_us = total_us.saturating_mul(request.style.cover_progress_q16() as u64)
+            / PROGRESS_MAX as u64;
+        let cover_us = match request.direction {
+            NavigationTransitionDirection::Forward => forward_cover_us,
+            NavigationTransitionDirection::Reverse => total_us.saturating_sub(forward_cover_us),
+        };
 
         if self.phase == NavigationTransitionPhase::Expand {
             let elapsed = now_us.saturating_sub(self.phase_started_us);
-            self.progress_q16 = scale_progress(elapsed, cover_us, cover_progress);
+            self.progress_q16 = match request.direction {
+                NavigationTransitionDirection::Forward => {
+                    scale_progress(elapsed, cover_us, cover_progress)
+                }
+                NavigationTransitionDirection::Reverse => {
+                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
+                        request.style,
+                        total_us,
+                        total_us.saturating_sub(elapsed.min(cover_us)),
+                    ))
+                }
+            };
             if elapsed >= cover_us {
                 self.progress_q16 = cover_progress;
                 self.phase = NavigationTransitionPhase::Covered;
                 self.covered_started_us = self.phase_started_us.saturating_add(cover_us);
+                self.covered_observed_us = now_us;
                 self.phase_started_us = self.covered_started_us;
                 if destination_ready {
                     self.phase = NavigationTransitionPhase::Reveal;
@@ -497,9 +524,18 @@ impl NavigationTransitionController {
         }
         if self.phase == NavigationTransitionPhase::Covered {
             if destination_ready {
-                self.telemetry.covered_hold_us = now_us.saturating_sub(self.covered_started_us);
+                let destination_prepared_on_cover_tick = now_us == self.covered_observed_us;
+                self.telemetry.covered_hold_us = if destination_prepared_on_cover_tick {
+                    0
+                } else {
+                    now_us.saturating_sub(self.covered_observed_us)
+                };
                 self.phase = NavigationTransitionPhase::Reveal;
-                self.phase_started_us = now_us;
+                self.phase_started_us = if destination_prepared_on_cover_tick {
+                    self.covered_started_us
+                } else {
+                    now_us
+                };
             } else if now_us.saturating_sub(self.covered_started_us)
                 >= request.preparation_timeout_us
             {
@@ -511,8 +547,21 @@ impl NavigationTransitionController {
         if self.phase == NavigationTransitionPhase::Reveal {
             let reveal_us = total_us.saturating_sub(cover_us).max(1);
             let elapsed = now_us.saturating_sub(self.phase_started_us);
-            let reveal_progress = scale_progress(elapsed, reveal_us, PROGRESS_MAX - cover_progress);
-            self.progress_q16 = cover_progress.saturating_add(reveal_progress);
+            self.progress_q16 = match request.direction {
+                NavigationTransitionDirection::Forward => {
+                    let reveal_progress =
+                        scale_progress(elapsed, reveal_us, PROGRESS_MAX - cover_progress);
+                    cover_progress.saturating_add(reveal_progress)
+                }
+                NavigationTransitionDirection::Reverse => {
+                    let reverse_elapsed = cover_us.saturating_add(elapsed.min(reveal_us));
+                    PROGRESS_MAX.saturating_sub(forward_progress_q16_at_elapsed(
+                        request.style,
+                        total_us,
+                        total_us.saturating_sub(reverse_elapsed),
+                    ))
+                }
+            };
             if elapsed >= reveal_us {
                 self.progress_q16 = PROGRESS_MAX;
                 self.phase = NavigationTransitionPhase::Settled;
@@ -563,7 +612,7 @@ impl NavigationTransitionController {
         }
         let cover_progress = self
             .request
-            .map(|request| request.style.cover_progress_q16())
+            .map(request_cover_progress_q16)
             .unwrap_or(COVER_PROGRESS);
         let endpoint = if self.progress_q16 >= cover_progress && destination_ready {
             NavigationTransitionEndpoint::Destination
@@ -629,7 +678,7 @@ impl NavigationTransitionController {
     pub fn frame(&self) -> NavigationTransitionFrame {
         let cover_progress = self
             .request
-            .map(|request| request.style.cover_progress_q16())
+            .map(request_cover_progress_q16)
             .unwrap_or(COVER_PROGRESS);
         let cover_progress_q16 = if self.progress_q16 >= cover_progress {
             PROGRESS_MAX
@@ -694,6 +743,34 @@ impl NavigationTransitionController {
         } else {
             NavigationTransitionEndpoint::Destination
         })
+    }
+}
+
+const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
+    let forward_cover = request.style.cover_progress_q16();
+    match request.direction {
+        NavigationTransitionDirection::Forward => forward_cover,
+        NavigationTransitionDirection::Reverse => PROGRESS_MAX - forward_cover,
+    }
+}
+
+fn forward_progress_q16_at_elapsed(
+    style: NavigationTransitionStyle,
+    total_us: u64,
+    elapsed_us: u64,
+) -> u16 {
+    let total_us = total_us.max(1);
+    let cover_progress = style.cover_progress_q16();
+    let cover_us = total_us.saturating_mul(cover_progress as u64) / PROGRESS_MAX as u64;
+    let elapsed_us = elapsed_us.min(total_us);
+    if elapsed_us <= cover_us {
+        scale_progress(elapsed_us, cover_us.max(1), cover_progress)
+    } else {
+        cover_progress.saturating_add(scale_progress(
+            elapsed_us.saturating_sub(cover_us),
+            total_us.saturating_sub(cover_us).max(1),
+            PROGRESS_MAX - cover_progress,
+        ))
     }
 }
 
@@ -972,16 +1049,23 @@ impl NavigationTransitionPoc {
         if direction == NavigationTransitionDirection::Forward {
             self.geometry_history[edge.history_index()] = Some(geometry);
         }
-        if self.style() == NavigationTransitionStyle::SpriteFoundry {
-            self.sprite_foundry
-                .prepare(self.buffers.width, self.buffers.height);
-        } else if self.style() == NavigationTransitionStyle::NeonCabinetDive {
+        if self.style() == NavigationTransitionStyle::NeonCabinetDive {
             self.neon_cabinet
                 .prepare(self.buffers.width, self.buffers.height);
         }
         self.buffers.begin_capture();
         let capture_started = Instant::now();
         self.buffers.capture_source(source)?;
+        if self.style() == NavigationTransitionStyle::SpriteFoundry {
+            self.sprite_foundry.prepare_transition(
+                self.buffers.width,
+                self.buffers.height,
+                source,
+                geometry,
+                direction,
+                edge,
+            );
+        }
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         let mut request = NavigationTransitionRequest::new(self.style(), edge, direction, geometry);
         if let Some(duration_us) = self.duration_override_us {
@@ -1007,6 +1091,18 @@ impl NavigationTransitionPoc {
     ) -> Result<(), NavigationTransitionFailure> {
         let prepare_started = Instant::now();
         self.buffers.capture_destination(destination)?;
+        if self.style() == NavigationTransitionStyle::SpriteFoundry
+            && let Some(request) = self.controller.request()
+            && request.direction == NavigationTransitionDirection::Forward
+        {
+            self.sprite_foundry.prepare_destination_title(
+                self.buffers.width,
+                self.buffers.height,
+                destination,
+                request.geometry.destination_title,
+                request.edge,
+            );
+        }
         if self.style() == NavigationTransitionStyle::CharacterRomRecompile {
             self.character_rom.prepare(
                 self.buffers
@@ -5140,11 +5236,106 @@ mod tests {
 
         let reveal = controller.tick(510_000, true);
         assert_eq!(reveal.phase, NavigationTransitionPhase::Reveal);
-        let cover_us =
-            request().duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+        assert_eq!(controller.telemetry().covered_hold_us, 510_000 - 300_000);
+    }
+
+    #[test]
+    fn standalone_reverse_uses_the_complementary_covered_boundary() {
+        let forward = NavigationTransitionRequest::new(
+            NavigationTransitionStyle::SpriteFoundry,
+            NavigationTransitionEdge::HomeToConsoles,
+            NavigationTransitionDirection::Forward,
+            geometry(),
+        );
+        let reverse = NavigationTransitionRequest {
+            direction: NavigationTransitionDirection::Reverse,
+            ..forward
+        };
+        assert_eq!(request_cover_progress_q16(forward), COVER_PROGRESS);
         assert_eq!(
-            controller.telemetry().covered_hold_us,
-            510_000 - (2_000 + cover_us)
+            request_cover_progress_q16(reverse),
+            PROGRESS_MAX - COVER_PROGRESS
+        );
+
+        let mut controller = NavigationTransitionController::default();
+        assert!(controller.begin(reverse, 0));
+        assert!(controller.captured(0, 0));
+        let forward_covered_us = reverse.duration_us * COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+        let covered_us = reverse.duration_us - forward_covered_us;
+        let covered = controller.tick(covered_us, true);
+        assert_eq!(covered.progress_q16, PROGRESS_MAX - COVER_PROGRESS);
+        assert_eq!(covered.cover_progress_q16, PROGRESS_MAX);
+        assert_eq!(covered.reveal_progress_q16, 0);
+    }
+
+    #[test]
+    fn standalone_reverse_progress_is_the_exact_forward_complement() {
+        let frame_at = |request, elapsed_us| {
+            let mut controller = NavigationTransitionController::default();
+            assert!(controller.begin(request, 0));
+            assert!(controller.captured(0, 0));
+            controller.tick(elapsed_us, true)
+        };
+        for duration_us in [500_000, 4_000_000] {
+            let forward = NavigationTransitionRequest {
+                duration_us,
+                ..NavigationTransitionRequest::new(
+                    NavigationTransitionStyle::SpriteFoundry,
+                    NavigationTransitionEdge::HomeToArcade,
+                    NavigationTransitionDirection::Forward,
+                    geometry(),
+                )
+            };
+            let reverse = NavigationTransitionRequest {
+                direction: NavigationTransitionDirection::Reverse,
+                ..forward
+            };
+            let covered_us = duration_us * COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+            for forward_us in [0, covered_us, duration_us / 2, duration_us] {
+                let forward_frame = frame_at(forward, forward_us);
+                let reverse_frame = frame_at(reverse, duration_us - forward_us);
+                assert_eq!(
+                    forward_frame.progress_q16,
+                    PROGRESS_MAX - reverse_frame.progress_q16,
+                    "duration={duration_us} forward_us={forward_us}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn destination_prepared_on_the_cover_tick_does_not_add_a_quantization_hold() {
+        let duration_us = 500_000;
+        let forward = NavigationTransitionRequest {
+            duration_us,
+            ..NavigationTransitionRequest::new(
+                NavigationTransitionStyle::SpriteFoundry,
+                NavigationTransitionEdge::HomeToArcade,
+                NavigationTransitionDirection::Forward,
+                geometry(),
+            )
+        };
+        let reverse = NavigationTransitionRequest {
+            direction: NavigationTransitionDirection::Reverse,
+            ..forward
+        };
+        let mut forward_controller = NavigationTransitionController::default();
+        assert!(forward_controller.begin(forward, 0));
+        assert!(forward_controller.captured(0, 0));
+        let forward_midpoint = forward_controller.tick(duration_us / 2, true);
+
+        let mut reverse_controller = NavigationTransitionController::default();
+        assert!(reverse_controller.begin(reverse, 0));
+        assert!(reverse_controller.captured(0, 0));
+        let observed_cover = reverse_controller.tick(233_333, false);
+        assert_eq!(observed_cover.phase, NavigationTransitionPhase::Covered);
+        let reveal = reverse_controller.tick(233_333, true);
+        assert_eq!(reveal.phase, NavigationTransitionPhase::Reveal);
+        assert_eq!(reverse_controller.telemetry().covered_hold_us, 0);
+        let reverse_midpoint = reverse_controller.tick(duration_us / 2, true);
+        assert_eq!(
+            forward_midpoint.progress_q16,
+            PROGRESS_MAX - reverse_midpoint.progress_q16
         );
     }
 
@@ -5394,6 +5585,8 @@ mod tests {
         assert_eq!(nested.destination_title.x, 16);
         assert_eq!(nested.destination_title.y, 16);
         assert_eq!(nested.destination_title.width, 120);
+        assert_ne!(root.label_signature, nested.label_signature);
+        assert_eq!(nested.label_signature, navigation_label_signature("ATARI"));
         let live_list_height =
             crate::arcade_list_renderer::ArcadeListGeometry::NORMAL.visible_height(540);
         let live_row_height = crate::arcade_catalog::ARCADE_ROW_HEIGHT as usize;

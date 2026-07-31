@@ -136,15 +136,95 @@ mod macos {
             application.load_headless_screenshot_tiles()?;
         }
         if let Some(output) = options.output {
+            let mut demo_origin_selected_id = None;
+            let mut demo_origin_frame = None;
             if options.navigation_transition_demo.is_some() {
-                application.compose_frame();
+                for _ in 0..36 {
+                    application.compose_frame();
+                }
+                demo_origin_selected_id = application
+                    .launcher_nav
+                    .current_menu_items()
+                    .get(application.launcher_nav.selected)
+                    .map(|item| item.id.clone());
+                demo_origin_frame = Some(application.frame_target.cached_565().to_vec());
                 application.launcher_pad.btn_a = true;
                 application.launcher_pad.rebuild_pressed_now();
+                if options.navigation_transition_demo_reverse {
+                    let settle_frames = options
+                        .navigation_transition_duration_ms
+                        .unwrap_or(600)
+                        .saturating_mul(options.refresh_rate.headless_hz() as u64)
+                        / 1_000
+                        + 12;
+                    for step in 0..settle_frames {
+                        application.compose_frame();
+                        if step == 0 {
+                            application.launcher_pad.btn_a = false;
+                            application.launcher_pad.rebuild_pressed_now();
+                        }
+                    }
+                    let reverse_origin = application.frame_target.cached_565().to_vec();
+                    application.launcher_pad.btn_b = true;
+                    application.launcher_pad.rebuild_pressed_now();
+                    application.compose_frame();
+                    application.launcher_pad.btn_b = false;
+                    application.launcher_pad.rebuild_pressed_now();
+                    if let Some((count, min_x, min_y, max_x, max_y)) =
+                        frame_difference_outside_navigation_hud(
+                            &reverse_origin,
+                            application.frame_target.cached_565(),
+                            frame_width,
+                            frame_height,
+                        )
+                    {
+                        return Err(format!(
+                            "reverse demo frame 0 differs from its destination origin outside the POC HUD: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
+                        )
+                        .into());
+                    }
+                }
             }
-            for _ in 0..=options.frame {
+            let capture_advance_count = if options.navigation_transition_demo_reverse {
+                options.frame
+            } else {
+                options.frame.saturating_add(1)
+            };
+            for _ in 0..capture_advance_count {
                 application.compose_frame();
                 application.launcher_pad.btn_a = false;
                 application.launcher_pad.rebuild_pressed_now();
+            }
+            if options.navigation_transition_demo_reverse
+                && !application.navigation_transition.is_active()
+            {
+                let restored_selected_id = application
+                    .launcher_nav
+                    .current_menu_items()
+                    .get(application.launcher_nav.selected)
+                    .map(|item| item.id.as_str());
+                if restored_selected_id != demo_origin_selected_id.as_deref() {
+                    return Err(format!(
+                        "reverse demo restored selection {:?}, expected {:?}",
+                        restored_selected_id,
+                        demo_origin_selected_id.as_deref()
+                    )
+                    .into());
+                }
+                if let Some(origin) = demo_origin_frame.as_deref()
+                    && let Some((count, min_x, min_y, max_x, max_y)) =
+                        frame_difference_outside_navigation_hud(
+                            origin,
+                            application.frame_target.cached_565(),
+                            frame_width,
+                            frame_height,
+                        )
+                {
+                    return Err(format!(
+                        "reverse demo endpoint differs from its originating frame outside the POC HUD: pixels={count} bounds={min_x},{min_y}..{max_x},{max_y}"
+                    )
+                    .into());
+                }
             }
             if options.scenario == Scenario::ScreenshotTiles {
                 application.settle_headless_production_screensaver()?;
@@ -156,11 +236,13 @@ mod macos {
                 frame_height,
             )?;
             println!(
-                "capture={} scenario={} frame={} refresh_hz={} hash={:016x}",
+                "capture={} scenario={} frame={} refresh_hz={} transition_phase={:?} transition_progress_q16={} hash={:016x}",
                 output.display(),
                 options.scenario.label(),
                 options.frame,
                 application.refresh_hz,
+                application.navigation_transition.frame().phase,
+                application.navigation_transition.frame().progress_q16,
                 frame_hash(application.frame_target.cached_565())
             );
             return Ok(());
@@ -512,7 +594,7 @@ mod macos {
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
                 Scenario::ScreensaverSettings => 3,
-                Scenario::Arcade => self.catalog.games.len(),
+                Scenario::Arcade => self.catalog.system_game_count(MENU_ARCADE_SYSTEM_ID),
                 _ => 1,
             };
             self.selection = self
@@ -532,11 +614,13 @@ mod macos {
             bridge.set_screensaver_settings_selected(self.selection as i32);
             bridge.set_confirm_selected(self.selection.min(1) as i32);
             if self.scenario == Scenario::Arcade {
-                apply_arcade_fixture_bridge(
-                    &self.launcher,
-                    self.catalog.games.as_slice(),
-                    self.selection,
-                );
+                let games = self
+                    .catalog
+                    .games
+                    .iter()
+                    .filter(|game| game.system_id.as_ref() == MENU_ARCADE_SYSTEM_ID)
+                    .collect::<Vec<_>>();
+                apply_arcade_fixture_bridge(&self.launcher, "Arcade", &games, self.selection);
             }
             if matches!(
                 self.scenario,
@@ -667,8 +751,8 @@ mod macos {
             self.scenario = Scenario::Home;
             self.launcher_nav.go_root();
             let target_id = match edge {
-                NavigationTransitionEdge::HomeToConsoles => CONSOLES_MENU_ID,
-                NavigationTransitionEdge::HomeToArcade => MENU_ARCADE_SYSTEM_ID,
+                NavigationTransitionEdge::HomeToConsoles => CONSOLES_MENU_ID.to_string(),
+                NavigationTransitionEdge::HomeToArcade => MENU_ARCADE_SYSTEM_ID.to_string(),
                 NavigationTransitionEdge::ConsolesToSystem => {
                     if !self.launcher_nav.open_menu(CONSOLES_MENU_ID) {
                         return Err("Consoles menu is unavailable in preview content".into());
@@ -677,7 +761,7 @@ mod macos {
                         .current_menu_items()
                         .iter()
                         .find(|item| item.kind == LauncherMenuItemKind::Collection)
-                        .map(|item| item.id.as_str())
+                        .map(|item| item.id.clone())
                         .ok_or("Consoles menu has no directly launchable system")?
                 }
             };
@@ -968,9 +1052,29 @@ mod macos {
                     .or(Some(0)),
                 false,
             );
+            let (fixture_title, fixture_system_id) = self
+                .launcher_nav
+                .active_collection()
+                .map(|collection| {
+                    (
+                        collection.title.as_str(),
+                        collection
+                            .system_id
+                            .as_deref()
+                            .unwrap_or(collection.legacy_system_id.as_str()),
+                    )
+                })
+                .unwrap_or(("Arcade", MENU_ARCADE_SYSTEM_ID));
+            let fixture_games = self
+                .catalog
+                .games
+                .iter()
+                .filter(|game| game.system_id.as_ref() == fixture_system_id)
+                .collect::<Vec<_>>();
             apply_arcade_fixture_bridge(
                 &self.launcher,
-                self.catalog.games.as_slice(),
+                fixture_title,
+                &fixture_games,
                 self.launcher_nav.arcade.selected,
             );
             self.request_selected_preview();
@@ -2028,6 +2132,7 @@ mod macos {
         display_profile: DisplayProfile,
         navigation_transition_poc: bool,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
+        navigation_transition_demo_reverse: bool,
         navigation_transition_style: Option<NavigationTransitionStyle>,
         navigation_transition_duration_ms: Option<u64>,
     }
@@ -2046,6 +2151,7 @@ mod macos {
             let mut display_profile = DisplayProfile::Hdmi;
             let mut navigation_transition_poc = false;
             let mut navigation_transition_demo = None;
+            let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_style = None;
             let mut navigation_transition_duration_ms = None;
             let mut arguments = arguments.into_iter();
@@ -2130,6 +2236,10 @@ mod macos {
                             })?);
                         navigation_transition_poc = true;
                     }
+                    "--navigation-transition-demo-reverse" => {
+                        navigation_transition_demo_reverse = true;
+                        navigation_transition_poc = true;
+                    }
                     "--display-profile" => {
                         let value = arguments
                             .next()
@@ -2140,7 +2250,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-style STYLE] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-poc] [--navigation-transition-style STYLE] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2149,6 +2259,12 @@ mod macos {
             }
             if frame > 0 && output.is_none() {
                 return Err("--frame requires --output".into());
+            }
+            if navigation_transition_demo_reverse && navigation_transition_demo.is_none() {
+                return Err(
+                    "--navigation-transition-demo-reverse requires --navigation-transition-demo"
+                        .into(),
+                );
             }
             Ok(Self {
                 scenario,
@@ -2163,6 +2279,7 @@ mod macos {
                 display_profile,
                 navigation_transition_poc,
                 navigation_transition_demo,
+                navigation_transition_demo_reverse,
                 navigation_transition_style,
                 navigation_transition_duration_ms,
             })
@@ -2395,6 +2512,39 @@ mod macos {
             file.write_all(&row)?;
         }
         Ok(())
+    }
+
+    fn frame_difference_outside_navigation_hud(
+        first: &[Rgb565Pixel],
+        second: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize, usize, usize, usize)> {
+        const HUD_WIDTH: usize = 286;
+        const HUD_HEIGHT: usize = 28;
+        const HUD_MARGIN: usize = 8;
+        if first.len() != width.saturating_mul(height) || second.len() != first.len() {
+            return Some((usize::MAX, 0, 0, width, height));
+        }
+        let hud_width = HUD_WIDTH.min(width.saturating_sub(HUD_MARGIN));
+        let hud_x = width.saturating_sub(HUD_MARGIN).saturating_sub(hud_width);
+        let hud_bottom = HUD_MARGIN.saturating_add(HUD_HEIGHT).min(height);
+        let mut difference = None;
+        for (offset, pair) in first.iter().zip(second).enumerate() {
+            let x = offset % width.max(1);
+            let y = offset / width.max(1);
+            let inside_hud =
+                y >= HUD_MARGIN && y < hud_bottom && x >= hud_x && x < hud_x + hud_width;
+            if !inside_hud && pair.0 != pair.1 {
+                let (count, min_x, min_y, max_x, max_y) = difference.get_or_insert((0, x, y, x, y));
+                *count += 1;
+                *min_x = (*min_x).min(x);
+                *min_y = (*min_y).min(y);
+                *max_x = (*max_x).max(x);
+                *max_y = (*max_y).max(y);
+            }
+        }
+        difference
     }
 
     fn frame_hash(pixels: &[Rgb565Pixel]) -> u64 {
@@ -2764,11 +2914,12 @@ mod macos {
 
     fn apply_arcade_fixture_bridge(
         launcher: &Launcher,
-        games: &[ArcadeGameEntry],
+        title: &str,
+        games: &[&ArcadeGameEntry],
         selected: usize,
     ) {
         let bridge = launcher.global::<MisterBridge>();
-        bridge.set_active_system_title("Arcade".into());
+        bridge.set_active_system_title(title.into());
         bridge.set_active_system_count(games.len() as i32);
         bridge.set_arcade_games(ModelRc::new(VecModel::from(
             games
@@ -2908,6 +3059,7 @@ mod macos {
                     "super-scaler-shell",
                     "--navigation-transition-duration-ms",
                     "4000",
+                    "--navigation-transition-demo-reverse",
                 ]
                 .map(String::from),
             )
@@ -2923,6 +3075,7 @@ mod macos {
                 Some(NavigationTransitionStyle::SuperScalerShell)
             );
             assert_eq!(options.navigation_transition_duration_ms, Some(4_000));
+            assert!(options.navigation_transition_demo_reverse);
         }
 
         #[test]
@@ -3117,6 +3270,25 @@ mod macos {
             assert_eq!(
                 frame_hash(&[Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)]),
                 0x462038d925b18c13
+            );
+        }
+
+        #[test]
+        fn reverse_endpoint_comparison_ignores_only_the_navigation_hud() {
+            let width = 320;
+            let height = 64;
+            let first = vec![Rgb565Pixel(0x1234); width * height];
+            let mut second = first.clone();
+            second[8 * width + 26] = Rgb565Pixel(0xabcd);
+            assert_eq!(
+                frame_difference_outside_navigation_hud(&first, &second, width, height),
+                None
+            );
+
+            second[40 * width + 26] = Rgb565Pixel(0xabcd);
+            assert_eq!(
+                frame_difference_outside_navigation_hud(&first, &second, width, height),
+                Some((1, 26, 40, 26, 40))
             );
         }
 

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub const FIXTURE_ARCADE_GAME_COUNT: usize = 48;
+pub const FIXTURE_CONSOLE_GAME_COUNT: usize = 12;
 pub const FIXTURE_SCREENSHOT_WIDTH: usize = 160;
 pub const FIXTURE_SCREENSHOT_HEIGHT: usize = 120;
 
@@ -30,14 +31,18 @@ pub struct FixtureScreenshot {
 
 impl UiPreviewFixtures {
     pub fn new() -> Result<Self, String> {
-        let games = fixture_arcade_games();
+        let mut games = fixture_arcade_games();
+        games.extend(fixture_console_games());
         let definitions = system_definitions()?;
         let systems = definitions
             .iter()
             .map(|definition| GameSystemEntry {
                 id: definition.id.clone(),
                 title: definition.title.clone(),
-                count: usize::from(definition.id == "arcade") * games.len(),
+                count: games
+                    .iter()
+                    .filter(|game| game.system_id.as_ref() == definition.id)
+                    .count(),
             })
             .collect::<Vec<_>>();
         let shell_system_ids = systems
@@ -64,6 +69,41 @@ impl UiPreviewFixtures {
             .iter()
             .find(|screenshot| screenshot.key.as_ref() == key)
     }
+}
+
+fn fixture_console_games() -> Vec<ArcadeGameEntry> {
+    const TITLES: [&str; FIXTURE_CONSOLE_GAME_COUNT] = [
+        "Adventure",
+        "Asteroids",
+        "Berzerk",
+        "Breakout",
+        "Combat",
+        "Crystal Castles",
+        "Gravitar",
+        "Haunted House",
+        "Missile Command",
+        "Pitfall!",
+        "River Raid",
+        "Yars' Revenge",
+    ];
+    TITLES
+        .into_iter()
+        .enumerate()
+        .map(|(index, title)| ArcadeGameEntry {
+            title: Arc::from(title),
+            mra_path: Arc::from(format!("/fixture/atari2600/{index:02}.a26")),
+            preview_archive_path: Arc::from("/fixture/arcade-screenshots.zip"),
+            preview_asset_key: Arc::from(format!("fixture-{index:02}")),
+            has_preview: true,
+            system_id: Arc::from("atari2600"),
+            year: Some(1977 + index as u16),
+            manufacturer: Arc::from("Atari"),
+            category: Arc::from(if index % 2 == 0 { "Action" } else { "Arcade" }),
+            players: Some(if index % 3 == 0 { 2 } else { 1 }),
+            control: Arc::from("Joystick"),
+            is_new: index < 2,
+        })
+        .collect()
 }
 
 fn fixture_arcade_games() -> Vec<ArcadeGameEntry> {
@@ -186,7 +226,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_arcade_has_fixture_content() {
+    fn arcade_and_atari_have_fixture_content() {
         let fixtures = UiPreviewFixtures::new().expect("preview fixtures");
         assert_eq!(
             fixtures.catalog.system_game_count("arcade"),
@@ -197,8 +237,12 @@ mod tests {
                 .catalog
                 .systems
                 .iter()
-                .filter(|system| system.id != "arcade")
+                .filter(|system| system.id != "arcade" && system.id != "atari2600")
                 .all(|system| fixtures.catalog.system_game_count(&system.id) == 0)
+        );
+        assert_eq!(
+            fixtures.catalog.system_game_count("atari2600"),
+            FIXTURE_CONSOLE_GAME_COUNT
         );
     }
 

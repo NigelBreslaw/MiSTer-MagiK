@@ -798,6 +798,15 @@ pub(crate) fn raster_packed_visual_commands(
     commands: &[u32],
     dirty_offsets: &mut Vec<u32>,
 ) -> usize {
+    raster_packed_visual_commands_with_palette(destination, commands, dirty_offsets, VISUAL_PALETTE)
+}
+
+pub(crate) fn raster_packed_visual_commands_with_palette(
+    destination: &mut [Rgb565Pixel],
+    commands: &[u32],
+    dirty_offsets: &mut Vec<u32>,
+    palette: [Rgb565Pixel; 4],
+) -> usize {
     let mut written = 0usize;
     for &command in commands {
         let Some((offset, palette_index, neighbor)) = unpack_visual_command(command) else {
@@ -806,14 +815,14 @@ pub(crate) fn raster_packed_visual_commands(
         let Some(pixel) = destination.get_mut(offset) else {
             continue;
         };
-        *pixel = VISUAL_PALETTE[palette_index];
+        *pixel = palette[palette_index];
         dirty_offsets.push(offset as u32);
         written = written.saturating_add(1);
         if neighbor {
             let Some(pixel) = destination.get_mut(offset.saturating_add(1)) else {
                 continue;
             };
-            *pixel = VISUAL_PALETTE[2];
+            *pixel = palette[2];
             dirty_offsets.push(offset.saturating_add(1) as u32);
             written = written.saturating_add(1);
         }
@@ -1508,6 +1517,36 @@ mod tests {
             commands,
             vec![second, first, third, PARTICLE_NOT_VISIBLE_OFFSET]
         );
+    }
+
+    #[test]
+    fn packed_visual_commands_accept_a_transition_local_palette() {
+        let palette = [
+            Rgb565Pixel(0x0001),
+            Rgb565Pixel(0x0002),
+            Rgb565Pixel(0x0003),
+            Rgb565Pixel(0x0004),
+        ];
+        let commands = [
+            pack_visual_command(2, 1, false),
+            pack_visual_command(5, 3, true),
+        ];
+        let mut destination = [Rgb565Pixel(0); 8];
+        let mut dirty = Vec::new();
+
+        assert_eq!(
+            raster_packed_visual_commands_with_palette(
+                &mut destination,
+                &commands,
+                &mut dirty,
+                palette,
+            ),
+            3
+        );
+        assert_eq!(destination[2], palette[1]);
+        assert_eq!(destination[5], palette[3]);
+        assert_eq!(destination[6], palette[2]);
+        assert_eq!(dirty, vec![2, 5, 6]);
     }
 
     #[test]

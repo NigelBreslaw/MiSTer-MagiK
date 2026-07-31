@@ -3,6 +3,7 @@
 
 import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
 
+import { MisterBridge } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
@@ -94,7 +95,10 @@ export component LauncherTile inherits Rectangle {
             vertical-alignment: center;
             wrap: word-wrap;
 
-            animate color { duration: 100ms; easing: Easing.ease-in-out; }
+            animate color {
+                duration: MisterBridge.nav-transition-phase == 0 ? 100ms : 0ms;
+                easing: Easing.ease-in-out;
+            }
         }
 
         if status == MenuItemStatus.scanning : ScanningSubtitle {
@@ -115,7 +119,10 @@ export component LauncherTile inherits Rectangle {
 
             // In the RGB565 software-renderer launcher mock, animating color alpha
             // was slightly faster than animating Text opacity for this subtitle fade.
-            animate color { duration: 100ms; easing: Easing.ease-in-out; }
+            animate color {
+                duration: MisterBridge.nav-transition-phase == 0 ? 100ms : 0ms;
+                easing: Easing.ease-in-out;
+            }
         }
     }
 }
