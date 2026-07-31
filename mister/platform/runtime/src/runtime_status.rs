@@ -187,8 +187,16 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_transition_direction: &'static str,
     pub navigation_transition_us: u64,
     pub navigation_transition_overlay_us: u64,
+    pub navigation_snapshot_locked: bool,
+    pub navigation_slint_render_called: bool,
+    pub navigation_status_quiesce_wait_us: u64,
+    pub navigation_status_quiesce_timeout: bool,
     pub wall_us: u64,
     pub prepare_us: u64,
+    pub slint_timer_dispatch_us: u64,
+    pub navigation_commit_us: u64,
+    pub bridge_sync_us: u64,
+    pub unattributed_prepare_us: u64,
     pub render_us: u64,
     pub custom_draw_us: u64,
     pub vsync_us: u64,
@@ -305,6 +313,10 @@ pub struct FrameBudgetSlowFrame {
     pub direct_preview_rows: u32,
     pub dirty_y0: u32,
     pub dirty_y1: u32,
+    pub slint_timer_dispatch_us: u64,
+    pub navigation_commit_us: u64,
+    pub bridge_sync_us: u64,
+    pub unattributed_prepare_us: u64,
     pub catalog_worker_us: u64,
     pub catalog_message_count: u32,
     pub catalog_backlog: u32,
@@ -1080,8 +1092,28 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "navigation_transition_overlay_us",
         frame.navigation_transition_overlay_us
     );
+    field!(
+        "navigation_snapshot_locked",
+        frame.navigation_snapshot_locked
+    );
+    field!(
+        "navigation_slint_render_called",
+        frame.navigation_slint_render_called
+    );
+    field!(
+        "navigation_status_quiesce_wait_us",
+        frame.navigation_status_quiesce_wait_us
+    );
+    field!(
+        "navigation_status_quiesce_timeout",
+        frame.navigation_status_quiesce_timeout
+    );
     field!("wall_us", frame.wall_us);
     field!("prepare_us", frame.prepare_us);
+    field!("slint_timer_dispatch_us", frame.slint_timer_dispatch_us);
+    field!("navigation_commit_us", frame.navigation_commit_us);
+    field!("bridge_sync_us", frame.bridge_sync_us);
+    field!("unattributed_prepare_us", frame.unattributed_prepare_us);
     field!("render_us", frame.render_us);
     field!("custom_draw_us", frame.custom_draw_us);
     field!("vsync_us", frame.vsync_us);
@@ -1320,6 +1352,19 @@ fn frame_budget_slow_frame_value(frame: &FrameBudgetSlowFrame) -> Value {
     );
     object.insert("dirty_y0".into(), json!(frame.dirty_y0));
     object.insert("dirty_y1".into(), json!(frame.dirty_y1));
+    object.insert(
+        "slint_timer_dispatch_us".into(),
+        json!(frame.slint_timer_dispatch_us),
+    );
+    object.insert(
+        "navigation_commit_us".into(),
+        json!(frame.navigation_commit_us),
+    );
+    object.insert("bridge_sync_us".into(), json!(frame.bridge_sync_us));
+    object.insert(
+        "unattributed_prepare_us".into(),
+        json!(frame.unattributed_prepare_us),
+    );
     object.insert("catalog_worker_us".into(), json!(frame.catalog_worker_us));
     object.insert(
         "catalog_message_count".into(),
@@ -1668,6 +1713,10 @@ mod tests {
                         direct_preview_rows: 4,
                         dirty_y0: 12,
                         dirty_y1: 22,
+                        slint_timer_dispatch_us: 0,
+                        navigation_commit_us: 0,
+                        bridge_sync_us: 0,
+                        unattributed_prepare_us: 0,
                         catalog_worker_us: 77,
                         catalog_message_count: 3,
                         catalog_backlog: 2,

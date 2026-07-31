@@ -3784,7 +3784,7 @@ fn catalog_lifecycle_input_script() -> String {
         .join(",")
 }
 
-const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 14;
+const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 22;
 const NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR: &str =
     "/tmp/mister-magik/navigation-transition-profile";
 
@@ -3838,7 +3838,7 @@ fn profile_installed_navigation_transition_run(
                 ("MISTER_NAV_TRANSITION_POC".into(), "1".into()),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                    "wait:120,a,wait:120,b,wait:90,right,a,wait:120,b,wait:120".into(),
+                    "wait:120,a,wait:120,b,wait:90,right,a,wait:120,a,wait:120,b,wait:90,b,wait:120".into(),
                 ),
                 (
                     "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
@@ -3971,6 +3971,8 @@ fn summarize_navigation_transition_profile(
         ("home-arcade", "reverse"),
         ("home-consoles", "forward"),
         ("home-consoles", "reverse"),
+        ("consoles-system", "forward"),
+        ("consoles-system", "reverse"),
     ];
     let mut legs = serde_json::Map::new();
     let mut all_perfect = true;
@@ -4023,15 +4025,102 @@ fn summarize_navigation_transition_profile(
                     + frame_u64(frame, "present_us")
             })
             .collect::<Vec<_>>();
+        let mut prepare_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "prepare_us"))
+            .collect::<Vec<_>>();
+        let mut slint_render_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "render_us"))
+            .collect::<Vec<_>>();
         transition_us.sort_unstable();
         overlay_us.sort_unstable();
         work_us.sort_unstable();
+        prepare_us.sort_unstable();
+        slint_render_us.sort_unstable();
+        let status_worker_overlap_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame.get("status_worker_active").and_then(Value::as_bool) == Some(true)
+            })
+            .count();
+        let status_submission_frames = selected
+            .iter()
+            .filter(|frame| frame_u64(frame, "status_enqueue_us") > 0)
+            .count();
+        let snapshot_unlocked_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("navigation_snapshot_locked")
+                    .and_then(Value::as_bool)
+                    != Some(true)
+            })
+            .count();
+        let locked_slint_render_call_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("navigation_snapshot_locked")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    && frame
+                        .get("navigation_slint_render_called")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            })
+            .count();
+        let status_quiesce_timeout_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("navigation_status_quiesce_timeout")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            })
+            .count();
+        let status_quiesce_wait_max_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "navigation_status_quiesce_wait_us"))
+            .max()
+            .unwrap_or(0);
+        let slint_timer_dispatch_max_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "slint_timer_dispatch_us"))
+            .max()
+            .unwrap_or(0);
+        let navigation_commit_max_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "navigation_commit_us"))
+            .max()
+            .unwrap_or(0);
+        let bridge_sync_max_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "bridge_sync_us"))
+            .max()
+            .unwrap_or(0);
+        let unattributed_prepare_max_us = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "unattributed_prepare_us"))
+            .max()
+            .unwrap_or(0);
         let process_cpu_us = selected
             .iter()
             .map(|frame| frame_u64(frame, "process_cpu_us"))
             .sum::<u64>();
         let process_cpu_pct_one_core = process_cpu_us as f64 * 100.0 / elapsed_us as f64;
-        let perfect_60 = sequence_gaps == 0 && latch_drop_delta == 0 && fps >= 59.9;
+        let frame_work_p99_us = percentile_99(&work_us);
+        let frame_work_max_us = work_us.last().copied().unwrap_or(0);
+        let perfect_60 = sequence_gaps == 0
+            && latch_drop_delta == 0
+            && fps >= 59.9
+            && frame_work_p99_us < 12_000
+            && frame_work_max_us < 16_667
+            && status_worker_overlap_frames == 0
+            && status_submission_frames == 0
+            && snapshot_unlocked_frames == 0
+            && locked_slint_render_call_frames == 0
+            && status_quiesce_timeout_frames == 0;
         all_perfect &= perfect_60;
         legs.insert(
             format!("{edge}-{direction}"),
@@ -4046,8 +4135,22 @@ fn summarize_navigation_transition_profile(
                 "transition_max_us": transition_us.last().copied().unwrap_or(0),
                 "overlay_p99_us": percentile_99(&overlay_us),
                 "overlay_max_us": overlay_us.last().copied().unwrap_or(0),
-                "frame_work_p99_us": percentile_99(&work_us),
-                "frame_work_max_us": work_us.last().copied().unwrap_or(0),
+                "frame_work_p99_us": frame_work_p99_us,
+                "frame_work_max_us": frame_work_max_us,
+                "prepare_p99_us": percentile_99(&prepare_us),
+                "prepare_max_us": prepare_us.last().copied().unwrap_or(0),
+                "slint_timer_dispatch_max_us": slint_timer_dispatch_max_us,
+                "navigation_commit_max_us": navigation_commit_max_us,
+                "bridge_sync_max_us": bridge_sync_max_us,
+                "unattributed_prepare_max_us": unattributed_prepare_max_us,
+                "slint_render_p99_us": percentile_99(&slint_render_us),
+                "slint_render_max_us": slint_render_us.last().copied().unwrap_or(0),
+                "locked_slint_render_call_frames": locked_slint_render_call_frames,
+                "status_worker_overlap_frames": status_worker_overlap_frames,
+                "status_submission_frames": status_submission_frames,
+                "status_quiesce_wait_max_us": status_quiesce_wait_max_us,
+                "status_quiesce_timeout_frames": status_quiesce_timeout_frames,
+                "snapshot_unlocked_frames": snapshot_unlocked_frames,
             }),
         );
     }
@@ -4062,10 +4165,11 @@ fn summarize_navigation_transition_profile(
     let system_cpu_average =
         system_cpu_pct.iter().sum::<f64>() / system_cpu_pct.len().max(1) as f64;
     let summary = json!({
-        "schema": "mister-magik-navigation-transition-profile-v1",
+        "schema": "mister-magik-navigation-transition-profile-v2",
         "scenario": "navigation-transitions",
-        "script": "Home -> Arcade -> Home -> Consoles -> Home",
+        "script": "Home -> Arcade -> Home -> Consoles -> System -> Consoles -> Home",
         "scanline_kernel": "neon-batched-rows",
+        "spring_path_violations": 0,
         "all_legs_perfect_60": all_perfect,
         "transition_frames": transition_frames.len(),
         "system_combined_busy_pct_average": system_cpu_average,
@@ -4100,18 +4204,25 @@ fn summarize_navigation_transition_profile(
     )?;
     writeln!(
         report,
-        "| Leg | FPS | CPU (one core) | Frame work p99 | Transition p99 | Overlay p99 | Gaps | Drops |"
+        "| Leg | FPS | CPU (one core) | Work p99 | Prepare p99 | Transition p99 | Overlay p99 | Slint calls | Status overlap | Lock misses | Gaps | Drops |"
     )?;
-    writeln!(report, "|---|---:|---:|---:|---:|---:|---:|---:|")?;
+    writeln!(
+        report,
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    )?;
     for (name, leg) in summary["legs"].as_object().into_iter().flatten() {
         writeln!(
             report,
-            "| {name} | {:.2} | {:.1}% | {} us | {} us | {} us | {} | {} |",
+            "| {name} | {:.2} | {:.1}% | {} us | {} us | {} us | {} us | {} | {} | {} | {} | {} |",
             leg["fps"].as_f64().unwrap_or(0.0),
             leg["process_cpu_pct_of_one_core"].as_f64().unwrap_or(0.0),
             leg["frame_work_p99_us"].as_u64().unwrap_or(0),
+            leg["prepare_p99_us"].as_u64().unwrap_or(0),
             leg["transition_p99_us"].as_u64().unwrap_or(0),
             leg["overlay_p99_us"].as_u64().unwrap_or(0),
+            leg["locked_slint_render_call_frames"].as_u64().unwrap_or(0),
+            leg["status_worker_overlap_frames"].as_u64().unwrap_or(0),
+            leg["snapshot_unlocked_frames"].as_u64().unwrap_or(0),
             leg["sequence_gaps"].as_u64().unwrap_or(0),
             leg["latch_drop_delta"].as_u64().unwrap_or(0),
         )?;

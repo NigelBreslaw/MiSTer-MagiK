@@ -2396,10 +2396,12 @@ pub(super) fn run_launcher_loop(
             continue;
         }
         let loop_start = Instant::now();
+        let slint_timer_dispatch_started = Instant::now();
         let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
         if !navigation_snapshot_locked_at_loop_start {
             slint::platform::update_timers_and_animations();
         }
+        let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending);
         if let Some(collection_id) = deferred_navigation_hydration_finish.take() {
             nav.catalog_system_hydration_finished(&collection_id);
@@ -2459,6 +2461,7 @@ pub(super) fn run_launcher_loop(
         let arcade_filter_visual_index_at_loop_start = nav.arcade_filter.visual_index;
         let prepare_trace_enabled = frame_accounting.preview_scroll_trace_enabled();
         let mut prepare_trace = LauncherPrepareTrace::default();
+        prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
@@ -2970,6 +2973,7 @@ pub(super) fn run_launcher_loop(
                     .as_ref()
                     .is_some_and(|pending| !pending.committed);
             if should_commit {
+                let navigation_commit_started = Instant::now();
                 let event = pending_navigation_transition
                     .as_ref()
                     .map(|pending| pending.event.clone())
@@ -3002,6 +3006,9 @@ pub(super) fn run_launcher_loop(
                 {
                     navigation_transition.request_reverse(now_us);
                 }
+                prepare_trace.navigation_commit_us = prepare_trace
+                    .navigation_commit_us
+                    .saturating_add(navigation_commit_started.elapsed().as_micros());
             }
             request_launcher_redraw!();
         }
@@ -3988,12 +3995,15 @@ pub(super) fn run_launcher_loop(
             navigation_transition.is_active(),
             source_was_arcade,
         );
-        match launcher_bridge_sync_plan(
+        let bridge_sync_plan = launcher_bridge_sync_plan(
             launching,
             lifecycle.startup_input_enabled(),
             full_bridge_dirty,
             light_bridge_dirty,
-        ) {
+        );
+        let bridge_sync_started =
+            (bridge_sync_plan != LauncherBridgeSyncPlan::None).then(Instant::now);
+        match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
                 sync_bridge_launcher(
                     &app,
@@ -4039,6 +4049,9 @@ pub(super) fn run_launcher_loop(
             }
             LauncherBridgeSyncPlan::None => {}
         }
+        prepare_trace.bridge_sync_us = bridge_sync_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or(0);
         sync_startup_visibility(&app, &lifecycle);
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
@@ -5101,6 +5114,7 @@ pub(super) fn run_launcher_loop(
             sync_navigation_transition_poc_bridge(&app, &navigation_transition);
         }
         let effect_label_us = navigation_transition_render_us;
+        let navigation_telemetry = navigation_transition.telemetry();
         let custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
             preview_blit_us,
@@ -5109,6 +5123,11 @@ pub(super) fn run_launcher_loop(
                 as u128,
             navigation_transition_edge,
             navigation_transition_direction,
+            navigation_snapshot_locked: navigation_snapshot_locked_before_render,
+            navigation_slint_render_called: !screensaver.active
+                && !navigation_snapshot_locked_before_render,
+            navigation_status_quiesce_wait_us: navigation_telemetry.status_quiesce_wait_us,
+            navigation_status_quiesce_timeout: navigation_telemetry.status_quiesce_timeout,
         };
         let cpu_custom_draw_done = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_done = Instant::now();

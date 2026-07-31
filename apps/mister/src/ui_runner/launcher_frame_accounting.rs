@@ -473,6 +473,9 @@ impl FrameAnalyticsCpuStamp {
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct LauncherPrepareTrace {
+    pub(super) slint_timer_dispatch_us: u128,
+    pub(super) navigation_commit_us: u128,
+    pub(super) bridge_sync_us: u128,
     pub(super) catalog_worker_us: u128,
     pub(super) catalog_message_count: u32,
     pub(super) catalog_backlog: u32,
@@ -926,6 +929,10 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) navigation_transition_overlay_us: u128,
     pub(super) navigation_transition_edge: &'static str,
     pub(super) navigation_transition_direction: &'static str,
+    pub(super) navigation_snapshot_locked: bool,
+    pub(super) navigation_slint_render_called: bool,
+    pub(super) navigation_status_quiesce_wait_us: u64,
+    pub(super) navigation_status_quiesce_timeout: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1701,6 +1708,19 @@ impl LauncherFrameAccounting {
         runtime_status_write_us: u128,
     ) {
         let publisher = self.runtime_status_publisher.metrics();
+        let attributed_prepare_us = u128_to_u64_saturating(
+            frame
+                .prepare_trace
+                .slint_timer_dispatch_us
+                .saturating_add(frame.prepare_trace.navigation_commit_us)
+                .saturating_add(frame.prepare_trace.bridge_sync_us)
+                .saturating_add(frame.prepare_trace.catalog_worker_us)
+                .saturating_add(frame.prepare_trace.media_worker_us)
+                .saturating_add(frame.prepare_trace.media_gate_us)
+                .saturating_add(frame.prepare_trace.preview_schedule_us)
+                .saturating_add(frame.prepare_trace.preview_apply_us)
+                .saturating_add(frame.prepare_trace.status_string_copy_us),
+        );
         if self.frame_analytics_samples.len() == FRAME_ANALYTICS_SAMPLE_CAP {
             self.frame_analytics_samples.remove(0);
         }
@@ -1719,8 +1739,26 @@ impl LauncherFrameAccounting {
                 navigation_transition_overlay_us: u128_to_u64_saturating(
                     frame.custom_draw_trace.navigation_transition_overlay_us,
                 ),
+                navigation_snapshot_locked: frame.custom_draw_trace.navigation_snapshot_locked,
+                navigation_slint_render_called: frame
+                    .custom_draw_trace
+                    .navigation_slint_render_called,
+                navigation_status_quiesce_wait_us: frame
+                    .custom_draw_trace
+                    .navigation_status_quiesce_wait_us,
+                navigation_status_quiesce_timeout: frame
+                    .custom_draw_trace
+                    .navigation_status_quiesce_timeout,
                 wall_us,
                 prepare_us,
+                slint_timer_dispatch_us: u128_to_u64_saturating(
+                    frame.prepare_trace.slint_timer_dispatch_us,
+                ),
+                navigation_commit_us: u128_to_u64_saturating(
+                    frame.prepare_trace.navigation_commit_us,
+                ),
+                bridge_sync_us: u128_to_u64_saturating(frame.prepare_trace.bridge_sync_us),
+                unattributed_prepare_us: prepare_us.saturating_sub(attributed_prepare_us),
                 render_us,
                 custom_draw_us,
                 vsync_us,
@@ -1983,6 +2021,34 @@ impl LauncherFrameAccounting {
                 direct_preview_rows: frame.direct_preview_rows,
                 dirty_y0,
                 dirty_y1,
+                slint_timer_dispatch_us: u128_to_u64_saturating(
+                    frame.prepare_trace.slint_timer_dispatch_us,
+                ),
+                navigation_commit_us: u128_to_u64_saturating(
+                    frame.prepare_trace.navigation_commit_us,
+                ),
+                bridge_sync_us: u128_to_u64_saturating(frame.prepare_trace.bridge_sync_us),
+                unattributed_prepare_us: prepare_us.saturating_sub(
+                    u128_to_u64_saturating(frame.prepare_trace.slint_timer_dispatch_us)
+                        .saturating_add(u128_to_u64_saturating(
+                            frame.prepare_trace.navigation_commit_us,
+                        ))
+                        .saturating_add(u128_to_u64_saturating(frame.prepare_trace.bridge_sync_us))
+                        .saturating_add(u128_to_u64_saturating(
+                            frame.prepare_trace.catalog_worker_us,
+                        ))
+                        .saturating_add(u128_to_u64_saturating(frame.prepare_trace.media_worker_us))
+                        .saturating_add(u128_to_u64_saturating(frame.prepare_trace.media_gate_us))
+                        .saturating_add(u128_to_u64_saturating(
+                            frame.prepare_trace.preview_schedule_us,
+                        ))
+                        .saturating_add(u128_to_u64_saturating(
+                            frame.prepare_trace.preview_apply_us,
+                        ))
+                        .saturating_add(u128_to_u64_saturating(
+                            frame.prepare_trace.status_string_copy_us,
+                        )),
+                ),
                 catalog_worker_us: u128_to_u64_saturating(frame.prepare_trace.catalog_worker_us),
                 catalog_message_count: frame.prepare_trace.catalog_message_count,
                 catalog_backlog: frame.prepare_trace.catalog_backlog,
@@ -2608,6 +2674,9 @@ mod tests {
             custom_draw_done,
             custom_draw_trace: LauncherCustomDrawTrace::default(),
             prepare_trace: LauncherPrepareTrace {
+                slint_timer_dispatch_us: 0,
+                navigation_commit_us: 0,
+                bridge_sync_us: 0,
                 catalog_worker_us: 50,
                 catalog_message_count: 2,
                 catalog_backlog: 1,

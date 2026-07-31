@@ -21,10 +21,11 @@ Supported scenarios:
 - `search`
 
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
-Consoles → Home with the Super-Scaler POC enabled. It records per-frame process
-CPU, transition and overlay cost, latch sequence continuity, physical FPS, and
-drop counters for each forward and reverse leg, then restores the ordinary
-launcher. Evidence is written below
+Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It
+records per-frame process CPU, transition and overlay cost, snapshot locking,
+Slint calls, status-writer overlap, preparation attribution, latch sequence
+continuity, physical FPS, and drop counters for all six legs, then restores the
+ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
 
 New benchmarks must add a named registry entry and a fixed typed device
