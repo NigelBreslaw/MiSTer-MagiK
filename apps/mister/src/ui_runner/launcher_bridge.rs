@@ -257,12 +257,7 @@ fn sync_arcade_list_geometry_bridge(
     ui: &UiDisplay,
 ) {
     // Rust and Slint consume one route-owned PAL geometry contract.
-    let geometry = arcade_list_geometry(nav, ui);
-    let render_h = if nav.uses_crt_layout() {
-        ui.content_rect().bottom()
-    } else {
-        ui.render_h()
-    };
+    let (geometry, render_h) = arcade_list_layout(nav, ui);
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
@@ -272,9 +267,9 @@ fn sync_arcade_list_geometry_bridge(
     ) as i32);
 }
 
-fn arcade_list_geometry(nav: &LauncherNav, ui: &UiDisplay) -> ArcadeListGeometry {
+pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeListGeometry, usize) {
     let search = nav.arcade_search.is_active(&nav.arcade_filter.active);
-    if nav.uses_crt_layout() {
+    let geometry = if nav.uses_crt_layout() {
         ArcadeListGeometry::crt_for_content(
             ui.content_rect(),
             CrtUiMetrics::for_display(ui),
@@ -284,7 +279,13 @@ fn arcade_list_geometry(nav: &LauncherNav, ui: &UiDisplay) -> ArcadeListGeometry
         ArcadeListGeometry::search_for_render_w(ui.render_w())
     } else {
         ArcadeListGeometry::NORMAL
-    }
+    };
+    let render_h = if nav.uses_crt_layout() {
+        ui.content_rect().bottom()
+    } else {
+        ui.render_h()
+    };
+    (geometry, render_h)
 }
 
 pub(super) struct CatalogScanBridgeStatus {
@@ -1104,12 +1105,7 @@ fn sync_arcade_list_geometry_bridge_if_changed(
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
-    let geometry = arcade_list_geometry(nav, ui);
-    let render_h = if nav.uses_crt_layout() {
-        ui.content_rect().bottom()
-    } else {
-        ui.render_h()
-    };
+    let (geometry, render_h) = arcade_list_layout(nav, ui);
     set_bridge_if_changed!(
         bridge,
         get_arcade_list_x,

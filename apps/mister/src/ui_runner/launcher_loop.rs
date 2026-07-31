@@ -262,6 +262,15 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
+fn configure_arcade_list_renderer_geometry(
+    renderer: &mut ArcadeListRenderer,
+    nav: &LauncherNav,
+    ui: &UiDisplay,
+) {
+    let (geometry, render_h) = arcade_list_layout(nav, ui);
+    renderer.set_geometry_for_render_h(geometry, render_h);
+}
+
 fn navigation_transition_for_intent(
     nav: &LauncherNav,
     event: &launcher::LauncherEvent,
@@ -5201,24 +5210,7 @@ pub(super) fn run_launcher_loop(
         let custom_draw_start = Instant::now();
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
-            arcade_list_renderer.set_geometry_for_render_h(
-                if nav.uses_crt_layout() {
-                    ArcadeListGeometry::crt_for_content(
-                        ui.content_rect(),
-                        CrtUiMetrics::for_display(ui),
-                        arcade_search_active,
-                    )
-                } else if arcade_search_active {
-                    ArcadeListGeometry::search_for_render_w(ui.render_w())
-                } else {
-                    ArcadeListGeometry::NORMAL
-                },
-                if nav.uses_crt_layout() {
-                    ui.content_rect().bottom()
-                } else {
-                    ui.render_h()
-                },
-            );
+            configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
                 this_rect,
@@ -5311,8 +5303,11 @@ pub(super) fn run_launcher_loop(
                         false
                     };
                     if preview_surface_ready {
-                        arcade_list_renderer
-                            .set_geometry_for_render_h(ArcadeListGeometry::NORMAL, ui.render_h());
+                        configure_arcade_list_renderer_geometry(
+                            &mut arcade_list_renderer,
+                            &nav,
+                            ui,
+                        );
                         if let Some(update) = arcade_list_renderer.draw(
                             active_system_game_view(&catalog, &nav),
                             nav.arcade.selected,
@@ -7172,6 +7167,97 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::arcade_game;
+
+    fn crt_240_display() -> UiDisplay {
+        let plan = UiDisplayPlan::from_mister_ini_text(
+            "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+        )
+        .expect("CRT240 display plan");
+        UiDisplay::for_plan(plan)
+    }
+
+    #[test]
+    fn navigation_destination_uses_crt_240_arcade_geometry() {
+        let ui = crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&ui);
+        let nav = LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
+        let mut renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+
+        configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
+
+        assert_eq!(
+            renderer.dirty_rect(),
+            DirtyRect {
+                x0: 16,
+                y0: 104,
+                x1: 624,
+                y1: 416,
+            }
+        );
+    }
+
+    #[test]
+    fn crt_240_arcade_composition_leaves_header_and_footer_bands_untouched() {
+        let ui = crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&ui);
+        let nav = LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
+        let mut renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+        configure_arcade_list_renderer_geometry(&mut renderer, &nav, &ui);
+        let games = (0..20)
+            .map(|index| arcade_game(format!("Game {index}")).build())
+            .collect::<Vec<_>>();
+        let sentinel = <Rgb565Pixel as TargetPixel>::from_rgb(255, 0, 255);
+        let mut target = UiFrameTarget::cached(frame_target_geometry(&ui));
+        target.cached_565_mut().fill(sentinel);
+
+        let update = renderer
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, true)
+            .expect("forced Arcade list composition");
+        let _ = target.compose_arcade_list_update(&mut renderer, update);
+
+        let pixels = target.cached_frame_view().pixels();
+        for band in [56..104, 416..448] {
+            assert!(
+                band.flat_map(|y| &pixels[y * ui.render_w()..(y + 1) * ui.render_w()])
+                    .all(|pixel| *pixel == sentinel)
+            );
+        }
+    }
+
+    #[test]
+    fn shared_arcade_geometry_preserves_hdmi_and_crt_search_layouts() {
+        let hdmi = UiDisplay::for_framebuffer(960, 540);
+        let hdmi_nav = LauncherNav::new();
+        let mut hdmi_renderer = ArcadeListRenderer::new();
+        configure_arcade_list_renderer_geometry(&mut hdmi_renderer, &hdmi_nav, &hdmi);
+        assert_eq!(
+            hdmi_renderer.dirty_rect(),
+            DirtyRect {
+                x0: 8,
+                y0: 56,
+                x1: 518,
+                y1: 508,
+            }
+        );
+
+        let crt = crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&crt);
+        let mut crt_nav =
+            LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
+        crt_nav.arcade_filter.active = arcade_catalog::ArcadeFilter::Search;
+        let mut crt_renderer = ArcadeListRenderer::new_for_crt_metrics(metrics);
+        configure_arcade_list_renderer_geometry(&mut crt_renderer, &crt_nav, &crt);
+        assert_eq!(
+            crt_renderer.dirty_rect(),
+            DirtyRect {
+                x0: 288,
+                y0: 104,
+                x1: 624,
+                y1: 416,
+            }
+        );
+    }
 
     #[test]
     fn settings_page_routes_use_depth_for_forward_and_reverse_motion() {
