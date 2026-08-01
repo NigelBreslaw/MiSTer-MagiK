@@ -15,6 +15,7 @@ mod macos_display_clock;
 mod macos_titlebar;
 mod platform_lifecycle;
 mod sd_card;
+mod stream_lifecycle;
 
 use agent_client::{
     DeviceTelemetrySample, DeviceTelemetryStreamControl, FramebufferStreamControl,
@@ -4360,11 +4361,7 @@ fn apply_compiled_stream_disconnected(ui: &AppWindow, err: &str) {
 }
 
 fn cancel_framebuffer_stream(stream_control: &SharedFramebufferStreamControl) {
-    if let Ok(mut active) = stream_control.lock() {
-        if let Some((_, control)) = active.take() {
-            control.shutdown();
-        }
-    }
+    stream_lifecycle::cancel(stream_control, FramebufferStreamControl::shutdown);
 }
 
 fn register_framebuffer_stream(
@@ -4372,30 +4369,20 @@ fn register_framebuffer_stream(
     generation: u64,
     control: FramebufferStreamControl,
 ) {
-    if let Ok(mut active) = stream_control.lock() {
-        if let Some((_, old_control)) = active.replace((generation, control)) {
-            old_control.shutdown();
-        }
-    }
+    stream_lifecycle::replace(
+        stream_control,
+        generation,
+        control,
+        FramebufferStreamControl::shutdown,
+    );
 }
 
 fn unregister_framebuffer_stream(stream_control: &SharedFramebufferStreamControl, generation: u64) {
-    if let Ok(mut active) = stream_control.lock() {
-        if active
-            .as_ref()
-            .is_some_and(|(active_generation, _)| *active_generation == generation)
-        {
-            active.take();
-        }
-    }
+    stream_lifecycle::unregister(stream_control, generation);
 }
 
 fn cancel_realtime_stream(stream_control: &SharedRealtimeStreamControl) {
-    if let Ok(mut active) = stream_control.lock() {
-        if let Some((_, control)) = active.take() {
-            control.shutdown();
-        }
-    }
+    stream_lifecycle::cancel(stream_control, DeviceTelemetryStreamControl::shutdown);
 }
 
 fn register_realtime_stream(
@@ -4403,22 +4390,16 @@ fn register_realtime_stream(
     generation: u64,
     control: DeviceTelemetryStreamControl,
 ) {
-    if let Ok(mut active) = stream_control.lock() {
-        if let Some((_, old_control)) = active.replace((generation, control)) {
-            old_control.shutdown();
-        }
-    }
+    stream_lifecycle::replace(
+        stream_control,
+        generation,
+        control,
+        DeviceTelemetryStreamControl::shutdown,
+    );
 }
 
 fn unregister_realtime_stream(stream_control: &SharedRealtimeStreamControl, generation: u64) {
-    if let Ok(mut active) = stream_control.lock() {
-        if active
-            .as_ref()
-            .is_some_and(|(active_generation, _)| *active_generation == generation)
-        {
-            active.take();
-        }
-    }
+    stream_lifecycle::unregister(stream_control, generation);
 }
 
 #[cfg(feature = "live-ui")]
