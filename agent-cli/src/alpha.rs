@@ -61,6 +61,7 @@ struct AcceptanceReceipt {
     accepted: bool,
     accepted_at_unix: u64,
     candidate: CandidateIdentity,
+    catalog_creation: Value,
     installed_runtime: Value,
     checkpoints: Vec<Value>,
     launch_return: Value,
@@ -109,7 +110,9 @@ pub fn execute(
         })?)
         .map_err(|error| format!("cannot parse alpha activation: {error}"))?;
     let original_main = alpha_original_main(&activation)?;
-    let acceptance = accept_installed_candidate(&mut device, candidate, output, reporter);
+    let catalog_creation = alpha_catalog_creation(&activation)?;
+    let acceptance =
+        accept_installed_candidate(&mut device, candidate, catalog_creation, output, reporter);
     let restored = device.execute(DeviceRequest::RestoreAlphaHostMode { original_main });
     let receipt = match (acceptance, restored) {
         (Ok(receipt), Ok(_)) => receipt,
@@ -169,9 +172,38 @@ fn alpha_original_main(activation: &Value) -> AgentResult<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
+fn alpha_catalog_creation(activation: &Value) -> AgentResult<Value> {
+    let catalog = activation
+        .get("catalog")
+        .ok_or_else(|| AgentError::Classified {
+            code: "invalid_alpha_activation",
+            detail: "alpha activation has no catalog evidence".into(),
+        })?;
+    if catalog.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-alpha-catalog-creation-v1")
+        || catalog.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true)
+        || catalog
+            .pointer("/catalog/total_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+        || catalog
+            .pointer("/timing/complete_ms")
+            .and_then(Value::as_u64)
+            .is_none()
+    {
+        return classified(
+            "invalid_alpha_activation",
+            "alpha activation catalog evidence is incomplete",
+        );
+    }
+    Ok(catalog.clone())
+}
+
 fn accept_installed_candidate(
     device: &mut DeviceClient,
     candidate: CandidateIdentity,
+    catalog_creation: Value,
     output: &Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<AcceptanceReceipt> {
@@ -233,6 +265,7 @@ fn accept_installed_candidate(
         accepted: true,
         accepted_at_unix: unix_secs(),
         candidate,
+        catalog_creation,
         installed_runtime: runtime,
         checkpoints,
         launch_return,
@@ -524,13 +557,22 @@ fn require_installed_candidate(
         .pointer("/runtime/slint_status")
         .filter(|value| value.is_object())
         .ok_or("device status has no Slint runtime identity")?;
-    if runtime.get("build_version").and_then(Value::as_str) != Some(&candidate.version)
-        || runtime.get("build_source_revision").and_then(Value::as_str)
-            != Some(&candidate.magik_revision)
+    let actual_version = runtime.pointer("/build/version").and_then(Value::as_str);
+    let actual_revision = runtime
+        .pointer("/build/source_revision")
+        .and_then(Value::as_str);
+    if actual_version != Some(&candidate.version)
+        || actual_revision != Some(&candidate.magik_revision)
     {
         return classified(
             "alpha_candidate_not_installed",
-            "running UI does not match the verified candidate",
+            format!(
+                "running UI identity does not match candidate: expected version={} revision={} actual version={} revision={}",
+                candidate.version,
+                candidate.magik_revision,
+                actual_version.unwrap_or("missing"),
+                actual_revision.unwrap_or("missing"),
+            ),
         );
     }
     Ok(runtime.clone())
@@ -619,11 +661,31 @@ pub fn verify_acceptance(
     let runtime = receipt
         .get("installed_runtime")
         .ok_or_else(|| AgentError::from("receipt has no installed runtime"))?;
-    if runtime.get("build_version").and_then(Value::as_str) != Some(&candidate.version)
-        || runtime.get("build_source_revision").and_then(Value::as_str)
+    if runtime.pointer("/build/version").and_then(Value::as_str) != Some(&candidate.version)
+        || runtime
+            .pointer("/build/source_revision")
+            .and_then(Value::as_str)
             != Some(&candidate.magik_revision)
     {
         return invalid_acceptance("installed runtime identity does not match the candidate");
+    }
+    let catalog = receipt
+        .get("catalog_creation")
+        .ok_or("receipt has no catalog-creation evidence")?;
+    if catalog.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-alpha-catalog-creation-v1")
+        || catalog.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true)
+        || catalog
+            .pointer("/catalog/total_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+        || catalog
+            .pointer("/timing/complete_ms")
+            .and_then(Value::as_u64)
+            .is_none()
+    {
+        return invalid_acceptance("catalog-creation evidence is invalid");
     }
     let launch_return = receipt
         .get("launch_return")
@@ -1164,6 +1226,61 @@ mod tests {
                 "schema": "mister-magik-alpha-candidate-activation-v1",
                 "original_main": "custom/unsafe",
             }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn alpha_activation_requires_valid_catalog_creation_evidence() {
+        let activation = json!({
+            "catalog": {
+                "schema": "mister-magik-alpha-catalog-creation-v1",
+                "mode": "built-or-upgraded",
+                "timing": {"first_visible_ms": 1200, "complete_ms": 3400},
+                "catalog": {"valid": true, "total_games": 42, "systems": []},
+            }
+        });
+        assert_eq!(
+            alpha_catalog_creation(&activation).unwrap(),
+            activation["catalog"]
+        );
+        assert!(alpha_catalog_creation(&json!({"catalog": {"catalog": {"valid": true}}})).is_err());
+    }
+
+    #[test]
+    fn installed_candidate_uses_the_runtime_build_identity_object() {
+        let candidate = CandidateIdentity {
+            format: "mister-magik-alpha-candidate-v1",
+            version: "0.2.2954".into(),
+            build_number: 2954,
+            candidate_tag: "alpha-candidate-v0.2.2954-test".into(),
+            archive: "candidate.zip".into(),
+            archive_sha256: "a".repeat(64),
+            release_assets_sha256: "b".repeat(64),
+            magik_revision: "c".repeat(40),
+            gui_sha256: "d".repeat(64),
+            platform_manifest_sha256: "e".repeat(64),
+            platform_bundle_id: "bundle".into(),
+            qualification_candidate_id: "f".repeat(64),
+            component_sha256: BTreeMap::new(),
+        };
+        let status = json!({
+            "runtime": {
+                "slint_status": {
+                    "build": {
+                        "version": candidate.version.clone(),
+                        "source_revision": candidate.magik_revision.clone(),
+                    }
+                }
+            }
+        });
+
+        assert!(require_installed_candidate(&status, &candidate).is_ok());
+        assert!(
+            require_installed_candidate(
+                &json!({"runtime": {"slint_status": {"build_version": "0.2.2954"}}}),
+                &candidate,
+            )
             .is_err()
         );
     }

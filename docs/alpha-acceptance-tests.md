@@ -108,12 +108,43 @@ The device-side transaction then checks and exercises the real update route:
 - run public platform verification and public runtime health checks;
 - confirm the running Slint build version and source revision match the
   candidate exactly;
+- wait for the real public catalog to become first-visible and finish its
+  refresh within an eight-minute bound;
+- inspect the published catalog with the candidate binary and require a valid,
+  nonempty generation;
+- record whether the catalog was cached or built/upgraded, first-visible time,
+  complete time, generation, per-system counts, and total game count;
 - record the active Main generation used by the UI journey.
 
 No rolling `alpha` tag or Downloader feed moves if any installation or reboot
 check fails.
 
-## 5. Real UI journey
+## 5. Real catalog creation
+
+Catalog creation is the first product test after installation. It uses the
+candidate's public runtime and the MiSTer's real library rather than a mock
+catalog.
+
+The acceptance gate:
+
+1. Records whether a complete catalog was already available at startup.
+2. If no complete catalog exists, lets the candidate build or upgrade it once.
+3. Records progress while the catalog is being created.
+4. Requires both first-visible catalog readiness and completion of the library
+   refresh.
+5. Runs `catalog-v3-inspect` through the candidate binary.
+6. Requires a valid, nonempty published generation.
+7. Records first-visible and complete elapsed times, total games, generation,
+   and every system's game count in the acceptance receipt.
+8. Reuses that same completed catalog for every following UI test; it is not
+   rebuilt between UI checks.
+
+A cached catalog remains a valid fast-path result and is labelled `cached`.
+Starting without a complete catalog is labelled `built-or-upgraded` and proves
+the full creation path. The catalog phase has an eight-minute bound so the
+complete physical job remains inside its 15-minute timeout.
+
+## 6. Real UI journey
 
 Every injected action waits until the resulting UI state has been presented.
 The journey uses production button handling rather than test-only callbacks.
@@ -191,7 +222,7 @@ cannot be proven, the result is classified as recovery-required.
 4. Move once within Settings, press B, and assert return to Home.
 5. Close the volatile automation session and fail if cleanup cannot be proven.
 
-## 6. Visual evidence
+## 7. Visual evidence
 
 The journey currently produces these authoritative RGB565 checkpoints:
 
@@ -223,7 +254,7 @@ Each USB image must be a validated 1920x1080 JPEG and is recorded with byte
 length and SHA-256. RGB565 proves the authoritative rendered buffer; USB Video
 proves a real physical video signal. Neither replaces the other.
 
-## 7. Receipt and promotion gate
+## 8. Receipt and promotion gate
 
 Successful hardware acceptance writes `alpha-acceptance.json` and uploads the
 whole evidence directory as a private Actions artifact retained for 30 days.
@@ -232,6 +263,8 @@ promote unless:
 
 - the receipt schema is supported and `accepted` is true;
 - the complete candidate identity exactly matches freshly verified assets;
+- catalog-creation evidence contains a valid nonempty generation and complete
+  timing;
 - the installed runtime identity matches the candidate;
 - launch evidence proves a real non-Menu core and return;
 - there are at least six valid, uniquely labelled RGB565 checkpoints;
@@ -249,7 +282,7 @@ Only after these checks pass are the already-tested candidate bytes copied to
 the rolling `alpha` release and its Downloader feed. Promotion does not rebuild
 the binaries.
 
-## 8. Catalog compatibility snapshots
+## 9. Catalog compatibility snapshots
 
 Normal Rust/catalog CI also protects a checked-in immutable predecessor corpus:
 
@@ -301,7 +334,8 @@ navigation is used, but its provenance hashes, manifest, binding, and source MRA
 are not yet consumed together as a complete historical authority tree. It also
 does not contain real historical compressed navigation and SQLite shard files.
 
-The fast hardware journey intentionally consumes the already-installed real
-catalog rather than rebuilding it on every alpha. Full saved-catalog upgrades
-belong in fast host fixtures, with only a small representative device smoke
-test if needed.
+The physical alpha journey now proves creation or upgrade when the public
+catalog is incomplete and records the cached fast path otherwise. It builds at
+most once and reuses that generation for all UI checks. Full saved-catalog
+upgrades still belong in fast host fixtures, with a representative device
+upgrade added when the fixture corpus is complete.

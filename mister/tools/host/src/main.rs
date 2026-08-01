@@ -761,7 +761,7 @@ fn install_alpha_candidate(
             Err(restore) => Err(alpha_restore_failure(primary, restore)),
         };
     }
-    let activation = (|| -> std::result::Result<(), DeviceFailure> {
+    let activation = (|| -> std::result::Result<Value, DeviceFailure> {
         let safety = platform_safety_script();
         let cleanup =
             shell_sequence(["set -eu", release_arming_cleanup_command(), safety.as_str()]);
@@ -786,22 +786,115 @@ fn install_alpha_candidate(
         )
         .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
         wait_delivery_health(&session, "public", Duration::from_secs(10))
-            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+        wait_alpha_catalog_ready(
+            &session,
+            Duration::from_secs(ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS),
+        )
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
     })();
-    if let Err(primary) = activation {
-        return match restore_alpha_host_mode(config, original_main) {
-            Ok(_) => Err(primary),
-            Err(restore) => Err(alpha_restore_failure(primary, restore)),
-        };
-    }
+    let catalog = match activation {
+        Ok(catalog) => catalog,
+        Err(primary) => {
+            return match restore_alpha_host_mode(config, original_main) {
+                Ok(_) => Err(primary),
+                Err(restore) => Err(alpha_restore_failure(primary, restore)),
+            };
+        }
+    };
     serde_json::to_string(&json!({
         "schema": "mister-magik-alpha-candidate-activation-v1",
         "install": installed,
         "supervised_reboot": true,
         "public_health": "ready",
+        "catalog": catalog,
         "original_main": original_main,
     }))
     .map_err(device_failure)
+}
+
+fn wait_alpha_catalog_ready(session: &Session, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    let mut last = Value::Null;
+    let mut initial_ready = None;
+    let mut initial_refresh_done = None;
+    let mut first_visible_ms = None;
+    let mut last_progress_second = u64::MAX;
+    loop {
+        if let Some(status) = remote_read(session, "/tmp/mister-magik/status.json")
+            .and_then(|status| serde_json::from_str::<Value>(&status).ok())
+        {
+            let ready = status.get("catalog_ready").and_then(Value::as_bool);
+            let refresh_done = status.get("catalog_refresh_done").and_then(Value::as_bool);
+            initial_ready.get_or_insert(ready.unwrap_or(false));
+            initial_refresh_done.get_or_insert(refresh_done.unwrap_or(false));
+            if first_visible_ms.is_none() && ready == Some(true) {
+                first_visible_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            if ready == Some(true) && refresh_done == Some(true) {
+                let inspect = exec(
+                    session,
+                    "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
+                    true,
+                )?;
+                if let Some(error) = exec_failure_message("alpha catalog inspect", &inspect) {
+                    return Err(error.into());
+                }
+                let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout)?;
+                return Ok(json!({
+                    "schema": "mister-magik-alpha-catalog-creation-v1",
+                    "mode": if initial_ready == Some(false) || initial_refresh_done == Some(false) {
+                        "built-or-upgraded"
+                    } else {
+                        "cached"
+                    },
+                    "initial_catalog_ready": initial_ready,
+                    "initial_refresh_done": initial_refresh_done,
+                    "timing": {
+                        "first_visible_ms": first_visible_ms,
+                        "complete_ms": started.elapsed().as_millis() as u64,
+                    },
+                    "catalog": catalog,
+                }));
+            }
+            last = json!({
+                "catalog_ready": status.get("catalog_ready"),
+                "catalog_generation": status.get("catalog_generation"),
+                "catalog_games": status.get("catalog_games"),
+                "catalog_systems": status.get("catalog_systems"),
+                "catalog_scan_visible": status.get("catalog_scan_visible"),
+                "catalog_scan_percent": status.get("catalog_scan_percent"),
+                "catalog_refresh_done": status.get("catalog_refresh_done"),
+            });
+            let elapsed_second = started.elapsed().as_secs();
+            if elapsed_second / 5 != last_progress_second / 5 {
+                eprintln!(
+                    "alpha catalog build elapsed={}s ready={} refresh_done={} games={} systems={} percent={}",
+                    elapsed_second,
+                    ready.map_or("?".into(), |value| value.to_string()),
+                    refresh_done.map_or("?".into(), |value| value.to_string()),
+                    status
+                        .get("catalog_games")
+                        .map_or("?".into(), Value::to_string),
+                    status
+                        .get("catalog_systems")
+                        .map_or("?".into(), Value::to_string),
+                    status
+                        .get("catalog_scan_percent")
+                        .map_or("?".into(), Value::to_string),
+                );
+                last_progress_second = elapsed_second;
+            }
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "public alpha catalog did not become ready within {}s; last_status={last}",
+                timeout.as_secs()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn alpha_host_main(session: &Session) -> std::result::Result<Option<String>, DeviceFailure> {
@@ -3575,6 +3668,7 @@ const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-prof
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
+const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
 const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
