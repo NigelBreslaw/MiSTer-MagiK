@@ -468,11 +468,19 @@ fn run_ui_journey(
     let before_index = semantic(&state, "selected_index")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let selected_count = semantic(&state, "selected_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let velocity_button = if before_index.saturating_add(1) < selected_count {
+        AutomationButton::Down
+    } else {
+        AutomationButton::Up
+    };
     let velocity = action(
         device,
         nonce,
         AutomationAction::Hold {
-            button: AutomationButton::Down,
+            button: velocity_button,
             duration_ms: 350,
         },
     )?;
