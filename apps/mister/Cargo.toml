@@ -105,6 +105,15 @@ codegen-units = 2
 # line-level debug sections.
 strip = "debuginfo"
 
+[profile.release-live]
+# Fast iteration profile for the explicitly installed experimental runtime.
+# Keep runtime optimization while favoring parallel local code generation over
+# whole-program optimization.
+inherits = "release"
+lto = false
+codegen-units = 16
+strip = "debuginfo"
+
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"
