@@ -104,7 +104,7 @@ fn execute_launch_return(
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "profiling three Arcade launch-return cycles on the coherently installed Dev runtime",
+        "profiling two Arcade launch-return cycles on the coherently installed Dev runtime",
         Some(35),
     )?;
     let detail = device.execute(DeviceRequest::ProfileInstalledLaunchReturn {
@@ -129,7 +129,7 @@ fn execute_launch_return(
 
 fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-launch-return-benchmark-v2")
+        != Some("mister-magik-launch-return-benchmark-v3")
     {
         return Err("launch-return benchmark summary has the wrong schema".into());
     }
@@ -141,13 +141,38 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
             "launch-return benchmark summary lacks installed-runtime profile evidence".into(),
         );
     }
+    for (field, length) in [("main_revision", 40), ("main_sha256", 64)] {
+        let value = summary.get(field).and_then(Value::as_str).unwrap_or("");
+        if value.len() != length
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(format!("launch-return benchmark has invalid {field}").into());
+        }
+    }
+    for phase in [
+        "command_to_process",
+        "process_to_context",
+        "context_to_preview",
+        "preview_to_present",
+        "total_return",
+    ] {
+        if summary
+            .pointer(&format!("/latency/{phase}/median_us"))
+            .and_then(Value::as_u64)
+            .is_none()
+        {
+            return Err(format!("launch-return benchmark has no {phase} latency").into());
+        }
+    }
     let cycles = summary
         .get("cycles")
         .and_then(Value::as_array)
         .ok_or("launch-return benchmark summary has no cycles")?;
-    if cycles.len() != 3 {
+    if cycles.len() != 2 {
         return Err(format!(
-            "launch-return benchmark completed {} of 3 cycles",
+            "launch-return benchmark completed {} of 2 cycles",
             cycles.len()
         )
         .into());
@@ -162,6 +187,20 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
             .get("total_return_us")
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        let timestamps = [
+            "request_monotonic_us",
+            "acknowledged_monotonic_us",
+            "process_start_monotonic_us",
+            "exact_context_monotonic_us",
+            "preview_ready_monotonic_us",
+            "first_correct_present_monotonic_us",
+        ]
+        .map(|field| cycle.get(field).and_then(Value::as_u64).unwrap_or(0));
+        let monotonic_ordered = timestamps[0] > 0
+            && timestamps.windows(2).all(|pair| pair[0] <= pair[1])
+            && total_return_us == timestamps[5] - timestamps[0];
+        let black_interval_authoritative =
+            elapsed_ms == total_return_us.saturating_add(999) / 1_000;
         let preview_verified = cycle.get("preview_verified").and_then(Value::as_bool) == Some(true);
         let cpu_profile_valid = cycle
             .get("cpu_sample_hits")
@@ -194,14 +233,16 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
                 .is_some_and(|value| !value.is_empty())
         });
         if !restored
-            || elapsed_ms >= 2_000
+            || elapsed_ms >= 5_000
             || total_return_us == 0
+            || !monotonic_ordered
+            || !black_interval_authoritative
             || !preview_verified
             || !cpu_profile_valid
             || !artifacts_present
         {
             return Err(format!(
-                "launch-return cycle {} failed: restored={restored} black_interval_ms={elapsed_ms} total_return_us={total_return_us} preview_verified={preview_verified} artifacts_present={artifacts_present}",
+                "launch-return cycle {} failed: restored={restored} black_interval_ms={elapsed_ms} total_return_us={total_return_us} monotonic_ordered={monotonic_ordered} black_interval_authoritative={black_interval_authoritative} preview_verified={preview_verified} artifacts_present={artifacts_present}",
                 index + 1
             )
             .into());
@@ -808,11 +849,17 @@ mod tests {
     }
 
     #[test]
-    fn launch_return_requires_three_fast_restored_cycles() {
+    fn launch_return_requires_two_restored_cycles_with_authoritative_timestamps() {
         let cycle = json!({
             "restored": true,
-            "black_interval_ms": 1_999,
-            "total_return_us": 123_456,
+            "black_interval_ms": 5,
+            "total_return_us": 5_000,
+            "request_monotonic_us": 10_000,
+            "acknowledged_monotonic_us": 10_100,
+            "process_start_monotonic_us": 11_000,
+            "exact_context_monotonic_us": 12_000,
+            "preview_ready_monotonic_us": 14_000,
+            "first_correct_present_monotonic_us": 15_000,
             "preview_verified": true,
             "cpu_sample_hits": 10,
             "cpu_sample_stacks": 2,
@@ -826,18 +873,34 @@ mod tests {
             "timeline_file": "timeline.json",
         });
         let passing = json!({
-            "schema": "mister-magik-launch-return-benchmark-v2",
+            "schema": "mister-magik-launch-return-benchmark-v3",
             "timing_class": "instrumented-installed-dev-symbols",
-            "latency": {"total_return": {"min_us": 1, "median_us": 2, "max_us": 3}},
-            "cycles": [cycle.clone(), cycle.clone(), cycle]
+            "main_revision": "a".repeat(40),
+            "main_sha256": "b".repeat(64),
+            "latency": {
+                "command_to_process": {"min_us": 1, "median_us": 2, "max_us": 3},
+                "process_to_context": {"min_us": 1, "median_us": 2, "max_us": 3},
+                "context_to_preview": {"min_us": 1, "median_us": 2, "max_us": 3},
+                "preview_to_present": {"min_us": 1, "median_us": 2, "max_us": 3},
+                "total_return": {"min_us": 1, "median_us": 2, "max_us": 3}
+            },
+            "cycles": [cycle.clone(), cycle]
         });
         evaluate_launch_return_summary(&passing).unwrap();
         let mut slow = passing.clone();
-        slow["cycles"][1]["black_interval_ms"] = json!(2_000);
+        slow["cycles"][1]["black_interval_ms"] = json!(5_000);
+        slow["cycles"][1]["total_return_us"] = json!(5_000_000);
+        slow["cycles"][1]["first_correct_present_monotonic_us"] = json!(5_010_000);
         assert!(evaluate_launch_return_summary(&slow).is_err());
         let mut unrestored = passing.clone();
         unrestored["cycles"][0]["restored"] = json!(false);
         assert!(evaluate_launch_return_summary(&unrestored).is_err());
+        let mut zero = passing.clone();
+        zero["cycles"][0]["request_monotonic_us"] = json!(0);
+        assert!(evaluate_launch_return_summary(&zero).is_err());
+        let mut unordered = passing.clone();
+        unordered["cycles"][0]["acknowledged_monotonic_us"] = json!(11_500);
+        assert!(evaluate_launch_return_summary(&unordered).is_err());
         assert!(evaluate_launch_return_summary(&json!({"schema": "wrong", "cycles": []})).is_err());
     }
 

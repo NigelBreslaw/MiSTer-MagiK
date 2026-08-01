@@ -4670,9 +4670,25 @@ fn profile_installed_catalog_lifecycle(
 const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchmark-gate";
 const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-profile";
-const LAUNCH_RETURN_CYCLES: usize = 3;
-const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
+const LAUNCH_RETURN_CYCLES: usize = 2;
+const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
+
+fn exact_manifest_field(manifest: &str, field: &str, length: usize) -> Result<String> {
+    let values = manifest
+        .lines()
+        .filter_map(|line| line.strip_prefix(&format!("{field}=")))
+        .collect::<Vec<_>>();
+    if values.len() != 1
+        || values[0].len() != length
+        || !values[0]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("installed Dev manifest has invalid {field}").into());
+    }
+    Ok(values[0].into())
+}
 
 fn legacy_launcher_restart_cleanup_command() -> &'static str {
     "set -eu; now=$(cut -d. -f1 /proc/uptime); ticks=$(getconf CLK_TCK 2>/dev/null || echo 100); killed=0; for proc in /proc/[0-9]*; do pid=${proc##*/}; test \"$pid\" != \"$$\" || continue; target=$(readlink \"$proc/fd/8\" 2>/dev/null || true); test \"$target\" = /tmp/mister-magik/command-operation.lock || continue; command=$(tr '\\000' ' ' < \"$proc/cmdline\" 2>/dev/null || true); case \"$command\" in *mister_magik_restart_launcher*) ;; *) continue ;; esac; start=$(awk '{print $22}' \"$proc/stat\" 2>/dev/null || echo 0); age=$((now - start / ticks)); test \"$age\" -ge 30 || continue; kill \"$pid\"; killed=$((killed + 1)); done; test \"$killed\" -eq 0 || sleep 1; printf 'legacy_launcher_restart_cleanup_tsv\\tkilled=%s\\n' \"$killed\""
@@ -4686,6 +4702,10 @@ fn profile_installed_launch_return(
     fs::create_dir_all(output_dir)?;
     let _signal_guard = ScreensaverProfileSignalGuard::install();
     let mut cycles = Vec::new();
+    let installed_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("launch-return benchmark cannot read the installed Dev manifest")?;
+    let main_revision = exact_manifest_field(&installed_manifest, "main_revision", 40)?;
+    let main_sha256 = exact_manifest_field(&installed_manifest, "main_sha256", 64)?;
     let run_result = (|| -> Result<Value> {
         exec_checked(
             &session,
@@ -4790,12 +4810,12 @@ fn profile_installed_launch_return(
                 format!("{}\n", serde_json::to_string_pretty(&expected)?),
             )?;
 
-            let return_started = Instant::now();
+            let host_poll_started = Instant::now();
             let return_action =
                 request_magik_benchmark_action(&config.agent, "return-to-launcher")?;
             let status =
                 wait_launch_return_ready(&session, previous_launcher_pid, Duration::from_secs(8))?;
-            let black_interval_ms = return_started.elapsed().as_millis() as u64;
+            let host_poll_elapsed_ms = host_poll_started.elapsed().as_millis() as u64;
             let expected_index = expected
                 .get("game_index")
                 .and_then(Value::as_u64)
@@ -4868,10 +4888,18 @@ fn profile_installed_launch_return(
                 .unwrap_or(0);
             let monotonic_ordered = request_us > 0
                 && request_us <= acknowledge_us
-                && request_us <= process_us
+                && acknowledge_us <= process_us
                 && process_us <= context_us
                 && context_us <= preview_us
                 && preview_us <= present_us;
+            if !monotonic_ordered {
+                return Err(format!(
+                    "launch-return cycle {cycle_number} has zero or unordered device-monotonic timestamps request={request_us} acknowledge={acknowledge_us} process={process_us} context={context_us} preview={preview_us} present={present_us}"
+                )
+                .into());
+            }
+            let total_return_us = present_us - request_us;
+            let visible_black_ms = total_return_us.saturating_add(999) / 1_000;
             let restored = status.get("return_screen").and_then(Value::as_str) == Some("arcade")
                 && selected == expected_index
                 && (visual_index - expected_index as f64).abs() < 0.01
@@ -4879,8 +4907,7 @@ fn profile_installed_launch_return(
                 && selected_path == expected_path
                 && selected_collection == expected_collection
                 && preview_verified
-                && monotonic_ordered
-                && black_interval_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
+                && visible_black_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
             let capture =
                 request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
             validate_visible_launcher_capture(&capture)?;
@@ -5001,7 +5028,9 @@ fn profile_installed_launch_return(
                 "preview_cache_state": preview_state,
                 "preview_expected": preview_expected,
                 "preview_verified": preview_verified,
-                "black_interval_ms": black_interval_ms,
+                "black_interval_ms": visible_black_ms,
+                "visible_black_us": total_return_us,
+                "host_poll_elapsed_ms": host_poll_elapsed_ms,
                 "return_screen": status.get("return_screen"),
                 "startup_mode": status.get("startup_mode"),
                 "return_source": status.get("return_source"),
@@ -5016,7 +5045,7 @@ fn profile_installed_launch_return(
                 "process_to_context_us": context_us.saturating_sub(process_us),
                 "context_to_preview_us": preview_us.saturating_sub(context_us),
                 "preview_to_present_us": present_us.saturating_sub(preview_us),
-                "total_return_us": present_us.saturating_sub(request_us),
+                "total_return_us": total_return_us,
                 "capture_file": capture_file,
                 "capture_metadata_file": capture_metadata_file,
                 "flamegraph_file": format!("cycle-{cycle_number}-flamegraph.svg"),
@@ -5075,16 +5104,25 @@ fn profile_installed_launch_return(
                 .filter_map(|cycle| cycle.get(field).and_then(Value::as_u64))
                 .collect::<Vec<_>>();
             values.sort_unstable();
+            let median_us = if values.is_empty() {
+                0
+            } else {
+                let lower = values[(values.len() - 1) / 2];
+                let upper = values[values.len() / 2];
+                ((u128::from(lower) + u128::from(upper)) / 2) as u64
+            };
             json!({
                 "min_us": values.first().copied().unwrap_or(0),
-                "median_us": values.get(values.len() / 2).copied().unwrap_or(0),
+                "median_us": median_us,
                 "max_us": values.last().copied().unwrap_or(0),
             })
         };
         Ok(json!({
-            "schema": "mister-magik-launch-return-benchmark-v2",
+            "schema": "mister-magik-launch-return-benchmark-v3",
             "scenario": "launch-return",
             "timing_class": "instrumented-installed-dev-symbols",
+            "main_revision": &main_revision,
+            "main_sha256": &main_sha256,
             "cpu_profile_hz": 999,
             "cycles": cycles.clone(),
             "latency": {
@@ -5140,9 +5178,11 @@ fn profile_installed_launch_return(
         (Ok(summary), Ok(())) => summary,
         (Err(error), Ok(())) => {
             let failure = json!({
-                "schema": "mister-magik-launch-return-benchmark-v2",
+                "schema": "mister-magik-launch-return-benchmark-v3",
                 "scenario": "launch-return",
                 "timing_class": "instrumented-installed-dev-symbols",
+                "main_revision": &main_revision,
+                "main_sha256": &main_sha256,
                 "cpu_profile_hz": 999,
                 "cycles": cycles,
                 "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,

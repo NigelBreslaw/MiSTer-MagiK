@@ -46,17 +46,23 @@ the separate `scripts/agent build runtime-analysis` intent for offline analysis,
 but a benchmark cannot invoke or install it or any other temporary runtime.
 
 The workflow selects a deep settled Arcade row (index 128, clamped when the
-catalog is shorter), launches a real core, returns three times, and moves one
-row between cycles. It records device-monotonic request, process-start,
-exact-context, preview-ready, and first-correct-present timestamps. Each cycle
+catalog is shorter), launches a real core, returns twice, and moves one row
+between cycles. It records device-monotonic request, acknowledgement,
+process-start, exact-context, preview-ready, and first-correct-present
+timestamps. Zero or unordered timestamps fail the run rather than producing an
+uptime-derived latency. Each cycle
 must restore the exact collection, game path/index, visual/scroll position,
 and preview state without presenting Home first. It also requires a nonblank
 authoritative RGB565 capture, flamegraph, folded stacks, frame profile,
 timeline, launcher log, Main events, and pre-launch/restored state.
 
-The v2 summary reports command-to-process, process-to-context,
+The v3 summary binds the installed Main revision and hash and reports
+command-to-process, process-to-context,
 context-to-preview, preview-to-present, and total return latency in
-microseconds, plus min/median/max aggregation. Its timing class is
+microseconds, plus min/median/max aggregation. Device-monotonic request to
+first-correct-present is the authoritative visible-black interval. Host polling
+elapsed time is recorded separately and is never counted as visible black. The
+explicit restoration/fallback boundary is five seconds. Its timing class is
 `instrumented-installed-dev-symbols`: sampling overhead is present, but the
 binary and manifest remain the exact installed pair for the entire run.
 
