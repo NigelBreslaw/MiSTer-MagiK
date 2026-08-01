@@ -420,17 +420,21 @@ fn require_lower_hex(label: &str, value: &str, length: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const HEADER: &str = "setname,name,region,version,alternative,parent_title,platform,series,homebrew,bootleg,year,manufacturer,category,linebreak1,resolution,rotation,flip,linebreak2,players,move_inputs,special_controls,num_buttons\n";
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
     fn temp_path(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "mister-arcade-database-{}-{name}",
+            "mister-arcade-database-{}-{}-{}-{name}",
+            std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed),
         ))
     }
 
