@@ -298,10 +298,43 @@ impl Entry {
 }
 
 fn decode_text(value: &str) -> Result<String> {
-    Ok(if value.contains('&') {
-        unescape(value)?.into_owned()
-    } else {
-        value.to_string()
+    if !value.contains('&') {
+        return Ok(value.to_string());
+    }
+
+    let mut escaped = String::with_capacity(value.len());
+    let mut remainder = value;
+    while let Some(index) = remainder.find('&') {
+        escaped.push_str(&remainder[..index]);
+        remainder = &remainder[index + 1..];
+        if starts_with_xml_entity(remainder) {
+            escaped.push('&');
+        } else {
+            escaped.push_str("&amp;");
+        }
+    }
+    escaped.push_str(remainder);
+    Ok(unescape(&escaped)?.into_owned())
+}
+
+fn starts_with_xml_entity(value: &str) -> bool {
+    ["amp;", "apos;", "gt;", "lt;", "quot;"]
+        .iter()
+        .any(|entity| value.starts_with(entity))
+        || value
+            .strip_prefix("#x")
+            .is_some_and(|value| has_numeric_entity(value, 16))
+        || value
+            .strip_prefix('#')
+            .is_some_and(|value| has_numeric_entity(value, 10))
+}
+
+fn has_numeric_entity(value: &str, radix: u32) -> bool {
+    value.find(';').is_some_and(|end| {
+        end > 0
+            && value[..end]
+                .chars()
+                .all(|character| character.is_digit(radix))
     })
 }
 
@@ -401,11 +434,11 @@ mod tests {
     }
 
     #[test]
-    fn imports_quoted_categories_entities_and_blank_setnames() {
+    fn imports_entities_literal_ampersands_and_blank_setnames() {
         let path = database();
         let csv_path = temp_path("ArcadeDatabase.csv");
         let csv = format!(
-            "{HEADER},\"Run &amp; Gun\",World,,no,,Board,Series,no,no,1985,Maker,\"Platform - Run, Jump &amp; Scrolling\",,15kHz,horizontal,n-a,,2-4 (simultaneous),8-way,,2\n"
+            "{HEADER},\"Snow Bros. - Nick & Tom\",World,,no,,Board,Series,no,no,1985,Maker,\"Platform - Run, Jump &amp; Scrolling\",,15kHz,horizontal,n-a,,2-4 (simultaneous),8-way,,2\n"
         );
         fs::write(&csv_path, csv).unwrap();
 
@@ -424,7 +457,7 @@ mod tests {
             row,
             (
                 String::new(),
-                "Run & Gun".to_string(),
+                "Snow Bros. - Nick & Tom".to_string(),
                 "Platform - Run, Jump & Scrolling".to_string(),
                 1985
             )
