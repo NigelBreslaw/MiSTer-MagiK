@@ -4156,14 +4156,18 @@ pub fn request_supervised_launcher_restart() -> Result<(), String> {
     write_mister_command_nonblocking("mister_magik_supervised_restart_launcher\n")
 }
 
-fn write_magik_command_response(cmd: &str) -> Result<String, String> {
+fn write_magik_command_response_with_lock(
+    cmd: &str,
+    lock_nonblocking: bool,
+) -> Result<String, String> {
     let command_lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open("/tmp/mister-magik/command-operation.lock")
         .map_err(|error| format!("failed to open command lock: {error}"))?;
-    if unsafe { libc::flock(command_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+    let lock_operation = libc::LOCK_EX | if lock_nonblocking { libc::LOCK_NB } else { 0 };
+    if unsafe { libc::flock(command_lock.as_raw_fd(), lock_operation) } != 0 {
         return Err(format!(
             "failed to lock command channel: {}",
             std::io::Error::last_os_error()
@@ -4214,6 +4218,10 @@ fn write_magik_command_response(cmd: &str) -> Result<String, String> {
     }
 }
 
+fn write_magik_command_response(cmd: &str) -> Result<String, String> {
+    write_magik_command_response_with_lock(cmd, false)
+}
+
 fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
     write_magik_command_response(cmd).map(|_| ())
 }
@@ -4239,6 +4247,11 @@ pub enum DisplayTransactionPhase {
 
 pub fn display_state() -> Result<DisplayCommandState, String> {
     let response = write_magik_command_response("mister_magik_display_get_v1\n")?;
+    parse_display_state_response(&response)
+}
+
+pub fn try_display_state() -> Result<DisplayCommandState, String> {
+    let response = write_magik_command_response_with_lock("mister_magik_display_get_v1\n", true)?;
     parse_display_state_response(&response)
 }
 

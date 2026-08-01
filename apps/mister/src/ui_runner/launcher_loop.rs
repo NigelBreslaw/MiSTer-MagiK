@@ -1924,7 +1924,7 @@ pub(super) fn run_launcher_loop(
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
-        if let Ok(state) = launcher::display_state() {
+        if let Ok(state) = launcher::try_display_state() {
             let selected_id = state.pending.as_deref().unwrap_or(&state.active);
             if let Some(index) =
                 mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
