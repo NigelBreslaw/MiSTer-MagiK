@@ -1505,30 +1505,34 @@ fn request_pending_launch_return_shard(
     now: Instant,
     start: Instant,
 ) -> bool {
-    let Some(collection_id) = pending.and_then(launcher::LaunchReturnState::collection_id) else {
+    let Some(state) = pending else {
         return false;
     };
-    if collection_has_resident_rows(catalog, collection_id)
-        || !catalog
-            .systems
-            .iter()
-            .any(|system| system.id == collection_id)
+    let collection_id = state.collection_id().unwrap_or_else(|| state.system_id());
+    if catalog
+        .system_game_view(collection_id)
+        .iter()
+        .any(|game| game.mra_path.as_ref() == state.game_path())
     {
         return false;
     }
+    let system_id = state.system_id();
+    if !catalog.systems.iter().any(|system| system.id == system_id) {
+        return false;
+    }
     if !scheduler.request_system_shard(
-        collection_id.to_string(),
+        system_id.to_string(),
         SystemShardPriority::Urgent,
         "launch-return",
         now,
     ) {
         return false;
     }
-    nav.catalog_system_hydration_started(collection_id);
+    nav.catalog_system_hydration_started(system_id);
     print_startup_event(
         start,
         "launch_return_system_shard_requested",
-        format!("system={collection_id} priority=urgent"),
+        format!("system={system_id} priority=urgent"),
     );
     true
 }
@@ -2610,10 +2614,7 @@ pub(super) fn run_launcher_loop(
         let return_was_waiting = lifecycle.startup_status().mode == StartupMode::ReturnFromGame
             && !lifecycle.startup_can_present_frame();
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
-        if return_was_waiting
-            && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
-            && !launch_return_session.context_matches(&nav, &catalog)
-        {
+        if return_black_timeout_requires_home_fallback(return_was_waiting, &lifecycle_effects) {
             launch_return_session.fallback_to_home(&mut nav);
             full_bridge_dirty = true;
             request_launcher_redraw!();
@@ -6313,6 +6314,13 @@ fn launcher_return_to_launcher_requested() -> bool {
     )
 }
 
+fn return_black_timeout_requires_home_fallback(
+    return_was_waiting: bool,
+    effects: &LifecycleEffects,
+) -> bool {
+    return_was_waiting && effects.has_startup_event("return_black_screen_timeout")
+}
+
 fn return_to_launcher_env_is_set(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true") | Some("yes"))
 }
@@ -8072,6 +8080,55 @@ mod tests {
     }
 
     #[test]
+    fn pending_launch_return_requests_its_shard_when_other_collection_rows_are_resident() {
+        let full_catalog = arcade_catalog(
+            vec![
+                arcade_game("first")
+                    .path("/media/fat/_Arcade/first.mra")
+                    .system_id("arcade")
+                    .build(),
+                arcade_game("saved")
+                    .path("/media/fat/_Arcade/saved.mra")
+                    .system_id("arcade")
+                    .build(),
+            ],
+            vec![arcade_system("arcade", 2)],
+        );
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&full_catalog, "arcade"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &full_catalog,
+            "/media/fat/_Arcade/saved.mra",
+        )
+        .expect("return state");
+        let partial_catalog = arcade_catalog(
+            vec![
+                arcade_game("first")
+                    .path("/media/fat/_Arcade/first.mra")
+                    .system_id("arcade")
+                    .build(),
+            ],
+            vec![arcade_system("arcade", 2)],
+        );
+        let mut restored_nav = LauncherNav::new();
+        restored_nav.sync_launcher_taxonomy(&partial_catalog);
+        let mut scheduler = LauncherScheduler::new(false);
+        let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
+        let now = Instant::now();
+
+        assert!(request_pending_launch_return_shard(
+            Some(&state),
+            &partial_catalog,
+            &mut restored_nav,
+            &mut scheduler,
+            now,
+            now,
+        ));
+        assert!(scheduler.system_shard_attempted("arcade"));
+    }
+
+    #[test]
     fn return_session_reapplies_exact_context_until_authoritative_present() {
         let catalog = arcade_catalog(
             (0..3)
@@ -8188,6 +8245,28 @@ mod tests {
         );
         assert_eq!(session.phase, "fallback-home");
         assert_eq!(session.fallback_reason, "capsule checksum mismatch");
+        assert!(!session.requested());
+    }
+
+    #[test]
+    fn return_preview_timeout_falls_back_even_when_exact_context_was_restored() {
+        let catalog = catalog_for_media_systems(&["c64"]);
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "c64"));
+        let state =
+            launcher::capture_launch_return_state(&nav, &catalog, "/media/fat/_Arcade/c64.mra")
+                .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+        assert!(session.apply(&mut nav, &catalog, CatalogSource::ReturnCapsule));
+        assert!(session.context_matches(&nav, &catalog));
+        let mut effects = LifecycleEffects::new();
+        effects.startup_event("return_black_screen_timeout", "preview never ready");
+
+        assert!(return_black_timeout_requires_home_fallback(true, &effects));
+        session.fallback_to_home(&mut nav);
+
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(session.phase, "fallback-home");
         assert!(!session.requested());
     }
 

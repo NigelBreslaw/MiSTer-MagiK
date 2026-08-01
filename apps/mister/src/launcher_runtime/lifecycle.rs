@@ -363,6 +363,15 @@ impl LifecycleEffects {
         });
     }
 
+    pub fn has_startup_event(&self, expected_name: &str) -> bool {
+        self.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                LauncherEffect::StartupEvent { name, .. } if *name == expected_name
+            )
+        })
+    }
+
     pub fn drain(&mut self) -> impl Iterator<Item = LauncherEffect> + '_ {
         self.effects.drain(..)
     }

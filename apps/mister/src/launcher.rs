@@ -3718,6 +3718,10 @@ impl LaunchReturnState {
         self.collection_id.as_deref()
     }
 
+    pub fn system_id(&self) -> &str {
+        &self.system_id
+    }
+
     pub fn game_path(&self) -> &str {
         &self.game_path
     }
@@ -3869,13 +3873,13 @@ pub fn apply_launch_return_state(
         if games.is_empty() {
             return false;
         }
-        (
-            games
-                .iter()
-                .position(|game| game.mra_path.as_ref() == state.game_path)
-                .unwrap_or_else(|| state.game_index.min(games.len() - 1)),
-            games.len(),
-        )
+        let Some(game_index) = games
+            .iter()
+            .position(|game| game.mra_path.as_ref() == state.game_path)
+        else {
+            return false;
+        };
+        (game_index, games.len())
     };
 
     nav.screen = Screen::Arcade;
@@ -7445,7 +7449,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_return_state_falls_back_to_clamped_indices() {
+    fn launch_return_state_rejects_a_missing_exact_game() {
         let state = LaunchReturnState {
             schema_version: LAUNCH_RETURN_STATE_SCHEMA,
             screen: "arcade".into(),
@@ -7462,12 +7466,7 @@ mod tests {
         let catalog = reordered_arcade_catalog();
         let mut restored = LauncherNav::new();
 
-        assert!(apply_launch_return_state(&mut restored, &catalog, state));
-
-        assert_eq!(restored.screen, Screen::Arcade);
-        assert_eq!(restored.selected, 0);
-        assert_eq!(restored.arcade.selected, 2);
-        assert_eq!(restored.arcade.scroll_y, 2 * ARCADE_ROW_HEIGHT);
+        assert!(!apply_launch_return_state(&mut restored, &catalog, state));
     }
 
     #[test]
