@@ -4423,7 +4423,7 @@ fn profile_installed_launch_return(
                 format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
             )?;
             let profile_metadata_text =
-                wait_launch_return_profile(&session, &remote_complete, Duration::from_secs(5))?;
+                wait_launch_return_artifact(&session, &remote_complete, Duration::from_secs(5))?;
             let profile_metadata: Value = serde_json::from_str(profile_metadata_text.trim())?;
             let sample_hits = profile_metadata
                 .get("sample_hits")
@@ -4463,10 +4463,13 @@ fn profile_installed_launch_return(
                 output_dir.join(format!("cycle-{cycle_number}-profile.json")),
                 format!("{}\n", serde_json::to_string_pretty(&profile_metadata)?),
             )?;
-            for (remote, local) in [
-                (&remote_svg, format!("cycle-{cycle_number}-flamegraph.svg")),
-                (&remote_frames, format!("cycle-{cycle_number}-frames.tsv")),
-            ] {
+            let frame_profile =
+                wait_launch_return_artifact(&session, &remote_frames, Duration::from_secs(6))?;
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-frames.tsv")),
+                frame_profile,
+            )?;
+            for (remote, local) in [(&remote_svg, format!("cycle-{cycle_number}-flamegraph.svg"))] {
                 let artifact = remote_read(&session, remote)
                     .filter(|text| !text.trim().is_empty())
                     .ok_or_else(|| {
@@ -4763,7 +4766,7 @@ fn wait_launch_return_ready(
     .into())
 }
 
-fn wait_launch_return_profile(session: &Session, path: &str, timeout: Duration) -> Result<String> {
+fn wait_launch_return_artifact(session: &Session, path: &str, timeout: Duration) -> Result<String> {
     let started = Instant::now();
     while started.elapsed() < timeout {
         if screensaver_profile_interrupted() {
@@ -4777,7 +4780,7 @@ fn wait_launch_return_profile(session: &Session, path: &str, timeout: Duration) 
         thread::sleep(Duration::from_millis(25));
     }
     Err(format!(
-        "launch-return profile metadata did not complete within {} ms: {path}",
+        "launch-return artifact did not become readable within {} ms: {path}",
         timeout.as_millis()
     )
     .into())
