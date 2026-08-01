@@ -352,51 +352,14 @@ jobs:
           (cd dist/published-assets && sha256sum --check SHA256SUMS)
 
       - name: Verify release identity is consistent
-        env:
-          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
-          RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
-          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
-          RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
-          CANDIDATE_TAG: ${{ steps.package.outputs.candidate_tag }}
-        run: |
-          python3 - <<'PY'
-          import json, os, zipfile
-          from pathlib import Path
-
-          root = Path("dist/release-assets")
-          receipt = json.loads((root / "release-assets.json").read_text())
-          version = os.environ["RELEASE_VERSION"]
-          build = int(os.environ["RELEASE_BUILD_NUMBER"])
-          tag = os.environ["RELEASE_TAG"]
-          channel = os.environ["RELEASE_CHANNEL"]
-          assert receipt["version"] == version == f"0.2.{build}"
-          expected_tag = (
-              os.environ["CANDIDATE_TAG"]
-              if channel == "alpha"
-              else channel if channel == "beta" else f"v{version}"
-          )
-          assert tag == expected_tag
-          assert receipt["archive"] == f"mister-magik-{version}.zip"
-          with zipfile.ZipFile(root / receipt["archive"]) as package:
-              release = dict(
-                  line.split("=", 1)
-                  for line in package.read("mister-magik/release-v1.txt").decode().splitlines()
-              )
-              assert version.encode() in package.read("mister-magik/mister-magik-fb")
-              game_databases = json.loads(
-                  package.read("mister-magik/game-databases-manifest.json")
-              )
-          assert release["version"] == version
-          assert int(release["build_number"]) == build
-          assert int(release["game_database_version"]) == game_databases["release_version"]
-          database = json.loads((root / f"mister-magik-{channel}-db.json").read_text())
-          assert database["db_id"] == "mister_magik"
-          assert database["release"] == {"version": version, "build_number": build}
-          assert tag in json.dumps(database)
-          alpha_installer = root / "mister-magik-alpha-installer.zip"
-          if channel == "alpha":
-              assert not alpha_installer.exists()
-          PY
+        run: >-
+          python3 scripts/release/packaging/verify-release-identity.py
+          --root dist/release-assets
+          --version '${{ needs.release-metadata.outputs.version }}'
+          --build-number '${{ needs.release-metadata.outputs.build-number }}'
+          --release-tag '${{ needs.release-metadata.outputs.tag }}'
+          --channel '${{ github.event.inputs.release_channel }}'
+          --candidate-tag '${{ steps.package.outputs.candidate_tag }}'
 
       - name: Upload immutable candidate
         uses: actions/upload-artifact@v7
