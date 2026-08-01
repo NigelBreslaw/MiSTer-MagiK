@@ -386,11 +386,10 @@ impl DeviceOperations for NativeDevice {
                     Layout::Development => "dev",
                     Layout::Public => "public",
                 };
-                let command = delivery_health_command(label).map_err(device_failure)?;
                 let session = connect(10).map_err(device_failure)?;
                 wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                exec_checked(&session, "delivery health", &command)
+                wait_delivery_health(&session, label, Duration::from_secs(10))
                     .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
                 "healthy".into()
             }
@@ -751,12 +750,8 @@ fn install_alpha_candidate(
         &installed_platform_verify_command(Layout::Public),
     )
     .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
-    exec_checked(
-        &session,
-        "alpha candidate public health",
-        &delivery_health_command("public").map_err(device_failure)?,
-    )
-    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    wait_delivery_health(&session, "public", Duration::from_secs(10))
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
     serde_json::to_string(&json!({
         "schema": "mister-magik-alpha-candidate-activation-v1",
         "install": installed,
@@ -845,12 +840,8 @@ fn verify_delivery_health(config: &NativeDeviceConfig) -> std::result::Result<()
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
         .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-    exec_checked(
-        &session,
-        "delivery health",
-        &delivery_health_command("dev").map_err(device_failure)?,
-    )
-    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
+    wait_delivery_health(&session, "dev", Duration::from_secs(10))
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
 }
 
 fn smoke_development_delivery(
@@ -2576,6 +2567,28 @@ fn delivery_health_command(layout: &str) -> Result<String> {
     Ok(format!(
         "set -eu; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; test ! -e {directory}/launcher.env; test ! -e {directory}/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
     ))
+}
+
+fn wait_delivery_health(session: &Session, layout: &str, timeout: Duration) -> Result<()> {
+    let command = delivery_health_command(layout)?;
+    let started = Instant::now();
+    let mut attempts = 0_u32;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let output = exec(session, &command, true)?;
+        if let Some(error) = exec_failure_message("delivery health", &output) {
+            if started.elapsed() >= timeout {
+                return Err(format!(
+                    "{error}; delivery health attempts={attempts} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                )
+                .into());
+            }
+            thread::sleep(Duration::from_millis(250));
+        } else {
+            return Ok(());
+        }
+    }
 }
 
 fn validate_delivery_remote(remote: &str) -> Result<()> {
