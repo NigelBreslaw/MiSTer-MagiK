@@ -4229,6 +4229,7 @@ fn profile_installed_launch_return(
             "launch-return benchmark stale profile cleanup",
             &format!("rm -rf {}", sh(LAUNCH_RETURN_PROFILE_REMOTE_DIR)),
         )?;
+        wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {

@@ -36,7 +36,9 @@ fn require_clean_installed_commit(
     )?;
     device.execute(DeviceRequest::Discover)?;
     device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    if benchmark_requires_initial_health(scenario) {
+        device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    }
     let manifest = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
     let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
     if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
@@ -85,6 +87,12 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool {
+    // Launch-return owns a one-shot launcher.env. Its typed operation removes that
+    // exact state and then performs the same development health check itself.
+    !matches!(scenario, BenchmarkScenario::LaunchReturn)
 }
 
 fn execute_launch_return(
@@ -831,6 +839,16 @@ mod tests {
         unrestored["cycles"][0]["restored"] = json!(false);
         assert!(evaluate_launch_return_summary(&unrestored).is_err());
         assert!(evaluate_launch_return_summary(&json!({"schema": "wrong", "cycles": []})).is_err());
+    }
+
+    #[test]
+    fn launch_return_health_follows_owned_cleanup() {
+        assert!(!benchmark_requires_initial_health(
+            BenchmarkScenario::LaunchReturn
+        ));
+        assert!(benchmark_requires_initial_health(
+            BenchmarkScenario::Screensaver
+        ));
     }
 
     #[test]
