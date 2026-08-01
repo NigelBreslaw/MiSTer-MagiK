@@ -306,7 +306,7 @@ mod imp {
 
     pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
         let Some(profiler) = profiler else {
-            return finish_launch_return(None).map(|_| ());
+            return Ok(());
         };
         std::thread::Builder::new()
             .name("launch-return-profile".into())
@@ -545,7 +545,10 @@ mod stub {
     }
 
     pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
-        finish_launch_return(profiler).map(|_| ())
+        let Some(profiler) = profiler else {
+            return Ok(());
+        };
+        finish_launch_return(Some(profiler)).map(|_| ())
     }
 
     pub struct ScreensaverProfiler;
