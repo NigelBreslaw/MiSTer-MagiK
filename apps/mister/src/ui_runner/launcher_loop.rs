@@ -6371,8 +6371,8 @@ impl LaunchReturnSession {
         if !launcher::apply_launch_return_state(nav, catalog, state) {
             return false;
         }
-        self.source = source.label();
         if self.exact_context_monotonic_us == 0 {
+            self.source = source.label();
             self.exact_context_monotonic_us = monotonic_clock_us().unwrap_or(0);
         }
         if matches!(
@@ -8112,6 +8112,7 @@ mod tests {
         assert!(!session.context_matches(&restored_nav, &catalog));
         assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FullSqlite));
         assert!(session.context_matches(&restored_nav, &catalog));
+        assert_eq!(session.source, "return-capsule");
         session.mark_correct_present(&restored_nav, &catalog);
         assert!(
             session.requested(),
@@ -8232,6 +8233,12 @@ mod tests {
         assert!(session.context_matches(&restored_nav, &catalog));
         assert_eq!(session.source, "sharded-registry");
         assert_eq!(session.phase, "authoritative-context-restored");
+
+        assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FreshBuild));
+        assert_eq!(
+            session.source, "sharded-registry",
+            "later catalogue publications must not rewrite the restoration origin"
+        );
     }
 
     #[test]
