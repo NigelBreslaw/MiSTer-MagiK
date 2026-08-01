@@ -137,6 +137,9 @@ pub enum DeviceRequest {
     ProfileInstalledLaunchReturn {
         output_dir: PathBuf,
     },
+    ProfileInstalledLaunchReturnFallback {
+        output_dir: PathBuf,
+    },
     ProfileInstalledColdBoot {
         output_dir: PathBuf,
     },
@@ -246,6 +249,9 @@ impl DeviceRequest {
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::ProfileInstalledLaunchReturn { .. } => "profile-installed-launch-return",
+            Self::ProfileInstalledLaunchReturnFallback { .. } => {
+                "profile-installed-launch-return-fallback"
+            }
             Self::ProfileInstalledColdBoot { .. } => "profile-installed-cold-boot",
             Self::ProfileInstalledNavigationTransitions { .. } => {
                 "profile-installed-navigation-transitions"
@@ -303,6 +309,7 @@ impl DeviceRequest {
                 | Self::VerifyInstalledSearchUi { .. }
                 | Self::ProfileInstalledCatalogLifecycle { .. }
                 | Self::ProfileInstalledLaunchReturn { .. }
+                | Self::ProfileInstalledLaunchReturnFallback { .. }
                 | Self::ProfileInstalledColdBoot { .. }
                 | Self::ProfileInstalledNavigationTransitions { .. }
                 | Self::VerifyHealth(Layout::Development)
@@ -522,6 +529,9 @@ mod tests {
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return-profile".into(),
             },
+            DeviceRequest::ProfileInstalledLaunchReturnFallback {
+                output_dir: "launch-return-fallback-profile".into(),
+            },
             DeviceRequest::ProfileInstalledColdBoot {
                 output_dir: "cold-boot-profile".into(),
             },
@@ -589,7 +599,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 50);
+        assert_eq!(labels.len(), 51);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -609,6 +619,7 @@ mod tests {
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle",
                 "profile-installed-launch-return",
+                "profile-installed-launch-return-fallback",
                 "profile-installed-navigation-transitions"
             ]
         );
@@ -622,6 +633,12 @@ mod tests {
         assert!(
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return".into(),
+            }
+            .allowed_during_benchmark()
+        );
+        assert!(
+            DeviceRequest::ProfileInstalledLaunchReturnFallback {
+                output_dir: "launch-return-fallback".into(),
             }
             .allowed_during_benchmark()
         );

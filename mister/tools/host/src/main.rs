@@ -61,6 +61,7 @@ const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pi
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
 const DEVELOPMENT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik-dev/launcher.env";
+const RETURN_CATALOG_CAPSULE_REMOTE: &str = "/tmp/mister-magik/launcher-return-catalog.json";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 const LATCH_FAILURE_REMOTE: &str = "/tmp/mister-magik/latch-failure.json";
@@ -389,7 +390,13 @@ impl DeviceOperations for NativeDevice {
             }
             DeviceRequest::ProfileInstalledLaunchReturn { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                profile_installed_launch_return(&config, output_dir).map_err(device_failure)?
+                profile_installed_launch_return(&config, output_dir, false)
+                    .map_err(device_failure)?
+            }
+            DeviceRequest::ProfileInstalledLaunchReturnFallback { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_launch_return(&config, output_dir, true)
+                    .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledColdBoot { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -4980,6 +4987,7 @@ fn legacy_launcher_restart_cleanup_command() -> &'static str {
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
     output_dir: &Path,
+    force_capsule_miss: bool,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
@@ -5096,6 +5104,18 @@ fn profile_installed_launch_return(
                 output_dir.join(format!("cycle-{cycle_number}-pre-launch-state.json")),
                 format!("{}\n", serde_json::to_string_pretty(&expected)?),
             )?;
+
+            let capsule_fault_injected = force_capsule_miss && cycle_number == 2;
+            if capsule_fault_injected {
+                exec_checked(
+                    &session,
+                    "remove launch-return capsule for fixed fallback cycle",
+                    &remove_files_command(&[
+                        RETURN_CATALOG_CAPSULE_REMOTE,
+                        "/tmp/mister-magik/launcher-return-catalog.json.tmp",
+                    ]),
+                )?;
+            }
 
             let host_poll_started = Instant::now();
             let return_action =
@@ -5303,6 +5323,7 @@ fn profile_installed_launch_return(
             }
             let cycle = json!({
                 "cycle": cycle_number,
+                "capsule_fault_injected": capsule_fault_injected,
                 "expected_game_path": &expected_path,
                 "expected_game_index": expected_index,
                 "selected_game_index": selected,
@@ -5406,7 +5427,7 @@ fn profile_installed_launch_return(
         };
         Ok(json!({
             "schema": "mister-magik-launch-return-benchmark-v3",
-            "scenario": "launch-return",
+            "scenario": if force_capsule_miss { "launch-return-fallback" } else { "launch-return" },
             "timing_class": "instrumented-installed-dev-symbols",
             "main_revision": &main_revision,
             "main_sha256": &main_sha256,
@@ -5466,7 +5487,7 @@ fn profile_installed_launch_return(
         (Err(error), Ok(())) => {
             let failure = json!({
                 "schema": "mister-magik-launch-return-benchmark-v3",
-                "scenario": "launch-return",
+                "scenario": if force_capsule_miss { "launch-return-fallback" } else { "launch-return" },
                 "timing_class": "instrumented-installed-dev-symbols",
                 "main_revision": &main_revision,
                 "main_sha256": &main_sha256,

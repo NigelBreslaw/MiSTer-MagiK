@@ -80,7 +80,10 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::LaunchReturn => {
-            execute_launch_return(&mut device, manifest, output_dir, reporter)
+            execute_launch_return(&mut device, manifest, output_dir, reporter, false)
+        }
+        BenchmarkScenario::LaunchReturnFallback => {
+            execute_launch_return(&mut device, manifest, output_dir, reporter, true)
         }
         BenchmarkScenario::ColdBoot => {
             execute_cold_boot(&mut device, manifest, output_dir, reporter)
@@ -164,7 +167,10 @@ fn evaluate_cold_boot_summary(summary: &Value) -> AgentResult<()> {
 const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool {
     // Launch-return owns a one-shot launcher.env. Its typed operation removes that
     // exact state and then performs the same development health check itself.
-    !matches!(scenario, BenchmarkScenario::LaunchReturn)
+    !matches!(
+        scenario,
+        BenchmarkScenario::LaunchReturn | BenchmarkScenario::LaunchReturnFallback
+    )
 }
 
 fn execute_launch_return(
@@ -172,18 +178,35 @@ fn execute_launch_return(
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
+    force_capsule_miss: bool,
 ) -> AgentResult<Outcome> {
+    let scenario = if force_capsule_miss {
+        "launch-return-fallback"
+    } else {
+        "launch-return"
+    };
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "profiling two Arcade launch-return cycles on the coherently installed Dev runtime",
+        if force_capsule_miss {
+            "profiling one normal Arcade return and one forced capsule-miss return on the coherently installed Dev runtime"
+        } else {
+            "profiling two Arcade launch-return cycles on the coherently installed Dev runtime"
+        },
         Some(35),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledLaunchReturn {
-        output_dir: output_dir.clone(),
-    })?;
+    let request = if force_capsule_miss {
+        DeviceRequest::ProfileInstalledLaunchReturnFallback {
+            output_dir: output_dir.clone(),
+        }
+    } else {
+        DeviceRequest::ProfileInstalledLaunchReturn {
+            output_dir: output_dir.clone(),
+        }
+    };
+    let detail = device.execute(request)?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    evaluate_launch_return_summary(&summary)?;
+    evaluate_launch_return_summary(&summary, scenario, force_capsule_miss)?;
     device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
     reporter.emit(
         EventKind::Progress,
@@ -199,11 +222,18 @@ fn execute_launch_return(
     Ok(Outcome::Passed)
 }
 
-fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
+fn evaluate_launch_return_summary(
+    summary: &Value,
+    expected_scenario: &str,
+    expect_capsule_fallback: bool,
+) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
         != Some("mister-magik-launch-return-benchmark-v3")
     {
         return Err("launch-return benchmark summary has the wrong schema".into());
+    }
+    if summary.get("scenario").and_then(Value::as_str) != Some(expected_scenario) {
+        return Err("launch-return benchmark summary has the wrong scenario".into());
     }
     if summary.get("timing_class").and_then(Value::as_str)
         != Some("instrumented-installed-dev-symbols")
@@ -250,6 +280,22 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
         .into());
     }
     for (index, cycle) in cycles.iter().enumerate() {
+        let capsule_fault_injected = cycle
+            .get("capsule_fault_injected")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if capsule_fault_injected != (expect_capsule_fallback && index == 1) {
+            return Err(format!(
+                "launch-return cycle {} has the wrong capsule fault state",
+                index + 1
+            )
+            .into());
+        }
+        if capsule_fault_injected
+            && cycle.get("return_source").and_then(Value::as_str) != Some("sharded-registry")
+        {
+            return Err("forced capsule miss did not restore from the sharded registry".into());
+        }
         let restored = cycle.get("restored").and_then(Value::as_bool) == Some(true);
         let elapsed_ms = cycle
             .get("black_interval_ms")
@@ -923,6 +969,7 @@ mod tests {
     #[test]
     fn launch_return_requires_two_restored_cycles_with_authoritative_timestamps() {
         let cycle = json!({
+            "capsule_fault_injected": false,
             "restored": true,
             "black_interval_ms": 5,
             "total_return_us": 5_000,
@@ -946,6 +993,7 @@ mod tests {
         });
         let passing = json!({
             "schema": "mister-magik-launch-return-benchmark-v3",
+            "scenario": "launch-return",
             "timing_class": "instrumented-installed-dev-symbols",
             "main_revision": "a".repeat(40),
             "main_sha256": "b".repeat(64),
@@ -958,28 +1006,44 @@ mod tests {
             },
             "cycles": [cycle.clone(), cycle]
         });
-        evaluate_launch_return_summary(&passing).unwrap();
+        evaluate_launch_return_summary(&passing, "launch-return", false).unwrap();
         let mut slow = passing.clone();
         slow["cycles"][1]["black_interval_ms"] = json!(5_000);
         slow["cycles"][1]["total_return_us"] = json!(5_000_000);
         slow["cycles"][1]["first_correct_present_monotonic_us"] = json!(5_010_000);
-        assert!(evaluate_launch_return_summary(&slow).is_err());
+        assert!(evaluate_launch_return_summary(&slow, "launch-return", false).is_err());
         let mut unrestored = passing.clone();
         unrestored["cycles"][0]["restored"] = json!(false);
-        assert!(evaluate_launch_return_summary(&unrestored).is_err());
+        assert!(evaluate_launch_return_summary(&unrestored, "launch-return", false).is_err());
         let mut zero = passing.clone();
         zero["cycles"][0]["request_monotonic_us"] = json!(0);
-        assert!(evaluate_launch_return_summary(&zero).is_err());
+        assert!(evaluate_launch_return_summary(&zero, "launch-return", false).is_err());
         let mut unordered = passing.clone();
         unordered["cycles"][0]["acknowledged_monotonic_us"] = json!(11_500);
-        assert!(evaluate_launch_return_summary(&unordered).is_err());
-        assert!(evaluate_launch_return_summary(&json!({"schema": "wrong", "cycles": []})).is_err());
+        assert!(evaluate_launch_return_summary(&unordered, "launch-return", false).is_err());
+        assert!(
+            evaluate_launch_return_summary(
+                &json!({"schema": "wrong", "cycles": []}),
+                "launch-return",
+                false
+            )
+            .is_err()
+        );
+
+        let mut fallback = passing;
+        fallback["scenario"] = json!("launch-return-fallback");
+        fallback["cycles"][1]["capsule_fault_injected"] = json!(true);
+        fallback["cycles"][1]["return_source"] = json!("sharded-registry");
+        evaluate_launch_return_summary(&fallback, "launch-return-fallback", true).unwrap();
     }
 
     #[test]
     fn launch_return_health_follows_owned_cleanup() {
         assert!(!benchmark_requires_initial_health(
             BenchmarkScenario::LaunchReturn
+        ));
+        assert!(!benchmark_requires_initial_health(
+            BenchmarkScenario::LaunchReturnFallback
         ));
         assert!(benchmark_requires_initial_health(
             BenchmarkScenario::Screensaver

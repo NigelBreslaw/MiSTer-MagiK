@@ -2313,7 +2313,11 @@ pub(super) fn run_launcher_loop(
         catalog_version = catalog_version.wrapping_add(1);
     }
     nav.sync_launcher_taxonomy(&catalog);
-    if !capsule_seed_ready {
+    if sharded_seed_ready && !capsule_seed_ready {
+        launch_return_restored =
+            launch_return_session.apply(&mut nav, &catalog, CatalogSource::ShardedRegistry);
+    }
+    if !capsule_seed_ready && !launch_return_restored {
         let _ = request_pending_launch_return_shard(
             launch_return_session.state(),
             &catalog,
@@ -6373,7 +6377,8 @@ impl LaunchReturnSession {
         }
         if matches!(
             source,
-            CatalogSource::NavigationProjection
+            CatalogSource::ShardedRegistry
+                | CatalogSource::NavigationProjection
                 | CatalogSource::FullSqlite
                 | CatalogSource::FreshBuild
         ) {
@@ -8206,6 +8211,27 @@ mod tests {
         session.mark_system_shard_authoritative();
         assert!(session.context_matches(&restored_nav, &full_catalog));
         assert_eq!(session.source, "system-shard");
+    }
+
+    #[test]
+    fn rejected_capsule_restores_immediately_from_validated_registry_rows() {
+        let catalog = catalog_for_media_systems(&["c64"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&catalog, "c64"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &catalog,
+            "/media/fat/_Arcade/c64.mra",
+        )
+        .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+        session.note_capsule_failure("capsule missing".to_string());
+        let mut restored_nav = LauncherNav::new();
+
+        assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::ShardedRegistry));
+        assert!(session.context_matches(&restored_nav, &catalog));
+        assert_eq!(session.source, "sharded-registry");
+        assert_eq!(session.phase, "authoritative-context-restored");
     }
 
     #[test]
