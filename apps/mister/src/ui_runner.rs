@@ -320,6 +320,8 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
     crate::launch_preparation::cleanup_archive_launch_staging();
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
+    let launch_return_preparation =
+        (scene == "launcher").then(launcher_loop::start_launch_return_preparation);
     crate::ui_logln!("ui scene={scene} secs={secs}");
     crate::ui_logln!("ui_render_mode=cached");
     mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
@@ -438,6 +440,8 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
                 let mut target = UiFrameTarget::open(frame_target_geometry(&ui));
                 let pad = open_pads();
                 init_launcher_bridge(&app, &pad);
+                let launch_return_preparation = launch_return_preparation
+                    .expect("launcher return preparation exists for launcher scene");
                 run_launcher_loop(
                     secs,
                     &ui,
@@ -449,6 +453,7 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
                     pad,
                     app,
                     &animation_clock,
+                    launch_return_preparation,
                     launch_return_cpu_profile,
                 );
             });

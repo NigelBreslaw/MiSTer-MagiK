@@ -1807,6 +1807,7 @@ pub(super) fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
+    launch_return_preparation: LaunchReturnPreparation,
     launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
 ) {
     let start = Instant::now();
@@ -1885,16 +1886,11 @@ pub(super) fn run_launcher_loop(
     let lock_screen = launcher_lock_screen_from_env()
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
-    let launch_return_restore_allowed = launcher_return_to_launcher_requested()
-        && env_start_screen.is_none()
-        && launcher_bench_scenario.is_none()
-        && lock_screen.is_none();
-    let mut launch_return_session = LaunchReturnSession::new(
-        launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed),
-    );
-    if !launch_return_restore_allowed || !launch_return_session.requested() {
-        return_catalog_capsule::remove_return_catalog_capsule();
-    }
+    let LaunchReturnPreparation {
+        session: mut launch_return_session,
+        capsule_worker,
+        arcade_root,
+    } = launch_return_preparation;
     let startup_return_requested = launch_return_session.requested();
     let mut launch_return_restored = false;
     let arcade_catalog_required_at_start = start_screen == Screen::Arcade
@@ -2075,8 +2071,6 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
-    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
-        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     crate::ui_logln!(
         "preview_visual_pct={} preview_blitter=raw",
         preview_visual_pct()
@@ -2092,42 +2086,8 @@ pub(super) fn run_launcher_loop(
         present_timing.delay_us(),
         pacer.fresh_hit_max_age_us()
     );
-    let return_capsule_target = launch_return_session.state().and_then(|state| {
-        Some((
-            state.collection_id()?.to_string(),
-            state.game_path().to_string(),
-        ))
-    });
-    let return_capsule = return_capsule_target.and_then(|(collection_id, game_path)| {
-        let capsule_started = Instant::now();
-        match return_catalog_capsule::take_return_catalog_capsule(
-            Path::new(&arcade_root),
-            &collection_id,
-            &game_path,
-        ) {
-            Ok(capsule) => {
-                print_startup_event(
-                    start,
-                    "return_catalog_capsule_decoded",
-                    format!("elapsed_us={}", capsule_started.elapsed().as_micros()),
-                );
-                Some(capsule)
-            }
-            Err(error) => {
-                print_startup_event(
-                    start,
-                    "return_catalog_capsule_rejected",
-                    format!(
-                        "elapsed_us={} error={}",
-                        capsule_started.elapsed().as_micros(),
-                        error.replace('\t', " ")
-                    ),
-                );
-                launch_return_session.note_capsule_failure(error);
-                None
-            }
-        }
-    });
+    let return_capsule =
+        finish_launch_return_capsule(capsule_worker, &mut launch_return_session, start);
     let return_capsule_fingerprint = return_capsule
         .as_ref()
         .map(|capsule| capsule.durable_catalog_fingerprint.clone());
@@ -6313,6 +6273,115 @@ fn launcher_return_to_launcher_requested() -> bool {
     )
 }
 
+struct PendingReturnCatalogCapsule {
+    started: Instant,
+    worker: Result<
+        std::thread::JoinHandle<(
+            Result<return_catalog_capsule::TakenReturnCatalogCapsule, String>,
+            u128,
+        )>,
+        String,
+    >,
+}
+
+pub(super) struct LaunchReturnPreparation {
+    session: LaunchReturnSession,
+    capsule_worker: Option<PendingReturnCatalogCapsule>,
+    arcade_root: String,
+}
+
+pub(super) fn start_launch_return_preparation() -> LaunchReturnPreparation {
+    let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
+        .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
+    let restore_allowed = launcher_return_to_launcher_requested()
+        && launcher_start_screen_from_env().is_none()
+        && LauncherBenchScenario::from_env().is_none()
+        && launcher_lock_screen_from_env().is_none()
+        && launcher_start_system_from_env().is_none();
+    let session =
+        LaunchReturnSession::new(launcher::take_launch_return_state().filter(|_| restore_allowed));
+    if !restore_allowed || !session.requested() {
+        return_catalog_capsule::remove_return_catalog_capsule();
+        return LaunchReturnPreparation {
+            session,
+            capsule_worker: None,
+            arcade_root,
+        };
+    }
+    let capsule_target = session.state().and_then(|state| {
+        Some((
+            state.collection_id()?.to_string(),
+            state.game_path().to_string(),
+        ))
+    });
+    let capsule_worker = capsule_target.map(|(collection_id, game_path)| {
+        let worker_root = arcade_root.clone();
+        let started = Instant::now();
+        boot_analytics::event(
+            "return_catalog_capsule_worker_started",
+            format!("collection={collection_id}"),
+        );
+        let worker = std::thread::Builder::new()
+            .name("return-catalog-capsule".to_string())
+            .spawn(move || {
+                let work_started = Instant::now();
+                let result = return_catalog_capsule::take_return_catalog_capsule(
+                    Path::new(&worker_root),
+                    &collection_id,
+                    &game_path,
+                );
+                (result, work_started.elapsed().as_micros())
+            })
+            .map_err(|error| format!("start return capsule worker: {error}"));
+        PendingReturnCatalogCapsule { started, worker }
+    });
+    LaunchReturnPreparation {
+        session,
+        capsule_worker,
+        arcade_root,
+    }
+}
+
+fn finish_launch_return_capsule(
+    pending: Option<PendingReturnCatalogCapsule>,
+    session: &mut LaunchReturnSession,
+    start: Instant,
+) -> Option<return_catalog_capsule::TakenReturnCatalogCapsule> {
+    let PendingReturnCatalogCapsule { started, worker } = pending?;
+    let wait_started = Instant::now();
+    let (result, work_us) = match worker {
+        Ok(worker) => match worker.join() {
+            Ok((result, work_us)) => (result, work_us),
+            Err(_) => (Err("return capsule worker panicked".to_string()), 0),
+        },
+        Err(error) => (Err(error), 0),
+    };
+    let wait_us = wait_started.elapsed().as_micros();
+    let elapsed_us = started.elapsed().as_micros();
+    match result {
+        Ok(capsule) => {
+            print_startup_event(
+                start,
+                "return_catalog_capsule_decoded",
+                format!("elapsed_us={elapsed_us} work_us={work_us} wait_us={wait_us}"),
+            );
+            Some(capsule)
+        }
+        Err(error) => {
+            print_startup_event(
+                start,
+                "return_catalog_capsule_rejected",
+                format!(
+                    "elapsed_us={elapsed_us} work_us={work_us} wait_us={wait_us} error={}",
+                    error.replace('\t', " ")
+                ),
+            );
+            session.note_capsule_failure(error);
+            None
+        }
+    }
+}
+
 fn return_to_launcher_env_is_set(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true") | Some("yes"))
 }
@@ -8239,6 +8308,29 @@ mod tests {
             session.source, "sharded-registry",
             "later catalogue publications must not rewrite the restoration origin"
         );
+    }
+
+    #[test]
+    fn capsule_worker_propagates_its_exact_failure_to_the_return_session() {
+        let mut session = LaunchReturnSession::new(None);
+        let pending = PendingReturnCatalogCapsule {
+            started: Instant::now(),
+            worker: Ok(std::thread::spawn(|| {
+                (
+                    Err::<return_catalog_capsule::TakenReturnCatalogCapsule, _>(
+                        "intentional capsule failure".to_string(),
+                    ),
+                    17,
+                )
+            })),
+        };
+
+        assert!(
+            finish_launch_return_capsule(Some(pending), &mut session, Instant::now()).is_none()
+        );
+        assert_eq!(session.source, "capsule-rejected");
+        assert_eq!(session.phase, "hydrate-system-shard");
+        assert_eq!(session.fallback_reason, "intentional capsule failure");
     }
 
     #[test]
