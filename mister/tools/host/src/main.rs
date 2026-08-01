@@ -17121,8 +17121,8 @@ H: Handlers=event3 js0"#
         assert!(snapshot.contains("snapshot"));
 
         let swap = local_main_swap_script(&"a".repeat(64), &"b".repeat(64));
-        let main_swap = swap.find("MiSTer_MagiKDev.upload").unwrap();
-        let manifest_swap = swap.find("platform-v3.manifest.upload").unwrap();
+        let main_swap = swap.rfind("MiSTer_MagiKDev'.upload").unwrap();
+        let manifest_swap = swap.rfind("platform-v3.manifest'.upload").unwrap();
         assert!(main_swap < manifest_swap);
         assert!(swap.contains("chmod 755"));
         assert!(swap.find("activating").unwrap() < main_swap);
