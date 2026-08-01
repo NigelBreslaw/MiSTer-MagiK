@@ -1,0 +1,133 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Accept MiSTer MagiK Alpha
+
+on:
+  workflow_run:
+    workflows:
+      - Publish MiSTer MagiK
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Immutable alpha candidate tag; newest unaccepted candidate when empty
+        required: false
+        type: string
+  schedule:
+    - cron: "17 * * * *"
+
+concurrency:
+  group: mister-magik-alpha-hil
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  select:
+    name: Select immutable candidate
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      available: ${{ steps.candidate.outputs.available }}
+      tag: ${{ steps.candidate.outputs.tag }}
+      sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - name: Select newest unaccepted candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REQUESTED_TAG: ${{ inputs.candidate_tag }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          candidate="$REQUESTED_TAG"
+          if [ -z "$candidate" ]; then
+            while IFS= read -r tag; do
+              [[ "$tag" =~ ^alpha-candidate-v0\.2\.[0-9]+-[0-9a-f]{12}$ ]] || continue
+              if gh release view "$tag" --repo "$GH_REPO" --json assets \
+                --jq '.assets[].name' | grep -qx alpha-acceptance-marker.json; then
+                continue
+              fi
+              sha="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha)"
+              if [ -n "$WORKFLOW_SHA" ] && [ "$sha" != "$WORKFLOW_SHA" ]; then
+                continue
+              fi
+              candidate="$tag"
+              break
+            done < <(gh release list --repo "$GH_REPO" --limit 100 \
+              --json tagName,isPrerelease,createdAt \
+              --jq '.[] | select(.isPrerelease) | .tagName')
+          fi
+          if [ -z "$candidate" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$candidate" =~ ^alpha-candidate-v0\.2\.[0-9]+-[0-9a-f]{12}$ ]]
+          sha="$(gh api "repos/$GH_REPO/commits/$candidate" --jq .sha)"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$candidate" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  hardware:
+    name: Install and exercise real alpha UI
+    needs: select
+    if: needs.select.outputs.available == 'true'
+    runs-on:
+      - self-hosted
+      - macOS
+      - magik-hil
+    timeout-minutes: 15
+    environment:
+      name: alpha-hil
+    steps:
+      - name: Checkout exact candidate source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.select.outputs.sha }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-agent-cli
+        with:
+          cache-scope: alpha-hil
+
+      - name: Allocate run-specific evidence paths
+        id: paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$(mktemp -d "$RUNNER_TEMP/mister-magik-alpha.XXXXXX")"
+          mkdir -p "$root/candidate"
+          echo "candidate=$root/candidate" >> "$GITHUB_OUTPUT"
+          echo "evidence=$root/evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Download public immutable candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CANDIDATE_TAG: ${{ needs.select.outputs.tag }}
+          CANDIDATE_DIR: ${{ steps.paths.outputs.candidate }}
+        shell: bash
+        run: gh release download "$CANDIDATE_TAG" --repo "$GH_REPO" --dir "$CANDIDATE_DIR"
+
+      - name: Install exact candidate and run real UI journey
+        env:
+          CANDIDATE_DIR: ${{ steps.paths.outputs.candidate }}
+          EVIDENCE_DIR: ${{ steps.paths.outputs.evidence }}
+        shell: bash
+        run: scripts/agent alpha accept --candidate "$CANDIDATE_DIR" --output "$EVIDENCE_DIR"
+
+      - name: Upload private hardware evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: alpha-hil-${{ needs.select.outputs.tag }}
+          path: ${{ steps.paths.outputs.evidence }}
+          if-no-files-found: warn
+          retention-days: 30

@@ -213,6 +213,7 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
 
 fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
     let workflow = read(repository, ".github/workflows/distribution.yml")?;
+    let acceptance = read(repository, ".github/workflows/alpha-acceptance.yml")?;
     let cross = read(repository, "apps/mister/Cross.toml")?;
     let package = read(repository, "scripts/package-distribution.sh")?;
     for variable in [
@@ -255,6 +256,24 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
             return Err(format!("distribution_contract_forbidden: {forbidden}"));
         }
     }
+    require_fragments(
+        "alpha_acceptance_workflow",
+        &acceptance,
+        &[
+            "name: Accept MiSTer MagiK Alpha",
+            "workflow_run:",
+            "workflow_dispatch:",
+            "schedule:",
+            "group: mister-magik-alpha-hil",
+            "cancel-in-progress: false",
+            "self-hosted",
+            "macOS",
+            "magik-hil",
+            "scripts/agent alpha accept --candidate",
+            "actions/upload-artifact@v7",
+        ],
+        &["update_all", "ssh ", "scp "],
+    )?;
     for forbidden in [
         "--mame-sqlite)",
         "--hbmame-sqlite)",
