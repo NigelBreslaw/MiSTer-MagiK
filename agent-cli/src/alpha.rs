@@ -553,7 +553,7 @@ fn run_ui_journey(
     for _ in 0..9 {
         tap(device, nonce, AutomationButton::Left)?;
     }
-    for _ in 0..4 {
+    for _ in 0..5 {
         tap(device, nonce, AutomationButton::Down)?;
     }
     for _ in 0..2 {
@@ -561,7 +561,7 @@ fn run_ui_journey(
     }
     tap(device, nonce, AutomationButton::A)?;
     require_semantic(&snapshot(device, nonce)?, "search_query", "")?;
-    for _ in 0..4 {
+    for _ in 0..5 {
         tap(device, nonce, AutomationButton::Up)?;
     }
     for _ in 0..9 {
