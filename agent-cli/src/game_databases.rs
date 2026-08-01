@@ -763,4 +763,45 @@ mod tests {
         assert!(validate_tags("0288", "tag24532").is_err());
         assert!(validate_tags("mame0288", "branch").is_err());
     }
+
+    #[test]
+    fn identities_and_archive_members_are_format_specific() {
+        assert!(require_hex("sha", &"a".repeat(40), 40).is_ok());
+        assert!(require_hex("sha", &"A".repeat(40), 40).is_err());
+        assert!(require_hex("sha", &"g".repeat(40), 40).is_err());
+        assert_eq!(
+            expected_archive_members(&json!({"format": LEGACY_FORMAT})).len(),
+            4
+        );
+        assert_eq!(
+            expected_archive_members(&json!({"format": FORMAT})).len(),
+            6
+        );
+    }
+
+    #[test]
+    fn synthetic_archive_checksums_require_exact_unique_members() {
+        let manifest = serde_json::to_vec(&json!({"format": LEGACY_FORMAT})).unwrap();
+        let mut files = BTreeMap::from([
+            (DATABASES[0].to_string(), b"mame-db".to_vec()),
+            (DATABASES[1].to_string(), b"hbmame-db".to_vec()),
+            (MANIFEST.to_string(), manifest),
+        ]);
+        let checksums = [DATABASES[0], DATABASES[1], MANIFEST]
+            .into_iter()
+            .map(|name| format!("{}  {name}", digest_bytes(&files[name])))
+            .collect::<Vec<_>>()
+            .join("\n");
+        files.insert(CHECKSUMS.to_string(), checksums.into_bytes());
+        verify_checksums(&files).unwrap();
+
+        let mut tampered = files.clone();
+        tampered.insert(DATABASES[0].to_string(), b"changed".to_vec());
+        assert!(verify_checksums(&tampered).is_err());
+        let mut duplicate = files;
+        duplicate.get_mut(CHECKSUMS).unwrap().extend_from_slice(
+            format!("\n{}  {}", digest_bytes(b"mame-db"), DATABASES[0]).as_bytes(),
+        );
+        assert!(verify_checksums(&duplicate).is_err());
+    }
 }

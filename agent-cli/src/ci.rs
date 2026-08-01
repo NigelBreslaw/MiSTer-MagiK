@@ -140,15 +140,19 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
     fn fixture(payload: &Value) -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "agent-cli-artifacts-{}-{nonce}.json",
+            "agent-cli-artifacts-{}-{nonce}-{id}.json",
             std::process::id()
         ));
         fs::write(&path, serde_json::to_vec(payload).unwrap()).unwrap();
