@@ -553,21 +553,35 @@ fn run_ui_journey(
     for _ in 0..9 {
         tap(device, nonce, AutomationButton::Left)?;
     }
-    for _ in 0..5 {
+    for _ in 0..7 {
         tap(device, nonce, AutomationButton::Down)?;
     }
     for _ in 0..2 {
         tap(device, nonce, AutomationButton::Right)?;
     }
-    tap(device, nonce, AutomationButton::A)?;
+    action(
+        device,
+        nonce,
+        AutomationAction::Hold {
+            button: AutomationButton::A,
+            duration_ms: 120,
+        },
+    )?;
     require_semantic(&snapshot(device, nonce)?, "search_query", "")?;
-    for _ in 0..5 {
+    for _ in 0..7 {
         tap(device, nonce, AutomationButton::Up)?;
     }
     for _ in 0..9 {
         tap(device, nonce, AutomationButton::Left)?;
     }
-    let typed = tap(device, nonce, AutomationButton::A)?;
+    let typed = action(
+        device,
+        nonce,
+        AutomationAction::Hold {
+            button: AutomationButton::A,
+            duration_ms: 120,
+        },
+    )?;
     let search_state = await_semantic(device, nonce, "search_query", "A")?;
     require_bool(&search_state, "search_active", true)?;
     checkpoints.push(checkpoint(
@@ -747,16 +761,22 @@ fn await_semantic(
     field: &str,
     expected: &str,
 ) -> AgentResult<Value> {
+    let mut last_actual = None;
     for _ in 0..100 {
         let value = snapshot(device, nonce)?;
-        if semantic(&value, field).and_then(Value::as_str) == Some(expected) {
+        let actual = semantic(&value, field).and_then(Value::as_str);
+        if actual == Some(expected) {
             return Ok(value);
         }
+        last_actual = actual.map(str::to_owned);
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     classified(
         "alpha_ui_assertion_failed",
-        format!("{field} did not become {expected}"),
+        format!(
+            "{field} did not become {expected}; actual={}",
+            last_actual.as_deref().unwrap_or("missing")
+        ),
     )
 }
 
