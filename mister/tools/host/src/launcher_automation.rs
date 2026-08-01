@@ -454,9 +454,28 @@ fn prepare_replacement_session(
         .and_then(Value::as_u64)
         .ok_or("release action has no sequence")?;
     await_presented(config, new_nonce, post_return_sequence, 3_000)?;
-    let restored_snapshot = snapshot(config, new_nonce)?;
-    validate_restored_snapshot(&restored_snapshot, expected_game_id)?;
+    let restored_snapshot = wait_for_restored_snapshot(config, new_nonce, expected_game_id)?;
     Ok((post_return_sequence, restored_snapshot))
+}
+
+fn wait_for_restored_snapshot(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    expected_game_id: &str,
+) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut last_error = String::from("no restored snapshot");
+    while Instant::now() < deadline {
+        match snapshot(config, nonce) {
+            Ok(value) => match validate_restored_snapshot(&value, expected_game_id) {
+                Ok(()) => return Ok(value),
+                Err(error) => last_error = error.to_string(),
+            },
+            Err(error) => last_error = error.to_string(),
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err(format!("returned launcher did not restore Arcade state: {last_error}").into())
 }
 
 fn fail_before_launch<T>(
