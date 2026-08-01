@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![recursion_limit = "256"]
+
 use mister_tool::transport::{
     DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
 };
