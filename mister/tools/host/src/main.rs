@@ -1780,6 +1780,12 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
         exec_checked(
             self.session,
+            "reconcile interrupted local Main transaction before platform delivery",
+            &local_main_reconcile_script(),
+        )
+        .map_err(device_failure)?;
+        exec_checked(
+            self.session,
             "platform snapshot",
             &platform_snapshot_script(),
         )
@@ -1962,19 +1968,30 @@ impl LocalMainDeliveryActions<'_> {
         .into())
     }
 
+    fn recovery_reboot(
+        &mut self,
+        reason: impl std::fmt::Display,
+    ) -> std::result::Result<(), DeviceFailure> {
+        if self.recovery_reboot_used {
+            return Err(DeviceFailure::RecoveryRequired(format!(
+                "local Main recovery reboot already used ({reason})"
+            )));
+        }
+        self.recovery_reboot_used = true;
+        eprintln!("local Main rollback requires one bounded recovery reboot ({reason})");
+        one_shot_recovery_reboot_wait(self.config)
+    }
+
     fn activate_installed_main(&mut self) -> std::result::Result<(), DeviceFailure> {
         match self.activation {
+            LocalMainActivation::LinuxReboot if self.rolling_back => {
+                self.recovery_reboot("supervised Main reload is unavailable")
+            }
             LocalMainActivation::LinuxReboot => delivery_reboot_wait(self.config),
             LocalMainActivation::SupervisedReload { pid, generation } => {
                 match self.reload(pid, generation) {
                     Ok(()) => Ok(()),
-                    Err(error) if self.rolling_back && !self.recovery_reboot_used => {
-                        self.recovery_reboot_used = true;
-                        eprintln!(
-                            "local Main rollback reload unavailable ({error}); using one bounded recovery reboot"
-                        );
-                        delivery_reboot_wait(self.config)
-                    }
+                    Err(error) if self.rolling_back => self.recovery_reboot(error),
                     Err(error) => Err(device_failure(error)),
                 }
             }
