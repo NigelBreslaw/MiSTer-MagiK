@@ -178,6 +178,12 @@ pub struct LocalMainIdentity {
     pub qualification_candidate_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiveParticlesIdentity {
+    pub gui_sha256: String,
+    pub qualification_candidate_id: String,
+}
+
 impl InstalledManifest {
     #[must_use]
     pub fn qualification_candidate_id(&self) -> &str {
@@ -289,6 +295,46 @@ pub fn write_local_main_overlay(
     Ok(LocalMainIdentity {
         main_sha256,
         gui_sha256: values["gui_sha256"].clone(),
+        qualification_candidate_id: values["qualification_candidate_id"].clone(),
+    })
+}
+
+pub fn write_live_particles_overlay(
+    output: &Path,
+    installed_text: &str,
+    gui: &Path,
+    magik_revision: &str,
+) -> AgentResult<LiveParticlesIdentity> {
+    require_hex("magik_revision", magik_revision, 40)?;
+    if !gui.is_file() {
+        return classified(
+            "platform_artifact_missing",
+            format!("gui: {}", gui.display()),
+        );
+    }
+
+    let installed = parse_installed(installed_text, Layout::Development)?;
+    let mut values = installed.values;
+    let gui_sha256 = digest(gui)?;
+    values.insert("gui_sha256".into(), gui_sha256.clone());
+    values.insert("magik_revision".into(), magik_revision.into());
+    values.insert(
+        "qualification_candidate_id".into(),
+        qualification_candidate_id(&values),
+    );
+    let text = FIELDS
+        .iter()
+        .map(|field| format!("{field}={}\n", values[*field]))
+        .collect::<String>();
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    fs::write(output, text)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    verify(output, None, Layout::Development)?;
+    Ok(LiveParticlesIdentity {
+        gui_sha256,
         qualification_candidate_id: values["qualification_candidate_id"].clone(),
     })
 }
@@ -753,6 +799,35 @@ mod tests {
                 &"e".repeat(40),
             )
             .is_err()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn live_particles_overlay_changes_only_the_gui_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-live-particles-overlay-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let gui = root.join("mister-magik-fb");
+        fs::write(&gui, b"experimental gui").unwrap();
+        let output = root.join(FILE_NAME);
+        let revision = "d".repeat(40);
+        let identity =
+            write_live_particles_overlay(&output, &canonical_manifest(), &gui, &revision).unwrap();
+        let overlay =
+            parse_installed(&fs::read_to_string(&output).unwrap(), Layout::Development).unwrap();
+
+        assert_eq!(overlay.magik_revision(), revision);
+        assert_eq!(overlay.gui_sha256(), identity.gui_sha256);
+        assert_eq!(overlay.main_sha256(), "a".repeat(64));
+        assert_eq!(overlay.manager_sha256(), "a".repeat(64));
+        assert_eq!(overlay.latch_rbf_sha256(), "a".repeat(64));
+        assert_eq!(
+            overlay.qualification_candidate_id(),
+            identity.qualification_candidate_id
         );
         let _ = fs::remove_dir_all(root);
     }

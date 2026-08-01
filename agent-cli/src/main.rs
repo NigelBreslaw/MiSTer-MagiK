@@ -145,6 +145,7 @@ fn dispatch(
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::DeliverLocalMain => return deliver_local_main(repository, reporter),
+        Intent::InstallLiveParticles => return install_live_particles(repository, reporter),
         Intent::ClearLatchDiagnostics => {
             reporter.emit(
                 EventKind::Progress,
@@ -801,6 +802,50 @@ fn deliver_local_main(
         (Err(error), Ok(())) => Err(error),
         (Err(error), Err(cleanup)) => Err(format!(
             "local Main delivery failed ({error}); staging cleanup failed ({cleanup})"
+        )
+        .into()),
+    }
+}
+
+fn install_live_particles(
+    repository: &std::path::Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
+    if !dirty.is_empty() {
+        return Err(
+            "dirty_worktree: commit or discard changes before live-particle installation".into(),
+        );
+    }
+    let app_revision = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+    let installation =
+        agent_cli::live_particles_delivery::execute(repository, &app_revision, reporter);
+    reporter.emit(
+        EventKind::Progress,
+        "cleanup",
+        "cleaning transient live-particle staging",
+        None,
+    )?;
+    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
+    match (installation, cleanup) {
+        (Ok(execution), Ok(())) => {
+            reporter.emit(
+                EventKind::Completed,
+                "live-particles",
+                &format!(
+                    "installed app_revision={} gui_sha256={} candidate={}",
+                    execution.app_revision,
+                    execution.gui_sha256,
+                    execution.qualification_candidate_id,
+                ),
+                Some(100),
+            )?;
+            Ok(Outcome::Passed)
+        }
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup)) => Err(format!(
+            "live-particle installation failed ({error}); staging cleanup failed ({cleanup})"
         )
         .into()),
     }

@@ -55,6 +55,7 @@ pub enum BuildCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuildRecipe {
     RuntimeDevice(UiScope),
+    LiveParticles,
     RuntimeFast,
     RuntimeAnalysis,
     ValidateLauncher,
@@ -128,6 +129,15 @@ impl BuildSpec {
                 vec!["ui", "profile"],
                 scope,
                 runtime_artifact("release-device"),
+                true,
+            ),
+            BuildRecipe::LiveParticles => (
+                BuildTarget::Runtime,
+                BuildMode::Build,
+                "release-live",
+                vec!["ui", "experiments"],
+                UiScope::Launcher,
+                runtime_artifact("release-live"),
                 true,
             ),
             BuildRecipe::RuntimeFast => (

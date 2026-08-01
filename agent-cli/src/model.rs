@@ -138,6 +138,7 @@ pub enum Intent {
     ClearLatchDiagnostics,
     Deliver,
     DeliverLocalMain,
+    InstallLiveParticles,
     Benchmark {
         scenario: BenchmarkScenario,
     },
@@ -217,6 +218,7 @@ impl Intent {
             }
             Self::Deliver { .. }
             | Self::DeliverLocalMain
+            | Self::InstallLiveParticles
             | Self::Benchmark { .. }
             | Self::Diagnose
             | Self::AlphaAccept { .. } => Risk::DeviceWrite,

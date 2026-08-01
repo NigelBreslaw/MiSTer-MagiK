@@ -63,6 +63,10 @@ pub enum Command {
         #[arg(value_enum)]
         target: Option<DeliverTarget>,
     },
+    LiveParticles {
+        #[command(subcommand)]
+        command: LiveParticlesCommand,
+    },
     Benchmark {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
@@ -124,6 +128,11 @@ pub enum CiCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DeliverTarget {
     LocalMain,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LiveParticlesCommand {
+    Install,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
@@ -447,6 +456,9 @@ impl Cli {
             Some(Command::Deliver {
                 target: Some(DeliverTarget::LocalMain),
             }) => Intent::DeliverLocalMain,
+            Some(Command::LiveParticles {
+                command: LiveParticlesCommand::Install,
+            }) => Intent::InstallLiveParticles,
             Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
@@ -596,6 +608,23 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
+    }
+
+    #[test]
+    fn live_particles_install_is_a_closed_explicit_command() {
+        let cli = Cli::try_parse_from(["agent-cli", "live-particles", "install"]).unwrap();
+        assert_eq!(cli.into_intent(), Intent::InstallLiveParticles);
+        assert!(Cli::try_parse_from(["agent-cli", "live-particles"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "live-particles",
+                "install",
+                "--remote",
+                "/tmp/runtime",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
