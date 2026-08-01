@@ -4763,7 +4763,7 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         return Err("device did not complete the cold-boot profile reboot".into());
     }
     wait_authenticated_agent_ready(config, Duration::from_secs(30))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| format!("{error:?}"))?;
     let session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
     wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
