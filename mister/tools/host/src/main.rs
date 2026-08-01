@@ -4863,8 +4863,6 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         .ok_or("cold-boot benchmark cannot read the installed Dev manifest")?;
     let main_revision = exact_manifest_field(&installed_manifest, "main_revision", 40)?;
     let main_sha256 = exact_manifest_field(&installed_manifest, "main_sha256", 64)?;
-    let magik_revision = exact_manifest_field(&installed_manifest, "magik_revision", 40)?;
-    let gui_sha256 = exact_manifest_field(&installed_manifest, "gui_sha256", 64)?;
     let boot_id_before = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("cold-boot benchmark cannot read the initial boot id")?;
     exec_checked(
@@ -5099,6 +5097,8 @@ fn profile_installed_launch_return(
         .ok_or("launch-return benchmark cannot read the installed Dev manifest")?;
     let main_revision = exact_manifest_field(&installed_manifest, "main_revision", 40)?;
     let main_sha256 = exact_manifest_field(&installed_manifest, "main_sha256", 64)?;
+    let magik_revision = exact_manifest_field(&installed_manifest, "magik_revision", 40)?;
+    let gui_sha256 = exact_manifest_field(&installed_manifest, "gui_sha256", 64)?;
     let run_result = (|| -> Result<Value> {
         exec_checked(
             &session,
