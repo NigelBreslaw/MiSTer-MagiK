@@ -3275,7 +3275,7 @@ impl ParticleShowcaseRenderer {
             let hash = xorshift32(
                 (frame as u32)
                     .wrapping_mul(0x9e37_79b9)
-                    .wrapping_add(x as u32 * 0x45d9_f3b),
+                    .wrapping_add((x as u32).wrapping_mul(0x45d9_f3b)),
             );
             let flicker = ((hash >> 25) & 0x7f) as u8;
             self.heat[bottom + x] = 150u8.saturating_add(envelope).saturating_add(flicker);
@@ -4332,6 +4332,9 @@ mod tests {
         assert_eq!(first_stats.demo, ParticleDemoKind::FireEmbers);
         assert_eq!(first_stats.beat, "flame");
         assert!(first_stats.visible > 0);
+        assert_eq!(second_stats.demo, first_stats.demo);
+        assert_eq!(second_stats.beat, first_stats.beat);
+        assert_eq!(second_stats.visible, first_stats.visible);
         assert!(first.commands.len() <= first.pool.active() / 4);
         assert!(first.heat.iter().any(|value| *value > 0));
         assert_eq!(first.heat, second.heat);
