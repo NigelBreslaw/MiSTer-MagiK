@@ -43,7 +43,7 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 pub enum BuildCommand {
     RuntimeDevice,
     RuntimeFast,
-    RuntimeProfile,
+    RuntimeAnalysis,
     ValidateLauncher,
     ValidateLibrary,
     ValidateRuntime,
@@ -56,7 +56,7 @@ pub enum BuildCommand {
 pub enum BuildRecipe {
     RuntimeDevice(UiScope),
     RuntimeFast,
-    RuntimeProfile,
+    RuntimeAnalysis,
     ValidateLauncher,
     ValidateLibrary,
     DeviceAgent,
@@ -69,7 +69,7 @@ impl BuildRecipe {
         match command {
             BuildCommand::RuntimeDevice => Some(Self::RuntimeDevice(UiScope::All)),
             BuildCommand::RuntimeFast => Some(Self::RuntimeFast),
-            BuildCommand::RuntimeProfile => Some(Self::RuntimeProfile),
+            BuildCommand::RuntimeAnalysis => Some(Self::RuntimeAnalysis),
             BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => {
                 Some(Self::ValidateLauncher)
             }
@@ -139,11 +139,11 @@ impl BuildSpec {
                 runtime_artifact("release"),
                 true,
             ),
-            BuildRecipe::RuntimeProfile => (
+            BuildRecipe::RuntimeAnalysis => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device-profile",
-                vec!["ui", "bench-tools", "profile"],
+                vec!["ui", "profile"],
                 UiScope::All,
                 runtime_artifact("release-device-profile"),
                 true,

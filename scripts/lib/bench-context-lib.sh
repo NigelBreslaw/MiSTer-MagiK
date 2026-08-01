@@ -44,20 +44,6 @@ bench_context_parse_sha256() {
   '
 }
 
-bench_context_shell_quote() {
-  printf "'"
-  printf '%s' "$1" | sed "s/'/'\"'\"'/g"
-  printf "'"
-}
-
-bench_context_remote_sha256() {
-  local mister="$1" remote_path="$2" output hash
-  output="$("$mister" run "sha256sum $(bench_context_shell_quote "$remote_path")" 2>/dev/null)" || return 1
-  hash="$(printf '%s\n' "$output" | bench_context_parse_sha256)"
-  [[ -n "$hash" ]] || return 1
-  printf '%s\n' "$hash"
-}
-
 bench_context_binary_identity_status() {
   local deployment_state="$1" local_sha="$2" deployed_sha="$3"
   if [[ "$deployment_state" != "verified" ]]; then

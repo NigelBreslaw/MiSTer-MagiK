@@ -17,6 +17,7 @@ Supported scenarios:
 - `particle-step`
 - `particle-profile`
 - `catalog-lifecycle`
+- `launch-return`
 - `navigation-transitions`
 - `search`
 
@@ -30,7 +31,34 @@ ordinary launcher. Evidence is written below
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
-or generic environment overrides.
+or generic environment overrides. Benchmark requests pass through a restricted
+client that rejects delivery and platform-mutation operations before transport.
+The device agent exposes no binary-only runtime replacement endpoint.
+
+## Arcade launch and return
+
+`launch-return` profiles the coherently installed Dev runtime. Canonical
+`release-device` delivery includes the dormant `profile` feature and retains
+function symbols while omitting line-level debug sections; the profiler is
+activated only by the benchmark's one-shot return environment. A
+`release-device-profile` build with full debug information may be produced by
+the separate `scripts/agent build runtime-analysis` intent for offline analysis,
+but a benchmark cannot invoke or install it or any other temporary runtime.
+
+The workflow selects a deep settled Arcade row (index 128, clamped when the
+catalog is shorter), launches a real core, returns three times, and moves one
+row between cycles. It records device-monotonic request, process-start,
+exact-context, preview-ready, and first-correct-present timestamps. Each cycle
+must restore the exact collection, game path/index, visual/scroll position,
+and preview state without presenting Home first. It also requires a nonblank
+authoritative RGB565 capture, flamegraph, folded stacks, frame profile,
+timeline, launcher log, Main events, and pre-launch/restored state.
+
+The v2 summary reports command-to-process, process-to-context,
+context-to-preview, preview-to-present, and total return latency in
+microseconds, plus min/median/max aggregation. Its timing class is
+`instrumented-installed-dev-symbols`: sampling overhead is present, but the
+binary and manifest remain the exact installed pair for the entire run.
 
 The former showcase, firework, commercial-technique and Form-scene scenarios
 are archived with their code and visual contracts under
@@ -186,7 +214,9 @@ also report the final 15 seconds separately, after the parade has had roughly
 ## Restoration
 
 Restoration removes the launcher environment, frame-analytics lease, and
-temporary remote profile files, then restarts the ordinary launcher. The
+temporary remote profile files, then restarts the ordinary launcher. For
+launch-return it also removes the one-shot auto-launch gate and return state;
+it never changes the installed runtime or manifest. The
 workflow fails separately when performance is outside its gates or restoration
 cannot prove a clean, healthy device. The confirmed 720p mode and its exact
 `MiSTer.ini` contents, device boot ID, and installed manifest must be unchanged

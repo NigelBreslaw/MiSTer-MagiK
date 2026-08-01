@@ -120,6 +120,10 @@ gate, the pre-push hook is the full affected local assurance interface, and
 native Linux CI owns Linux-specific Rust and Clippy behavior. Use
 `scripts/agent db report`, not ad-hoc SQL, for workflow evidence analysis.
 `deliver` only when the committed change has runtime or platform impact.
+`benchmark` must use the coherently installed Dev runtime and may never build,
+upload, swap, or restore an executable or manifest. The benchmark client is a
+closed read/profile/health interface; do not bypass it with host or agent
+transport calls.
 `release qualify` is an attended operator gate; run it only when explicitly
 requested.
 `capture usb-video` is a macOS-only native capture of the fixed `USB Video`
@@ -153,6 +157,9 @@ remote. Concurrent agents must use separate worktrees.
 
 - Never set `main=mister-magik-fb`; Slint cannot replace Main video
   initialization. Use `MiSTer_MagiK` or `MiSTer_MagiKDev`.
+- Never replace `mister-magik-fb` without its regenerated
+  `platform-v3.manifest` in the coherent rollback-capable delivery transaction.
+  A Main suspend/resume acknowledgement is not launcher health.
 - Never launch cores with external `rbf_load`; use Main's command/FIFO handoff.
 - Never SIGSTOP MiSTer for the launcher.
 - Use Analytics live streaming for continuous framebuffer inspection and

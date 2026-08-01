@@ -8,6 +8,38 @@ pub struct DeviceClient<D = mister_tool::NativeDevice> {
     device: D,
 }
 
+pub struct BenchmarkDeviceClient<D = mister_tool::NativeDevice> {
+    client: DeviceClient<D>,
+}
+
+impl Default for BenchmarkDeviceClient<mister_tool::NativeDevice> {
+    fn default() -> Self {
+        Self {
+            client: DeviceClient::default(),
+        }
+    }
+}
+
+impl<D: DeviceOperations> BenchmarkDeviceClient<D> {
+    #[cfg(test)]
+    pub const fn new(device: D) -> Self {
+        Self {
+            client: DeviceClient::new(device),
+        }
+    }
+
+    pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
+        if !request.allowed_during_benchmark() {
+            return Err(format!(
+                "benchmark policy rejects device operation {}",
+                request.label()
+            )
+            .into());
+        }
+        self.client.execute(request)
+    }
+}
+
 impl Default for DeviceClient<mister_tool::NativeDevice> {
     fn default() -> Self {
         Self {
@@ -86,6 +118,34 @@ mod tests {
         };
         let recorded = Rc::new(RefCell::new(Vec::new()));
         let mut client = DeviceClient::new(RecordingDevice(Rc::clone(&recorded)));
+
+        assert_eq!(client.execute(request.clone()).unwrap(), "snapshotted");
+        assert_eq!(recorded.borrow().as_slice(), &[request]);
+    }
+
+    #[test]
+    fn benchmark_client_rejects_platform_mutation_before_transport() {
+        let recorded = Rc::new(RefCell::new(Vec::new()));
+        let mut client = BenchmarkDeviceClient::new(RecordingDevice(Rc::clone(&recorded)));
+        let request = DeviceRequest::DeliverRuntimeTransaction {
+            local: "/tmp/runtime".into(),
+            remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
+            manifest_local: "/tmp/manifest".into(),
+            manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest".into(),
+            expected_sha256: "a".repeat(64),
+        };
+
+        assert!(client.execute(request).is_err());
+        assert!(recorded.borrow().is_empty());
+    }
+
+    #[test]
+    fn benchmark_client_forwards_installed_runtime_profiles() {
+        let recorded = Rc::new(RefCell::new(Vec::new()));
+        let mut client = BenchmarkDeviceClient::new(RecordingDevice(Rc::clone(&recorded)));
+        let request = DeviceRequest::ProfileInstalledLaunchReturn {
+            output_dir: "/tmp/profile".into(),
+        };
 
         assert_eq!(client.execute(request.clone()).unwrap(), "snapshotted");
         assert_eq!(recorded.borrow().as_slice(), &[request]);

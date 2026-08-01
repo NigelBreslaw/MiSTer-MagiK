@@ -17,6 +17,13 @@ the app. Runtime delivery may replace the app independently only by activating
 a regenerated manifest with the new app hash in the same rollback-capable
 transaction.
 
+There is deliberately no binary-only runtime deployment interface. The app and
+manifest are one activation unit even when Main, the scanout module, and the
+RBF are unchanged. Main's acknowledgement of `mister_magik_resume` means only
+that it accepted the request; successful preflight, child start, latch-backed
+ready reporting, and delivery smoke are required before the old unit may be
+discarded.
+
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
 

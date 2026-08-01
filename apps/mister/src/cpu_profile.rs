@@ -4,8 +4,8 @@
 //! Optional CPU sampling profiler (`--features profile`, env `MISTER_PPROF=1`).
 //!
 //! Uses `SIGPROF`/`ITIMER_PROF` sampling from the `pprof` crate — no `perf` CLI required.
-//! Build with `scripts/agent build runtime-profile`, run with `MISTER_PPROF=1`, pull the SVG
-//! and/or folded stack output.
+//! Canonical device delivery includes this dormant feature. The offline full-debug artifact is
+//! built with `scripts/agent build runtime-analysis`; benchmarks profile the installed runtime.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
@@ -450,8 +450,8 @@ mod stub {
     pub fn start() -> Option<CpuProfiler> {
         if std::env::var("MISTER_PPROF").ok().as_deref() == Some("1") {
             crate::ui_errln!(
-                "cpu_profile: MISTER_PPROF=1 ignored — rebuild with \
-                 `scripts/agent build runtime-profile` (Cargo feature `profile`)"
+                "cpu_profile: MISTER_PPROF=1 ignored — the runtime lacks the `profile` feature; \
+                 install the canonical device runtime with `scripts/agent deliver`"
             );
         }
         None

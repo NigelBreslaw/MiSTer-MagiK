@@ -12,6 +12,7 @@ scripts/agent deliver
 scripts/agent benchmark
 scripts/agent benchmark particles
 scripts/agent benchmark catalog-lifecycle
+scripts/agent benchmark launch-return
 scripts/agent diagnose
 ```
 
@@ -41,6 +42,7 @@ another registered typed workflow. `particles` searches and confirms the
 frames, and restores the original display configuration. `catalog-lifecycle`
 performs an isolated full catalog build under `/tmp`, validates every generated
 shard, then removes the fixture and restores the ordinary launcher. Benchmarks
+run through a restricted typed client that rejects delivery requests. They
 never build or deploy a temporary runtime, and require the installed revision
 to match the clean local commit wherever runtime or platform files changed.
 Host-only benchmark changes may reconcile as a no-op without replacing the

@@ -8,7 +8,6 @@ use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::Command;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::Result;
@@ -189,33 +188,6 @@ pub(crate) fn exec(sess: &Session, command: &str, merge_stderr: bool) -> Result<
     })
 }
 
-pub(crate) fn stream_command(sess: &Session, command: &str) -> Result<()> {
-    let mut channel = sess.channel_session()?;
-    channel.handle_extended_data(ExtendedData::Merge)?;
-    channel.exec(command)?;
-    let mut buf = [0u8; 8192];
-    loop {
-        match channel.read(&mut buf) {
-            Ok(0) => {
-                if channel.eof() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Ok(n) => {
-                io::stdout().write_all(&buf[..n])?;
-                io::stdout().flush()?;
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    channel.wait_close()?;
-    std::process::exit(channel.exit_status()?);
-}
-
 pub(crate) fn put(sess: &Session, local: &Path, remote: &str) -> Result<()> {
     let sftp = sess.sftp()?;
     ensure_remote_parent_dir(&sftp, Path::new(remote))?;
@@ -234,49 +206,6 @@ fn put_bytes_with_sftp(sftp: &ssh2::Sftp, remote: &str, bytes: &[u8]) -> Result<
     ensure_remote_parent_dir(sftp, Path::new(remote))?;
     let mut dst = sftp.create(Path::new(remote))?;
     dst.write_all(bytes)?;
-    Ok(())
-}
-
-pub(crate) fn put_dir(sess: &Session, local_dir: &Path, remote_dir: &str) -> Result<usize> {
-    let sftp = sess.sftp()?;
-    if !local_dir.is_dir() {
-        return Err(format!("{} is not a directory", local_dir.display()).into());
-    }
-    ensure_remote_dir(&sftp, Path::new(remote_dir))?;
-    let mut count = 0;
-    put_dir_recursive(
-        &sftp,
-        local_dir,
-        local_dir,
-        Path::new(remote_dir),
-        &mut count,
-    )?;
-    Ok(count)
-}
-
-fn put_dir_recursive(
-    sftp: &ssh2::Sftp,
-    root: &Path,
-    dir: &Path,
-    remote_root: &Path,
-    count: &mut usize,
-) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let metadata = entry.metadata()?;
-        if metadata.is_dir() {
-            put_dir_recursive(sftp, root, &path, remote_root, count)?;
-        } else if metadata.is_file() {
-            let rel = path.strip_prefix(root)?;
-            let remote = remote_root.join(rel);
-            ensure_remote_parent_dir(sftp, &remote)?;
-            let mut src = File::open(&path)?;
-            let mut dst = sftp.create(&remote)?;
-            io::copy(&mut src, &mut dst)?;
-            *count += 1;
-        }
-    }
     Ok(())
 }
 

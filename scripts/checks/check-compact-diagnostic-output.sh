@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-forbidden='latch_readiness_json\\t|agent magik \{action\} ok after|agent_deploy_magik_bin .*result='
+forbidden='latch_readiness_json\\t|agent magik \{action\} ok after'
 if rg -n "$forbidden" \
   "$ROOT/apps/mister/src/main.rs" \
   "$ROOT/mister/tools/host/src/main.rs"; then

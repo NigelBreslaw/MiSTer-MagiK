@@ -841,7 +841,7 @@ mod tests {
         for intent in [
             "runtime-device",
             "runtime-fast",
-            "runtime-profile",
+            "runtime-analysis",
             "validate-launcher",
             "validate-library",
             "validate-runtime",
@@ -852,6 +852,7 @@ mod tests {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());
         }
         for intent in [
+            "runtime-profile",
             "host-tool",
             "runtime-benchmark",
             "runtime-diagnostics",

@@ -896,7 +896,6 @@ mod linux {
         SCHEMA as FRAMEBUFFER_STREAM_SCHEMA, read_frame,
     };
     use serde_json::{Value, json};
-    use sha2::{Digest, Sha256};
     use std::collections::{HashMap, VecDeque};
     use std::ffi::CString;
     use std::fs::{self, File, OpenOptions};
@@ -904,7 +903,7 @@ mod linux {
     use std::mem;
     use std::net::{Shutdown, TcpListener, TcpStream, UdpSocket};
     use std::os::fd::AsRawFd;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
@@ -958,7 +957,6 @@ mod linux {
     ];
     const LOG_RING_CAPACITY: usize = 512;
     const TIMELINE_CAPACITY: usize = 128;
-    const MAX_DEPLOY_BYTES: u64 = 1024 * 1024 * 1024;
 
     type SharedLogRing = Arc<Mutex<LogRing>>;
     type SharedTimeline = Arc<Mutex<Timeline>>;
@@ -1338,7 +1336,7 @@ mod linux {
                 if maybe_handle_sd_preview_image_stream(&line, &token, &mut stream) {
                     return;
                 }
-                handle_control_line(&line, &token, boot_id, started, &mut reader)
+                handle_control_line(&line, &token, boot_id, started)
             }
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
@@ -2260,13 +2258,7 @@ mod linux {
         true
     }
 
-    fn handle_control_line<R: Read>(
-        line: &str,
-        token: &str,
-        boot_id: u64,
-        started: Instant,
-        reader: &mut R,
-    ) -> String {
+    fn handle_control_line(line: &str, token: &str, boot_id: u64, started: Instant) -> String {
         let request_received = Instant::now();
         let request = match parse_control_request(line, token, CONTROL_AUTH_DISABLED) {
             Ok(request) => request,
@@ -2300,16 +2292,6 @@ mod linux {
             "logs" => response(id, true, Some(log_ring_json()), None),
             "timeline" => response(id, true, Some(timeline_json(boot_id, started)), None),
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
-            "deploy_magik_bin" => response(
-                id,
-                false,
-                None,
-                Some("legacy buffered deployment is disabled"),
-            ),
-            "deploy_magik_bin_stream" => match deploy_magik_bin_stream(args, reader) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
-            },
             "magik" => match magik_control(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
@@ -3481,221 +3463,6 @@ mod linux {
 
     fn elapsed_us(start: Instant) -> u64 {
         start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
-    }
-
-    fn deploy_magik_bin_stream(args: Value, reader: &mut dyn Read) -> Result<Value, String> {
-        let remote = args
-            .get("remote")
-            .and_then(Value::as_str)
-            .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb");
-        validate_deploy_remote(remote)?;
-        let expectations = deploy_expectations(&args)?;
-        deploy_magik_bin_stream_raw(remote, &expectations, reader)
-    }
-
-    fn deploy_magik_bin_stream_raw(
-        remote: &str,
-        expectations: &DeployExpectations,
-        reader: &mut dyn Read,
-    ) -> Result<Value, String> {
-        let remote_path = Path::new(remote);
-        let parent = remote_path
-            .parent()
-            .ok_or_else(|| "deploy remote has no parent".to_string())?;
-        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        let upload = parent.join(format!(
-            ".{}.upload",
-            remote_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("mister-magik-fb")
-        ));
-        let rollback = parent.join(format!(
-            ".{}.rollback",
-            remote_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("mister-magik-fb")
-        ));
-        let _ = fs::remove_file(&upload);
-        let receive_t = Instant::now();
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&upload)
-            .map_err(|err| err.to_string())?;
-        let mut hasher = Sha256::new();
-        let mut remaining = expectations.raw_size;
-        let mut buffer = [0u8; 64 * 1024];
-        while remaining > 0 {
-            let wanted = usize::try_from(remaining.min(buffer.len() as u64))
-                .map_err(|_| "deploy size overflow")?;
-            let count = reader
-                .read(&mut buffer[..wanted])
-                .map_err(|err| err.to_string())?;
-            if count == 0 {
-                let _ = fs::remove_file(&upload);
-                return Err(format!("deploy payload truncated remaining={remaining}"));
-            }
-            file.write_all(&buffer[..count])
-                .map_err(|err| err.to_string())?;
-            hasher.update(&buffer[..count]);
-            remaining -= count as u64;
-        }
-        let checksum = encode_hex(&hasher.finalize());
-        if checksum != expectations.checksum {
-            let _ = fs::remove_file(&upload);
-            return Err(format!(
-                "deploy checksum mismatch expected={} actual={checksum}",
-                expectations.checksum
-            ));
-        }
-        file.sync_all().map_err(|err| err.to_string())?;
-        fs::set_permissions(&upload, fs::Permissions::from_mode(0o755))
-            .map_err(|err| err.to_string())?;
-        file.sync_all().map_err(|err| err.to_string())?;
-        let receive_ms = receive_t.elapsed().as_millis() as u64;
-        let operation_id = format!(
-            "deploy-{}-{}",
-            std::process::id(),
-            receive_t.elapsed().as_nanos()
-        );
-        magik_acknowledged_action(
-            "suspend",
-            &json!({"operation_id": format!("{operation_id}-suspend")}),
-        )?;
-        let _ = fs::remove_file(&rollback);
-        if remote_path.exists() {
-            fs::rename(remote_path, &rollback).map_err(|err| err.to_string())?;
-        }
-        if let Err(err) = fs::rename(&upload, remote_path) {
-            let _ = fs::rename(&rollback, remote_path);
-            return Err(err.to_string());
-        }
-        if let Ok(dir) = File::open(parent) {
-            dir.sync_all().map_err(|err| err.to_string())?;
-        }
-        match magik_acknowledged_action(
-            "resume",
-            &json!({"operation_id": format!("{operation_id}-resume")}),
-        ) {
-            Ok(resume) => {
-                let mut published = File::open(remote_path).map_err(|err| err.to_string())?;
-                let mut published_hasher = Sha256::new();
-                let mut hash_buffer = [0u8; 64 * 1024];
-                loop {
-                    let count = published
-                        .read(&mut hash_buffer)
-                        .map_err(|err| err.to_string())?;
-                    if count == 0 {
-                        break;
-                    }
-                    published_hasher.update(&hash_buffer[..count]);
-                }
-                let published_checksum = encode_hex(&published_hasher.finalize());
-                if published_checksum != expectations.checksum {
-                    let failed = parent.join(".mister-magik-fb.failed");
-                    let _ = fs::remove_file(&failed);
-                    let _ = fs::rename(remote_path, &failed);
-                    fs::rename(&rollback, remote_path).map_err(|err| {
-                        format!("published checksum mismatch and rollback failed: {err}")
-                    })?;
-                    let _ = fs::remove_file(&failed);
-                    return Err(format!(
-                        "published checksum mismatch expected={} actual={published_checksum}; previous executable restored",
-                        expectations.checksum
-                    ));
-                }
-                let _ = fs::remove_file(&rollback);
-                if let Ok(dir) = File::open(parent) {
-                    let _ = dir.sync_all();
-                }
-                Ok(
-                    json!({"transport":"stream","encoding":"raw","remote":remote,"bytes":expectations.raw_size,"remote_bytes":expectations.raw_size,"checksum":checksum,"checksum_algorithm":"sha256","receive_ms":receive_ms,"published":true,"rolled_back":false,"resume":resume}),
-                )
-            }
-            Err(health_error) => {
-                let failed = parent.join(format!(
-                    ".{}.failed",
-                    remote_path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("mister-magik-fb")
-                ));
-                let _ = fs::remove_file(&failed);
-                let _ = fs::rename(remote_path, &failed);
-                let rollback_result = fs::rename(&rollback, remote_path);
-                let _ = fs::remove_file(&failed);
-                if let Ok(dir) = File::open(parent) {
-                    let _ = dir.sync_all();
-                }
-                rollback_result.map_err(|err| {
-                    format!("deployment health failed ({health_error}); rollback failed: {err}")
-                })?;
-                Err(format!(
-                    "deployment health failed; previous executable restored: {health_error}"
-                ))
-            }
-        }
-    }
-
-    struct DeployExpectations {
-        raw_size: u64,
-        checksum: String,
-    }
-
-    fn deploy_expectations(args: &Value) -> Result<DeployExpectations, String> {
-        let raw_size = args
-            .get("size")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| "missing deploy size".to_string())?;
-        if raw_size > MAX_DEPLOY_BYTES {
-            return Err(format!(
-                "deploy size {raw_size} exceeds max {MAX_DEPLOY_BYTES}"
-            ));
-        }
-        let encoding = args
-            .get("encoding")
-            .and_then(Value::as_str)
-            .unwrap_or("raw")
-            .to_string();
-        if encoding != "raw" {
-            return Err(format!(
-                "unsupported transactional deploy encoding: {encoding}"
-            ));
-        }
-        let payload_size = args
-            .get("payload_size")
-            .and_then(Value::as_u64)
-            .unwrap_or(raw_size);
-        if payload_size > MAX_DEPLOY_BYTES {
-            return Err(format!(
-                "deploy payload size {payload_size} exceeds max {MAX_DEPLOY_BYTES}"
-            ));
-        }
-        if encoding == "raw" && payload_size != raw_size {
-            return Err(format!(
-                "raw payload size mismatch expected={raw_size} payload={payload_size}"
-            ));
-        }
-        let checksum = args
-            .get("checksum")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "missing deploy checksum".to_string())?;
-        Ok(DeployExpectations {
-            raw_size,
-            checksum: checksum.to_string(),
-        })
-    }
-
-    fn validate_deploy_remote(remote: &str) -> Result<(), String> {
-        if !remote.starts_with("/media/fat/mister-magik-dev/") {
-            return Err("deploy remote must be under /media/fat/mister-magik-dev".to_string());
-        }
-        if remote.ends_with('/') || remote.contains('\0') || remote.contains("/../") {
-            return Err(format!("unsupported deploy remote: {remote}"));
-        }
-        Ok(())
     }
 
     fn main_generation(status: &Value) -> Option<u64> {

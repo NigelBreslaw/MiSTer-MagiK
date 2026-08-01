@@ -32,19 +32,18 @@ mod remote;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
-    agent_request_with_liveness, agent_stream_request_reader, agent_stream_request_reader_at,
-    agent_telemetry_for_duration, agent_telemetry_for_particle_renderer_trial,
-    agent_telemetry_for_particle_trial, agent_telemetry_until_screensaver_profile_complete,
-    agent_token, agent_token_for_device, bootstrap_agent, bootstrap_agent_with,
-    verify_agent_deploy_result,
+    agent_request_with_liveness, agent_telemetry_for_duration,
+    agent_telemetry_for_particle_renderer_trial, agent_telemetry_for_particle_trial,
+    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
+    bootstrap_agent, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
     ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_timed,
     connect_timed_with, connect_with, create_dir_command, exec, exec_failure_message, get, host,
     host_wait_diagnostics_with, launcher_restart_command, port_open, port_open_with, put,
-    put_bytes, put_dir, remote_subcommand, remove_files_command, sftp_write_profile,
-    shell_quote as sh, stream_command, tcp_probe_label, tcp_probe_label_port,
+    put_bytes, remote_subcommand, remove_files_command, sftp_write_profile, shell_quote as sh,
+    tcp_probe_label, tcp_probe_label_port,
 };
 
 #[cfg(test)]
@@ -376,19 +375,6 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::ProfileInstalledLaunchReturn { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_launch_return(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileDevelopmentLaunchReturn {
-                profile_binary,
-                expected_sha256,
-                output_dir,
-            } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                profile_development_launch_return(
-                    &config,
-                    profile_binary,
-                    expected_sha256,
-                    output_dir,
-                )?
             }
             DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -1290,10 +1276,6 @@ fn retain_diagnostic_evidence(session: &Session, facts: &Value) -> Result<PathBu
             "/media/fat/mister-magik-dev/platform-v3.manifest".to_string(),
             "platform-v3.manifest".to_string(),
         ),
-        (
-            LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE.to_string(),
-            "launch-return-watchdog.pid".to_string(),
-        ),
     ];
     for cycle in 1..=LAUNCH_RETURN_CYCLES {
         files.extend([
@@ -1584,6 +1566,7 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.remote,
             self.manifest_local,
             self.manifest_remote,
+            self.expected_sha256,
         )
         .map_err(device_failure)
     }
@@ -1660,6 +1643,14 @@ fn deliver_runtime_transaction(
     require_delivery_sha256(expected_sha256)?;
     validate_delivery_remote(remote).map_err(device_failure)?;
     validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
+    MagikDeployTransaction::validate_bundle(
+        local,
+        remote,
+        manifest_local,
+        manifest_remote,
+        expected_sha256,
+    )
+    .map_err(device_failure)?;
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
     run_coherent_delivery(
         &mut RuntimeDeliveryActions {
@@ -1808,53 +1799,6 @@ pub fn run_cli() -> Result<()> {
         "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
         "connected" => println!("connected"),
-        "run" => {
-            let stream = args.first().map(|s| s.as_str()) == Some("--stream");
-            if stream {
-                args.remove(0);
-            }
-            let command = args.first().ok_or("run needs a command")?;
-            validate_remote_run_command(command)?;
-            let sess = connect(10)?;
-            if stream {
-                stream_command(&sess, command)?;
-            } else {
-                let out = exec(&sess, command, true)?;
-                print!("{}", out.stdout);
-                if !out.stderr.trim().is_empty() {
-                    eprint!("[stderr] {}", out.stderr);
-                }
-                std::process::exit(out.rc);
-            }
-        }
-        "put" => {
-            if args.len() < 2 {
-                return Err("put needs <local> <remote>".into());
-            }
-            let sess = connect(10)?;
-            put(&sess, Path::new(&args[0]), &args[1])?;
-            println!("put {} -> {}", args[0], args[1]);
-        }
-        "put-dir" => {
-            if args.len() < 2 {
-                return Err("put-dir needs <local-dir> <remote-dir>".into());
-            }
-            let sess = connect(10)?;
-            let count = put_dir(&sess, Path::new(&args[0]), &args[1])?;
-            println!("put-dir {} -> {} files={count}", args[0], args[1]);
-        }
-        "deploy-magik-bin" => {
-            if args.is_empty() {
-                return Err("deploy-magik-bin needs <local> [remote]".into());
-            }
-            let remote = args
-                .get(1)
-                .cloned()
-                .or_else(|| std::env::var("MISTER_MAGIK_BIN").ok())
-                .unwrap_or_else(|| "/media/fat/mister-magik/mister-magik-fb".to_string());
-            let sess = connect(10)?;
-            deploy_magik_bin(&sess, Path::new(&args[0]), &remote)?;
-        }
         "get" => {
             if args.len() < 2 {
                 return Err("get needs <remote> <local>".into());
@@ -4240,187 +4184,10 @@ fn profile_installed_catalog_lifecycle(
 
 const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchmark-gate";
 const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-state.json";
+const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-profile";
 const LAUNCH_RETURN_CYCLES: usize = 3;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
-const LAUNCH_RETURN_PROFILE_BACKUP_REMOTE: &str =
-    "/media/fat/mister-magik-dev/.mister-magik-fb.launch-return-canonical";
-const LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE: &str =
-    "/tmp/mister-magik/launch-return-profile-watchdog.pid";
-
-fn deploy_profile_runtime_binary(
-    endpoint: &AgentEndpoint,
-    local: &Path,
-    expected_sha256: &str,
-) -> Result<()> {
-    let mut source = fs::File::open(local)?;
-    let size = source.metadata()?.len();
-    let reply = agent_stream_request_reader_at(
-        endpoint,
-        "deploy_magik_bin_stream",
-        json!({
-            "remote": "/media/fat/mister-magik-dev/mister-magik-fb",
-            "size": size,
-            "payload_size": size,
-            "checksum": expected_sha256,
-            "encoding": "raw",
-        }),
-        &mut source,
-        Duration::from_secs(120),
-    )?;
-    let result = reply.response.get("result").unwrap_or(&Value::Null);
-    verify_agent_deploy_result(
-        result,
-        size,
-        "/media/fat/mister-magik-dev/mister-magik-fb",
-        expected_sha256,
-    )?;
-    Ok(())
-}
-
-fn profile_development_launch_return(
-    config: &NativeDeviceConfig,
-    profile_binary: &Path,
-    expected_sha256: &str,
-    output_dir: &Path,
-) -> std::result::Result<String, DeviceFailure> {
-    require_delivery_sha256(expected_sha256)?;
-    if file_sha256(profile_binary.to_path_buf()).map_err(device_failure)? != expected_sha256 {
-        return Err(DeviceFailure::ArtifactMismatch(
-            "launch-return profile binary does not match its build receipt".into(),
-        ));
-    }
-    fs::create_dir_all(output_dir).map_err(device_failure)?;
-    let canonical_local = output_dir.join("canonical-runtime.backup");
-    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    exec_checked(
-        &session,
-        "recover interrupted launch-return profile transaction",
-        &format!(
-            "set -eu; if test -f {backup}; then mv -f {backup} {runtime}; chmod 755 {runtime}; fi; if test -f {watchdog}; then pid=$(cat {watchdog} 2>/dev/null || true); test -z \"$pid\" || kill \"$pid\" 2>/dev/null || true; rm -f {watchdog}; fi",
-            backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
-            runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
-            watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
-        ),
-    )
-    .map_err(device_failure)?;
-    exec_checked(
-        &session,
-        "verify canonical development runtime before launch-return profile",
-        &installed_platform_verify_command(Layout::Development),
-    )
-    .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
-        .ok_or_else(|| DeviceFailure::ArtifactMismatch("development manifest is missing".into()))?;
-    let canonical_sha256 = manifest
-        .lines()
-        .find_map(|line| line.strip_prefix("gui_sha256="))
-        .ok_or_else(|| DeviceFailure::ArtifactMismatch("manifest has no GUI identity".into()))?
-        .to_string();
-    require_delivery_sha256(&canonical_sha256)?;
-    get(
-        &session,
-        "/media/fat/mister-magik-dev/mister-magik-fb",
-        &canonical_local,
-    )
-    .map_err(device_failure)?;
-    if file_sha256(canonical_local.clone()).map_err(device_failure)? != canonical_sha256 {
-        return Err(DeviceFailure::ArtifactMismatch(
-            "downloaded canonical runtime does not match the development manifest".into(),
-        ));
-    }
-    exec_checked(
-        &session,
-        "snapshot canonical launch-return runtime",
-        &format!(
-            "set -eu; cp {runtime} {backup}; chmod 755 {backup}; sync",
-            runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
-            backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
-        ),
-    )
-    .map_err(device_failure)?;
-    drop(session);
-
-    let run_result = (|| -> Result<String> {
-        deploy_profile_runtime_binary(&config.agent, profile_binary, expected_sha256)?;
-        let session = connect_with(&config.connection, 10)?;
-        exec_checked(
-            &session,
-            "arm bounded launch-return profile restore watchdog",
-            &format!(
-                "set -eu; (sleep 180; if test -f {backup}; then mv -f {backup} {runtime}; chmod 755 {runtime}; sync; fi; rm -f {watchdog}) >/dev/null 2>&1 & echo $! > {watchdog}",
-                backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
-                runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
-                watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
-            ),
-        )?;
-        drop(session);
-        profile_installed_launch_return(config, output_dir)
-    })();
-
-    let restore_result = (|| -> Result<()> {
-        deploy_profile_runtime_binary(&config.agent, &canonical_local, &canonical_sha256)?;
-        let session = connect_with(&config.connection, 10)?;
-        exec_checked(
-            &session,
-            "commit launch-return profile restoration",
-            &format!(
-                "set -eu; if test -f {watchdog}; then pid=$(cat {watchdog} 2>/dev/null || true); test -z \"$pid\" || kill \"$pid\" 2>/dev/null || true; fi; rm -f {watchdog} {backup}; sync",
-                backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
-                watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
-            ),
-        )?;
-        exec_checked(
-            &session,
-            "verify restored canonical development runtime",
-            &installed_platform_verify_command(Layout::Development),
-        )?;
-        let restored_manifest =
-            remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
-                .ok_or("development manifest is missing after launch-return profile")?;
-        if restored_manifest != manifest {
-            return Err("development manifest changed during launch-return profile".into());
-        }
-        Ok(())
-    })();
-
-    let transaction_metadata = json!({
-        "schema": "mister-magik-launch-return-profile-transaction-v1",
-        "profile_sha256": expected_sha256,
-        "canonical_sha256": canonical_sha256,
-        "manifest_preserved": restore_result.is_ok(),
-        "canonical_restored": restore_result.is_ok(),
-    });
-    fs::write(
-        output_dir.join("profile-transaction.json"),
-        format!(
-            "{}\n",
-            serde_json::to_string_pretty(&transaction_metadata).map_err(device_failure)?
-        ),
-    )
-    .map_err(device_failure)?;
-    if restore_result.is_ok() {
-        let _ = fs::remove_file(&canonical_local);
-    }
-
-    launch_return_profile_transaction_result(run_result, restore_result)
-}
-
-fn launch_return_profile_transaction_result(
-    run_result: Result<String>,
-    restore_result: Result<()>,
-) -> std::result::Result<String, DeviceFailure> {
-    match (run_result, restore_result) {
-        (Ok(summary), Ok(())) => Ok(summary),
-        (Err(error), Ok(())) => Err(device_failure(error)),
-        (Ok(_), Err(error)) => Err(DeviceFailure::RecoveryRequired(format!(
-            "launch-return profile completed but canonical restoration failed: {error}"
-        ))),
-        (Err(run_error), Err(restore_error)) => Err(DeviceFailure::RecoveryRequired(format!(
-            "launch-return profile failed: {run_error}; canonical restoration failed: {restore_error}"
-        ))),
-    }
-}
 
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
@@ -4428,6 +4195,7 @@ fn profile_installed_launch_return(
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
+    let _signal_guard = ScreensaverProfileSignalGuard::install();
     let mut cycles = Vec::new();
     let run_result = (|| -> Result<Value> {
         exec_checked(
@@ -4438,6 +4206,11 @@ fn profile_installed_launch_return(
                 LAUNCH_RETURN_GATE_REMOTE,
                 LAUNCH_RETURN_STATE_REMOTE,
             ]),
+        )?;
+        exec_checked(
+            &session,
+            "launch-return benchmark stale profile cleanup",
+            &format!("rm -rf {}", sh(LAUNCH_RETURN_PROFILE_REMOTE_DIR)),
         )?;
         restart_launcher_with_one_shot_env(
             &session,
@@ -4471,9 +4244,9 @@ fn profile_installed_launch_return(
         let mut expected = wait_launch_return_state(&session, None, Duration::from_secs(20))?;
 
         for cycle_index in 0..LAUNCH_RETURN_CYCLES {
-            thread::sleep(Duration::from_secs(LAUNCH_RETURN_GAME_SETTLE_SECS));
+            wait_launch_return_duration(Duration::from_secs(LAUNCH_RETURN_GAME_SETTLE_SECS))?;
             let cycle_number = cycle_index + 1;
-            let remote_profile_dir = "/tmp/mister-magik/launch-return-profile";
+            let remote_profile_dir = LAUNCH_RETURN_PROFILE_REMOTE_DIR;
             let remote_svg = format!("{remote_profile_dir}/cycle-{cycle_number}.svg");
             let remote_folded = format!("{remote_profile_dir}/cycle-{cycle_number}.folded");
             let remote_frames = format!("{remote_profile_dir}/cycle-{cycle_number}-frames.tsv");
@@ -4518,7 +4291,8 @@ fn profile_installed_launch_return(
             )?;
 
             let return_started = Instant::now();
-            let return_action = request_magik_benchmark_action("return-to-launcher")?;
+            let return_action =
+                request_magik_benchmark_action(&config.agent, "return-to-launcher")?;
             let status =
                 wait_launch_return_ready(&session, previous_launcher_pid, Duration::from_secs(8))?;
             let black_interval_ms = return_started.elapsed().as_millis() as u64;
@@ -4765,7 +4539,7 @@ fn profile_installed_launch_return(
         Ok(json!({
             "schema": "mister-magik-launch-return-benchmark-v2",
             "scenario": "launch-return",
-            "timing_class": "instrumented-full-symbol",
+            "timing_class": "instrumented-installed-dev-symbols",
             "cpu_profile_hz": 999,
             "cycles": cycles.clone(),
             "latency": {
@@ -4789,14 +4563,37 @@ fn profile_installed_launch_return(
             let _ = fs::write(output_dir.join(local), text);
         }
     }
-    let cleanup_result = restore_installed_launch_return(&session);
+    for cycle in 1..=LAUNCH_RETURN_CYCLES {
+        for (remote, local) in [
+            (
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}.svg"),
+                format!("cycle-{cycle}-flamegraph.svg"),
+            ),
+            (
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}.folded"),
+                format!("cycle-{cycle}-stacks.folded"),
+            ),
+            (
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}-frames.tsv"),
+                format!("cycle-{cycle}-frames.tsv"),
+            ),
+        ] {
+            if !output_dir.join(&local).is_file()
+                && let Some(text) = remote_read(&session, &remote)
+                && !text.trim().is_empty()
+            {
+                let _ = fs::write(output_dir.join(local), text);
+            }
+        }
+    }
+    let cleanup_result = restore_installed_launch_return(&config.agent, &session);
     let summary = match (run_result, cleanup_result) {
         (Ok(summary), Ok(())) => summary,
         (Err(error), Ok(())) => {
             let failure = json!({
                 "schema": "mister-magik-launch-return-benchmark-v2",
                 "scenario": "launch-return",
-                "timing_class": "instrumented-full-symbol",
+                "timing_class": "instrumented-installed-dev-symbols",
                 "cpu_profile_hz": 999,
                 "cycles": cycles,
                 "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
@@ -4833,6 +4630,9 @@ fn wait_launch_return_state(
 ) -> Result<Value> {
     let started = Instant::now();
     while started.elapsed() < timeout {
+        if screensaver_profile_interrupted() {
+            return Err("launch-return benchmark interrupted".into());
+        }
         if let Some(text) = remote_read(session, LAUNCH_RETURN_STATE_REMOTE)
             && let Ok(state) = serde_json::from_str::<Value>(&text)
             && state.get("game_path").and_then(Value::as_str) != previous_path
@@ -4856,6 +4656,9 @@ fn wait_launch_return_ready(
     let started = Instant::now();
     let mut last_status = Value::Null;
     while started.elapsed() < timeout {
+        if screensaver_profile_interrupted() {
+            return Err("launch-return benchmark interrupted".into());
+        }
         if let Ok(status) = read_launcher_status(session) {
             let new_process = status.get("pid").and_then(Value::as_i64) != Some(previous_pid);
             let return_startup =
@@ -4882,8 +4685,24 @@ fn wait_launch_return_ready(
     .into())
 }
 
-fn request_magik_benchmark_action(action: &str) -> Result<Value> {
-    let status = agent_request("magik", json!({"action": "status"}), Duration::from_secs(5))?;
+fn wait_launch_return_duration(duration: Duration) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < duration {
+        if screensaver_profile_interrupted() {
+            return Err("launch-return benchmark interrupted".into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+fn request_magik_benchmark_action(endpoint: &AgentEndpoint, action: &str) -> Result<Value> {
+    let status = agent_request_at(
+        endpoint,
+        "magik",
+        json!({"action": "status"}),
+        Duration::from_secs(5),
+    )?;
     let expected_generation = status
         .response
         .pointer("/result/files/main_status/main_generation")
@@ -4894,7 +4713,8 @@ fn request_magik_benchmark_action(action: &str) -> Result<Value> {
         std::process::id(),
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     );
-    let reply = agent_request(
+    let reply = agent_request_at(
+        endpoint,
         "magik",
         json!({
             "action": action,
@@ -4907,7 +4727,7 @@ fn request_magik_benchmark_action(action: &str) -> Result<Value> {
     Ok(reply.response.get("result").cloned().unwrap_or(Value::Null))
 }
 
-fn restore_installed_launch_return(session: &Session) -> Result<()> {
+fn restore_installed_launch_return(endpoint: &AgentEndpoint, session: &Session) -> Result<()> {
     let remove = exec_checked(
         session,
         "launch-return benchmark cleanup",
@@ -4918,7 +4738,12 @@ fn restore_installed_launch_return(session: &Session) -> Result<()> {
         ]),
     );
     remove?;
-    request_magik_benchmark_action("return-to-launcher").map_err(|error| {
+    exec_checked(
+        session,
+        "launch-return benchmark profile cleanup",
+        &format!("rm -rf {}", sh(LAUNCH_RETURN_PROFILE_REMOTE_DIR)),
+    )?;
+    request_magik_benchmark_action(endpoint, "return-to-launcher").map_err(|error| {
         format!(
             "launch-return cleanup could not return through Main; launcher restart skipped: {error}"
         )
@@ -9753,47 +9578,6 @@ fn issue_delivery_reboot(sess: &Session) -> Result<String> {
     issue_reboot(sess, delivery_reboot_mode(&probe.stdout))
 }
 
-fn validate_remote_run_command(command: &str) -> Result<()> {
-    let normalized = command.split_whitespace().collect::<Vec<_>>().join(" ");
-    let normalized = expand_simple_shell_assignments(&normalized);
-    let unquoted = normalized.replace(['\'', '"'], "");
-    let direct_arcade = [
-        "mister-magik-fb ui arcade",
-        "mister-magik-fb' ui arcade",
-        "mister-magik-fb\" ui arcade",
-        "mister-magic-fb ui arcade",
-        "mister-magic-fb' ui arcade",
-        "mister-magic-fb\" ui arcade",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle) || unquoted.contains(needle));
-    if direct_arcade {
-        return Err("refusing removed direct arcade scene; benchmark Arcade through the Main-supervised launcher env/restart path".into());
-    }
-    Ok(())
-}
-
-fn expand_simple_shell_assignments(command: &str) -> String {
-    let mut expanded = command.to_string();
-    for token in command.split_whitespace() {
-        let token = token.trim_end_matches(';');
-        let Some((name, value)) = token.split_once('=') else {
-            continue;
-        };
-        if name.is_empty()
-            || !name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        {
-            continue;
-        }
-        let value = value.trim_matches(|ch| ch == '\'' || ch == '"');
-        expanded = expanded.replace(&format!("${name}"), value);
-        expanded = expanded.replace(&format!("${{{name}}}"), value);
-    }
-    expanded
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 struct MameMachine {
     setname: String,
@@ -10411,27 +10195,23 @@ fn write_mame_metadata_db(
     Ok(())
 }
 
-fn deploy_magik_bin(sess: &Session, local: &Path, remote: &str) -> Result<()> {
-    let total_t = Instant::now();
-    let validate_t = Instant::now();
-    let transaction = MagikDeployTransaction::validate(local, remote)?;
-    let validate_ms = validate_t.elapsed().as_millis();
-    let report = transaction.run_ssh(sess, validate_ms, total_t)?;
-    report.print();
-    Ok(())
-}
-
 fn deploy_magik_bundle(
     sess: &Session,
     local: &Path,
     remote: &str,
     manifest_local: &Path,
     manifest_remote: &str,
+    expected_sha256: &str,
 ) -> Result<()> {
     let total_t = Instant::now();
     let validate_t = Instant::now();
-    let transaction =
-        MagikDeployTransaction::validate_bundle(local, remote, manifest_local, manifest_remote)?;
+    let transaction = MagikDeployTransaction::validate_bundle(
+        local,
+        remote,
+        manifest_local,
+        manifest_remote,
+        expected_sha256,
+    )?;
     let validate_ms = validate_t.elapsed().as_millis();
     let report = transaction.run_ssh(sess, validate_ms, total_t)?;
     report.print();
@@ -10501,7 +10281,113 @@ struct MagikDeployTransaction {
     upload: String,
     lock: String,
     local_bytes: u64,
-    manifest: Option<ManifestDeploy>,
+    expected_sha256: String,
+    manifest_sha256: String,
+    manifest: ManifestDeploy,
+}
+
+const RUNTIME_MANIFEST_FIELDS: &[&str] = &[
+    "format",
+    "platform_release",
+    "platform_release_number",
+    "platform_bundle_id",
+    "qualification_candidate_id",
+    "latch_protocol_version",
+    "latch_capability_mask",
+    "main_path",
+    "gui_path",
+    "manager_path",
+    "scanout_module_path",
+    "scanout_metadata_path",
+    "latch_rbf_path",
+    "latch_metadata_path",
+    "main_sha256",
+    "gui_sha256",
+    "manager_sha256",
+    "scanout_module_sha256",
+    "scanout_metadata_sha256",
+    "latch_rbf_sha256",
+    "latch_metadata_sha256",
+    "platform_contract_sha256",
+    "main_revision",
+    "magik_revision",
+    "menu_revision",
+];
+
+fn validate_runtime_bundle_identity(
+    local: &Path,
+    manifest_local: &Path,
+    expected_sha256: &str,
+) -> Result<String> {
+    if expected_sha256.len() != 64
+        || !expected_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("runtime binary expected SHA-256 is not canonical lowercase hex".into());
+    }
+    let actual_sha256 = file_sha256(local.to_path_buf())?;
+    if actual_sha256 != expected_sha256 {
+        return Err(format!(
+            "runtime binary hash mismatch expected={expected_sha256} actual={actual_sha256}"
+        )
+        .into());
+    }
+    let text = fs::read_to_string(manifest_local)?;
+    let mut fields = BTreeMap::new();
+    for line in text.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or("runtime manifest contains a malformed line")?;
+        if value.is_empty()
+            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
+            || fields.insert(key, value).is_some()
+        {
+            return Err(
+                format!("runtime manifest has an invalid or duplicate field: {key}").into(),
+            );
+        }
+    }
+    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
+        || RUNTIME_MANIFEST_FIELDS
+            .iter()
+            .any(|field| !fields.contains_key(field))
+    {
+        return Err("runtime manifest does not have the exact canonical field set".into());
+    }
+    for (key, expected) in [
+        ("format", "mister-magik-platform-v3"),
+        ("latch_protocol_version", "4"),
+        ("latch_capability_mask", "0x01ff"),
+        ("main_path", "/media/fat/MiSTer_MagiKDev"),
+        ("gui_path", "/media/fat/mister-magik-dev/mister-magik-fb"),
+        (
+            "manager_path",
+            "/media/fat/mister-magik-dev/mister-magik-manager",
+        ),
+        (
+            "scanout_module_path",
+            "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
+        ),
+        (
+            "scanout_metadata_path",
+            "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
+        ),
+        (
+            "latch_rbf_path",
+            "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
+        ),
+        (
+            "latch_metadata_path",
+            "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
+        ),
+        ("gui_sha256", expected_sha256),
+    ] {
+        if fields.get(key).copied() != Some(expected) {
+            return Err(format!("runtime manifest field {key} is not canonical").into());
+        }
+    }
+    Ok(file_sha256(manifest_local.to_path_buf())?)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10529,15 +10415,33 @@ struct MagikDeployReport {
 }
 
 impl MagikDeployTransaction {
-    fn validate(local: &Path, remote: &str) -> Result<Self> {
+    fn validate_bundle(
+        local: &Path,
+        remote: &str,
+        manifest_local: &Path,
+        manifest_remote: &str,
+        expected_sha256: &str,
+    ) -> Result<Self> {
         if !remote.starts_with('/') || remote.ends_with('/') || remote.contains('\0') {
             return Err(format!("unsupported deploy remote: {remote}").into());
         }
         if remote.split('/').any(|part| part == "." || part == "..") {
             return Err(format!("unsupported deploy remote path component: {remote}").into());
         }
+        if remote != "/media/fat/mister-magik-dev/mister-magik-fb"
+            || manifest_remote != "/media/fat/mister-magik-dev/platform-v3.manifest"
+            || !local.is_file()
+            || !manifest_local.is_file()
+        {
+            return Err(
+                "runtime deployment requires the canonical development binary and manifest bundle"
+                    .into(),
+            );
+        }
         let remote_dir = remote_parent_dir(remote)?.to_string();
         let local_bytes = fs::metadata(local)?.len();
+        let manifest_sha256 =
+            validate_runtime_bundle_identity(local, manifest_local, expected_sha256)?;
         Ok(Self {
             local: local.to_path_buf(),
             remote: remote.to_string(),
@@ -10545,28 +10449,14 @@ impl MagikDeployTransaction {
             lock: format!("{remote_dir}/deploy.lock"),
             remote_dir,
             local_bytes,
-            manifest: None,
+            expected_sha256: expected_sha256.into(),
+            manifest_sha256,
+            manifest: ManifestDeploy {
+                local: manifest_local.to_path_buf(),
+                remote: manifest_remote.into(),
+                upload: format!("{manifest_remote}.upload"),
+            },
         })
-    }
-
-    fn validate_bundle(
-        local: &Path,
-        remote: &str,
-        manifest_local: &Path,
-        manifest_remote: &str,
-    ) -> Result<Self> {
-        let mut transaction = Self::validate(local, remote)?;
-        if manifest_remote != "/media/fat/mister-magik-dev/platform-v3.manifest"
-            || !manifest_local.is_file()
-        {
-            return Err("unsupported runtime bundle manifest".into());
-        }
-        transaction.manifest = Some(ManifestDeploy {
-            local: manifest_local.to_path_buf(),
-            remote: manifest_remote.into(),
-            upload: format!("{manifest_remote}.upload"),
-        });
-        Ok(transaction)
     }
 
     fn run_ssh(
@@ -10601,9 +10491,8 @@ impl MagikDeployTransaction {
 
             let upload_t = Instant::now();
             remote.put(&self.local, &self.upload)?;
-            if let Some(manifest) = &self.manifest {
-                remote.put(&manifest.local, &manifest.upload)?;
-            }
+            remote.put(&self.manifest.local, &self.manifest.upload)?;
+            self.verify_uploads(remote)?;
             let upload_ms = upload_t.elapsed().as_millis();
 
             let swap_ms = self.swap_upload(remote)?;
@@ -10657,19 +10546,36 @@ impl MagikDeployTransaction {
 
     fn swap_upload<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
-        let manifest_swap = self.manifest.as_ref().map_or_else(String::new, |manifest| {
-            format!("; mv {} {}", sh(&manifest.upload), sh(&manifest.remote))
-        });
+        let manifest_swap = format!(
+            "; mv {} {}",
+            sh(&self.manifest.upload),
+            sh(&self.manifest.remote)
+        );
         self.exec_phase(
             remote,
             "swap",
             &format!(
-                "mv {} {}{manifest_swap}",
+                "set -eu; mv {} {}{manifest_swap}; sync",
                 sh(&self.upload),
                 sh(&self.remote)
             ),
         )?;
         Ok(start.elapsed().as_millis())
+    }
+
+    fn verify_uploads<R: DeployRemote>(&self, remote: &R) -> Result<()> {
+        self.exec_phase(
+            remote,
+            "upload-identity",
+            &format!(
+                "set -eu; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}",
+                sh(&self.upload),
+                sh(&self.expected_sha256),
+                sh(&self.manifest.upload),
+                sh(&self.manifest_sha256),
+            ),
+        )?;
+        Ok(())
     }
 
     fn chmod_and_verify_size<R: DeployRemote>(&self, remote: &R) -> Result<(u128, u64)> {
@@ -10701,10 +10607,7 @@ impl MagikDeployTransaction {
 
     fn cleanup<R: DeployRemote>(&self, remote: &R) -> Result<u128> {
         let start = Instant::now();
-        let manifest_upload = self
-            .manifest
-            .as_ref()
-            .map_or_else(String::new, |manifest| format!(" {}", sh(&manifest.upload)));
+        let manifest_upload = format!(" {}", sh(&self.manifest.upload));
         self.exec_phase(
             remote,
             "cleanup",
@@ -10769,7 +10672,7 @@ impl MagikDeployReport {
         let finish_ms = self.swap_ms + self.chmod_size_ms;
         let resume_size_ms = self.resume_ms + self.chmod_size_ms;
         println!(
-            "deploy_magik_bin local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={}",
+            "deploy_runtime_bundle local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={}",
             self.local.display(),
             self.remote,
             self.local_bytes,
@@ -11003,9 +10906,6 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "framebuffer-capture-lz4" => {
             agent_framebuffer_capture_lz4(&args[1..])?;
         }
-        "deploy-magik-bin" => {
-            agent_deploy_magik_bin(&args[1..])?;
-        }
         "magik" => {
             agent_magik(&args[1..])?;
         }
@@ -11023,7 +10923,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
 
 fn agent_usage() {
     println!(
-        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|deploy-magik-bin|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       deploy-magik-bin LOCAL [REMOTE]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
+        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
     );
 }
 
@@ -11733,88 +11633,6 @@ fn format_bytes_nearest_kb(bytes: u64) -> String {
     }
 }
 
-fn resolve_agent_deploy_magik_remote(explicit: Option<&str>, environment: Option<&str>) -> String {
-    explicit
-        .or(environment)
-        .unwrap_or("/media/fat/mister-magik-dev/mister-magik-fb")
-        .to_string()
-}
-
-fn agent_deploy_magik_bin(args: &[String]) -> Result<()> {
-    let json_output = args.iter().any(|arg| arg == "--json");
-    let positional = args
-        .iter()
-        .filter(|arg| arg.as_str() != "--json")
-        .collect::<Vec<_>>();
-    let local = positional
-        .first()
-        .ok_or("agent deploy-magik-bin needs LOCAL [REMOTE]")?;
-    if positional.len() > 2 {
-        return Err("usage: mister agent deploy-magik-bin LOCAL [REMOTE] [--json]".into());
-    }
-    let environment = std::env::var("MISTER_MAGIK_BIN").ok();
-    let remote = resolve_agent_deploy_magik_remote(
-        positional.get(1).map(|value| value.as_str()),
-        environment.as_deref(),
-    );
-    let total_t = Instant::now();
-    let read_t = Instant::now();
-    let mut source = fs::File::open(local)?;
-    let byte_count = source.metadata()?.len();
-    let mut hasher = Sha256::new();
-    let mut hash_buffer = [0u8; 64 * 1024];
-    loop {
-        let count = source.read(&mut hash_buffer)?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&hash_buffer[..count]);
-    }
-    let checksum = encode_hex(&hasher.finalize());
-    source = fs::File::open(local)?;
-    let read_ms = read_t.elapsed().as_millis();
-    let encoding = "raw";
-    let compression_decision = "streamed-raw";
-    let compress_ms = 0;
-    let args = json!({
-        "remote": &remote,
-        "size": byte_count,
-        "payload_size": byte_count,
-        "checksum": checksum,
-        "encoding": encoding,
-    });
-    let reply = agent_stream_request_reader(
-        "deploy_magik_bin_stream",
-        args,
-        &mut source,
-        Duration::from_secs(120),
-    )?;
-    let result = reply.response.get("result").unwrap_or(&Value::Null);
-    let remote_bytes = verify_agent_deploy_result(result, byte_count, &remote, &checksum)?;
-    let output = json!({
-        "action": "deploy-magik-bin",
-        "local": local,
-        "remote": remote,
-        "encoding": encoding,
-        "compression_decision": compression_decision,
-        "bytes": byte_count,
-        "remote_bytes": remote_bytes,
-        "payload_bytes": byte_count,
-        "checksum": checksum,
-        "total_ms": total_t.elapsed().as_millis() as u64,
-        "read_ms": read_ms as u64,
-        "compress_ms": compress_ms,
-        "request_ms": reply.elapsed_ms,
-        "result": result,
-    });
-    if json_output {
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    } else {
-        println!("{}", format_agent_deploy_summary(&output));
-    }
-    Ok(())
-}
-
 fn agent_magik(args: &[String]) -> Result<()> {
     let json_output = args.iter().any(|arg| arg == "--json");
     let positional = args
@@ -11906,20 +11724,6 @@ fn format_agent_magik_summary(action: &str, request_ms: u128, result: &Value) ->
         });
     format!(
         "agent magik action={action} outcome={outcome} elapsed_ms={request_ms} state={state} pid={pid} generation={generation}"
-    )
-}
-
-fn format_agent_deploy_summary(output: &Value) -> String {
-    let remote = output.get("remote").and_then(Value::as_str).unwrap_or("?");
-    let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
-    let total_ms = output.get("total_ms").and_then(Value::as_u64).unwrap_or(0);
-    let checksum = output
-        .get("checksum")
-        .and_then(Value::as_str)
-        .unwrap_or("?");
-    let checksum = checksum.get(..12).unwrap_or(checksum);
-    format!(
-        "agent deploy-magik-bin ok remote={remote} bytes={bytes} elapsed_ms={total_ms} sha256={checksum}"
     )
 }
 
@@ -14620,39 +14424,6 @@ fn unix_secs() -> u64 {
 mod tests {
     use super::*;
 
-    fn transaction_error(message: &str) -> Box<dyn std::error::Error> {
-        Box::new(io::Error::other(message.to_string()))
-    }
-
-    #[test]
-    fn launch_return_profile_transaction_requires_canonical_restore_on_every_exit_path() {
-        assert_eq!(
-            launch_return_profile_transaction_result(Ok("summary".into()), Ok(())).unwrap(),
-            "summary"
-        );
-        assert!(matches!(
-            launch_return_profile_transaction_result(
-                Err(transaction_error("profile failed")),
-                Ok(())
-            ),
-            Err(DeviceFailure::OperationFailed(_))
-        ));
-        assert!(matches!(
-            launch_return_profile_transaction_result(
-                Ok("summary".into()),
-                Err(transaction_error("restore failed"))
-            ),
-            Err(DeviceFailure::RecoveryRequired(_))
-        ));
-        assert!(matches!(
-            launch_return_profile_transaction_result(
-                Err(transaction_error("profile failed")),
-                Err(transaction_error("restore failed"))
-            ),
-            Err(DeviceFailure::RecoveryRequired(_))
-        ));
-    }
-
     #[test]
     fn native_device_config_retains_resolved_identity_and_forwards_agent_state() {
         let connection =
@@ -14912,6 +14683,14 @@ mod tests {
         }
     }
 
+    fn runtime_manifest_for(gui_sha256: &str) -> String {
+        format!(
+            "format=mister-magik-platform-v3\nplatform_release=platform-v0.1\nplatform_release_number=1\nplatform_bundle_id={hash}\nqualification_candidate_id={hash}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\nmain_path=/media/fat/MiSTer_MagiKDev\ngui_path=/media/fat/mister-magik-dev/mister-magik-fb\nmanager_path=/media/fat/mister-magik-dev/mister-magik-manager\nscanout_module_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko\nscanout_metadata_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt\nlatch_rbf_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf\nlatch_metadata_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt\nmain_sha256={hash}\ngui_sha256={gui_sha256}\nmanager_sha256={hash}\nscanout_module_sha256={hash}\nscanout_metadata_sha256={hash}\nlatch_rbf_sha256={hash}\nlatch_metadata_sha256={hash}\nplatform_contract_sha256={hash}\nmain_revision={revision}\nmagik_revision={revision}\nmenu_revision={revision}\n",
+            hash = "a".repeat(64),
+            revision = "b".repeat(40),
+        )
+    }
+
     #[test]
     fn parses_sd_list_probe_options() {
         let args = vec![
@@ -14975,21 +14754,6 @@ mod tests {
         assert_eq!(
             format_agent_magik_summary("status", 12, &status),
             "agent magik action=status outcome=ok elapsed_ms=12 state=LauncherSuspended pid=0 generation=0"
-        );
-    }
-
-    #[test]
-    fn formats_compact_agent_deploy_summary() {
-        let output = json!({
-            "remote": "/media/fat/mister-magik-dev/mister-magik-fb",
-            "bytes": 123456,
-            "total_ms": 987,
-            "checksum": "0123456789abcdef",
-            "result": {"verbose": "omitted"},
-        });
-        assert_eq!(
-            format_agent_deploy_summary(&output),
-            "agent deploy-magik-bin ok remote=/media/fat/mister-magik-dev/mister-magik-fb bytes=123456 elapsed_ms=987 sha256=0123456789ab"
         );
     }
 
@@ -15379,38 +15143,6 @@ video_mode=14
         let edited = edit_mister_ini(ini, IniEdit::StockBoot);
 
         assert!(edited.contains(";main=mister-magik-fb ; MiSTer MagiK stock boot restore"));
-    }
-
-    #[test]
-    fn remote_run_rejects_removed_direct_arcade_scene() {
-        assert!(
-            validate_remote_run_command("/media/fat/mister-magik/mister-magik-fb ui arcade 20")
-                .is_err()
-        );
-        assert!(
-            validate_remote_run_command("'/media/fat/mister-magik/mister-magik-fb' ui arcade 20")
-                .is_err()
-        );
-        assert!(
-            validate_remote_run_command(
-                "scene=arcade; /media/fat/mister-magik/mister-magik-fb ui \"$scene\" 20"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn remote_run_allows_launcher_and_restart_paths() {
-        assert!(
-            validate_remote_run_command("/media/fat/mister-magik/mister-magik-fb ui launcher 0")
-                .is_ok()
-        );
-        assert!(
-            validate_remote_run_command(
-                "printf 'mister_magik_restart_launcher\\n' > /dev/MiSTer_cmd"
-            )
-            .is_ok()
-        );
     }
 
     #[test]
@@ -16347,76 +16079,77 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn deploy_transaction_derives_remote_paths_and_local_size() {
+    fn runtime_deploy_requires_the_canonical_binary_and_manifest_bundle() {
         let local = temp_path("deploy-bin");
+        let manifest = temp_path("deploy-manifest");
         fs::write(&local, b"abc").unwrap();
+        let expected = file_sha256(local.clone()).unwrap();
+        fs::write(&manifest, runtime_manifest_for(&expected)).unwrap();
 
-        let tx =
-            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
-                .unwrap();
-        let _ = fs::remove_file(&local);
+        assert!(
+            MagikDeployTransaction::validate_bundle(
+                &local,
+                "/media/fat/mister-magik/mister-magik-fb",
+                &manifest,
+                "/media/fat/mister-magik/platform-v3.manifest",
+                &expected,
+            )
+            .is_err()
+        );
+        let tx = MagikDeployTransaction::validate_bundle(
+            &local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            &manifest,
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
+            &expected,
+        )
+        .unwrap();
 
-        assert_eq!(tx.remote_dir, "/media/fat/mister-magik");
-        assert_eq!(tx.upload, "/media/fat/mister-magik/mister-magik-fb.upload");
-        assert_eq!(tx.lock, "/media/fat/mister-magik/deploy.lock");
+        assert_eq!(tx.remote_dir, "/media/fat/mister-magik-dev");
+        assert_eq!(
+            tx.upload,
+            "/media/fat/mister-magik-dev/mister-magik-fb.upload"
+        );
+        assert_eq!(tx.lock, "/media/fat/mister-magik-dev/deploy.lock");
         assert_eq!(tx.local_bytes, 3);
         assert_eq!(
             tx.chmod_size_verify_command(),
-            "chmod +x '/media/fat/mister-magik/mister-magik-fb' && wc -c '/media/fat/mister-magik/mister-magik-fb'"
+            "chmod +x '/media/fat/mister-magik-dev/mister-magik-fb' && wc -c '/media/fat/mister-magik-dev/mister-magik-fb'"
         );
-    }
-
-    #[test]
-    fn agent_deploy_magik_remote_defaults_to_development() {
-        assert_eq!(
-            resolve_agent_deploy_magik_remote(None, None),
-            "/media/fat/mister-magik-dev/mister-magik-fb"
-        );
-        assert_eq!(
-            resolve_agent_deploy_magik_remote(None, Some("/environment/bin")),
-            "/environment/bin"
-        );
-        assert_eq!(
-            resolve_agent_deploy_magik_remote(Some("/explicit/bin"), Some("/environment/bin")),
-            "/explicit/bin"
-        );
-    }
-
-    #[test]
-    fn deploy_transaction_rejects_invalid_remote_paths() {
-        let local = temp_path("deploy-invalid-bin");
-        fs::write(&local, b"abc").unwrap();
-
-        assert!(MagikDeployTransaction::validate(&local, "relative/path").is_err());
-        assert!(MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/").is_err());
         assert!(
-            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/../MiSTer").is_err()
+            MagikDeployTransaction::validate_bundle(
+                &local,
+                "/media/fat/mister-magik-dev/mister-magik-fb",
+                &manifest,
+                "/media/fat/mister-magik-dev/platform-v3.manifest",
+                &"c".repeat(64),
+            )
+            .is_err()
         );
-
-        let _ = fs::remove_file(&local);
-    }
-
-    #[test]
-    fn deploy_transaction_runs_bounded_phases_in_order() {
-        let local = temp_path("deploy-scripted-success");
-        fs::write(&local, b"abc").unwrap();
-        let tx =
-            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
-                .unwrap();
-        let remote = scripted_deploy_remote(3);
-
-        let report = tx.run_with(&remote, 0, Instant::now()).unwrap();
-        let events = remote.events();
-
-        assert_eq!(report.remote_bytes, 3);
-        assert!(events[0].contains("mkdir -p"));
-        assert!(events[1].contains("mister_magik_suspend"));
-        assert!(events[2].starts_with("put "));
-        assert!(events[3].starts_with("mv "));
-        assert!(events[4].contains("wc -c"));
-        assert!(events[5].starts_with("rm -f "));
-        assert!(events[6].contains("mister_magik_resume"));
+        for invalid in [
+            runtime_manifest_for(&expected)
+                .replace("format=mister-magik-platform-v3", "format=wrong"),
+            runtime_manifest_for(&expected).replace("gui_sha256=", "wrong_gui_sha256="),
+            format!(
+                "{}gui_sha256={}\n",
+                runtime_manifest_for(&expected),
+                expected
+            ),
+        ] {
+            fs::write(&manifest, invalid).unwrap();
+            assert!(
+                MagikDeployTransaction::validate_bundle(
+                    &local,
+                    "/media/fat/mister-magik-dev/mister-magik-fb",
+                    &manifest,
+                    "/media/fat/mister-magik-dev/platform-v3.manifest",
+                    &expected,
+                )
+                .is_err()
+            );
+        }
         let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
     }
 
     #[test]
@@ -16424,12 +16157,14 @@ H: Handlers=event3 js0"#
         let local = temp_path("deploy-bundle-bin");
         let manifest = temp_path("deploy-bundle-manifest");
         fs::write(&local, b"abc").unwrap();
-        fs::write(&manifest, b"manifest").unwrap();
+        let expected = file_sha256(local.clone()).unwrap();
+        fs::write(&manifest, runtime_manifest_for(&expected)).unwrap();
         let tx = MagikDeployTransaction::validate_bundle(
             &local,
             "/media/fat/mister-magik-dev/mister-magik-fb",
             &manifest,
             "/media/fat/mister-magik-dev/platform-v3.manifest",
+            &expected,
         )
         .unwrap();
         let remote = scripted_deploy_remote(3);
@@ -16438,9 +16173,10 @@ H: Handlers=event3 js0"#
         let events = remote.events();
         assert!(events[2].ends_with("mister-magik-fb.upload"));
         assert!(events[3].ends_with("platform-v3.manifest.upload"));
+        assert!(events[4].contains("sha256sum"));
         assert!(
-            events[4].find("mister-magik-fb.upload").unwrap()
-                < events[4].find("platform-v3.manifest.upload").unwrap()
+            events[5].find("mister-magik-fb.upload").unwrap()
+                < events[5].find("platform-v3.manifest.upload").unwrap()
         );
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
@@ -16449,10 +16185,18 @@ H: Handlers=event3 js0"#
     #[test]
     fn deploy_transaction_cleans_and_resumes_after_upload_failure() {
         let local = temp_path("deploy-scripted-upload-failure");
+        let manifest = temp_path("deploy-scripted-upload-failure-manifest");
         fs::write(&local, b"abc").unwrap();
-        let tx =
-            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
-                .unwrap();
+        let expected = file_sha256(local.clone()).unwrap();
+        fs::write(&manifest, runtime_manifest_for(&expected)).unwrap();
+        let tx = MagikDeployTransaction::validate_bundle(
+            &local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            &manifest,
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
+            &expected,
+        )
+        .unwrap();
         let mut remote = scripted_deploy_remote(3);
         remote.fail_upload = true;
 
@@ -16465,15 +16209,54 @@ H: Handlers=event3 js0"#
         assert!(events[4].contains("mister_magik_resume"));
         assert_eq!(events.len(), 5);
         let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
+    }
+
+    #[test]
+    fn runtime_bundle_rejects_corrupt_uploads_before_activation() {
+        let local = temp_path("deploy-corrupt-upload");
+        let manifest = temp_path("deploy-corrupt-upload-manifest");
+        fs::write(&local, b"abc").unwrap();
+        let expected = file_sha256(local.clone()).unwrap();
+        fs::write(&manifest, runtime_manifest_for(&expected)).unwrap();
+        let tx = MagikDeployTransaction::validate_bundle(
+            &local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            &manifest,
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
+            &expected,
+        )
+        .unwrap();
+        let mut remote = scripted_deploy_remote(3);
+        remote.fail_command_containing = Some("sha256sum");
+
+        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        let events = remote.events();
+        assert!(!events.iter().any(|event| event.contains("; mv ")));
+        assert!(
+            events
+                .last()
+                .is_some_and(|event| event.contains("mister_magik_resume"))
+        );
+        let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
     }
 
     #[test]
     fn deploy_transaction_cleans_partial_prepare_failure() {
         let local = temp_path("deploy-scripted-prepare-failure");
+        let manifest = temp_path("deploy-scripted-prepare-failure-manifest");
         fs::write(&local, b"abc").unwrap();
-        let tx =
-            MagikDeployTransaction::validate(&local, "/media/fat/mister-magik/mister-magik-fb")
-                .unwrap();
+        let expected = file_sha256(local.clone()).unwrap();
+        fs::write(&manifest, runtime_manifest_for(&expected)).unwrap();
+        let tx = MagikDeployTransaction::validate_bundle(
+            &local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            &manifest,
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
+            &expected,
+        )
+        .unwrap();
         let mut remote = scripted_deploy_remote(3);
         remote.fail_command_containing = Some("mkdir -p");
 
@@ -16485,6 +16268,7 @@ H: Handlers=event3 js0"#
         assert!(events[1].starts_with("rm -f "));
         assert!(!events.iter().any(|event| event.contains("suspend")));
         let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
     }
 
     #[test]
@@ -16515,48 +16299,6 @@ H: Handlers=event3 js0"#
             Some(12345)
         );
         assert_eq!(parse_wc_byte_count("not-a-size path\n"), None);
-    }
-
-    #[test]
-    fn agent_deploy_result_verifies_remote_and_size() {
-        let result = json!({
-            "remote": "/media/fat/mister-magik/mister-magik-fb",
-            "remote_bytes": 42,
-            "checksum_algorithm": "sha256",
-            "checksum": "abc",
-            "published": true,
-            "rolled_back": false
-        });
-
-        assert_eq!(
-            verify_agent_deploy_result(
-                &result,
-                42,
-                "/media/fat/mister-magik/mister-magik-fb",
-                "abc"
-            )
-            .unwrap(),
-            42
-        );
-        assert!(
-            verify_agent_deploy_result(
-                &result,
-                43,
-                "/media/fat/mister-magik/mister-magik-fb",
-                "abc"
-            )
-            .is_err()
-        );
-        assert!(verify_agent_deploy_result(&result, 42, "/tmp/other", "abc").is_err());
-        assert!(
-            verify_agent_deploy_result(
-                &result,
-                42,
-                "/media/fat/mister-magik/mister-magik-fb",
-                "wrong"
-            )
-            .is_err()
-        );
     }
 
     #[test]

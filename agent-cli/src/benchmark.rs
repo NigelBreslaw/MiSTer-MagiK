@@ -1,8 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::build::{BuildRecipe, BuildSpec};
-use crate::device::DeviceClient;
+use crate::device::BenchmarkDeviceClient;
 use crate::error::AgentResult;
 use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
@@ -28,7 +27,7 @@ fn require_clean_installed_commit(
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
     }
-    let mut device = DeviceClient::default();
+    let mut device = BenchmarkDeviceClient::default();
     reporter.emit(
         EventKind::Progress,
         "preflight",
@@ -79,7 +78,7 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::LaunchReturn => {
-            execute_launch_return(repository, &mut device, manifest, output_dir, reporter)
+            execute_launch_return(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
@@ -89,30 +88,18 @@ fn require_clean_installed_commit(
 }
 
 fn execute_launch_return(
-    repository: &Path,
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    let profile_build = BuildSpec::for_recipe(BuildRecipe::RuntimeProfile);
-    reporter.emit(
-        EventKind::Progress,
-        "profile-build",
-        "building the full-symbol launch-return profile runtime",
-        Some(20),
-    )?;
-    crate::build::execute(repository, &profile_build, reporter)?;
-    let receipt = profile_build.verify(repository)?;
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "running three installed Arcade launch-return cycles",
+        "profiling three Arcade launch-return cycles on the coherently installed Dev runtime",
         Some(35),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileDevelopmentLaunchReturn {
-        profile_binary: repository.join(profile_build.artifact()),
-        expected_sha256: receipt.binary_sha256,
+    let detail = device.execute(DeviceRequest::ProfileInstalledLaunchReturn {
         output_dir: output_dir.clone(),
     })?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
@@ -138,10 +125,13 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
     {
         return Err("launch-return benchmark summary has the wrong schema".into());
     }
-    if summary.get("timing_class").and_then(Value::as_str) != Some("instrumented-full-symbol")
+    if summary.get("timing_class").and_then(Value::as_str)
+        != Some("instrumented-installed-dev-symbols")
         || summary.get("latency").and_then(Value::as_object).is_none()
     {
-        return Err("launch-return benchmark summary lacks full-profile timing evidence".into());
+        return Err(
+            "launch-return benchmark summary lacks installed-runtime profile evidence".into(),
+        );
     }
     let cycles = summary
         .get("cycles")
@@ -197,7 +187,7 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn execute_navigation_transitions(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -233,7 +223,7 @@ fn execute_navigation_transitions(
 }
 
 fn execute_particle_profile(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -278,7 +268,7 @@ fn execute_particle_profile(
 }
 
 fn execute_particles(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -310,7 +300,7 @@ fn execute_particles(
 }
 
 fn execute_particle_capacity(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -339,7 +329,7 @@ fn execute_particle_capacity(
 }
 
 fn execute_particle_demo_40k(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -364,7 +354,7 @@ fn execute_particle_demo_40k(
 }
 
 fn execute_particle_step(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -429,7 +419,7 @@ fn evaluate_particle_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn execute_screensaver(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -461,7 +451,7 @@ fn execute_screensaver(
 }
 
 fn execute_search(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -538,7 +528,7 @@ fn evaluate_search_ui_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn execute_catalog_lifecycle(
-    device: &mut DeviceClient,
+    device: &mut BenchmarkDeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -809,7 +799,7 @@ mod tests {
         });
         let passing = json!({
             "schema": "mister-magik-launch-return-benchmark-v2",
-            "timing_class": "instrumented-full-symbol",
+            "timing_class": "instrumented-installed-dev-symbols",
             "latency": {"total_return": {"min_us": 1, "median_us": 2, "max_us": 3}},
             "cycles": [cycle.clone(), cycle.clone(), cycle]
         });

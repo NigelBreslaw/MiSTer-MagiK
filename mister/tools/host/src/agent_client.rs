@@ -5,7 +5,7 @@ use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -812,50 +812,6 @@ fn read_agent_binary_response<R: BufRead>(
     })
 }
 
-pub(crate) fn agent_stream_request_reader(
-    cmd: &str,
-    args: Value,
-    payload: &mut dyn Read,
-    timeout: Duration,
-) -> Result<AgentResponse> {
-    agent_stream_request_reader_at(
-        &AgentEndpoint::from_environment()?,
-        cmd,
-        args,
-        payload,
-        timeout,
-    )
-}
-
-pub(crate) fn agent_stream_request_reader_at(
-    endpoint: &AgentEndpoint,
-    cmd: &str,
-    args: Value,
-    payload: &mut dyn Read,
-    timeout: Duration,
-) -> Result<AgentResponse> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
-    let start = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    if let Err(write_error) = io::copy(payload, &mut stream).and_then(|_| stream.flush()) {
-        let mut line = String::new();
-        match BufReader::new(stream).read_line(&mut line) {
-            Ok(0) | Err(_) => return Err(write_error.into()),
-            Ok(_) => return parse_agent_response_line(line, start),
-        }
-    }
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    parse_agent_response_line(line, start)
-}
-
 #[cfg(test)]
 fn write_agent_stream_payload<T: Read + Write>(
     mut stream: T,
@@ -892,39 +848,6 @@ fn agent_binary_payload_len(response: &Value) -> Result<usize> {
             .replace("missing payload", "missing result payload")
             .into()
     })
-}
-
-pub(crate) fn verify_agent_deploy_result(
-    result: &Value,
-    expected_bytes: u64,
-    expected_remote: &str,
-    expected_checksum: &str,
-) -> Result<u64> {
-    let remote = result.get("remote").and_then(Value::as_str).unwrap_or("");
-    if remote != expected_remote {
-        return Err(format!(
-            "agent deploy remote mismatch expected={expected_remote} actual={remote}"
-        )
-        .into());
-    }
-    let remote_bytes = result
-        .get("remote_bytes")
-        .and_then(Value::as_u64)
-        .ok_or("agent deploy response missing remote_bytes")?;
-    if remote_bytes != expected_bytes {
-        return Err(format!(
-            "agent deployed size mismatch expected={expected_bytes} remote={remote_bytes}"
-        )
-        .into());
-    }
-    if result.get("checksum_algorithm").and_then(Value::as_str) != Some("sha256")
-        || result.get("checksum").and_then(Value::as_str) != Some(expected_checksum)
-        || result.get("published").and_then(Value::as_bool) != Some(true)
-        || result.get("rolled_back").and_then(Value::as_bool) != Some(false)
-    {
-        return Err("agent deployment was not verified and authoritatively published".into());
-    }
-    Ok(remote_bytes)
 }
 
 #[cfg(test)]
@@ -1238,36 +1161,5 @@ mod tests {
         }
         assert!(rollback.contains("mount -o remount,ro /"));
         assert!(cleanup.contains("mount -o remount,ro /"));
-    }
-
-    #[test]
-    fn deploy_verification_rejects_each_untrusted_field() {
-        let valid = json!({
-            "remote": "/remote",
-            "remote_bytes": 42,
-            "checksum_algorithm": "sha256",
-            "checksum": "sum",
-            "published": true,
-            "rolled_back": false,
-        });
-        assert_eq!(
-            verify_agent_deploy_result(&valid, 42, "/remote", "sum").unwrap(),
-            42
-        );
-        for (field, value) in [
-            ("remote", json!("/wrong")),
-            ("remote_bytes", json!(41)),
-            ("checksum_algorithm", json!("md5")),
-            ("checksum", json!("wrong")),
-            ("published", json!(false)),
-            ("rolled_back", json!(true)),
-        ] {
-            let mut invalid = valid.clone();
-            invalid[field] = value;
-            assert!(verify_agent_deploy_result(&invalid, 42, "/remote", "sum").is_err());
-        }
-        let mut missing_size = valid;
-        missing_size["remote_bytes"] = Value::Null;
-        assert!(verify_agent_deploy_result(&missing_size, 42, "/remote", "sum").is_err());
     }
 }

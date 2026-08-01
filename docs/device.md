@@ -66,6 +66,16 @@ Device mutation is serialized, bounded, snapshotted, and compensated. A device
 timeout, refusal, route, or authentication failure ends after the first typed
 attempt and is reported as unavailable. Host-only work never contacts MiSTer.
 
+The runtime executable and its platform manifest are inseparable deployment
+state. No operator command, benchmark request, or device-agent endpoint may
+replace `mister-magik-fb` alone. Runtime changes use the coherent Dev bundle
+transaction, activate the regenerated manifest last, and retain rollback until
+Main has passed preflight and the launcher has proved ready on the real latch
+path. A Main suspend/resume acknowledgement confirms command acceptance only;
+it is never deployment health evidence. The host tool intentionally exposes no
+generic remote shell, file upload, directory upload, or binary deployment
+subcommand; fixed typed operations own all device mutation.
+
 The attended release gate qualifies whichever MagiK layout is currently active.
 Its display phase reboots through the fixed boundary matrix: presets 10, 13,
 14, 8, and 0, followed by custom `1920,1200,60`. Every case requires the ABI

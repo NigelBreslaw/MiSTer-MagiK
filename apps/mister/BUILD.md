@@ -37,3 +37,11 @@ platform assurance.
 `deliver` owns build scope, artifact qualification, transport, activation,
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `mister scene`; it is separate from building and deployment.
+
+The canonical `release-device` runtime includes dormant on-device profiling
+support and retains function symbols. Benchmarks activate that support only on
+the already-installed runtime. `scripts/agent build runtime-analysis` produces
+the `release-device-profile` offline artifact and is not callable from the
+benchmark workflow or deployable by it. Runtime delivery always
+publishes `mister-magik-fb` together with its regenerated
+`platform-v3.manifest`; no binary-only build or deployment command is exposed.

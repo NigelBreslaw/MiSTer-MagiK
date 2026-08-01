@@ -131,11 +131,6 @@ pub enum DeviceRequest {
     ProfileInstalledLaunchReturn {
         output_dir: PathBuf,
     },
-    ProfileDevelopmentLaunchReturn {
-        profile_binary: PathBuf,
-        expected_sha256: String,
-        output_dir: PathBuf,
-    },
     ProfileInstalledNavigationTransitions {
         output_dir: PathBuf,
     },
@@ -240,7 +235,6 @@ impl DeviceRequest {
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::ProfileInstalledLaunchReturn { .. } => "profile-installed-launch-return",
-            Self::ProfileDevelopmentLaunchReturn { .. } => "profile-development-launch-return",
             Self::ProfileInstalledNavigationTransitions { .. } => {
                 "profile-installed-navigation-transitions"
             }
@@ -277,6 +271,28 @@ impl DeviceRequest {
             }
             Self::EndLauncherAutomation { .. } => "end-launcher-automation",
         }
+    }
+
+    #[must_use]
+    pub const fn allowed_during_benchmark(&self) -> bool {
+        matches!(
+            self,
+            Self::Discover
+                | Self::ReadDevelopmentManifest
+                | Self::VerifyDevelopmentPlatform
+                | Self::ProfileInstalledScreensaver { .. }
+                | Self::ProfileInstalledParticles { .. }
+                | Self::ProfileInstalledParticleCapacity { .. }
+                | Self::ProfileInstalledParticleDemo40k { .. }
+                | Self::ProfileInstalledParticleStep { .. }
+                | Self::ProfileInstalledParticleCpu { .. }
+                | Self::ProfileInstalledSearch { .. }
+                | Self::VerifyInstalledSearchUi { .. }
+                | Self::ProfileInstalledCatalogLifecycle { .. }
+                | Self::ProfileInstalledLaunchReturn { .. }
+                | Self::ProfileInstalledNavigationTransitions { .. }
+                | Self::VerifyHealth(Layout::Development)
+        )
     }
 }
 
@@ -462,11 +478,6 @@ mod tests {
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return-profile".into(),
             },
-            DeviceRequest::ProfileDevelopmentLaunchReturn {
-                profile_binary: "profile-runtime".into(),
-                expected_sha256: "a".repeat(64),
-                output_dir: "launch-return-full-profile".into(),
-            },
             DeviceRequest::ProfileInstalledNavigationTransitions {
                 output_dir: "navigation-transition-profile".into(),
             },
@@ -530,7 +541,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 49);
+        assert_eq!(labels.len(), 48);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -550,12 +561,34 @@ mod tests {
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle",
                 "profile-installed-launch-return",
-                "profile-development-launch-return",
                 "profile-installed-navigation-transitions"
             ]
         );
         assert!(!labels.contains(&"run"));
         assert!(!labels.contains(&"shell"));
+    }
+
+    #[test]
+    fn benchmark_policy_allows_installed_profiles_but_rejects_delivery() {
+        assert!(DeviceRequest::Discover.allowed_during_benchmark());
+        assert!(
+            DeviceRequest::ProfileInstalledLaunchReturn {
+                output_dir: "launch-return".into(),
+            }
+            .allowed_during_benchmark()
+        );
+        assert!(DeviceRequest::VerifyHealth(Layout::Development).allowed_during_benchmark());
+        assert!(!DeviceRequest::VerifyHealth(Layout::Public).allowed_during_benchmark());
+        assert!(
+            !DeviceRequest::DeliverRuntimeTransaction {
+                local: "runtime".into(),
+                remote: "runtime-remote".into(),
+                manifest_local: "manifest".into(),
+                manifest_remote: "manifest-remote".into(),
+                expected_sha256: "a".repeat(64),
+            }
+            .allowed_during_benchmark()
+        );
     }
 
     #[test]
