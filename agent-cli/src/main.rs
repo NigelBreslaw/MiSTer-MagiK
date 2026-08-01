@@ -186,6 +186,15 @@ fn dispatch(
             println!("{}", receipt.display());
             return Ok(Outcome::Passed);
         }
+        Intent::AlphaVerify {
+            candidate,
+            receipt,
+            marker,
+        } => {
+            let marker = agent_cli::alpha::verify_acceptance(candidate, receipt, marker)?;
+            println!("{}", marker.display());
+            return Ok(Outcome::Passed);
+        }
         Intent::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }

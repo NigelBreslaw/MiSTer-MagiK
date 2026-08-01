@@ -345,6 +345,14 @@ pub enum AlphaCommand {
         #[arg(long)]
         output: PathBuf,
     },
+    Verify {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        receipt: PathBuf,
+        #[arg(long)]
+        marker: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -429,6 +437,18 @@ impl Cli {
             Some(Command::Alpha {
                 command: AlphaCommand::Accept { candidate, output },
             }) => Intent::AlphaAccept { candidate, output },
+            Some(Command::Alpha {
+                command:
+                    AlphaCommand::Verify {
+                        candidate,
+                        receipt,
+                        marker,
+                    },
+            }) => Intent::AlphaVerify {
+                candidate,
+                receipt,
+                marker,
+            },
             Some(Command::Release {
                 command: ReleaseCommand::Qualify,
             }) => Intent::ReleaseQualify,
@@ -716,6 +736,30 @@ mod tests {
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
+    }
+
+    #[test]
+    fn alpha_verify_has_a_closed_candidate_receipt_and_marker_interface() {
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "alpha",
+                "verify",
+                "--candidate",
+                "/tmp/candidate",
+                "--receipt",
+                "/tmp/evidence/alpha-acceptance.json",
+                "--marker",
+                "/tmp/marker.json",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::AlphaVerify {
+                candidate: "/tmp/candidate".into(),
+                receipt: "/tmp/evidence/alpha-acceptance.json".into(),
+                marker: "/tmp/marker.json".into(),
+            }
+        );
     }
 
     #[test]

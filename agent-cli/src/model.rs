@@ -144,6 +144,11 @@ pub enum Intent {
         candidate: PathBuf,
         output: PathBuf,
     },
+    AlphaVerify {
+        candidate: PathBuf,
+        receipt: PathBuf,
+        marker: PathBuf,
+    },
     ReleaseQualify,
     Build {
         intent: crate::build::BuildCommand,
@@ -198,7 +203,8 @@ impl Intent {
             Self::Verify { .. }
             | Self::PrePush { .. }
             | Self::CiHostAssurance { .. }
-            | Self::CaptureUsbVideo { .. } => Risk::LocalWrite,
+            | Self::CaptureUsbVideo { .. }
+            | Self::AlphaVerify { .. } => Risk::LocalWrite,
             Self::ReleaseQualify | Self::DatabaseRotate | Self::ClearLatchDiagnostics => {
                 Risk::Destructive
             }
