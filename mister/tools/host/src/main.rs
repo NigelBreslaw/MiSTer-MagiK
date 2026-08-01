@@ -635,6 +635,15 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::RestoreAlphaHostMode { original_main } => {
                 restore_alpha_host_mode(&config, original_main.clone())?
             }
+            DeviceRequest::EnsureInstalledAlphaLauncher {
+                expected_build_version,
+                expected_source_revision,
+            } => launcher_automation::ensure_installed_alpha_launcher(
+                &config,
+                expected_build_version,
+                expected_source_revision,
+            )
+            .map_err(device_failure)?,
             DeviceRequest::InspectPublicCatalog => {
                 let session = connect(10).map_err(device_failure)?;
                 let inspect = exec(

@@ -178,6 +178,10 @@ fn reuse_installed_catalog_start(
 ) -> AgentResult<Value> {
     let started_at_unix_ms = unix_millis();
     let deadline_unix_ms = started_at_unix_ms.saturating_add(8 * 60 * 1_000);
+    device.execute(DeviceRequest::EnsureInstalledAlphaLauncher {
+        expected_build_version: candidate.version.clone(),
+        expected_source_revision: candidate.magik_revision.clone(),
+    })?;
     let mut first = true;
     loop {
         let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
