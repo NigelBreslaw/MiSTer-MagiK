@@ -115,9 +115,12 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    static ARCHIVE_ID: AtomicU64 = AtomicU64::new(0);
 
     enum Entry<'a> {
         File(&'a str, &'a [u8]),
@@ -129,8 +132,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let id = ARCHIVE_ID.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "agent-cli-archive-{}-{nonce}.zip",
+            "agent-cli-archive-{}-{nonce}-{id}.zip",
             std::process::id()
         ));
         let mut archive = ZipWriter::new(File::create(&path).unwrap());
