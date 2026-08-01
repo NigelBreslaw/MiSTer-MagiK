@@ -86,6 +86,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: release-metadata
     timeout-minutes: 120
+    outputs:
+      candidate-tag: ${{ steps.package.outputs.candidate_tag }}
 
     steps:
       - name: Checkout app repo
@@ -276,6 +278,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y sqlite3 unzip zip
 
       - name: Package distribution zip
+        id: package
         env:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
           RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
@@ -322,11 +325,18 @@ jobs:
             --build-number "$RELEASE_BUILD_NUMBER" \
             --name "mister-magik-$RELEASE_VERSION" \
             --release-assets-dir dist/release-assets
+          downloader_tag="$RELEASE_TAG"
+          if [ "$RELEASE_CHANNEL" = alpha ]; then
+            archive_sha256="$(jq -r .archive_sha256 dist/release-assets/release-assets.json)"
+            [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
+            downloader_tag="alpha-candidate-v${RELEASE_VERSION}-${archive_sha256:0:12}"
+          fi
+          echo "candidate_tag=$downloader_tag" >> "$GITHUB_OUTPUT"
           python3 scripts/release/databases/generate-downloader-db.py \
             --receipt dist/release-assets/release-assets.json \
             --output dist/release-assets \
             --channel "$RELEASE_CHANNEL" \
-            --tag "$RELEASE_TAG" \
+            --tag "$downloader_tag" \
             --timestamp "${{ needs.release-metadata.outputs.timestamp }}"
           if [ "$RELEASE_CHANNEL" = release ]; then
             python3 scripts/release/databases/generate-downloader-db.py \
@@ -347,6 +357,7 @@ jobs:
           RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
           RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
           RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
+          CANDIDATE_TAG: ${{ steps.package.outputs.candidate_tag }}
         run: |
           python3 - <<'PY'
           import json, os, zipfile
@@ -359,7 +370,11 @@ jobs:
           tag = os.environ["RELEASE_TAG"]
           channel = os.environ["RELEASE_CHANNEL"]
           assert receipt["version"] == version == f"0.2.{build}"
-          expected_tag = channel if channel in {"alpha", "beta"} else f"v{version}"
+          expected_tag = (
+              os.environ["CANDIDATE_TAG"]
+              if channel == "alpha"
+              else channel if channel == "beta" else f"v{version}"
+          )
           assert tag == expected_tag
           assert receipt["archive"] == f"mister-magik-{version}.zip"
           with zipfile.ZipFile(root / receipt["archive"]) as package:
@@ -391,8 +406,56 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  publish-alpha-candidate:
+    name: Publish immutable alpha candidate
+    if: github.event.inputs.release_channel == 'alpha'
+    runs-on: ubuntu-24.04
+    needs:
+      - release-metadata
+      - distribution
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download immutable candidate
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.release-metadata.outputs.artifact-name }}
+          path: candidate
+
+      - name: Publish or verify content-addressed prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CANDIDATE_TAG: ${{ needs.distribution.outputs.candidate-tag }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_TAG" =~ ^alpha-candidate-v0\.2\.[0-9]+-[0-9a-f]{12}$ ]]
+          (cd candidate && sha256sum --check SHA256SUMS)
+          if gh release view "$CANDIDATE_TAG" --repo "$GH_REPO" >/dev/null 2>&1; then
+            test "$(gh release view "$CANDIDATE_TAG" --repo "$GH_REPO" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
+            mkdir existing
+            gh release download "$CANDIDATE_TAG" --repo "$GH_REPO" --dir existing
+            (cd existing && sha256sum --check SHA256SUMS)
+            diff -u candidate/SHA256SUMS existing/SHA256SUMS
+            while IFS= read -r path; do
+              cmp "candidate/$path" "existing/$path"
+            done < <(awk '{print $2}' candidate/SHA256SUMS)
+          else
+            mapfile -t assets < <(find candidate -type f -print | sort)
+            gh release create "$CANDIDATE_TAG" "${assets[@]}" \
+              --repo "$GH_REPO" \
+              --target "$GITHUB_SHA" \
+              --title "MiSTer MagiK $RELEASE_VERSION Alpha Candidate" \
+              --notes "Immutable alpha candidate awaiting automated MiSTer hardware acceptance." \
+              --prerelease
+          fi
+
   publish:
     name: Publish ${{ github.event.inputs.release_channel }} release
+    if: github.event.inputs.release_channel != 'alpha'
     runs-on: ubuntu-24.04
     concurrency:
       group: mister-magik-downloader-feed

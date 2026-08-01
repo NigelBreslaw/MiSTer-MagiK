@@ -234,6 +234,8 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
         "scripts/agent ci game-databases verify",
         "contents: write",
         "gh release create",
+        "alpha-candidate-v${RELEASE_VERSION}-${archive_sha256:0:12}",
+        "Publish immutable alpha candidate",
         "initialize_feed_branch()",
         "cancel-in-progress: false",
     ] {
