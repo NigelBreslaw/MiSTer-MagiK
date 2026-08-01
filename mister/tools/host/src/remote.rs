@@ -130,7 +130,7 @@ pub(crate) fn create_dir_command(path: &str) -> String {
 
 pub(crate) fn acknowledged_main_command(command: &str) -> String {
     format!(
-        "if [ -p /dev/MiSTer_cmd ] && [ -p /dev/MiSTer_cmd_reply ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then exec 8>/tmp/mister-magik/command-operation.lock; flock -w 5 8 || {{ echo 'Main command lock timed out' >&2; exit 16; }}; exec 9<>/dev/MiSTer_cmd_reply; while IFS= read -r -t 0.01 stale <&9; do :; done; heartbeat=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); missed=0; printf '%s\\n' {} > /dev/MiSTer_cmd; while ! IFS= read -r -t 5 reply <&9; do if ! pidof MiSTer_MagiKDev >/dev/null 2>&1 && ! pidof MiSTer_MagiK >/dev/null 2>&1; then echo 'Main command channel closed' >&2; exit 15; fi; next=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); if [ -z \"$next\" ] || [ \"$next\" = \"$heartbeat\" ]; then missed=$((missed + 1)); else heartbeat=$next; missed=0; fi; if [ \"$missed\" -ge 2 ]; then echo 'Main heartbeat stopped' >&2; exit 14; fi; done; case \"$reply\" in ok|ok\\ *) printf '%s\\n' \"$reply\" ;; *) printf '%s\\n' \"$reply\" >&2; exit 13 ;; esac; else echo 'MiSTer command channel unavailable' >&2; exit 12; fi",
+        "if [ -p /dev/MiSTer_cmd ] && [ -p /dev/MiSTer_cmd_reply ] && {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }}; then exec 8>/tmp/mister-magik/command-operation.lock; flock -w 5 8 || {{ echo 'Main command lock timed out' >&2; exit 16; }}; exec 9<>/dev/MiSTer_cmd_reply; while IFS= read -r -t 0.01 stale <&9; do :; done; heartbeat=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); missed=0; waits=0; printf '%s\\n' {} > /dev/MiSTer_cmd; while ! IFS= read -r -t 5 reply <&9; do waits=$((waits + 1)); if [ \"$waits\" -ge 4 ]; then echo 'Main command acknowledgement timed out' >&2; exit 17; fi; if ! pidof MiSTer_MagiKDev >/dev/null 2>&1 && ! pidof MiSTer_MagiK >/dev/null 2>&1; then echo 'Main command channel closed' >&2; exit 15; fi; next=$(sed -n 's/.*\"ts_boot_ms\":\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/main-status.json); if [ -z \"$next\" ] || [ \"$next\" = \"$heartbeat\" ]; then missed=$((missed + 1)); else heartbeat=$next; missed=0; fi; if [ \"$missed\" -ge 2 ]; then echo 'Main heartbeat stopped' >&2; exit 14; fi; done; case \"$reply\" in ok|ok\\ *) printf '%s\\n' \"$reply\" ;; *) printf '%s\\n' \"$reply\" >&2; exit 13 ;; esac; else echo 'MiSTer command channel unavailable' >&2; exit 12; fi",
         shell_quote(command)
     )
 }
@@ -425,6 +425,9 @@ mod tests {
         assert!(command.contains("flock -w 5 8"));
         assert!(command.contains("Main command lock timed out"));
         assert!(command.contains("exit 16"));
+        assert!(command.contains("waits=$((waits + 1))"));
+        assert!(command.contains("Main command acknowledgement timed out"));
+        assert!(command.contains("exit 17"));
         assert!(command.contains("MiSTer_cmd_reply"));
         assert!(command.contains("exec 9<>/dev/MiSTer_cmd_reply"));
         assert!(command.contains("read -r -t 0.01 stale"));

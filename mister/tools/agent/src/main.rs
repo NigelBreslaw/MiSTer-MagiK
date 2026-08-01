@@ -3509,6 +3509,26 @@ mod linux {
             .map_err(|err| format!("command_write_failed: {err}"))
     }
 
+    const MAIN_COMMAND_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+    const MAIN_COMMAND_ACK_TIMEOUT: Duration = Duration::from_secs(20);
+
+    fn acquire_main_command_lock(file: &File) -> Result<(), String> {
+        let started = Instant::now();
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Ok(());
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::WouldBlock {
+                return Err(format!("command_lock_failed: {error}"));
+            }
+            if started.elapsed() >= MAIN_COMMAND_LOCK_TIMEOUT {
+                return Err("command_lock_timed_out".to_string());
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn send_main_command_acknowledged(command: &str, generation: u64) -> Result<String, String> {
         let command_lock = OpenOptions::new()
             .create(true)
@@ -3516,12 +3536,7 @@ mod linux {
             .write(true)
             .open("/tmp/mister-magik/command-operation.lock")
             .map_err(|err| format!("command_lock_unavailable: {err}"))?;
-        if unsafe { libc::flock(command_lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(format!(
-                "command_lock_failed: {}",
-                io::Error::last_os_error()
-            ));
-        }
+        acquire_main_command_lock(&command_lock)?;
         let mut reply = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
@@ -3535,6 +3550,7 @@ mod linux {
             .and_then(Value::as_u64)
             .unwrap_or(0);
         let mut heartbeat_seen = Instant::now();
+        let acknowledgement_started = Instant::now();
         write_main_command_nonblocking(command)?;
         loop {
             let mut chunk = [0u8; 128];
@@ -3552,6 +3568,9 @@ mod linux {
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
                 Err(err) => return Err(format!("reply_read_failed: {err}")),
+            }
+            if acknowledgement_started.elapsed() >= MAIN_COMMAND_ACK_TIMEOUT {
+                return Err("command_acknowledgement_timed_out".to_string());
             }
             let status = read_json_value("/tmp/mister-magik/main-status.json");
             if main_generation(&status).is_some_and(|current| current != generation) {
