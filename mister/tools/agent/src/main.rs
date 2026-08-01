@@ -3808,6 +3808,7 @@ mod linux {
     }
 
     fn magik_acknowledged_action(action: &str, args: &Value) -> Result<Value, String> {
+        let request_monotonic_us = monotonic_us_now();
         let operation_id = args
             .get("operation_id")
             .and_then(Value::as_str)
@@ -3855,6 +3856,8 @@ mod linux {
                 "before_generation": before_generation,
                 "after_generation": before_generation,
                 "elapsed_ms": started.elapsed().as_millis() as u64,
+                "request_monotonic_us": request_monotonic_us,
+                "acknowledged_monotonic_us": monotonic_us_now(),
                 "terminal_reason": "already-satisfied",
                 "main_status": ready,
             });
@@ -3883,6 +3886,7 @@ mod linux {
                     before_generation,
                     target,
                     started,
+                    request_monotonic_us,
                     cache,
                 );
             }
@@ -3900,6 +3904,7 @@ mod linux {
             return Err(error);
         }
         let final_status = read_json_value("/tmp/mister-magik/main-status.json");
+        let acknowledged_monotonic_us = monotonic_us_now();
         let result = json!({
             "operation_id": operation_id,
             "action": action,
@@ -3907,6 +3912,8 @@ mod linux {
             "before_generation": before_generation,
             "after_generation": main_generation(&final_status),
             "elapsed_ms": started.elapsed().as_millis() as u64,
+            "request_monotonic_us": request_monotonic_us,
+            "acknowledged_monotonic_us": acknowledged_monotonic_us,
             "terminal_reason": "acknowledged",
             "main_status": final_status,
         });
@@ -3938,6 +3945,7 @@ mod linux {
         before_generation: u64,
         target: &str,
         started: Instant,
+        request_monotonic_us: u64,
         cache: &Mutex<HashMap<String, Value>>,
     ) -> Result<Value, String> {
         let command = format!("mister_magik_launch {target}");
@@ -3953,7 +3961,7 @@ mod linux {
             return Err(error);
         }
         let final_status = read_json_value("/tmp/mister-magik/main-status.json");
-        let result = json!({"operation_id":operation_id,"action":"launch","command":command,"before_generation":before_generation,"after_generation":main_generation(&final_status),"elapsed_ms":started.elapsed().as_millis() as u64,"terminal_reason":"acknowledged","main_status":final_status});
+        let result = json!({"operation_id":operation_id,"action":"launch","command":command,"before_generation":before_generation,"after_generation":main_generation(&final_status),"elapsed_ms":started.elapsed().as_millis() as u64,"request_monotonic_us":request_monotonic_us,"acknowledged_monotonic_us":monotonic_us_now(),"terminal_reason":"acknowledged","main_status":final_status});
         let mut results = cache.lock().map_err(|_| "operation cache poisoned")?;
         if results.len() >= 128 {
             results.clear();
@@ -4480,6 +4488,22 @@ mod linux {
             .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
             .map(|secs| (secs * 1000.0) as u64)
             .unwrap_or(0)
+    }
+
+    fn monotonic_us_now() -> u64 {
+        let mut ts = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        // SAFETY: `ts` is a valid writable timespec and CLOCK_MONOTONIC is a
+        // read-only process-independent device clock.
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) } != 0 {
+            return 0;
+        }
+        u64::try_from(ts.tv_sec)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000)
+            .saturating_add(u64::try_from(ts.tv_nsec).unwrap_or(0) / 1_000)
     }
 }
 

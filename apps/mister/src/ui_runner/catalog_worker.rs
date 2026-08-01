@@ -1781,10 +1781,14 @@ fn navigation_projection_stamp(
 }
 
 pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::fmt::Display) {
-    let elapsed_ms = start.elapsed().as_millis();
+    let elapsed_us = start.elapsed().as_micros();
+    let elapsed_ms = elapsed_us / 1_000;
     let detail = detail.to_string();
-    boot_analytics::event(name, format!("since_run_ui_ms={elapsed_ms} {detail}"));
-    crate::ui_logln!("startup_timing\t{name}\t{}ms\t{detail}", elapsed_ms);
+    boot_analytics::event(
+        name,
+        format!("since_run_ui_us={elapsed_us} since_run_ui_ms={elapsed_ms} {detail}"),
+    );
+    crate::ui_logln!("startup_timing\t{name}\t{elapsed_us}us\t{detail}");
 }
 
 #[cfg(test)]

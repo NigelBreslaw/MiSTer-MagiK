@@ -74,6 +74,7 @@ launcher_status_types! {
         catalog_systems: usize,
         catalog_refresh_done: bool,
         catalog_worker_enabled: bool,
+        selected_game_has_preview: bool,
         catalog_scan_visible: bool,
         catalog_scan_percent: i32,
         catalog_background_scan_visible: bool,
@@ -81,6 +82,7 @@ launcher_status_types! {
         confirm_selected: i32,
         arcade_selected: usize,
         arcade_visual_index: f32,
+        arcade_scroll_y: i32,
         arcade_drawer_open: bool,
         arcade_drawer_selected: usize,
         arcade_drawer_requested_hash: u64,
@@ -99,6 +101,10 @@ launcher_status_types! {
         input_enabled: bool,
         reveal_ms: u64,
         input_enabled_ms: u64,
+        process_start_monotonic_us: u64,
+        exact_context_monotonic_us: u64,
+        preview_ready_monotonic_us: u64,
+        first_correct_present_monotonic_us: u64,
         frame_budget: FrameBudgetStatus,
     }
     strings {
@@ -157,6 +163,9 @@ launcher_status_types! {
         last_raw_event,
         startup_mode,
         startup_reveal_state,
+        return_source,
+        return_phase,
+        return_fallback_reason,
     }
 }
 
@@ -756,9 +765,14 @@ fn write_launcher_status_json_tail(
     }
     field!("arcade_selected", status.arcade_selected);
     field!(
+        "selected_game_has_preview",
+        status.selected_game_has_preview
+    );
+    field!(
         "arcade_visual_index",
         (status.arcade_visual_index * 1000.0).round() / 1000.0
     );
+    field!("arcade_scroll_y", status.arcade_scroll_y);
     field!("arcade_drawer_open", status.arcade_drawer_open);
     field!("arcade_drawer_level", status.arcade_drawer_level);
     field!("arcade_drawer_selected", status.arcade_drawer_selected);
@@ -775,6 +789,25 @@ fn write_launcher_status_json_tail(
     field!("arcade_search_query", status.arcade_search_query);
     field!("arcade_search_results", status.arcade_search_results);
     field!("preview_cache_state", status.preview_cache_state);
+    field!("return_source", status.return_source);
+    field!("return_phase", status.return_phase);
+    field!("return_fallback_reason", status.return_fallback_reason);
+    field!(
+        "process_start_monotonic_us",
+        status.process_start_monotonic_us
+    );
+    field!(
+        "exact_context_monotonic_us",
+        status.exact_context_monotonic_us
+    );
+    field!(
+        "preview_ready_monotonic_us",
+        status.preview_ready_monotonic_us
+    );
+    field!(
+        "first_correct_present_monotonic_us",
+        status.first_correct_present_monotonic_us
+    );
     field!(
         "preview_transition_effect",
         status.preview_transition_effect
@@ -1608,6 +1641,7 @@ mod tests {
                 catalog_refresh_done: false,
                 catalog_refresh_policy: "off",
                 catalog_worker_enabled: false,
+                selected_game_has_preview: true,
                 screensaver_profile_state: "active",
                 catalog_scan_visible: false,
                 catalog_scan_message: "Scanning for games",
@@ -1623,6 +1657,7 @@ mod tests {
                 confirm_right_label: "Full rebuild",
                 arcade_selected: 3,
                 arcade_visual_index: 3.25,
+                arcade_scroll_y: 72,
                 arcade_drawer_open: true,
                 arcade_drawer_level: "Decades",
                 arcade_drawer_selected: 0,
@@ -1656,10 +1691,17 @@ mod tests {
                 last_input_ms_ago: 100,
                 startup_mode: "warm_catalog",
                 startup_reveal_state: "input_enabled",
+                return_source: "return-capsule",
+                return_phase: "complete",
+                return_fallback_reason: "",
                 revealed: true,
                 input_enabled: true,
                 reveal_ms: 37,
                 input_enabled_ms: 37,
+                process_start_monotonic_us: 1_000,
+                exact_context_monotonic_us: 1_100,
+                preview_ready_monotonic_us: 1_200,
+                first_correct_present_monotonic_us: 1_300,
                 frame_budget: FrameBudgetStatus {
                     budget_us: 16_667,
                     frames_total: 42,
@@ -2081,6 +2123,7 @@ mod tests {
             catalog_refresh_done: true,
             catalog_refresh_policy: "default",
             catalog_worker_enabled: true,
+            selected_game_has_preview: false,
             screensaver_profile_state,
             catalog_scan_visible: true,
             catalog_scan_message: "Updating Library",
@@ -2096,6 +2139,7 @@ mod tests {
             confirm_right_label: "",
             arcade_selected: 0,
             arcade_visual_index: 0.0,
+            arcade_scroll_y: 0,
             arcade_drawer_open: false,
             arcade_drawer_level: "Filters",
             arcade_drawer_selected: 0,
@@ -2129,10 +2173,17 @@ mod tests {
             last_input_ms_ago: 0,
             startup_mode: "cold_no_catalog",
             startup_reveal_state: "catalog_progress_visible",
+            return_source: "none",
+            return_phase: "none",
+            return_fallback_reason: "",
             revealed: false,
             input_enabled: false,
             reveal_ms: 0,
             input_enabled_ms: 0,
+            process_start_monotonic_us: 0,
+            exact_context_monotonic_us: 0,
+            preview_ready_monotonic_us: 0,
+            first_correct_present_monotonic_us: 0,
             frame_budget: FrameBudgetStatus::default(),
         }
     }

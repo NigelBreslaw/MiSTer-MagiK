@@ -642,15 +642,10 @@ impl LauncherLifecycle {
             StartupRevealState::HoldBlack if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
-            StartupRevealState::WaitRelevantPreview => {
-                let preview_elapsed = self
-                    .return_preview_wait_started_at
-                    .map(|started_at| now.saturating_duration_since(started_at))
-                    .unwrap_or_default();
-                if preview_elapsed >= Self::RETURN_PREVIEW_HOLD_TIMEOUT {
-                    self.mark_reveal_ready("preview_state=timeout", out);
-                }
-            }
+            // A return never reveals a stale or missing expected preview. The
+            // single five-second return watchdog above owns the diagnosed Home
+            // fallback when exact preview readiness cannot be reached.
+            StartupRevealState::WaitRelevantPreview => {}
             _ => {}
         }
     }
@@ -1557,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn return_start_reveals_if_preview_never_becomes_ready() {
+    fn return_start_holds_black_if_preview_never_becomes_ready() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1601,14 +1596,14 @@ mod tests {
         );
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::RevealLauncher
+            StartupRevealState::WaitRelevantPreview
         );
-        assert!(lifecycle.startup_can_present_frame());
-        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
+        assert!(!lifecycle.startup_can_present_frame());
+        assert!(!effect_names(&effects).contains(&"launcher_reveal_ready"));
     }
 
     #[test]
-    fn return_preview_timeout_starts_after_context_restoration() {
+    fn return_preview_short_timeout_never_reveals_stale_content() {
         let now = Instant::now();
         let restored_at = now + Duration::from_secs(1);
         let mut lifecycle = lifecycle();
@@ -1647,7 +1642,7 @@ mod tests {
         );
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::RevealLauncher
+            StartupRevealState::WaitRelevantPreview
         );
     }
 

@@ -1807,6 +1807,7 @@ pub(super) fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
+    launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
 ) {
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
@@ -1888,12 +1889,13 @@ pub(super) fn run_launcher_loop(
         && env_start_screen.is_none()
         && launcher_bench_scenario.is_none()
         && lock_screen.is_none();
-    let mut pending_launch_return_state =
-        launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed);
-    if !launch_return_restore_allowed || pending_launch_return_state.is_none() {
+    let mut launch_return_session = LaunchReturnSession::new(
+        launcher::take_launch_return_state().filter(|_| launch_return_restore_allowed),
+    );
+    if !launch_return_restore_allowed || !launch_return_session.requested() {
         return_catalog_capsule::remove_return_catalog_capsule();
     }
-    let startup_return_requested = pending_launch_return_state.is_some();
+    let startup_return_requested = launch_return_session.requested();
     let mut launch_return_restored = false;
     let arcade_catalog_required_at_start = start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade)
@@ -2069,7 +2071,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_arcade_scroll_offset = 0i64;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
-    let cpu = cpu_profile::start();
+    let mut cpu = launch_return_cpu_profile.or_else(cpu_profile::start);
     let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
@@ -2090,13 +2092,41 @@ pub(super) fn run_launcher_loop(
         present_timing.delay_us(),
         pacer.fresh_hit_max_age_us()
     );
-    let return_capsule_catalog = pending_launch_return_state.as_ref().and_then(|state| {
-        let collection_id = state.collection_id()?;
-        return_catalog_capsule::take_return_catalog_capsule(
+    let return_capsule_target = launch_return_session.state().and_then(|state| {
+        Some((
+            state.collection_id()?.to_string(),
+            state.game_path().to_string(),
+        ))
+    });
+    let return_capsule_catalog = return_capsule_target.and_then(|(collection_id, game_path)| {
+        let capsule_started = Instant::now();
+        match return_catalog_capsule::take_return_catalog_capsule(
             Path::new(&arcade_root),
-            collection_id,
-            state.game_path(),
-        )
+            &collection_id,
+            &game_path,
+        ) {
+            Ok(catalog) => {
+                print_startup_event(
+                    start,
+                    "return_catalog_capsule_decoded",
+                    format!("elapsed_us={}", capsule_started.elapsed().as_micros()),
+                );
+                Some(catalog)
+            }
+            Err(error) => {
+                print_startup_event(
+                    start,
+                    "return_catalog_capsule_rejected",
+                    format!(
+                        "elapsed_us={} error={}",
+                        capsule_started.elapsed().as_micros(),
+                        error.replace('\t', " ")
+                    ),
+                );
+                launch_return_session.note_capsule_failure(error);
+                None
+            }
+        }
     });
     let mut catalog = return_capsule_catalog.unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
     let mut catalog_ready = !catalog.is_empty();
@@ -2280,7 +2310,7 @@ pub(super) fn run_launcher_loop(
     nav.sync_launcher_taxonomy(&catalog);
     if !capsule_seed_ready {
         let _ = request_pending_launch_return_shard(
-            pending_launch_return_state.as_ref(),
+            launch_return_session.state(),
             &catalog,
             &mut nav,
             &mut scheduler,
@@ -2289,10 +2319,8 @@ pub(super) fn run_launcher_loop(
         );
     }
     if capsule_seed_ready {
-        launch_return_restored = pending_launch_return_state
-            .as_ref()
-            .cloned()
-            .is_some_and(|state| launcher::apply_launch_return_state(&mut nav, &catalog, state));
+        launch_return_restored =
+            launch_return_session.apply(&mut nav, &catalog, CatalogSource::ReturnCapsule);
         if !launch_return_restored {
             crate::ui_errln!("return catalog capsule could not restore saved destination");
             catalog = empty_arcade_catalog(&arcade_root);
@@ -2310,8 +2338,16 @@ pub(super) fn run_launcher_loop(
             .current_menu_items()
             .get(nav.selected)
             .is_some_and(|item| item.id == arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-    if catalog_ready && root_arcade_focused && preview_route.allows_preview_work() {
-        let games = catalog.system_game_view(arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+    let restored_arcade_collection = (nav.screen == Screen::Arcade)
+        .then(|| nav.active_collection_scope_id(&catalog))
+        .filter(|collection_id| !collection_id.is_empty());
+    if catalog_ready
+        && (root_arcade_focused || restored_arcade_collection.is_some())
+        && preview_route.allows_preview_work()
+    {
+        let collection_id =
+            restored_arcade_collection.unwrap_or(arcade_catalog::MENU_ARCADE_SYSTEM_ID);
+        let games = catalog.system_game_view(collection_id);
         if !games.is_empty() {
             let selected = nav.arcade.selected.min(games.len() - 1);
             let _ = prewarm_arcade_selected_preview(games, selected, &mut preview);
@@ -2438,6 +2474,7 @@ pub(super) fn run_launcher_loop(
             &nav,
             &catalog,
             &preview,
+            &mut launch_return_session,
             start,
         );
     }
@@ -2561,7 +2598,17 @@ pub(super) fn run_launcher_loop(
             frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
         let mut prepare_trace = LauncherPrepareTrace::default();
         prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
+        let return_was_waiting = lifecycle.startup_status().mode == StartupMode::ReturnFromGame
+            && !lifecycle.startup_can_present_frame();
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
+        if return_was_waiting
+            && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
+            && !launch_return_session.context_matches(&nav, &catalog)
+        {
+            launch_return_session.fallback_to_home(&mut nav);
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
+        }
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
         scheduler.record_loading_frame(loop_start);
@@ -2815,7 +2862,7 @@ pub(super) fn run_launcher_loop(
                         &mut catalog_version,
                         &mut return_capsule_active,
                         &mut catalog_generation,
-                        &mut pending_launch_return_state,
+                        &mut launch_return_session,
                         &mut preview,
                         &mut media_session,
                         &mut scheduler,
@@ -2873,7 +2920,7 @@ pub(super) fn run_launcher_loop(
                     &mut catalog_version,
                     &mut return_capsule_active,
                     &mut catalog_generation,
-                    &mut pending_launch_return_state,
+                    &mut launch_return_session,
                     &mut preview,
                     &mut media_session,
                     &mut scheduler,
@@ -2910,7 +2957,7 @@ pub(super) fn run_launcher_loop(
                     &mut catalog_version,
                     &mut return_capsule_active,
                     &mut catalog_generation,
-                    &mut pending_launch_return_state,
+                    &mut launch_return_session,
                     &mut preview,
                     &mut media_session,
                     &mut scheduler,
@@ -3202,7 +3249,7 @@ pub(super) fn run_launcher_loop(
                 &mut catalog_version,
                 &mut return_capsule_active,
                 &mut catalog_generation,
-                &mut pending_launch_return_state,
+                &mut launch_return_session,
                 &mut preview,
                 &mut media_session,
                 &mut scheduler,
@@ -3851,7 +3898,7 @@ pub(super) fn run_launcher_loop(
                                     &mut catalog_version,
                                     &mut return_capsule_active,
                                     &mut catalog_generation,
-                                    &mut pending_launch_return_state,
+                                    &mut launch_return_session,
                                     &mut preview,
                                     &mut media_session,
                                     &mut scheduler,
@@ -3914,7 +3961,7 @@ pub(super) fn run_launcher_loop(
                                     &mut catalog_version,
                                     &mut return_capsule_active,
                                     &mut catalog_generation,
-                                    &mut pending_launch_return_state,
+                                    &mut launch_return_session,
                                     &mut preview,
                                     &mut media_session,
                                     &mut scheduler,
@@ -3938,7 +3985,7 @@ pub(super) fn run_launcher_loop(
                                     &mut catalog_version,
                                     &mut return_capsule_active,
                                     &mut catalog_generation,
-                                    &mut pending_launch_return_state,
+                                    &mut launch_return_session,
                                     &mut preview,
                                     &mut media_session,
                                     &mut scheduler,
@@ -4475,6 +4522,7 @@ pub(super) fn run_launcher_loop(
             &nav,
             &catalog,
             &preview,
+            &mut launch_return_session,
         );
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         sync_startup_visibility(&app, &lifecycle);
@@ -4812,6 +4860,7 @@ pub(super) fn run_launcher_loop(
                 display_session.last_reassert_ok(),
                 display_session.last_reassert_error(),
                 startup_status,
+                &launch_return_session,
             );
             std::thread::sleep(launcher_idle_sleep_duration(&pacer));
             continue;
@@ -5648,6 +5697,20 @@ pub(super) fn run_launcher_loop(
                 catalog_publication_test.hold_first_launcher_frame(start);
             }
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
+            if lifecycle.startup_status().mode == StartupMode::ReturnFromGame
+                && lifecycle.startup_status().revealed
+            {
+                launch_return_session.mark_correct_present(&nav, &catalog);
+                if launch_return_session.first_correct_present_monotonic_us != 0
+                    && cpu_profile::launch_return_profile_requested()
+                    && let Err(error) = cpu_profile::finish(cpu.take())
+                {
+                    crate::ui_errln!("launch-return cpu profile failed: {error}");
+                }
+                if catalog_session.refresh_done() {
+                    launch_return_session.release_if_complete();
+                }
+            }
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         }
         arcade_entry_latency.record_presented_frame(
@@ -5782,6 +5845,7 @@ pub(super) fn run_launcher_loop(
                 display_session.last_reassert_ok(),
                 display_session.last_reassert_error(),
                 lifecycle.startup_status(),
+                &launch_return_session,
             );
             // Latch mode posts the hidden buffer first, then spends the slack before
             // vblank on normal per-frame accounting. The final wait is only the
@@ -5921,6 +5985,7 @@ pub(super) fn run_launcher_loop(
                 display_session.last_reassert_ok(),
                 display_session.last_reassert_error(),
                 lifecycle.startup_status(),
+                &launch_return_session,
                 latch_trace_flush_deferred,
             );
         }
@@ -5940,7 +6005,7 @@ pub(super) fn run_launcher_loop(
         "done: {frames} frames in {elapsed:.1}s = {:.1} fps avg",
         frames as f64 / elapsed
     );
-    if let Err(e) = cpu_profile::finish(cpu) {
+    if let Err(e) = cpu_profile::finish(cpu.take()) {
         crate::ui_errln!("{e}");
     }
 }
@@ -6091,7 +6156,7 @@ fn process_catalog_worker_message(
     catalog_version: &mut usize,
     return_capsule_active: &mut bool,
     catalog_generation: &mut CatalogGenerationState,
-    pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
+    launch_return_session: &mut LaunchReturnSession,
     preview: &mut PreviewState,
     media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
@@ -6150,7 +6215,7 @@ fn process_catalog_worker_message(
         catalog_version,
         return_capsule_active,
         catalog_generation,
-        pending_launch_return_state,
+        launch_return_session,
         preview,
         media_session,
         scheduler,
@@ -6242,20 +6307,174 @@ fn return_to_launcher_env_is_set(value: Option<&str>) -> bool {
     matches!(value, Some("1") | Some("true") | Some("yes"))
 }
 
+#[derive(Debug)]
+struct LaunchReturnSession {
+    state: Option<launcher::LaunchReturnState>,
+    source: &'static str,
+    phase: &'static str,
+    fallback_reason: String,
+    exact_context_monotonic_us: u64,
+    preview_ready_monotonic_us: u64,
+    first_correct_present_monotonic_us: u64,
+    authoritative_catalog_ready: bool,
+    complete: bool,
+}
+
+impl LaunchReturnSession {
+    fn new(state: Option<launcher::LaunchReturnState>) -> Self {
+        Self {
+            phase: if state.is_some() { "requested" } else { "none" },
+            state,
+            source: "none",
+            fallback_reason: String::new(),
+            exact_context_monotonic_us: 0,
+            preview_ready_monotonic_us: 0,
+            first_correct_present_monotonic_us: 0,
+            authoritative_catalog_ready: false,
+            complete: false,
+        }
+    }
+
+    fn requested(&self) -> bool {
+        self.state.is_some()
+    }
+
+    fn state(&self) -> Option<&launcher::LaunchReturnState> {
+        self.state.as_ref()
+    }
+
+    fn note_capsule_failure(&mut self, error: String) {
+        self.source = "capsule-rejected";
+        self.phase = "hydrate-system-shard";
+        self.fallback_reason = error;
+    }
+
+    fn apply(
+        &mut self,
+        nav: &mut LauncherNav,
+        catalog: &ArcadeCatalog,
+        source: CatalogSource,
+    ) -> bool {
+        let Some(state) = self.state.as_ref().cloned() else {
+            return false;
+        };
+        if !launcher::apply_launch_return_state(nav, catalog, state) {
+            return false;
+        }
+        self.source = source.label();
+        self.phase = "context-restored";
+        if self.exact_context_monotonic_us == 0 {
+            self.exact_context_monotonic_us = monotonic_clock_us().unwrap_or(0);
+        }
+        if matches!(
+            source,
+            CatalogSource::NavigationProjection
+                | CatalogSource::FullSqlite
+                | CatalogSource::FreshBuild
+        ) {
+            self.authoritative_catalog_ready = true;
+            self.phase = "authoritative-context-restored";
+        }
+        true
+    }
+
+    fn reapply(&mut self, nav: &mut LauncherNav, catalog: &ArcadeCatalog) -> bool {
+        let Some(state) = self.state.as_ref().cloned() else {
+            return false;
+        };
+        if !launcher::apply_launch_return_state(nav, catalog, state) {
+            return false;
+        }
+        self.phase = if self.authoritative_catalog_ready {
+            "authoritative-context-restored"
+        } else {
+            "context-restored"
+        };
+        true
+    }
+
+    fn mark_system_shard_authoritative(&mut self) {
+        self.authoritative_catalog_ready = true;
+        self.source = "system-shard";
+        self.phase = "authoritative-context-restored";
+    }
+
+    fn context_matches(&self, nav: &LauncherNav, catalog: &ArcadeCatalog) -> bool {
+        let Some(state) = self.state.as_ref() else {
+            return false;
+        };
+        if nav.screen != Screen::Arcade
+            || state
+                .collection_id()
+                .is_some_and(|collection_id| nav.active_collection_id() != Some(collection_id))
+            || nav.arcade.selected != state.game_index()
+            || !nav.arcade.is_settled_at_selected()
+        {
+            return false;
+        }
+        nav.active_arcade_game_at(
+            catalog,
+            nav.active_collection_scope_id(catalog),
+            nav.arcade.selected,
+        )
+        .is_some_and(|game| game.mra_path.as_ref() == state.game_path())
+    }
+
+    fn mark_preview_ready(&mut self) {
+        if self.preview_ready_monotonic_us == 0 {
+            self.preview_ready_monotonic_us = monotonic_clock_us().unwrap_or(0);
+        }
+        self.phase = "preview-ready";
+    }
+
+    fn mark_correct_present(&mut self, nav: &LauncherNav, catalog: &ArcadeCatalog) {
+        if !self.context_matches(nav, catalog) || self.preview_ready_monotonic_us == 0 {
+            return;
+        }
+        if self.first_correct_present_monotonic_us == 0 {
+            self.first_correct_present_monotonic_us = monotonic_clock_us().unwrap_or(0);
+        }
+        self.phase = if self.authoritative_catalog_ready {
+            "complete"
+        } else {
+            "presented-awaiting-authoritative-catalog"
+        };
+        if self.authoritative_catalog_ready {
+            self.complete = true;
+        }
+    }
+
+    fn release_if_complete(&mut self) {
+        if self.complete {
+            self.state = None;
+        }
+    }
+
+    fn fallback_to_home(&mut self, nav: &mut LauncherNav) {
+        nav.go_root();
+        self.phase = "fallback-home";
+        if self.fallback_reason.is_empty() {
+            self.fallback_reason = "return restoration exceeded five-second deadline".to_string();
+        }
+        self.state = None;
+    }
+}
+
 fn apply_pending_launch_return_state(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
-    pending: &mut Option<launcher::LaunchReturnState>,
+    pending: &mut LaunchReturnSession,
+    source: CatalogSource,
 ) -> bool {
-    let Some(state) = pending.as_ref().cloned() else {
-        return false;
-    };
-    if launcher::apply_launch_return_state(nav, catalog, state) {
-        pending.take();
-        true
-    } else {
-        false
-    }
+    pending.apply(nav, catalog, source)
+}
+
+fn reapply_pending_launch_return_state(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    pending: &mut LaunchReturnSession,
+) -> bool {
+    pending.reapply(nav, catalog)
 }
 
 fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
@@ -6272,9 +6491,11 @@ fn emit_return_context_restored(
     nav: &LauncherNav,
     catalog: &ArcadeCatalog,
     preview: &PreviewState,
+    return_session: &mut LaunchReturnSession,
     restored_at: Instant,
 ) {
-    if lifecycle.startup_status().mode != StartupMode::ReturnFromGame {
+    let startup_status = lifecycle.startup_status();
+    if startup_status.mode != StartupMode::ReturnFromGame || startup_status.input_enabled {
         return;
     }
     let system_id = active_system(catalog, nav)
@@ -6297,7 +6518,8 @@ fn emit_return_context_restored(
         },
         effects,
     );
-    if return_preview_ready(nav, catalog, preview) {
+    if return_preview_ready(return_session, nav, catalog, preview) {
+        return_session.mark_preview_ready();
         lifecycle.handle(
             LauncherLifecycleInput::StartupReturnPreviewReady {
                 preview_state: preview.trace_cache_state(),
@@ -6313,14 +6535,16 @@ fn maybe_mark_return_preview_ready(
     nav: &LauncherNav,
     catalog: &ArcadeCatalog,
     preview: &PreviewState,
+    return_session: &mut LaunchReturnSession,
 ) {
     let status = lifecycle.startup_status();
     if status.mode != StartupMode::ReturnFromGame
         || status.state != StartupRevealState::WaitRelevantPreview
-        || !return_preview_ready(nav, catalog, preview)
+        || !return_preview_ready(return_session, nav, catalog, preview)
     {
         return;
     }
+    return_session.mark_preview_ready();
     lifecycle.handle(
         LauncherLifecycleInput::StartupReturnPreviewReady {
             preview_state: preview.trace_cache_state(),
@@ -6330,12 +6554,13 @@ fn maybe_mark_return_preview_ready(
 }
 
 fn return_preview_ready(
+    return_session: &LaunchReturnSession,
     nav: &LauncherNav,
     catalog: &ArcadeCatalog,
     preview: &PreviewState,
 ) -> bool {
-    if nav.screen != Screen::Arcade {
-        return true;
+    if !return_session.context_matches(nav, catalog) {
+        return false;
     }
     if !selected_arcade_game_has_preview(nav, catalog) {
         return true;
@@ -6440,7 +6665,7 @@ fn apply_catalog_session_effects(
     catalog_version: &mut usize,
     return_capsule_active: &mut bool,
     catalog_generation: &mut CatalogGenerationState,
-    pending_launch_return_state: &mut Option<launcher::LaunchReturnState>,
+    launch_return_session: &mut LaunchReturnSession,
     preview: &mut PreviewState,
     media_session: &mut ScreenshotMediaUpdateSession,
     scheduler: &mut LauncherScheduler,
@@ -6496,7 +6721,7 @@ fn apply_catalog_session_effects(
                 }
                 apply_forced_arcade_selected(nav, catalog);
                 let return_restored =
-                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                    apply_pending_launch_return_state(nav, catalog, launch_return_session, source);
                 if return_restored {
                     emit_return_context_restored(
                         lifecycle,
@@ -6504,6 +6729,7 @@ fn apply_catalog_session_effects(
                         nav,
                         catalog,
                         preview,
+                        launch_return_session,
                         now,
                     );
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
@@ -6537,6 +6763,7 @@ fn apply_catalog_session_effects(
                 nav.catalog_hydration_reset();
                 nav.set_arcade_exit_locked(false);
                 nav.sync_launcher_taxonomy(catalog);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 preview.clear(&bridge);
                 *full_bridge_dirty = true;
@@ -6558,10 +6785,10 @@ fn apply_catalog_session_effects(
                                 timing.total_us
                             ),
                         );
-                        let return_restored = apply_pending_launch_return_state(
+                        let return_restored = reapply_pending_launch_return_state(
                             nav,
                             catalog,
-                            pending_launch_return_state,
+                            launch_return_session,
                         );
                         if return_restored {
                             emit_return_context_restored(
@@ -6570,6 +6797,7 @@ fn apply_catalog_session_effects(
                                 nav,
                                 catalog,
                                 preview,
+                                launch_return_session,
                                 now,
                             );
                             lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
@@ -6602,6 +6830,7 @@ fn apply_catalog_session_effects(
                 nav.catalog_build_started();
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogPlanReady {
@@ -6612,6 +6841,7 @@ fn apply_catalog_session_effects(
                 *catalog = nav.catalog_with_build_shells(catalog.clone());
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogSystemDiscovered { .. } => {}
@@ -6620,6 +6850,7 @@ fn apply_catalog_session_effects(
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogSystemPrepared {
@@ -6654,6 +6885,7 @@ fn apply_catalog_session_effects(
                 nav.catalog_system_hydration_finished(&system_id);
                 nav.catalog_system_ready(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogSystemFailed { system_id } => {
@@ -6662,6 +6894,7 @@ fn apply_catalog_session_effects(
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::PersistCatalogFailure {
@@ -6710,6 +6943,23 @@ fn apply_catalog_session_effects(
                 nav.catalog_build_finished(catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
+                let return_restored = apply_pending_launch_return_state(
+                    nav,
+                    catalog,
+                    launch_return_session,
+                    CatalogSource::FreshBuild,
+                );
+                if return_restored {
+                    emit_return_context_restored(
+                        lifecycle,
+                        lifecycle_effects,
+                        nav,
+                        catalog,
+                        preview,
+                        launch_return_session,
+                        now,
+                    );
+                }
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::Ui(intent) => {
@@ -6734,14 +6984,16 @@ fn apply_catalog_session_effects(
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 let return_restored =
-                    apply_pending_launch_return_state(nav, catalog, pending_launch_return_state);
+                    reapply_pending_launch_return_state(nav, catalog, launch_return_session);
                 if return_restored {
+                    launch_return_session.mark_system_shard_authoritative();
                     emit_return_context_restored(
                         lifecycle,
                         lifecycle_effects,
                         nav,
                         catalog,
                         preview,
+                        launch_return_session,
                         now,
                     );
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
@@ -6772,6 +7024,7 @@ fn apply_catalog_session_effects(
             CatalogSessionEffect::Lifecycle(input) => {
                 lifecycle.handle(input, lifecycle_effects);
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+                launch_return_session.release_if_complete();
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::StartCatalogWorker(worker) => {
@@ -7790,6 +8043,146 @@ mod tests {
             "home-highlight",
             now,
         ));
+    }
+
+    #[test]
+    fn return_session_reapplies_exact_context_until_authoritative_present() {
+        let catalog = arcade_catalog(
+            (0..3)
+                .map(|index| {
+                    arcade_game(format!("c64 game {index}"))
+                        .path(format!("/media/fat/_Arcade/c64-{index}.mra"))
+                        .preview(format!("c64-{index}.raw565"))
+                        .system_id("c64")
+                        .build()
+                })
+                .collect(),
+            vec![arcade_system("c64", 3)],
+        );
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&catalog, "c64"));
+        launched_nav
+            .arcade
+            .restore_position(2, 2 * launched_nav.arcade.row_height(), 3);
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &catalog,
+            "/media/fat/_Arcade/c64-2.mra",
+        )
+        .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+        let mut restored_nav = LauncherNav::new();
+
+        assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::ReturnCapsule));
+        assert!(session.context_matches(&restored_nav, &catalog));
+        session.mark_preview_ready();
+        session.mark_correct_present(&restored_nav, &catalog);
+        assert!(
+            session.requested(),
+            "capsule present is not authoritative hydration"
+        );
+
+        restored_nav.go_root();
+        assert!(!session.context_matches(&restored_nav, &catalog));
+        assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FullSqlite));
+        assert!(session.context_matches(&restored_nav, &catalog));
+        session.mark_correct_present(&restored_nav, &catalog);
+        assert!(
+            session.requested(),
+            "state is retained through catalog validation"
+        );
+        assert_eq!(session.phase, "complete");
+        restored_nav.go_root();
+        assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FullSqlite));
+        assert!(session.context_matches(&restored_nav, &catalog));
+        session.release_if_complete();
+        assert!(!session.requested());
+    }
+
+    #[test]
+    fn three_consecutive_return_sessions_restore_their_settled_row() {
+        let catalog = arcade_catalog(
+            (0..3)
+                .map(|index| {
+                    arcade_game(format!("arcade game {index}"))
+                        .path(format!("/media/fat/_Arcade/arcade-{index}.mra"))
+                        .system_id("arcade")
+                        .build()
+                })
+                .collect(),
+            vec![arcade_system("arcade", 3)],
+        );
+        for index in 0..3 {
+            let mut launched_nav = LauncherNav::new();
+            assert!(launched_nav.open_system(&catalog, "arcade"));
+            launched_nav.arcade.restore_position(
+                index,
+                index as i32 * launched_nav.arcade.row_height(),
+                3,
+            );
+            let path = format!("/media/fat/_Arcade/arcade-{index}.mra");
+            let state = launcher::capture_launch_return_state(&launched_nav, &catalog, &path)
+                .expect("return state");
+            let mut session = LaunchReturnSession::new(Some(state));
+            let mut restored_nav = LauncherNav::new();
+
+            assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FullSqlite));
+            assert!(session.context_matches(&restored_nav, &catalog));
+            assert_eq!(restored_nav.arcade.selected, index);
+            assert_eq!(
+                restored_nav.arcade.scroll_y,
+                index as i32 * restored_nav.arcade.row_height()
+            );
+        }
+    }
+
+    #[test]
+    fn return_session_timeout_explicitly_falls_back_to_root_home() {
+        let catalog = catalog_for_media_systems(&["c64"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&catalog, "c64"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &catalog,
+            "/media/fat/_Arcade/c64.mra",
+        )
+        .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+
+        session.note_capsule_failure("capsule checksum mismatch".to_string());
+        session.fallback_to_home(&mut launched_nav);
+
+        assert_eq!(launched_nav.screen, Screen::Home);
+        assert_eq!(
+            launched_nav.current_menu_id(),
+            crate::launcher_taxonomy::ROOT_MENU_ID
+        );
+        assert_eq!(session.phase, "fallback-home");
+        assert_eq!(session.fallback_reason, "capsule checksum mismatch");
+        assert!(!session.requested());
+    }
+
+    #[test]
+    fn rejected_capsule_restores_from_the_urgent_system_shard() {
+        let full_catalog = catalog_for_media_systems(&["c64"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&full_catalog, "c64"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &full_catalog,
+            "/media/fat/_Arcade/c64.mra",
+        )
+        .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+        session.note_capsule_failure("capsule generation mismatch".to_string());
+        let registry = arcade_catalog(Vec::new(), vec![arcade_system("c64", 1)]);
+        let mut restored_nav = LauncherNav::new();
+
+        assert!(!session.reapply(&mut restored_nav, &registry));
+        assert!(session.reapply(&mut restored_nav, &full_catalog));
+        session.mark_system_shard_authoritative();
+        assert!(session.context_matches(&restored_nav, &full_catalog));
+        assert_eq!(session.source, "system-shard");
     }
 
     #[test]

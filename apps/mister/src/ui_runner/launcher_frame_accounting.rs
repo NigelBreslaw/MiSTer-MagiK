@@ -1275,6 +1275,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
+        return_session: &LaunchReturnSession,
         #[cfg_attr(
             not(any(feature = "bench-tools", feature = "diagnostics")),
             allow(unused_variables)
@@ -1310,6 +1311,7 @@ impl LauncherFrameAccounting {
             last_route_reassert_ok,
             last_route_reassert_error,
             startup_status,
+            return_session,
         );
         self.record_finished_frame(
             &frame,
@@ -1352,6 +1354,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
+        return_session: &LaunchReturnSession,
     ) -> LauncherFrameFinishTraceTiming {
         let frame_finish_start = Instant::now();
         self.observe_automation_state(
@@ -1409,6 +1412,7 @@ impl LauncherFrameAccounting {
             last_route_reassert_ok,
             last_route_reassert_error,
             startup_status,
+            return_session,
             None,
         );
         let runtime_status_write_us = runtime_status_write_start
@@ -1532,6 +1536,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
+        return_session: &LaunchReturnSession,
     ) {
         self.idle_loops_since_status = self.idle_loops_since_status.saturating_add(1);
         let status_write_due = self.status_write_due();
@@ -1579,6 +1584,7 @@ impl LauncherFrameAccounting {
             last_route_reassert_ok,
             last_route_reassert_error,
             startup_status,
+            return_session,
             Some((self.idle_loops_since_status, last_frame_ms_ago)),
         );
     }
@@ -2360,6 +2366,7 @@ impl LauncherFrameAccounting {
         last_route_reassert_ok: bool,
         last_route_reassert_error: &str,
         startup_status: StartupRevealStatus,
+        return_session: &LaunchReturnSession,
         idle_status: Option<(u64, u64)>,
     ) {
         if !status_write_due {
@@ -2463,6 +2470,7 @@ impl LauncherFrameAccounting {
             catalog_refresh_done,
             catalog_refresh_policy: catalog_refresh_policy().label(),
             catalog_worker_enabled: catalog_refresh_policy().worker_enabled(),
+            selected_game_has_preview: selected_game.is_some_and(|game| game.has_preview),
             screensaver_profile_state,
             catalog_scan_visible,
             catalog_scan_message,
@@ -2478,6 +2486,7 @@ impl LauncherFrameAccounting {
             confirm_right_label,
             arcade_selected,
             arcade_visual_index,
+            arcade_scroll_y: nav.arcade.scroll_y,
             arcade_drawer_open: nav.arcade_filter.drawer_open,
             arcade_drawer_level: nav.arcade_filter.title(),
             arcade_drawer_selected: nav.arcade_filter.selected,
@@ -2530,10 +2539,17 @@ impl LauncherFrameAccounting {
             },
             startup_mode: startup_status.mode.label(),
             startup_reveal_state: startup_status.state.label(),
+            return_source: return_session.source,
+            return_phase: return_session.phase,
+            return_fallback_reason: &return_session.fallback_reason,
             revealed: startup_status.revealed,
             input_enabled: startup_status.input_enabled,
             reveal_ms: startup_status.reveal_ms,
             input_enabled_ms: startup_status.input_enabled_ms,
+            process_start_monotonic_us: crate::process_start_monotonic_us(),
+            exact_context_monotonic_us: return_session.exact_context_monotonic_us,
+            preview_ready_monotonic_us: return_session.preview_ready_monotonic_us,
+            first_correct_present_monotonic_us: return_session.first_correct_present_monotonic_us,
             frame_budget,
         });
         if screensaver_profile_state == "complete" && status_submitted {

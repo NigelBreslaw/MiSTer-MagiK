@@ -361,12 +361,12 @@ pub fn take_return_catalog_capsule(
     catalog_root: &Path,
     collection_id: &str,
     return_game_path: &str,
-) -> Option<ArcadeCatalog> {
+) -> Result<ArcadeCatalog, String> {
     let expected = match CapsuleBinding::current(catalog_root) {
         Ok(expected) => expected,
-        Err(_) => {
+        Err(error) => {
             remove_return_catalog_capsule();
-            return None;
+            return Err(format!("bind return capsule: {error}"));
         }
     };
     take_return_catalog_capsule_at(
@@ -375,7 +375,6 @@ pub fn take_return_catalog_capsule(
         collection_id,
         return_game_path,
     )
-    .ok()
 }
 
 fn take_return_catalog_capsule_at(

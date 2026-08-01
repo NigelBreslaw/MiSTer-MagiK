@@ -12,12 +12,14 @@ use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
 const NAVIGATION_TRANSITIONS_TRIGGER: &str = "navigation-transitions";
+const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BoundedProfileTrigger {
     Screensaver,
     NavigationTransitions,
+    LaunchReturn,
 }
 
 impl BoundedProfileTrigger {
@@ -25,6 +27,7 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => SCREENSAVER_TRIGGER,
             Self::NavigationTransitions => NAVIGATION_TRANSITIONS_TRIGGER,
+            Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
         }
     }
 
@@ -32,6 +35,7 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
+            Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
         }
     }
 }
@@ -93,6 +97,10 @@ pub fn navigation_transition_profile_requested() -> bool {
     bounded_profile_trigger() == Some(BoundedProfileTrigger::NavigationTransitions)
 }
 
+pub fn launch_return_profile_requested() -> bool {
+    bounded_profile_trigger() == Some(BoundedProfileTrigger::LaunchReturn)
+}
+
 fn bounded_profile_trigger_from_values(
     enabled: Option<&str>,
     trigger: Option<&str>,
@@ -103,6 +111,7 @@ fn bounded_profile_trigger_from_values(
     match trigger {
         Some(SCREENSAVER_TRIGGER) => Some(BoundedProfileTrigger::Screensaver),
         Some(NAVIGATION_TRANSITIONS_TRIGGER) => Some(BoundedProfileTrigger::NavigationTransitions),
+        Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         _ => None,
     }
 }
@@ -162,6 +171,12 @@ mod imp {
             return None;
         }
         start_enabled()
+    }
+
+    pub fn start_launch_return() -> Option<CpuProfiler> {
+        (bounded_profile_trigger() == Some(BoundedProfileTrigger::LaunchReturn))
+            .then(start_enabled)
+            .flatten()
     }
 
     fn start_enabled() -> Option<CpuProfiler> {
@@ -297,7 +312,13 @@ mod imp {
     impl ScreensaverProfiler {
         pub fn from_env() -> Self {
             let trigger = bounded_profile_trigger();
-            let state = if trigger.is_some() {
+            let state = if matches!(
+                trigger,
+                Some(
+                    BoundedProfileTrigger::Screensaver
+                        | BoundedProfileTrigger::NavigationTransitions
+                )
+            ) {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
                 State::Waiting
             } else {
@@ -415,7 +436,7 @@ mod imp {
 }
 
 #[cfg(feature = "profile")]
-pub use imp::{ScreensaverProfiler, finish, start};
+pub use imp::{CpuProfiler, ScreensaverProfiler, finish, start, start_launch_return};
 
 #[cfg(not(feature = "profile"))]
 mod stub {
@@ -432,6 +453,13 @@ mod stub {
                 "cpu_profile: MISTER_PPROF=1 ignored — rebuild with \
                  `scripts/agent build runtime-profile` (Cargo feature `profile`)"
             );
+        }
+        None
+    }
+
+    pub fn start_launch_return() -> Option<CpuProfiler> {
+        if bounded_profile_trigger() == Some(BoundedProfileTrigger::LaunchReturn) {
+            set_screensaver_profile_state(ScreensaverProfileState::Failed);
         }
         None
     }
@@ -461,7 +489,7 @@ mod stub {
 }
 
 #[cfg(not(feature = "profile"))]
-pub use stub::{ScreensaverProfiler, finish, start};
+pub use stub::{CpuProfiler, ScreensaverProfiler, finish, start, start_launch_return};
 
 #[cfg(test)]
 mod tests {
@@ -498,6 +526,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("navigation-transitions")),
             Some(BoundedProfileTrigger::NavigationTransitions)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("launch-return")),
+            Some(BoundedProfileTrigger::LaunchReturn)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),

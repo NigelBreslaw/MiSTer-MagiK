@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::build::{BuildRecipe, BuildSpec};
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::{BenchmarkScenario, Outcome};
@@ -78,7 +79,7 @@ fn require_clean_installed_commit(
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::LaunchReturn => {
-            execute_launch_return(&mut device, manifest, output_dir, reporter)
+            execute_launch_return(repository, &mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
@@ -88,18 +89,30 @@ fn require_clean_installed_commit(
 }
 
 fn execute_launch_return(
+    repository: &Path,
     device: &mut DeviceClient,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
+    let profile_build = BuildSpec::for_recipe(BuildRecipe::RuntimeProfile);
+    reporter.emit(
+        EventKind::Progress,
+        "profile-build",
+        "building the full-symbol launch-return profile runtime",
+        Some(20),
+    )?;
+    crate::build::execute(repository, &profile_build, reporter)?;
+    let receipt = profile_build.verify(repository)?;
     reporter.emit(
         EventKind::Progress,
         "profile",
         "running three installed Arcade launch-return cycles",
         Some(35),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledLaunchReturn {
+    let detail = device.execute(DeviceRequest::ProfileDevelopmentLaunchReturn {
+        profile_binary: repository.join(profile_build.artifact()),
+        expected_sha256: receipt.binary_sha256,
         output_dir: output_dir.clone(),
     })?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
@@ -121,7 +134,7 @@ fn execute_launch_return(
 
 fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-launch-return-benchmark-v1")
+        != Some("mister-magik-launch-return-benchmark-v2")
     {
         return Err("launch-return benchmark summary has the wrong schema".into());
     }
@@ -754,7 +767,7 @@ mod tests {
     fn launch_return_requires_three_fast_restored_cycles() {
         let cycle = json!({"restored": true, "black_interval_ms": 1_999});
         let passing = json!({
-            "schema": "mister-magik-launch-return-benchmark-v1",
+            "schema": "mister-magik-launch-return-benchmark-v2",
             "cycles": [cycle.clone(), cycle.clone(), cycle]
         });
         evaluate_launch_return_summary(&passing).unwrap();

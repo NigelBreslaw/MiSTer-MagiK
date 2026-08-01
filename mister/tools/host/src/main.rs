@@ -376,6 +376,19 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_launch_return(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileDevelopmentLaunchReturn {
+                profile_binary,
+                expected_sha256,
+                output_dir,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_development_launch_return(
+                    &config,
+                    profile_binary,
+                    expected_sha256,
+                    output_dir,
+                )?
+            }
             DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_navigation_transitions(&config, output_dir)
@@ -4133,6 +4146,179 @@ const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-stat
 const LAUNCH_RETURN_CYCLES: usize = 3;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
+const LAUNCH_RETURN_PROFILE_BACKUP_REMOTE: &str =
+    "/media/fat/mister-magik-dev/.mister-magik-fb.launch-return-canonical";
+const LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE: &str =
+    "/tmp/mister-magik/launch-return-profile-watchdog.pid";
+
+fn deploy_profile_runtime_binary(local: &Path, expected_sha256: &str) -> Result<()> {
+    let mut source = fs::File::open(local)?;
+    let size = source.metadata()?.len();
+    let reply = agent_stream_request_reader(
+        "deploy_magik_bin_stream",
+        json!({
+            "remote": "/media/fat/mister-magik-dev/mister-magik-fb",
+            "size": size,
+            "payload_size": size,
+            "checksum": expected_sha256,
+            "encoding": "raw",
+        }),
+        &mut source,
+        Duration::from_secs(120),
+    )?;
+    let result = reply.response.get("result").unwrap_or(&Value::Null);
+    verify_agent_deploy_result(
+        result,
+        size,
+        "/media/fat/mister-magik-dev/mister-magik-fb",
+        expected_sha256,
+    )?;
+    Ok(())
+}
+
+fn profile_development_launch_return(
+    config: &NativeDeviceConfig,
+    profile_binary: &Path,
+    expected_sha256: &str,
+    output_dir: &Path,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_sha256)?;
+    if file_sha256(profile_binary.to_path_buf()).map_err(device_failure)? != expected_sha256 {
+        return Err(DeviceFailure::ArtifactMismatch(
+            "launch-return profile binary does not match its build receipt".into(),
+        ));
+    }
+    fs::create_dir_all(output_dir).map_err(device_failure)?;
+    let canonical_local = output_dir.join("canonical-runtime.backup");
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    exec_checked(
+        &session,
+        "recover interrupted launch-return profile transaction",
+        &format!(
+            "set -eu; if test -f {backup}; then mv -f {backup} {runtime}; chmod 755 {runtime}; fi; if test -f {watchdog}; then pid=$(cat {watchdog} 2>/dev/null || true); test -z \"$pid\" || kill \"$pid\" 2>/dev/null || true; rm -f {watchdog}; fi",
+            backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
+            runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
+            watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
+        ),
+    )
+    .map_err(device_failure)?;
+    exec_checked(
+        &session,
+        "verify canonical development runtime before launch-return profile",
+        &installed_platform_verify_command(Layout::Development),
+    )
+    .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or_else(|| DeviceFailure::ArtifactMismatch("development manifest is missing".into()))?;
+    let canonical_sha256 = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("gui_sha256="))
+        .ok_or_else(|| DeviceFailure::ArtifactMismatch("manifest has no GUI identity".into()))?
+        .to_string();
+    require_delivery_sha256(&canonical_sha256)?;
+    get(
+        &session,
+        "/media/fat/mister-magik-dev/mister-magik-fb",
+        &canonical_local,
+    )
+    .map_err(device_failure)?;
+    if file_sha256(canonical_local.clone()).map_err(device_failure)? != canonical_sha256 {
+        return Err(DeviceFailure::ArtifactMismatch(
+            "downloaded canonical runtime does not match the development manifest".into(),
+        ));
+    }
+    exec_checked(
+        &session,
+        "snapshot canonical launch-return runtime",
+        &format!(
+            "set -eu; cp {runtime} {backup}; chmod 755 {backup}; sync",
+            runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
+            backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
+        ),
+    )
+    .map_err(device_failure)?;
+    drop(session);
+
+    let run_result = (|| -> Result<String> {
+        deploy_profile_runtime_binary(profile_binary, expected_sha256)?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "arm bounded launch-return profile restore watchdog",
+            &format!(
+                "set -eu; (sleep 180; if test -f {backup}; then mv -f {backup} {runtime}; chmod 755 {runtime}; sync; fi; rm -f {watchdog}) >/dev/null 2>&1 & echo $! > {watchdog}",
+                backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
+                runtime = sh("/media/fat/mister-magik-dev/mister-magik-fb"),
+                watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
+            ),
+        )?;
+        drop(session);
+        profile_installed_launch_return(config, output_dir)
+    })();
+
+    let restore_result = (|| -> Result<()> {
+        deploy_profile_runtime_binary(&canonical_local, &canonical_sha256)?;
+        let session = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &session,
+            "commit launch-return profile restoration",
+            &format!(
+                "set -eu; if test -f {watchdog}; then pid=$(cat {watchdog} 2>/dev/null || true); test -z \"$pid\" || kill \"$pid\" 2>/dev/null || true; fi; rm -f {watchdog} {backup}; sync",
+                backup = sh(LAUNCH_RETURN_PROFILE_BACKUP_REMOTE),
+                watchdog = sh(LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE),
+            ),
+        )?;
+        exec_checked(
+            &session,
+            "verify restored canonical development runtime",
+            &installed_platform_verify_command(Layout::Development),
+        )?;
+        let restored_manifest =
+            remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+                .ok_or("development manifest is missing after launch-return profile")?;
+        if restored_manifest != manifest {
+            return Err("development manifest changed during launch-return profile".into());
+        }
+        Ok(())
+    })();
+
+    let transaction_metadata = json!({
+        "schema": "mister-magik-launch-return-profile-transaction-v1",
+        "profile_sha256": expected_sha256,
+        "canonical_sha256": canonical_sha256,
+        "manifest_preserved": restore_result.is_ok(),
+        "canonical_restored": restore_result.is_ok(),
+    });
+    fs::write(
+        output_dir.join("profile-transaction.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&transaction_metadata).map_err(device_failure)?
+        ),
+    )
+    .map_err(device_failure)?;
+    if restore_result.is_ok() {
+        let _ = fs::remove_file(&canonical_local);
+    }
+
+    launch_return_profile_transaction_result(run_result, restore_result)
+}
+
+fn launch_return_profile_transaction_result(
+    run_result: Result<String>,
+    restore_result: Result<()>,
+) -> std::result::Result<String, DeviceFailure> {
+    match (run_result, restore_result) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(error), Ok(())) => Err(device_failure(error)),
+        (Ok(_), Err(error)) => Err(DeviceFailure::RecoveryRequired(format!(
+            "launch-return profile completed but canonical restoration failed: {error}"
+        ))),
+        (Err(run_error), Err(restore_error)) => Err(DeviceFailure::RecoveryRequired(format!(
+            "launch-return profile failed: {run_error}; canonical restoration failed: {restore_error}"
+        ))),
+    }
+}
 
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
@@ -4158,7 +4344,7 @@ fn profile_installed_launch_return(
                     ("MISTER_CATALOG_REFRESH".into(), "off".into()),
                     ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
                     ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-                    ("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into()),
+                    ("MISTER_ARCADE_SELECTED_INDEX".into(), "128".into()),
                     ("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED".into(), "1".into()),
                     (
                         "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE".into(),
@@ -4184,29 +4370,53 @@ fn profile_installed_launch_return(
 
         for cycle_index in 0..LAUNCH_RETURN_CYCLES {
             thread::sleep(Duration::from_secs(LAUNCH_RETURN_GAME_SETTLE_SECS));
+            let cycle_number = cycle_index + 1;
+            let remote_profile_dir = "/tmp/mister-magik/launch-return-profile";
+            let remote_svg = format!("{remote_profile_dir}/cycle-{cycle_number}.svg");
+            let remote_folded = format!("{remote_profile_dir}/cycle-{cycle_number}.folded");
+            let remote_frames = format!("{remote_profile_dir}/cycle-{cycle_number}-frames.tsv");
+            let mut return_env = vec![
+                ("MISTER_PPROF".into(), "1".into()),
+                ("MISTER_PPROF_TRIGGER".into(), "launch-return".into()),
+                ("MISTER_PPROF_HZ".into(), "999".into()),
+                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PROFILE".into(), "full".into()),
+                (
+                    "MISTER_BOOT_FRAME_PROFILE_FILE".into(),
+                    remote_frames.clone(),
+                ),
+                ("MISTER_BOOT_FRAME_PROFILE_FRAMES".into(), "240".into()),
+            ];
             if cycle_index + 1 < LAUNCH_RETURN_CYCLES {
-                put_bytes(
-                    &session,
-                    DEVELOPMENT_LAUNCHER_ENV_REMOTE,
-                    one_shot_launcher_env_text(
-                        &[
-                            (
-                                "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                                "wait:120,down,wait:12,a".into(),
-                            ),
-                            (
-                                "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                                "1".into(),
-                            ),
-                        ],
-                        DEVELOPMENT_LAUNCHER_ENV_REMOTE,
-                    )
-                    .as_bytes(),
-                )?;
+                return_env.extend([
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                        "wait:120,down,wait:12,a".into(),
+                    ),
+                    (
+                        "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                        "1".into(),
+                    ),
+                ]);
             }
+            exec_checked(
+                &session,
+                "prepare launch-return profile directory",
+                &format!("set -eu; mkdir -p {}", sh(remote_profile_dir)),
+            )?;
+            put_bytes(
+                &session,
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                one_shot_launcher_env_text(&return_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE).as_bytes(),
+            )?;
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-pre-launch-state.json")),
+                format!("{}\n", serde_json::to_string_pretty(&expected)?),
+            )?;
 
             let return_started = Instant::now();
-            request_magik_benchmark_action("return-to-launcher")?;
+            let return_action = request_magik_benchmark_action("return-to-launcher")?;
             let status =
                 wait_launch_return_ready(&session, previous_launcher_pid, Duration::from_secs(8))?;
             let black_interval_ms = return_started.elapsed().as_millis() as u64;
@@ -4231,26 +4441,187 @@ fn profile_installed_launch_return(
                 .get("preview_cache_state")
                 .and_then(Value::as_str)
                 .unwrap_or("missing");
+            let preview_expected = status
+                .get("selected_game_has_preview")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let preview_verified = preview_state == "exact" || !preview_expected;
+            let expected_collection = expected
+                .get("collection_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let selected_path = status
+                .get("selected_game_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let selected_collection = status
+                .get("active_collection_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let expected_scroll_y = expected
+                .get("scroll_y")
+                .and_then(Value::as_i64)
+                .unwrap_or(expected_index as i64 * 48);
+            let scroll_y = status
+                .get("arcade_scroll_y")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MIN);
+            let request_us = return_action
+                .get("request_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let acknowledge_us = return_action
+                .get("acknowledged_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let process_us = status
+                .get("process_start_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let context_us = status
+                .get("exact_context_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let preview_us = status
+                .get("preview_ready_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let present_us = status
+                .get("first_correct_present_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let monotonic_ordered = request_us > 0
+                && request_us <= acknowledge_us
+                && request_us <= process_us
+                && process_us <= context_us
+                && context_us <= preview_us
+                && preview_us <= present_us;
             let restored = status.get("return_screen").and_then(Value::as_str) == Some("arcade")
                 && selected == expected_index
                 && (visual_index - expected_index as f64).abs() < 0.01
-                && preview_state == "exact"
+                && scroll_y == expected_scroll_y
+                && selected_path == expected_path
+                && selected_collection == expected_collection
+                && preview_verified
+                && monotonic_ordered
                 && black_interval_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
+            let capture =
+                request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+            validate_visible_launcher_capture(&capture)?;
+            let capture_file = format!("cycle-{cycle_number}-rgb565.png");
+            let capture_metadata_file = format!("cycle-{cycle_number}-capture.json");
+            fs::write(output_dir.join(&capture_file), &capture.png)?;
+            fs::write(
+                output_dir.join(&capture_metadata_file),
+                format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+            )?;
+            for (remote, local) in [
+                (&remote_svg, format!("cycle-{cycle_number}-flamegraph.svg")),
+                (
+                    &remote_folded,
+                    format!("cycle-{cycle_number}-stacks.folded"),
+                ),
+                (&remote_frames, format!("cycle-{cycle_number}-frames.tsv")),
+            ] {
+                let artifact = remote_read(&session, remote)
+                    .filter(|text| !text.trim().is_empty())
+                    .ok_or_else(|| {
+                        format!("launch-return profile artifact is missing: {remote}")
+                    })?;
+                fs::write(output_dir.join(local), artifact)?;
+            }
+            for (remote, local) in [
+                (
+                    "/tmp/mister-magik/events.jsonl",
+                    format!("cycle-{cycle_number}-events.jsonl"),
+                ),
+                (
+                    "/tmp/mister-magik-slint.log",
+                    format!("cycle-{cycle_number}-launcher.log"),
+                ),
+            ] {
+                let artifact = remote_read(&session, remote)
+                    .filter(|text| !text.trim().is_empty())
+                    .ok_or_else(|| format!("launch-return log artifact is missing: {remote}"))?;
+                if remote.ends_with("events.jsonl") {
+                    let presented_home_after_request = artifact.lines().any(|line| {
+                        let Ok(event) = serde_json::from_str::<Value>(line) else {
+                            return false;
+                        };
+                        event.get("event").and_then(Value::as_str)
+                            == Some("launcher_first_frame_presented")
+                            && event
+                                .get("ts_boot_ms")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                                .saturating_mul(1_000)
+                                >= process_us
+                            && event
+                                .get("detail")
+                                .and_then(Value::as_str)
+                                .is_some_and(|detail| detail.contains("screen=home"))
+                    });
+                    if presented_home_after_request {
+                        return Err(format!(
+                            "launch-return cycle {cycle_number} presented Home before exact Arcade restoration"
+                        )
+                        .into());
+                    }
+                }
+                fs::write(output_dir.join(local), artifact)?;
+            }
             let cycle = json!({
-                "cycle": cycle_index + 1,
+                "cycle": cycle_number,
                 "expected_game_path": &expected_path,
                 "expected_game_index": expected_index,
                 "selected_game_index": selected,
                 "visual_index": visual_index,
+                "expected_scroll_y": expected_scroll_y,
+                "scroll_y": scroll_y,
+                "expected_collection_id": expected_collection,
+                "selected_collection_id": selected_collection,
+                "selected_game_path": selected_path,
                 "preview_cache_state": preview_state,
+                "preview_expected": preview_expected,
+                "preview_verified": preview_verified,
                 "black_interval_ms": black_interval_ms,
                 "return_screen": status.get("return_screen"),
                 "startup_mode": status.get("startup_mode"),
+                "return_source": status.get("return_source"),
+                "return_phase": status.get("return_phase"),
+                "request_monotonic_us": request_us,
+                "acknowledged_monotonic_us": acknowledge_us,
+                "process_start_monotonic_us": process_us,
+                "exact_context_monotonic_us": context_us,
+                "preview_ready_monotonic_us": preview_us,
+                "first_correct_present_monotonic_us": present_us,
+                "command_to_process_us": process_us.saturating_sub(request_us),
+                "process_to_context_us": context_us.saturating_sub(process_us),
+                "context_to_preview_us": preview_us.saturating_sub(context_us),
+                "preview_to_present_us": present_us.saturating_sub(preview_us),
+                "total_return_us": present_us.saturating_sub(request_us),
+                "capture_file": capture_file,
+                "capture_metadata_file": capture_metadata_file,
                 "restored": restored,
             });
             fs::write(
                 output_dir.join(format!("cycle-{}-status.json", cycle_index + 1)),
                 format!("{}\n", serde_json::to_string_pretty(&status)?),
+            )?;
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-timeline.json")),
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&json!({
+                        "schema": "mister-magik-launch-return-timeline-v1",
+                        "request_monotonic_us": request_us,
+                        "acknowledged_monotonic_us": acknowledge_us,
+                        "process_start_monotonic_us": process_us,
+                        "exact_context_monotonic_us": context_us,
+                        "preview_ready_monotonic_us": preview_us,
+                        "first_correct_present_monotonic_us": present_us,
+                    }))?
+                ),
             )?;
             cycles.push(cycle);
             if !restored {
@@ -4273,10 +4644,31 @@ fn profile_installed_launch_return(
             }
         }
 
+        let latency_values = |field: &str| {
+            let mut values = cycles
+                .iter()
+                .filter_map(|cycle| cycle.get(field).and_then(Value::as_u64))
+                .collect::<Vec<_>>();
+            values.sort_unstable();
+            json!({
+                "min_us": values.first().copied().unwrap_or(0),
+                "median_us": values.get(values.len() / 2).copied().unwrap_or(0),
+                "max_us": values.last().copied().unwrap_or(0),
+            })
+        };
         Ok(json!({
-            "schema": "mister-magik-launch-return-benchmark-v1",
+            "schema": "mister-magik-launch-return-benchmark-v2",
             "scenario": "launch-return",
+            "timing_class": "instrumented-full-symbol",
+            "cpu_profile_hz": 999,
             "cycles": cycles.clone(),
+            "latency": {
+                "command_to_process": latency_values("command_to_process_us"),
+                "process_to_context": latency_values("process_to_context_us"),
+                "context_to_preview": latency_values("context_to_preview_us"),
+                "preview_to_present": latency_values("preview_to_present_us"),
+                "total_return": latency_values("total_return_us"),
+            },
             "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
             "game_settle_secs": LAUNCH_RETURN_GAME_SETTLE_SECS,
         }))
@@ -4296,8 +4688,10 @@ fn profile_installed_launch_return(
         (Ok(summary), Ok(())) => summary,
         (Err(error), Ok(())) => {
             let failure = json!({
-                "schema": "mister-magik-launch-return-benchmark-v1",
+                "schema": "mister-magik-launch-return-benchmark-v2",
                 "scenario": "launch-return",
+                "timing_class": "instrumented-full-symbol",
+                "cpu_profile_hz": 999,
                 "cycles": cycles,
                 "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
                 "game_settle_secs": LAUNCH_RETURN_GAME_SETTLE_SECS,
@@ -4361,7 +4755,14 @@ fn wait_launch_return_ready(
             let return_startup =
                 status.get("startup_mode").and_then(Value::as_str) == Some("return_from_game");
             let input_enabled = status.get("input_enabled").and_then(Value::as_bool) == Some(true);
-            if new_process && return_startup && input_enabled {
+            let exact_return_complete = status.get("return_phase").and_then(Value::as_str)
+                == Some("complete")
+                && status
+                    .get("first_correct_present_monotonic_us")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0;
+            if new_process && return_startup && input_enabled && exact_return_complete {
                 return Ok(status);
             }
             last_status = status;
@@ -14112,6 +14513,39 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transaction_error(message: &str) -> Box<dyn std::error::Error> {
+        Box::new(io::Error::other(message.to_string()))
+    }
+
+    #[test]
+    fn launch_return_profile_transaction_requires_canonical_restore_on_every_exit_path() {
+        assert_eq!(
+            launch_return_profile_transaction_result(Ok("summary".into()), Ok(())).unwrap(),
+            "summary"
+        );
+        assert!(matches!(
+            launch_return_profile_transaction_result(
+                Err(transaction_error("profile failed")),
+                Ok(())
+            ),
+            Err(DeviceFailure::OperationFailed(_))
+        ));
+        assert!(matches!(
+            launch_return_profile_transaction_result(
+                Ok("summary".into()),
+                Err(transaction_error("restore failed"))
+            ),
+            Err(DeviceFailure::RecoveryRequired(_))
+        ));
+        assert!(matches!(
+            launch_return_profile_transaction_result(
+                Err(transaction_error("profile failed")),
+                Err(transaction_error("restore failed"))
+            ),
+            Err(DeviceFailure::RecoveryRequired(_))
+        ));
+    }
 
     #[test]
     fn native_device_config_retains_resolved_identity_and_forwards_agent_state() {

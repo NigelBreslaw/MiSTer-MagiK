@@ -69,6 +69,29 @@ use std::io::{Read, Write};
 #[cfg(feature = "diagnostics")]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+static PROCESS_START_MONOTONIC_US: OnceLock<u64> = OnceLock::new();
+
+fn device_monotonic_us() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid writable timespec and CLOCK_MONOTONIC has no
+    // externally visible side effects.
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) } != 0 {
+        return 0;
+    }
+    u64::try_from(ts.tv_sec)
+        .unwrap_or(0)
+        .saturating_mul(1_000_000)
+        .saturating_add(u64::try_from(ts.tv_nsec).unwrap_or(0) / 1_000)
+}
+
+pub(crate) fn process_start_monotonic_us() -> u64 {
+    *PROCESS_START_MONOTONIC_US.get_or_init(device_monotonic_us)
+}
 
 mod arcade_list_renderer;
 mod artifact_publish;
@@ -144,6 +167,8 @@ fn main() {
     // SAFETY: this is the first operation in main, before hooks, UI state, or
     // worker threads exist.
     unsafe { mister_magik_catalog::device_layout::initialize_process_env() };
+    let _ = process_start_monotonic_us();
+    let launch_return_cpu_profile = cpu_profile::start_launch_return();
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
     let build_identity = build_identity::BuildIdentity::current();
@@ -228,7 +253,7 @@ fn main() {
         }
     };
 
-    dispatch_fpga(&cmd, &args, &mut f);
+    dispatch_fpga(&cmd, &args, &mut f, launch_return_cpu_profile);
 }
 
 enum ProcessLockState {
@@ -404,11 +429,16 @@ fn run_catalog_v3_inspect() {
     }
 }
 
-fn dispatch_fpga(cmd: &str, args: &[String], f: &mut Fpga) {
+fn dispatch_fpga(
+    cmd: &str,
+    args: &[String],
+    f: &mut Fpga,
+    launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
+) {
     match cmd {
         "read" => read_mode(f),
         "early-black" => early_black_route(f),
-        "ui" => ui_runner::run_ui(f),
+        "ui" => ui_runner::run_ui(f, launch_return_cpu_profile),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
         #[cfg(mister_experiments)]

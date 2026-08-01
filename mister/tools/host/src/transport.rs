@@ -131,6 +131,11 @@ pub enum DeviceRequest {
     ProfileInstalledLaunchReturn {
         output_dir: PathBuf,
     },
+    ProfileDevelopmentLaunchReturn {
+        profile_binary: PathBuf,
+        expected_sha256: String,
+        output_dir: PathBuf,
+    },
     ProfileInstalledNavigationTransitions {
         output_dir: PathBuf,
     },
@@ -235,6 +240,7 @@ impl DeviceRequest {
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::ProfileInstalledLaunchReturn { .. } => "profile-installed-launch-return",
+            Self::ProfileDevelopmentLaunchReturn { .. } => "profile-development-launch-return",
             Self::ProfileInstalledNavigationTransitions { .. } => {
                 "profile-installed-navigation-transitions"
             }
@@ -456,6 +462,11 @@ mod tests {
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return-profile".into(),
             },
+            DeviceRequest::ProfileDevelopmentLaunchReturn {
+                profile_binary: "profile-runtime".into(),
+                expected_sha256: "a".repeat(64),
+                output_dir: "launch-return-full-profile".into(),
+            },
             DeviceRequest::ProfileInstalledNavigationTransitions {
                 output_dir: "navigation-transition-profile".into(),
             },
@@ -519,7 +530,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 48);
+        assert_eq!(labels.len(), 49);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -539,6 +550,7 @@ mod tests {
                 "profile-installed-search",
                 "profile-installed-catalog-lifecycle",
                 "profile-installed-launch-return",
+                "profile-development-launch-return",
                 "profile-installed-navigation-transitions"
             ]
         );

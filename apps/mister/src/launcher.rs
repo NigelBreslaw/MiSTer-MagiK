@@ -408,7 +408,17 @@ impl ArcadeNav {
         self.sync_visual_from_px();
     }
 
-    fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
+    pub fn row_height(&self) -> i32 {
+        self.row_height
+    }
+
+    pub fn is_settled_at_selected(&self) -> bool {
+        self.scroll_y == self.selected as i32 * self.row_height
+            && (self.visual_index - self.selected as f32).abs() < 0.001
+            && !self.is_scroll_active()
+    }
+
+    pub fn restore_position(&mut self, selected: usize, scroll_y: i32, count: usize) {
         if count == 0 {
             self.reset();
             return;
@@ -3697,6 +3707,8 @@ pub struct LaunchReturnState {
     menu_path: Vec<String>,
     game_path: String,
     game_index: usize,
+    #[serde(default)]
+    scroll_y: Option<i32>,
     filter_kind: Option<String>,
     filter_value: Option<String>,
 }
@@ -3708,6 +3720,14 @@ impl LaunchReturnState {
 
     pub fn game_path(&self) -> &str {
         &self.game_path
+    }
+
+    pub fn game_index(&self) -> usize {
+        self.game_index
+    }
+
+    pub fn scroll_y(&self) -> Option<i32> {
+        self.scroll_y
     }
 }
 
@@ -3757,6 +3777,7 @@ pub fn capture_launch_return_state(
         menu_path: nav.menu_path.clone(),
         game_path: game_path.to_string(),
         game_index,
+        scroll_y: Some(nav.arcade.scroll_y),
         filter_kind: Some(filter_kind),
         filter_value,
     })
@@ -3861,11 +3882,12 @@ pub fn apply_launch_return_state(
     nav.arcade_filter.active = filter;
     nav.arcade_filter.drawer_open = false;
     nav.arcade_filter.level = ArcadeFilterLevel::Top;
-    nav.arcade.restore_position(
-        game_index,
-        game_index as i32 * ARCADE_ROW_HEIGHT,
-        game_count,
-    );
+    let settled_scroll_y = state
+        .scroll_y
+        .filter(|_| game_index == state.game_index)
+        .unwrap_or(game_index as i32 * nav.arcade.row_height());
+    nav.arcade
+        .restore_position(game_index, settled_scroll_y, game_count);
     true
 }
 
@@ -5691,6 +5713,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
+            scroll_y: None,
             filter_kind: Some("decade".to_string()),
             filter_value: Some("1980".to_string()),
         };
@@ -5981,6 +6004,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
+            scroll_y: None,
             filter_kind: Some("search".to_string()),
             filter_value: Some("battle".to_string()),
         };
@@ -6012,6 +6036,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/battle-1981.mra".to_string(),
             game_index: 0,
+            scroll_y: None,
             filter_kind: Some("search".to_string()),
             filter_value: Some("battle".to_string()),
         };
@@ -7417,6 +7442,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/missing.mra".into(),
             game_index: 99,
+            scroll_y: None,
             filter_kind: Some("all".into()),
             filter_value: None,
         };
@@ -7444,6 +7470,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
+            scroll_y: None,
             filter_kind: Some("all".into()),
             filter_value: None,
         };
@@ -7471,6 +7498,7 @@ mod tests {
             menu_path: Vec::new(),
             game_path: "/media/fat/_Arcade/arcade-2.mra".into(),
             game_index: 2,
+            scroll_y: None,
             filter_kind: Some("all".into()),
             filter_value: None,
         };
