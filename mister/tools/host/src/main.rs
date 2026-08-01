@@ -4206,6 +4206,10 @@ const LAUNCH_RETURN_CYCLES: usize = 3;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 2_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 
+fn legacy_launcher_restart_cleanup_command() -> &'static str {
+    "set -eu; now=$(cut -d. -f1 /proc/uptime); ticks=$(getconf CLK_TCK 2>/dev/null || echo 100); killed=0; for proc in /proc/[0-9]*; do pid=${proc##*/}; test \"$pid\" != \"$$\" || continue; target=$(readlink \"$proc/fd/8\" 2>/dev/null || true); test \"$target\" = /tmp/mister-magik/command-operation.lock || continue; command=$(tr '\\000' ' ' < \"$proc/cmdline\" 2>/dev/null || true); case \"$command\" in *mister_magik_restart_launcher*) ;; *) continue ;; esac; start=$(awk '{print $22}' \"$proc/stat\" 2>/dev/null || echo 0); age=$((now - start / ticks)); test \"$age\" -ge 30 || continue; kill \"$pid\"; killed=$((killed + 1)); done; test \"$killed\" -eq 0 || sleep 1; printf 'legacy_launcher_restart_cleanup_tsv\\tkilled=%s\\n' \"$killed\""
+}
+
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -4215,6 +4219,11 @@ fn profile_installed_launch_return(
     let _signal_guard = ScreensaverProfileSignalGuard::install();
     let mut cycles = Vec::new();
     let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "launch-return legacy restart cleanup",
+            legacy_launcher_restart_cleanup_command(),
+        )?;
         exec_checked(
             &session,
             "launch-return benchmark preflight cleanup",
@@ -17299,6 +17308,16 @@ H: Handlers=event3 js0"#
         assert!(latch_health.contains("delivery_health_failure_tsv"));
         assert!(latch_health.contains("health_check=latch-readiness"));
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
+    }
+
+    #[test]
+    fn legacy_launcher_restart_cleanup_is_narrow_and_age_bounded() {
+        let command = legacy_launcher_restart_cleanup_command();
+        assert!(command.contains("$proc/fd/8"));
+        assert!(command.contains("/tmp/mister-magik/command-operation.lock"));
+        assert!(command.contains("mister_magik_restart_launcher"));
+        assert!(command.contains("-ge 30"));
+        assert!(command.contains("kill \"$pid\""));
     }
 
     #[test]
