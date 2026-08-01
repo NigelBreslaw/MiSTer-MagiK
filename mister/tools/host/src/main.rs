@@ -4883,20 +4883,27 @@ fn restore_installed_launch_return(endpoint: &AgentEndpoint, session: &Session) 
         "launch-return benchmark profile cleanup",
         &format!("rm -rf {}", sh(LAUNCH_RETURN_PROFILE_REMOTE_DIR)),
     )?;
-    request_magik_benchmark_action(endpoint, "return-to-launcher").map_err(|error| {
-        format!(
-            "launch-return cleanup could not return through Main; launcher restart skipped: {error}"
-        )
-    })?;
-    launcher_restart(
-        session,
-        &LauncherRestartOptions {
-            clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-            timeout_secs: 45,
-            ..LauncherRestartOptions::default()
-        },
-    )
+    let main_status = remote_read(session, MAIN_STATUS_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or(Value::Null);
+    if launch_return_cleanup_needs_active_restart(&main_status) {
+        return launcher_restart(
+            session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        );
+    }
+    request_magik_benchmark_action(endpoint, "return-to-launcher")
+        .map_err(|error| format!("launch-return cleanup could not return through Main: {error}"))?;
+    wait_launcher_ready(session, Instant::now(), Duration::from_secs(45)).map(|_| ())
+}
+
+fn launch_return_cleanup_needs_active_restart(main_status: &Value) -> bool {
+    main_status.get("launcher_state").and_then(Value::as_str) == Some("LauncherActive")
 }
 
 fn catalog_lifecycle_prepare_command() -> String {
@@ -14571,6 +14578,18 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_return_cleanup_does_not_restart_main_during_game_handoff() {
+        assert!(launch_return_cleanup_needs_active_restart(&json!({
+            "launcher_state": "LauncherActive"
+        })));
+        for state in ["Unconfigured", "HandoffToGame", "EnteringLauncher"] {
+            assert!(!launch_return_cleanup_needs_active_restart(&json!({
+                "launcher_state": state
+            })));
+        }
+    }
 
     #[test]
     fn native_device_config_retains_resolved_identity_and_forwards_agent_state() {
