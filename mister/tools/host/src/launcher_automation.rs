@@ -834,4 +834,94 @@ mod tests {
         };
         assert!(validate_returned_status(&status, &previous_identity).is_err());
     }
+
+    #[test]
+    fn automation_identity_and_snapshot_boundaries_are_strict() {
+        assert!(validate_nonce(&"a".repeat(32)).is_ok());
+        assert!(validate_nonce(&"F".repeat(128)).is_ok());
+        for invalid in ["short".to_string(), "g".repeat(32), "a".repeat(129)] {
+            assert!(validate_nonce(&invalid).is_err());
+        }
+
+        let mut snapshot = json!({
+            "state_revision": 1,
+            "action_sequence": 2,
+            "presented_state_revision": 3,
+            "presented_action_sequence": 4,
+            "presented_latch_sequence": 5,
+            "semantic": {},
+        });
+        validate_snapshot(&snapshot).unwrap();
+        require_presented_action(&snapshot, 4).unwrap();
+        assert!(require_presented_action(&snapshot, 5).is_err());
+        assert!(require_presented_action(&snapshot, 0).is_err());
+        for field in [
+            "state_revision",
+            "action_sequence",
+            "presented_state_revision",
+            "presented_action_sequence",
+            "presented_latch_sequence",
+        ] {
+            let saved = snapshot[field].take();
+            assert!(
+                validate_snapshot(&snapshot).is_err(),
+                "accepted missing {field}"
+            );
+            snapshot[field] = saved;
+        }
+        snapshot["semantic"] = Value::Null;
+        assert!(validate_snapshot(&snapshot).is_err());
+    }
+
+    #[test]
+    fn checkpoint_capture_requires_authoritative_nonzero_sequences() {
+        let snapshot = json!({"presented_latch_sequence": 9});
+        let valid = PngCapture {
+            result: json!({"capture_source": {"active_sequence": 7}}),
+            png: Vec::new(),
+            elapsed_ms: 0,
+        };
+        require_capture_sequence(&valid, &snapshot).unwrap();
+
+        let zero = PngCapture {
+            result: json!({"capture_source": {"active_sequence": 0}}),
+            png: Vec::new(),
+            elapsed_ms: 0,
+        };
+        assert!(require_capture_sequence(&zero, &snapshot).is_err());
+        assert!(require_capture_sequence(&valid, &json!({})).is_err());
+    }
+
+    #[test]
+    fn restored_snapshot_rejects_each_stale_semantic_boundary() {
+        let game = "/media/fat/_Arcade/game.mra";
+        let snapshot = json!({
+            "state_revision": 1,
+            "action_sequence": 2,
+            "presented_state_revision": 1,
+            "presented_action_sequence": 2,
+            "presented_latch_sequence": 3,
+            "semantic": {
+                "effective_view": "arcade",
+                "return_screen": "arcade",
+                "launch_state": "idle",
+                "selected_game_id": game,
+                "input_enabled": true,
+            }
+        });
+        validate_restored_snapshot(&snapshot, game).unwrap();
+        for field in [
+            "effective_view",
+            "return_screen",
+            "launch_state",
+            "selected_game_id",
+        ] {
+            let mut invalid = snapshot.clone();
+            invalid["semantic"][field] = json!("stale");
+            assert!(validate_restored_snapshot(&invalid, game).is_err());
+        }
+        let mut disabled = snapshot;
+        disabled["semantic"]["input_enabled"] = json!(false);
+        assert!(validate_restored_snapshot(&disabled, game).is_err());
+    }
 }

@@ -693,4 +693,113 @@ mod tests {
         main["fpga_owner_epoch"] = json!(2);
         assert!(validate_main_qualification_sample(&main, &baseline).is_err());
     }
+
+    #[test]
+    fn identity_requires_every_release_and_runtime_component() {
+        let identity = json!({
+            "classification": "qualified",
+            "runtime": {
+                "build_number": "17",
+                "source_revision": "runtime-rev",
+                "binary_sha256": "runtime-sha",
+            },
+            "platform": {
+                "latch_protocol_version": 4,
+                "latch_capability_mask": "0x01ff",
+                "release_tag": "platform-v0.7",
+                "bundle_id": "bundle",
+                "qualification_candidate_id": "candidate",
+                "manifest_sha256": "manifest",
+                "main_sha256": "main",
+                "scanout_module_sha256": "module",
+                "latch_rbf_sha256": "rbf",
+            },
+            "device_boot_id": "boot",
+            "launcher_session_id": "session",
+        });
+        validate_identity(&identity).unwrap();
+
+        let mut unknown = identity.clone();
+        unknown["runtime"]["source_revision"] = json!("unknown");
+        assert!(validate_identity(&unknown).is_err());
+        let mut mixed = identity.clone();
+        mixed["classification"] = json!("mixed-invalid");
+        assert!(validate_identity(&mixed).is_err());
+        let mut wrong_protocol = identity;
+        wrong_protocol["platform"]["latch_protocol_version"] = json!(3);
+        assert!(validate_identity(&wrong_protocol).is_err());
+    }
+
+    #[test]
+    fn baseline_rejects_dirty_or_unowned_main_state() {
+        let clean = json!({
+            "launcher_state": "LauncherActive",
+            "fpga_owner": "magik",
+            "main_generation": 1,
+            "pid": 2,
+            "fpga_owner_epoch": 3,
+            "blocked_spi_writes": 4,
+            "blocked_gpo_writes": 5,
+            "crash_count": 0,
+            "invariant_count": 0,
+        });
+        assert!(main_qualification_baseline(&clean).is_ok());
+        for (field, value) in [
+            ("launcher_state", json!("Unconfigured")),
+            ("fpga_owner", json!("main")),
+            ("crash_count", json!(1)),
+            ("invariant_count", json!(1)),
+        ] {
+            let mut invalid = clean.clone();
+            invalid[field] = value;
+            assert!(main_qualification_baseline(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn final_gate_rejects_memory_and_each_stress_floor() {
+        let state = json!({
+            "elapsed_ms": DURATION.as_millis() as u64,
+            "catalog_completed": MIN_CATALOG_GENERATIONS,
+            "accepted_confirmed_frames": MIN_ACCEPTED_CONFIRMED_FRAMES,
+            "catalog_overlap_frames": MIN_CATALOG_OVERLAP_FRAMES,
+            "stress_class_frames": {
+                "particles": MIN_STRESS_CLASS_FRAMES,
+                "transitions": MIN_STRESS_CLASS_FRAMES,
+                "arcade_scroll": MIN_STRESS_CLASS_FRAMES,
+                "preview_archive": MIN_STRESS_CLASS_FRAMES,
+                "search_filter_model": MIN_STRESS_CLASS_FRAMES,
+                "input_traffic": MIN_STRESS_CLASS_FRAMES,
+            }
+        });
+        let status = json!({"rss_kb": 10_000});
+        assert!(validate_final(&state, MIN_RECEIPT_STATUS_SAMPLES, 8_000, 10_000, &status).is_ok());
+        for key in [
+            "particles",
+            "transitions",
+            "arcade_scroll",
+            "preview_archive",
+            "search_filter_model",
+            "input_traffic",
+        ] {
+            let mut invalid = state.clone();
+            invalid["stress_class_frames"][key] = json!(MIN_STRESS_CLASS_FRAMES - 1);
+            assert!(
+                validate_final(&invalid, MIN_RECEIPT_STATUS_SAMPLES, 8_000, 10_000, &status)
+                    .is_err()
+            );
+        }
+        assert!(
+            validate_final(
+                &state,
+                MIN_RECEIPT_STATUS_SAMPLES,
+                8_000,
+                MAX_RSS_HWM_KB + 1,
+                &status
+            )
+            .is_err()
+        );
+        let grown = json!({"rss_kb": 8_000 + MAX_RSS_GROWTH_KB + 1});
+        assert!(validate_final(&state, MIN_RECEIPT_STATUS_SAMPLES, 8_000, 10_000, &grown).is_err());
+    }
 }

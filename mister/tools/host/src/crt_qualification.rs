@@ -1014,4 +1014,58 @@ mod tests {
         )
         .is_ok());
     }
+
+    #[test]
+    fn probe_parser_rejects_missing_contract_fields_and_uses_last_status() {
+        let valid = "crt_probe_status_v1 schema=1 ok=1 pattern=fixed-a mode=crt-240p60 duration_ms=20000 slot_a_base=0x1 slot_b_base=0x2 writes=2 posts=2 flips=2 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 reason=none";
+        assert_eq!(
+            parse_crt_probe_status(&format!("noise\nold\n{valid}\ntrailing")).unwrap(),
+            valid
+        );
+        for required in ["writes=2", "posts=2", "flips=2", "reason=none"] {
+            assert!(parse_crt_probe_status(&valid.replace(required, "removed=x")).is_err());
+        }
+        assert!(parse_crt_probe_status("untyped ok=1").is_err());
+    }
+
+    #[test]
+    fn interrupt_and_output_directory_checks_fail_closed() {
+        let interrupted = AtomicBool::new(false);
+        check_interrupted(&interrupted).unwrap();
+        interrupted.store(true, Ordering::SeqCst);
+        assert!(check_interrupted(&interrupted).is_err());
+
+        let output = std::env::temp_dir().join(format!("mister-crt-output-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&output);
+        create_new_output_directory(&output).unwrap();
+        assert!(create_new_output_directory(&output).is_err());
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn every_probe_pattern_has_an_attended_observation_contract() {
+        for pattern in [
+            "fixed-a",
+            "fixed-b",
+            "identical-flip",
+            "slow-ab",
+            "full-ab",
+            "full-ab-hold2",
+            "full-ab-hold3",
+            "full-ab-hold4",
+            "motion",
+            "motion-hold2",
+            "motion-hold3",
+            "motion-slow",
+            "motion-color",
+            "preloaded-ruler-slow",
+            "preloaded-bars-slow",
+        ] {
+            assert!(!probe_observation_prompt(pattern).is_empty());
+        }
+        assert_eq!(
+            probe_observation_prompt("not-a-pattern"),
+            "Observe the physical CRT."
+        );
+    }
 }
