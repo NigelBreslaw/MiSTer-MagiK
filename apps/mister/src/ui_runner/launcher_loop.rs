@@ -6447,6 +6447,10 @@ impl LaunchReturnSession {
 
     fn release_if_complete(&mut self) {
         if self.complete {
+            // Catalog/taxonomy replacement may reapply the saved state after the
+            // correct frame was presented. Reapplication must not make a completed
+            // return look incomplete to status consumers.
+            self.phase = "complete";
             self.state = None;
         }
     }
@@ -8098,6 +8102,7 @@ mod tests {
         assert!(session.context_matches(&restored_nav, &catalog));
         session.release_if_complete();
         assert!(!session.requested());
+        assert_eq!(session.phase, "complete");
     }
 
     #[test]
