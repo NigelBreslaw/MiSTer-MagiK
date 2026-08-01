@@ -1774,16 +1774,20 @@ struct PlatformDeliveryActions<'a> {
     session: &'a Session,
     transaction: &'a PlatformDeployTransaction,
     expected_sha256: &'a str,
+    recovery_reboot_required: bool,
+    recovery_reboot_used: bool,
 }
 
 impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
-        exec_checked(
+        let reconciliation = exec_checked_output(
             self.session,
             "reconcile interrupted local Main transaction before platform delivery",
             &local_main_reconcile_script(),
         )
         .map_err(device_failure)?;
+        self.recovery_reboot_required =
+            local_main_reconcile_requires_recovery(&reconciliation.stdout);
         exec_checked(
             self.session,
             "platform snapshot",
@@ -1809,7 +1813,20 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
     }
 
     fn reboot(&mut self) -> std::result::Result<(), DeviceFailure> {
-        delivery_reboot_wait(self.config)
+        if !self.recovery_reboot_required {
+            return delivery_reboot_wait(self.config);
+        }
+        if self.recovery_reboot_used {
+            return Err(DeviceFailure::RecoveryRequired(
+                "canonical delivery already used its local-Main recovery reboot".into(),
+            ));
+        }
+        self.recovery_reboot_used = true;
+        let reboot = one_shot_recovery_reboot_wait(self.config);
+        if reboot.is_ok() {
+            self.recovery_reboot_required = false;
+        }
+        reboot
     }
 
     fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
@@ -1847,6 +1864,8 @@ fn deliver_platform_transaction(
             session: &session,
             transaction: &transaction,
             expected_sha256,
+            recovery_reboot_required: false,
+            recovery_reboot_used: false,
         },
         true,
     )
@@ -2270,11 +2289,18 @@ fn local_main_snapshot_script() -> String {
 
 fn local_main_reconcile_script() -> String {
     format!(
-        "set -eu; state=none; test ! -f {transaction} || state=$(cat {transaction}); if test \"$state\" = validated; then rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload {transaction}; sync; elif test -f {transaction}; then test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {transaction}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; elif test -f {main}.delivery-rollback && test -f {manifest}.delivery-rollback; then cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; else rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; fi",
+        "set -eu; state=none; test ! -f {transaction} || state=$(cat {transaction}); if test \"$state\" = validated; then rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload {transaction}; sync; printf 'local-main-reconcile=validated\\n'; elif test -f {transaction}; then test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {transaction}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; printf 'local-main-reconcile=%s\\n' \"$state\"; elif test -f {main}.delivery-rollback && test -f {manifest}.delivery-rollback; then cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; printf 'local-main-reconcile=orphan\\n'; else rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; printf 'local-main-reconcile=none\\n'; fi",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
         transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
     )
+}
+
+fn local_main_reconcile_requires_recovery(output: &str) -> bool {
+    output.lines().any(|line| {
+        line.strip_prefix("local-main-reconcile=")
+            .is_some_and(|state| !matches!(state, "none" | "validated" | "snapshot" | "orphan"))
+    })
 }
 
 fn local_main_swap_script(expected_main_sha256: &str, expected_manifest_sha256: &str) -> String {
@@ -17105,6 +17131,18 @@ H: Handlers=event3 js0"#
         let reconcile = local_main_reconcile_script();
         assert!(reconcile.contains("validated"));
         assert!(reconcile.contains("local-main.delivery-state"));
+        assert!(!local_main_reconcile_requires_recovery(
+            "local-main-reconcile=none\n"
+        ));
+        assert!(!local_main_reconcile_requires_recovery(
+            "local-main-reconcile=snapshot\n"
+        ));
+        assert!(local_main_reconcile_requires_recovery(
+            "local-main-reconcile=activating\n"
+        ));
+        assert!(local_main_reconcile_requires_recovery(
+            "local-main-reconcile=rolled-back\n"
+        ));
         assert!(local_main_cleanup_script().contains("validated"));
         assert!(local_main_rollback_cleanup_script().contains("rolled-back"));
     }
