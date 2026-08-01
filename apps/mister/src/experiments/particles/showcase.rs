@@ -4097,6 +4097,14 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u128 {
 mod tests {
     use super::*;
 
+    fn frame_signature(frame: &[Rgb565Pixel]) -> u64 {
+        frame.iter().fold(0xcbf2_9ce4_8422_2325, |hash, pixel| {
+            pixel.0.to_le_bytes().into_iter().fold(hash, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+        })
+    }
+
     #[test]
     fn demo_order_and_wrapping_are_stable() {
         assert_eq!(ParticleDemoKind::ALL.len(), 36);
@@ -4187,6 +4195,36 @@ mod tests {
         );
         assert_eq!(ParticleDemoKind::parse("37"), None);
         assert_eq!(ParticleDemoKind::parse("unknown"), None);
+    }
+
+    #[test]
+    fn embedded_showcase_defaults_are_deterministic_at_the_hero_frame() {
+        for kind in ParticleDemoKind::ALL {
+            let config = ParticleShowcaseConfig {
+                width: 960,
+                height: 540,
+                seed: 827_141_709_451,
+                initial_demo: kind,
+            };
+            let mut first = ParticleShowcaseRenderer::new(config).unwrap();
+            let mut second = ParticleShowcaseRenderer::new(config).unwrap();
+            first.configure_capture_hud(false);
+            second.configure_capture_hud(false);
+            let mut first_frame = vec![Rgb565Pixel(0); 960 * 540];
+            let mut second_frame = vec![Rgb565Pixel(0); 960 * 540];
+            let elapsed = Duration::from_secs(15);
+
+            let first_stats = first.render(&mut first_frame, 1, elapsed).unwrap();
+            let second_stats = second.render(&mut second_frame, 1, elapsed).unwrap();
+
+            assert_eq!(first_stats.demo, kind);
+            assert_eq!(first_stats.beat, second_stats.beat);
+            assert_eq!(first_stats.count, second_stats.count);
+            assert_eq!(
+                frame_signature(&first_frame),
+                frame_signature(&second_frame)
+            );
+        }
     }
 
     #[test]
