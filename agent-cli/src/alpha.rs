@@ -462,6 +462,7 @@ fn run_ui_journey(
     require_semantic(&state, "effective_view", "arcade")?;
     require_nonzero(&state, "selected_count")?;
     require_nonempty(&state, "selected_game_id")?;
+    let state = await_semantic_not(device, nonce, "composition_state", "navigation-transition")?;
     checkpoints.push(checkpoint(device, nonce, arcade, "arcade", &rgb_dir)?);
     usb.push(capture_usb("arcade", &usb_dir)?);
 
@@ -756,6 +757,25 @@ fn await_semantic(
     classified(
         "alpha_ui_assertion_failed",
         format!("{field} did not become {expected}"),
+    )
+}
+
+fn await_semantic_not(
+    device: &mut DeviceClient,
+    nonce: &Option<String>,
+    field: &str,
+    unexpected: &str,
+) -> AgentResult<Value> {
+    for _ in 0..300 {
+        let value = snapshot(device, nonce)?;
+        if semantic(&value, field).and_then(Value::as_str) != Some(unexpected) {
+            return Ok(value);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    classified(
+        "alpha_ui_assertion_failed",
+        format!("{field} remained {unexpected}"),
     )
 }
 
