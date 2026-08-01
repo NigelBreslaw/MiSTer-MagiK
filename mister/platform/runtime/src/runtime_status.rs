@@ -1034,9 +1034,14 @@ fn launcher_status_value(
     );
     insert!("arcade_selected", status.arcade_selected);
     insert!(
+        "selected_game_has_preview",
+        status.selected_game_has_preview
+    );
+    insert!(
         "arcade_visual_index",
         (status.arcade_visual_index * 1000.0).round() / 1000.0
     );
+    insert!("arcade_scroll_y", status.arcade_scroll_y);
     insert!("arcade_drawer_open", status.arcade_drawer_open);
     insert!("arcade_drawer_level", status.arcade_drawer_level);
     insert!("arcade_drawer_selected", status.arcade_drawer_selected);
@@ -1053,6 +1058,25 @@ fn launcher_status_value(
     insert!("arcade_search_query", status.arcade_search_query);
     insert!("arcade_search_results", status.arcade_search_results);
     insert!("preview_cache_state", status.preview_cache_state);
+    insert!("return_source", status.return_source);
+    insert!("return_phase", status.return_phase);
+    insert!("return_fallback_reason", status.return_fallback_reason);
+    insert!(
+        "process_start_monotonic_us",
+        status.process_start_monotonic_us
+    );
+    insert!(
+        "exact_context_monotonic_us",
+        status.exact_context_monotonic_us
+    );
+    insert!(
+        "preview_ready_monotonic_us",
+        status.preview_ready_monotonic_us
+    );
+    insert!(
+        "first_correct_present_monotonic_us",
+        status.first_correct_present_monotonic_us
+    );
     insert!(
         "preview_transition_effect",
         status.preview_transition_effect
