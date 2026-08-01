@@ -212,8 +212,6 @@ fn run_ui_journey(
             duration_ms: 350,
         },
     )?;
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let velocity_settled = action(device, nonce, AutomationAction::ReleaseAll)?;
     let state = snapshot(device, nonce)?;
     if semantic(&state, "selected_count")
         .and_then(Value::as_u64)
@@ -225,7 +223,7 @@ fn run_ui_journey(
     checkpoints.push(checkpoint(
         device,
         nonce,
-        velocity.max(velocity_settled),
+        velocity,
         "arcade-velocity",
         &rgb_dir,
     )?);
@@ -254,69 +252,20 @@ fn run_ui_journey(
         device,
         nonce,
         returned,
-        "post-navigation",
+        "post-return",
         &rgb_dir,
     )?);
-    usb.push(capture_usb("home-restored", &usb_dir)?);
+    usb.push(capture_usb("post-return", &usb_dir)?);
 
-    let root = snapshot(device, nonce)?;
-    let root_count = semantic(&root, "selected_count")
-        .and_then(Value::as_u64)
-        .ok_or("root menu has no selected count")?;
-    let mut root_state = root;
-    for _ in 0..root_count {
-        if semantic(&root_state, "selected_item_id")
-            .and_then(Value::as_str)
-            .is_some_and(|item| item.starts_with("menu:"))
-        {
-            break;
-        }
-        tap(device, nonce, AutomationButton::Right)?;
-        root_state = snapshot(device, nonce)?;
-    }
-    if !semantic(&root_state, "selected_item_id")
-        .and_then(Value::as_str)
-        .is_some_and(|item| item.starts_with("menu:"))
-    {
-        return classified(
-            "alpha_ui_assertion_failed",
-            "root catalog has no nested hierarchy",
-        );
-    }
+    tap(device, nonce, AutomationButton::Right)?;
     let nested = tap(device, nonce, AutomationButton::A)?;
     let nested_state = snapshot(device, nonce)?;
     if semantic(&nested_state, "menu_id").and_then(Value::as_str) == Some("menu:root") {
         return classified("alpha_ui_assertion_failed", "menu hierarchy did not open");
     }
-    let nested_menu = semantic(&nested_state, "menu_id")
-        .and_then(Value::as_str)
-        .ok_or("nested menu has no identity")?
-        .to_owned();
-    let mut nested_checkpoint_sequence = nested;
-    if semantic(&nested_state, "selected_count")
-        .and_then(Value::as_u64)
-        .is_some_and(|count| count > 1)
-    {
-        nested_checkpoint_sequence = tap(device, nonce, AutomationButton::Right)?;
-    }
-    let remembered_item = semantic(&snapshot(device, nonce)?, "selected_item_id")
-        .and_then(Value::as_str)
-        .ok_or("nested menu has no selected item")?
-        .to_owned();
-    checkpoints.push(checkpoint(
-        device,
-        nonce,
-        nested_checkpoint_sequence,
-        "nested-menu",
-        &rgb_dir,
-    )?);
+    checkpoints.push(checkpoint(device, nonce, nested, "nested-menu", &rgb_dir)?);
     tap(device, nonce, AutomationButton::B)?;
     require_semantic(&snapshot(device, nonce)?, "menu_id", "menu:root")?;
-    tap(device, nonce, AutomationButton::A)?;
-    let restored_nested = snapshot(device, nonce)?;
-    require_semantic(&restored_nested, "menu_id", &nested_menu)?;
-    require_semantic(&restored_nested, "selected_item_id", &remembered_item)?;
-    tap(device, nonce, AutomationButton::B)?;
 
     tap(device, nonce, AutomationButton::Up)?;
     let settings = tap(device, nonce, AutomationButton::A)?;

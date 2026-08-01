@@ -149,15 +149,22 @@ conversion:
   and 576p use identity presentation and damage mapping. Both hidden latch
   slots and diagnostic `/dev/fb0` use the same route plan. Native scanout
   geometry is the authoritative framebuffer capture geometry.
-- CRT and HDMI routes use the checked-in Press Start 2P font for Slint text and
-  the custom Rust games renderer. Every output route uses the same font asset.
+- CRT and HDMI routes use MagiK Pixel for Slint text and the custom Rust games
+  renderer. Native PAL routes select the matching OFL-derived families whose
+  glyph outlines and vertical metrics are scaled 3:5 for 288p and 6:5 for
+  576p while horizontal advances remain unchanged.
+- The checked-in `MagiK Pixel` font family is generated from the pristine
+  Press Start 2P source without using its reserved family name. Its normal,
+  PAL 288, and PAL 576 variants declare ascent and descent from their actual
+  glyph bounds so wrapped lines cannot overlap.
 - First-party MiSTer Slint uses `PixelText8` as its sole raw text primitive.
   `PixelTextSize` limits font sizes to 8, 16, 24, or 32 pixels, and wrapped
   content declares a bounded line capacity so it clips instead of painting
   into adjacent layout.
 - The macOS headless UI preview exposes `hdmi`, `crt-240p`, `crt-288p`,
   `crt-480p`, and `crt-576p` display profiles. CRT captures use the production
-  route geometry, content insets, typed text sizes, and Press Start 2P font.
+  route geometry, content insets, typed text sizes, and matching MagiK Pixel
+  font family.
 - Rust sends the FPGA `SET_FBUF` route so buffer 0 is scanned to HDMI. For CRT,
   the FPGA receives a framebuffer already matching the full active raster; its
   OSD path is a direct overlay and is not relied on for UI scaling.

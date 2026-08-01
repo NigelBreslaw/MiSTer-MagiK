@@ -758,8 +758,7 @@ impl ParticleShowcaseRenderer {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
         });
-        let mut hud_font =
-            ConsoleFont::new_with_typeface(HUD_FONT_PX, ConsoleTypeface::PressStart2P);
+        let mut hud_font = ConsoleFont::new_with_typeface(HUD_FONT_PX, ConsoleTypeface::MagikPixel);
         let mut hud_pixels = vec![Pixel(0); HUD_W * HUD_H];
         for kind in ParticleDemoKind::ALL {
             hud_pixels.fill(Pixel(0));

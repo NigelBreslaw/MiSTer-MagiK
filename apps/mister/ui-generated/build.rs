@@ -11,7 +11,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
 
-    // Embed the production UI font at every HDMI and CRT design size.
+    // Embed both production UI fonts at every HDMI and CRT design size.
     let font_sizes = if let Ok(font_sizes) = std::env::var("SLINT_FONT_SIZES") {
         font_sizes
     } else {
@@ -99,6 +99,12 @@ fn main() {
         "../ui/views/hdmi/settings.slint",
         "../ui/fonts/PressStart2P-Regular.ttf",
         "../ui/fonts/PressStart2P-Regular.ttf.license",
+        "../ui/fonts/MagikPixel-Regular.ttf",
+        "../ui/fonts/MagikPixel-Regular.ttf.license",
+        "../ui/fonts/MagikPixel-PAL288-Regular.ttf",
+        "../ui/fonts/MagikPixel-PAL288-Regular.ttf.license",
+        "../ui/fonts/MagikPixel-PAL576-Regular.ttf",
+        "../ui/fonts/MagikPixel-PAL576-Regular.ttf.license",
         "../ui/icons/settings.svg",
     ];
     if bench_scenes {
