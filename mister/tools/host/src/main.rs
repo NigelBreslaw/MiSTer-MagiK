@@ -1,8 +1,6 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#![recursion_limit = "256"]
-
 use mister_tool::transport::{
     DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
 };
@@ -5468,7 +5466,7 @@ fn profile_installed_launch_return(
                 }
                 fs::write(output_dir.join(local), artifact)?;
             }
-            let cycle = json!({
+            let mut cycle = json!({
                 "cycle": cycle_number,
                 "capsule_fault_injected": capsule_fault_injected,
                 "expected_game_path": &expected_path,
@@ -5490,6 +5488,8 @@ fn profile_installed_launch_return(
                 "startup_mode": status.get("startup_mode"),
                 "return_source": status.get("return_source"),
                 "return_phase": status.get("return_phase"),
+            });
+            let timing_and_artifacts = json!({
                 "request_monotonic_us": request_us,
                 "acknowledged_monotonic_us": acknowledge_us,
                 "process_start_monotonic_us": process_us,
@@ -5513,6 +5513,15 @@ fn profile_installed_launch_return(
                 "timeline_file": format!("cycle-{cycle_number}-timeline.json"),
                 "restored": restored,
             });
+            cycle
+                .as_object_mut()
+                .ok_or("launch-return cycle summary is not an object")?
+                .extend(
+                    timing_and_artifacts
+                        .as_object()
+                        .ok_or("launch-return timing summary is not an object")?
+                        .clone(),
+                );
             fs::write(
                 output_dir.join(format!("cycle-{}-status.json", cycle_index + 1)),
                 format!("{}\n", serde_json::to_string_pretty(&status)?),
