@@ -4710,7 +4710,8 @@ fn parse_boot_events(text: &str) -> Result<Vec<Value>> {
 fn boot_event_us(events: &[Value], name: &str, last: bool) -> Result<u64> {
     let matching = events.iter().filter(|event| {
         event.get("event").and_then(Value::as_str) == Some(name)
-            && event.get("ts_boot_us").and_then(Value::as_u64).is_some()
+            && (event.get("ts_boot_us").and_then(Value::as_u64).is_some()
+                || event.get("ts_boot_ms").and_then(Value::as_u64).is_some())
     });
     let event = if last {
         matching.last()
@@ -4718,7 +4719,16 @@ fn boot_event_us(events: &[Value], name: &str, last: bool) -> Result<u64> {
         matching.into_iter().next()
     }
     .ok_or_else(|| format!("cold-boot event is missing: {name}"))?;
-    Ok(event.get("ts_boot_us").and_then(Value::as_u64).unwrap_or(0))
+    Ok(event
+        .get("ts_boot_us")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            event
+                .get("ts_boot_ms")
+                .and_then(Value::as_u64)
+                .map(|milliseconds| milliseconds.saturating_mul(1_000))
+        })
+        .unwrap_or(0))
 }
 
 fn parse_magik_startup_events(text: &str) -> Vec<Value> {
@@ -4837,7 +4847,8 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         .and_then(|event| event.get("elapsed_us"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let first_present_us = process_start_us.saturating_add(first_present_elapsed_us);
+    let first_present_us = boot_event_us(&events, "launcher_first_frame_presented", true)?;
+    let startup_clock_origin_us = first_present_us.saturating_sub(first_present_elapsed_us);
     let ordered = [
         initial_main_us,
         final_main_us,
@@ -4889,6 +4900,8 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         "launcher_exec_us": launcher_exec_us,
         "magik_process_start_us": process_start_us,
         "first_launcher_present_us": first_present_us,
+        "first_launcher_present_resolution_us": 10_000,
+        "magik_startup_clock_origin_us": startup_clock_origin_us,
         "main_events": events,
         "magik_startup_events": startup_events,
         "agent_timeline": agent_timeline,
@@ -4902,6 +4915,8 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         "preflight_us": preflight_end_us.saturating_sub(preflight_begin_us),
         "preflight_to_launcher_exec_us": launcher_exec_us.saturating_sub(preflight_end_us),
         "launcher_exec_to_magik_process_us": process_start_us.saturating_sub(launcher_exec_us),
+        "magik_process_to_startup_clock_us": startup_clock_origin_us.saturating_sub(process_start_us),
+        "startup_clock_to_first_present_us": first_present_us.saturating_sub(startup_clock_origin_us),
         "magik_process_to_first_present_us": first_present_us.saturating_sub(process_start_us),
         "linux_boot_to_first_present_us": first_present_us,
     });

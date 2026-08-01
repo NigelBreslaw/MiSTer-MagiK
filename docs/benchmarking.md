@@ -49,7 +49,10 @@ retried after an unavailable response.
 The device-monotonic timeline starts at Linux boot and records initial Main
 entry, final latch Main entry, launcher preflight begin/end, direct Bash exec,
 MagiK process entry, every `startup_timing` milestone, and the first real
-presented launcher frame. It also records host reboot/recovery polling
+presented launcher frame. The presentation event uses Main's absolute boot
+clock at its native 10 ms resolution; MagiK's finer internal startup clock is
+retained separately and is never added to the process-entry timestamp. It also
+records host reboot/recovery polling
 separately; host timing is not substituted for device-visible startup time.
 The retained agent timeline, kernel log, inittab, boot analytics and init-time
 diagnostics expose the otherwise uninstrumented Linux/stock-Main interval
