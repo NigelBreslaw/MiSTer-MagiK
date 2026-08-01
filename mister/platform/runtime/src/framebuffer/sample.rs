@@ -322,4 +322,75 @@ mod tests {
         assert_eq!(view.sampled_signature().1, 1);
         assert_eq!(view.right_edge_signature(1).1, 2);
     }
+
+    #[test]
+    fn edge_signatures_clip_requests_and_count_only_visible_pixels() {
+        let pixels = [
+            Rgb565Pixel(1),
+            Rgb565Pixel(0),
+            Rgb565Pixel(2),
+            Rgb565Pixel(0),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+        ];
+        let view = Rgb565SampleView::new(&pixels, 3, 2, 3);
+        assert_eq!(view.left_edge_signature(99).1, 4);
+        assert_eq!(view.right_edge_signature(1).1, 2);
+        assert_eq!(view.top_edge_signature(1).1, 2);
+        assert_eq!(view.bottom_edge_signature(99).1, 4);
+    }
+
+    #[test]
+    fn rect_sampling_clips_to_geometry_and_normalizes_zero_step() {
+        let pixels = (0..16)
+            .map(|value| Rgb565Pixel(if value % 2 == 0 { 0 } else { 1 }))
+            .collect::<Vec<_>>();
+        let view = Rgb565SampleView::new(&pixels, 4, 4, 4);
+        assert_eq!(view.rect_sampled_signature(2, 2, 99, 99, 0).1, 2);
+        assert_eq!(view.rect_sampled_signature(9, 9, 2, 2, 1).1, 0);
+        assert_eq!(view.rect_sampled_signature(0, 0, 4, 4, 2).1, 0);
+    }
+
+    #[test]
+    fn visual_classifier_distinguishes_black_content_and_transitions() {
+        let black = vec![Rgb565Pixel(0); 64 * 64];
+        let solid = vec![Rgb565Pixel(0xffff); 64 * 64];
+        let alternating = (0..64 * 64)
+            .map(|index| {
+                let x = index % 64;
+                let y = index / 64;
+                Rgb565Pixel(if (x / 16 + y / 16) % 2 == 0 {
+                    0xf800
+                } else {
+                    0x001f
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            Rgb565SampleView::new(&black, 64, 64, 64)
+                .visual_sample()
+                .classification,
+            "mostly_black"
+        );
+        assert_eq!(
+            Rgb565SampleView::new(&solid, 64, 64, 64)
+                .visual_sample()
+                .classification,
+            "slint_like"
+        );
+        let sample = Rgb565SampleView::new(&alternating, 64, 64, 64).visual_sample();
+        assert_eq!(sample.classification, "static_like");
+        assert!(sample.transitions > 0);
+        assert_eq!(sample.samples, 16);
+    }
+
+    #[test]
+    fn sampling_helpers_are_bounded_and_tsv_safe() {
+        assert_eq!(pct(1, 0), 0);
+        assert_eq!(pct(1, 3), 33);
+        assert_eq!(pct(u32::MAX, 1), u32::MAX);
+        assert_eq!(color_distance(0xff0000, 0x0000ff), 510);
+        assert_eq!(sanitize_tsv("a\tb\nc\rd"), "a b c d");
+        assert_ne!(hash_sample(SAMPLE_HASH_OFFSET, 0), SAMPLE_HASH_OFFSET);
+    }
 }

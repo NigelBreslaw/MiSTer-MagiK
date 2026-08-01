@@ -1124,6 +1124,62 @@ mod tests {
     }
 
     #[test]
+    fn malformed_rect_sources_fail_without_partial_frame_data() {
+        let pixels = (0..6).map(Rgb565Pixel).collect::<Vec<_>>();
+        let zero = FrameRect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 2,
+        };
+        assert_eq!(collect_strided_rect(&pixels, 3, 0, 0, zero), None);
+
+        let overrun = FrameRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        assert_eq!(collect_strided_rect(&pixels, 3, 2, 0, overrun), None);
+        assert!(
+            rgb565_rect_bytes(&pixels, overrun, 3, 2, 0)
+                .as_ref()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn latest_frame_copy_stops_at_truncated_input_or_destination() {
+        let geometry = FrameGeometry {
+            width: 3,
+            height: 2,
+            stride_pixels: 3,
+        };
+        let rect = FrameRect {
+            x: 1,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        let mut latest = vec![Rgb565Pixel(9); 6];
+        copy_rect_into_latest(&mut latest, geometry, rect, &[Rgb565Pixel(1)]);
+        assert_eq!(latest, vec![Rgb565Pixel(9); 6]);
+
+        copy_rect_into_latest(
+            &mut latest[..2],
+            geometry,
+            rect,
+            &[
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+            ],
+        );
+        assert_eq!(latest, vec![Rgb565Pixel(9); 6]);
+    }
+
+    #[test]
     fn stream_encoder_reuses_size_prepended_lz4_format() {
         let raw = (0..4096).map(|value| value as u8).collect::<Vec<_>>();
         let mut encoder = StreamEncoder::new();

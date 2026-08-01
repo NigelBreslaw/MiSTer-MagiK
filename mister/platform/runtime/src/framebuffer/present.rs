@@ -395,4 +395,25 @@ mod tests {
         assert_eq!(rows, 0);
         assert_eq!(events.into_inner(), ["copy"]);
     }
+
+    #[test]
+    fn direct_preview_nonoverlap_is_a_noop() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(8, 4));
+        target.direct_preview_565_rect_mut(rect(2, 1, 6, 3));
+        let events = RefCell::new(Vec::new());
+
+        let rows = copy_direct_preview_region(
+            target.direct_preview_view().expect("preview view"),
+            rect(0, 0, 1, 1),
+            "test",
+            |_| {
+                events.borrow_mut().push("copy");
+                Ok::<(), std::io::Error>(())
+            },
+            |_| events.borrow_mut().push("publish"),
+        );
+
+        assert_eq!(rows, 0);
+        assert!(events.into_inner().is_empty());
+    }
 }
