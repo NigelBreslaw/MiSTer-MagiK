@@ -13,7 +13,7 @@ use crate::{catalog_store, sqlite_catalog};
 use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 
-const STATE_SCHEMA_VERSION: u32 = 1;
+use crate::catalog_format::CATALOG_STATE_SCHEMA_VERSION as STATE_SCHEMA_VERSION;
 const STATE_FILE_NAME: &str = "catalog-state.sqlite3";
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -5,6 +5,7 @@
 
 use crate::catalog_classify::SystemId;
 use crate::catalog_domain::ScanUnitId;
+use crate::catalog_format::CatalogFormatDescriptor;
 use crate::sharded_catalog::MANIFEST_SCHEMA_VERSION;
 use crate::system_shard::SystemShardLimits;
 #[cfg(feature = "builder")]
@@ -48,6 +49,7 @@ pub fn production_registry_limits() -> RegistryLimits {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogManifest {
+    pub format: Option<CatalogFormatDescriptor>,
     pub generation: u64,
     pub systems: Vec<ManifestSystem>,
 }
@@ -79,6 +81,8 @@ pub struct PublishedGeneration {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredManifest {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<CatalogFormatDescriptor>,
     generation: u64,
     systems: Vec<StoredSystem>,
 }
@@ -676,6 +680,7 @@ fn validate_generation(
 fn to_stored(manifest: &CatalogManifest) -> StoredManifest {
     StoredManifest {
         schema_version: MANIFEST_SCHEMA_VERSION,
+        format: manifest.format.clone(),
         generation: manifest.generation,
         systems: manifest
             .systems
@@ -720,6 +725,7 @@ fn from_stored(stored: StoredManifest) -> Result<CatalogManifest, RegistryError>
         ));
     }
     Ok(CatalogManifest {
+        format: stored.format,
         generation: stored.generation,
         systems: stored
             .systems
@@ -1142,6 +1148,7 @@ mod tests {
     fn stored_manifest_rejects_traversal_paths() {
         let stored = StoredManifest {
             schema_version: MANIFEST_SCHEMA_VERSION,
+            format: Some(CatalogFormatDescriptor::current()),
             generation: 1,
             systems: vec![StoredSystem {
                 system_id: "snes".to_string(),
@@ -1215,6 +1222,7 @@ mod tests {
         previous: Option<PublishedGeneration>,
     ) -> CatalogManifest {
         CatalogManifest {
+            format: Some(CatalogFormatDescriptor::current()),
             generation,
             systems: vec![ManifestSystem {
                 system_id: SystemId::parse("snes").unwrap(),

@@ -102,6 +102,7 @@ pub fn bootstrap_fixture_system(
     garbage_collect_unreferenced(
         config.storage_root(),
         current_manifest.as_ref().unwrap_or(&CatalogManifest {
+            format: None,
             generation: 0,
             systems: Vec::new(),
         }),
@@ -168,6 +169,7 @@ pub fn bootstrap_fixture_system(
     publish_manifest(
         config.storage_root(),
         &CatalogManifest {
+            format: Some(crate::catalog_format::CatalogFormatDescriptor::current()),
             generation: manifest_generation,
             systems,
         },

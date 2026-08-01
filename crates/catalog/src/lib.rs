@@ -22,6 +22,7 @@ pub mod catalog_classify;
 pub mod catalog_config;
 mod catalog_discovery;
 pub mod catalog_domain;
+pub mod catalog_format;
 mod catalog_load_metrics;
 pub mod catalog_navigation;
 mod catalog_progress;

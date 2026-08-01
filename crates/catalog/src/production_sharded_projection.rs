@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
-const BINDING_SCHEMA_VERSION: u32 = 1;
+use crate::catalog_format::{BINDING_SCHEMA_VERSION, CatalogFormatDescriptor, CatalogFormatStatus};
 pub use crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT;
 const BINDING_FILE: &str = "catalog.binding.json";
 const MAX_BINDING_BYTES: u64 = 4096;
@@ -32,6 +32,8 @@ const MAX_BINDING_BYTES: u64 = 4096;
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CatalogBinding {
     schema_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<CatalogFormatDescriptor>,
     projection_contract: String,
     manifest_generation: u64,
     catalog_fingerprint: String,
@@ -164,6 +166,7 @@ pub fn reconcile_production_preview_availability(
         storage_root,
         &CatalogBinding {
             schema_version: BINDING_SCHEMA_VERSION,
+            format: Some(CatalogFormatDescriptor::current()),
             projection_contract: PRODUCTION_PROJECTION_CONTRACT.to_string(),
             manifest_generation: next_generation,
             catalog_fingerprint: fingerprint,
@@ -436,6 +439,7 @@ pub fn publish_bound_production_projection_with_events(
         storage_root,
         &CatalogBinding {
             schema_version: BINDING_SCHEMA_VERSION,
+            format: Some(CatalogFormatDescriptor::current()),
             projection_contract: PRODUCTION_PROJECTION_CONTRACT.to_string(),
             manifest_generation: outcome.generation,
             catalog_fingerprint: catalog_fingerprint.to_string(),
@@ -468,17 +472,71 @@ pub fn inspect_production_binding(
     manifest_generation: u64,
 ) -> Result<ProductionBindingStatus, ReconciliationError> {
     let binding = read_binding(storage_root)?;
+    let manifest = read_latest_manifest_lazy(storage_root, production_registry_limits())?;
     let state = crate::catalog_state::read(&crate::catalog_state::path_for_root(storage_root))
         .map_err(|error| ReconciliationError::new("binding", error))?;
     let state_fingerprint = state.stamp.fingerprint_hex();
     if binding.schema_version != BINDING_SCHEMA_VERSION
         || binding.manifest_generation != manifest_generation
+        || manifest.generation != manifest_generation
         || binding.catalog_fingerprint != state_fingerprint
     {
         return Err(ReconciliationError::new(
             "binding",
             "catalog binding does not match the active manifest and V3 state",
         ));
+    }
+    if let Some(format) = binding.format.as_ref().or(manifest.format.as_ref()) {
+        if binding.format.as_ref().is_some_and(|binding_format| {
+            manifest
+                .format
+                .as_ref()
+                .is_some_and(|manifest_format| binding_format != manifest_format)
+        }) {
+            return Err(ReconciliationError::new(
+                "binding",
+                "catalog binding and manifest format descriptors disagree",
+            ));
+        }
+        match crate::catalog_format::classify(format) {
+            CatalogFormatStatus::Current => {}
+            CatalogFormatStatus::UpgradeRequired {
+                installed,
+                required,
+            } => {
+                return Ok(ProductionBindingStatus::UpgradeRequired {
+                    fingerprint: state_fingerprint,
+                    installed: installed.label(),
+                    required: required.label(),
+                });
+            }
+            CatalogFormatStatus::UnsupportedFuture {
+                installed,
+                required,
+            } => {
+                return Err(ReconciliationError::new(
+                    "binding",
+                    format!(
+                        "unsupported future catalog format: installed {}, required {}",
+                        installed.label(),
+                        required.label()
+                    ),
+                ));
+            }
+            CatalogFormatStatus::Corrupt {
+                installed,
+                required,
+            } => {
+                return Err(ReconciliationError::new(
+                    "binding",
+                    format!(
+                        "incoherent catalog format: installed {}, required {}",
+                        installed.label(),
+                        required.label()
+                    ),
+                ));
+            }
+        }
     }
     if binding.projection_contract != PRODUCTION_PROJECTION_CONTRACT {
         return Ok(ProductionBindingStatus::UpgradeRequired {
@@ -985,6 +1043,7 @@ mod tests {
             &root,
             &CatalogBinding {
                 schema_version: BINDING_SCHEMA_VERSION,
+                format: None,
                 projection_contract: "rich-game-v1".to_string(),
                 manifest_generation: outcome.generation,
                 catalog_fingerprint: fingerprint.clone(),

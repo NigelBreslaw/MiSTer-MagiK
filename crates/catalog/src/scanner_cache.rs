@@ -9,7 +9,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: u32 = 1;
+use crate::catalog_format::SCANNER_CACHE_SCHEMA_VERSION as SCHEMA_VERSION;
 const FILE_NAME: &str = "scanner-cache.sqlite3";
 const WRITE_BATCH_ROWS: usize = 8_192;
 

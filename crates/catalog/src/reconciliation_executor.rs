@@ -221,6 +221,7 @@ pub fn execute_reconciliation_with_events(
     garbage_collect_unreferenced_with_retained(
         storage_root,
         current.as_ref().unwrap_or(&CatalogManifest {
+            format: None,
             generation: 0,
             systems: Vec::new(),
         }),
@@ -470,6 +471,7 @@ pub fn execute_reconciliation_with_events(
         run_manifest_publication(
             storage_root,
             &CatalogManifest {
+                format: Some(crate::catalog_format::CatalogFormatDescriptor::current()),
                 generation: expected_generation,
                 systems,
             },
