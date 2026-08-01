@@ -3988,7 +3988,7 @@ mod linux {
         })
     }
 
-    fn read_trimmed_text_value(path: &str) -> Value {
+    pub(super) fn read_trimmed_text_value(path: &str) -> Value {
         fs::read_to_string(path)
             .ok()
             .map(|text| text.trim().to_string())
@@ -4948,11 +4948,14 @@ mod tests {
         let _ = std::fs::remove_file(&root);
         std::fs::write(&root, "  ArcadeCore\n").unwrap();
         assert_eq!(
-            read_trimmed_text_value(root.to_str().unwrap()),
+            linux::read_trimmed_text_value(root.to_str().unwrap()),
             "ArcadeCore"
         );
         std::fs::write(&root, " \n").unwrap();
-        assert_eq!(read_trimmed_text_value(root.to_str().unwrap()), Value::Null);
+        assert_eq!(
+            linux::read_trimmed_text_value(root.to_str().unwrap()),
+            Value::Null
+        );
         let _ = std::fs::remove_file(root);
     }
 
