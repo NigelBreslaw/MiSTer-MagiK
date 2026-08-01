@@ -511,4 +511,77 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn mutators_add_missing_keys_and_preserve_requested_section_order() {
+        let mut document =
+            Document::parse(b"[arcade_vertical]\nvideo_mode=8\n[arcade]\ncore=keep\n").unwrap();
+
+        document.set("arcade", "direct_video", "1");
+        document.set("Menu", "video_mode", "6");
+        document.ensure_section_after("arcade", "arcade_vertical");
+
+        let output = String::from_utf8(document.render()).unwrap();
+        assert!(output.starts_with("[arcade]\ncore=keep\ndirect_video=1\n"));
+        assert!(output.find("[arcade]").unwrap() < output.find("[arcade_vertical]").unwrap());
+        assert!(output.ends_with("[Menu]\nvideo_mode=6\n"));
+
+        let stable = document.render();
+        document.ensure_section_after("arcade", "arcade_vertical");
+        document.ensure_section_after("missing", "arcade_vertical");
+        document.ensure_section_after("arcade", "missing");
+        assert_eq!(document.render(), stable);
+    }
+
+    #[test]
+    fn selective_commenting_and_removal_leave_unmatched_settings_active() {
+        let mut document = Document::parse(
+            b"[Menu]\nvideo_mode=8 ; owned\ndirect_video=2\nuser=keep\n[Other]\nvideo_mode=8\n",
+        )
+        .unwrap();
+
+        document.comment_if_value("Menu", "video_mode", &["7", "8"], "restored");
+        document.comment_if_value("Menu", "user", &["different"], "not-used");
+        document.remove("Menu", "direct_video", "removed");
+
+        let output = String::from_utf8(document.render()).unwrap();
+        assert!(output.contains(";video_mode=8 ; owned ; restored"));
+        assert!(output.contains(";direct_video=2 ; removed"));
+        assert!(output.contains("user=keep"));
+        assert!(output.contains("[Other]\nvideo_mode=8"));
+        assert_eq!(document.active_count("Menu", "video_mode"), 0);
+        assert_eq!(document.active_count("Menu", "direct_video"), 0);
+        assert_eq!(document.active_count("Menu", "user"), 1);
+    }
+
+    #[test]
+    fn restore_with_backup_missing_main_restores_the_absence() {
+        let mut live = Document::parse(b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
+        let backup = Document::parse(b"[Menu]\nvideo_mode=6\n").unwrap();
+
+        apply_restore(&mut live, Some(&backup));
+
+        assert_eq!(live.effective_value("MiSTer", "main"), None);
+        assert!(
+            String::from_utf8(live.render())
+                .unwrap()
+                .contains(";main=MiSTer_MagiK ; MiSTer MagiK restored absent value")
+        );
+    }
+
+    #[test]
+    fn parse_errors_have_actionable_messages() {
+        assert_eq!(
+            Error::TooLarge { bytes: 42 }.to_string(),
+            "MiSTer.ini is too large (42 bytes)"
+        );
+        assert_eq!(
+            Error::InvalidUtf8.to_string(),
+            "MiSTer.ini is not valid UTF-8"
+        );
+        assert_eq!(
+            Error::InteriorNul.to_string(),
+            "MiSTer.ini contains a NUL byte"
+        );
+    }
 }
