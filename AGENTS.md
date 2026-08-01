@@ -29,6 +29,11 @@ direct-reset-no-sync experiments, verify no live arming file remains:
 mister arming-status
 ```
 
+A single bounded recovery reboot is not a reboot loop. `scripts/agent diagnose`
+may clear the listed arming files and issue one raw Linux reboot over SSH when
+the installed platform is coherent and the launcher or its heartbeat is down.
+That reboot request must never be automatically replayed.
+
 If the MiSTer repeatedly reboots, stop normal deploy attempts. Remove stale
 arming files first; if SSH is unstable, power down, mount the SD card on the
 Mac, remove them directly, and inspect
@@ -76,13 +81,18 @@ those trees are part of the task.
 - Never use the Codex GitHub plugin for repository, issue, PR, or Actions work.
   Use `gh`.
 - Agents use `scripts/agent deliver`, `benchmark`, or `diagnose` for device
-  workflows. Attended human operations use typed commands in the Rust `mister`
-  host binary; never raw SSH/SCP or generic remote-shell orchestration.
+  workflows. Diagnosis owns bounded read-only retries and one unattended
+  one-shot recovery reboot. Other operator operations use typed commands in the
+  Rust `mister` host binary; never raw SSH/SCP or generic remote-shell
+  orchestration.
 - Device workflows, Apple container, virtualization, and attended `mister`
   commands require first-attempt escalation using their direct repository
   command.
-- On device timeout, refusal, route, or authentication failure, stop after the
-  first typed attempt and report the device unavailable.
+- Retry an explicitly read-only typed request once after a transient timeout,
+  refusal, or route failure. Never blindly replay mutation: use the owning
+  workflow's reconciliation or compensation path. Authentication and access
+  failures require changed credentials or permissions before retrying. Report
+  the device unavailable only after the bounded recovery path fails.
 - Edit `MiSTer.ini` only through typed `mister` mutators or approved
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to

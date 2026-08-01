@@ -145,11 +145,13 @@ unreferenced diagnostic/profiling shell libraries mixed fact collection with
 mutation and exposed unsafe or ownerless experiments. The flag-free
 `scripts/agent diagnose` command now owns the fixed Discover → HostFacts →
 DeviceFacts → Correlate → SafeRepair → Recheck → Report state chart using
-structured typed device facts. It repairs only named temporary benchmark state;
-credentials, reboot instability, firmware incompatibility, arming files,
-physical recovery, and missing services produce exactly one user action and no
-implicit destructive repair. The reviewed scripts and orphaned libraries were
-deleted without replacement wrappers.
+structured typed device facts. It repairs named temporary benchmark state.
+Since 2026-08-01 it also owns a single non-retryable raw recovery reboot for a
+missing or stalled launcher: the typed request clears arming, refuses known
+reboot instability, and proves the device healthy after reconnecting.
+Credentials, firmware incompatibility, and physical recovery still produce one
+user action. The reviewed scripts and orphaned libraries were deleted without
+replacement wrappers.
 
 ## Device wrapper removal and shell boundary
 

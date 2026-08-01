@@ -112,6 +112,7 @@ pub struct DeviceFacts {
 pub struct DiagnosticReport {
     pub status: &'static str,
     pub repaired_temporary_state: bool,
+    pub recovered_by_reboot: bool,
     pub next_action: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub launcher_state: String,
@@ -208,8 +209,10 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         facts: None,
         report: None,
         repair_needed: false,
+        reboot_needed: false,
         repair_temporary_state: false,
         repaired: false,
+        rebooted: false,
         geometry_trial: geometry_trial_from_env()?,
         geometry_trial_detail: None,
         screensaver_trial: screensaver_trial_from_env(),
@@ -263,8 +266,10 @@ struct ProcessActions<'a> {
     facts: Option<DeviceFacts>,
     report: Option<DiagnosticReport>,
     repair_needed: bool,
+    reboot_needed: bool,
     repair_temporary_state: bool,
     repaired: bool,
+    rebooted: bool,
     geometry_trial: Option<[u16; 4]>,
     geometry_trial_detail: Option<String>,
     screensaver_trial: bool,
@@ -338,6 +343,7 @@ impl DiagnoseActions for ProcessActions<'_> {
                 let facts = self.facts.as_ref().ok_or("device facts are missing")?;
                 self.repair_temporary_state = facts.temporary_state;
                 self.repair_needed = diagnostic_safe_repair_needed(facts);
+                self.reboot_needed = diagnostic_one_shot_reboot_needed(facts);
                 self.report = Some(correlate(facts, false));
                 Ok(())
             }
@@ -345,6 +351,11 @@ impl DiagnoseActions for ProcessActions<'_> {
                 if self.repair_needed {
                     self.device.execute(DeviceRequest::RepairSafeDeviceState)?;
                     self.repaired = self.repair_temporary_state;
+                }
+                if self.reboot_needed {
+                    self.device
+                        .execute(DeviceRequest::RecoverWithOneShotReboot)?;
+                    self.rebooted = true;
                 }
                 if let Some(rectangle) = self.geometry_trial.take() {
                     self.geometry_trial_detail = Some(
@@ -386,10 +397,12 @@ impl DiagnoseActions for ProcessActions<'_> {
                 Ok(())
             }
             Phase::Report => {
-                self.report = Some(correlate(
+                let mut report = correlate(
                     self.facts.as_ref().ok_or("device facts are missing")?,
                     self.repaired,
-                ));
+                );
+                report.recovered_by_reboot = self.rebooted;
+                self.report = Some(report);
                 Ok(())
             }
         }
@@ -408,6 +421,18 @@ fn diagnostic_safe_repair_needed(facts: &DeviceFacts) -> bool {
             && !facts.reboot_unstable
             && facts.arming_files == 0
             && facts.launcher_state == "Unconfigured")
+}
+
+fn diagnostic_one_shot_reboot_needed(facts: &DeviceFacts) -> bool {
+    !facts.reboot_unstable
+        && facts.credentials_ready
+        && facts.firmware_compatible
+        && facts.scanout_ready
+        && facts.latch_ready
+        && (!facts.main_running
+            || !facts.launcher_running
+            || !facts.agent_running
+            || !facts.launcher_heartbeat_advancing)
 }
 
 pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
@@ -443,6 +468,7 @@ pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
             "healthy"
         },
         repaired_temporary_state: repaired,
+        recovered_by_reboot: false,
         next_action,
         launcher_state: facts.launcher_state.clone(),
         crash_count: facts.crash_count,
@@ -533,6 +559,7 @@ mod tests {
     fn healthy_and_self_solvable_states_need_no_user_action() {
         let report = correlate(&healthy(), false);
         assert_eq!(report.status, "healthy");
+        assert!(!report.recovered_by_reboot);
         assert!(report.next_action.is_none());
         let report = correlate(
             &DeviceFacts {
@@ -547,13 +574,12 @@ mod tests {
 
     #[test]
     fn stalled_launcher_heartbeat_is_not_reported_healthy() {
-        let report = correlate(
-            &DeviceFacts {
-                launcher_heartbeat_advancing: false,
-                ..healthy()
-            },
-            false,
-        );
+        let facts = DeviceFacts {
+            launcher_heartbeat_advancing: false,
+            ..healthy()
+        };
+        assert!(diagnostic_one_shot_reboot_needed(&facts));
+        let report = correlate(&facts, false);
         assert_eq!(report.status, "user_action_required");
         assert!(
             report
@@ -572,13 +598,26 @@ mod tests {
             ..healthy()
         };
         assert!(diagnostic_safe_repair_needed(&facts));
+        assert!(diagnostic_one_shot_reboot_needed(&facts));
 
         assert!(!diagnostic_safe_repair_needed(&DeviceFacts {
             arming_files: 1,
             ..facts.clone()
         }));
+        assert!(diagnostic_one_shot_reboot_needed(&DeviceFacts {
+            arming_files: 1,
+            ..facts.clone()
+        }));
         assert!(!diagnostic_safe_repair_needed(&DeviceFacts {
             latch_ready: false,
+            ..facts.clone()
+        }));
+        assert!(!diagnostic_one_shot_reboot_needed(&DeviceFacts {
+            latch_ready: false,
+            ..facts.clone()
+        }));
+        assert!(!diagnostic_one_shot_reboot_needed(&DeviceFacts {
+            reboot_unstable: true,
             ..facts
         }));
     }

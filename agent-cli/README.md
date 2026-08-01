@@ -54,4 +54,9 @@ specialized host environments.
 
 Device operations use `DeviceClient` and closed `DeviceRequest` variants.
 The separate Rust `mister` binary remains available to humans for fixed operator
-operations, but `agent-cli` never invokes it as a subprocess.
+operations, but `agent-cli` never invokes it as a subprocess. Explicitly
+read-only requests receive one bounded retry after transient unavailability;
+mutations are not blindly replayed. Diagnosis may clear reboot arming and issue
+one raw Linux reboot over SSH when the coherent installed platform has a missing
+or stalled launcher. It refuses known reboot-instability state and never
+automatically issues a second reboot.

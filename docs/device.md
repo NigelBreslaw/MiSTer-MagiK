@@ -38,9 +38,9 @@ temporarily suspend the supervised launcher and always resume it.
 
 ## Boot-loop safety
 
-Never arm reset faults through persistent `launcher.env`. Destructive recovery
-requires an attended, volatile `/tmp` session token and a confirmed non-network
-recovery path. Every cleanup must remove:
+Never arm reset faults through persistent `launcher.env`. Reset-fault testing
+and `direct-reset-no-sync` require an attended, volatile `/tmp` session token
+and a confirmed non-network recovery path. Every cleanup must remove:
 
 - `/media/fat/mister-magik/launcher.env`
 - `/media/fat/mister-magik-dev/launcher.env`
@@ -55,16 +55,27 @@ reboots, stop deployment attempts. Power it down, mount the SD card on the Mac,
 remove the listed files, and inspect
 `/media/fat/mister-magik/bootlogs/main-reboot.log`.
 
+An unattended one-shot recovery reboot is permitted and is not reset-fault
+testing. `scripts/agent diagnose` may remove the listed arming files, verify
+that the device is not marked reboot-unstable, issue one raw Linux reboot over
+SSH, and wait for authenticated agent, SSH, and launcher health. It never
+automatically replays the reboot request.
+
 ## Agent workflows
 
-Agents do not call the operator tool. Runtime and platform changes are committed
-first and then use `scripts/agent deliver`. Performance work uses
-`scripts/agent benchmark`; diagnosis uses `scripts/agent diagnose`. The attended
-release gate is `scripts/agent release qualify`.
+Agents use closed typed workflows rather than the operator CLI. Runtime and
+platform changes are committed first and then use `scripts/agent deliver`.
+Performance work uses `scripts/agent benchmark`; diagnosis and one-shot reboot
+recovery use `scripts/agent diagnose`. The attended release gate is
+`scripts/agent release qualify`.
 
-Device mutation is serialized, bounded, snapshotted, and compensated. A device
-timeout, refusal, route, or authentication failure ends after the first typed
-attempt and is reported as unavailable. Host-only work never contacts MiSTer.
+Device mutation is serialized, bounded, snapshotted, and compensated.
+Explicitly read-only requests receive one bounded retry after a transient
+timeout, refusal, or route failure. Mutating requests are never blindly
+replayed; their owning state machine must reconcile or compensate first.
+Authentication and access failures require changed external state. The device
+is reported unavailable only after the applicable bounded recovery fails.
+Host-only work never contacts MiSTer.
 
 The runtime executable and its platform manifest are inseparable deployment
 state. No operator command, benchmark request, or device-agent endpoint may

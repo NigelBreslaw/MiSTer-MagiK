@@ -24,6 +24,8 @@ the six-hour latch stress or display matrix.
 
 Automated fake-device qualification and real-device attended evidence are
 recorded separately. A skipped physical capability is not a pass. Destructive
-recovery never runs unattended, and no release command pushes Git state.
+release fault injection never runs unattended; this is distinct from the
+single bounded raw recovery reboot owned by `scripts/agent diagnose`. No release
+command pushes Git state.
 
 Rollback is verified with the typed `mister mode stock` operator command.

@@ -155,6 +155,7 @@ pub enum DeviceRequest {
     /// Runs the product screensaver trial in each standard CRT mode and restores the original mode.
     RunCrtScreensaverMatrix,
     RepairSafeDeviceState,
+    RecoverWithOneShotReboot,
     CaptureFramebuffer,
     InstallAlphaCandidate {
         tag: String,
@@ -254,6 +255,7 @@ impl DeviceRequest {
             Self::RunCrtScreensaverTrial => "run-crt-screensaver-trial",
             Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
+            Self::RecoverWithOneShotReboot => "recover-with-one-shot-reboot",
             Self::CaptureFramebuffer => "capture-framebuffer",
             Self::InstallAlphaCandidate { .. } => "install-alpha-candidate",
             Self::RestoreAlphaHostMode { .. } => "restore-alpha-host-mode",
@@ -292,6 +294,24 @@ impl DeviceRequest {
                 | Self::ProfileInstalledLaunchReturn { .. }
                 | Self::ProfileInstalledNavigationTransitions { .. }
                 | Self::VerifyHealth(Layout::Development)
+        )
+    }
+
+    #[must_use]
+    pub const fn retryable_after_unavailable(&self) -> bool {
+        matches!(
+            self,
+            Self::Discover
+                | Self::Status
+                | Self::ReadDevelopmentManifest
+                | Self::VerifyDevelopmentPlatform
+                | Self::FetchVerifiedDevelopmentManager { .. }
+                | Self::VerifyHealth(_)
+                | Self::CollectDiagnosticFacts
+                | Self::CollectLatestCrashReport
+                | Self::InspectPublicCatalog
+                | Self::AwaitLauncherAutomationPresented { .. }
+                | Self::ReadLauncherAutomationSnapshot { .. }
         )
     }
 }
@@ -498,6 +518,7 @@ mod tests {
             DeviceRequest::RunCrtScreensaverTrial,
             DeviceRequest::RunCrtScreensaverMatrix,
             DeviceRequest::RepairSafeDeviceState,
+            DeviceRequest::RecoverWithOneShotReboot,
             DeviceRequest::CaptureFramebuffer,
             DeviceRequest::RestoreAlphaHostMode {
                 original_main: Some("MiSTer_MagiKDev".into()),
@@ -541,7 +562,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 48);
+        assert_eq!(labels.len(), 49);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -588,6 +609,22 @@ mod tests {
                 expected_sha256: "a".repeat(64),
             }
             .allowed_during_benchmark()
+        );
+    }
+
+    #[test]
+    fn only_read_only_requests_retry_after_unavailability() {
+        assert!(DeviceRequest::Discover.retryable_after_unavailable());
+        assert!(DeviceRequest::CollectDiagnosticFacts.retryable_after_unavailable());
+        assert!(DeviceRequest::ReadDevelopmentManifest.retryable_after_unavailable());
+        assert!(!DeviceRequest::RepairSafeDeviceState.retryable_after_unavailable());
+        assert!(!DeviceRequest::RecoverWithOneShotReboot.retryable_after_unavailable());
+        assert!(
+            !DeviceRequest::DeliverPlatformTransaction {
+                stage: "stage".into(),
+                expected_sha256: "a".repeat(64),
+            }
+            .retryable_after_unavailable()
         );
     }
 

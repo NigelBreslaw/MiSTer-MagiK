@@ -3,6 +3,10 @@
 
 use crate::error::{AgentError, AgentResult};
 use mister_tool::transport::{DeviceOperations, DeviceRequest};
+use std::thread;
+use std::time::Duration;
+
+const READ_ONLY_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub struct DeviceClient<D = mister_tool::NativeDevice> {
     device: D,
@@ -55,9 +59,18 @@ impl<D: DeviceOperations> DeviceClient<D> {
     }
 
     pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
-        self.execute_typed(request)
-            .map(|response| response.detail)
-            .map_err(AgentError::from)
+        match self.execute_typed(request.clone()) {
+            Ok(response) => Ok(response.detail),
+            Err(mister_tool::transport::DeviceFailure::Unavailable(_))
+                if request.retryable_after_unavailable() =>
+            {
+                thread::sleep(READ_ONLY_RETRY_DELAY);
+                self.execute_typed(request)
+                    .map(|response| response.detail)
+                    .map_err(AgentError::from)
+            }
+            Err(error) => Err(AgentError::from(error)),
+        }
     }
 
     pub fn execute_typed(
@@ -121,6 +134,48 @@ mod tests {
 
         assert_eq!(client.execute(request.clone()).unwrap(), "snapshotted");
         assert_eq!(recorded.borrow().as_slice(), &[request]);
+    }
+
+    #[test]
+    fn read_only_unavailability_gets_one_bounded_retry() {
+        let fake = FakeDevice::with_results([
+            Err(DeviceFailure::Unavailable("transient route failure".into())),
+            Ok(DeviceResponse {
+                operation: "status",
+                detail: "healthy".into(),
+            }),
+        ]);
+        assert_eq!(
+            DeviceClient::new(fake)
+                .execute(DeviceRequest::Status)
+                .unwrap(),
+            "healthy"
+        );
+    }
+
+    #[test]
+    fn mutations_are_never_replayed_after_unavailability() {
+        struct UnavailableDevice(Rc<RefCell<Vec<DeviceRequest>>>);
+
+        impl DeviceOperations for UnavailableDevice {
+            fn execute(
+                &mut self,
+                request: &DeviceRequest,
+            ) -> Result<DeviceResponse, DeviceFailure> {
+                self.0.borrow_mut().push(request.clone());
+                Err(DeviceFailure::Unavailable("ambiguous timeout".into()))
+            }
+        }
+
+        let recorded = Rc::new(RefCell::new(Vec::new()));
+        let error = DeviceClient::new(UnavailableDevice(Rc::clone(&recorded)))
+            .execute(DeviceRequest::RecoverWithOneShotReboot)
+            .unwrap_err();
+        assert_eq!(error.to_string(), "device_unavailable: ambiguous timeout");
+        assert_eq!(
+            recorded.borrow().as_slice(),
+            &[DeviceRequest::RecoverWithOneShotReboot]
+        );
     }
 
     #[test]

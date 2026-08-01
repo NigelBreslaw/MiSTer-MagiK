@@ -13,6 +13,9 @@ transport lives in `remote.rs` and `agent_client.rs`.
 ## Rules
 
 - Keep destructive operations explicit and bounded.
+- Permit one-shot recovery reboots only through a closed typed request that
+  clears persistent arming, refuses known reboot instability, waits for health,
+  and is never automatically replayed.
 - The implicit connection bootstrap may transactionally install or upgrade only
   `mister-magik-agent`, its init hook, and its token. It must verify the new
   authenticated version and roll back on failure before the requested command

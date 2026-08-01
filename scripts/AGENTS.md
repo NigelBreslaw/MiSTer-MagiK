@@ -24,7 +24,9 @@ contacting the MiSTer.
 - Do not add device/build/deploy/profile/acceptance shell orchestrators.
 - Human device operations use the typed Rust `mister` host binary; agents use
   `scripts/agent deliver`, `benchmark`, or `diagnose`.
-- Device/network commands must fail after one bounded wrapper attempt.
+- Explicitly read-only device requests may retry once after transient transport
+  unavailability. Mutating requests must not be replayed outside their typed
+  reconciliation or compensation path.
 - Destructive runners require interruption-safe cleanup and volatile arming.
 - Self-tests must use temporary/local fixtures and never contact the MiSTer.
 - Generated output belongs under ignored `build/`, `dist/`, or a temporary

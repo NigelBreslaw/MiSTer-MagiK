@@ -629,17 +629,11 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
                     .map_err(device_failure)?;
-                let recover_launcher = remote_read(&session, MAIN_STATUS_REMOTE)
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    .is_some_and(|status| diagnostic_launcher_recovery_required(&status));
-                drop(session);
-                if recover_launcher {
-                    delivery_reboot_wait(&config)?;
-                    verify_delivery_health(&config)?;
-                    "temporary-state=clear launcher=recovered".into()
-                } else {
-                    "temporary-state=clear launcher=unchanged".into()
-                }
+                "temporary-state=clear launcher=unchanged".into()
+            }
+            DeviceRequest::RecoverWithOneShotReboot => {
+                one_shot_recovery_reboot_wait(&config)?;
+                "reboot=raw recovery=healthy arming=clear".into()
             }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
@@ -1116,6 +1110,56 @@ fn delivery_reboot_wait(config: &NativeDeviceConfig) -> std::result::Result<(), 
         ));
     }
     Ok(())
+}
+
+fn one_shot_recovery_preflight_command() -> String {
+    shell_sequence([
+        "set -eu",
+        "test ! -e /tmp/mister-magik/reboot-unstable",
+        release_arming_cleanup_command(),
+        "sync",
+    ])
+}
+
+fn one_shot_recovery_reboot_wait(
+    config: &NativeDeviceConfig,
+) -> std::result::Result<(), DeviceFailure> {
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    exec_checked(
+        &session,
+        "one-shot recovery preflight",
+        &one_shot_recovery_preflight_command(),
+    )
+    .map_err(device_failure)?;
+    issue_reboot(&session, RebootMode::Raw).map_err(device_failure)?;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0)
+        || wait_up_with(&config.connection, 120.0).map_err(device_failure)? != 0
+    {
+        return Err(DeviceFailure::Unavailable(
+            "device did not complete its one-shot recovery reboot".into(),
+        ));
+    }
+    wait_authenticated_agent_ready(config, Duration::from_secs(30))?;
+    verify_delivery_health(config)
+}
+
+fn wait_authenticated_agent_ready(
+    config: &NativeDeviceConfig,
+    timeout: Duration,
+) -> std::result::Result<(), DeviceFailure> {
+    let started = Instant::now();
+    let mut last = String::from("agent did not answer");
+    while started.elapsed() < timeout {
+        match agent_request_at(&config.agent, "ping", json!({}), Duration::from_millis(500)) {
+            Ok(_) => return Ok(()),
+            Err(error) => last = error.to_string(),
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err(DeviceFailure::Unavailable(format!(
+        "authenticated device agent did not recover: {last}"
+    )))
 }
 
 fn verify_delivery_health(config: &NativeDeviceConfig) -> std::result::Result<(), DeviceFailure> {
@@ -3164,13 +3208,6 @@ fn safe_repair_command() -> String {
         release_arming_cleanup_command(),
         safety.as_str(),
     ])
-}
-
-fn diagnostic_launcher_recovery_required(main_status: &Value) -> bool {
-    main_status.get("launcher_state").and_then(Value::as_str) == Some("Unconfigured")
-        && main_status.get("launcher_pid").and_then(Value::as_u64) == Some(0)
-        && main_status.get("executable_path").and_then(Value::as_str)
-            == Some("/media/fat/MiSTer_MagiKDev")
 }
 
 fn arming_status() -> Result<()> {
@@ -17453,22 +17490,13 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn diagnosis_recovers_only_unconfigured_development_main() {
-        assert!(diagnostic_launcher_recovery_required(&json!({
-            "launcher_state": "Unconfigured",
-            "launcher_pid": 0,
-            "executable_path": "/media/fat/MiSTer_MagiKDev",
-        })));
-        assert!(!diagnostic_launcher_recovery_required(&json!({
-            "launcher_state": "LauncherActive",
-            "launcher_pid": 42,
-            "executable_path": "/media/fat/MiSTer_MagiKDev",
-        })));
-        assert!(!diagnostic_launcher_recovery_required(&json!({
-            "launcher_state": "Unconfigured",
-            "launcher_pid": 0,
-            "executable_path": "/media/fat/MiSTer_MagiK",
-        })));
+    fn one_shot_recovery_clears_arming_and_refuses_known_reboot_instability() {
+        let preflight = one_shot_recovery_preflight_command();
+        assert!(preflight.contains("test ! -e /tmp/mister-magik/reboot-unstable"));
+        assert!(preflight.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(preflight.contains("/media/fat/mister-magik-dev/launcher.env"));
+        assert!(preflight.contains("/tmp/mister-magik/fs-fault-session"));
+        assert!(preflight.ends_with("sync"));
     }
 
     #[test]
