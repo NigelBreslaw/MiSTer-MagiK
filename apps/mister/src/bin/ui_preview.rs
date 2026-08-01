@@ -811,13 +811,15 @@ mod macos {
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
-            let previous_pad = self.navigation_previous_pad.clone();
+            let physical_previous = self.navigation_previous_pad.clone();
             self.navigation_previous_pad = self.launcher_pad.clone();
+            let routed_input = self.navigation_transition.route_input(
+                &self.launcher_pad,
+                &physical_previous,
+                false,
+            );
 
             if self.navigation_transition.is_active() {
-                if self.launcher_pad.btn_b && !previous_pad.btn_b {
-                    self.navigation_transition.request_reverse(now_us);
-                }
                 self.launcher_nav.absorb_input(&self.launcher_pad);
                 let transition_frame = self.navigation_transition.tick(now_us);
                 if transition_frame.phase == NavigationTransitionPhase::Capture
@@ -836,12 +838,18 @@ mod macos {
                 self.finish_navigation_tick();
                 return;
             }
+            let routed_input = routed_input.expect("idle navigation always delivers input");
+            if routed_input.replayed {
+                self.launcher_nav.absorb_input(&routed_input.previous);
+            }
+            let previous_pad = &routed_input.previous;
+            let nav_state = &routed_input.now;
 
             let settings_transition_source = (self.navigation_transition.enabled()
                 && settings_navigation_input_candidate(
                     self.launcher_nav.screen,
-                    &self.launcher_pad,
-                    &previous_pad,
+                    nav_state,
+                    previous_pad,
                 ))
             .then(|| {
                 (
@@ -851,13 +859,13 @@ mod macos {
             });
             let event = if self.navigation_transition.enabled() {
                 self.launcher_nav.handle_input_with_navigation_intents(
-                    &self.launcher_pad,
+                    nav_state,
                     frame_now,
                     &self.catalog,
                 )
             } else {
                 self.launcher_nav
-                    .handle_input(&self.launcher_pad, frame_now, &self.catalog)
+                    .handle_input(nav_state, frame_now, &self.catalog)
             };
             if let Some((source_screen, source_state)) = settings_transition_source
                 && let Some(direction) =
@@ -3126,6 +3134,45 @@ mod macos {
             );
             assert_eq!(options.navigation_transition_duration_ms, Some(4_000));
             assert!(options.navigation_transition_demo_reverse);
+        }
+
+        #[test]
+        fn preview_transition_input_uses_the_shared_fifo_route() {
+            let mut transition = NavigationTransitionRuntime::new(4, 3, true);
+            let pixels = vec![Rgb565Pixel(0); 4 * 3];
+            transition
+                .begin_settings_page(NavigationTransitionDirection::Forward, &pixels, 0)
+                .unwrap();
+            let released = PadState::default();
+            let activate = PadState {
+                btn_a: true,
+                ..PadState::default()
+            };
+            let home = PadState {
+                btn_home: true,
+                ..PadState::default()
+            };
+
+            assert!(
+                transition
+                    .route_input(&activate, &released, false)
+                    .is_none()
+            );
+            assert!(
+                transition
+                    .route_input(&released, &activate, false)
+                    .is_none()
+            );
+            assert!(transition.route_input(&home, &released, false).is_none());
+            transition.settle_at_destination();
+            assert!(transition.complete().is_some());
+
+            let first = transition.route_input(&released, &home, false).unwrap();
+            assert!(first.replayed);
+            assert!(first.now.btn_a);
+            let second = transition.route_input(&released, &released, false).unwrap();
+            assert!(second.replayed);
+            assert!(second.now.btn_home);
         }
 
         #[test]
