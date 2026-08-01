@@ -504,8 +504,8 @@ mod imp {
 
 #[cfg(feature = "profile")]
 pub use imp::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, finish_launch_return_async,
-    start, start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async, start,
+    start_launch_return,
 };
 
 #[cfg(not(feature = "profile"))]
@@ -570,8 +570,8 @@ mod stub {
 
 #[cfg(not(feature = "profile"))]
 pub use stub::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, finish_launch_return_async,
-    start, start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async, start,
+    start_launch_return,
 };
 
 #[cfg(test)]
