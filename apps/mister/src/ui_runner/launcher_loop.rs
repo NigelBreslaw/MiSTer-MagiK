@@ -5703,7 +5703,7 @@ pub(super) fn run_launcher_loop(
                 launch_return_session.mark_correct_present(&nav, &catalog);
                 if launch_return_session.first_correct_present_monotonic_us != 0
                     && cpu_profile::launch_return_profile_requested()
-                    && let Err(error) = cpu_profile::finish(cpu.take())
+                    && let Err(error) = cpu_profile::finish_launch_return(cpu.take())
                 {
                     crate::ui_errln!("launch-return cpu profile failed: {error}");
                 }

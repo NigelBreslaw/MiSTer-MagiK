@@ -252,6 +252,41 @@ mod imp {
         }
     }
 
+    pub fn finish_launch_return(
+        profiler: Option<CpuProfiler>,
+    ) -> Result<Option<CpuProfileSummary>, String> {
+        let result = finish(profiler);
+        let metadata = match &result {
+            Ok(Some(summary)) => json!({
+                "schema": "mister-magik-launch-return-pprof-v1",
+                "state": "complete",
+                "duration_secs": summary.duration_secs,
+                "hz": summary.hz,
+                "sample_stacks": summary.sample_stacks,
+                "sample_hits": summary.sample_hits,
+                "out_path": summary.out_path,
+                "bytes": summary.bytes,
+            }),
+            Ok(None) => json!({
+                "schema": "mister-magik-launch-return-pprof-v1",
+                "state": "failed",
+                "error": "profiler-produced-no-summary",
+            }),
+            Err(error) => json!({
+                "schema": "mister-magik-launch-return-pprof-v1",
+                "state": "failed",
+                "error": error,
+            }),
+        };
+        let path = std::env::var("MISTER_PPROF_COMPLETE")
+            .map_err(|_| "MISTER_PPROF_COMPLETE is missing".to_string())?;
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::write(path, format!("{metadata}\n")).map_err(|error| error.to_string())?;
+        result
+    }
+
     fn write_folded_report(report: &pprof::Report, path: &str) -> Result<u64, String> {
         use std::fmt::Write as _;
         use std::io::Write as _;
@@ -436,7 +471,9 @@ mod imp {
 }
 
 #[cfg(feature = "profile")]
-pub use imp::{CpuProfiler, ScreensaverProfiler, finish, start, start_launch_return};
+pub use imp::{
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, start, start_launch_return,
+};
 
 #[cfg(not(feature = "profile"))]
 mod stub {
@@ -468,6 +505,12 @@ mod stub {
         Ok(None)
     }
 
+    pub fn finish_launch_return(
+        profiler: Option<CpuProfiler>,
+    ) -> Result<Option<CpuProfileSummary>, String> {
+        finish(profiler)
+    }
+
     pub struct ScreensaverProfiler;
 
     impl ScreensaverProfiler {
@@ -489,7 +532,9 @@ mod stub {
 }
 
 #[cfg(not(feature = "profile"))]
-pub use stub::{CpuProfiler, ScreensaverProfiler, finish, start, start_launch_return};
+pub use stub::{
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, start, start_launch_return,
+};
 
 #[cfg(test)]
 mod tests {

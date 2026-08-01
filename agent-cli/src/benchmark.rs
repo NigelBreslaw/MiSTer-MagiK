@@ -155,11 +155,26 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
             .and_then(Value::as_u64)
             .unwrap_or(0);
         let preview_verified = cycle.get("preview_verified").and_then(Value::as_bool) == Some(true);
+        let cpu_profile_valid = cycle
+            .get("cpu_sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0
+            && cycle
+                .get("cpu_sample_stacks")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && cycle
+                .get("resolved_application_symbols")
+                .and_then(Value::as_bool)
+                == Some(true);
         let artifacts_present = [
             "capture_file",
             "capture_metadata_file",
             "flamegraph_file",
             "folded_stacks_file",
+            "cpu_profile_file",
             "frame_profile_file",
             "timeline_file",
         ]
@@ -174,6 +189,7 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
             || elapsed_ms >= 2_000
             || total_return_us == 0
             || !preview_verified
+            || !cpu_profile_valid
             || !artifacts_present
         {
             return Err(format!(
@@ -790,10 +806,14 @@ mod tests {
             "black_interval_ms": 1_999,
             "total_return_us": 123_456,
             "preview_verified": true,
+            "cpu_sample_hits": 10,
+            "cpu_sample_stacks": 2,
+            "resolved_application_symbols": true,
             "capture_file": "capture.png",
             "capture_metadata_file": "capture.json",
             "flamegraph_file": "flamegraph.svg",
             "folded_stacks_file": "stacks.folded",
+            "cpu_profile_file": "profile.json",
             "frame_profile_file": "frames.tsv",
             "timeline_file": "timeline.json",
         });

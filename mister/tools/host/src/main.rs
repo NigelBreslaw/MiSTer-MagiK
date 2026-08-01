@@ -4250,12 +4250,14 @@ fn profile_installed_launch_return(
             let remote_svg = format!("{remote_profile_dir}/cycle-{cycle_number}.svg");
             let remote_folded = format!("{remote_profile_dir}/cycle-{cycle_number}.folded");
             let remote_frames = format!("{remote_profile_dir}/cycle-{cycle_number}-frames.tsv");
+            let remote_complete = format!("{remote_profile_dir}/cycle-{cycle_number}-profile.json");
             let mut return_env = vec![
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "launch-return".into()),
                 ("MISTER_PPROF_HZ".into(), "999".into()),
                 ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
                 ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
                 ("MISTER_PROFILE".into(), "full".into()),
                 (
                     "MISTER_BOOT_FRAME_PROFILE_FILE".into(),
@@ -4391,12 +4393,52 @@ fn profile_installed_launch_return(
                 output_dir.join(&capture_metadata_file),
                 format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
             )?;
+            let profile_metadata_text = remote_read(&session, &remote_complete)
+                .filter(|text| !text.trim().is_empty())
+                .ok_or_else(|| {
+                    format!("launch-return profile metadata is missing: {remote_complete}")
+                })?;
+            let profile_metadata: Value = serde_json::from_str(profile_metadata_text.trim())?;
+            let sample_hits = profile_metadata
+                .get("sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let sample_stacks = profile_metadata
+                .get("sample_stacks")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if profile_metadata.get("state").and_then(Value::as_str) != Some("complete")
+                || sample_hits <= 0
+                || sample_stacks == 0
+            {
+                return Err(format!(
+                    "launch-return cycle {cycle_number} produced no valid CPU samples"
+                )
+                .into());
+            }
+            let folded = remote_read(&session, &remote_folded)
+                .filter(|text| !text.trim().is_empty())
+                .ok_or_else(|| {
+                    format!("launch-return profile artifact is missing: {remote_folded}")
+                })?;
+            let resolved_application_symbols =
+                folded.contains("mister_magik") || folded.contains("slint::");
+            if !resolved_application_symbols {
+                return Err(format!(
+                    "launch-return cycle {cycle_number} folded stacks have no resolved application symbols"
+                )
+                .into());
+            }
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-stacks.folded")),
+                &folded,
+            )?;
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-profile.json")),
+                format!("{}\n", serde_json::to_string_pretty(&profile_metadata)?),
+            )?;
             for (remote, local) in [
                 (&remote_svg, format!("cycle-{cycle_number}-flamegraph.svg")),
-                (
-                    &remote_folded,
-                    format!("cycle-{cycle_number}-stacks.folded"),
-                ),
                 (&remote_frames, format!("cycle-{cycle_number}-frames.tsv")),
             ] {
                 let artifact = remote_read(&session, remote)
@@ -4480,6 +4522,10 @@ fn profile_installed_launch_return(
                 "capture_metadata_file": capture_metadata_file,
                 "flamegraph_file": format!("cycle-{cycle_number}-flamegraph.svg"),
                 "folded_stacks_file": format!("cycle-{cycle_number}-stacks.folded"),
+                "cpu_profile_file": format!("cycle-{cycle_number}-profile.json"),
+                "cpu_sample_hits": sample_hits,
+                "cpu_sample_stacks": sample_stacks,
+                "resolved_application_symbols": resolved_application_symbols,
                 "frame_profile_file": format!("cycle-{cycle_number}-frames.tsv"),
                 "timeline_file": format!("cycle-{cycle_number}-timeline.json"),
                 "restored": restored,
@@ -4576,6 +4622,10 @@ fn profile_installed_launch_return(
             (
                 format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}-frames.tsv"),
                 format!("cycle-{cycle}-frames.tsv"),
+            ),
+            (
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}-profile.json"),
+                format!("cycle-{cycle}-profile.json"),
             ),
         ] {
             if !output_dir.join(&local).is_file()
