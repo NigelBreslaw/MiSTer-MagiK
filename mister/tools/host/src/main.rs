@@ -4740,14 +4740,16 @@ fn wait_launch_return_ready(
             let return_startup =
                 status.get("startup_mode").and_then(Value::as_str) == Some("return_from_game");
             let input_enabled = status.get("input_enabled").and_then(Value::as_bool) == Some(true);
-            let exact_return_complete = status.get("return_phase").and_then(Value::as_str)
-                == Some("complete")
-                && status
-                    .get("first_correct_present_monotonic_us")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    > 0;
-            if new_process && return_startup && input_enabled && exact_return_complete {
+            // Measure black until the first exact presented frame. A validated capsule
+            // may keep the session alive afterward so later authoritative catalog
+            // publications can reapply the same position; that background phase is not
+            // additional black time and must not delay capture of the visible result.
+            let exact_return_presented = status
+                .get("first_correct_present_monotonic_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0;
+            if new_process && return_startup && input_enabled && exact_return_presented {
                 return Ok(status);
             }
             last_status = status;
