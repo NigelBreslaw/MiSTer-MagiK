@@ -241,7 +241,14 @@ fn run_downloader(entrypoint: &Path) -> Result<(), String> {
 
 fn require_hash(path: &Path, expected: &str) -> Result<(), String> {
     let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
+    let actual =
+        Sha256::digest(bytes)
+            .iter()
+            .fold(String::with_capacity(64), |mut output, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(output, "{byte:02x}");
+                output
+            });
     if actual == expected {
         Ok(())
     } else {

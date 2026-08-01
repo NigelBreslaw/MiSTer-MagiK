@@ -4938,6 +4938,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn trimmed_status_text_omits_blank_runtime_markers() {
         let root = std::env::temp_dir().join(format!(
