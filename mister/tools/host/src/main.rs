@@ -4786,8 +4786,39 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         .ok_or("cold-boot benchmark has no launcher status")?;
     let main_status: Value = serde_json::from_str(&main_status_text)?;
     let launcher_status: Value = serde_json::from_str(&launcher_status_text)?;
+    let agent_diagnostics = agent_request_at(
+        &config.agent,
+        "diagnostics",
+        json!({}),
+        Duration::from_secs(10),
+    )?
+    .response
+    .get("result")
+    .cloned()
+    .ok_or("cold-boot benchmark has no agent diagnostics")?;
+    let dmesg = exec(&session, "dmesg", true)?;
+    if let Some(message) = exec_failure_message("cold-boot dmesg", &dmesg) {
+        return Err(message.into());
+    }
+    let inittab = remote_read(&session, "/etc/inittab")
+        .ok_or("cold-boot benchmark cannot read /etc/inittab")?;
+    let boot_analytics =
+        remote_read(&session, "/tmp/mister-magik-boot-analytics.tsv").unwrap_or_default();
     let events = parse_boot_events(&events_text)?;
     let startup_events = parse_magik_startup_events(&launcher_log);
+
+    let agent_timeline = agent_diagnostics
+        .pointer("/timeline/events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let agent_start_us = agent_timeline
+        .iter()
+        .find(|event| event.get("event").and_then(Value::as_str) == Some("agent_start"))
+        .and_then(|event| event.get("uptime_ms"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .saturating_mul(1_000);
 
     let initial_main_us = boot_event_us(&events, "main_process_entry", false)?;
     let final_main_us = boot_event_us(&events, "main_process_entry", true)?;
@@ -4816,7 +4847,9 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         process_start_us,
         first_present_us,
     ];
-    if ordered[0] == 0
+    if agent_start_us == 0
+        || agent_start_us > initial_main_us
+        || ordered[0] == 0
         || first_present_elapsed_us == 0
         || ordered.windows(2).any(|pair| pair[0] > pair[1])
     {
@@ -4836,11 +4869,19 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         ("main-status.json", main_status_text.as_str()),
         ("launcher-status.json", launcher_status_text.as_str()),
         ("platform-v3.manifest", installed_manifest.as_str()),
+        ("dmesg.log", dmesg.stdout.as_str()),
+        ("inittab.txt", inittab.as_str()),
+        ("boot-analytics.tsv", boot_analytics.as_str()),
     ] {
         fs::write(output_dir.join(name), text)?;
     }
+    fs::write(
+        output_dir.join("agent-diagnostics.json"),
+        format!("{}\n", serde_json::to_string_pretty(&agent_diagnostics)?),
+    )?;
 
     let timeline = json!({
+        "agent_start_us": agent_start_us,
         "initial_main_entry_us": initial_main_us,
         "final_main_entry_us": final_main_us,
         "preflight_begin_us": preflight_begin_us,
@@ -4850,8 +4891,11 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         "first_launcher_present_us": first_present_us,
         "main_events": events,
         "magik_startup_events": startup_events,
+        "agent_timeline": agent_timeline,
     });
     let phases = json!({
+        "linux_boot_to_agent_start_us": agent_start_us,
+        "agent_start_to_initial_main_us": initial_main_us.saturating_sub(agent_start_us),
         "linux_boot_to_initial_main_us": initial_main_us,
         "initial_main_to_final_main_us": final_main_us.saturating_sub(initial_main_us),
         "final_main_to_preflight_us": preflight_begin_us.saturating_sub(final_main_us),

@@ -136,6 +136,7 @@ fn evaluate_cold_boot_summary(summary: &Value) -> AgentResult<()> {
         .and_then(Value::as_object)
         .ok_or("cold-boot benchmark summary has no timeline")?;
     let ordered = [
+        "agent_start_us",
         "initial_main_entry_us",
         "final_main_entry_us",
         "preflight_begin_us",
@@ -993,19 +994,20 @@ mod tests {
             "launcher_ready": true,
             "capture_verified": true,
             "timeline": {
-                "initial_main_entry_us": 1,
-                "final_main_entry_us": 2,
-                "preflight_begin_us": 3,
-                "preflight_end_us": 4,
-                "launcher_exec_us": 5,
-                "magik_process_start_us": 6,
-                "first_launcher_present_us": 7,
+                "agent_start_us": 1,
+                "initial_main_entry_us": 2,
+                "final_main_entry_us": 3,
+                "preflight_begin_us": 4,
+                "preflight_end_us": 5,
+                "launcher_exec_us": 6,
+                "magik_process_start_us": 7,
+                "first_launcher_present_us": 8,
             }
         });
         evaluate_cold_boot_summary(&passing).unwrap();
 
         let mut unordered = passing.clone();
-        unordered["timeline"]["launcher_exec_us"] = json!(8);
+        unordered["timeline"]["launcher_exec_us"] = json!(9);
         assert!(evaluate_cold_boot_summary(&unordered).is_err());
 
         let mut missing_capture = passing;

@@ -51,6 +51,9 @@ entry, final latch Main entry, launcher preflight begin/end, direct Bash exec,
 MagiK process entry, every `startup_timing` milestone, and the first real
 presented launcher frame. It also records host reboot/recovery polling
 separately; host timing is not substituted for device-visible startup time.
+The retained agent timeline, kernel log, inittab, boot analytics and init-time
+diagnostics expose the otherwise uninstrumented Linux/stock-Main interval
+without replacing the stock boot executable.
 The benchmark requires a new boot ID, active launcher readiness, exact installed
 Main revision/hash, and a nonblank authoritative RGB565 capture. Raw Main
 events, MagiK log, both status files, the manifest, timeline, summary, capture,
