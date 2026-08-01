@@ -247,8 +247,7 @@ fn build_agent() -> Result<PathBuf> {
         .join("mister/tools/agent/target")
         .join(TARGET)
         .join("release/mister-magik-agent");
-    let explicit_cross = env::var("MISTER_ARM_BUILD_BACKEND").as_deref() == Ok("cross")
-        || env::var("GITHUB_ACTIONS").as_deref() == Ok("true");
+    let explicit_cross = env::var("MISTER_ARM_BUILD_BACKEND").as_deref() == Ok("cross");
     if explicit_cross {
         let mut command = Command::new("cross");
         command
