@@ -672,6 +672,24 @@ impl DeviceOperations for NativeDevice {
                 output_dir,
             )
             .map_err(device_failure)?,
+            DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
+                nonce,
+                expected_game_id,
+                lifetime_seconds,
+            } => match launcher_automation::exercise_launch_return(
+                &config,
+                nonce,
+                expected_game_id,
+                *lifetime_seconds,
+            ) {
+                Ok(detail) => detail,
+                Err(launcher_automation::LaunchReturnError::Failed(detail)) => {
+                    return Err(DeviceFailure::OperationFailed(detail));
+                }
+                Err(launcher_automation::LaunchReturnError::RecoveryRequired(detail)) => {
+                    return Err(DeviceFailure::RecoveryRequired(detail));
+                }
+            },
             DeviceRequest::EndLauncherAutomation { nonce } => {
                 launcher_automation::end(&config, nonce).map_err(device_failure)?
             }

@@ -3982,8 +3982,19 @@ mod linux {
                 "main_status": main_status,
                 "slint_status": slint_status,
                 "slint_status_current": slint_status_current,
+                "core_name": read_trimmed_text_value("/tmp/CORENAME"),
+                "rbf_name": read_trimmed_text_value("/tmp/RBFNAME"),
             }
         })
+    }
+
+    fn read_trimmed_text_value(path: &str) -> Value {
+        fs::read_to_string(path)
+            .ok()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .map(Value::String)
+            .unwrap_or(Value::Null)
     }
 
     fn read_text_value(path: &str) -> Value {
@@ -4925,6 +4936,23 @@ mod tests {
         assert!(sd_browse::stat_item_at_root(&root, "/../escape").is_err());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn trimmed_status_text_omits_blank_runtime_markers() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-agent-status-text-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&root);
+        std::fs::write(&root, "  ArcadeCore\n").unwrap();
+        assert_eq!(
+            read_trimmed_text_value(root.to_str().unwrap()),
+            "ArcadeCore"
+        );
+        std::fs::write(&root, " \n").unwrap();
+        assert_eq!(read_trimmed_text_value(root.to_str().unwrap()), Value::Null);
+        let _ = std::fs::remove_file(root);
     }
 
     #[test]

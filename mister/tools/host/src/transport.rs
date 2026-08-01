@@ -184,6 +184,11 @@ pub enum DeviceRequest {
         label: String,
         output_dir: PathBuf,
     },
+    ExerciseLauncherAutomationLaunchReturn {
+        nonce: String,
+        expected_game_id: String,
+        lifetime_seconds: u64,
+    },
     EndLauncherAutomation {
         nonce: String,
     },
@@ -248,6 +253,9 @@ impl DeviceRequest {
             Self::ReadLauncherAutomationSnapshot { .. } => "read-launcher-automation-snapshot",
             Self::CaptureLauncherAutomationCheckpoint { .. } => {
                 "capture-launcher-automation-checkpoint"
+            }
+            Self::ExerciseLauncherAutomationLaunchReturn { .. } => {
+                "exercise-launcher-automation-launch-return"
             }
             Self::EndLauncherAutomation { .. } => "end-launcher-automation",
         }
@@ -481,12 +489,17 @@ mod tests {
                 label: "home".into(),
                 output_dir: "checkpoints".into(),
             },
+            DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
+                nonce: "a".repeat(64),
+                expected_game_id: "/media/fat/_Arcade/game.mra".into(),
+                lifetime_seconds: 120,
+            },
             DeviceRequest::EndLauncherAutomation {
                 nonce: "a".repeat(64),
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 44);
+        assert_eq!(labels.len(), 45);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

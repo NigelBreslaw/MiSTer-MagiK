@@ -63,6 +63,7 @@ struct AcceptanceReceipt {
     candidate: CandidateIdentity,
     installed_runtime: Value,
     checkpoints: Vec<Value>,
+    launch_return: Value,
     usb_video: Vec<UsbEvidence>,
 }
 
@@ -133,11 +134,15 @@ pub fn execute(
         .and_then(Value::as_str)
         .ok_or("automation session has no nonce")?
         .to_owned();
-    let journey = run_ui_journey(&mut device, &nonce, output);
-    let ended = device.execute(DeviceRequest::EndLauncherAutomation {
-        nonce: nonce.clone(),
-    });
-    let (checkpoints, usb_video) = match (journey, ended) {
+    let mut nonce = Some(nonce);
+    let journey = run_ui_journey(&mut device, &mut nonce, output);
+    let ended = match nonce.as_ref() {
+        Some(nonce) => device.execute(DeviceRequest::EndLauncherAutomation {
+            nonce: nonce.clone(),
+        }),
+        None => Ok(String::from("automation session already closed")),
+    };
+    let (checkpoints, launch_return, usb_video) = match (journey, ended) {
         (Ok(evidence), Ok(_)) => evidence,
         (Err(error), Ok(_)) => return Err(error),
         (Ok(_), Err(restore)) => {
@@ -161,6 +166,7 @@ pub fn execute(
         candidate,
         installed_runtime: runtime,
         checkpoints,
+        launch_return,
         usb_video,
     };
     let receipt_path = output.join("alpha-acceptance.json");
@@ -176,9 +182,9 @@ pub fn execute(
 
 fn run_ui_journey(
     device: &mut DeviceClient,
-    nonce: &str,
+    nonce: &mut Option<String>,
     output: &Path,
-) -> AgentResult<(Vec<Value>, Vec<UsbEvidence>)> {
+) -> AgentResult<(Vec<Value>, Value, Vec<UsbEvidence>)> {
     let rgb_dir = output.join("rgb565");
     let usb_dir = output.join("usb-video");
     fs::create_dir_all(&rgb_dir).map_err(|error| error.to_string())?;
@@ -229,6 +235,43 @@ fn run_ui_journey(
         "arcade-velocity",
         &rgb_dir,
     )?);
+
+    let pre_launch = snapshot(device, nonce)?;
+    let expected_game_id = semantic(&pre_launch, "selected_game_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("arcade launch has no selected game")?
+        .to_owned();
+    let launch_nonce = nonce.take().ok_or("automation session is not active")?;
+    let launch_return: Value = serde_json::from_str(&device.execute(
+        DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
+            nonce: launch_nonce,
+            expected_game_id: expected_game_id.clone(),
+            lifetime_seconds: 120,
+        },
+    )?)
+    .map_err(|error| format!("cannot parse launch-return evidence: {error}"))?;
+    let replacement_nonce = launch_return
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("launch-return evidence has no replacement nonce")?
+        .to_owned();
+    let return_sequence = launch_return
+        .get("post_return_action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return evidence has no presented sequence")?;
+    *nonce = Some(replacement_nonce);
+    let returned_arcade = snapshot(device, nonce)?;
+    require_semantic(&returned_arcade, "effective_view", "arcade")?;
+    require_semantic(&returned_arcade, "selected_game_id", &expected_game_id)?;
+    checkpoints.push(checkpoint(
+        device,
+        nonce,
+        return_sequence,
+        "arcade-return",
+        &rgb_dir,
+    )?);
+    usb.push(capture_usb("arcade-return", &usb_dir)?);
 
     tap(device, nonce, AutomationButton::Left)?;
     require_bool(&snapshot(device, nonce)?, "drawer_open", true)?;
@@ -326,17 +369,25 @@ fn run_ui_journey(
     tap(device, nonce, AutomationButton::B)?;
     require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
 
-    Ok((checkpoints, usb))
+    Ok((checkpoints, launch_return, usb))
 }
 
-fn tap(device: &mut DeviceClient, nonce: &str, button: AutomationButton) -> AgentResult<u64> {
+fn tap(
+    device: &mut DeviceClient,
+    nonce: &Option<String>,
+    button: AutomationButton,
+) -> AgentResult<u64> {
     action(device, nonce, AutomationAction::Tap(button))
 }
 
-fn action(device: &mut DeviceClient, nonce: &str, action: AutomationAction) -> AgentResult<u64> {
+fn action(
+    device: &mut DeviceClient,
+    nonce: &Option<String>,
+    action: AutomationAction,
+) -> AgentResult<u64> {
     let response: Value = serde_json::from_str(&device.execute(
         DeviceRequest::SendLauncherAutomationAction {
-            nonce: nonce.to_owned(),
+            nonce: active_nonce(nonce)?.to_owned(),
             action,
         },
     )?)
@@ -346,17 +397,17 @@ fn action(device: &mut DeviceClient, nonce: &str, action: AutomationAction) -> A
         .and_then(Value::as_u64)
         .ok_or("automation action has no sequence")?;
     device.execute(DeviceRequest::AwaitLauncherAutomationPresented {
-        nonce: nonce.to_owned(),
+        nonce: active_nonce(nonce)?.to_owned(),
         action_sequence: sequence,
         timeout_ms: 3_000,
     })?;
     Ok(sequence)
 }
 
-fn snapshot(device: &mut DeviceClient, nonce: &str) -> AgentResult<Value> {
+fn snapshot(device: &mut DeviceClient, nonce: &Option<String>) -> AgentResult<Value> {
     serde_json::from_str(
         &device.execute(DeviceRequest::ReadLauncherAutomationSnapshot {
-            nonce: nonce.to_owned(),
+            nonce: active_nonce(nonce)?.to_owned(),
         })?,
     )
     .map_err(|error| format!("cannot parse automation snapshot: {error}").into())
@@ -364,14 +415,14 @@ fn snapshot(device: &mut DeviceClient, nonce: &str) -> AgentResult<Value> {
 
 fn checkpoint(
     device: &mut DeviceClient,
-    nonce: &str,
+    nonce: &Option<String>,
     sequence: u64,
     label: &str,
     output: &Path,
 ) -> AgentResult<Value> {
     serde_json::from_str(
         &device.execute(DeviceRequest::CaptureLauncherAutomationCheckpoint {
-            nonce: nonce.to_owned(),
+            nonce: active_nonce(nonce)?.to_owned(),
             action_sequence: sequence,
             label: label.to_owned(),
             output_dir: output.to_owned(),
@@ -382,7 +433,7 @@ fn checkpoint(
 
 fn await_semantic(
     device: &mut DeviceClient,
-    nonce: &str,
+    nonce: &Option<String>,
     field: &str,
     expected: &str,
 ) -> AgentResult<Value> {
@@ -397,6 +448,12 @@ fn await_semantic(
         "alpha_ui_assertion_failed",
         format!("{field} did not become {expected}"),
     )
+}
+
+fn active_nonce(nonce: &Option<String>) -> AgentResult<&str> {
+    nonce
+        .as_deref()
+        .ok_or_else(|| "automation session is not active".into())
 }
 
 fn require_installed_candidate(
@@ -587,15 +644,16 @@ pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
         );
     }
 
+    let candidate_tag = format!(
+        "alpha-candidate-v{}-{}",
+        receipt.version,
+        &receipt.archive_sha256[..12]
+    );
     Ok(CandidateIdentity {
         format: "mister-magik-alpha-candidate-v1",
         version: receipt.version,
         build_number: receipt.build_number,
-        candidate_tag: format!(
-            "alpha-candidate-v{}-{}",
-            receipt.version,
-            &receipt.archive_sha256[..12]
-        ),
+        candidate_tag,
         archive: receipt.archive,
         archive_sha256: receipt.archive_sha256,
         release_assets_sha256: digest(&receipt_bytes),
@@ -650,12 +708,12 @@ fn verify_checksums(root: &Path) -> AgentResult<BTreeSet<String>> {
 }
 
 fn candidate_hashes(candidate: &CandidateIdentity) -> AgentResult<AlphaCandidateHashes> {
-    let component = |name: &str| {
+    let component = |name: &str| -> AgentResult<String> {
         candidate
             .component_sha256
             .get(name)
             .cloned()
-            .ok_or_else(|| format!("candidate has no {name} component hash").into())
+            .ok_or_else(|| AgentError::from(format!("candidate has no {name} component hash")))
     };
     Ok(AlphaCandidateHashes {
         platform_manifest: candidate.platform_manifest_sha256.clone(),
