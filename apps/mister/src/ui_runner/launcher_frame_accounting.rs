@@ -4,6 +4,7 @@
 use super::launcher_compositor::{
     LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
 };
+use super::launcher_loop::LaunchReturnSession;
 use super::launcher_pacing::LauncherPacingTrace;
 use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::*;

@@ -6308,14 +6308,14 @@ fn return_to_launcher_env_is_set(value: Option<&str>) -> bool {
 }
 
 #[derive(Debug)]
-struct LaunchReturnSession {
+pub(super) struct LaunchReturnSession {
     state: Option<launcher::LaunchReturnState>,
-    source: &'static str,
-    phase: &'static str,
-    fallback_reason: String,
-    exact_context_monotonic_us: u64,
-    preview_ready_monotonic_us: u64,
-    first_correct_present_monotonic_us: u64,
+    pub(super) source: &'static str,
+    pub(super) phase: &'static str,
+    pub(super) fallback_reason: String,
+    pub(super) exact_context_monotonic_us: u64,
+    pub(super) preview_ready_monotonic_us: u64,
+    pub(super) first_correct_present_monotonic_us: u64,
     authoritative_catalog_ready: bool,
     complete: bool,
 }
