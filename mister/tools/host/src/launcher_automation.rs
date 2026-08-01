@@ -19,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const MAX_WAIT: Duration = Duration::from_secs(10);
 const HANDOFF_WAIT: Duration = Duration::from_secs(15);
 const RETURN_WAIT: Duration = Duration::from_secs(12);
+const PUBLIC_MAIN_PATH: &str = "/media/fat/MiSTer_MagiK";
 
 #[derive(Clone, Debug)]
 struct LaunchIdentity {
@@ -245,10 +246,11 @@ pub(super) fn ensure_installed_alpha_launcher(
 
     if main.get("launcher_state").and_then(Value::as_str) == Some("LauncherActive") {
         let launcher_pid = required_u64(main, "launcher_pid")?;
-        if status
-            .pointer("/files/slint_status_current")
-            .and_then(Value::as_bool)
-            != Some(true)
+        if !is_public_main_executable(main.get("executable_path").and_then(Value::as_str))
+            || status
+                .pointer("/files/slint_status_current")
+                .and_then(Value::as_bool)
+                != Some(true)
             || slint.get("pid").and_then(Value::as_u64) != Some(launcher_pid)
             || slint.get("input_enabled").and_then(Value::as_bool) != Some(true)
         {
@@ -649,6 +651,14 @@ fn validate_candidate_build(
     }
 }
 
+fn is_public_main_executable(path: Option<&str>) -> bool {
+    matches!(path, Some("unknown" | PUBLIC_MAIN_PATH))
+}
+
+fn same_public_main_executable(expected: &str, actual: Option<&str>) -> bool {
+    is_public_main_executable(Some(expected)) && is_public_main_executable(actual)
+}
+
 fn validate_pre_launch_snapshot(snapshot: &Value, expected_game_id: &str) -> Result<()> {
     validate_snapshot(snapshot)?;
     for (field, expected) in [
@@ -704,8 +714,10 @@ fn validate_handoff_status(
     }
     if handoff_main.generation == identity.main_generation
         || handoff_main.pid == identity.main_pid
-        || main.get("executable_path").and_then(Value::as_str)
-            != Some(identity.executable_path.as_str())
+        || !same_public_main_executable(
+            &identity.executable_path,
+            main.get("executable_path").and_then(Value::as_str),
+        )
         || main.get("command_channel").and_then(Value::as_str) != Some("ready")
     {
         return Err("core handoff did not create the expected replacement Main epoch".into());
@@ -766,8 +778,7 @@ fn validate_returned_status(
     };
     if returned.main_generation == handoff_main.generation
         || returned.main_pid == handoff_main.pid
-        || main.get("executable_path").and_then(Value::as_str)
-            != Some(identity.executable_path.as_str())
+        || main.get("executable_path").and_then(Value::as_str) != Some(PUBLIC_MAIN_PATH)
         || main.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive")
         || launcher_pid == 0
         || launcher_pid == identity.launcher_pid
@@ -1080,7 +1091,7 @@ mod tests {
                 "main_status": {
                     "main_generation": 29,
                     "pid": 31,
-                    "executable_path": "unknown",
+                    "executable_path": "/media/fat/MiSTer_MagiK",
                     "launcher_pid": 23,
                     "launcher_state": "LauncherActive",
                 },
