@@ -4,7 +4,7 @@
 //! Read-only MiSTer card discovery and Mac-local preview storage.
 
 use crc32fast::Hasher;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -93,6 +93,7 @@ impl HostContentLayout {
 
     pub fn to_canonical(&self, physical: impl AsRef<Path>) -> Result<PathBuf, String> {
         let physical = normalize_without_parent_components(physical.as_ref())?;
+        let physical = canonicalize_existing_ancestor(&physical)?;
         let relative = physical.strip_prefix(&self.card_root).map_err(|_| {
             format!(
                 "{} is outside MiSTer card {}",
@@ -117,6 +118,32 @@ impl HostContentLayout {
     pub fn cache_path(&self, relative: impl AsRef<Path>) -> Result<PathBuf, String> {
         let relative = normalize_relative(relative.as_ref())?;
         Ok(self.cache_root.join(relative))
+    }
+}
+
+fn canonicalize_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
+    let mut current = path;
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match fs::canonicalize(current) {
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return Ok(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(name) = current.file_name() else {
+                    return Err(format!("resolve path {}: {error}", path.display()));
+                };
+                missing.push(name.to_os_string());
+                let Some(parent) = current.parent() else {
+                    return Err(format!("resolve path {}: {error}", path.display()));
+                };
+                current = parent;
+            }
+            Err(error) => return Err(format!("resolve path {}: {error}", path.display())),
+        }
     }
 }
 
@@ -306,7 +333,7 @@ mod tests {
             layout
                 .to_card_path("/media/fat/_Arcade/1942.mra")
                 .expect("card path"),
-            game
+            layout.card_root.join("_Arcade/1942.mra")
         );
     }
 
