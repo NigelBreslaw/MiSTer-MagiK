@@ -36,10 +36,10 @@ pub fn execute(
     reporter.emit(
         EventKind::Progress,
         "platform-identity",
-        "verifying that the installed Dev app matches the local commit",
+        "verifying the coherent installed Dev platform",
         Some(5),
     )?;
-    require_installed_app_revision(app_revision, DeviceClient::default())?;
+    verify_installed_dev_platform(DeviceClient::default())?;
 
     reporter.emit(
         EventKind::Progress,
@@ -71,17 +71,15 @@ pub fn execute(
     )?;
     execute_overlay_transaction(
         repository,
-        app_revision,
         &main_revision,
         &artifact,
         DeviceClient::default(),
     )
 }
 
-fn require_installed_app_revision<D: DeviceOperations>(
-    app_revision: &str,
+fn verify_installed_dev_platform<D: DeviceOperations>(
     mut device: DeviceClient<D>,
-) -> AgentResult<()> {
+) -> AgentResult<String> {
     device.execute(DeviceRequest::Discover)?;
     device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
     let installed = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
@@ -89,19 +87,11 @@ fn require_installed_app_revision<D: DeviceOperations>(
         &installed,
         crate::platform_manifest::Layout::Development,
     )?;
-    if installed.magik_revision() != app_revision {
-        return Err(format!(
-            "installed Dev MagiK revision does not match the local app commit; run scripts/agent deliver first: installed={} local={app_revision}",
-            installed.magik_revision()
-        )
-        .into());
-    }
-    Ok(())
+    Ok(installed.magik_revision().into())
 }
 
 fn execute_overlay_transaction<D: DeviceOperations>(
     repository: &Path,
-    app_revision: &str,
     main_revision: &str,
     artifact: &Path,
     mut device: DeviceClient<D>,
@@ -109,9 +99,14 @@ fn execute_overlay_transaction<D: DeviceOperations>(
     device.execute(DeviceRequest::Discover)?;
     device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
     let installed = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    let installed_identity = crate::platform_manifest::parse_installed(
+        &installed,
+        crate::platform_manifest::Layout::Development,
+    )?;
+    let installed_app_revision = installed_identity.magik_revision().to_string();
     let stage = repository
         .join("build/agent-deploy/local-main")
-        .join(format!("{app_revision}-{main_revision}"));
+        .join(format!("{installed_app_revision}-{main_revision}"));
     if stage.exists() {
         fs::remove_dir_all(&stage)
             .map_err(|error| format!("cannot clear {}: {error}", stage.display()))?;
@@ -124,7 +119,7 @@ fn execute_overlay_transaction<D: DeviceOperations>(
         &installed,
         artifact,
         main_revision,
-        app_revision,
+        &installed_app_revision,
     )?;
     device.execute(DeviceRequest::DeliverLocalMainTransaction {
         local: artifact.to_path_buf(),
@@ -133,7 +128,7 @@ fn execute_overlay_transaction<D: DeviceOperations>(
         expected_gui_sha256: identity.gui_sha256,
     })?;
     Ok(LocalMainExecution {
-        app_revision: app_revision.into(),
+        app_revision: installed_app_revision,
         main_revision: main_revision.into(),
         main_sha256: identity.main_sha256,
         qualification_candidate_id: identity.qualification_candidate_id,
@@ -276,21 +271,16 @@ mod tests {
                 detail: "healthy".into(),
             }),
         ]);
-        let execution = execute_overlay_transaction(
-            &root,
-            &"a".repeat(40),
-            &"b".repeat(40),
-            &artifact,
-            DeviceClient::new(fake),
-        )
-        .unwrap();
+        let execution =
+            execute_overlay_transaction(&root, &"b".repeat(40), &artifact, DeviceClient::new(fake))
+                .unwrap();
         assert_eq!(execution.app_revision, "a".repeat(40));
         assert_eq!(execution.main_revision, "b".repeat(40));
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn installed_app_revision_is_rejected_before_main_build() {
+    fn installed_app_revision_is_preserved_independently_of_host_head() {
         let fake = FakeDevice::with_results([
             Ok(DeviceResponse {
                 operation: "discover",
@@ -305,13 +295,8 @@ mod tests {
                 detail: super::test_manifest(&"a".repeat(40)),
             }),
         ]);
-        let error =
-            require_installed_app_revision(&"b".repeat(40), DeviceClient::new(fake)).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("run scripts/agent deliver first")
-        );
+        let revision = verify_installed_dev_platform(DeviceClient::new(fake)).unwrap();
+        assert_eq!(revision, "a".repeat(40));
     }
 
     #[test]

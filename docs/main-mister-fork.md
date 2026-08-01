@@ -209,6 +209,8 @@ snapshots Dev Main and the manifest, uploads Main first, activates the manifest
 last, and retains rollback until the running `/proc/<pid>/exe`, the complete
 installed platform, and the launcher smoke test all pass. The app, manager,
 scanout module, and latch RBF are never built or replaced by this workflow.
+The recorded app revision is the verified installed MagiK revision, which may
+legitimately predate a clean host-only tooling commit at repository HEAD.
 
 An installed Main that advertises supervised local reload is replaced without
 rebooting Linux. The initial commit that introduces that capability necessarily
