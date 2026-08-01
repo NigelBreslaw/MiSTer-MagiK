@@ -391,6 +391,10 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_launch_return(&config, output_dir).map_err(device_failure)?
             }
+            DeviceRequest::ProfileInstalledColdBoot { output_dir } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                profile_installed_cold_boot(&config, output_dir).map_err(device_failure)?
+            }
             DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_navigation_transitions(&config, output_dir)
@@ -4673,6 +4677,226 @@ const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-
 const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
+
+fn cold_boot_profile_preflight_command() -> String {
+    let verify = installed_platform_verify_command(Layout::Development);
+    shell_sequence([
+        "set -eu",
+        verify.as_str(),
+        "test ! -e /tmp/mister-magik/reboot-unstable",
+        "test ! -e /media/fat/mister-magik/launcher.env",
+        "test ! -e /media/fat/mister-magik-dev/launcher.env",
+        "test ! -e /tmp/mister-magik/fs-fault-launcher.env",
+        "test ! -e /tmp/mister-magik/fs-fault-session",
+        "test ! -e /tmp/mister-magik/fs-fault.json",
+        "test ! -e /media/fat/mister-magik/rebuild-on-next-boot",
+        "test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "sync",
+    ])
+}
+
+fn parse_boot_events(text: &str) -> Result<Vec<Value>> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .enumerate()
+        .map(|(index, line)| {
+            serde_json::from_str::<Value>(line).map_err(|error| {
+                format!("invalid boot event at line {}: {error}", index + 1).into()
+            })
+        })
+        .collect()
+}
+
+fn boot_event_us(events: &[Value], name: &str, last: bool) -> Result<u64> {
+    let matching = events.iter().filter(|event| {
+        event.get("event").and_then(Value::as_str) == Some(name)
+            && event.get("ts_boot_us").and_then(Value::as_u64).is_some()
+    });
+    let event = if last {
+        matching.last()
+    } else {
+        matching.into_iter().next()
+    }
+    .ok_or_else(|| format!("cold-boot event is missing: {name}"))?;
+    Ok(event.get("ts_boot_us").and_then(Value::as_u64).unwrap_or(0))
+}
+
+fn parse_magik_startup_events(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            if fields.next()? != "startup_timing" {
+                return None;
+            }
+            let event = fields.next()?;
+            let elapsed_us = fields.next()?.strip_suffix("us")?.parse::<u64>().ok()?;
+            Some(json!({
+                "event": event,
+                "elapsed_us": elapsed_us,
+                "detail": fields.collect::<Vec<_>>().join("\t"),
+            }))
+        })
+        .collect()
+}
+
+fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let installed_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("cold-boot benchmark cannot read the installed Dev manifest")?;
+    let main_revision = exact_manifest_field(&installed_manifest, "main_revision", 40)?;
+    let main_sha256 = exact_manifest_field(&installed_manifest, "main_sha256", 64)?;
+    let boot_id_before = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("cold-boot benchmark cannot read the initial boot id")?;
+    exec_checked(
+        &session,
+        "cold-boot benchmark safety preflight",
+        &cold_boot_profile_preflight_command(),
+    )?;
+
+    let host_started = Instant::now();
+    let issue_started = Instant::now();
+    let reboot_mode = issue_reboot(&session, RebootMode::Supervised)?;
+    let host_reboot_issue_ms = issue_started.elapsed().as_millis() as u64;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
+        return Err("device did not complete the cold-boot profile reboot".into());
+    }
+    wait_authenticated_agent_ready(config, Duration::from_secs(30))
+        .map_err(|error| error.to_string())?;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    wait_delivery_health(&session, "dev", Duration::from_secs(10))?;
+    let host_recovery_elapsed_ms = host_started.elapsed().as_millis() as u64;
+
+    let boot_id_after = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("cold-boot benchmark cannot read the final boot id")?;
+    if boot_id_after.trim() == boot_id_before.trim() {
+        return Err("cold-boot benchmark did not observe a new Linux boot id".into());
+    }
+    let events_text = remote_read(&session, "/tmp/mister-magik/events.jsonl")
+        .filter(|text| !text.trim().is_empty())
+        .ok_or("cold-boot benchmark has no Main event log")?;
+    let launcher_log = remote_read(&session, "/tmp/mister-magik-slint.log")
+        .filter(|text| !text.trim().is_empty())
+        .ok_or("cold-boot benchmark has no MagiK launcher log")?;
+    let main_status_text = remote_read(&session, MAIN_STATUS_REMOTE)
+        .ok_or("cold-boot benchmark has no Main status")?;
+    let launcher_status_text = remote_read(&session, SLINT_STATUS_REMOTE)
+        .ok_or("cold-boot benchmark has no launcher status")?;
+    let main_status: Value = serde_json::from_str(&main_status_text)?;
+    let launcher_status: Value = serde_json::from_str(&launcher_status_text)?;
+    let events = parse_boot_events(&events_text)?;
+    let startup_events = parse_magik_startup_events(&launcher_log);
+
+    let initial_main_us = boot_event_us(&events, "main_process_entry", false)?;
+    let final_main_us = boot_event_us(&events, "main_process_entry", true)?;
+    let preflight_begin_us = boot_event_us(&events, "launcher_preflight_begin", true)?;
+    let preflight_end_us = boot_event_us(&events, "launcher_preflight_end", true)?;
+    let launcher_exec_us = boot_event_us(&events, "launcher_exec_begin", true)?;
+    let process_start_us = launcher_status
+        .get("process_start_monotonic_us")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let first_present_elapsed_us = startup_events
+        .iter()
+        .find(|event| {
+            event.get("event").and_then(Value::as_str) == Some("launcher_first_frame_presented")
+        })
+        .and_then(|event| event.get("elapsed_us"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let first_present_us = process_start_us.saturating_add(first_present_elapsed_us);
+    let ordered = [
+        initial_main_us,
+        final_main_us,
+        preflight_begin_us,
+        preflight_end_us,
+        launcher_exec_us,
+        process_start_us,
+        first_present_us,
+    ];
+    if ordered[0] == 0
+        || first_present_elapsed_us == 0
+        || ordered.windows(2).any(|pair| pair[0] > pair[1])
+    {
+        return Err(format!("cold-boot timestamps are zero or unordered: {ordered:?}").into());
+    }
+
+    let capture = request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+    validate_visible_launcher_capture(&capture)?;
+    fs::write(output_dir.join("boot-rgb565.png"), &capture.png)?;
+    fs::write(
+        output_dir.join("boot-capture.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+    )?;
+    for (name, text) in [
+        ("events.jsonl", events_text.as_str()),
+        ("launcher.log", launcher_log.as_str()),
+        ("main-status.json", main_status_text.as_str()),
+        ("launcher-status.json", launcher_status_text.as_str()),
+        ("platform-v3.manifest", installed_manifest.as_str()),
+    ] {
+        fs::write(output_dir.join(name), text)?;
+    }
+
+    let timeline = json!({
+        "initial_main_entry_us": initial_main_us,
+        "final_main_entry_us": final_main_us,
+        "preflight_begin_us": preflight_begin_us,
+        "preflight_end_us": preflight_end_us,
+        "launcher_exec_us": launcher_exec_us,
+        "magik_process_start_us": process_start_us,
+        "first_launcher_present_us": first_present_us,
+        "main_events": events,
+        "magik_startup_events": startup_events,
+    });
+    let phases = json!({
+        "linux_boot_to_initial_main_us": initial_main_us,
+        "initial_main_to_final_main_us": final_main_us.saturating_sub(initial_main_us),
+        "final_main_to_preflight_us": preflight_begin_us.saturating_sub(final_main_us),
+        "preflight_us": preflight_end_us.saturating_sub(preflight_begin_us),
+        "preflight_to_launcher_exec_us": launcher_exec_us.saturating_sub(preflight_end_us),
+        "launcher_exec_to_magik_process_us": process_start_us.saturating_sub(launcher_exec_us),
+        "magik_process_to_first_present_us": first_present_us.saturating_sub(process_start_us),
+        "linux_boot_to_first_present_us": first_present_us,
+    });
+    let launcher_ready = main_status.get("launcher_state").and_then(Value::as_str)
+        == Some("LauncherActive")
+        && launcher_status
+            .get("input_enabled")
+            .and_then(Value::as_bool)
+            == Some(true);
+    let summary = json!({
+        "schema": "mister-magik-cold-boot-benchmark-v1",
+        "scenario": "cold-boot",
+        "timing_class": "device-monotonic-instrumented-installed-dev",
+        "main_revision": main_revision,
+        "main_sha256": main_sha256,
+        "boot_id_before": boot_id_before.trim(),
+        "boot_id_after": boot_id_after.trim(),
+        "reboot_mode": reboot_mode,
+        "host_reboot_issue_ms": host_reboot_issue_ms,
+        "host_recovery_elapsed_ms": host_recovery_elapsed_ms,
+        "launcher_ready": launcher_ready,
+        "screen": launcher_status.get("screen"),
+        "effective_view": launcher_status.get("effective_view"),
+        "capture_verified": true,
+        "capture_file": "boot-rgb565.png",
+        "capture_metadata_file": "boot-capture.json",
+        "phases": phases,
+        "timeline": timeline,
+    });
+    fs::write(
+        output_dir.join("timeline.json"),
+        format!("{}\n", serde_json::to_string_pretty(&timeline)?),
+    )?;
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
 
 fn exact_manifest_field(manifest: &str, field: &str, length: usize) -> Result<String> {
     let values = manifest

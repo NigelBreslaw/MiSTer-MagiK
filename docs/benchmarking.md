@@ -2,7 +2,9 @@
 
 `scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
-never builds, deploys, replaces platform files, or reboots the MiSTer. The
+never builds, deploys, or replaces platform files. The fixed `cold-boot`
+scenario is the sole benchmark allowed to issue one supervised Linux reboot;
+all other scenarios must leave the device boot unchanged. The
 installed platform manifest and its hashes are the benchmark identity, and its
 delivery reconciliation against the clean local Git HEAD must be a no-op.
 Host-only benchmark tooling changes therefore do not force an identical runtime
@@ -11,6 +13,7 @@ revision, while pending runtime or platform changes remain a hard failure.
 Supported scenarios:
 
 - `screensaver` (the default)
+- `cold-boot`
 - `particles`
 - `particle-demo-40k`
 - `particle-capacity`
@@ -34,6 +37,25 @@ request. They may not expose arbitrary commands, duration knobs, remote paths,
 or generic environment overrides. Benchmark requests pass through a restricted
 client that rejects delivery and platform-mutation operations before transport.
 The device agent exposes no binary-only runtime replacement endpoint.
+
+## Cold boot
+
+`cold-boot` profiles exactly one supervised reboot of the coherently installed
+Dev platform. Before issuing it, the workflow re-verifies the complete
+installed platform, rejects every persistent or volatile reset-fault arming
+file, rejects a reboot-unstable marker, and syncs. The reboot request is never
+retried after an unavailable response.
+
+The device-monotonic timeline starts at Linux boot and records initial Main
+entry, final latch Main entry, launcher preflight begin/end, direct Bash exec,
+MagiK process entry, every `startup_timing` milestone, and the first real
+presented launcher frame. It also records host reboot/recovery polling
+separately; host timing is not substituted for device-visible startup time.
+The benchmark requires a new boot ID, active launcher readiness, exact installed
+Main revision/hash, and a nonblank authoritative RGB565 capture. Raw Main
+events, MagiK log, both status files, the manifest, timeline, summary, capture,
+and capture metadata are retained under
+`build/agent-benchmarks/cold-boot/<timestamp>/`.
 
 ## Arcade launch and return
 

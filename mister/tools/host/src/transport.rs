@@ -137,6 +137,9 @@ pub enum DeviceRequest {
     ProfileInstalledLaunchReturn {
         output_dir: PathBuf,
     },
+    ProfileInstalledColdBoot {
+        output_dir: PathBuf,
+    },
     ProfileInstalledNavigationTransitions {
         output_dir: PathBuf,
     },
@@ -243,6 +246,7 @@ impl DeviceRequest {
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
             Self::ProfileInstalledLaunchReturn { .. } => "profile-installed-launch-return",
+            Self::ProfileInstalledColdBoot { .. } => "profile-installed-cold-boot",
             Self::ProfileInstalledNavigationTransitions { .. } => {
                 "profile-installed-navigation-transitions"
             }
@@ -299,6 +303,7 @@ impl DeviceRequest {
                 | Self::VerifyInstalledSearchUi { .. }
                 | Self::ProfileInstalledCatalogLifecycle { .. }
                 | Self::ProfileInstalledLaunchReturn { .. }
+                | Self::ProfileInstalledColdBoot { .. }
                 | Self::ProfileInstalledNavigationTransitions { .. }
                 | Self::VerifyHealth(Layout::Development)
         )
@@ -517,6 +522,9 @@ mod tests {
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return-profile".into(),
             },
+            DeviceRequest::ProfileInstalledColdBoot {
+                output_dir: "cold-boot-profile".into(),
+            },
             DeviceRequest::ProfileInstalledNavigationTransitions {
                 output_dir: "navigation-transition-profile".into(),
             },
@@ -614,6 +622,12 @@ mod tests {
         assert!(
             DeviceRequest::ProfileInstalledLaunchReturn {
                 output_dir: "launch-return".into(),
+            }
+            .allowed_during_benchmark()
+        );
+        assert!(
+            DeviceRequest::ProfileInstalledColdBoot {
+                output_dir: "cold-boot".into(),
             }
             .allowed_during_benchmark()
         );

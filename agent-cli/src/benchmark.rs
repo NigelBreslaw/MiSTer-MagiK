@@ -82,11 +82,82 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LaunchReturn => {
             execute_launch_return(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::ColdBoot => {
+            execute_cold_boot(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_cold_boot(
+    device: &mut BenchmarkDeviceClient,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling one controlled Dev cold boot through the first real launcher frame",
+        Some(35),
+    )?;
+    let detail = device.execute(DeviceRequest::ProfileInstalledColdBoot {
+        output_dir: output_dir.clone(),
+    })?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_cold_boot_summary(&summary)?;
+    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_cold_boot_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-benchmark-v1")
+        || summary.get("timing_class").and_then(Value::as_str)
+            != Some("device-monotonic-instrumented-installed-dev")
+    {
+        return Err("cold-boot benchmark summary has the wrong evidence schema".into());
+    }
+    let timeline = summary
+        .get("timeline")
+        .and_then(Value::as_object)
+        .ok_or("cold-boot benchmark summary has no timeline")?;
+    let ordered = [
+        "initial_main_entry_us",
+        "final_main_entry_us",
+        "preflight_begin_us",
+        "preflight_end_us",
+        "launcher_exec_us",
+        "magik_process_start_us",
+        "first_launcher_present_us",
+    ]
+    .into_iter()
+    .map(|field| timeline.get(field).and_then(Value::as_u64).unwrap_or(0))
+    .collect::<Vec<_>>();
+    if ordered[0] == 0 || ordered.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(
+            format!("cold-boot benchmark timestamps are zero or unordered: {ordered:?}").into(),
+        );
+    }
+    if summary.get("capture_verified").and_then(Value::as_bool) != Some(true)
+        || summary.get("launcher_ready").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("cold-boot benchmark did not verify the visible launcher".into());
+    }
+    Ok(())
 }
 
 const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool {
@@ -912,6 +983,34 @@ mod tests {
         assert!(benchmark_requires_initial_health(
             BenchmarkScenario::Screensaver
         ));
+    }
+
+    #[test]
+    fn cold_boot_requires_ordered_device_timing_and_visible_capture() {
+        let passing = json!({
+            "schema": "mister-magik-cold-boot-benchmark-v1",
+            "timing_class": "device-monotonic-instrumented-installed-dev",
+            "launcher_ready": true,
+            "capture_verified": true,
+            "timeline": {
+                "initial_main_entry_us": 1,
+                "final_main_entry_us": 2,
+                "preflight_begin_us": 3,
+                "preflight_end_us": 4,
+                "launcher_exec_us": 5,
+                "magik_process_start_us": 6,
+                "first_launcher_present_us": 7,
+            }
+        });
+        evaluate_cold_boot_summary(&passing).unwrap();
+
+        let mut unordered = passing.clone();
+        unordered["timeline"]["launcher_exec_us"] = json!(8);
+        assert!(evaluate_cold_boot_summary(&unordered).is_err());
+
+        let mut missing_capture = passing;
+        missing_capture["capture_verified"] = json!(false);
+        assert!(evaluate_cold_boot_summary(&missing_capture).is_err());
     }
 
     #[test]

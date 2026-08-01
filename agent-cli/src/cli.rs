@@ -672,6 +672,14 @@ mod tests {
             }
         );
         assert_eq!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "cold-boot"])
+                .unwrap()
+                .into_intent(),
+            Intent::Benchmark {
+                scenario: BenchmarkScenario::ColdBoot
+            }
+        );
+        assert_eq!(
             Cli::try_parse_from(["agent-cli", "benchmark", "search"])
                 .unwrap()
                 .into_intent(),
