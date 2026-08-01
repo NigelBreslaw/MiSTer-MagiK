@@ -163,8 +163,8 @@ pub(crate) fn import(sqlite: &Path, csv: &Path, source_sha: &str) -> Result<Valu
                 entry.value("parent_title"),
                 entry.value("platform"),
                 entry.value("series"),
-                yes_no(entry.value("homebrew"), "homebrew")?,
-                yes_no(entry.value("bootleg"), "bootleg")?,
+                source_flag(entry.value("homebrew"), "homebrew")?,
+                source_flag(entry.value("bootleg"), "bootleg")?,
                 optional_integer(entry.value("year"), "year")?,
                 entry.value("manufacturer"),
                 entry.value("category"),
@@ -346,6 +346,16 @@ fn yes_no(value: &str, field: &str) -> Result<i64> {
     }
 }
 
+fn source_flag(value: &str, field: &str) -> Result<i64> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "yes" | "ys" => Ok(1),
+        "" | "no" => Ok(0),
+        _ => Err(
+            format!("ArcadeDatabase {field} must be yes, no, ys, or blank; got {value:?}").into(),
+        ),
+    }
+}
+
 fn optional_yes_no(value: &str, field: &str) -> Result<Option<i64>> {
     match value.trim().to_ascii_lowercase().as_str() {
         "" | "n-a" => Ok(None),
@@ -434,21 +444,30 @@ mod tests {
     }
 
     #[test]
-    fn imports_entities_literal_ampersands_and_blank_setnames() {
+    fn imports_entities_literal_ampersands_and_source_flag_quirks() {
         let path = database();
         let csv_path = temp_path("ArcadeDatabase.csv");
         let csv = format!(
-            "{HEADER},\"Snow Bros. - Nick & Tom\",World,,no,,Board,Series,no,no,1985,Maker,\"Platform - Run, Jump &amp; Scrolling\",,15kHz,horizontal,n-a,,2-4 (simultaneous),8-way,,2\n"
+            "{HEADER},\"Snow Bros. - Nick & Tom\",World,,no,,Board,Series,,ys,1985,Maker,\"Platform - Run, Jump &amp; Scrolling\",,15kHz,horizontal,n-a,,2-4 (simultaneous),8-way,,2\n"
         );
         fs::write(&csv_path, csv).unwrap();
 
         let summary = import(&path, &csv_path, &"a".repeat(40)).unwrap();
         let connection = Connection::open(&path).unwrap();
-        let row: (String, String, String, i64) = connection
+        let row: (String, String, String, i64, i64, i64) = connection
             .query_row(
-                "SELECT setname,name,category,year FROM mister_arcade_entries",
+                "SELECT setname,name,category,year,homebrew,bootleg FROM mister_arcade_entries",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .unwrap();
 
@@ -459,7 +478,9 @@ mod tests {
                 String::new(),
                 "Snow Bros. - Nick & Tom".to_string(),
                 "Platform - Run, Jump & Scrolling".to_string(),
-                1985
+                1985,
+                0,
+                1
             )
         );
         let _ = fs::remove_file(path);
