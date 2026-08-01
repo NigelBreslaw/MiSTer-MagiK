@@ -290,6 +290,21 @@ impl DeviceOperations for NativeDevice {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 deliver_platform_transaction(&config, stage, expected_sha256)?
             }
+            DeviceRequest::DeliverLocalMainTransaction {
+                local,
+                manifest_local,
+                expected_main_sha256,
+                expected_gui_sha256,
+            } => {
+                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
+                deliver_local_main_transaction(
+                    &config,
+                    local,
+                    manifest_local,
+                    expected_main_sha256,
+                    expected_gui_sha256,
+                )?
+            }
             DeviceRequest::ProfileInstalledScreensaver { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
@@ -1792,6 +1807,422 @@ fn deliver_platform_transaction(
             session: &session,
             transaction: &transaction,
             expected_sha256,
+        },
+        true,
+    )
+}
+
+const LOCAL_MAIN_REMOTE: &str = "/media/fat/MiSTer_MagiKDev";
+const LOCAL_MAIN_MANIFEST_REMOTE: &str = "/media/fat/mister-magik-dev/platform-v3.manifest";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LocalMainActivation {
+    LinuxReboot,
+    SupervisedReload { pid: u64, generation: u64 },
+}
+
+fn local_main_activation(status: Option<&Value>) -> LocalMainActivation {
+    let Some(status) = status else {
+        return LocalMainActivation::LinuxReboot;
+    };
+    let supported = status
+        .get("local_main_reload_supported")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let active = status.get("launcher_state").and_then(Value::as_str) == Some("LauncherActive");
+    let dev = status.get("executable_path").and_then(Value::as_str) == Some(LOCAL_MAIN_REMOTE);
+    let pid = status.get("pid").and_then(Value::as_u64);
+    let generation = status.get("main_generation").and_then(Value::as_u64);
+    match (supported && active && dev, pid, generation) {
+        (true, Some(pid), Some(generation)) if pid != 0 && generation != 0 => {
+            LocalMainActivation::SupervisedReload { pid, generation }
+        }
+        _ => LocalMainActivation::LinuxReboot,
+    }
+}
+
+struct LocalMainDeliveryActions<'a> {
+    config: &'a NativeDeviceConfig,
+    local: &'a Path,
+    manifest_local: &'a Path,
+    expected_main_sha256: &'a str,
+    expected_gui_sha256: &'a str,
+    activation: LocalMainActivation,
+    installed_manifest: Option<BTreeMap<String, String>>,
+    rolling_back: bool,
+    recovery_reboot_used: bool,
+}
+
+impl LocalMainDeliveryActions<'_> {
+    fn connect(&self) -> std::result::Result<Session, DeviceFailure> {
+        connect_with(&self.config.connection, 10).map_err(device_failure)
+    }
+
+    fn reload(&self, previous_pid: u64, previous_generation: u64) -> Result<()> {
+        let session = connect_with(&self.config.connection, 10)?;
+        exec_checked(
+            &session,
+            "local Main supervised reload",
+            &acknowledged_main_command("mister_magik_reload_main"),
+        )?;
+        let started = Instant::now();
+        let mut last_status = Value::Null;
+        while started.elapsed() < Duration::from_secs(45) {
+            if let Some(text) = remote_read(&session, MAIN_STATUS_REMOTE)
+                && let Ok(status) = serde_json::from_str::<Value>(&text)
+            {
+                let pid = status.get("pid").and_then(Value::as_u64).unwrap_or(0);
+                let generation = status
+                    .get("main_generation")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if pid != 0
+                    && generation != 0
+                    && pid != previous_pid
+                    && generation != previous_generation
+                {
+                    return Ok(());
+                }
+                last_status = status;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        Err(format!(
+            "local Main reload did not produce a new process generation; last_status={last_status}"
+        )
+        .into())
+    }
+
+    fn activate_installed_main(&mut self) -> std::result::Result<(), DeviceFailure> {
+        match self.activation {
+            LocalMainActivation::LinuxReboot => delivery_reboot_wait(self.config),
+            LocalMainActivation::SupervisedReload { pid, generation } => {
+                match self.reload(pid, generation) {
+                    Ok(()) => Ok(()),
+                    Err(error) if self.rolling_back && !self.recovery_reboot_used => {
+                        self.recovery_reboot_used = true;
+                        eprintln!(
+                            "local Main rollback reload unavailable ({error}); using one bounded recovery reboot"
+                        );
+                        delivery_reboot_wait(self.config)
+                    }
+                    Err(error) => Err(device_failure(error)),
+                }
+            }
+        }
+    }
+}
+
+impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
+    fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let session = self.connect()?;
+        exec_checked(
+            &session,
+            "installed Dev platform verification before local Main delivery",
+            &installed_platform_verify_command(Layout::Development),
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+        let status = remote_read(&session, MAIN_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        self.activation = local_main_activation(status.as_ref());
+        let installed_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+            .ok_or_else(|| DeviceFailure::ArtifactMismatch("Dev manifest is missing".into()))?;
+        self.installed_manifest = Some(
+            parse_local_main_manifest_text(&installed_manifest)
+                .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?,
+        );
+        exec_checked(
+            &session,
+            "local Main snapshot",
+            &local_main_snapshot_script(),
+        )
+        .map_err(device_failure)
+    }
+
+    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let candidate = parse_local_main_manifest(self.manifest_local).map_err(device_failure)?;
+        validate_local_main_overlay_preserves_installed(
+            self.installed_manifest.as_ref().ok_or_else(|| {
+                DeviceFailure::OperationFailed("local Main snapshot identity is missing".into())
+            })?,
+            &candidate,
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+        let session = self.connect()?;
+        put(&session, self.local, &format!("{LOCAL_MAIN_REMOTE}.upload"))
+            .map_err(device_failure)?;
+        put(
+            &session,
+            self.manifest_local,
+            &format!("{LOCAL_MAIN_MANIFEST_REMOTE}.upload"),
+        )
+        .map_err(device_failure)?;
+        exec_checked(
+            &session,
+            "local Main activation",
+            &local_main_swap_script(
+                self.expected_main_sha256,
+                &file_sha256(self.manifest_local.to_path_buf()).map_err(device_failure)?,
+            ),
+        )
+        .map_err(device_failure)
+    }
+
+    fn activate(&mut self) -> std::result::Result<(), DeviceFailure> {
+        Ok(())
+    }
+
+    fn reboot(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.activate_installed_main()
+    }
+
+    fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
+        let mut detail = smoke_development_delivery(self.config, self.expected_gui_sha256)?;
+        let session = self.connect()?;
+        exec_checked(
+            &session,
+            "local Main installed platform verification",
+            &installed_platform_verify_command(Layout::Development),
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+        exec_checked(
+            &session,
+            "local Main running process identity",
+            &local_main_process_identity_command(self.expected_main_sha256),
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+        detail.push_str(&format!(" main_sha256={}", self.expected_main_sha256));
+        Ok(detail)
+    }
+
+    fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let session = self.connect()?;
+        exec_checked(&session, "local Main commit", &local_main_cleanup_script())
+            .map_err(device_failure)
+    }
+
+    fn rollback(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.rolling_back = true;
+        let session = self.connect()?;
+        let status = remote_read(&session, MAIN_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        self.activation = local_main_activation(status.as_ref());
+        exec_checked(
+            &session,
+            "local Main rollback",
+            &local_main_rollback_script(),
+        )
+        .map_err(device_failure)
+    }
+
+    fn health(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let session = self.connect()?;
+        exec_checked(
+            &session,
+            "restored Dev platform verification",
+            &installed_platform_verify_command(Layout::Development),
+        )
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+        verify_delivery_health(self.config)
+    }
+}
+
+fn validate_local_main_bundle_identity(
+    local: &Path,
+    manifest_local: &Path,
+    expected_main_sha256: &str,
+    expected_gui_sha256: &str,
+) -> Result<()> {
+    if !local.is_file() || !manifest_local.is_file() {
+        return Err("local Main delivery requires a Main artifact and manifest".into());
+    }
+    if file_sha256(local.to_path_buf())? != expected_main_sha256 {
+        return Err("local Main artifact hash does not match the requested identity".into());
+    }
+    let fields = parse_local_main_manifest(manifest_local)?;
+    for (field, expected) in [
+        ("main_sha256", expected_main_sha256),
+        ("gui_sha256", expected_gui_sha256),
+        ("main_path", LOCAL_MAIN_REMOTE),
+        ("gui_path", "/media/fat/mister-magik-dev/mister-magik-fb"),
+    ] {
+        if fields.get(field).map(String::as_str) != Some(expected) {
+            return Err(format!("local Main manifest field {field} is not canonical").into());
+        }
+    }
+    Ok(())
+}
+
+fn parse_local_main_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
+    let text = fs::read_to_string(path)?;
+    parse_local_main_manifest_text(&text)
+}
+
+fn parse_local_main_manifest_text(text: &str) -> Result<BTreeMap<String, String>> {
+    let mut fields: BTreeMap<String, String> = BTreeMap::new();
+    for line in text.lines() {
+        let (key, value) = line
+            .split_once('=')
+            .ok_or("local Main manifest contains a malformed line")?;
+        if value.is_empty()
+            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
+            || fields.insert(key.into(), value.into()).is_some()
+        {
+            return Err(format!("local Main manifest has an invalid field: {key}").into());
+        }
+    }
+    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
+        || RUNTIME_MANIFEST_FIELDS
+            .iter()
+            .any(|field| !fields.contains_key(*field))
+    {
+        return Err("local Main manifest does not have the exact canonical field set".into());
+    }
+    for field in [
+        "platform_bundle_id",
+        "qualification_candidate_id",
+        "main_sha256",
+        "gui_sha256",
+        "manager_sha256",
+        "scanout_module_sha256",
+        "scanout_metadata_sha256",
+        "latch_rbf_sha256",
+        "latch_metadata_sha256",
+        "platform_contract_sha256",
+    ] {
+        require_local_main_hex(field, &fields[field], 64)?;
+    }
+    for field in ["main_revision", "magik_revision", "menu_revision"] {
+        require_local_main_hex(field, &fields[field], 40)?;
+    }
+    if fields["format"] != "mister-magik-platform-v3"
+        || fields["main_path"] != LOCAL_MAIN_REMOTE
+        || fields["gui_path"] != "/media/fat/mister-magik-dev/mister-magik-fb"
+    {
+        return Err("local Main manifest has a non-Dev platform identity".into());
+    }
+    if fields["qualification_candidate_id"] != local_main_candidate_id(&fields) {
+        return Err("local Main manifest candidate identity is inconsistent".into());
+    }
+    Ok(fields)
+}
+
+fn validate_local_main_overlay_preserves_installed(
+    installed: &BTreeMap<String, String>,
+    candidate: &BTreeMap<String, String>,
+) -> Result<()> {
+    for field in RUNTIME_MANIFEST_FIELDS {
+        if matches!(
+            *field,
+            "main_sha256" | "main_revision" | "qualification_candidate_id"
+        ) {
+            continue;
+        }
+        if candidate.get(*field) != installed.get(*field) {
+            return Err(
+                format!("local Main overlay changed protected platform field {field}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn local_main_candidate_id(fields: &BTreeMap<String, String>) -> String {
+    let mut hash = Sha256::new();
+    for field in RUNTIME_MANIFEST_FIELDS {
+        if *field == "qualification_candidate_id" {
+            continue;
+        }
+        hash.update(field.as_bytes());
+        hash.update(b"=");
+        hash.update(fields[*field].as_bytes());
+        hash.update(b"\n");
+    }
+    encode_hex(&hash.finalize())
+}
+
+fn require_local_main_hex(name: &str, value: &str, length: usize) -> Result<()> {
+    if value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(format!("local Main manifest field {name} is not lowercase hex").into())
+    }
+}
+
+fn local_main_snapshot_script() -> String {
+    let safety = platform_safety_script();
+    format!(
+        "set -eu; {safety}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; cp -p {main} {main}.delivery-rollback.tmp; mv -f {main}.delivery-rollback.tmp {main}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback.tmp; mv -f {manifest}.delivery-rollback.tmp {manifest}.delivery-rollback; sync",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+    )
+}
+
+fn local_main_swap_script(expected_main_sha256: &str, expected_manifest_sha256: &str) -> String {
+    format!(
+        "set -eu; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; test \"$(sha256sum {main}.upload | awk '{{print $1}}')\" = {main_hash}; test \"$(sha256sum {manifest}.upload | awk '{{print $1}}')\" = {manifest_hash}; mv -f {main}.upload {main}; chmod 755 {main}; mv -f {manifest}.upload {manifest}; sync",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        main_hash = sh(expected_main_sha256),
+        manifest_hash = sh(expected_manifest_sha256),
+    )
+}
+
+fn local_main_rollback_script() -> String {
+    format!(
+        "set -eu; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; mv -f {main}.delivery-rollback {main}; chmod 755 {main}; mv -f {manifest}.delivery-rollback {manifest}; rm -f {main}.upload {manifest}.upload; sync",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+    )
+}
+
+fn local_main_cleanup_script() -> String {
+    format!(
+        "rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+    )
+}
+
+fn local_main_process_identity_command(expected_main_sha256: &str) -> String {
+    format!(
+        "set -eu; set -- $(pidof MiSTer_MagiKDev); test \"$#\" -eq 1; test \"$(readlink /proc/$1/exe)\" = {main}; test \"$(sha256sum /proc/$1/exe | awk '{{print $1}}')\" = {expected}",
+        main = sh(LOCAL_MAIN_REMOTE),
+        expected = sh(expected_main_sha256),
+    )
+}
+
+fn deliver_local_main_transaction(
+    config: &NativeDeviceConfig,
+    local: &Path,
+    manifest_local: &Path,
+    expected_main_sha256: &str,
+    expected_gui_sha256: &str,
+) -> std::result::Result<String, DeviceFailure> {
+    require_delivery_sha256(expected_main_sha256)?;
+    require_delivery_sha256(expected_gui_sha256)?;
+    validate_local_main_bundle_identity(
+        local,
+        manifest_local,
+        expected_main_sha256,
+        expected_gui_sha256,
+    )
+    .map_err(device_failure)?;
+    run_coherent_delivery(
+        &mut LocalMainDeliveryActions {
+            config,
+            local,
+            manifest_local,
+            expected_main_sha256,
+            expected_gui_sha256,
+            activation: LocalMainActivation::LinuxReboot,
+            installed_manifest: None,
+            rolling_back: false,
+            recovery_reboot_used: false,
         },
         true,
     )
@@ -14858,6 +15289,26 @@ mod tests {
         )
     }
 
+    fn local_main_manifest_for(main_sha256: &str, gui_sha256: &str) -> String {
+        let text = runtime_manifest_for(gui_sha256).replace(
+            &format!("main_sha256={}", "a".repeat(64)),
+            &format!("main_sha256={main_sha256}"),
+        );
+        let mut values = BTreeMap::new();
+        for line in text.lines() {
+            let (key, value) = line.split_once('=').unwrap();
+            values.insert(key.to_owned(), value.to_owned());
+        }
+        values.insert(
+            "qualification_candidate_id".into(),
+            local_main_candidate_id(&values),
+        );
+        RUNTIME_MANIFEST_FIELDS
+            .iter()
+            .map(|field| format!("{field}={}\n", values[*field]))
+            .collect()
+    }
+
     #[test]
     fn parses_sd_list_probe_options() {
         let args = vec![
@@ -16107,6 +16558,104 @@ H: Handlers=event3 js0"#
             &format!("manager_sha256={}\n", "b".repeat(64)),
             &expected
         ));
+    }
+
+    #[test]
+    fn local_main_reload_requires_an_active_dev_main_that_advertises_support() {
+        let supported = json!({
+            "local_main_reload_supported": true,
+            "launcher_state": "LauncherActive",
+            "executable_path": LOCAL_MAIN_REMOTE,
+            "pid": 41,
+            "main_generation": 9001,
+        });
+        assert_eq!(
+            local_main_activation(Some(&supported)),
+            LocalMainActivation::SupervisedReload {
+                pid: 41,
+                generation: 9001,
+            }
+        );
+        for status in [
+            Value::Null,
+            json!({
+                "launcher_state": "LauncherActive",
+                "executable_path": LOCAL_MAIN_REMOTE,
+                "pid": 41,
+                "main_generation": 9001,
+            }),
+            json!({
+                "local_main_reload_supported": true,
+                "launcher_state": "LauncherSuspended",
+                "executable_path": LOCAL_MAIN_REMOTE,
+                "pid": 41,
+                "main_generation": 9001,
+            }),
+            json!({
+                "local_main_reload_supported": true,
+                "launcher_state": "LauncherActive",
+                "executable_path": "/media/fat/MiSTer_MagiK",
+                "pid": 41,
+                "main_generation": 9001,
+            }),
+        ] {
+            assert_eq!(
+                local_main_activation((status != Value::Null).then_some(&status)),
+                LocalMainActivation::LinuxReboot
+            );
+        }
+    }
+
+    #[test]
+    fn local_main_transaction_swaps_main_before_manifest_and_restores_the_pair() {
+        let swap = local_main_swap_script(&"a".repeat(64), &"b".repeat(64));
+        let main_swap = swap.find("MiSTer_MagiKDev.upload").unwrap();
+        let manifest_swap = swap.find("platform-v3.manifest.upload").unwrap();
+        assert!(main_swap < manifest_swap);
+        assert!(swap.contains("chmod 755"));
+
+        let rollback = local_main_rollback_script();
+        assert!(rollback.contains("MiSTer_MagiKDev.delivery-rollback"));
+        assert!(rollback.contains("platform-v3.manifest.delivery-rollback"));
+        assert!(
+            rollback.find("MiSTer_MagiKDev.delivery-rollback").unwrap()
+                < rollback
+                    .find("platform-v3.manifest.delivery-rollback")
+                    .unwrap()
+        );
+    }
+
+    #[test]
+    fn local_main_bundle_requires_exact_main_and_preserved_gui_identities() {
+        let local = temp_path("local-main-bin");
+        let manifest = temp_path("local-main-manifest");
+        fs::write(&local, b"local main").unwrap();
+        let main_sha256 = file_sha256(local.clone()).unwrap();
+        let gui_sha256 = "c".repeat(64);
+        let text = local_main_manifest_for(&main_sha256, &gui_sha256);
+        fs::write(&manifest, text).unwrap();
+        assert!(
+            validate_local_main_bundle_identity(&local, &manifest, &main_sha256, &gui_sha256)
+                .is_ok()
+        );
+        assert!(
+            validate_local_main_bundle_identity(&local, &manifest, &"d".repeat(64), &gui_sha256)
+                .is_err()
+        );
+        assert!(
+            validate_local_main_bundle_identity(&local, &manifest, &main_sha256, &"e".repeat(64))
+                .is_err()
+        );
+        let installed =
+            parse_local_main_manifest_text(&local_main_manifest_for(&"a".repeat(64), &gui_sha256))
+                .unwrap();
+        let candidate = parse_local_main_manifest(&manifest).unwrap();
+        assert!(validate_local_main_overlay_preserves_installed(&installed, &candidate).is_ok());
+        let mut changed_rbf = candidate;
+        changed_rbf.insert("latch_rbf_sha256".into(), "f".repeat(64));
+        assert!(validate_local_main_overlay_preserves_installed(&installed, &changed_rbf).is_err());
+        let _ = fs::remove_file(local);
+        let _ = fs::remove_file(manifest);
     }
 
     #[derive(Default)]

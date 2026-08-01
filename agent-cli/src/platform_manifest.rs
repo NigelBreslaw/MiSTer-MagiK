@@ -171,6 +171,13 @@ pub struct InstalledManifest {
     values: BTreeMap<String, String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalMainIdentity {
+    pub main_sha256: String,
+    pub gui_sha256: String,
+    pub qualification_candidate_id: String,
+}
+
 impl InstalledManifest {
     #[must_use]
     pub fn qualification_candidate_id(&self) -> &str {
@@ -232,6 +239,58 @@ pub fn parse_installed(text: &str, layout: Layout) -> AgentResult<InstalledManif
     let values = parse_text_fields(text, Some(FIELDS), "installed platform manifest")?;
     validate_manifest_fields(&values, layout)?;
     Ok(InstalledManifest { values })
+}
+
+pub fn write_local_main_overlay(
+    output: &Path,
+    installed_text: &str,
+    main: &Path,
+    main_revision: &str,
+    expected_magik_revision: &str,
+) -> AgentResult<LocalMainIdentity> {
+    require_hex("main_revision", main_revision, 40)?;
+    require_hex("magik_revision", expected_magik_revision, 40)?;
+    if !main.is_file() {
+        return classified(
+            "platform_artifact_missing",
+            format!("main: {}", main.display()),
+        );
+    }
+    let installed = parse_installed(installed_text, Layout::Development)?;
+    if installed.magik_revision() != expected_magik_revision {
+        return classified(
+            "installed_magik_revision_mismatch",
+            format!(
+                "expected={expected_magik_revision} installed={}",
+                installed.magik_revision()
+            ),
+        );
+    }
+
+    let mut values = installed.values;
+    let main_sha256 = digest(main)?;
+    values.insert("main_sha256".into(), main_sha256.clone());
+    values.insert("main_revision".into(), main_revision.into());
+    values.insert(
+        "qualification_candidate_id".into(),
+        qualification_candidate_id(&values),
+    );
+    let text = FIELDS
+        .iter()
+        .map(|field| format!("{field}={}\n", values[*field]))
+        .collect::<String>();
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    fs::write(output, text)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    verify(output, None, Layout::Development)?;
+    Ok(LocalMainIdentity {
+        main_sha256,
+        gui_sha256: values["gui_sha256"].clone(),
+        qualification_candidate_id: values["qualification_candidate_id"].clone(),
+    })
 }
 
 impl Artifacts {
@@ -639,5 +698,62 @@ mod tests {
             &format!("gui_sha256={}", "d".repeat(64)),
         );
         assert!(parse_installed(&invalid, Layout::Development).is_err());
+    }
+
+    #[test]
+    fn local_main_overlay_preserves_the_verified_dev_platform() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-local-main-overlay-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let main = root.join("MiSTer");
+        fs::write(&main, b"local main").unwrap();
+        let output = root.join(FILE_NAME);
+        let revision = "d".repeat(40);
+        let identity = write_local_main_overlay(
+            &output,
+            &canonical_manifest(),
+            &main,
+            &revision,
+            &"b".repeat(40),
+        )
+        .unwrap();
+        let overlay =
+            parse_installed(&fs::read_to_string(&output).unwrap(), Layout::Development).unwrap();
+        assert_eq!(overlay.main_revision(), revision);
+        assert_eq!(overlay.main_sha256(), identity.main_sha256);
+        assert_eq!(overlay.gui_sha256(), "a".repeat(64));
+        assert_eq!(
+            overlay.qualification_candidate_id(),
+            identity.qualification_candidate_id
+        );
+        assert_eq!(overlay.manager_sha256(), "a".repeat(64));
+        assert_eq!(overlay.latch_rbf_sha256(), "a".repeat(64));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_main_overlay_rejects_a_different_installed_app_commit() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-local-main-overlay-reject-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let main = root.join("MiSTer");
+        fs::write(&main, b"local main").unwrap();
+        assert!(
+            write_local_main_overlay(
+                &root.join(FILE_NAME),
+                &canonical_manifest(),
+                &main,
+                &"d".repeat(40),
+                &"e".repeat(40),
+            )
+            .is_err()
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

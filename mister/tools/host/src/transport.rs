@@ -83,6 +83,12 @@ pub enum DeviceRequest {
         stage: PathBuf,
         expected_sha256: String,
     },
+    DeliverLocalMainTransaction {
+        local: PathBuf,
+        manifest_local: PathBuf,
+        expected_main_sha256: String,
+        expected_gui_sha256: String,
+    },
     ProfileInstalledScreensaver {
         output_dir: PathBuf,
     },
@@ -215,6 +221,7 @@ impl DeviceRequest {
             Self::FetchVerifiedDevelopmentManager { .. } => "fetch-verified-development-manager",
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
+            Self::DeliverLocalMainTransaction { .. } => "deliver-local-main-transaction",
             Self::ProfileInstalledScreensaver { .. } => "profile-installed-screensaver",
             Self::ProfileInstalledParticles { .. } => "profile-installed-particles",
             Self::ProfileInstalledParticleCapacity { .. } => "profile-installed-particle-capacity",
@@ -416,6 +423,12 @@ mod tests {
                 stage: "s".into(),
                 expected_sha256: "a".repeat(64),
             },
+            DeviceRequest::DeliverLocalMainTransaction {
+                local: "main".into(),
+                manifest_local: "manifest".into(),
+                expected_main_sha256: "a".repeat(64),
+                expected_gui_sha256: "b".repeat(64),
+            },
             DeviceRequest::VerifyHealth(Layout::Development),
             DeviceRequest::CaptureFramebuffer,
         ]
@@ -445,6 +458,12 @@ mod tests {
             DeviceRequest::DeliverPlatformTransaction {
                 stage: "s".into(),
                 expected_sha256: "a".repeat(64),
+            },
+            DeviceRequest::DeliverLocalMainTransaction {
+                local: "main".into(),
+                manifest_local: "manifest".into(),
+                expected_main_sha256: "a".repeat(64),
+                expected_gui_sha256: "b".repeat(64),
             },
             DeviceRequest::ProfileInstalledScreensaver {
                 output_dir: "profiles".into(),
@@ -562,7 +581,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 49);
+        assert_eq!(labels.len(), 50);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
@@ -607,6 +626,15 @@ mod tests {
                 manifest_local: "manifest".into(),
                 manifest_remote: "manifest-remote".into(),
                 expected_sha256: "a".repeat(64),
+            }
+            .allowed_during_benchmark()
+        );
+        assert!(
+            !DeviceRequest::DeliverLocalMainTransaction {
+                local: "main".into(),
+                manifest_local: "manifest".into(),
+                expected_main_sha256: "a".repeat(64),
+                expected_gui_sha256: "b".repeat(64),
             }
             .allowed_during_benchmark()
         );
