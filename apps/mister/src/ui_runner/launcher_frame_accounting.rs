@@ -52,7 +52,7 @@ pub(super) struct LauncherFrameAccounting {
     last_preview_trace_frame_t4: Option<Instant>,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     last_preview_trace_finish_done: Option<Instant>,
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
     boot_frame_profile: Option<boot_analytics::LauncherFrameWriter>,
     runtime_status_publisher: runtime_status::RuntimeStatusPublisher,
     last_status_write: Instant,
@@ -1074,7 +1074,7 @@ impl LauncherFrameAccounting {
             last_preview_trace_frame_t4: None,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
             last_preview_trace_finish_done: None,
-            #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+            #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
             boot_frame_profile: boot_analytics::LauncherFrameWriter::from_env(),
             runtime_status_publisher: runtime_status::RuntimeStatusPublisher::new(),
             last_status_write: Instant::now() - Duration::from_secs(2),
@@ -1454,7 +1454,7 @@ impl LauncherFrameAccounting {
         self.record_stable_samples(frame.frames, disp);
         self.last_rendered_frame_at = frame.frame_t4;
         self.idle_loops_since_status = 0;
-        #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+        #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
         self.record_boot_frame_profile(frame, disp);
         self.record_first_frame(frame, start, catalog_ready);
     }
@@ -2266,7 +2266,7 @@ impl LauncherFrameAccounting {
         }
     }
 
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+    #[cfg(any(feature = "bench-tools", feature = "diagnostics", feature = "profile"))]
     fn record_boot_frame_profile(
         &mut self,
         frame: &LauncherPresentedFrame,
