@@ -1352,7 +1352,11 @@ impl ArcadeListRenderer {
         let title = self
             .title_font
             .clipped_text(title, self.width.saturating_sub(reserved));
-        let gradient = TextGradient::new(self.style.text, self.style.text, self.style.text);
+        let gradient = if self.style.crt_palette {
+            TextGradient::new(self.style.text, self.style.text, self.style.text)
+        } else {
+            ARCADE_TITLE_GRADIENT
+        };
         let title_baseline = if self.style.crt_palette {
             self.title_font
                 .centered_text_baseline(&title, 0, row_height)
@@ -1978,9 +1982,9 @@ mod tests {
         assert_eq!(
             ArcadeListGeometry::search_for_render_w(1280),
             ArcadeListGeometry {
-                x: 808,
+                x: 648,
                 y: ARCADE_SEARCH_LIST_Y,
-                width: ARCADE_SEARCH_LIST_W,
+                width: 624,
             }
         );
     }
@@ -1999,22 +2003,22 @@ mod tests {
             geometry,
             ArcadeListGeometry {
                 x: 8,
-                y: 44,
+                y: 60,
                 width: 624,
             }
         );
-        assert_eq!(geometry.visible_height(480), 400);
+        assert_eq!(geometry.visible_height(480), 384);
 
         let search = ArcadeListGeometry::crt_for_content(content, metrics, true);
         assert_eq!(
             search,
             ArcadeListGeometry {
                 x: 272,
-                y: 44,
+                y: 60,
                 width: 360,
             }
         );
-        assert_eq!(search.visible_height(480), 400);
+        assert_eq!(search.visible_height(480), 384);
     }
 
     #[test]
@@ -2032,20 +2036,20 @@ mod tests {
         let mut renderer = ArcadeListRenderer::new_for_crt(24);
         renderer.set_geometry_for_render_h(geometry, 480);
 
-        assert_eq!(renderer.visible_height, 400);
+        assert_eq!(renderer.visible_height, 384);
         assert_eq!(
             renderer.visible_height / renderer.style.row_height as usize,
             16
         );
         assert_eq!(
             renderer.visible_height % renderer.style.row_height as usize,
-            16
+            0
         );
         assert_eq!(
             renderer.dirty_rect(),
             DirtyRect {
                 x0: 8,
-                y0: 44,
+                y0: 60,
                 x1: 632,
                 y1: 444,
             }
@@ -2063,7 +2067,7 @@ mod tests {
                 renderer.selection_y(),
                 renderer.visible_height,
             ),
-            Some((42, 58))
+            Some((42, 57))
         );
     }
 

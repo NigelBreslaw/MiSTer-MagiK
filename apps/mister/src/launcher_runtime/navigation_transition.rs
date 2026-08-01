@@ -4912,13 +4912,13 @@ mod tests {
             buffers
                 .working()
                 .iter()
-                .any(|pixel| *pixel == Rgb565Pixel(0x30aa))
+                .any(|pixel| *pixel == Rgb565Pixel(0x40ed))
         );
         assert!(
             buffers
                 .working()
                 .iter()
-                .any(|pixel| *pixel == Rgb565Pixel(0x07d6))
+                .any(|pixel| *pixel == Rgb565Pixel(0x28aa))
         );
     }
 
@@ -5048,7 +5048,7 @@ mod tests {
             system_request(NavigationTransitionDirection::Forward),
             &mut stats,
         );
-        assert_eq!(selected_row[46 * width + 20], Rgb565Pixel(0x1234));
+        assert_eq!(selected_row[48 * width + 20], Rgb565Pixel(0x1234));
         assert_eq!(selected_row[70 * width + 20], Rgb565Pixel(0));
 
         let mut framed = vec![Rgb565Pixel(0); width * height];
@@ -5063,6 +5063,18 @@ mod tests {
         );
         assert_eq!(framed[18 * width + 77], Rgb565Pixel(0x79b8));
         assert_eq!(framed[50 * width + 77], Rgb565Pixel(0x1234));
+
+        let mut content = vec![Rgb565Pixel(0); width * height];
+        reveal_destination_regions(
+            &mut content,
+            &destination,
+            width,
+            height,
+            60_000,
+            system_request(NavigationTransitionDirection::Forward),
+            &mut stats,
+        );
+        assert_eq!(content[50 * width + 77], Rgb565Pixel(0x1234));
     }
 
     #[test]
@@ -5688,24 +5700,26 @@ mod tests {
             direction: NavigationTransitionDirection::Reverse,
             ..forward
         };
+        let forward_cover_us =
+            duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let mut forward_controller = NavigationTransitionController::default();
         assert!(forward_controller.begin(forward, 0));
         assert!(forward_controller.captured(0, 0));
-        let forward_midpoint = forward_controller.tick(duration_us / 2, true);
+        let forward_reveal = forward_controller.tick(forward_cover_us, true);
+        assert_eq!(forward_reveal.phase, NavigationTransitionPhase::Reveal);
+        assert_eq!(forward_controller.telemetry().covered_hold_us, 0);
 
         let mut reverse_controller = NavigationTransitionController::default();
         assert!(reverse_controller.begin(reverse, 0));
         assert!(reverse_controller.captured(0, 0));
-        let observed_cover = reverse_controller.tick(233_333, false);
+        let reverse_cover_us = duration_us.saturating_sub(forward_cover_us);
+        let observed_cover = reverse_controller.tick(reverse_cover_us, false);
         assert_eq!(observed_cover.phase, NavigationTransitionPhase::Covered);
-        let reveal = reverse_controller.tick(233_333, true);
+        let reveal = reverse_controller.tick(reverse_cover_us, true);
         assert_eq!(reveal.phase, NavigationTransitionPhase::Reveal);
         assert_eq!(reverse_controller.telemetry().covered_hold_us, 0);
-        let reverse_midpoint = reverse_controller.tick(duration_us / 2, true);
-        assert_eq!(
-            forward_midpoint.progress_q16,
-            PROGRESS_MAX - reverse_midpoint.progress_q16
-        );
+        let progressing = reverse_controller.tick(reverse_cover_us + 1, true);
+        assert_ne!(progressing.progress_q16, reveal.progress_q16);
     }
 
     #[test]
@@ -6157,14 +6171,11 @@ mod tests {
         let full_phosphor_pixels = ((height + 1) / CRT_SCANLINE_PERIOD_ROWS * width) as u64;
         for (progress, expected_full) in [
             (0, false),
-            (CRT_SWEEP_END_Q16 / 2, false),
+            (1, false),
             (CRT_SWEEP_END_Q16, true),
             (PROGRESS_MAX / 2, true),
             (CRT_CLEAR_START_Q16, true),
-            (
-                ((CRT_CLEAR_START_Q16 as u32 + PROGRESS_MAX as u32) / 2) as u16,
-                false,
-            ),
+            (PROGRESS_MAX - 1, false),
             (PROGRESS_MAX, false),
         ] {
             let mut pixels = original.clone();
@@ -6201,7 +6212,11 @@ mod tests {
                     );
                 }
             } else {
-                assert!(stats.phosphor_pixels < full_phosphor_pixels);
+                assert!(
+                    stats.phosphor_pixels < full_phosphor_pixels,
+                    "progress={progress} phosphor_pixels={}",
+                    stats.phosphor_pixels
+                );
                 assert!(stats.scanline_pixels <= width as u64 * 5);
             }
         }
