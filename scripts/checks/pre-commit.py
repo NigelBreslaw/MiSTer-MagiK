@@ -135,6 +135,7 @@ def run(
     *,
     input_bytes: bytes | None = None,
     allowed_codes: tuple[int, ...] = (0,),
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         result = subprocess.run(
@@ -144,6 +145,7 @@ def run(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
+            env=environment,
         )
     except OSError as error:
         raise GateError(f"cannot run {args[0]}: {error}") from error
@@ -163,12 +165,14 @@ def git(
     *,
     input_bytes: bytes | None = None,
     allowed_codes: tuple[int, ...] = (0,),
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     return run(
         repository,
         ["git", *args],
         input_bytes=input_bytes,
         allowed_codes=allowed_codes,
+        environment=environment,
     )
 
 
@@ -285,9 +289,15 @@ def staged_submodules(repository: Path, paths: Sequence[str]) -> list[str]:
 
 
 def check_submodules(repository: Path, paths: Sequence[str]) -> None:
+    submodule_environment = os.environ.copy()
+    submodule_environment.pop("GIT_INDEX_FILE", None)
     for path in staged_submodules(repository, paths):
         submodule = repository / path
-        status = git(submodule, ["status", "--porcelain"]).stdout
+        status = git(
+            submodule,
+            ["status", "--porcelain"],
+            environment=submodule_environment,
+        ).stdout
         if status:
             raise GateError(f"staged_git_dirty_submodule: {path}")
         if path != "private/magik-cloud":
@@ -296,10 +306,15 @@ def check_submodules(repository: Path, paths: Sequence[str]) -> None:
             submodule,
             ["rev-parse", "@{u}"],
             allowed_codes=(0, 1, 128),
+            environment=submodule_environment,
         )
         if upstream.returncode != 0:
             raise GateError("staged_git_private_submodule_has_no_upstream")
-        head = git(submodule, ["rev-parse", "HEAD"]).stdout.strip()
+        head = git(
+            submodule,
+            ["rev-parse", "HEAD"],
+            environment=submodule_environment,
+        ).stdout.strip()
         ancestor = git(
             submodule,
             [
@@ -309,6 +324,7 @@ def check_submodules(repository: Path, paths: Sequence[str]) -> None:
                 upstream.stdout.decode().strip(),
             ],
             allowed_codes=(0, 1),
+            environment=submodule_environment,
         )
         if ancestor.returncode != 0:
             raise GateError("staged_git_private_submodule_must_be_pushed_first")

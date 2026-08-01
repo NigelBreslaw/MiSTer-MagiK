@@ -13,3 +13,6 @@
 	path = apps/desktop/vendor/github-app
 	url = https://github.com/NigelBreslaw/slint-ui-for-github-cli.git
 	ignore = all
+[submodule "private/lspi"]
+	path = private/lspi
+	url = git@github.com:NigelBreslaw/lspi.git

@@ -52,6 +52,7 @@ linkedProjects = [
   "apps/mister/ui-generated/Cargo.toml",
   "mister/tools/agent/Cargo.toml",
   "mister/tools/manager/Cargo.toml",
+  "private/lspi/Cargo.toml",
 ]
 checkOnSave = true
 

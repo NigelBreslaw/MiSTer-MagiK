@@ -2,11 +2,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [mcp_servers.magik-rust-lsp]
-command = "lspi"
-args = ["mcp", "--workspace-root", ".", "--config", ".codex/lspi.toml"]
+command = "cargo"
+args = [
+  "run",
+  "--quiet",
+  "--locked",
+  "--manifest-path",
+  "private/lspi/Cargo.toml",
+  "-p",
+  "lspi",
+  "--",
+  "mcp",
+  "--workspace-root",
+  ".",
+  "--config",
+  ".codex/lspi.toml",
+]
 required = false
-startup_timeout_sec = 10
-tool_timeout_sec = 180
+startup_timeout_sec = 120
+tool_timeout_sec = 30
 enabled_tools = [
   "list_servers",
   "get_server_status",

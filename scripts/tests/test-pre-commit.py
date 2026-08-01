@@ -189,10 +189,10 @@ class PreCommitTests(unittest.TestCase):
                 str(child),
                 "private/sample",
             )
-            clean = self.repository.gate()
+            clean = self.repository.gate(GIT_INDEX_FILE=".git/index")
             self.assertEqual(clean.returncode, 0, clean.stderr)
             (self.repository.root / "private/sample/dirty.txt").write_text("dirty\n")
-            result = self.repository.gate()
+            result = self.repository.gate(GIT_INDEX_FILE=".git/index")
             self.assertEqual(result.returncode, 1)
             self.assertIn("staged_git_dirty_submodule: private/sample", result.stderr)
 
