@@ -4286,7 +4286,9 @@ fn profile_installed_launch_return(
                 return_env.extend([
                     (
                         "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                        "wait:120,down,wait:12,a".into(),
+                        // Leave the returned launcher alive long enough for the 240-frame
+                        // profile and its artifacts to be copied before the next core handoff.
+                        "wait:360,down,wait:12,a".into(),
                     ),
                     (
                         "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
