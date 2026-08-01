@@ -143,6 +143,8 @@ pub enum Intent {
     AlphaAccept {
         candidate: PathBuf,
         output: PathBuf,
+        reuse_installed: bool,
+        restore_host_mode: bool,
     },
     AlphaVerify {
         candidate: PathBuf,

@@ -181,8 +181,19 @@ fn dispatch(
         Intent::ReleaseQualify => {
             return agent_cli::release::execute(reporter);
         }
-        Intent::AlphaAccept { candidate, output } => {
-            let receipt = agent_cli::alpha::execute(candidate, output, reporter)?;
+        Intent::AlphaAccept {
+            candidate,
+            output,
+            reuse_installed,
+            restore_host_mode,
+        } => {
+            let receipt = agent_cli::alpha::execute(
+                candidate,
+                output,
+                *reuse_installed,
+                *restore_host_mode,
+                reporter,
+            )?;
             println!("{}", receipt.display());
             return Ok(Outcome::Passed);
         }

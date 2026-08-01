@@ -627,11 +627,29 @@ impl DeviceOperations for NativeDevice {
                 capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
                 "captured".into()
             }
-            DeviceRequest::InstallAlphaCandidate { tag, hashes } => {
-                install_alpha_candidate(&config, tag, hashes)?
-            }
+            DeviceRequest::InstallAlphaCandidate {
+                tag,
+                hashes,
+                restore_on_failure,
+            } => install_alpha_candidate(&config, tag, hashes, *restore_on_failure)?,
             DeviceRequest::RestoreAlphaHostMode { original_main } => {
                 restore_alpha_host_mode(&config, original_main.clone())?
+            }
+            DeviceRequest::InspectPublicCatalog => {
+                let session = connect(10).map_err(device_failure)?;
+                let inspect = exec(
+                    &session,
+                    "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
+                    true,
+                )
+                .map_err(device_failure)?;
+                if let Some(error) = exec_failure_message("public catalog inspect", &inspect) {
+                    return Err(DeviceFailure::Unhealthy(error));
+                }
+                serde_json::to_string(
+                    &parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(device_failure)?,
+                )
+                .map_err(device_failure)?
             }
             DeviceRequest::BeginLauncherAutomation {
                 expected_build_version,
@@ -707,6 +725,7 @@ fn install_alpha_candidate(
     config: &NativeDeviceConfig,
     tag: &str,
     hashes: &mister_tool::transport::AlphaCandidateHashes,
+    restore_on_failure: bool,
 ) -> std::result::Result<String, DeviceFailure> {
     for hash in [
         &hashes.platform_manifest,
@@ -756,6 +775,9 @@ fn install_alpha_candidate(
     if let Err(error) = edit_remote_ini(&session, IniEdit::SelectMain("MiSTer_MagiK".into()), false)
     {
         let primary = DeviceFailure::OperationFailed(error.to_string());
+        if !restore_on_failure {
+            return Err(primary);
+        }
         return match restore_alpha_host_mode(config, original_main) {
             Ok(_) => Err(primary),
             Err(restore) => Err(alpha_restore_failure(primary, restore)),
@@ -796,6 +818,9 @@ fn install_alpha_candidate(
     let catalog = match activation {
         Ok(catalog) => catalog,
         Err(primary) => {
+            if !restore_on_failure {
+                return Err(primary);
+            }
             return match restore_alpha_host_mode(config, original_main) {
                 Ok(_) => Err(primary),
                 Err(restore) => Err(alpha_restore_failure(primary, restore)),
@@ -815,6 +840,7 @@ fn install_alpha_candidate(
 
 fn wait_alpha_catalog_ready(session: &Session, timeout: Duration) -> Result<Value> {
     let started = Instant::now();
+    let started_at_unix_ms = unix_ms_now();
     let mut last = Value::Null;
     let mut initial_ready = None;
     let mut initial_refresh_done = None;
@@ -831,30 +857,33 @@ fn wait_alpha_catalog_ready(session: &Session, timeout: Duration) -> Result<Valu
             if first_visible_ms.is_none() && ready == Some(true) {
                 first_visible_ms = Some(started.elapsed().as_millis() as u64);
             }
-            if ready == Some(true) && refresh_done == Some(true) {
-                let inspect = exec(
-                    session,
-                    "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
-                    true,
-                )?;
-                if let Some(error) = exec_failure_message("alpha catalog inspect", &inspect) {
-                    return Err(error.into());
-                }
-                let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout)?;
+            if ready == Some(true)
+                && status
+                    .get("catalog_games")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+            {
                 return Ok(json!({
-                    "schema": "mister-magik-alpha-catalog-creation-v1",
+                    "schema": "mister-magik-alpha-catalog-start-v1",
                     "mode": if initial_ready == Some(false) || initial_refresh_done == Some(false) {
                         "built-or-upgraded"
                     } else {
                         "cached"
                     },
+                    "started_at_unix_ms": started_at_unix_ms,
+                    "deadline_unix_ms": started_at_unix_ms.saturating_add(timeout.as_millis()),
                     "initial_catalog_ready": initial_ready,
                     "initial_refresh_done": initial_refresh_done,
                     "timing": {
                         "first_visible_ms": first_visible_ms,
-                        "complete_ms": started.elapsed().as_millis() as u64,
                     },
-                    "catalog": catalog,
+                    "first_visible": {
+                        "generation": status.get("catalog_generation"),
+                        "games": status.get("catalog_games"),
+                        "systems": status.get("catalog_systems"),
+                        "refresh_done": refresh_done,
+                    },
                 }));
             }
             last = json!({

@@ -108,13 +108,22 @@ The device-side transaction then checks and exercises the real update route:
 - run public platform verification and public runtime health checks;
 - confirm the running Slint build version and source revision match the
   candidate exactly;
-- wait for the real public catalog to become first-visible and finish its
-  refresh within an eight-minute bound;
-- inspect the published catalog with the candidate binary and require a valid,
-  nonempty generation;
+- wait only until the real public catalog becomes first-visible and usable;
+- begin the UI journey while the real library refresh continues in the
+  background, matching normal product behavior;
+- after the UI journey, wait for the refresh to finish within the original
+  eight-minute catalog deadline;
+- inspect the final published catalog with the candidate binary and require a
+  valid, nonempty generation;
 - record whether the catalog was cached or built/upgraded, first-visible time,
   complete time, generation, per-system counts, and total game count;
 - record the active Main generation used by the UI journey.
+
+By default the MiSTer remains on the tested public alpha after the run,
+including after a UI assertion failure. `--reuse-installed` reruns the journey
+against that exact identity without Downloader or a device reboot. Restoring a
+pre-test Main selection is an explicit `--restore-host-mode` operation and
+cannot be combined with reuse mode.
 
 No rolling `alpha` tag or Downloader feed moves if any installation or reboot
 check fails.
@@ -130,19 +139,24 @@ The acceptance gate:
 1. Records whether a complete catalog was already available at startup.
 2. If no complete catalog exists, lets the candidate build or upgrade it once.
 3. Records progress while the catalog is being created.
-4. Requires both first-visible catalog readiness and completion of the library
-   refresh.
-5. Runs `catalog-v3-inspect` through the candidate binary.
-6. Requires a valid, nonempty published generation.
-7. Records first-visible and complete elapsed times, total games, generation,
+4. Starts the real UI journey as soon as first-visible catalog readiness is
+   reached.
+5. Allows the production library refresh to continue in the background during
+   UI navigation, screenshots, and launch-return testing.
+6. After the UI journey, requires refresh completion before the original
+   catalog deadline.
+7. Runs `catalog-v3-inspect` through the candidate binary and requires a valid,
+   nonempty final generation.
+8. Records first-visible and complete elapsed times, total games, generation,
    and every system's game count in the acceptance receipt.
-8. Reuses that same completed catalog for every following UI test; it is not
-   rebuilt between UI checks.
+9. Never rebuilds the catalog between UI checks.
 
 A cached catalog remains a valid fast-path result and is labelled `cached`.
 Starting without a complete catalog is labelled `built-or-upgraded` and proves
-the full creation path. The catalog phase has an eight-minute bound so the
-complete physical job remains inside its 15-minute timeout.
+the full creation path. First-visible time measures when the launcher becomes
+useful; complete time measures the background refresh. Both share an
+eight-minute deadline so the complete physical job remains inside its
+15-minute timeout.
 
 ## 6. Real UI journey
 

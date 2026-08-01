@@ -10,7 +10,7 @@ use mister_tool::transport::{
     AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceRequest,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -81,6 +81,8 @@ struct UsbEvidence {
 pub fn execute(
     candidate_root: &Path,
     output: &Path,
+    reuse_installed: bool,
+    restore_host_mode: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<PathBuf> {
     reporter.emit(
@@ -96,24 +98,53 @@ pub fn execute(
             format!("output already exists: {}", output.display()),
         );
     }
+    if reuse_installed && restore_host_mode {
+        return classified(
+            "invalid_alpha_acceptance_mode",
+            "--reuse-installed cannot restore an unknown pre-install host mode",
+        );
+    }
     let mut device = DeviceClient::default();
-    reporter.emit(
-        EventKind::Progress,
-        "install",
-        "Installing the exact candidate through MiSTer Downloader",
-        Some(10),
-    )?;
-    let activation: Value =
-        serde_json::from_str(&device.execute(DeviceRequest::InstallAlphaCandidate {
-            tag: candidate.candidate_tag.clone(),
-            hashes: candidate_hashes(&candidate)?,
-        })?)
-        .map_err(|error| format!("cannot parse alpha activation: {error}"))?;
-    let original_main = alpha_original_main(&activation)?;
-    let catalog_creation = alpha_catalog_creation(&activation)?;
+    let (original_main, catalog_start) = if reuse_installed {
+        reporter.emit(
+            EventKind::Progress,
+            "reuse",
+            "Reusing the identity-verified public alpha without reinstalling or rebooting",
+            Some(10),
+        )?;
+        (
+            None,
+            reuse_installed_catalog_start(&mut device, &candidate)?,
+        )
+    } else {
+        reporter.emit(
+            EventKind::Progress,
+            "install",
+            "Installing the exact candidate through MiSTer Downloader",
+            Some(10),
+        )?;
+        let activation: Value =
+            serde_json::from_str(&device.execute(DeviceRequest::InstallAlphaCandidate {
+                tag: candidate.candidate_tag.clone(),
+                hashes: candidate_hashes(&candidate)?,
+                restore_on_failure: restore_host_mode,
+            })?)
+            .map_err(|error| format!("cannot parse alpha activation: {error}"))?;
+        (
+            Some(alpha_original_main(&activation)?),
+            alpha_catalog_start(&activation)?,
+        )
+    };
     let acceptance =
-        accept_installed_candidate(&mut device, candidate, catalog_creation, output, reporter);
-    let restored = device.execute(DeviceRequest::RestoreAlphaHostMode { original_main });
+        accept_installed_candidate(&mut device, candidate, catalog_start, output, reporter);
+    let restored = if restore_host_mode {
+        device.execute(DeviceRequest::RestoreAlphaHostMode {
+            original_main: original_main
+                .ok_or("alpha acceptance has no host-mode restore target")?,
+        })
+    } else {
+        Ok("host-mode=kept-public-alpha".into())
+    };
     let receipt = match (acceptance, restored) {
         (Ok(receipt), Ok(_)) => receipt,
         (Err(error), Ok(_)) => return Err(error),
@@ -139,6 +170,50 @@ pub fn execute(
         Some(100),
     )?;
     Ok(receipt_path)
+}
+
+fn reuse_installed_catalog_start(
+    device: &mut DeviceClient,
+    candidate: &CandidateIdentity,
+) -> AgentResult<Value> {
+    let started_at_unix_ms = unix_millis();
+    let deadline_unix_ms = started_at_unix_ms.saturating_add(8 * 60 * 1_000);
+    let mut first = true;
+    loop {
+        let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
+            .map_err(|error| format!("cannot parse installed alpha status: {error}"))?;
+        let runtime = require_installed_candidate(&status, candidate)?;
+        let ready = runtime.get("catalog_ready").and_then(Value::as_bool);
+        let games = runtime
+            .get("catalog_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if ready == Some(true) && games > 0 {
+            return Ok(json!({
+                "schema": "mister-magik-alpha-catalog-start-v1",
+                "mode": "cached",
+                "started_at_unix_ms": started_at_unix_ms,
+                "deadline_unix_ms": deadline_unix_ms,
+                "initial_catalog_ready": if first { ready } else { Some(false) },
+                "initial_refresh_done": runtime.get("catalog_refresh_done"),
+                "timing": {"first_visible_ms": unix_millis().saturating_sub(started_at_unix_ms)},
+                "first_visible": {
+                    "generation": runtime.get("catalog_generation"),
+                    "games": games,
+                    "systems": runtime.get("catalog_systems"),
+                    "refresh_done": runtime.get("catalog_refresh_done"),
+                },
+            }));
+        }
+        if unix_millis() >= deadline_unix_ms {
+            return classified(
+                "alpha_catalog_creation_timeout",
+                "installed alpha catalog did not become first-visible before its deadline",
+            );
+        }
+        first = false;
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 fn alpha_original_main(activation: &Value) -> AgentResult<Option<String>> {
@@ -172,29 +247,35 @@ fn alpha_original_main(activation: &Value) -> AgentResult<Option<String>> {
     Ok(Some(value.to_owned()))
 }
 
-fn alpha_catalog_creation(activation: &Value) -> AgentResult<Value> {
+fn alpha_catalog_start(activation: &Value) -> AgentResult<Value> {
     let catalog = activation
         .get("catalog")
         .ok_or_else(|| AgentError::Classified {
             code: "invalid_alpha_activation",
             detail: "alpha activation has no catalog evidence".into(),
         })?;
-    if catalog.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-alpha-catalog-creation-v1")
-        || catalog.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true)
+    if catalog.get("schema").and_then(Value::as_str) != Some("mister-magik-alpha-catalog-start-v1")
         || catalog
-            .pointer("/catalog/total_games")
+            .pointer("/first_visible/games")
             .and_then(Value::as_u64)
             .unwrap_or(0)
             == 0
         || catalog
-            .pointer("/timing/complete_ms")
+            .pointer("/timing/first_visible_ms")
+            .and_then(Value::as_u64)
+            .is_none()
+        || catalog
+            .get("started_at_unix_ms")
+            .and_then(Value::as_u64)
+            .is_none()
+        || catalog
+            .get("deadline_unix_ms")
             .and_then(Value::as_u64)
             .is_none()
     {
         return classified(
             "invalid_alpha_activation",
-            "alpha activation catalog evidence is incomplete",
+            "alpha activation first-visible catalog evidence is incomplete",
         );
     }
     Ok(catalog.clone())
@@ -203,7 +284,7 @@ fn alpha_catalog_creation(activation: &Value) -> AgentResult<Value> {
 fn accept_installed_candidate(
     device: &mut DeviceClient,
     candidate: CandidateIdentity,
-    catalog_creation: Value,
+    catalog_start: Value,
     output: &Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<AcceptanceReceipt> {
@@ -259,6 +340,13 @@ fn accept_installed_candidate(
             ));
         }
     };
+    reporter.emit(
+        EventKind::Progress,
+        "catalog-complete",
+        "Waiting for the background catalog refresh to complete",
+        Some(90),
+    )?;
+    let catalog_creation = complete_alpha_catalog_creation(device, &catalog_start)?;
 
     Ok(AcceptanceReceipt {
         format: "mister-magik-alpha-hil-v1",
@@ -271,6 +359,78 @@ fn accept_installed_candidate(
         launch_return,
         usb_video,
     })
+}
+
+fn complete_alpha_catalog_creation(
+    device: &mut DeviceClient,
+    catalog_start: &Value,
+) -> AgentResult<Value> {
+    let started_at_unix_ms = catalog_start
+        .get("started_at_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or("catalog start has no start time")?;
+    let deadline_unix_ms = catalog_start
+        .get("deadline_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or("catalog start has no deadline")?;
+    loop {
+        let status: Value =
+            serde_json::from_str(&device.execute(DeviceRequest::Status)?).map_err(|error| {
+                format!("cannot parse device status during catalog refresh: {error}")
+            })?;
+        let runtime = status
+            .pointer("/runtime/slint_status")
+            .filter(|value| value.is_object())
+            .ok_or("device status has no Slint runtime during catalog refresh")?;
+        let ready = runtime.get("catalog_ready").and_then(Value::as_bool);
+        let refresh_done = runtime.get("catalog_refresh_done").and_then(Value::as_bool);
+        let games = runtime
+            .get("catalog_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let last = json!({
+            "catalog_ready": ready,
+            "catalog_refresh_done": refresh_done,
+            "catalog_games": games,
+            "catalog_systems": runtime.get("catalog_systems"),
+            "catalog_generation": runtime.get("catalog_generation"),
+        });
+        if ready == Some(true) && refresh_done == Some(true) && games > 0 {
+            let catalog: Value =
+                serde_json::from_str(&device.execute(DeviceRequest::InspectPublicCatalog)?)
+                    .map_err(|error| format!("cannot parse completed public catalog: {error}"))?;
+            if catalog.get("valid").and_then(Value::as_bool) != Some(true)
+                || catalog
+                    .get("total_games")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    == 0
+            {
+                return classified(
+                    "alpha_catalog_creation_failed",
+                    "completed public catalog inspection is invalid or empty",
+                );
+            }
+            return Ok(json!({
+                "schema": "mister-magik-alpha-catalog-creation-v1",
+                "mode": catalog_start.get("mode"),
+                "initial_catalog_ready": catalog_start.get("initial_catalog_ready"),
+                "initial_refresh_done": catalog_start.get("initial_refresh_done"),
+                "timing": {
+                    "first_visible_ms": catalog_start.pointer("/timing/first_visible_ms"),
+                    "complete_ms": unix_millis().saturating_sub(started_at_unix_ms),
+                },
+                "catalog": catalog,
+            }));
+        }
+        if unix_millis() >= deadline_unix_ms {
+            return classified(
+                "alpha_catalog_creation_timeout",
+                format!("background catalog refresh missed its deadline; last_status={last}"),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 fn run_ui_journey(
@@ -292,6 +452,7 @@ fn run_ui_journey(
     checkpoints.push(checkpoint(device, nonce, home, "home", &rgb_dir)?);
     usb.push(capture_usb("home", &usb_dir)?);
 
+    select_home_item(device, nonce, "menu:arcade")?;
     let arcade = tap(device, nonce, AutomationButton::A)?;
     let state = snapshot(device, nonce)?;
     require_semantic(&state, "effective_view", "arcade")?;
@@ -403,7 +564,7 @@ fn run_ui_journey(
     for _ in 0..root_count {
         if semantic(&root_state, "selected_item_id")
             .and_then(Value::as_str)
-            .is_some_and(|item| item.starts_with("menu:"))
+            .is_some_and(|item| item.starts_with("menu:") && item != "menu:arcade")
         {
             break;
         }
@@ -412,7 +573,7 @@ fn run_ui_journey(
     }
     if !semantic(&root_state, "selected_item_id")
         .and_then(Value::as_str)
-        .is_some_and(|item| item.starts_with("menu:"))
+        .is_some_and(|item| item.starts_with("menu:") && item != "menu:arcade")
     {
         return classified(
             "alpha_ui_assertion_failed",
@@ -463,6 +624,29 @@ fn run_ui_journey(
     require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
 
     Ok((checkpoints, launch_return, usb))
+}
+
+fn select_home_item(
+    device: &mut DeviceClient,
+    nonce: &Option<String>,
+    expected_item_id: &str,
+) -> AgentResult<()> {
+    let initial = snapshot(device, nonce)?;
+    let count = semantic(&initial, "selected_count")
+        .and_then(Value::as_u64)
+        .ok_or("home menu has no selected count")?;
+    let mut state = initial;
+    for _ in 0..count {
+        if semantic(&state, "selected_item_id").and_then(Value::as_str) == Some(expected_item_id) {
+            return Ok(());
+        }
+        tap(device, nonce, AutomationButton::Right)?;
+        state = snapshot(device, nonce)?;
+    }
+    classified(
+        "alpha_ui_assertion_failed",
+        format!("home menu has no {expected_item_id} item"),
+    )
 }
 
 fn tap(
@@ -928,6 +1112,14 @@ fn unix_secs() -> u64 {
         .map_or(0, |duration| duration.as_secs())
 }
 
+fn unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_millis().min(u128::from(u64::MAX)) as u64
+        })
+}
+
 pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
     let receipt_path = root.join("release-assets.json");
     let receipt_bytes = fs::read(&receipt_path)
@@ -1231,20 +1423,24 @@ mod tests {
     }
 
     #[test]
-    fn alpha_activation_requires_valid_catalog_creation_evidence() {
+    fn alpha_activation_requires_first_visible_catalog_evidence() {
         let activation = json!({
             "catalog": {
-                "schema": "mister-magik-alpha-catalog-creation-v1",
+                "schema": "mister-magik-alpha-catalog-start-v1",
                 "mode": "built-or-upgraded",
-                "timing": {"first_visible_ms": 1200, "complete_ms": 3400},
-                "catalog": {"valid": true, "total_games": 42, "systems": []},
+                "started_at_unix_ms": 1000,
+                "deadline_unix_ms": 481000,
+                "timing": {"first_visible_ms": 1200},
+                "first_visible": {"games": 42, "systems": 3},
             }
         });
         assert_eq!(
-            alpha_catalog_creation(&activation).unwrap(),
+            alpha_catalog_start(&activation).unwrap(),
             activation["catalog"]
         );
-        assert!(alpha_catalog_creation(&json!({"catalog": {"catalog": {"valid": true}}})).is_err());
+        assert!(
+            alpha_catalog_start(&json!({"catalog": {"first_visible": {"games": 42}}})).is_err()
+        );
     }
 
     #[test]

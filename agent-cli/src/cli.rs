@@ -344,6 +344,12 @@ pub enum AlphaCommand {
         candidate: PathBuf,
         #[arg(long)]
         output: PathBuf,
+        /// Reuse the identity-verified public alpha without reinstalling or rebooting.
+        #[arg(long)]
+        reuse_installed: bool,
+        /// Restore the pre-test Main selection. By default the MiSTer stays on alpha.
+        #[arg(long)]
+        restore_host_mode: bool,
     },
     Verify {
         #[arg(long)]
@@ -435,8 +441,19 @@ impl Cli {
                 command: CaptureCommand::UsbVideo { output, seconds },
             }) => Intent::CaptureUsbVideo { output, seconds },
             Some(Command::Alpha {
-                command: AlphaCommand::Accept { candidate, output },
-            }) => Intent::AlphaAccept { candidate, output },
+                command:
+                    AlphaCommand::Accept {
+                        candidate,
+                        output,
+                        reuse_installed,
+                        restore_host_mode,
+                    },
+            }) => Intent::AlphaAccept {
+                candidate,
+                output,
+                reuse_installed,
+                restore_host_mode,
+            },
             Some(Command::Alpha {
                 command:
                     AlphaCommand::Verify {
@@ -733,6 +750,29 @@ mod tests {
             Intent::AlphaAccept {
                 candidate: "/tmp/candidate".into(),
                 output: "/tmp/evidence".into(),
+                reuse_installed: false,
+                restore_host_mode: false,
+            }
+        );
+        assert_eq!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "alpha",
+                "accept",
+                "--candidate",
+                "/tmp/candidate",
+                "--output",
+                "/tmp/evidence",
+                "--reuse-installed",
+                "--restore-host-mode",
+            ])
+            .unwrap()
+            .into_intent(),
+            Intent::AlphaAccept {
+                candidate: "/tmp/candidate".into(),
+                output: "/tmp/evidence".into(),
+                reuse_installed: true,
+                restore_host_mode: true,
             }
         );
         assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
