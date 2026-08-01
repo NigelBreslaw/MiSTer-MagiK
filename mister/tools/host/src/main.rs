@@ -2945,7 +2945,7 @@ fn launcher_heartbeat_initial_sample_command() -> &'static str {
 }
 
 fn launcher_heartbeat_sample_command() -> &'static str {
-    "status=/tmp/mister-magik/status.json; pid_before=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_before=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sleep 2; pid_after=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_after=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\")"
+    "status=/tmp/mister-magik/status.json; pid_before=; sequence_before=; pid_after=; sequence_after=; if test -r \"$status\"; then pid_before=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_before=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sleep 2; if test -r \"$status\"; then pid_after=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); sequence_after=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); fi; fi"
 }
 
 const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
@@ -17269,6 +17269,8 @@ H: Handlers=event3 js0"#
         assert!(command.contains("latch-readiness-report"));
         assert!(command.contains("pid_before"));
         assert!(command.contains("pid_after"));
+        assert!(command.contains("test -r \"$status\""));
+        assert!(command.contains("pid_before=; sequence_before=; pid_after=; sequence_after="));
     }
 
     #[test]
