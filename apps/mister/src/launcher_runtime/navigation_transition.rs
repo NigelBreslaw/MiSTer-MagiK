@@ -3,8 +3,10 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
+use crate::input_state::PadState;
 use crate::spring_animation::{smooth_spring_q16, warm_smooth_spring_curve};
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::collections::VecDeque;
 use std::time::Instant;
 
 const PROGRESS_MAX: u16 = u16::MAX;
@@ -583,10 +585,67 @@ impl NavigationTransitionPhase {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NavigationTransitionInput {
-    Activate,
-    Back,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NavigationTransitionInput {
+    pub activate: bool,
+    pub back: bool,
+    pub home: bool,
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl NavigationTransitionInput {
+    pub fn rising_edges(now: &PadState, previous: &PadState) -> Option<Self> {
+        let input = Self {
+            activate: now.btn_a && !previous.btn_a,
+            back: now.btn_b && !previous.btn_b,
+            home: now.btn_home && !previous.btn_home,
+            up: now.dpad_up && !previous.dpad_up,
+            down: now.dpad_down && !previous.dpad_down,
+            left: now.dpad_left && !previous.dpad_left,
+            right: now.dpad_right && !previous.dpad_right,
+        };
+        (!input.is_empty()).then_some(input)
+    }
+
+    pub const fn is_empty(self) -> bool {
+        !self.activate
+            && !self.back
+            && !self.home
+            && !self.up
+            && !self.down
+            && !self.left
+            && !self.right
+    }
+
+    pub fn without_back(mut self) -> Option<Self> {
+        self.back = false;
+        (!self.is_empty()).then_some(self)
+    }
+
+    pub fn replay(self, physical: &PadState) -> (PadState, PadState) {
+        let mut previous = physical.clone();
+        let mut now = physical.clone();
+        for (queued, previous_field, now_field) in [
+            (self.activate, &mut previous.btn_a, &mut now.btn_a),
+            (self.back, &mut previous.btn_b, &mut now.btn_b),
+            (self.home, &mut previous.btn_home, &mut now.btn_home),
+            (self.up, &mut previous.dpad_up, &mut now.dpad_up),
+            (self.down, &mut previous.dpad_down, &mut now.dpad_down),
+            (self.left, &mut previous.dpad_left, &mut now.dpad_left),
+            (self.right, &mut previous.dpad_right, &mut now.dpad_right),
+        ] {
+            if queued {
+                *previous_field = false;
+                *now_field = true;
+            }
+        }
+        previous.rebuild_pressed_now();
+        now.rebuild_pressed_now();
+        (previous, now)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -605,7 +664,6 @@ pub enum NavigationTransitionEndpoint {
 pub struct NavigationTransitionCompletion {
     pub endpoint: NavigationTransitionEndpoint,
     pub failure: Option<NavigationTransitionFailure>,
-    pub queued_input: Option<NavigationTransitionInput>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -669,7 +727,6 @@ pub struct NavigationTransitionController {
     covered_observed_us: u64,
     progress_q16: u16,
     reverse_origin_q16: u16,
-    queued_input: Option<NavigationTransitionInput>,
     failure: Option<NavigationTransitionFailure>,
     telemetry: NavigationTransitionTelemetry,
 }
@@ -686,7 +743,6 @@ impl NavigationTransitionController {
         self.covered_observed_us = 0;
         self.progress_q16 = 0;
         self.reverse_origin_q16 = 0;
-        self.queued_input = None;
         self.failure = None;
         self.telemetry = NavigationTransitionTelemetry::default();
         true
@@ -761,7 +817,6 @@ impl NavigationTransitionController {
                 >= request.preparation_timeout_us
             {
                 self.failure = Some(NavigationTransitionFailure::DestinationTimeout);
-                self.queued_input = None;
                 self.start_reversing(now_us);
             }
         }
@@ -818,7 +873,6 @@ impl NavigationTransitionController {
     pub fn fail(&mut self, failure: NavigationTransitionFailure, now_us: u64) {
         if self.is_active() {
             self.failure = Some(failure);
-            self.queued_input = None;
             self.start_reversing(now_us);
         }
     }
@@ -845,7 +899,6 @@ impl NavigationTransitionController {
         };
         self.phase = NavigationTransitionPhase::Settled;
         self.failure = None;
-        self.queued_input = None;
         Some(endpoint)
     }
 
@@ -856,18 +909,7 @@ impl NavigationTransitionController {
         self.progress_q16 = PROGRESS_MAX;
         self.phase = NavigationTransitionPhase::Settled;
         self.failure = None;
-        self.queued_input = None;
         true
-    }
-
-    pub fn queue_input(&mut self, input: NavigationTransitionInput) {
-        if self.is_active() && self.queued_input.is_none() {
-            self.queued_input = Some(input);
-        }
-    }
-
-    pub fn take_queued_input(&mut self) -> Option<NavigationTransitionInput> {
-        self.queued_input.take()
     }
 
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
@@ -878,20 +920,12 @@ impl NavigationTransitionController {
         let completion = NavigationTransitionCompletion {
             endpoint,
             failure: self.failure,
-            queued_input: if endpoint == NavigationTransitionEndpoint::Source
-                && self.failure.is_some()
-            {
-                None
-            } else {
-                self.queued_input.take()
-            },
         };
         self.phase = NavigationTransitionPhase::Idle;
         self.request = None;
         self.progress_q16 = 0;
         self.reverse_origin_q16 = 0;
         self.failure = None;
-        self.queued_input = None;
         Some(completion)
     }
 
@@ -1144,6 +1178,7 @@ pub struct NavigationTransitionRuntime {
     pending_prepare_started: Option<Instant>,
     pending_status_quiesce_us: u64,
     pending_status_quiesce_timeout: bool,
+    queued_inputs: VecDeque<NavigationTransitionInput>,
     buffers: NavigationTransitionBuffers,
     geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
@@ -1166,6 +1201,7 @@ impl NavigationTransitionRuntime {
             pending_prepare_started: None,
             pending_status_quiesce_us: 0,
             pending_status_quiesce_timeout: false,
+            queued_inputs: VecDeque::new(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
@@ -1189,6 +1225,7 @@ impl NavigationTransitionRuntime {
         self.enabled = enabled;
         self.pending_request = None;
         self.controller = NavigationTransitionController::default();
+        self.queued_inputs.clear();
         self.geometry_history.clear();
         if enabled {
             warm_smooth_spring_curve();
@@ -1371,10 +1408,23 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn queue_input(&mut self, input: NavigationTransitionInput) {
-        self.controller.queue_input(input);
+        if !input.is_empty() {
+            self.queued_inputs.push_back(input);
+        }
+    }
+
+    pub fn take_queued_input(&mut self) -> Option<NavigationTransitionInput> {
+        (!self.is_active())
+            .then(|| self.queued_inputs.pop_front())
+            .flatten()
+    }
+
+    pub fn clear_queued_inputs(&mut self) {
+        self.queued_inputs.clear();
     }
 
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
+        self.queued_inputs.clear();
         if self.pending_request.is_some() {
             self.activate_pending(self.pending_started_us);
         }
@@ -1385,6 +1435,9 @@ impl NavigationTransitionRuntime {
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
         let request = self.request();
         let completion = self.controller.complete()?;
+        if completion.failure.is_some() {
+            self.queued_inputs.clear();
+        }
         if request.is_some_and(|request| {
             request.renderer == NavigationTransitionRenderer::SuperScaler
                 && matches!(
@@ -5743,7 +5796,6 @@ mod tests {
             Some(NavigationTransitionCompletion {
                 endpoint: NavigationTransitionEndpoint::Destination,
                 failure: None,
-                queued_input: None,
             })
         );
         assert!(!controller.is_active());
@@ -5782,17 +5834,31 @@ mod tests {
     }
 
     #[test]
-    fn only_one_input_is_queued() {
-        let mut controller = NavigationTransitionController::default();
-        controller.begin(request(), 0);
-        controller.queue_input(NavigationTransitionInput::Activate);
-        controller.queue_input(NavigationTransitionInput::Back);
+    fn navigation_input_captures_and_replays_simultaneous_edges() {
+        let previous = PadState::default();
+        let mut physical = PadState {
+            btn_a: true,
+            btn_b: true,
+            dpad_down: true,
+            btn_x: true,
+            ..PadState::default()
+        };
+        physical.rebuild_pressed_now();
+        let input = NavigationTransitionInput::rising_edges(&physical, &previous).unwrap();
 
-        assert_eq!(
-            controller.take_queued_input(),
-            Some(NavigationTransitionInput::Activate)
-        );
-        assert_eq!(controller.take_queued_input(), None);
+        assert!(input.activate);
+        assert!(input.back);
+        assert!(input.down);
+        assert!(!input.home);
+        let (replay_previous, replay_now) = input.replay(&physical);
+        assert!(!replay_previous.btn_a);
+        assert!(!replay_previous.btn_b);
+        assert!(!replay_previous.dpad_down);
+        assert!(replay_previous.btn_x);
+        assert!(replay_now.btn_a);
+        assert!(replay_now.btn_b);
+        assert!(replay_now.dpad_down);
+        assert!(replay_now.btn_x);
     }
 
     #[test]
@@ -5863,14 +5929,13 @@ mod tests {
     }
 
     #[test]
-    fn timeout_discards_queued_input_atomically() {
+    fn timeout_completion_reports_the_failure_atomically() {
         let mut timed = request();
         timed.preparation_timeout_us = 50_000;
         let cover_us = timed.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let mut controller = NavigationTransitionController::default();
         controller.begin(timed, 0);
         controller.captured(0, 0);
-        controller.queue_input(NavigationTransitionInput::Activate);
         controller.tick(cover_us, false);
         let reverse_at = cover_us + timed.preparation_timeout_us;
         controller.tick(reverse_at, false);
@@ -5881,7 +5946,6 @@ mod tests {
             Some(NavigationTransitionCompletion {
                 endpoint: NavigationTransitionEndpoint::Source,
                 failure: Some(NavigationTransitionFailure::DestinationTimeout),
-                queued_input: None,
             })
         );
     }
@@ -6161,6 +6225,71 @@ mod tests {
         assert!(poc.snapshot_locked());
         assert!(poc.complete().is_some());
         assert!(!poc.snapshot_locked());
+    }
+
+    #[test]
+    fn runtime_queue_preserves_every_input_across_chained_transitions() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
+        let activate = NavigationTransitionInput {
+            activate: true,
+            ..NavigationTransitionInput::default()
+        };
+        let back = NavigationTransitionInput {
+            back: true,
+            ..NavigationTransitionInput::default()
+        };
+        let home = NavigationTransitionInput {
+            home: true,
+            ..NavigationTransitionInput::default()
+        };
+
+        runtime
+            .begin_settings_page(NavigationTransitionDirection::Forward, &source, 0)
+            .unwrap();
+        runtime.queue_input(activate);
+        runtime.queue_input(back);
+        runtime.queue_input(home);
+        assert_eq!(runtime.take_queued_input(), None);
+        runtime.capture_destination(&destination, 1).unwrap();
+        runtime.tick(SETTINGS_PAGE_DURATION_US + 1);
+        assert_eq!(
+            runtime.complete().map(|completion| completion.endpoint),
+            Some(NavigationTransitionEndpoint::Destination)
+        );
+
+        assert_eq!(runtime.take_queued_input(), Some(activate));
+        runtime
+            .begin_settings_page(
+                NavigationTransitionDirection::Reverse,
+                &destination,
+                SETTINGS_PAGE_DURATION_US + 2,
+            )
+            .unwrap();
+        assert_eq!(runtime.take_queued_input(), None);
+        runtime
+            .capture_destination(&source, SETTINGS_PAGE_DURATION_US + 3)
+            .unwrap();
+        runtime.tick(SETTINGS_PAGE_DURATION_US * 2 + 3);
+        assert!(runtime.complete().is_some());
+
+        assert_eq!(runtime.take_queued_input(), Some(back));
+        assert_eq!(runtime.take_queued_input(), Some(home));
+        assert_eq!(runtime.take_queued_input(), None);
+    }
+
+    #[test]
+    fn runtime_queue_clears_when_transition_is_disabled() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        runtime.queue_input(NavigationTransitionInput {
+            back: true,
+            ..NavigationTransitionInput::default()
+        });
+
+        runtime.set_enabled(16, 12, false);
+
+        assert_eq!(runtime.take_queued_input(), None);
     }
 
     #[test]
