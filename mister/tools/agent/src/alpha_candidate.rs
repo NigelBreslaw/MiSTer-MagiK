@@ -168,8 +168,12 @@ fn validate_sha(value: &str) -> Result<(), String> {
 }
 
 fn require_single_canonical_section() -> Result<(), String> {
+    require_single_canonical_section_at(Path::new(DOWNLOADER_ROOT), Path::new(CONFIG_PATH))
+}
+
+fn require_single_canonical_section_at(root: &Path, canonical: &Path) -> Result<(), String> {
     let mut owners = Vec::new();
-    for entry in fs::read_dir(DOWNLOADER_ROOT).map_err(|error| error.to_string())? {
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -189,7 +193,8 @@ fn require_single_canonical_section() -> Result<(), String> {
             owners.push(entry.path());
         }
     }
-    if owners.as_slice() != [PathBuf::from(CONFIG_PATH)] {
+    if owners.as_slice() != [canonical.to_path_buf()] && !(owners.is_empty() && !canonical.exists())
+    {
         return Err(format!(
             "MiSTer MagiK Downloader section must have one canonical owner: {owners:?}"
         ));
@@ -258,23 +263,33 @@ fn require_hash(path: &Path, expected: &str) -> Result<(), String> {
 
 struct ConfigTransaction {
     path: PathBuf,
-    original: Vec<u8>,
+    original: Option<Vec<u8>>,
     mode: u32,
     replaced: bool,
 }
 
 impl ConfigTransaction {
     fn begin(path: &Path) -> Result<Self, String> {
-        let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
-            return Err("canonical Downloader configuration is unsafe".to_string());
+        match fs::metadata(path) {
+            Ok(metadata) => {
+                if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+                    return Err("canonical Downloader configuration is unsafe".to_string());
+                }
+                Ok(Self {
+                    path: path.to_path_buf(),
+                    original: Some(fs::read(path).map_err(|error| error.to_string())?),
+                    mode: metadata.permissions().mode(),
+                    replaced: false,
+                })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+                path: path.to_path_buf(),
+                original: None,
+                mode: 0o644,
+                replaced: false,
+            }),
+            Err(error) => Err(error.to_string()),
         }
-        Ok(Self {
-            path: path.to_path_buf(),
-            original: fs::read(path).map_err(|error| error.to_string())?,
-            mode: metadata.permissions().mode(),
-            replaced: false,
-        })
     }
 
     fn replace(&mut self, bytes: &[u8]) -> Result<(), String> {
@@ -285,7 +300,14 @@ impl ConfigTransaction {
 
     fn restore(&mut self) -> Result<(), String> {
         if self.replaced {
-            write_atomic(&self.path, &self.original, self.mode)?;
+            if let Some(original) = self.original.as_deref() {
+                write_atomic(&self.path, original, self.mode)?;
+            } else {
+                fs::remove_file(&self.path).map_err(|error| error.to_string())?;
+                fs::File::open(self.path.parent().ok_or("config has no parent")?)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|error| error.to_string())?;
+            }
             self.replaced = false;
         }
         Ok(())
@@ -333,11 +355,59 @@ fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn fixture(label: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-alpha-candidate-{label}-{}-{suffix}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).expect("create fixture");
+        root
+    }
+
     #[test]
     fn candidate_tags_are_closed_and_immutable() {
         assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef").is_ok());
         assert!(validate_tag("alpha").is_err());
         assert!(validate_tag("alpha-candidate-v0.2.123-latest").is_err());
         assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef/escape").is_err());
+    }
+
+    #[test]
+    fn absent_canonical_section_is_safe_for_a_transient_transaction() {
+        let root = fixture("absent");
+        let canonical = root.join("downloader_mister_magik.ini");
+        assert!(require_single_canonical_section_at(&root, &canonical).is_ok());
+        fs::remove_dir(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn alternate_section_owner_is_rejected() {
+        let root = fixture("alternate-owner");
+        let canonical = root.join("downloader_mister_magik.ini");
+        fs::write(
+            root.join("downloader_other.ini"),
+            "[mister_magik]\ndb_url = https://example.invalid/db.zip\n",
+        )
+        .expect("write alternate owner");
+        assert!(require_single_canonical_section_at(&root, &canonical).is_err());
+        fs::remove_dir_all(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn transient_config_is_removed_on_restore() {
+        let root = fixture("transient");
+        let canonical = root.join("downloader_mister_magik.ini");
+        let mut transaction = ConfigTransaction::begin(&canonical).expect("begin transaction");
+        transaction
+            .replace(b"[mister_magik]\ndb_url = https://example.invalid/db.zip\n")
+            .expect("replace config");
+        assert!(canonical.is_file());
+        transaction.restore().expect("restore config");
+        assert!(!canonical.exists());
+        fs::remove_dir(root).expect("remove fixture");
     }
 }
