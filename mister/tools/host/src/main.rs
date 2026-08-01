@@ -575,6 +575,14 @@ impl DeviceOperations for NativeDevice {
                         }
                     }
                 }
+                let evidence_dir =
+                    retain_diagnostic_evidence(&session, &facts).map_err(device_failure)?;
+                if let Some(facts) = facts.as_object_mut() {
+                    facts.insert(
+                        "evidence_dir".into(),
+                        Value::String(evidence_dir.display().to_string()),
+                    );
+                }
                 serde_json::to_string(&facts).map_err(device_failure)?
             }
             DeviceRequest::ClearLatchDiagnostics => {
@@ -1230,6 +1238,94 @@ fn retain_delivery_smoke_failure_evidence(session: &Session, failure: &str) -> R
         output_dir.join("evidence.json"),
         serde_json::to_vec_pretty(&bundle)?,
     )?;
+    Ok(fs::canonicalize(&output_dir).unwrap_or(output_dir))
+}
+
+fn retain_diagnostic_evidence(session: &Session, facts: &Value) -> Result<PathBuf> {
+    let output_dir = PathBuf::from("build/agent-diagnostics").join(timestamp());
+    fs::create_dir_all(&output_dir)?;
+    fs::write(
+        output_dir.join("diagnostic-facts.json"),
+        serde_json::to_vec_pretty(facts)?,
+    )?;
+    let processes = exec(session, "ps w", true)
+        .map(|output| output.stdout)
+        .unwrap_or_else(|error| format!("process capture failed: {error}"));
+    fs::write(output_dir.join("processes.txt"), processes)?;
+
+    let mut files = vec![
+        (
+            "/tmp/mister-magik/events.jsonl".to_string(),
+            "events.jsonl".to_string(),
+        ),
+        (
+            "/tmp/mister-magik-slint.log".to_string(),
+            "slint.log".to_string(),
+        ),
+        (
+            "/tmp/mister-magik-main.log".to_string(),
+            "main.log".to_string(),
+        ),
+        (
+            "/tmp/mister-magik/status.json".to_string(),
+            "slint-status.json".to_string(),
+        ),
+        (
+            "/tmp/mister-magik/main-status.json".to_string(),
+            "main-status.json".to_string(),
+        ),
+        (
+            "/tmp/mister-magik-boot-analytics.tsv".to_string(),
+            "boot-analytics.tsv".to_string(),
+        ),
+        (
+            "/tmp/mister-magik/latch-failure.json".to_string(),
+            "latch-failure.json".to_string(),
+        ),
+        (
+            "/media/fat/mister-magik-dev/launcher.env".to_string(),
+            "launcher.env".to_string(),
+        ),
+        (
+            "/media/fat/mister-magik-dev/platform-v3.manifest".to_string(),
+            "platform-v3.manifest".to_string(),
+        ),
+        (
+            LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE.to_string(),
+            "launch-return-watchdog.pid".to_string(),
+        ),
+    ];
+    for cycle in 1..=LAUNCH_RETURN_CYCLES {
+        files.extend([
+            (
+                format!("/tmp/mister-magik/launch-return-profile/cycle-{cycle}.svg"),
+                format!("cycle-{cycle}-flamegraph.svg"),
+            ),
+            (
+                format!("/tmp/mister-magik/launch-return-profile/cycle-{cycle}.folded"),
+                format!("cycle-{cycle}-folded.txt"),
+            ),
+            (
+                format!("/tmp/mister-magik/launch-return-profile/cycle-{cycle}-frames.tsv"),
+                format!("cycle-{cycle}-frames.tsv"),
+            ),
+        ]);
+    }
+    if let Some(path) = facts
+        .get("last_crash_report")
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty() && is_safe_crash_report_path(path))
+    {
+        files.push((path.to_string(), "latest-crash-report.json".to_string()));
+    }
+    for (remote, local) in files {
+        if let Err(error) = get(session, &remote, &output_dir.join(&local)) {
+            fs::write(
+                output_dir.join(format!("{local}.missing")),
+                format!("remote={remote}\nerror={error}\n"),
+            )?;
+        }
+    }
     Ok(fs::canonicalize(&output_dir).unwrap_or(output_dir))
 }
 
