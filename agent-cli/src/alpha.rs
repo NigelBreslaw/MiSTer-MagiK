@@ -538,6 +538,26 @@ fn run_ui_journey(
     tap(device, nonce, AutomationButton::Down)?;
     let search = tap(device, nonce, AutomationButton::A)?;
     require_bool(&snapshot(device, nonce)?, "search_active", true)?;
+
+    // Search remembers both its query and selected key. Drive to Clear from any
+    // remembered keyboard position, then drive to A for deterministic text input.
+    for _ in 0..9 {
+        tap(device, nonce, AutomationButton::Left)?;
+    }
+    for _ in 0..4 {
+        tap(device, nonce, AutomationButton::Down)?;
+    }
+    for _ in 0..2 {
+        tap(device, nonce, AutomationButton::Right)?;
+    }
+    tap(device, nonce, AutomationButton::A)?;
+    require_semantic(&snapshot(device, nonce)?, "search_query", "")?;
+    for _ in 0..4 {
+        tap(device, nonce, AutomationButton::Up)?;
+    }
+    for _ in 0..9 {
+        tap(device, nonce, AutomationButton::Left)?;
+    }
     let typed = tap(device, nonce, AutomationButton::A)?;
     let search_state = await_semantic(device, nonce, "search_query", "A")?;
     require_bool(&search_state, "search_active", true)?;
