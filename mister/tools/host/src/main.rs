@@ -4866,7 +4866,7 @@ fn boot_event_us(events: &[Value], name: &str, last: bool) -> Result<u64> {
     let event = if last {
         matching.next_back()
     } else {
-        matching.into_iter().next()
+        matching.next()
     }
     .ok_or_else(|| format!("cold-boot event is missing: {name}"))?;
     Ok(event
