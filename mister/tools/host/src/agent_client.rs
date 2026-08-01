@@ -818,7 +818,22 @@ pub(crate) fn agent_stream_request_reader(
     payload: &mut dyn Read,
     timeout: Duration,
 ) -> Result<AgentResponse> {
-    let endpoint = AgentEndpoint::from_environment()?;
+    agent_stream_request_reader_at(
+        &AgentEndpoint::from_environment()?,
+        cmd,
+        args,
+        payload,
+        timeout,
+    )
+}
+
+pub(crate) fn agent_stream_request_reader_at(
+    endpoint: &AgentEndpoint,
+    cmd: &str,
+    args: Value,
+    payload: &mut dyn Read,
+    timeout: Duration,
+) -> Result<AgentResponse> {
     let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()

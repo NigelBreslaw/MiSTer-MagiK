@@ -32,10 +32,11 @@ mod remote;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
-    agent_request_with_liveness, agent_stream_request_reader, agent_telemetry_for_duration,
-    agent_telemetry_for_particle_renderer_trial, agent_telemetry_for_particle_trial,
-    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
-    bootstrap_agent, bootstrap_agent_with, verify_agent_deploy_result,
+    agent_request_with_liveness, agent_stream_request_reader, agent_stream_request_reader_at,
+    agent_telemetry_for_duration, agent_telemetry_for_particle_renderer_trial,
+    agent_telemetry_for_particle_trial, agent_telemetry_until_screensaver_profile_complete,
+    agent_token, agent_token_for_device, bootstrap_agent, bootstrap_agent_with,
+    verify_agent_deploy_result,
 };
 use platform_deploy::*;
 use remote::{
@@ -4151,10 +4152,15 @@ const LAUNCH_RETURN_PROFILE_BACKUP_REMOTE: &str =
 const LAUNCH_RETURN_PROFILE_WATCHDOG_REMOTE: &str =
     "/tmp/mister-magik/launch-return-profile-watchdog.pid";
 
-fn deploy_profile_runtime_binary(local: &Path, expected_sha256: &str) -> Result<()> {
+fn deploy_profile_runtime_binary(
+    endpoint: &AgentEndpoint,
+    local: &Path,
+    expected_sha256: &str,
+) -> Result<()> {
     let mut source = fs::File::open(local)?;
     let size = source.metadata()?.len();
-    let reply = agent_stream_request_reader(
+    let reply = agent_stream_request_reader_at(
+        endpoint,
         "deploy_magik_bin_stream",
         json!({
             "remote": "/media/fat/mister-magik-dev/mister-magik-fb",
@@ -4240,7 +4246,7 @@ fn profile_development_launch_return(
     drop(session);
 
     let run_result = (|| -> Result<String> {
-        deploy_profile_runtime_binary(profile_binary, expected_sha256)?;
+        deploy_profile_runtime_binary(&config.agent, profile_binary, expected_sha256)?;
         let session = connect_with(&config.connection, 10)?;
         exec_checked(
             &session,
@@ -4257,7 +4263,7 @@ fn profile_development_launch_return(
     })();
 
     let restore_result = (|| -> Result<()> {
-        deploy_profile_runtime_binary(&canonical_local, &canonical_sha256)?;
+        deploy_profile_runtime_binary(&config.agent, &canonical_local, &canonical_sha256)?;
         let session = connect_with(&config.connection, 10)?;
         exec_checked(
             &session,
