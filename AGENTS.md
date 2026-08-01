@@ -96,7 +96,7 @@ those trees are part of the task.
 - Edit `MiSTer.ini` only through typed `mister` mutators or approved
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to
-  Docker/OrbStack unless explicitly comparing `MISTER_ARM_BUILD_BACKEND=cross`.
+  Docker/OrbStack.
 - RBF synthesis runs only in the `Build MiSTer MagiK Platform` GitHub Actions
   workflow. Never attempt a local Quartus/RBF build or retain local RBF output.
 - Enable `.githooks/pre-commit` with
@@ -105,7 +105,7 @@ those trees are part of the task.
   then update only the parent gitlink.
 - Never stage private screenshots, caches, archives, `.env`, `.wrangler/`,
   credentials, or files under ignored `private/test-fixtures/`.
-- Treat `reference/` as read-only.
+- Treat repos in `reference/` as read-only. However you can clone new repos into the folder.
 
 ## Top-Level Commands
 
@@ -178,10 +178,6 @@ remote. Concurrent agents must use separate worktrees.
 - `/dev/fb0` contents alone do not prove HDMI visibility.
 - Production rendering is RGB565-only. Do not restore wider-color routes.
 - Do not rebuild preview caches on the MiSTer hot path.
-- Do not lower priority or pin CPU0 for initial catalog creation.
-- The scanner must not walk screenshot/cache media, read `gamelist.xml`, or
-  classify helper payloads as games.
-- Use velocity scenarios, not row jumps, for arcade performance conclusions.
 
 ## Sources Of Truth
 
