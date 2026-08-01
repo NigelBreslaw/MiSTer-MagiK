@@ -20,6 +20,15 @@ const MAX_WAIT: Duration = Duration::from_secs(10);
 const HANDOFF_WAIT: Duration = Duration::from_secs(15);
 const RETURN_WAIT: Duration = Duration::from_secs(12);
 
+#[derive(Clone, Debug)]
+struct LaunchIdentity {
+    main_generation: u64,
+    main_pid: u64,
+    launcher_pid: u64,
+    build_version: String,
+    source_revision: String,
+}
+
 #[derive(Debug)]
 pub(super) enum LaunchReturnError {
     Failed(String),
@@ -224,22 +233,22 @@ pub(super) fn exercise_launch_return(
         Ok(status) => status,
         Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
     };
-    let identity = (|| -> Result<(u64, u64, u64, String, String)> {
+    let identity = (|| -> Result<LaunchIdentity> {
         let main = before
             .pointer("/files/main_status")
             .ok_or("Main status is missing before launch")?;
         let slint = before
             .pointer("/files/slint_status")
             .ok_or("Slint status is missing before launch")?;
-        Ok((
-            required_u64(main, "main_generation")?,
-            required_u64(main, "pid")?,
-            required_u64(main, "launcher_pid")?,
-            required_text_at(slint, "/build/version")?.to_owned(),
-            required_text_at(slint, "/build/source_revision")?.to_owned(),
-        ))
+        Ok(LaunchIdentity {
+            main_generation: required_u64(main, "main_generation")?,
+            main_pid: required_u64(main, "pid")?,
+            launcher_pid: required_u64(main, "launcher_pid")?,
+            build_version: required_text_at(slint, "/build/version")?.to_owned(),
+            source_revision: required_text_at(slint, "/build/source_revision")?.to_owned(),
+        })
     })();
-    let (main_generation, main_pid, launcher_pid, build_version, source_revision) = match identity {
+    let identity = match identity {
         Ok(identity) => identity,
         Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
     };
@@ -256,41 +265,25 @@ pub(super) fn exercise_launch_return(
         .ok_or_else(|| LaunchReturnError::Failed("launch action has no sequence".into()))?;
     let _ = await_presented(config, nonce, action_sequence, 1_000);
 
-    let handoff = match wait_for_handoff(config, main_generation, main_pid) {
+    let handoff = match wait_for_handoff(config, &identity) {
         Ok(status) => status,
         Err(error) => {
-            return recover_after_launch_failure(
-                config,
-                nonce,
-                main_generation,
-                main_pid,
-                launcher_pid,
-                &build_version,
-                &source_revision,
-                error,
-            );
+            return recover_after_launch_failure(config, nonce, &identity, error);
         }
     };
-    if let Err(error) = request_return_to_launcher(config, main_generation) {
+    if let Err(error) = request_return_to_launcher(config, identity.main_generation) {
         return Err(LaunchReturnError::RecoveryRequired(format!(
             "game handoff passed but typed return failed: {error}"
         )));
     }
-    let restored = wait_for_returned_launcher(
-        config,
-        main_generation,
-        main_pid,
-        launcher_pid,
-        &build_version,
-        &source_revision,
-    )
-    .map_err(|error| LaunchReturnError::RecoveryRequired(error.to_string()))?;
+    let restored = wait_for_returned_launcher(config, &identity)
+        .map_err(|error| LaunchReturnError::RecoveryRequired(error.to_string()))?;
     let begun: Value = serde_json::from_str(
         &begin(
             config,
-            &build_version,
-            &source_revision,
-            main_generation,
+            &identity.build_version,
+            &identity.source_revision,
+            identity.main_generation,
             lifetime_seconds,
         )
         .map_err(|error| LaunchReturnError::Failed(error.to_string()))?,
@@ -344,11 +337,7 @@ fn fail_before_launch<T>(
 fn recover_after_launch_failure<T>(
     config: &NativeDeviceConfig,
     nonce: &str,
-    main_generation: u64,
-    main_pid: u64,
-    launcher_pid: u64,
-    build_version: &str,
-    source_revision: &str,
+    identity: &LaunchIdentity,
     launch_error: impl std::fmt::Display,
 ) -> std::result::Result<T, LaunchReturnError> {
     let _ = end(config, nonce);
@@ -365,16 +354,9 @@ fn recover_after_launch_failure<T>(
     {
         return Err(LaunchReturnError::Failed(launch_error.to_string()));
     }
-    match request_return_to_launcher(config, main_generation).and_then(|_| {
-        wait_for_returned_launcher(
-            config,
-            main_generation,
-            main_pid,
-            launcher_pid,
-            build_version,
-            source_revision,
-        )
-    }) {
+    match request_return_to_launcher(config, identity.main_generation)
+        .and_then(|_| wait_for_returned_launcher(config, identity))
+    {
         Ok(_) => Err(LaunchReturnError::Failed(launch_error.to_string())),
         Err(recovery) => Err(LaunchReturnError::RecoveryRequired(format!(
             "{launch_error}; typed return recovery failed: {recovery}"
@@ -443,12 +425,12 @@ fn request_return_to_launcher(
     )
 }
 
-fn wait_for_handoff(config: &NativeDeviceConfig, generation: u64, main_pid: u64) -> Result<Value> {
+fn wait_for_handoff(config: &NativeDeviceConfig, identity: &LaunchIdentity) -> Result<Value> {
     let deadline = Instant::now() + HANDOFF_WAIT;
     let mut last = Value::Null;
     while Instant::now() < deadline {
         if let Ok(status) = magik_status(config) {
-            if validate_handoff_status(&status, generation, main_pid).is_ok() {
+            if validate_handoff_status(&status, identity).is_ok() {
                 return Ok(status);
             }
             last = status;
@@ -460,26 +442,13 @@ fn wait_for_handoff(config: &NativeDeviceConfig, generation: u64, main_pid: u64)
 
 fn wait_for_returned_launcher(
     config: &NativeDeviceConfig,
-    generation: u64,
-    main_pid: u64,
-    previous_launcher_pid: u64,
-    version: &str,
-    revision: &str,
+    identity: &LaunchIdentity,
 ) -> Result<Value> {
     let deadline = Instant::now() + RETURN_WAIT;
     let mut last = Value::Null;
     while Instant::now() < deadline {
         if let Ok(status) = magik_status(config) {
-            if validate_returned_status(
-                &status,
-                generation,
-                main_pid,
-                previous_launcher_pid,
-                version,
-                revision,
-            )
-            .is_ok()
-            {
+            if validate_returned_status(&status, identity).is_ok() {
                 return Ok(status);
             }
             last = status;
@@ -562,12 +531,12 @@ fn validate_restored_snapshot(snapshot: &Value, expected_game_id: &str) -> Resul
     Ok(())
 }
 
-fn validate_handoff_status(status: &Value, generation: u64, main_pid: u64) -> Result<()> {
+fn validate_handoff_status(status: &Value, identity: &LaunchIdentity) -> Result<()> {
     let main = status
         .pointer("/files/main_status")
         .ok_or("handoff status has no Main identity")?;
-    if main.get("main_generation").and_then(Value::as_u64) != Some(generation)
-        || main.get("pid").and_then(Value::as_u64) != Some(main_pid)
+    if main.get("main_generation").and_then(Value::as_u64) != Some(identity.main_generation)
+        || main.get("pid").and_then(Value::as_u64) != Some(identity.main_pid)
         || main.get("launcher_state").and_then(Value::as_str) != Some("Unconfigured")
         || main.get("last_operation").and_then(Value::as_str) != Some("HandoffComplete")
         || main.get("last_operation_result").and_then(Value::as_str) != Some("completed")
@@ -597,14 +566,7 @@ fn validate_handoff_status(status: &Value, generation: u64, main_pid: u64) -> Re
     Ok(())
 }
 
-fn validate_returned_status(
-    status: &Value,
-    generation: u64,
-    main_pid: u64,
-    previous_launcher_pid: u64,
-    version: &str,
-    revision: &str,
-) -> Result<()> {
+fn validate_returned_status(status: &Value, identity: &LaunchIdentity) -> Result<()> {
     let main = status
         .pointer("/files/main_status")
         .ok_or("returned status has no Main identity")?;
@@ -612,11 +574,11 @@ fn validate_returned_status(
         .get("launcher_pid")
         .and_then(Value::as_u64)
         .ok_or("returned Main status has no launcher pid")?;
-    if main.get("main_generation").and_then(Value::as_u64) != Some(generation)
-        || main.get("pid").and_then(Value::as_u64) != Some(main_pid)
+    if main.get("main_generation").and_then(Value::as_u64) != Some(identity.main_generation)
+        || main.get("pid").and_then(Value::as_u64) != Some(identity.main_pid)
         || main.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive")
         || launcher_pid == 0
-        || launcher_pid == previous_launcher_pid
+        || launcher_pid == identity.launcher_pid
     {
         return Err("returned launcher does not match the original Main generation".into());
     }
@@ -628,11 +590,12 @@ fn validate_returned_status(
         .and_then(Value::as_bool)
         != Some(true)
         || slint.get("pid").and_then(Value::as_u64) != Some(launcher_pid)
-        || slint.pointer("/build/version").and_then(Value::as_str) != Some(version)
+        || slint.pointer("/build/version").and_then(Value::as_str)
+            != Some(identity.build_version.as_str())
         || slint
             .pointer("/build/source_revision")
             .and_then(Value::as_str)
-            != Some(revision)
+            != Some(identity.source_revision.as_str())
         || slint.get("startup_mode").and_then(Value::as_str) != Some("return_from_game")
         || slint.get("input_enabled").and_then(Value::as_bool) != Some(true)
     {
@@ -811,6 +774,13 @@ mod tests {
 
     #[test]
     fn handoff_requires_same_main_and_a_non_menu_core() {
+        let identity = LaunchIdentity {
+            main_generation: 7,
+            main_pid: 11,
+            launcher_pid: 19,
+            build_version: "0.2.4".into(),
+            source_revision: "abc".into(),
+        };
         let mut status = json!({
             "processes": {"mister-magik-fb": []},
             "files": {
@@ -826,13 +796,20 @@ mod tests {
                 "core_name": "MoonPatrol",
             }
         });
-        assert!(validate_handoff_status(&status, 7, 11).is_ok());
+        assert!(validate_handoff_status(&status, &identity).is_ok());
         status["files"]["core_name"] = json!("Menu");
-        assert!(validate_handoff_status(&status, 7, 11).is_err());
+        assert!(validate_handoff_status(&status, &identity).is_err());
     }
 
     #[test]
     fn return_requires_new_candidate_launcher_process() {
+        let identity = LaunchIdentity {
+            main_generation: 7,
+            main_pid: 11,
+            launcher_pid: 19,
+            build_version: "0.2.4".into(),
+            source_revision: "abc".into(),
+        };
         let status = json!({
             "files": {
                 "main_status": {
@@ -850,7 +827,11 @@ mod tests {
                 }
             }
         });
-        assert!(validate_returned_status(&status, 7, 11, 19, "0.2.4", "abc").is_ok());
-        assert!(validate_returned_status(&status, 7, 11, 23, "0.2.4", "abc").is_err());
+        assert!(validate_returned_status(&status, &identity).is_ok());
+        let previous_identity = LaunchIdentity {
+            launcher_pid: 23,
+            ..identity
+        };
+        assert!(validate_returned_status(&status, &previous_identity).is_err());
     }
 }
