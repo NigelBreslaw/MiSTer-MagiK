@@ -29,6 +29,8 @@ fn select_framebuffer_capture<T>(
 #[cfg(any(target_os = "linux", test))]
 use serde_json::{Value, json};
 
+#[cfg(any(target_os = "linux", test))]
+mod alpha_candidate;
 #[cfg(target_os = "linux")]
 mod launcher_automation;
 #[cfg(target_os = "linux")]
@@ -2289,6 +2291,7 @@ mod linux {
                     "capabilities": [
                         mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
                         mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
+                        mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                     ],
                 })),
                 None,
@@ -2339,6 +2342,10 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
+            "alpha_candidate_install" => match crate::alpha_candidate::install(args) {
+                Ok(result) => response(id, true, Some(result), None),
+                Err(err) => response(id, false, None, Some(&err)),
+            },
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
                     id,
@@ -2376,6 +2383,7 @@ mod linux {
                 "capabilities": [
                     mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
                     mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
+                    mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                 ],
                 "boot_id": boot_id,
                 "uptime_ms": started.elapsed().as_millis() as u64,

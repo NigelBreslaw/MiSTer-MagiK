@@ -51,6 +51,18 @@ pub enum AutomationAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlphaCandidateHashes {
+    pub platform_manifest: String,
+    pub main: String,
+    pub gui: String,
+    pub manager: String,
+    pub scanout_module: String,
+    pub scanout_metadata: String,
+    pub latch_rbf: String,
+    pub latch_metadata: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceRequest {
     Discover,
     Status,
@@ -144,6 +156,10 @@ pub enum DeviceRequest {
     RunCrtScreensaverMatrix,
     RepairSafeDeviceState,
     CaptureFramebuffer,
+    InstallAlphaCandidate {
+        tag: String,
+        hashes: AlphaCandidateHashes,
+    },
     BeginLauncherAutomation {
         expected_build_version: String,
         expected_source_revision: String,
@@ -225,6 +241,7 @@ impl DeviceRequest {
             Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
+            Self::InstallAlphaCandidate { .. } => "install-alpha-candidate",
             Self::BeginLauncherAutomation { .. } => "begin-launcher-automation",
             Self::SendLauncherAutomationAction { .. } => "send-launcher-automation-action",
             Self::AwaitLauncherAutomationPresented { .. } => "await-launcher-automation-presented",

@@ -1,0 +1,336 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Closed MiSTer Downloader transaction for immutable alpha candidates.
+
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const CONFIG_PATH: &str = "/media/fat/downloader_mister_magik.ini";
+const DOWNLOADER_ROOT: &str = "/media/fat";
+const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+const DOWNLOADER_TIMEOUT: Duration = Duration::from_secs(240);
+const DATABASE_ID: &str = "mister_magik";
+
+const INSTALLED_FILES: &[(&str, &str)] = &[
+    ("main", "/media/fat/MiSTer_MagiK"),
+    ("gui", "/media/fat/mister-magik/mister-magik-fb"),
+    ("manager", "/media/fat/mister-magik/mister-magik-manager"),
+    (
+        "scanout_module",
+        "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
+    ),
+    (
+        "scanout_metadata",
+        "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
+    ),
+    (
+        "latch_rbf",
+        "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
+    ),
+    (
+        "latch_metadata",
+        "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
+    ),
+];
+
+pub(crate) fn install(args: Value) -> Result<Value, String> {
+    let request = Request::parse(&args)?;
+    require_single_canonical_section()?;
+    let entrypoint = select_downloader()?;
+    let mut config = ConfigTransaction::begin(Path::new(CONFIG_PATH))?;
+    let candidate_url = format!(
+        "https://github.com/NigelBreslaw/MiSTer-MagiK/releases/download/{}/mister-magik-alpha-db.json.zip",
+        request.tag
+    );
+    let install = (|| {
+        config.replace(format!("[{DATABASE_ID}]\ndb_url = {candidate_url}\n").as_bytes())?;
+        run_downloader(&entrypoint)?;
+        Ok(())
+    })();
+    let restored = config.restore();
+    match (install, restored) {
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(()), Err(error)) => {
+            return Err(format!(
+                "candidate installed but config restore failed: {error}"
+            ));
+        }
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; config restore also failed: {restore}"));
+        }
+        (Ok(()), Ok(())) => {}
+    }
+
+    let manifest_path = Path::new("/media/fat/mister-magik/platform-v3.manifest");
+    require_hash(manifest_path, &request.platform_manifest)?;
+    for (name, path) in INSTALLED_FILES {
+        require_hash(
+            Path::new(path),
+            request
+                .components
+                .get(*name)
+                .ok_or_else(|| format!("missing expected {name} hash"))?,
+        )?;
+    }
+    Ok(json!({
+        "schema": "mister-magik-alpha-candidate-install-v1",
+        "tag": request.tag,
+        "database_id": DATABASE_ID,
+        "downloader": entrypoint,
+        "configuration_restored": true,
+        "platform_manifest_sha256": request.platform_manifest,
+    }))
+}
+
+struct Request {
+    tag: String,
+    platform_manifest: String,
+    components: std::collections::BTreeMap<String, String>,
+}
+
+impl Request {
+    fn parse(args: &Value) -> Result<Self, String> {
+        let object = args
+            .as_object()
+            .ok_or("alpha candidate args must be an object")?;
+        if object.len() != 3 {
+            return Err("alpha candidate request has unknown or missing fields".to_string());
+        }
+        let tag = object
+            .get("tag")
+            .and_then(Value::as_str)
+            .ok_or("alpha candidate tag is missing")?;
+        validate_tag(tag)?;
+        let platform_manifest = object
+            .get("platform_manifest_sha256")
+            .and_then(Value::as_str)
+            .ok_or("platform manifest hash is missing")?;
+        validate_sha(platform_manifest)?;
+        let components = object
+            .get("component_sha256")
+            .and_then(Value::as_object)
+            .ok_or("component hashes are missing")?;
+        if components.len() != INSTALLED_FILES.len() {
+            return Err("component hash set is incomplete".to_string());
+        }
+        let components = components
+            .iter()
+            .map(|(name, value)| {
+                if !INSTALLED_FILES.iter().any(|(expected, _)| name == expected) {
+                    return Err(format!("unsupported component hash: {name}"));
+                }
+                let hash = value
+                    .as_str()
+                    .ok_or_else(|| format!("component hash is not text: {name}"))?;
+                validate_sha(hash)?;
+                Ok((name.clone(), hash.to_string()))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            tag: tag.to_string(),
+            platform_manifest: platform_manifest.to_string(),
+            components,
+        })
+    }
+}
+
+fn validate_tag(tag: &str) -> Result<(), String> {
+    let Some(rest) = tag.strip_prefix("alpha-candidate-v0.2.") else {
+        return Err("candidate tag has an unsupported prefix".to_string());
+    };
+    let Some((build, digest)) = rest.split_once('-') else {
+        return Err("candidate tag is missing its digest".to_string());
+    };
+    if build.is_empty()
+        || !build.bytes().all(|byte| byte.is_ascii_digit())
+        || digest.len() != 12
+        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("candidate tag is invalid".to_string());
+    }
+    Ok(())
+}
+
+fn validate_sha(value: &str) -> Result<(), String> {
+    if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err("candidate SHA-256 is invalid".to_string())
+    }
+}
+
+fn require_single_canonical_section() -> Result<(), String> {
+    let mut owners = Vec::new();
+    for entry in fs::read_dir(DOWNLOADER_ROOT).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name != "downloader.ini" && !(name.starts_with("downloader_") && name.ends_with(".ini"))
+        {
+            continue;
+        }
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+            return Err(format!("unsafe Downloader configuration: {name}"));
+        }
+        let text = fs::read_to_string(entry.path()).map_err(|error| error.to_string())?;
+        if text
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case("[mister_magik]"))
+        {
+            owners.push(entry.path());
+        }
+    }
+    if owners.as_slice() != [PathBuf::from(CONFIG_PATH)] {
+        return Err(format!(
+            "MiSTer MagiK Downloader section must have one canonical owner: {owners:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn select_downloader() -> Result<PathBuf, String> {
+    for path in [
+        "/media/fat/Scripts/update.sh",
+        "/media/fat/Scripts/downloader.sh",
+        "/media/fat/downloader.sh",
+    ] {
+        if fs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err("official MiSTer Downloader entrypoint is missing".to_string())
+}
+
+fn run_downloader(entrypoint: &Path) -> Result<(), String> {
+    let mut child = Command::new(entrypoint)
+        .args(["--run-only", DATABASE_ID])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("start targeted Downloader: {error}"))?;
+    let deadline = Instant::now() + DOWNLOADER_TIMEOUT;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("wait for targeted Downloader: {error}"))?
+        {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("targeted Downloader exited with {status}"))
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("targeted Downloader exceeded 240 seconds".to_string());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn require_hash(path: &Path, expected: &str) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    let actual = format!("{:x}", Sha256::digest(bytes));
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("installed hash mismatch: {}", path.display()))
+    }
+}
+
+struct ConfigTransaction {
+    path: PathBuf,
+    original: Vec<u8>,
+    mode: u32,
+    replaced: bool,
+}
+
+impl ConfigTransaction {
+    fn begin(path: &Path) -> Result<Self, String> {
+        let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+            return Err("canonical Downloader configuration is unsafe".to_string());
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            original: fs::read(path).map_err(|error| error.to_string())?,
+            mode: metadata.permissions().mode(),
+            replaced: false,
+        })
+    }
+
+    fn replace(&mut self, bytes: &[u8]) -> Result<(), String> {
+        write_atomic(&self.path, bytes, self.mode)?;
+        self.replaced = true;
+        Ok(())
+    }
+
+    fn restore(&mut self) -> Result<(), String> {
+        if self.replaced {
+            write_atomic(&self.path, &self.original, self.mode)?;
+            self.replaced = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ConfigTransaction {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), String> {
+    let temporary = path.with_file_name(format!(
+        ".{}.alpha-candidate-{}",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("downloader.ini"),
+        std::process::id()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(mode)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(mode))
+            .map_err(|error| error.to_string())?;
+        fs::rename(&temporary, path).map_err(|error| error.to_string())?;
+        fs::File::open(path.parent().ok_or("config has no parent")?)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_tags_are_closed_and_immutable() {
+        assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef").is_ok());
+        assert!(validate_tag("alpha").is_err());
+        assert!(validate_tag("alpha-candidate-v0.2.123-latest").is_err());
+        assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef/escape").is_err());
+    }
+}

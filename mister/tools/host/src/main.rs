@@ -628,6 +628,9 @@ impl DeviceOperations for NativeDevice {
                 capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
                 "captured".into()
             }
+            DeviceRequest::InstallAlphaCandidate { tag, hashes } => {
+                install_alpha_candidate(&config, tag, hashes)?
+            }
             DeviceRequest::BeginLauncherAutomation {
                 expected_build_version,
                 expected_source_revision,
@@ -678,6 +681,71 @@ impl DeviceOperations for NativeDevice {
             detail,
         })
     }
+}
+
+fn install_alpha_candidate(
+    config: &NativeDeviceConfig,
+    tag: &str,
+    hashes: &mister_tool::transport::AlphaCandidateHashes,
+) -> std::result::Result<String, DeviceFailure> {
+    for hash in [
+        &hashes.platform_manifest,
+        &hashes.main,
+        &hashes.gui,
+        &hashes.manager,
+        &hashes.scanout_module,
+        &hashes.scanout_metadata,
+        &hashes.latch_rbf,
+        &hashes.latch_metadata,
+    ] {
+        require_delivery_sha256(hash)?;
+    }
+    let reply = agent_request_at(
+        &config.agent,
+        "alpha_candidate_install",
+        json!({
+            "tag": tag,
+            "platform_manifest_sha256": hashes.platform_manifest,
+            "component_sha256": {
+                "main": hashes.main,
+                "gui": hashes.gui,
+                "manager": hashes.manager,
+                "scanout_module": hashes.scanout_module,
+                "scanout_metadata": hashes.scanout_metadata,
+                "latch_rbf": hashes.latch_rbf,
+                "latch_metadata": hashes.latch_metadata,
+            },
+        }),
+        Duration::from_secs(250),
+    )
+    .map_err(device_failure)?;
+    let installed =
+        reply.response.get("result").cloned().ok_or_else(|| {
+            DeviceFailure::OperationFailed("candidate install has no result".into())
+        })?;
+    delivery_reboot_wait(config)?;
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    exec_checked(
+        &session,
+        "alpha candidate public platform verification",
+        &installed_platform_verify_command(Layout::Public),
+    )
+    .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+    exec_checked(
+        &session,
+        "alpha candidate public health",
+        &delivery_health_command("public").map_err(device_failure)?,
+    )
+    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    serde_json::to_string(&json!({
+        "schema": "mister-magik-alpha-candidate-activation-v1",
+        "install": installed,
+        "supervised_reboot": true,
+        "public_health": "ready",
+    }))
+    .map_err(device_failure)
 }
 
 fn require_delivery_sha256(value: &str) -> std::result::Result<(), DeviceFailure> {

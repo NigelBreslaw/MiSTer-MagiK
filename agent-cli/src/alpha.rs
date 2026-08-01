@@ -6,7 +6,9 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{AutomationAction, AutomationButton, DeviceRequest};
+use mister_tool::transport::{
+    AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,6 +43,7 @@ pub struct CandidateIdentity {
     pub format: &'static str,
     pub version: String,
     pub build_number: u64,
+    pub candidate_tag: String,
     pub archive: String,
     pub archive_sha256: String,
     pub release_assets_sha256: String,
@@ -91,8 +94,17 @@ pub fn execute(
             format!("output already exists: {}", output.display()),
         );
     }
-    fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let mut device = DeviceClient::default();
+    reporter.emit(
+        EventKind::Progress,
+        "install",
+        "Installing the exact candidate through MiSTer Downloader",
+        Some(10),
+    )?;
+    device.execute(DeviceRequest::InstallAlphaCandidate {
+        tag: candidate.candidate_tag.clone(),
+        hashes: candidate_hashes(&candidate)?,
+    })?;
     let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
         .map_err(|error| format!("cannot parse device status: {error}"))?;
     let runtime = require_installed_candidate(&status, &candidate)?;
@@ -100,6 +112,7 @@ pub fn execute(
         .pointer("/runtime/main_status/main_generation")
         .and_then(Value::as_u64)
         .ok_or("device status has no Main generation")?;
+    fs::create_dir_all(output).map_err(|error| error.to_string())?;
 
     reporter.emit(
         EventKind::Progress,
@@ -451,7 +464,13 @@ pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
     }
     require_leaf("archive", &receipt.archive)?;
     require_sha("archive_sha256", &receipt.archive_sha256)?;
-    verify_checksums(root)?;
+    let checksums = verify_checksums(root)?;
+    if !checksums.contains("mister-magik-alpha-db.json.zip") {
+        return classified(
+            "invalid_alpha_candidate",
+            "candidate checksums do not cover the alpha Downloader database",
+        );
+    }
 
     let archive_path = root.join(&receipt.archive);
     if digest_file(&archive_path)? != receipt.archive_sha256 {
@@ -521,6 +540,11 @@ pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
         format: "mister-magik-alpha-candidate-v1",
         version: receipt.version,
         build_number: receipt.build_number,
+        candidate_tag: format!(
+            "alpha-candidate-v{}-{}",
+            receipt.version,
+            &receipt.archive_sha256[..12]
+        ),
         archive: receipt.archive,
         archive_sha256: receipt.archive_sha256,
         release_assets_sha256: digest(&receipt_bytes),
@@ -550,7 +574,7 @@ pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
     })
 }
 
-fn verify_checksums(root: &Path) -> AgentResult<()> {
+fn verify_checksums(root: &Path) -> AgentResult<BTreeSet<String>> {
     let path = root.join("SHA256SUMS");
     let text = fs::read_to_string(&path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
@@ -571,7 +595,27 @@ fn verify_checksums(root: &Path) -> AgentResult<()> {
             "SHA256SUMS does not cover release-assets.json",
         );
     }
-    Ok(())
+    Ok(seen.into_iter().map(str::to_string).collect())
+}
+
+fn candidate_hashes(candidate: &CandidateIdentity) -> AgentResult<AlphaCandidateHashes> {
+    let component = |name: &str| {
+        candidate
+            .component_sha256
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("candidate has no {name} component hash").into())
+    };
+    Ok(AlphaCandidateHashes {
+        platform_manifest: candidate.platform_manifest_sha256.clone(),
+        main: component("main")?,
+        gui: component("gui")?,
+        manager: component("manager")?,
+        scanout_module: component("scanout_module")?,
+        scanout_metadata: component("scanout_metadata")?,
+        latch_rbf: component("latch_rbf")?,
+        latch_metadata: component("latch_metadata")?,
+    })
 }
 
 fn parse_fields(bytes: &[u8]) -> AgentResult<BTreeMap<String, String>> {
