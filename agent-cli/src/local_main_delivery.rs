@@ -214,6 +214,59 @@ fn run_bounded(repository: &Path, program: &str, args: &[&str]) -> AgentResult<(
 }
 
 #[cfg(test)]
+fn test_manifest(magik_revision: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+
+    let fields = crate::platform_manifest::FIELDS;
+    let mut values = BTreeMap::new();
+    values.insert("format".to_owned(), "mister-magik-platform-v3".to_owned());
+    values.insert("platform_release".to_owned(), "platform-v0.16".to_owned());
+    values.insert("platform_release_number".to_owned(), "16".to_owned());
+    values.insert("platform_bundle_id".to_owned(), "c".repeat(64));
+    values.insert("latch_protocol_version".to_owned(), "4".to_owned());
+    values.insert("latch_capability_mask".to_owned(), "0x01ff".to_owned());
+    for (name, path) in crate::platform_manifest::Layout::Development.paths() {
+        values.insert(format!("{name}_path"), path.into());
+    }
+    for name in [
+        "main",
+        "gui",
+        "manager",
+        "scanout_module",
+        "scanout_metadata",
+        "latch_rbf",
+        "latch_metadata",
+        "platform_contract",
+    ] {
+        values.insert(format!("{name}_sha256"), "d".repeat(64));
+    }
+    values.insert("main_revision".to_owned(), "e".repeat(40));
+    values.insert("magik_revision".to_owned(), magik_revision.into());
+    values.insert("menu_revision".to_owned(), "f".repeat(40));
+    let mut hash = Sha256::new();
+    for field in fields {
+        if *field != "qualification_candidate_id" {
+            hash.update(field.as_bytes());
+            hash.update(b"=");
+            hash.update(values[*field].as_bytes());
+            hash.update(b"\n");
+        }
+    }
+    values.insert(
+        "qualification_candidate_id".to_owned(),
+        hash.finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    );
+    fields
+        .iter()
+        .map(|field| format!("{field}={}\n", values[*field]))
+        .collect()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mister_tool::transport::{DeviceFailure, DeviceResponse, FakeDevice};
@@ -314,57 +367,4 @@ mod tests {
                 .is_err()
         );
     }
-}
-
-#[cfg(test)]
-fn test_manifest(magik_revision: &str) -> String {
-    use sha2::{Digest, Sha256};
-    use std::collections::BTreeMap;
-
-    let fields = crate::platform_manifest::FIELDS;
-    let mut values = BTreeMap::new();
-    values.insert("format".to_owned(), "mister-magik-platform-v3".to_owned());
-    values.insert("platform_release".to_owned(), "platform-v0.16".to_owned());
-    values.insert("platform_release_number".to_owned(), "16".to_owned());
-    values.insert("platform_bundle_id".to_owned(), "c".repeat(64));
-    values.insert("latch_protocol_version".to_owned(), "4".to_owned());
-    values.insert("latch_capability_mask".to_owned(), "0x01ff".to_owned());
-    for (name, path) in crate::platform_manifest::Layout::Development.paths() {
-        values.insert(format!("{name}_path"), path.into());
-    }
-    for name in [
-        "main",
-        "gui",
-        "manager",
-        "scanout_module",
-        "scanout_metadata",
-        "latch_rbf",
-        "latch_metadata",
-        "platform_contract",
-    ] {
-        values.insert(format!("{name}_sha256"), "d".repeat(64));
-    }
-    values.insert("main_revision".to_owned(), "e".repeat(40));
-    values.insert("magik_revision".to_owned(), magik_revision.into());
-    values.insert("menu_revision".to_owned(), "f".repeat(40));
-    let mut hash = Sha256::new();
-    for field in fields {
-        if *field != "qualification_candidate_id" {
-            hash.update(field.as_bytes());
-            hash.update(b"=");
-            hash.update(values[*field].as_bytes());
-            hash.update(b"\n");
-        }
-    }
-    values.insert(
-        "qualification_candidate_id".to_owned(),
-        hash.finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-    );
-    fields
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect()
 }
