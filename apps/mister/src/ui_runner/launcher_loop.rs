@@ -6363,7 +6363,6 @@ impl LaunchReturnSession {
             return false;
         }
         self.source = source.label();
-        self.phase = "context-restored";
         if self.exact_context_monotonic_us == 0 {
             self.exact_context_monotonic_us = monotonic_clock_us().unwrap_or(0);
         }
@@ -6374,8 +6373,14 @@ impl LaunchReturnSession {
                 | CatalogSource::FreshBuild
         ) {
             self.authoritative_catalog_ready = true;
-            self.phase = "authoritative-context-restored";
         }
+        self.phase = if self.complete {
+            "complete"
+        } else if self.authoritative_catalog_ready {
+            "authoritative-context-restored"
+        } else {
+            "context-restored"
+        };
         true
     }
 
@@ -6386,7 +6391,9 @@ impl LaunchReturnSession {
         if !launcher::apply_launch_return_state(nav, catalog, state) {
             return false;
         }
-        self.phase = if self.authoritative_catalog_ready {
+        self.phase = if self.complete {
+            "complete"
+        } else if self.authoritative_catalog_ready {
             "authoritative-context-restored"
         } else {
             "context-restored"
@@ -6397,7 +6404,11 @@ impl LaunchReturnSession {
     fn mark_system_shard_authoritative(&mut self) {
         self.authoritative_catalog_ready = true;
         self.source = "system-shard";
-        self.phase = "authoritative-context-restored";
+        self.phase = if self.complete {
+            "complete"
+        } else {
+            "authoritative-context-restored"
+        };
     }
 
     fn context_matches(&self, nav: &LauncherNav, catalog: &ArcadeCatalog) -> bool {
@@ -8100,6 +8111,7 @@ mod tests {
         restored_nav.go_root();
         assert!(session.apply(&mut restored_nav, &catalog, CatalogSource::FullSqlite));
         assert!(session.context_matches(&restored_nav, &catalog));
+        assert_eq!(session.phase, "complete");
         session.release_if_complete();
         assert!(!session.requested());
         assert_eq!(session.phase, "complete");
