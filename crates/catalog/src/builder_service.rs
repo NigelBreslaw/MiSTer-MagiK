@@ -735,7 +735,7 @@ impl ProductionRepairStatus {
     }
 }
 
-fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> ProductionRepairStatus {
+fn inspect_v3_before_source_check() -> Result<ProductionRepairStatus, String> {
     let started = Instant::now();
     let storage = crate::catalog_config::default_sharded_catalog_path();
     let limits = crate::production_sharded_projection::production_registry_limits();
@@ -747,7 +747,7 @@ fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> ProductionRepai
         {
             Ok(crate::production_sharded_projection::ProductionBindingStatus::Current {
                 ..
-            }) => return ProductionRepairStatus::Current,
+            }) => return Ok(ProductionRepairStatus::Current),
             Ok(
                 crate::production_sharded_projection::ProductionBindingStatus::UpgradeRequired {
                     installed,
@@ -755,20 +755,27 @@ fn repair_v3_after_unchanged_check(catalog_fingerprint: &str) -> ProductionRepai
                     ..
                 },
             ) => {
-                return ProductionRepairStatus::UpgradeRequired {
+                return Ok(ProductionRepairStatus::UpgradeRequired {
                     installed,
                     required,
-                };
+                });
+            }
+            Err(error)
+                if error
+                    .to_string()
+                    .contains("unsupported future catalog format")
+                    || error.to_string().contains("incoherent catalog format") =>
+            {
+                return Err(error.to_string());
             }
             Err(_) => {}
         }
     }
     crate::catalog_errln!(
-        "catalog_v3_repair_tsv\tstatus=rebuild-required\tfingerprint={}\telapsed_us={}",
-        catalog_fingerprint,
+        "catalog_v3_repair_tsv\tstatus=rebuild-required\telapsed_us={}",
         started.elapsed().as_micros()
     );
-    ProductionRepairStatus::RepairRequired
+    Ok(ProductionRepairStatus::RepairRequired)
 }
 
 /// Remove the complete production catalog so the next launch performs a clean
@@ -837,13 +844,10 @@ impl BuilderBackend for SystemBuilderBackend {
     }
 
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {
+        let v3_repair = inspect_v3_before_source_check()
+            .map_err(|error| StageFailure::new("check-format", error))?;
         let check = library_db::default_sqlite_catalog_stamp_check()
             .map_err(|error| StageFailure::new("check", error))?;
-        let v3_repair = if check.unchanged {
-            repair_v3_after_unchanged_check(&check.current_fingerprint)
-        } else {
-            ProductionRepairStatus::RepairRequired
-        };
         let timing_detail = format!(
             "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={} v3_repair={}",
             check.unchanged,
@@ -868,38 +872,39 @@ impl BuilderBackend for SystemBuilderBackend {
             check.drift.detail,
             v3_repair.label(),
         );
-        let decision = if check.unchanged {
-            match v3_repair {
-                ProductionRepairStatus::Current => CheckDecision::Unchanged(BuilderSummary::from(
-                    library_db::default_sharded_cached_summary(check.check_us)
-                        .map_err(|error| StageFailure::new("summary", error))?,
-                )),
-                ProductionRepairStatus::UpgradeRequired {
+        let decision = match v3_repair {
+            ProductionRepairStatus::UpgradeRequired {
+                installed,
+                required,
+            } => CheckDecision::Changed {
+                detail: format!(
+                    "Catalog format update required: installed {installed}, required {required}."
+                ),
+                reason: CatalogChangeReason::ProjectionUpgrade {
                     installed,
                     required,
-                } => CheckDecision::Changed {
-                    detail: format!(
-                        "Catalog format update required: installed {installed}, required {required}."
-                    ),
-                    reason: CatalogChangeReason::ProjectionUpgrade {
-                        installed,
-                        required,
-                    },
                 },
-                ProductionRepairStatus::RepairRequired => CheckDecision::Changed {
-                    detail:
-                        "Catalog sources are unchanged, but the V3 generation is incomplete; rebuild required."
-                            .to_string(),
-                    reason: CatalogChangeReason::RepairRequired,
-                },
+            },
+            ProductionRepairStatus::Current if check.unchanged => {
+                CheckDecision::Unchanged(BuilderSummary::from(
+                    library_db::default_sharded_cached_summary(check.check_us)
+                        .map_err(|error| StageFailure::new("summary", error))?,
+                ))
             }
-        } else {
-            CheckDecision::Changed {
+            ProductionRepairStatus::RepairRequired if check.unchanged => CheckDecision::Changed {
+                detail:
+                    "Catalog sources are unchanged, but the V3 generation is incomplete; rebuild required."
+                        .to_string(),
+                reason: CatalogChangeReason::RepairRequired,
+            },
+            ProductionRepairStatus::Current | ProductionRepairStatus::RepairRequired => {
+                CheckDecision::Changed {
                 detail: format!(
                     "Catalog inputs changed; rebuild required. {}",
                     check.drift.detail
                 ),
                 reason: CatalogChangeReason::InputsChanged,
+                }
             }
         };
         Ok(CheckOutput {

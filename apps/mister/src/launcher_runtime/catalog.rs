@@ -84,11 +84,24 @@ pub fn load_sharded_registry_seed_at(
         arcade_catalog::MENU_ARCADE_SYSTEM_ID.trim_start_matches("menu:"),
     )
     .ok();
-    let (games, launch_plans) = arcade_id
-        .as_ref()
-        .and_then(|system_id| reader.open_system(system_id).ok())
-        .map(|system| arcade_rows_from_shard("arcade", system.games()))
-        .unwrap_or_default();
+    let (games, launch_plans) = match arcade_id.as_ref() {
+        Some(system_id)
+            if registry
+                .systems()
+                .iter()
+                .any(|system| &system.system_id == system_id) =>
+        {
+            let system =
+                reader
+                    .open_system(system_id)
+                    .map_err(|error| ShardedCatalogSeedLoadError {
+                        status: "failed",
+                        error: format!("registered Arcade catalog cannot be opened: {error}"),
+                    })?;
+            arcade_rows_from_shard("arcade", system.games())
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
     let platform_kinds = systems
         .iter()
         .map(|system| {

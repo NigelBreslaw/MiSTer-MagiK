@@ -4,28 +4,66 @@
 //! Manifest-first reader which opens system navigation only on demand.
 
 use crate::catalog_classify::SystemId;
+use crate::catalog_format::CatalogFormatStatus;
 use crate::shard_registry::{CatalogManifest, RegistryLimits, read_latest_manifest_lazy};
 use crate::sharded_catalog::{
     CatalogError, CatalogGame, CatalogLaunchPlan, CatalogReader, CatalogRegistry, SystemCatalog,
     SystemSummary,
 };
-use crate::system_shard::open_system_navigation;
+use crate::system_shard::{NavigationCompatibility, open_system_navigation_with_compatibility};
 use std::path::{Path, PathBuf};
 
 pub struct LazyShardedCatalogReader {
     storage_root: PathBuf,
     limits: RegistryLimits,
     manifest: CatalogManifest,
+    navigation_compatibility: NavigationCompatibility,
 }
 
 impl LazyShardedCatalogReader {
     pub fn open(storage_root: &Path, limits: RegistryLimits) -> Result<Self, CatalogError> {
         let manifest = read_latest_manifest_lazy(storage_root, limits)
             .map_err(|error| CatalogError::new("read-manifest", error.to_string()))?;
+        let navigation_compatibility = match manifest.format.as_ref() {
+            None => NavigationCompatibility::CurrentOrAlphaV1,
+            Some(format) => match crate::catalog_format::classify(format) {
+                CatalogFormatStatus::Current => NavigationCompatibility::CurrentOnly,
+                CatalogFormatStatus::UpgradeRequired { .. } => {
+                    NavigationCompatibility::CurrentOrAlphaV1
+                }
+                CatalogFormatStatus::UnsupportedFuture {
+                    installed,
+                    required,
+                } => {
+                    return Err(CatalogError::new(
+                        "read-manifest",
+                        format!(
+                            "unsupported future catalog format: installed {}, required {}",
+                            installed.label(),
+                            required.label()
+                        ),
+                    ));
+                }
+                CatalogFormatStatus::Corrupt {
+                    installed,
+                    required,
+                } => {
+                    return Err(CatalogError::new(
+                        "read-manifest",
+                        format!(
+                            "incoherent catalog format: installed {}, required {}",
+                            installed.label(),
+                            required.label()
+                        ),
+                    ));
+                }
+            },
+        };
         Ok(Self {
             storage_root: storage_root.to_path_buf(),
             limits,
             manifest,
+            navigation_compatibility,
         })
     }
 }
@@ -58,11 +96,12 @@ impl CatalogReader for LazyShardedCatalogReader {
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let open = |generation: &crate::shard_registry::PublishedGeneration| {
-            let loaded = open_system_navigation(
+            let loaded = open_system_navigation_with_compatibility(
                 &self.storage_root.join(&generation.navigation_path),
                 system_id,
                 generation.generation,
                 self.limits.shard,
+                self.navigation_compatibility,
             )
             .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
             if loaded.navigation_hash != generation.navigation_hash {

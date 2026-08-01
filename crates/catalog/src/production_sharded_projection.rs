@@ -486,7 +486,17 @@ pub fn inspect_production_binding(
             "catalog binding does not match the active manifest and V3 state",
         ));
     }
-    if let Some(format) = binding.format.as_ref().or(manifest.format.as_ref()) {
+    let legacy_format = if binding.format.is_none() && manifest.format.is_none() {
+        CatalogFormatDescriptor::from_legacy_stamp_lines(state.stamp.lines())
+    } else {
+        None
+    };
+    if let Some(format) = binding
+        .format
+        .as_ref()
+        .or(manifest.format.as_ref())
+        .or(legacy_format.as_ref())
+    {
         if binding.format.as_ref().is_some_and(|binding_format| {
             manifest
                 .format

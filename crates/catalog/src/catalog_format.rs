@@ -67,6 +67,31 @@ impl CatalogFormatDescriptor {
             self.projection_contract
         )
     }
+
+    #[must_use]
+    pub fn from_legacy_stamp_lines(lines: &[String]) -> Option<Self> {
+        let schema = stamp_value(lines, "schema")?;
+        let build = stamp_value(lines, "catalog-build")?;
+        if schema == crate::catalog_config::SCHEMA_VERSION
+            && build == crate::catalog_config::CATALOG_BUILD_VERSION
+        {
+            Some(Self::current())
+        } else if schema == 66 && build == 15 {
+            Some(Self::alpha_predecessor())
+        } else {
+            let mut descriptor = Self::current();
+            descriptor.canonical_schema_version = schema;
+            descriptor.catalog_build_version = build;
+            Some(descriptor)
+        }
+    }
+}
+
+fn stamp_value(lines: &[String], name: &str) -> Option<u32> {
+    lines.iter().find_map(|line| {
+        let (key, value) = line.split_once('\t')?;
+        (key == name).then(|| value.parse().ok()).flatten()
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -157,5 +182,14 @@ mod tests {
             classify(&mixed),
             CatalogFormatStatus::Corrupt { .. }
         ));
+    }
+
+    #[test]
+    fn legacy_stamp_recovers_the_known_predecessor_only() {
+        let lines = vec!["schema\t66".to_string(), "catalog-build\t15".to_string()];
+        assert_eq!(
+            CatalogFormatDescriptor::from_legacy_stamp_lines(&lines),
+            Some(CatalogFormatDescriptor::alpha_predecessor())
+        );
     }
 }
