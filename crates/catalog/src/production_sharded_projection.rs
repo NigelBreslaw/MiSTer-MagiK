@@ -472,7 +472,8 @@ pub fn inspect_production_binding(
     manifest_generation: u64,
 ) -> Result<ProductionBindingStatus, ReconciliationError> {
     let binding = read_binding(storage_root)?;
-    let manifest = read_latest_manifest_lazy(storage_root, production_registry_limits())?;
+    let manifest = read_latest_manifest_lazy(storage_root, production_registry_limits())
+        .map_err(|error| ReconciliationError::new("binding", error.to_string()))?;
     let state = crate::catalog_state::read(&crate::catalog_state::path_for_root(storage_root))
         .map_err(|error| ReconciliationError::new("binding", error))?;
     let state_fingerprint = state.stamp.fingerprint_hex();
