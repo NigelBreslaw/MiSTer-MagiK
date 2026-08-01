@@ -4410,11 +4410,8 @@ fn profile_installed_launch_return(
                 output_dir.join(&capture_metadata_file),
                 format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
             )?;
-            let profile_metadata_text = remote_read(&session, &remote_complete)
-                .filter(|text| !text.trim().is_empty())
-                .ok_or_else(|| {
-                    format!("launch-return profile metadata is missing: {remote_complete}")
-                })?;
+            let profile_metadata_text =
+                wait_launch_return_profile(&session, &remote_complete, Duration::from_secs(5))?;
             let profile_metadata: Value = serde_json::from_str(profile_metadata_text.trim())?;
             let sample_hits = profile_metadata
                 .get("sample_hits")
@@ -4747,6 +4744,26 @@ fn wait_launch_return_ready(
     }
     Err(format!(
         "launcher return did not become input-ready within {} ms; last_status={last_status}",
+        timeout.as_millis()
+    )
+    .into())
+}
+
+fn wait_launch_return_profile(session: &Session, path: &str, timeout: Duration) -> Result<String> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if screensaver_profile_interrupted() {
+            return Err("launch-return benchmark interrupted".into());
+        }
+        if let Some(text) = remote_read(session, path)
+            && !text.trim().is_empty()
+        {
+            return Ok(text);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    Err(format!(
+        "launch-return profile metadata did not complete within {} ms: {path}",
         timeout.as_millis()
     )
     .into())

@@ -180,6 +180,23 @@ mod imp {
     }
 
     fn start_enabled() -> Option<CpuProfiler> {
+        // pprof restores the signal disposition it observed here after stopping its
+        // ITIMER_PROF timer.  A final SIGPROF can already be pending at that point,
+        // especially at the 999 Hz launch-return sampling rate.  Leaving SIGPROF at
+        // its default disposition between sessions would therefore terminate the
+        // launcher immediately after a successful profile.  Make the disposition
+        // pprof restores harmless; pprof still installs its own handler while active.
+        //
+        // SAFETY: changing a process signal disposition through libc is valid here;
+        // profiler sessions are serialized by pprof's global guard and no profiling
+        // timer is active while start_enabled installs this between-session action.
+        if unsafe { libc::signal(libc::SIGPROF, libc::SIG_IGN) } == libc::SIG_ERR {
+            crate::ui_errln!(
+                "cpu_profile: failed to make the between-session SIGPROF disposition safe: {}",
+                std::io::Error::last_os_error()
+            );
+            return None;
+        }
         let hz = std::env::var("MISTER_PPROF_HZ")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -285,6 +302,21 @@ mod imp {
         }
         fs::write(path, format!("{metadata}\n")).map_err(|error| error.to_string())?;
         result
+    }
+
+    pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+        let Some(profiler) = profiler else {
+            return finish_launch_return(None).map(|_| ());
+        };
+        std::thread::Builder::new()
+            .name("launch-return-profile".into())
+            .spawn(move || {
+                if let Err(error) = finish_launch_return(Some(profiler)) {
+                    crate::ui_errln!("launch-return cpu profile failed: {error}");
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| format!("launch-return cpu profile worker spawn failed: {error}"))
     }
 
     fn write_folded_report(report: &pprof::Report, path: &str) -> Result<u64, String> {
@@ -472,7 +504,8 @@ mod imp {
 
 #[cfg(feature = "profile")]
 pub use imp::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, start, start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, finish_launch_return_async,
+    start, start_launch_return,
 };
 
 #[cfg(not(feature = "profile"))]
@@ -511,6 +544,10 @@ mod stub {
         finish(profiler)
     }
 
+    pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+        finish_launch_return(profiler).map(|_| ())
+    }
+
     pub struct ScreensaverProfiler;
 
     impl ScreensaverProfiler {
@@ -533,7 +570,8 @@ mod stub {
 
 #[cfg(not(feature = "profile"))]
 pub use stub::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, start, start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return, finish_launch_return_async,
+    start, start_launch_return,
 };
 
 #[cfg(test)]
