@@ -13,9 +13,12 @@ slint/
 scanout kernel module, and the FPGA latch come from the same latest qualified
 GitHub platform release; the tag-addressed verified archive is reused while
 that release remains latest. The platform manifest binds those components to
-the app. Runtime delivery may replace the app independently only by activating
-a regenerated manifest with the new app hash in the same rollback-capable
-transaction.
+the app. Current policy promotes every app revision change to a canonical
+Platform delivery, even when the component archive is unchanged. It reuses the
+verified tag-addressed platform cache, but activation still replaces the
+canonical component set and reboots. Runtime-only activation remains
+implemented below the policy boundary but is deliberately not selected by
+`scripts/agent deliver`.
 
 There is deliberately no binary-only runtime deployment interface. The app and
 manifest are one activation unit even when Main, the scanout module, and the
@@ -229,10 +232,9 @@ noncanonical manifests select `Platform`.
 
 - `NoOp` returns after reconciliation when the revisions already match or all
   accumulated app changes are non-deploying.
-- `Runtime` verifies the installed platform, builds the app, snapshots the old
-  app and manifest, uploads both replacements, activates the manifest last,
-  smoke-tests, and rolls both files back on failure inside one typed host
-  transaction. It does not reboot.
+- `Runtime` is an internal reconciliation result. Current delivery policy
+  promotes it to `Platform`; there is no user- or agent-facing runtime-only
+  activation path.
 - `Platform` qualifies and activates the complete Main, app, kernel, FPGA,
   manager, database-support, and manifest set with reboot and rollback
   protection inside one typed host transaction.
@@ -255,7 +257,9 @@ bundle. The only local Main exception is the fixed Dev-only
 module/RBF route exists.
 The host serializes a transaction with a nonblocking process-owned OS lock.
 The lock is released automatically when the process exits, including abnormal
-exit, and creates no persistent device lease or expiry/recovery state.
+exit. Local-Main delivery additionally owns a durable device-side transaction
+marker and rollback pair: a later invocation reconciles an interrupted swap
+before verifying or snapshotting the installed platform.
 
 The development script deploys:
 

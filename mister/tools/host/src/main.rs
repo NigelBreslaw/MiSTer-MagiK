@@ -1569,6 +1569,9 @@ trait CoherentDeliveryActions {
     fn commit(&mut self) -> std::result::Result<(), DeviceFailure>;
     fn rollback(&mut self) -> std::result::Result<(), DeviceFailure>;
     fn health(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn interrupted(&self) -> bool {
+        false
+    }
 }
 
 fn run_coherent_delivery(
@@ -1577,12 +1580,32 @@ fn run_coherent_delivery(
 ) -> std::result::Result<String, DeviceFailure> {
     actions.snapshot()?;
     let delivery = (|| {
+        if actions.interrupted() {
+            return Err(DeviceFailure::OperationFailed(
+                "delivery interrupted".into(),
+            ));
+        }
         actions.deploy()?;
+        if actions.interrupted() {
+            return Err(DeviceFailure::OperationFailed(
+                "delivery interrupted".into(),
+            ));
+        }
         actions.activate()?;
         if reboots {
             actions.reboot()?;
         }
+        if actions.interrupted() {
+            return Err(DeviceFailure::OperationFailed(
+                "delivery interrupted".into(),
+            ));
+        }
         let detail = actions.smoke()?;
+        if actions.interrupted() {
+            return Err(DeviceFailure::OperationFailed(
+                "delivery interrupted".into(),
+            ));
+        }
         Ok(detail)
     })();
     match delivery {
@@ -1825,6 +1848,41 @@ fn deliver_platform_transaction(
 
 const LOCAL_MAIN_REMOTE: &str = "/media/fat/MiSTer_MagiKDev";
 const LOCAL_MAIN_MANIFEST_REMOTE: &str = "/media/fat/mister-magik-dev/platform-v3.manifest";
+const LOCAL_MAIN_TRANSACTION_REMOTE: &str = "/media/fat/mister-magik-dev/local-main.delivery-state";
+
+static LOCAL_MAIN_DELIVERY_INTERRUPTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn local_main_delivery_interrupt_handler(_: libc::c_int) {
+    LOCAL_MAIN_DELIVERY_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+struct LocalMainDeliverySignalGuard([(libc::c_int, libc::sighandler_t); 3]);
+
+impl LocalMainDeliverySignalGuard {
+    fn install() -> Self {
+        LOCAL_MAIN_DELIVERY_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        Self([libc::SIGHUP, libc::SIGINT, libc::SIGTERM].map(|signal| {
+            let previous = unsafe {
+                libc::signal(
+                    signal,
+                    local_main_delivery_interrupt_handler as *const () as libc::sighandler_t,
+                )
+            };
+            (signal, previous)
+        }))
+    }
+}
+
+impl Drop for LocalMainDeliverySignalGuard {
+    fn drop(&mut self) {
+        for (signal, previous) in self.0 {
+            unsafe {
+                libc::signal(signal, previous);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LocalMainActivation {
@@ -1927,6 +1985,12 @@ impl LocalMainDeliveryActions<'_> {
 impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
         let session = self.connect()?;
+        exec_checked(
+            &session,
+            "reconcile interrupted local Main transaction",
+            &local_main_reconcile_script(),
+        )
+        .map_err(device_failure)?;
         exec_checked(
             &session,
             "installed Dev platform verification before local Main delivery",
@@ -2034,7 +2098,20 @@ impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
             &installed_platform_verify_command(Layout::Development),
         )
         .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-        verify_delivery_health(self.config)
+        verify_delivery_health(self.config)?;
+        if self.rolling_back {
+            exec_checked(
+                &session,
+                "local Main rollback commit",
+                &local_main_rollback_cleanup_script(),
+            )
+            .map_err(device_failure)?;
+        }
+        Ok(())
+    }
+
+    fn interrupted(&self) -> bool {
+        LOCAL_MAIN_DELIVERY_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -2167,35 +2244,57 @@ fn require_local_main_hex(name: &str, value: &str, length: usize) -> Result<()> 
 fn local_main_snapshot_script() -> String {
     let safety = platform_safety_script();
     format!(
-        "set -eu; {safety}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; cp -p {main} {main}.delivery-rollback.tmp; mv -f {main}.delivery-rollback.tmp {main}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback.tmp; mv -f {manifest}.delivery-rollback.tmp {manifest}.delivery-rollback; sync",
+        "set -eu; {safety}; test ! -e {transaction}; test ! -e {main}.delivery-rollback; test ! -e {manifest}.delivery-rollback; rm -f {main}.upload {manifest}.upload; cp -p {main} {main}.delivery-rollback.tmp; mv -f {main}.delivery-rollback.tmp {main}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback.tmp; mv -f {manifest}.delivery-rollback.tmp {manifest}.delivery-rollback; printf 'snapshot\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+    )
+}
+
+fn local_main_reconcile_script() -> String {
+    format!(
+        "set -eu; state=none; test ! -f {transaction} || state=$(cat {transaction}); if test \"$state\" = validated; then rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload {transaction}; sync; elif test -f {transaction}; then test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {transaction}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; elif test -f {main}.delivery-rollback && test -f {manifest}.delivery-rollback; then cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; else rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; fi",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
     )
 }
 
 fn local_main_swap_script(expected_main_sha256: &str, expected_manifest_sha256: &str) -> String {
     format!(
-        "set -eu; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; test \"$(sha256sum {main}.upload | awk '{{print $1}}')\" = {main_hash}; test \"$(sha256sum {manifest}.upload | awk '{{print $1}}')\" = {manifest_hash}; mv -f {main}.upload {main}; chmod 755 {main}; mv -f {manifest}.upload {manifest}; sync",
+        "set -eu; test -f {transaction}; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; test \"$(sha256sum {main}.upload | awk '{{print $1}}')\" = {main_hash}; test \"$(sha256sum {manifest}.upload | awk '{{print $1}}')\" = {manifest_hash}; printf 'activating\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; sync; mv -f {main}.upload {main}; chmod 755 {main}; mv -f {manifest}.upload {manifest}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
         main_hash = sh(expected_main_sha256),
         manifest_hash = sh(expected_manifest_sha256),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
     )
 }
 
 fn local_main_rollback_script() -> String {
     format!(
-        "set -eu; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; mv -f {main}.delivery-rollback {main}; chmod 755 {main}; mv -f {manifest}.delivery-rollback {manifest}; rm -f {main}.upload {manifest}.upload; sync",
+        "set -eu; test -f {transaction}; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; printf 'rolled-back\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; rm -f {main}.upload {manifest}.upload; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
     )
 }
 
 fn local_main_cleanup_script() -> String {
     format!(
-        "rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync",
+        "set -eu; test -f {transaction}; printf 'validated\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; rm -f {transaction}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+    )
+}
+
+fn local_main_rollback_cleanup_script() -> String {
+    format!(
+        "set -eu; test \"$(cat {transaction})\" = rolled-back; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; rm -f {transaction}; sync",
+        main = sh(LOCAL_MAIN_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
     )
 }
 
@@ -2214,6 +2313,7 @@ fn deliver_local_main_transaction(
     expected_main_sha256: &str,
     expected_gui_sha256: &str,
 ) -> std::result::Result<String, DeviceFailure> {
+    let _signal_guard = LocalMainDeliverySignalGuard::install();
     require_delivery_sha256(expected_main_sha256)?;
     require_delivery_sha256(expected_gui_sha256)?;
     validate_local_main_bundle_identity(
@@ -16956,21 +17056,34 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn local_main_transaction_swaps_main_before_manifest_and_restores_the_pair() {
+        let snapshot = local_main_snapshot_script();
+        assert!(snapshot.contains("local-main.delivery-state"));
+        assert!(snapshot.contains("snapshot"));
+
         let swap = local_main_swap_script(&"a".repeat(64), &"b".repeat(64));
         let main_swap = swap.find("MiSTer_MagiKDev.upload").unwrap();
         let manifest_swap = swap.find("platform-v3.manifest.upload").unwrap();
         assert!(main_swap < manifest_swap);
         assert!(swap.contains("chmod 755"));
+        assert!(swap.find("activating").unwrap() < main_swap);
 
         let rollback = local_main_rollback_script();
         assert!(rollback.contains("MiSTer_MagiKDev.delivery-rollback"));
         assert!(rollback.contains("platform-v3.manifest.delivery-rollback"));
+        assert!(rollback.contains("cp -p"));
+        assert!(rollback.contains("rolled-back"));
         assert!(
             rollback.find("MiSTer_MagiKDev.delivery-rollback").unwrap()
                 < rollback
                     .find("platform-v3.manifest.delivery-rollback")
                     .unwrap()
         );
+
+        let reconcile = local_main_reconcile_script();
+        assert!(reconcile.contains("validated"));
+        assert!(reconcile.contains("local-main.delivery-state"));
+        assert!(local_main_cleanup_script().contains("validated"));
+        assert!(local_main_rollback_cleanup_script().contains("rolled-back"));
     }
 
     #[test]
