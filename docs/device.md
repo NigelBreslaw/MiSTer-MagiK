@@ -65,6 +65,10 @@ automatically replays the reboot request.
 
 Agents use closed typed workflows rather than the operator CLI. Runtime and
 platform changes are committed first and then use `scripts/agent deliver`.
+Committed Main-fork experiments use `scripts/agent deliver local-main`, which
+is Dev-only and replaces only the verified Main/manifest pair from an exact
+clean sibling checkout. The first deployment of reload support may use one
+Linux reboot; later experiments activate by supervised Main replacement.
 Performance work uses `scripts/agent benchmark`; diagnosis and one-shot reboot
 recovery use `scripts/agent diagnose`. The attended release gate is
 `scripts/agent release qualify`.

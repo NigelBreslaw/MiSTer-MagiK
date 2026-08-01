@@ -133,6 +133,7 @@ pub enum Intent {
     Diagnose,
     ClearLatchDiagnostics,
     Deliver,
+    DeliverLocalMain,
     Benchmark {
         scenario: BenchmarkScenario,
     },
@@ -211,6 +212,7 @@ impl Intent {
                 Risk::Destructive
             }
             Self::Deliver { .. }
+            | Self::DeliverLocalMain
             | Self::Benchmark { .. }
             | Self::Diagnose
             | Self::AlphaAccept { .. } => Risk::DeviceWrite,

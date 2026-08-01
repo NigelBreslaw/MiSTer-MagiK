@@ -112,6 +112,7 @@ those trees are part of the task.
 ```bash
 scripts/agent plan
 scripts/agent deliver
+scripts/agent deliver local-main
 scripts/agent benchmark
 scripts/agent capture usb-video
 scripts/agent diagnose
@@ -149,9 +150,12 @@ time their operations, while pre-push and CI also deduplicate and record them.
 `scripts/agent deliver`; do not call
 implementation scripts or supply deployment feature flags. `deliver` never
 changes Git state or pushes. Development delivery builds the app runtime from
-the exact clean local commit. Main, the scanout kernel module, and the latch RBF
-must come together from the latest qualified GitHub platform release; reuse the
-verified tag-addressed cache instead of downloading an unchanged release.
+the exact clean local commit. Ordinary `deliver` takes Main, the scanout kernel
+module, and the latch RBF together from the latest qualified GitHub platform
+release. The permanent Dev-only `deliver local-main` exception builds the exact
+clean sibling `Main_MiSTer` commit and replaces only Dev Main plus its
+regenerated manifest; it must preserve the verified installed app, manager,
+module, and RBF identities. It never targets production or synthesizes an RBF.
 Git's index is the only commit-scope authority. Stage only intentional paths
 with `git add -- PATH...`; never use broad staging when unrelated changes
 exist. Invoke `git add`, `git commit`, and the one-time

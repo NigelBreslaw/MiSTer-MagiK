@@ -24,6 +24,9 @@ contacting the MiSTer.
 - Do not add device/build/deploy/profile/acceptance shell orchestrators.
 - Human device operations use the typed Rust `mister` host binary; agents use
   `scripts/agent deliver`, `benchmark`, or `diagnose`.
+- Local Main experiments use only the positional
+  `scripts/agent deliver local-main` workflow. Do not add feature-flag or shell
+  deployment alternatives.
 - Explicitly read-only device requests may retry once after transient transport
   unavailability. Mutating requests must not be replayed outside their typed
   reconciliation or compensation path.

@@ -21,6 +21,7 @@ pub mod executor;
 pub mod game_databases;
 pub mod git;
 pub mod hooks;
+pub mod local_main_delivery;
 pub mod model;
 pub mod planner;
 pub mod platform_bundle;

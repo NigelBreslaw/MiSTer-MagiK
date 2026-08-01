@@ -239,7 +239,7 @@ fn execute_with_device<D: DeviceOperations>(
 
 pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
     let workspace = repository.join("build/agent-deploy");
-    for transient in ["stage", "platform"] {
+    for transient in ["stage", "platform", "local-main"] {
         let path = workspace.join(transient);
         if !path.exists() {
             continue;

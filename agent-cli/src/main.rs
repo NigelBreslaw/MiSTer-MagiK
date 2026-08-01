@@ -144,6 +144,7 @@ fn dispatch(
             return Ok(outcome);
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
+        Intent::DeliverLocalMain => return deliver_local_main(repository, reporter),
         Intent::ClearLatchDiagnostics => {
             reporter.emit(
                 EventKind::Progress,
@@ -761,6 +762,48 @@ fn deliver_inner(
     }
     let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
     agent_cli::delivery::execute(repository, &sha, reporter)
+}
+
+fn deliver_local_main(
+    repository: &std::path::Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
+    if !dirty.is_empty() {
+        return Err("dirty_worktree: commit or discard changes before delivery".into());
+    }
+    let app_revision = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+    let delivery = agent_cli::local_main_delivery::execute(repository, &app_revision, reporter);
+    reporter.emit(
+        EventKind::Progress,
+        "cleanup",
+        "cleaning transient local Main staging",
+        None,
+    )?;
+    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
+    match (delivery, cleanup) {
+        (Ok(execution), Ok(())) => {
+            reporter.emit(
+                EventKind::Completed,
+                "delivery-decision",
+                &format!(
+                    "local-main app_revision={} main_revision={} main_sha256={} candidate={}",
+                    execution.app_revision,
+                    execution.main_revision,
+                    execution.main_sha256,
+                    execution.qualification_candidate_id,
+                ),
+                Some(100),
+            )?;
+            Ok(Outcome::Passed)
+        }
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Ok(())) => Err(error),
+        (Err(error), Err(cleanup)) => Err(format!(
+            "local Main delivery failed ({error}); staging cleanup failed ({cleanup})"
+        )
+        .into()),
+    }
 }
 
 fn fatal(message: &str) -> ! {

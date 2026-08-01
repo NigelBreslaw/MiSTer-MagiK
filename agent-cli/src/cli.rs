@@ -59,7 +59,10 @@ pub enum Command {
     Doctor,
     Diagnose,
     ClearLatchDiagnostics,
-    Deliver,
+    Deliver {
+        #[arg(value_enum)]
+        target: Option<DeliverTarget>,
+    },
     Benchmark {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
@@ -116,6 +119,11 @@ pub enum CiCommand {
         #[command(subcommand)]
         command: PlatformBundleCommand,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum DeliverTarget {
+    LocalMain,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
@@ -435,7 +443,10 @@ impl Cli {
             Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
             Some(Command::ClearLatchDiagnostics) => Intent::ClearLatchDiagnostics,
-            Some(Command::Deliver) => Intent::Deliver,
+            Some(Command::Deliver { target: None }) => Intent::Deliver,
+            Some(Command::Deliver {
+                target: Some(DeliverTarget::LocalMain),
+            }) => Intent::DeliverLocalMain,
             Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
@@ -578,6 +589,8 @@ mod tests {
     fn deliver_is_flag_free_and_git_independent() {
         let cli = Cli::try_parse_from(["agent-cli", "deliver"]).unwrap();
         assert_eq!(cli.into_intent(), Intent::Deliver);
+        let cli = Cli::try_parse_from(["agent-cli", "deliver", "local-main"]).unwrap();
+        assert_eq!(cli.into_intent(), Intent::DeliverLocalMain);
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());

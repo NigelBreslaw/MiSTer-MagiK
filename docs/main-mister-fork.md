@@ -175,7 +175,7 @@ Build the fork directly from the fork repo:
 
 ```bash
 cd ../Main_MiSTer
-./build-container.sh
+./build-container.sh clean all
 scripts/test-magik-state.sh
 scripts/check-magik-patch-surface.sh
 ```
@@ -191,6 +191,31 @@ Deploy from this app repo:
 ```bash
 scripts/agent deliver
 ```
+
+For committed Main-only development experiments, use the permanent positional
+workflow:
+
+```bash
+scripts/agent deliver local-main
+```
+
+It requires clean exact commits in this repository and the sibling
+`Main_MiSTer` checkout (`MISTER_MAIN_DIR` may override the latter), runs the
+fork state and patch-surface tests, and builds `bin/MiSTer` with
+`build-container.sh clean all`. It first verifies the complete installed Dev
+platform, then creates an overlay manifest that changes only `main_sha256`,
+`main_revision`, and `qualification_candidate_id`. The typed transaction
+snapshots Dev Main and the manifest, uploads Main first, activates the manifest
+last, and retains rollback until the running `/proc/<pid>/exe`, the complete
+installed platform, and the launcher smoke test all pass. The app, manager,
+scanout module, and latch RBF are never built or replaced by this workflow.
+
+An installed Main that advertises supervised local reload is replaced without
+rebooting Linux. The initial commit that introduces that capability necessarily
+uses one bounded Linux reboot. A rollback uses supervised replacement where
+possible and at most one bounded recovery reboot when the failed Main can no
+longer reload itself. Ordinary `scripts/agent deliver` remains the canonical
+way to restore the latest published platform.
 
 Development delivery first compares the installed manifest with the exact clean
 local app commit:
@@ -221,10 +246,11 @@ installed manifest and remote checksum have been verified, then cached by
 SHA-256. Changed manager inputs or failed installed verification use a strict
 local build receipt instead.
 
-Each mutating transaction uses the exact clean app commit. Platform transactions
-stage Main, kernel, and RBF only from the one verified GitHub bundle; none can
-be replaced by a local build. Main is never copied directly onto the device
-outside the platform transaction.
+Each mutating transaction uses the exact clean app commit. Canonical platform
+transactions stage Main, kernel, and RBF only from the one verified GitHub
+bundle. The only local Main exception is the fixed Dev-only
+`deliver local-main` Main/manifest transaction above; no generic upload or local
+module/RBF route exists.
 The host serializes a transaction with a nonblocking process-owned OS lock.
 The lock is released automatically when the process exits, including abnormal
 exit, and creates no persistent device lease or expiry/recovery state.
