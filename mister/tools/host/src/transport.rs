@@ -160,6 +160,9 @@ pub enum DeviceRequest {
         tag: String,
         hashes: AlphaCandidateHashes,
     },
+    RestoreAlphaHostMode {
+        original_main: Option<String>,
+    },
     BeginLauncherAutomation {
         expected_build_version: String,
         expected_source_revision: String,
@@ -247,6 +250,7 @@ impl DeviceRequest {
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::CaptureFramebuffer => "capture-framebuffer",
             Self::InstallAlphaCandidate { .. } => "install-alpha-candidate",
+            Self::RestoreAlphaHostMode { .. } => "restore-alpha-host-mode",
             Self::BeginLauncherAutomation { .. } => "begin-launcher-automation",
             Self::SendLauncherAutomationAction { .. } => "send-launcher-automation-action",
             Self::AwaitLauncherAutomationPresented { .. } => "await-launcher-automation-presented",
@@ -465,6 +469,9 @@ mod tests {
             DeviceRequest::RunCrtScreensaverMatrix,
             DeviceRequest::RepairSafeDeviceState,
             DeviceRequest::CaptureFramebuffer,
+            DeviceRequest::RestoreAlphaHostMode {
+                original_main: Some("MiSTer_MagiKDev".into()),
+            },
             DeviceRequest::BeginLauncherAutomation {
                 expected_build_version: "0.2.1".into(),
                 expected_source_revision: "deadbeef".into(),
@@ -499,7 +506,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 45);
+        assert_eq!(labels.len(), 46);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels

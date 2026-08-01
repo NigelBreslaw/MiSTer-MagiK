@@ -630,6 +630,9 @@ impl DeviceOperations for NativeDevice {
             DeviceRequest::InstallAlphaCandidate { tag, hashes } => {
                 install_alpha_candidate(&config, tag, hashes)?
             }
+            DeviceRequest::RestoreAlphaHostMode { original_main } => {
+                restore_alpha_host_mode(&config, original_main.clone())?
+            }
             DeviceRequest::BeginLauncherAutomation {
                 expected_build_version,
                 expected_source_revision,
@@ -740,25 +743,155 @@ fn install_alpha_candidate(
         reply.response.get("result").cloned().ok_or_else(|| {
             DeviceFailure::OperationFailed("candidate install has no result".into())
         })?;
-    delivery_reboot_wait(config)?;
     let session = connect_with(&config.connection, 10).map_err(device_failure)?;
-    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
-        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
     exec_checked(
         &session,
-        "alpha candidate public platform verification",
+        "alpha candidate public platform verification before activation",
         &installed_platform_verify_command(Layout::Public),
     )
     .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
-    wait_delivery_health(&session, "public", Duration::from_secs(10))
-        .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+    let original_main = alpha_host_main(&session)?;
+    require_alpha_host_main(original_main.as_deref())?;
+    ensure_stock_inittab(&session, false).map_err(device_failure)?;
+    if let Err(error) = edit_remote_ini(&session, IniEdit::SelectMain("MiSTer_MagiK".into()), false)
+    {
+        let primary = DeviceFailure::OperationFailed(error.to_string());
+        return match restore_alpha_host_mode(config, original_main) {
+            Ok(_) => Err(primary),
+            Err(restore) => Err(alpha_restore_failure(primary, restore)),
+        };
+    }
+    let activation = (|| -> std::result::Result<(), DeviceFailure> {
+        let safety = platform_safety_script();
+        let cleanup =
+            shell_sequence(["set -eu", release_arming_cleanup_command(), safety.as_str()]);
+        exec_checked(&session, "alpha activation arming cleanup", &cleanup)
+            .map_err(device_failure)?;
+        issue_delivery_reboot(&session).map_err(device_failure)?;
+        drop(session);
+        if !wait_down_with(&config.connection, 40.0)
+            || wait_up_with(&config.connection, 120.0).map_err(device_failure)? != 0
+        {
+            return Err(DeviceFailure::Unavailable(
+                "device did not complete its alpha activation reboot".into(),
+            ));
+        }
+        let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+        exec_checked(
+            &session,
+            "alpha candidate public platform verification",
+            &installed_platform_verify_command(Layout::Public),
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
+        wait_delivery_health(&session, "public", Duration::from_secs(10))
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
+    })();
+    if let Err(primary) = activation {
+        return match restore_alpha_host_mode(config, original_main) {
+            Ok(_) => Err(primary),
+            Err(restore) => Err(alpha_restore_failure(primary, restore)),
+        };
+    }
     serde_json::to_string(&json!({
         "schema": "mister-magik-alpha-candidate-activation-v1",
         "install": installed,
         "supervised_reboot": true,
         "public_health": "ready",
+        "original_main": original_main,
     }))
     .map_err(device_failure)
+}
+
+fn alpha_host_main(session: &Session) -> std::result::Result<Option<String>, DeviceFailure> {
+    let input = remote_read(session, "/media/fat/MiSTer.ini")
+        .ok_or_else(|| DeviceFailure::OperationFailed("MiSTer.ini is unavailable".into()))?;
+    let document = mister_magik_ini::Document::parse(input.as_bytes()).map_err(device_failure)?;
+    Ok(document.effective_value("MiSTer", "main"))
+}
+
+fn require_alpha_host_main(value: Option<&str>) -> std::result::Result<(), DeviceFailure> {
+    if value.is_none_or(|value| matches!(value, "MiSTer" | "MiSTer_MagiK" | "MiSTer_MagiKDev")) {
+        Ok(())
+    } else {
+        Err(DeviceFailure::InvalidRequest(format!(
+            "alpha acceptance cannot safely restore unsupported Main selection: {}",
+            value.unwrap_or_default()
+        )))
+    }
+}
+
+fn restore_alpha_host_mode(
+    config: &NativeDeviceConfig,
+    original_main: Option<String>,
+) -> std::result::Result<String, DeviceFailure> {
+    require_alpha_host_main(original_main.as_deref())?;
+    let session = connect_with(&config.connection, 10)
+        .or_else(|_| {
+            wait_up_with(&config.connection, 120.0)?;
+            connect_with(&config.connection, 10)
+        })
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    if alpha_host_main(&session)
+        .map_err(|error| DeviceFailure::RecoveryRequired(format!("{error:?}")))?
+        == original_main
+    {
+        return Ok("host-mode=unchanged".into());
+    }
+    ensure_stock_inittab(&session, false)
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    edit_remote_ini(&session, IniEdit::RestoreMain(original_main.clone()), false)
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    let safety = platform_safety_script();
+    let cleanup = shell_sequence(["set -eu", release_arming_cleanup_command(), safety.as_str()]);
+    exec_checked(&session, "alpha restore arming cleanup", &cleanup)
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    issue_delivery_reboot(&session)
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    drop(session);
+    if !wait_down_with(&config.connection, 40.0)
+        || wait_up_with(&config.connection, 120.0)
+            .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?
+            != 0
+    {
+        return Err(DeviceFailure::RecoveryRequired(
+            "device did not complete its alpha host-mode restore reboot".into(),
+        ));
+    }
+    let session = connect_with(&config.connection, 10)
+        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+    if alpha_host_main(&session)
+        .map_err(|error| DeviceFailure::RecoveryRequired(format!("{error:?}")))?
+        != original_main
+    {
+        return Err(DeviceFailure::RecoveryRequired(
+            "MiSTer.ini did not retain the original Main selection".into(),
+        ));
+    }
+    match original_main.as_deref() {
+        Some("MiSTer_MagiKDev") => {
+            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+            wait_delivery_health(&session, "dev", Duration::from_secs(10))
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+        }
+        Some("MiSTer_MagiK") => {
+            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+            wait_delivery_health(&session, "public", Duration::from_secs(10))
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+        }
+        None | Some("MiSTer") => {}
+        Some(_) => unreachable!("validated alpha host Main selection"),
+    }
+    Ok("host-mode=restored".into())
+}
+
+fn alpha_restore_failure(primary: DeviceFailure, restore: DeviceFailure) -> DeviceFailure {
+    DeviceFailure::RecoveryRequired(format!(
+        "alpha activation failed: {primary:?}; host-mode restore failed: {restore:?}"
+    ))
 }
 
 fn require_delivery_sha256(value: &str) -> std::result::Result<(), DeviceFailure> {
@@ -12774,6 +12907,7 @@ enum IniEdit {
     MagikBoot,
     MenuOutput(MenuOutputProfile),
     SelectMain(String),
+    RestoreMain(Option<String>),
     RestoreDevelopmentMenu,
     ZaparooBoot,
     ArcadeVideo,
@@ -12961,6 +13095,14 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         IniEdit::SelectMain(value) => {
             document.set("MiSTer", "main", &value);
         }
+        IniEdit::RestoreMain(value) => match value {
+            Some(value) => document.set("MiSTer", "main", &value),
+            None => document.remove(
+                "MiSTer",
+                "main",
+                "MiSTer MagiK alpha acceptance restored absent value",
+            ),
+        },
         IniEdit::RestoreDevelopmentMenu => {
             document.set("MiSTer", "main", "MiSTer_MagiKDev");
             document.remove(
@@ -14351,6 +14493,35 @@ video_mode=14
         );
         assert!(edited.contains("foo=keep"));
         assert!(edited.contains("[Menu]\nvideo_mode=6"));
+    }
+
+    #[test]
+    fn alpha_host_restore_preserves_the_original_main_semantics() {
+        let dev = "[MiSTer]\nmain=MiSTer_MagiK ; keep note\nfoo=keep\n";
+        let restored = edit_mister_ini(dev, IniEdit::RestoreMain(Some("MiSTer_MagiKDev".into())));
+        assert!(restored.contains("main=MiSTer_MagiKDev ; keep note"));
+        assert!(restored.contains("foo=keep"));
+
+        let absent = edit_mister_ini(
+            "[MiSTer]\nmain=MiSTer_MagiK\nfoo=keep\n",
+            IniEdit::RestoreMain(None),
+        );
+        let document = mister_magik_ini::Document::parse(absent.as_bytes()).unwrap();
+        assert_eq!(document.effective_value("MiSTer", "main"), None);
+        assert!(absent.contains("foo=keep"));
+    }
+
+    #[test]
+    fn alpha_host_restore_accepts_only_supported_main_modes() {
+        for value in [
+            None,
+            Some("MiSTer"),
+            Some("MiSTer_MagiK"),
+            Some("MiSTer_MagiKDev"),
+        ] {
+            assert!(require_alpha_host_main(value).is_ok());
+        }
+        assert!(require_alpha_host_main(Some("custom/unsafe")).is_err());
     }
 
     #[test]

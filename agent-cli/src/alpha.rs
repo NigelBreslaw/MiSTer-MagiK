@@ -102,10 +102,79 @@ pub fn execute(
         "Installing the exact candidate through MiSTer Downloader",
         Some(10),
     )?;
-    device.execute(DeviceRequest::InstallAlphaCandidate {
-        tag: candidate.candidate_tag.clone(),
-        hashes: candidate_hashes(&candidate)?,
+    let activation: Value =
+        serde_json::from_str(&device.execute(DeviceRequest::InstallAlphaCandidate {
+            tag: candidate.candidate_tag.clone(),
+            hashes: candidate_hashes(&candidate)?,
+        })?)
+        .map_err(|error| format!("cannot parse alpha activation: {error}"))?;
+    let original_main = alpha_original_main(&activation)?;
+    let acceptance = accept_installed_candidate(&mut device, candidate, output, reporter);
+    let restored = device.execute(DeviceRequest::RestoreAlphaHostMode { original_main });
+    let receipt = match (acceptance, restored) {
+        (Ok(receipt), Ok(_)) => receipt,
+        (Err(error), Ok(_)) => return Err(error),
+        (Ok(_), Err(restore)) => {
+            return Err(AgentError::recovery_required(
+                "alpha UI journey passed but the original MiSTer host mode was not restored",
+                restore.to_string(),
+            ));
+        }
+        (Err(error), Err(restore)) => {
+            return Err(AgentError::recovery_required(
+                error.to_string(),
+                format!("alpha host-mode restore failed: {restore}"),
+            ));
+        }
+    };
+    let receipt_path = output.join("alpha-acceptance.json");
+    write_receipt_atomically(&receipt_path, &receipt)?;
+    reporter.emit(
+        EventKind::Progress,
+        "accepted",
+        "Alpha candidate passed the real-UI journey",
+        Some(100),
+    )?;
+    Ok(receipt_path)
+}
+
+fn alpha_original_main(activation: &Value) -> AgentResult<Option<String>> {
+    if activation.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-alpha-candidate-activation-v1")
+    {
+        return classified(
+            "invalid_alpha_activation",
+            "alpha activation has an unsupported schema",
+        );
+    }
+    let value = activation
+        .get("original_main")
+        .ok_or_else(|| AgentError::Classified {
+            code: "invalid_alpha_activation",
+            detail: "alpha activation has no original_main".into(),
+        })?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value.as_str().ok_or_else(|| AgentError::Classified {
+        code: "invalid_alpha_activation",
+        detail: "alpha activation has invalid original_main".into(),
     })?;
+    if !matches!(value, "MiSTer" | "MiSTer_MagiK" | "MiSTer_MagiKDev") {
+        return classified(
+            "invalid_alpha_activation",
+            "alpha activation has an unsafe original_main",
+        );
+    }
+    Ok(Some(value.to_owned()))
+}
+
+fn accept_installed_candidate(
+    device: &mut DeviceClient,
+    candidate: CandidateIdentity,
+    output: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<AcceptanceReceipt> {
     let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
         .map_err(|error| format!("cannot parse device status: {error}"))?;
     let runtime = require_installed_candidate(&status, &candidate)?;
@@ -135,7 +204,7 @@ pub fn execute(
         .ok_or("automation session has no nonce")?
         .to_owned();
     let mut nonce = Some(nonce);
-    let journey = run_ui_journey(&mut device, &mut nonce, output);
+    let journey = run_ui_journey(device, &mut nonce, output);
     let ended = match nonce.as_ref() {
         Some(nonce) => device.execute(DeviceRequest::EndLauncherAutomation {
             nonce: nonce.clone(),
@@ -159,7 +228,7 @@ pub fn execute(
         }
     };
 
-    let receipt = AcceptanceReceipt {
+    Ok(AcceptanceReceipt {
         format: "mister-magik-alpha-hil-v1",
         accepted: true,
         accepted_at_unix: unix_secs(),
@@ -168,16 +237,7 @@ pub fn execute(
         checkpoints,
         launch_return,
         usb_video,
-    };
-    let receipt_path = output.join("alpha-acceptance.json");
-    write_receipt_atomically(&receipt_path, &receipt)?;
-    reporter.emit(
-        EventKind::Progress,
-        "accepted",
-        "Alpha candidate passed the real-UI journey",
-        Some(100),
-    )?;
-    Ok(receipt_path)
+    })
 }
 
 fn run_ui_journey(
@@ -1073,5 +1133,38 @@ mod tests {
         assert!(require_relative("../release-v1.txt").is_err());
         assert!(require_leaf("archive", "candidate.zip").is_ok());
         assert!(require_leaf("archive", "nested/candidate.zip").is_err());
+    }
+
+    #[test]
+    fn alpha_activation_requires_a_safe_restore_target() {
+        assert_eq!(
+            alpha_original_main(&json!({
+                "schema": "mister-magik-alpha-candidate-activation-v1",
+                "original_main": "MiSTer_MagiKDev",
+            }))
+            .unwrap(),
+            Some("MiSTer_MagiKDev".into())
+        );
+        assert_eq!(
+            alpha_original_main(&json!({
+                "schema": "mister-magik-alpha-candidate-activation-v1",
+                "original_main": null,
+            }))
+            .unwrap(),
+            None
+        );
+        assert!(
+            alpha_original_main(&json!({
+                "schema": "mister-magik-alpha-candidate-activation-v1",
+            }))
+            .is_err()
+        );
+        assert!(
+            alpha_original_main(&json!({
+                "schema": "mister-magik-alpha-candidate-activation-v1",
+                "original_main": "custom/unsafe",
+            }))
+            .is_err()
+        );
     }
 }
