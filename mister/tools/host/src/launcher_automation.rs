@@ -253,7 +253,17 @@ pub(super) fn exercise_launch_return(
         Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
     };
 
-    let action = match send_action(config, nonce, &AutomationAction::Tap(AutomationButton::A)) {
+    // Model a real button press across several launcher frames. A one-frame tap can be
+    // presented on a frame that is consumed by catalog publication or another transient
+    // UI task, even though the launcher remains ready for input on the next frame.
+    let action = match send_action(
+        config,
+        nonce,
+        &AutomationAction::Hold {
+            button: AutomationButton::A,
+            duration_ms: 120,
+        },
+    ) {
         Ok(action) => action,
         Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
     };
@@ -263,12 +273,16 @@ pub(super) fn exercise_launch_return(
         .get("action_sequence")
         .and_then(Value::as_u64)
         .ok_or_else(|| LaunchReturnError::Failed("launch action has no sequence".into()))?;
-    let _ = await_presented(config, nonce, action_sequence, 1_000);
+    let presentation_error = await_presented(config, nonce, action_sequence, 1_000).err();
 
     let handoff = match wait_for_handoff(config, &identity) {
         Ok(status) => status,
         Err(error) => {
-            return recover_after_launch_failure(config, nonce, &identity, error);
+            let detail = presentation_error.map_or_else(
+                || error.to_string(),
+                |presentation| format!("{error}; launch press was not presented: {presentation}"),
+            );
+            return recover_after_launch_failure(config, nonce, &identity, detail);
         }
     };
     if let Err(error) = request_return_to_launcher(config, identity.main_generation) {
