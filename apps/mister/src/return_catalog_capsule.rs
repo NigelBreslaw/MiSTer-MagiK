@@ -108,6 +108,12 @@ pub struct PreparedReturnCatalogCapsule {
     launch_plans: Vec<StructuredLaunchPlan>,
 }
 
+#[derive(Debug)]
+pub struct TakenReturnCatalogCapsule {
+    pub catalog: ArcadeCatalog,
+    pub durable_catalog_fingerprint: String,
+}
+
 #[derive(Clone, Debug)]
 struct ReturnCatalogCapsule {
     binding: CapsuleBinding,
@@ -361,7 +367,7 @@ pub fn take_return_catalog_capsule(
     catalog_root: &Path,
     collection_id: &str,
     return_game_path: &str,
-) -> Result<ArcadeCatalog, String> {
+) -> Result<TakenReturnCatalogCapsule, String> {
     let expected = match CapsuleBinding::current(catalog_root) {
         Ok(expected) => expected,
         Err(error) => {
@@ -382,8 +388,12 @@ fn take_return_catalog_capsule_at(
     expected: &CapsuleBinding,
     collection_id: &str,
     return_game_path: &str,
-) -> Result<ArcadeCatalog, String> {
-    let result = read_return_catalog_capsule_at(path, expected, collection_id, return_game_path);
+) -> Result<TakenReturnCatalogCapsule, String> {
+    let result = read_return_catalog_capsule_at(path, expected, collection_id, return_game_path)
+        .map(|catalog| TakenReturnCatalogCapsule {
+            catalog,
+            durable_catalog_fingerprint: expected.catalog_stamp_fingerprint.clone(),
+        });
     remove_file_quiet(path);
     remove_file_quiet(&temp_path(path));
     result
@@ -1113,13 +1123,36 @@ mod tests {
         let restored =
             take_return_catalog_capsule_at(&path, &binding(&root), "arcade", "/games/two.mra")
                 .expect("take");
-        assert_eq!(restored.len(), 2);
-        assert_eq!(restored.system_game_view("arcade").len(), 2);
+        assert_eq!(
+            restored.durable_catalog_fingerprint,
+            binding(&root).catalog_stamp_fingerprint
+        );
+        assert_eq!(restored.catalog.len(), 2);
+        assert_eq!(restored.catalog.system_game_view("arcade").len(), 2);
         assert!(
             restored
+                .catalog
                 .games
                 .iter()
                 .any(|game| game.mra_path.as_ref() == "/games/two.mra")
+        );
+        assert!(!path.exists());
+
+        let repeated = prepare_return_catalog_capsule_with_binding(
+            &restored.catalog,
+            "arcade",
+            "/games/two.mra",
+            binding(&root),
+        )
+        .expect("prepare repeated");
+        save_return_catalog_capsule_at(&path, &repeated).expect("save repeated");
+        let repeated =
+            take_return_catalog_capsule_at(&path, &binding(&root), "arcade", "/games/two.mra")
+                .expect("take repeated");
+        assert_eq!(repeated.catalog.system_game_view("arcade").len(), 2);
+        assert_eq!(
+            repeated.durable_catalog_fingerprint,
+            binding(&root).catalog_stamp_fingerprint
         );
         assert!(!path.exists());
         let _ = fs::remove_dir_all(root);

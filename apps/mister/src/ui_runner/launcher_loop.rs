@@ -2098,20 +2098,20 @@ pub(super) fn run_launcher_loop(
             state.game_path().to_string(),
         ))
     });
-    let return_capsule_catalog = return_capsule_target.and_then(|(collection_id, game_path)| {
+    let return_capsule = return_capsule_target.and_then(|(collection_id, game_path)| {
         let capsule_started = Instant::now();
         match return_catalog_capsule::take_return_catalog_capsule(
             Path::new(&arcade_root),
             &collection_id,
             &game_path,
         ) {
-            Ok(catalog) => {
+            Ok(capsule) => {
                 print_startup_event(
                     start,
                     "return_catalog_capsule_decoded",
                     format!("elapsed_us={}", capsule_started.elapsed().as_micros()),
                 );
-                Some(catalog)
+                Some(capsule)
             }
             Err(error) => {
                 print_startup_event(
@@ -2128,7 +2128,12 @@ pub(super) fn run_launcher_loop(
             }
         }
     });
-    let mut catalog = return_capsule_catalog.unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
+    let return_capsule_fingerprint = return_capsule
+        .as_ref()
+        .map(|capsule| capsule.durable_catalog_fingerprint.clone());
+    let mut catalog = return_capsule
+        .map(|capsule| capsule.catalog)
+        .unwrap_or_else(|| empty_arcade_catalog(&arcade_root));
     let mut catalog_ready = !catalog.is_empty();
     let mut return_capsule_active = catalog_ready;
     let catalog_refresh_policy = catalog_refresh_policy();
@@ -2165,7 +2170,7 @@ pub(super) fn run_launcher_loop(
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = sharded_catalog_fingerprint;
+    let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
