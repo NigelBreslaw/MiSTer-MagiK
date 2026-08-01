@@ -463,7 +463,7 @@ fn wait_for_restored_snapshot(
     nonce: &str,
     expected_game_id: &str,
 ) -> Result<Value> {
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + Duration::from_secs(8);
     let mut last_error = String::from("no restored snapshot");
     while Instant::now() < deadline {
         match snapshot(config, nonce) {
@@ -732,8 +732,13 @@ fn validate_restored_snapshot(snapshot: &Value, expected_game_id: &str) -> Resul
         ("launch_state", "idle"),
         ("selected_game_id", expected_game_id),
     ] {
-        if semantic(snapshot, field).and_then(Value::as_str) != Some(expected) {
-            return Err(format!("restored launcher failed: {field} is not {expected}").into());
+        let actual = semantic(snapshot, field).and_then(Value::as_str);
+        if actual != Some(expected) {
+            return Err(format!(
+                "restored launcher failed: {field} expected={expected} actual={}",
+                actual.unwrap_or("missing")
+            )
+            .into());
         }
     }
     if semantic(snapshot, "input_enabled").and_then(Value::as_bool) != Some(true) {
