@@ -208,6 +208,7 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         facts: None,
         report: None,
         repair_needed: false,
+        repair_temporary_state: false,
         repaired: false,
         geometry_trial: geometry_trial_from_env()?,
         geometry_trial_detail: None,
@@ -262,6 +263,7 @@ struct ProcessActions<'a> {
     facts: Option<DeviceFacts>,
     report: Option<DiagnosticReport>,
     repair_needed: bool,
+    repair_temporary_state: bool,
     repaired: bool,
     geometry_trial: Option<[u16; 4]>,
     geometry_trial_detail: Option<String>,
@@ -334,14 +336,15 @@ impl DiagnoseActions for ProcessActions<'_> {
             Phase::DeviceFacts => self.collect_facts(),
             Phase::Correlate => {
                 let facts = self.facts.as_ref().ok_or("device facts are missing")?;
-                self.repair_needed = facts.temporary_state;
+                self.repair_temporary_state = facts.temporary_state;
+                self.repair_needed = diagnostic_safe_repair_needed(facts);
                 self.report = Some(correlate(facts, false));
                 Ok(())
             }
             Phase::SafeRepair => {
                 if self.repair_needed {
                     self.device.execute(DeviceRequest::RepairSafeDeviceState)?;
-                    self.repaired = true;
+                    self.repaired = self.repair_temporary_state;
                 }
                 if let Some(rectangle) = self.geometry_trial.take() {
                     self.geometry_trial_detail = Some(
@@ -391,6 +394,20 @@ impl DiagnoseActions for ProcessActions<'_> {
             }
         }
     }
+}
+
+fn diagnostic_safe_repair_needed(facts: &DeviceFacts) -> bool {
+    facts.temporary_state
+        || (facts.main_running
+            && !facts.launcher_running
+            && facts.agent_running
+            && facts.credentials_ready
+            && facts.firmware_compatible
+            && facts.scanout_ready
+            && facts.latch_ready
+            && !facts.reboot_unstable
+            && facts.arming_files == 0
+            && facts.launcher_state == "Unconfigured")
 }
 
 pub fn correlate(facts: &DeviceFacts, repaired: bool) -> DiagnosticReport {
@@ -544,6 +561,26 @@ mod tests {
                 .unwrap()
                 .contains("event loop is stalled")
         );
+    }
+
+    #[test]
+    fn unconfigured_healthy_dev_platform_is_safe_to_recover() {
+        let facts = DeviceFacts {
+            launcher_running: false,
+            launcher_state: "Unconfigured".into(),
+            launcher_heartbeat_advancing: false,
+            ..healthy()
+        };
+        assert!(diagnostic_safe_repair_needed(&facts));
+
+        assert!(!diagnostic_safe_repair_needed(&DeviceFacts {
+            arming_files: 1,
+            ..facts.clone()
+        }));
+        assert!(!diagnostic_safe_repair_needed(&DeviceFacts {
+            latch_ready: false,
+            ..facts
+        }));
     }
 
     #[test]

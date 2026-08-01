@@ -629,7 +629,17 @@ impl DeviceOperations for NativeDevice {
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
                     .map_err(device_failure)?;
-                "temporary-state=clear".into()
+                let recover_launcher = remote_read(&session, MAIN_STATUS_REMOTE)
+                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+                    .is_some_and(|status| diagnostic_launcher_recovery_required(&status));
+                drop(session);
+                if recover_launcher {
+                    delivery_reboot_wait(&config)?;
+                    verify_delivery_health(&config)?;
+                    "temporary-state=clear launcher=recovered".into()
+                } else {
+                    "temporary-state=clear launcher=unchanged".into()
+                }
             }
             DeviceRequest::CaptureFramebuffer => {
                 capture_buffer_at(&config.agent, &[]).map_err(device_failure)?;
@@ -3154,6 +3164,13 @@ fn safe_repair_command() -> String {
         release_arming_cleanup_command(),
         safety.as_str(),
     ])
+}
+
+fn diagnostic_launcher_recovery_required(main_status: &Value) -> bool {
+    main_status.get("launcher_state").and_then(Value::as_str) == Some("Unconfigured")
+        && main_status.get("launcher_pid").and_then(Value::as_u64) == Some(0)
+        && main_status.get("executable_path").and_then(Value::as_str)
+            == Some("/media/fat/MiSTer_MagiKDev")
 }
 
 fn arming_status() -> Result<()> {
@@ -17388,6 +17405,25 @@ H: Handlers=event3 js0"#
         assert!(repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/rebuild-on-next-boot"));
+    }
+
+    #[test]
+    fn diagnosis_recovers_only_unconfigured_development_main() {
+        assert!(diagnostic_launcher_recovery_required(&json!({
+            "launcher_state": "Unconfigured",
+            "launcher_pid": 0,
+            "executable_path": "/media/fat/MiSTer_MagiKDev",
+        })));
+        assert!(!diagnostic_launcher_recovery_required(&json!({
+            "launcher_state": "LauncherActive",
+            "launcher_pid": 42,
+            "executable_path": "/media/fat/MiSTer_MagiKDev",
+        })));
+        assert!(!diagnostic_launcher_recovery_required(&json!({
+            "launcher_state": "Unconfigured",
+            "launcher_pid": 0,
+            "executable_path": "/media/fat/MiSTer_MagiK",
+        })));
     }
 
     #[test]
