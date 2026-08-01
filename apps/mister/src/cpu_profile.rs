@@ -511,7 +511,7 @@ pub use imp::{
 #[cfg(not(feature = "profile"))]
 mod stub {
     use super::{
-        CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
+        BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
         set_screensaver_profile_state,
     };
 
