@@ -35,6 +35,14 @@ pub fn execute(
 
     reporter.emit(
         EventKind::Progress,
+        "platform-identity",
+        "verifying that the installed Dev app matches the local commit",
+        Some(5),
+    )?;
+    require_installed_app_revision(app_revision, DeviceClient::default())?;
+
+    reporter.emit(
+        EventKind::Progress,
         "main-validation",
         "validating the clean local Main patch surface",
         Some(10),
@@ -68,6 +76,27 @@ pub fn execute(
         &artifact,
         DeviceClient::default(),
     )
+}
+
+fn require_installed_app_revision<D: DeviceOperations>(
+    app_revision: &str,
+    mut device: DeviceClient<D>,
+) -> AgentResult<()> {
+    device.execute(DeviceRequest::Discover)?;
+    device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+    let installed = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    let installed = crate::platform_manifest::parse_installed(
+        &installed,
+        crate::platform_manifest::Layout::Development,
+    )?;
+    if installed.magik_revision() != app_revision {
+        return Err(format!(
+            "installed Dev MagiK revision does not match the local app commit; run scripts/agent deliver first: installed={} local={app_revision}",
+            installed.magik_revision()
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn execute_overlay_transaction<D: DeviceOperations>(
@@ -258,6 +287,31 @@ mod tests {
         assert_eq!(execution.app_revision, "a".repeat(40));
         assert_eq!(execution.main_revision, "b".repeat(40));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn installed_app_revision_is_rejected_before_main_build() {
+        let fake = FakeDevice::with_results([
+            Ok(DeviceResponse {
+                operation: "discover",
+                detail: "connected".into(),
+            }),
+            Ok(DeviceResponse {
+                operation: "verify-development-platform",
+                detail: "verified".into(),
+            }),
+            Ok(DeviceResponse {
+                operation: "read-development-manifest",
+                detail: super::test_manifest(&"a".repeat(40)),
+            }),
+        ]);
+        let error =
+            require_installed_app_revision(&"b".repeat(40), DeviceClient::new(fake)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("run scripts/agent deliver first")
+        );
     }
 
     #[test]
