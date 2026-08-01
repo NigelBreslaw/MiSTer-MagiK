@@ -4286,6 +4286,7 @@ fn profile_installed_launch_return(
                 ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
                 ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
                 ("MISTER_PROFILE".into(), "full".into()),
+                ("MISTER_BOOT_ANALYTICS".into(), "1".into()),
                 (
                     "MISTER_BOOT_FRAME_PROFILE_FILE".into(),
                     remote_frames.clone(),
