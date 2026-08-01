@@ -2565,7 +2565,7 @@ fn delivery_health_command(layout: &str) -> Result<String> {
         _ => return Err(format!("unsupported delivery layout: {layout}").into()),
     };
     Ok(format!(
-        "set -eu; pidof {main} >/dev/null; pidof mister-magik-fb >/dev/null; grep -q '^mister_magik_scanout_slots ' /proc/modules; test -c /dev/mister-magik-scanout-slots; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; test ! -e {directory}/launcher.env; test ! -e {directory}/rebuild-on-next-boot; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json"
+        "set -eu; health_check=initializing; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_health_failure_tsv\\tcheck=%s\\trc=%s\\n\" \"$health_check\" \"$rc\" >&2; fi' EXIT; health_check=main-process; pidof {main} >/dev/null; health_check=launcher-process; pidof mister-magik-fb >/dev/null; health_check=scanout-module; grep -q '^mister_magik_scanout_slots ' /proc/modules; health_check=scanout-device; test -c /dev/mister-magik-scanout-slots; health_check=latch-readiness; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; health_check=launcher-env-clear; test ! -e {directory}/launcher.env; health_check=rebuild-clear; test ! -e {directory}/rebuild-on-next-boot; health_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; health_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; health_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; health_check=complete; trap - EXIT; printf 'delivery_health_tsv\\tvalid=1\\n'"
     ))
 }
 
@@ -16602,6 +16602,8 @@ H: Handlers=event3 js0"#
         let latch_health = delivery_health_command("dev").unwrap();
         assert!(latch_health.contains("latch-readiness-report"));
         assert!(latch_health.contains("mister_magik_scanout_slots"));
+        assert!(latch_health.contains("delivery_health_failure_tsv"));
+        assert!(latch_health.contains("health_check=latch-readiness"));
         assert!(validate_delivery_remote("/tmp/not-owned").is_err());
     }
 
