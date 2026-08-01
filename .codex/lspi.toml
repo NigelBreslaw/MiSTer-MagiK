@@ -36,8 +36,14 @@ args = ["run", "1.97.1", "rust-analyzer"]
 extensions = ["rs"]
 root_dir = "."
 initialize_timeout_ms = 120000
-request_timeout_ms = 180000
+request_timeout_ms = 10000
 idle_shutdown_ms = 120000
+
+[servers.request_timeout_overrides_ms]
+"textDocument/references" = 30000
+"textDocument/rename" = 30000
+"callHierarchy/incomingCalls" = 30000
+"callHierarchy/outgoingCalls" = 30000
 
 [servers.initialize_options]
 linkedProjects = [
@@ -72,8 +78,14 @@ args = ["run", "1.97.1", "rust-analyzer"]
 extensions = ["rs"]
 root_dir = "apps/desktop"
 initialize_timeout_ms = 120000
-request_timeout_ms = 180000
+request_timeout_ms = 10000
 idle_shutdown_ms = 120000
+
+[servers.request_timeout_overrides_ms]
+"textDocument/references" = 30000
+"textDocument/rename" = 30000
+"callHierarchy/incomingCalls" = 30000
+"callHierarchy/outgoingCalls" = 30000
 
 [servers.initialize_options]
 linkedProjects = ["Cargo.toml"]
@@ -102,8 +114,14 @@ args = ["run", "1.97.1", "rust-analyzer"]
 extensions = ["rs"]
 root_dir = "private/magik-cloud"
 initialize_timeout_ms = 120000
-request_timeout_ms = 180000
+request_timeout_ms = 10000
 idle_shutdown_ms = 120000
+
+[servers.request_timeout_overrides_ms]
+"textDocument/references" = 30000
+"textDocument/rename" = 30000
+"callHierarchy/incomingCalls" = 30000
+"callHierarchy/outgoingCalls" = 30000
 
 [servers.initialize_options]
 linkedProjects = ["Cargo.toml"]
