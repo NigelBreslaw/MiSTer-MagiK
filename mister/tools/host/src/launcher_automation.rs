@@ -98,11 +98,11 @@ pub(super) fn begin(
         thread::sleep(Duration::from_millis(10));
     }
     let _ = end(config, nonce);
-    return Err(format!(
+    Err(format!(
         "launcher automation socket did not become responsive: {}",
         last_error.as_deref().unwrap_or("no response")
     )
-    .into());
+    .into())
 }
 
 pub(super) fn send_action(
