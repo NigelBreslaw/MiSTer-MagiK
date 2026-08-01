@@ -7,7 +7,9 @@
 use crate::display_config::DisplayConfig;
 use crate::fpga::Fpga;
 use crate::ui_display::UiDisplay;
-use crate::ui_runner::ui_platform::{AnimationClock, MisterPlatform, update_slint_animations};
+use crate::ui_runner::ui_platform::{
+    AnimationClock, MisterPlatform, MisterSoftwareWindow, update_slint_animations,
+};
 use crate::vt::VtGraphicsGuard;
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EffectKind, EffectSize, EffectState,
@@ -15,9 +17,7 @@ use mister_magik_fb::experiments::effects::framebuffer_effects::{
 use mister_magik_fb::framebuffer::mapped::MappedRgb565Framebuffer;
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::vsync::VsyncPacer;
-use slint::platform::software_renderer::{
-    MinimalSoftwareWindow, RepaintBufferType, Rgb565Pixel, TargetPixel,
-};
+use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel, TargetPixel};
 use slint::{ComponentHandle, PhysicalSize};
 use std::rc::Rc;
 use std::time::Instant;
@@ -321,7 +321,7 @@ pub fn run_effect_bench(f: &mut Fpga) {
 
     let needs_overlay = modes.contains(&EffectBenchMode::Overlay);
     let mut overlay_ctx = if needs_overlay {
-        let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
         let animation_clock = AnimationClock::from_env();
         slint::platform::set_platform(Box::new(MisterPlatform::new(
             window.clone(),
@@ -375,7 +375,7 @@ pub fn run_effect_bench(_f: &mut Fpga) {
 fn run_one_effect_bench(
     disp: &mut MappedRgb565Framebuffer,
     overlay_ctx: &mut Option<(
-        Rc<MinimalSoftwareWindow>,
+        Rc<MisterSoftwareWindow>,
         slint_ui::effect_hud::EffectHud,
         AnimationClock,
         Vec<Rgb565Pixel>,

@@ -917,10 +917,11 @@ impl FramebufferStreamState {
         read_started: Instant,
         read_complete: Instant,
     ) -> Result<Option<FramebufferStreamFrame>, AgentError> {
-        if header.flags & FLAG_LZ4_SIZE_PREPENDED == 0 {
-            return Err(AgentError::Protocol(
-                "framebuffer stream frame is not LZ4 encoded".to_string(),
-            ));
+        if header.flags != FLAG_LZ4_SIZE_PREPENDED {
+            return Err(AgentError::Protocol(format!(
+                "framebuffer stream frame has unsupported flags 0x{:04x}",
+                header.flags
+            )));
         }
         if !matches!(header.kind, FrameKind::Keyframe | FrameKind::RectDelta) {
             return Err(AgentError::Protocol(format!(
@@ -3191,6 +3192,29 @@ tiny"#
             .expect_err("mismatched LZ4 size prefix should fail");
 
         assert!(err.to_string().contains("size prefix mismatch"));
+    }
+
+    #[test]
+    fn framebuffer_stream_rejects_unknown_encoding_flags() {
+        let geometry = FrameGeometry {
+            width: 2,
+            height: 1,
+            stride_pixels: 2,
+        };
+        let (mut header, payload) = encoded_stream_frame(
+            FrameKind::Keyframe,
+            1,
+            geometry,
+            FrameRect::full(geometry),
+            &[1, 2, 3, 4],
+        );
+        header.flags |= 1 << 1;
+
+        let err = FramebufferStreamState::default()
+            .apply_frame(header, &payload)
+            .expect_err("unknown encoding flags should fail closed");
+
+        assert!(err.to_string().contains("unsupported flags 0x0003"));
     }
 
     #[test]

@@ -2677,8 +2677,11 @@ impl ParticleShowcaseRenderer {
             self.pool.z[index] = minor_angle.sin() * minor_radius;
             self.pool.age[index] = unit01(random.rotate_left(11));
             self.pool.style[index] = 3 + ((random >> 29) as u8).min(4);
+            // Rim particles are handled by the `index & 63 == 0` branch in
+            // projection. Keep tendril and highlight samples on the projected
+            // lanes so those effects are not silently discarded as rim points.
             self.pool.flags[index] =
-                band as u8 | (u8::from(index & 127 == 0) << 1) | (u8::from(index & 511 == 0) << 2);
+                band as u8 | (u8::from(index & 127 == 8) << 1) | (u8::from(index & 511 == 16) << 2);
         }
     }
 
@@ -3275,7 +3278,7 @@ impl ParticleShowcaseRenderer {
             let hash = xorshift32(
                 (frame as u32)
                     .wrapping_mul(0x9e37_79b9)
-                    .wrapping_add(x as u32 * 0x45d9_f3b),
+                    .wrapping_add((x as u32).wrapping_mul(0x45d9_f3b)),
             );
             let flicker = ((hash >> 25) & 0x7f) as u8;
             self.heat[bottom + x] = 150u8.saturating_add(envelope).saturating_add(flicker);
@@ -4247,7 +4250,7 @@ mod tests {
         let wrapped = renderer
             .render(&mut destination, 2, Duration::from_millis(817))
             .unwrap();
-        assert_eq!(wrapped.demo, ParticleDemoKind::ArcadeCabinet);
+        assert_eq!(wrapped.demo, ParticleDemoKind::PointCloudMorphPassage);
         assert!(
             renderer
                 .render(&mut destination, 0, Duration::ZERO)
@@ -4332,6 +4335,9 @@ mod tests {
         assert_eq!(first_stats.demo, ParticleDemoKind::FireEmbers);
         assert_eq!(first_stats.beat, "flame");
         assert!(first_stats.visible > 0);
+        assert_eq!(second_stats.demo, first_stats.demo);
+        assert_eq!(second_stats.beat, first_stats.beat);
+        assert_eq!(second_stats.visible, first_stats.visible);
         assert!(first.commands.len() <= first.pool.active() / 4);
         assert!(first.heat.iter().any(|value| *value > 0));
         assert_eq!(first.heat, second.heat);
@@ -4584,7 +4590,7 @@ mod tests {
         assert!(
             renderer.pool.flags[..renderer.pool.active()]
                 .iter()
-                .any(|flags| flags & 2 != 0)
+                .all(|flags| flags & !3 == 0)
         );
     }
 

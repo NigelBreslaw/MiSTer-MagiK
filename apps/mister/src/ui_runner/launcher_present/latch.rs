@@ -1102,8 +1102,41 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 "latch status exhausted its bounded read budget",
             )
         })?;
-        let sample = read_status_sample(hardware, self.negotiated_capabilities)
+        let mut sample = read_status_sample(hardware, self.negotiated_capabilities)
             .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))?;
+        if !matches!(
+            self.classify_latch_status(sample.status),
+            Err(LatchStatusSyncError::HiddenGeometryMismatch { .. })
+        ) {
+            self.sync_latch_state_from_status(&sample)?;
+            return Ok(sample);
+        }
+
+        let fallback_status = sample.status;
+        let mut previous = LatchSafetyProjection::from(sample.status);
+        let mut diagnostics = std::mem::take(&mut sample.diagnostics);
+        while !budget.exhausted() {
+            budget.consume().map_err(|_| {
+                LatchFailure::runtime(
+                    LatchFailureStage::PostVerification,
+                    LatchFailureReason::FpgaTransportFailed,
+                    "latch status exhausted its bounded read budget",
+                )
+            })?;
+            let mut next = read_status_sample(hardware, self.negotiated_capabilities)
+                .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))?;
+            diagnostics.append(&next.diagnostics);
+            let projection = LatchSafetyProjection::from(next.status);
+            if projection == previous {
+                diagnostics.decision = LatchWireDecision::Corroborated;
+                next.diagnostics = diagnostics;
+                self.sync_latch_state_from_status(&next)?;
+                return Ok(next);
+            }
+            previous = projection;
+        }
+        sample.status = fallback_status;
+        sample.diagnostics = diagnostics;
         self.sync_latch_state_from_status(&sample)?;
         Ok(sample)
     }
@@ -1716,11 +1749,12 @@ mod tests {
                 crate::fpga::MAGIK_FBUF_CAPS_MAGIC,
                 0,
                 mister_magik_latch_contract::decode_capabilities(&[
-                    2,
+                    4,
                     mister_magik_latch_contract::REQUIRED_CAPS,
                     1366,
                     768,
                     2736,
+                    mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC,
                 ])
                 .map_err(io::Error::other)?,
             ))
@@ -1764,11 +1798,12 @@ mod tests {
         ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
             Some(
                 mister_magik_latch_contract::decode_capabilities(&[
-                    2,
+                    4,
                     mister_magik_latch_contract::REQUIRED_CAPS,
                     1366,
                     768,
                     2736,
+                    mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC,
                 ])
                 .unwrap(),
             )
@@ -1915,7 +1950,11 @@ mod tests {
         let events = EventLog::default();
         let mut presenter = presenter_with_events(events.clone());
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(FRONT_BASE, 0x0001)), Ok(status(BASE1, 0x0001))],
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
             events: Some(events.clone()),
             ..FakeHardware::default()
         };
@@ -1942,6 +1981,7 @@ mod tests {
                 TestEvent::Copy,
                 TestEvent::Overlay,
                 TestEvent::Publish,
+                TestEvent::ReadStatus,
                 TestEvent::Post,
                 TestEvent::ReadStatus,
             ]
@@ -1953,6 +1993,7 @@ mod tests {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
             statuses: vec![
+                Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE2, 0x0001)),
@@ -2070,6 +2111,7 @@ mod tests {
             statuses: vec![
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE2, 0x0001)),
             ],
             ..FakeHardware::default()
@@ -2102,7 +2144,11 @@ mod tests {
     fn committed_frame_view_contains_final_overlay_pixels() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(FRONT_BASE, 0x0001)), Ok(status(BASE1, 0x0001))],
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
             ..FakeHardware::default()
         };
         let mut display = display_session();
@@ -2129,10 +2175,14 @@ mod tests {
     }
 
     #[test]
-    fn cold_front_buffer_uses_first_hidden_slot_and_reads_status_twice() {
+    fn cold_front_buffer_uses_first_hidden_slot_across_locked_status_check() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(FRONT_BASE, 0x0001)), Ok(status(BASE1, 0x0001))],
+            statuses: vec![
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+            ],
             ..FakeHardware::default()
         };
         let mut display = display_session();
@@ -2141,14 +2191,18 @@ mod tests {
 
         assert_eq!(stats.buffer_index, 1);
         assert_eq!(hardware.post_bases, [BASE1]);
-        assert_eq!(hardware.read_count, 2);
+        assert_eq!(hardware.read_count, 3);
     }
 
     #[test]
     fn hidden_active_slot_is_not_selected_for_next_post() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(status(BASE1, 0x0001)), Ok(status(BASE2, 0x0001))],
+            statuses: vec![
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
+            ],
             ..FakeHardware::default()
         };
         let mut display = display_session();
@@ -2157,7 +2211,7 @@ mod tests {
 
         assert_eq!(stats.buffer_index, 2);
         assert_eq!(hardware.post_bases, [BASE2]);
-        assert_eq!(hardware.read_count, 2);
+        assert_eq!(hardware.read_count, 3);
     }
 
     #[test]
@@ -2166,10 +2220,14 @@ mod tests {
         let mut hardware = FakeHardware {
             statuses: vec![
                 Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE2, 0x0001)),
                 Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(FRONT_BASE, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE2, 0x0001)),
@@ -2187,7 +2245,7 @@ mod tests {
         assert_eq!(recovered.invalid_bytes, WIDTH * HEIGHT * 2);
         assert!(recovered_other_slot.full_copy);
         assert_eq!(recovered_other_slot.invalid_bytes, WIDTH * HEIGHT * 2);
-        assert_eq!(hardware.read_count, 8);
+        assert_eq!(hardware.read_count, 12);
     }
 
     #[test]
@@ -2213,6 +2271,7 @@ mod tests {
             statuses: vec![
                 Ok(status(BASE1, 0x0001 | 0x0004)),
                 Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
                 Ok(status(BASE2, 0x0001)),
             ],
             ..FakeHardware::default()
@@ -2224,7 +2283,7 @@ mod tests {
 
         assert_eq!(stats.buffer_index, 2);
         assert_eq!(hardware.post_bases, [BASE2]);
-        assert_eq!(hardware.read_count, 3);
+        assert_eq!(hardware.read_count, 4);
     }
 
     #[test]
@@ -2352,6 +2411,8 @@ mod tests {
                 Ok(valid),
                 Ok(valid),
                 Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE1, 0x0001)),
+                Ok(status(BASE2, 0x0001)),
             ],
             events: Some(Rc::clone(&events)),
             ..FakeHardware::default()
@@ -2361,7 +2422,7 @@ mod tests {
         let stats = present(&mut presenter, &mut hardware, &mut display).unwrap();
 
         assert_eq!(stats.buffer_index, 2);
-        assert_eq!(hardware.read_count, 4);
+        assert_eq!(hardware.read_count, 5);
         assert_eq!(
             &events.borrow()[..4],
             &[
@@ -2394,7 +2455,7 @@ mod tests {
 
         assert_eq!(hardware.read_count, 2);
         assert_eq!(diagnostics.decision, LatchWireDecision::Rejected);
-        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(diagnostics.protocol_version, Some(4));
         assert_eq!(
             diagnostics.capability_flags,
             Some(mister_magik_latch_contract::REQUIRED_CAPS)
@@ -2405,7 +2466,7 @@ mod tests {
         );
         assert!(hardware.post_bases.is_empty());
         let evidence = mister_magik_fb::latch_readiness::LatchFailureEvidence::from(&error);
-        assert_eq!(evidence.schema, "mister-magik-latch-failure-v4");
+        assert_eq!(evidence.schema, "mister-magik-latch-failure-v3");
     }
 
     #[test]
@@ -2505,19 +2566,19 @@ mod tests {
         let after = status(BASE1, 0x0001);
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
-            statuses: vec![Ok(before), Ok(before), Ok(after)],
+            statuses: vec![Ok(before), Ok(before), Ok(before), Ok(before), Ok(after)],
             posts: vec![Err(io::Error::other("post failed"))],
             ..FakeHardware::default()
         };
         let mut display = display_session();
 
         assert!(present(&mut presenter, &mut hardware, &mut display).is_err());
-        assert_eq!(hardware.read_count, 1);
+        assert_eq!(hardware.read_count, 2);
         let stats = present(&mut presenter, &mut hardware, &mut display).unwrap();
 
         assert_eq!(stats.buffer_index, 1);
         assert_eq!(hardware.post_bases, [BASE1, BASE1]);
-        assert_eq!(hardware.read_count, 3);
+        assert_eq!(hardware.read_count, 5);
     }
 
     #[test]
@@ -2639,7 +2700,7 @@ mod tests {
             diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
         );
-        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(diagnostics.protocol_version, Some(4));
         assert_eq!(
             diagnostics.capability_flags,
             Some(mister_magik_latch_contract::REQUIRED_CAPS)
@@ -2665,7 +2726,7 @@ mod tests {
             diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
         );
-        assert_eq!(diagnostics.protocol_version, Some(2));
+        assert_eq!(diagnostics.protocol_version, Some(4));
         assert_eq!(diagnostics.attempt_count, 2);
     }
 }

@@ -749,4 +749,50 @@ mod tests {
         empty["catalog"]["systems"] = json!([]);
         assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
     }
+
+    #[test]
+    fn launch_return_requires_three_fast_restored_cycles() {
+        let cycle = json!({"restored": true, "black_interval_ms": 1_999});
+        let passing = json!({
+            "schema": "mister-magik-launch-return-benchmark-v1",
+            "cycles": [cycle.clone(), cycle.clone(), cycle]
+        });
+        evaluate_launch_return_summary(&passing).unwrap();
+        let mut slow = passing.clone();
+        slow["cycles"][1]["black_interval_ms"] = json!(2_000);
+        assert!(evaluate_launch_return_summary(&slow).is_err());
+        let mut unrestored = passing.clone();
+        unrestored["cycles"][0]["restored"] = json!(false);
+        assert!(evaluate_launch_return_summary(&unrestored).is_err());
+        assert!(evaluate_launch_return_summary(&json!({"schema": "wrong", "cycles": []})).is_err());
+    }
+
+    #[test]
+    fn search_evaluators_require_timing_and_ready_results() {
+        let timing = json!({
+            "schema": "mister-magik-search-benchmark-v1",
+            "queries": [{"query": "A"}],
+            "warm_all_queries": {"total_us": {"p95": 1}}
+        });
+        evaluate_search_summary(&timing).unwrap();
+        let mut no_queries = timing.clone();
+        no_queries["queries"] = json!([]);
+        assert!(evaluate_search_summary(&no_queries).is_err());
+        let mut no_timing = timing;
+        no_timing["warm_all_queries"] = Value::Null;
+        assert!(evaluate_search_summary(&no_timing).is_err());
+
+        let ui = json!({
+            "schema": "mister-magik-search-ui-verification-v1",
+            "status": "ready",
+            "query": "A",
+            "results": 1,
+        });
+        evaluate_search_ui_summary(&ui).unwrap();
+        for field in ["schema", "status", "query", "results"] {
+            let mut invalid = ui.clone();
+            invalid[field] = Value::Null;
+            assert!(evaluate_search_ui_summary(&invalid).is_err());
+        }
+    }
 }

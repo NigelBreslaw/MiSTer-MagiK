@@ -488,9 +488,29 @@ fn add_path_operations(
     }
     if path == Path::new("apps/mister/Cargo.toml")
         || path == Path::new("apps/mister/src/bin/ui_preview.rs")
+        || path == Path::new("apps/mister/src/preview_state.rs")
+        || path == Path::new("apps/mister/src/visual_composition.rs")
+        || path == Path::new("apps/mister/src/ui_runner/launcher_screensaver.rs")
         || path.starts_with("apps/mister/ui")
         || path.starts_with("apps/mister/ui-generated")
     {
+        add(with_inputs(
+            cargo(
+                "app.preview-ui-tests",
+                "Test preview UI feature matrix",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "apps/mister/Cargo.toml",
+                    "--lib",
+                    "--no-default-features",
+                    "--features",
+                    "ui-preview",
+                ],
+                "preview UI source → complete preview UI suite",
+            ),
+            MISTER_APP_COMPILED_INPUTS,
+        ));
         add(with_inputs(
             cargo(
                 "app.ui-preview-tests",
@@ -562,6 +582,75 @@ fn add_path_operations(
             ),
             &["apps/mister"],
         ));
+        if path == Path::new("apps/mister/Cargo.toml")
+            || path == Path::new("apps/mister/src/ui_display.rs")
+            || path == Path::new("apps/mister/src/arcade_list_renderer.rs")
+            || path.starts_with("apps/mister/src/ui_runner")
+        {
+            add(with_inputs(
+                cargo(
+                    "app.production-ui-tests",
+                    "Test production UI feature matrix",
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--bin",
+                        "mister-magik-fb",
+                        "--no-default-features",
+                        "--features",
+                        "ui",
+                    ],
+                    "production UI source → complete production UI suite",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
+            ));
+        }
+        if path == Path::new("apps/mister/Cargo.toml")
+            || path.starts_with("apps/mister/src/experiments")
+        {
+            add(with_inputs(
+                cargo(
+                    "app.experimental-ui-tests",
+                    "Test experimental UI feature matrix",
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--lib",
+                        "--no-default-features",
+                        "--features",
+                        "ui,experiments",
+                    ],
+                    "experimental UI source → complete experimental UI suite",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
+            ));
+        }
+        if path == Path::new("apps/mister/Cargo.toml")
+            || path == Path::new("apps/mister/src/command_args.rs")
+            || path == Path::new("apps/mister/src/visual_platform.rs")
+            || path.starts_with("apps/mister/src/ui_runner")
+            || path.starts_with("apps/mister/ui-generated")
+        {
+            add(with_inputs(
+                cargo(
+                    "app.bench-scenes-tests",
+                    "Test bench-scenes UI feature matrix",
+                    &[
+                        "test",
+                        "--manifest-path",
+                        "apps/mister/Cargo.toml",
+                        "--lib",
+                        "--no-default-features",
+                        "--features",
+                        "ui,bench-scenes",
+                    ],
+                    "benchmark scene source → complete bench-scenes UI suite",
+                ),
+                MISTER_APP_COMPILED_INPUTS,
+            ));
+        }
         if path.starts_with("apps/mister/src/ui_runner") {
             add(with_inputs(
                 cargo(
@@ -1229,6 +1318,73 @@ mod tests {
                 .args
                 .contains(&"launcher_catalog_session::tests".into())
         );
+    }
+
+    #[test]
+    fn ui_assurance_selects_explicit_supported_feature_matrices() {
+        let production = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/ui_display.rs".into()],
+        )
+        .unwrap();
+        let production_test = production
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.production-ui-tests")
+            .unwrap();
+        assert!(production_test.args.contains(&"ui".into()));
+        assert!(
+            production_test
+                .args
+                .windows(2)
+                .any(|args| args == ["--bin", "mister-magik-fb"])
+        );
+        assert!(!production_test.args.contains(&"ui,experiments".into()));
+
+        let preview = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/preview_state.rs".into()],
+        )
+        .unwrap();
+        let preview_test = preview
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.preview-ui-tests")
+            .unwrap();
+        assert!(preview_test.args.contains(&"--lib".into()));
+        assert!(preview_test.args.contains(&"ui-preview".into()));
+
+        let bench = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/command_args.rs".into()],
+        )
+        .unwrap();
+        let bench_test = bench
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.bench-scenes-tests")
+            .unwrap();
+        assert!(bench_test.args.contains(&"ui,bench-scenes".into()));
+
+        let experimental = affected_plan(
+            Intent::Check {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/mister/src/experiments/particles/showcase.rs".into()],
+        )
+        .unwrap();
+        let experimental_test = experimental
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.experimental-ui-tests")
+            .unwrap();
+        assert!(experimental_test.args.contains(&"ui,experiments".into()));
     }
 
     #[test]

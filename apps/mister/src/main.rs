@@ -1202,13 +1202,13 @@ fn run_scanout_slots_map_report() {
         std::process::exit(1);
     });
     crate::ui_logln!(
-        "scanout_slots_layout_tsv\tabi_version={}\tslot_count={}\twidth={}\theight={}\tstride_bytes={}\tframe_bytes={}\tmap_bytes={}\tflags=0x{:x}",
+        "scanout_slots_layout_tsv\tabi_version={}\tslot_count={}\tmax_width={}\tmax_height={}\tmax_stride_bytes={}\tslot_capacity_bytes={}\tmap_bytes={}\tflags=0x{:x}",
         layout.abi_version,
         layout.slot_count,
-        layout.width,
-        layout.height,
-        layout.stride_bytes,
-        layout.frame_bytes,
+        layout.max_width,
+        layout.max_height,
+        layout.max_stride_bytes,
+        layout.slot_capacity_bytes,
         layout.map_bytes,
         layout.flags
     );

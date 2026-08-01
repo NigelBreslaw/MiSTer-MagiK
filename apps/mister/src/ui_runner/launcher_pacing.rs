@@ -55,11 +55,13 @@ impl LauncherPhaseAlignment {
             LATCH_PHASE_MIN_HEADROOM_US.saturating_sub(LATCH_PHASE_SAFETY_US),
             LATCH_PHASE_MAX_HEADROOM_US.saturating_sub(LATCH_PHASE_SAFETY_US),
         );
-        self.estimated_work_us = self
-            .estimated_work_us
-            .saturating_mul(7)
-            .saturating_add(bounded)
-            / 8;
+        self.estimated_work_us = if bounded >= self.estimated_work_us {
+            self.estimated_work_us
+                .saturating_add((bounded - self.estimated_work_us).div_ceil(8))
+        } else {
+            self.estimated_work_us
+                .saturating_sub((self.estimated_work_us - bounded).div_ceil(8))
+        };
     }
 
     #[must_use]
@@ -222,7 +224,7 @@ mod tests {
         }
         assert!(alignment.required_headroom_us() < FPGA_LATCH_LATE_FRAME_START_HEADROOM_US);
         assert!(alignment.required_headroom_us() >= LATCH_PHASE_MIN_HEADROOM_US);
-        for _ in 0..32 {
+        for _ in 0..128 {
             alignment.observe(30_000);
         }
         assert_eq!(

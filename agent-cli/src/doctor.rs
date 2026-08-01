@@ -270,6 +270,7 @@ fn quoted_value(text: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn parses_pinned_channel() {
@@ -282,5 +283,39 @@ mod tests {
     #[test]
     fn rejects_unquoted_channel() {
         assert_eq!(quoted_value("channel = stable", "channel"), None);
+    }
+
+    #[test]
+    fn quoted_values_require_exact_keys_and_balanced_quotes() {
+        let text = "channel_name = \"wrong\"\n channel = \"1.97.1\"\nprofile = \"minimal\"\n";
+        assert_eq!(quoted_value(text, "channel").as_deref(), Some("1.97.1"));
+        assert_eq!(quoted_value(text, "profile").as_deref(), Some("minimal"));
+        assert_eq!(quoted_value("channel = \"unterminated", "channel"), None);
+        assert_eq!(quoted_value(text, "missing"), None);
+    }
+
+    #[test]
+    fn executable_and_desktop_prerequisites_are_reported_from_fixtures() {
+        let root = std::env::temp_dir().join(format!("agent-doctor-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let command = root.join("tool");
+        fs::write(&command, b"#!/bin/sh\n").unwrap();
+        assert!(!is_executable(&command));
+        let mut permissions = fs::metadata(&command).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command, permissions).unwrap();
+        assert!(is_executable(&command));
+
+        let mut failures = Vec::new();
+        check_desktop(&root, &mut failures);
+        assert_eq!(failures.len(), 2);
+        for name in ["github-app", "material-icon-theme"] {
+            fs::create_dir_all(root.join("apps/desktop/vendor").join(name).join(".git")).unwrap();
+        }
+        failures.clear();
+        check_desktop(&root, &mut failures);
+        assert!(failures.is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 }

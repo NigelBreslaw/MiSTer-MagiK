@@ -1981,7 +1981,6 @@ mod tests {
     use slint::platform::software_renderer::RepaintBufferType;
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::sync::Once;
 
     #[test]
     fn preview_size_enlarges_only_by_integer_scale() {
@@ -2899,12 +2898,8 @@ mod tests {
     }
 
     fn init_test_slint_platform() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-            let _ =
-                slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
-        });
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
     }
 }

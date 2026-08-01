@@ -946,6 +946,9 @@ fn reboot_now(paths: &Paths) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::fd::{FromRawFd, OwnedFd};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
     struct FailAt {
         step: WriteStep,
@@ -974,6 +977,110 @@ mod tests {
             test_mode: true,
             test_keys: RefCell::default(),
         }
+    }
+
+    fn fixture_root(name: &str) -> PathBuf {
+        let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+        let root = env::temp_dir().join(format!("mister-manager-{name}-{}-{id}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn queue(paths: &Paths, events: impl IntoIterator<Item = InputEvent>) {
+        paths.test_keys.borrow_mut().extend(events);
+    }
+
+    fn write_valid_platform(paths: &Paths) {
+        let app = &paths.app;
+        let fpga = app.join("fpga");
+        fs::create_dir_all(&fpga).unwrap();
+        let files = [
+            (paths.fat.join("MiSTer_MagiK"), b"main".as_slice()),
+            (app.join("mister-magik-fb"), b"gui".as_slice()),
+            (app.join("mister-magik-manager"), b"manager".as_slice()),
+            (
+                app.join("mister_magik_scanout_slots.ko"),
+                b"module".as_slice(),
+            ),
+            (fpga.join("menu-magik-vblank-latch.rbf"), b"rbf".as_slice()),
+        ];
+        for (path, bytes) in &files {
+            fs::write(path, bytes).unwrap();
+        }
+
+        let module_sha = digest(&app.join("mister_magik_scanout_slots.ko")).unwrap();
+        let rbf_sha = digest(&fpga.join("menu-magik-vblank-latch.rbf")).unwrap();
+        let contract = "1".repeat(64);
+        fs::write(
+            app.join("mister_magik_scanout_slots.metadata.txt"),
+            format!(
+                "module_sha256={module_sha}\nplatform_contract_sha256={contract}\nvermagic=5.15.1-MiSTer SMP\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            fpga.join("menu-magik-vblank-latch.metadata.txt"),
+            format!(
+                "rbf_sha256={rbf_sha}\nplatform_contract_sha256={contract}\nsource_commit={}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\n",
+                "2".repeat(40)
+            ),
+        )
+        .unwrap();
+
+        let paths_and_hashes = [
+            (
+                "main",
+                "/media/fat/MiSTer_MagiK",
+                paths.fat.join("MiSTer_MagiK"),
+            ),
+            (
+                "gui",
+                "/media/fat/mister-magik/mister-magik-fb",
+                app.join("mister-magik-fb"),
+            ),
+            (
+                "manager",
+                "/media/fat/mister-magik/mister-magik-manager",
+                app.join("mister-magik-manager"),
+            ),
+            (
+                "scanout_module",
+                "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
+                app.join("mister_magik_scanout_slots.ko"),
+            ),
+            (
+                "scanout_metadata",
+                "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
+                app.join("mister_magik_scanout_slots.metadata.txt"),
+            ),
+            (
+                "latch_rbf",
+                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
+                fpga.join("menu-magik-vblank-latch.rbf"),
+            ),
+            (
+                "latch_metadata",
+                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
+                fpga.join("menu-magik-vblank-latch.metadata.txt"),
+            ),
+        ];
+        let mut manifest = format!(
+            "format=mister-magik-platform-v3\nplatform_release=platform-v0.7\nplatform_release_number=7\nplatform_bundle_id={}\nqualification_candidate_id={}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\n",
+            "3".repeat(64),
+            "4".repeat(64)
+        );
+        for (name, installed_path, local_path) in paths_and_hashes {
+            manifest.push_str(&format!("{name}_path={installed_path}\n"));
+            manifest.push_str(&format!("{name}_sha256={}\n", digest(&local_path).unwrap()));
+        }
+        manifest.push_str(&format!(
+            "platform_contract_sha256={contract}\nmain_revision={}\nmagik_revision={}\nmenu_revision={}\n",
+            "5".repeat(40),
+            "6".repeat(40),
+            "2".repeat(40)
+        ));
+        fs::write(&paths.manifest, manifest).unwrap();
     }
 
     fn pseudo_terminal() -> (OwnedFd, OwnedFd) {
@@ -1192,6 +1299,132 @@ mod tests {
         );
         assert_eq!(fs::read(existing).unwrap(), b"original");
         assert!(!created.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn confirmation_and_installed_action_routes_are_fail_closed() {
+        let root = fixture_root("routing");
+        let paths = fixture_paths(&root);
+
+        queue(&paths, [InputEvent::Cancel]);
+        let error = safety_confirmation(&paths, "warning", "installation").unwrap_err();
+        assert_eq!(error.to_string(), "installation cancelled; no changes made");
+
+        queue(&paths, [InputEvent::Down]);
+        safety_confirmation(&paths, "warning", "installation").unwrap();
+
+        queue(&paths, [InputEvent::Down, InputEvent::Confirm]);
+        assert_eq!(
+            choose_installed_action(&paths).unwrap(),
+            Some(Action::Uninstall)
+        );
+        queue(&paths, [InputEvent::Up, InputEvent::Confirm]);
+        assert_eq!(
+            choose_installed_action(&paths).unwrap(),
+            Some(Action::Uninstall)
+        );
+        queue(&paths, [InputEvent::Other]);
+        assert_eq!(choose_installed_action(&paths).unwrap(), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_platform_preflight_preserves_boot_configuration() {
+        let root = fixture_root("invalid-platform");
+        let paths = fixture_paths(&root);
+        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer\n").unwrap();
+        fs::write(&paths.inittab, b"::sysinit:/media/fat/MiSTer &\n").unwrap();
+        fs::write(&paths.manifest, b"format=unsupported\n").unwrap();
+        queue(&paths, [InputEvent::Down]);
+
+        let error = install(&paths).unwrap_err();
+        assert!(error.to_string().contains("platform verification failed"));
+        assert_eq!(fs::read(&paths.ini).unwrap(), b"[MiSTer]\nmain=MiSTer\n");
+        assert_eq!(
+            fs::read(&paths.inittab).unwrap(),
+            b"::sysinit:/media/fat/MiSTer &\n"
+        );
+        assert!(!paths.backup.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_mode_install_restore_and_uninstall_preserve_unowned_files() {
+        let root = fixture_root("workflows");
+        let paths = fixture_paths(&root);
+        let original_ini = b"[MiSTer]\nmain=MiSTer\nvideo_mode=8\n";
+        fs::write(&paths.ini, original_ini).unwrap();
+        fs::write(
+            &paths.inittab,
+            b"::sysinit:/media/fat/MiSTer_MagiK &\n::sysinit:/media/fat/MiSTer &\n",
+        )
+        .unwrap();
+        write_valid_platform(&paths);
+        queue(&paths, [InputEvent::Down]);
+
+        install(&paths).unwrap();
+        assert!(selects_magik(&paths.ini).unwrap());
+        assert_eq!(fs::read(&paths.backup).unwrap(), original_ini);
+        validate_install(&paths).unwrap();
+
+        restore(&paths).unwrap();
+        assert_eq!(
+            effective(&paths.ini, "MiSTer", "main").unwrap().as_deref(),
+            Some("MiSTer")
+        );
+        validate_stock(&paths).unwrap();
+
+        fs::write(root.join("unowned.txt"), b"keep").unwrap();
+        fs::create_dir_all(root.join("Scripts")).unwrap();
+        fs::write(&paths.script, b"owned").unwrap();
+        queue(&paths, [InputEvent::Down]);
+        uninstall(&paths).unwrap();
+        assert!(!paths.app.exists());
+        assert!(!paths.backup.exists());
+        assert!(!paths.script.exists());
+        assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
+        validate_stock(&paths).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restore_without_backup_removes_magik_selection_and_repairs_crlf_inittab() {
+        let root = fixture_root("restore-no-backup");
+        let paths = fixture_paths(&root);
+        fs::write(&paths.ini, b"[MiSTer]\nmain=MiSTer_MagiK\n").unwrap();
+        fs::write(
+            &paths.inittab,
+            b"::sysinit:/media/fat/mister-magik/boot.sh &\r\nother\r\n",
+        )
+        .unwrap();
+
+        restore_stock(&paths).unwrap();
+        assert!(!selects_magik(&paths.ini).unwrap());
+        assert_eq!(
+            fs::read(&paths.inittab).unwrap(),
+            b"other\r\n::sysinit:/media/fat/MiSTer &\r\n"
+        );
+        validate_stock(&paths).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manifest_validation_rejects_malformed_and_noncanonical_hex() {
+        let root = fixture_root("manifest-errors");
+        let manifest = root.join("manifest");
+        fs::write(&manifest, b"missing-separator\n").unwrap();
+        assert_eq!(
+            parse_manifest(&manifest).unwrap_err().to_string(),
+            "malformed platform manifest"
+        );
+        assert!(require_lower_hex("digest", &"a".repeat(64), 64).is_ok());
+        assert_eq!(
+            require_lower_hex("digest", &"A".repeat(64), 64)
+                .unwrap_err()
+                .to_string(),
+            format!("invalid digest: {}", "A".repeat(64))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

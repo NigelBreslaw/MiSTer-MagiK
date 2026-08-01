@@ -1144,12 +1144,12 @@ mod tests {
     #[test]
     fn direct_video_and_custom_modes_follow_the_same_contract() {
         let direct_video_cases = [
-            (0, 0, (640, 240), (640, 240), 1280, 153_600),
-            (0, 1, (640, 480), (640, 480), 1280, 307_200),
-            (1, 0, (640, 288), (640, 288), 1280, 184_320),
-            (1, 1, (640, 576), (640, 576), 1280, 368_640),
+            (0, 0, (640, 240), (640, 240), (640, 480), 1280, 153_600),
+            (0, 1, (640, 480), (640, 480), (640, 480), 1280, 307_200),
+            (1, 0, (640, 288), (640, 288), (640, 288), 1280, 184_320),
+            (1, 1, (640, 576), (640, 576), (640, 576), 1280, 368_640),
         ];
-        for (pal, scandoubler, scan, framebuffer, stride, pixels) in direct_video_cases {
+        for (pal, scandoubler, scan, framebuffer, render, stride, pixels) in direct_video_cases {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"
             );
@@ -1157,14 +1157,7 @@ mod tests {
             assert_eq!((plan.output_w, plan.output_h), scan);
             assert_eq!((plan.scan_w, plan.scan_h), scan);
             assert_eq!((plan.fb_w, plan.fb_h), framebuffer);
-            assert_eq!(
-                (plan.render_w, plan.render_h),
-                if pal == 1 && scandoubler == 1 {
-                    (640, 576)
-                } else {
-                    (640, 480)
-                }
-            );
+            assert_eq!((plan.render_w, plan.render_h), render);
             assert_eq!(rgb565_stride_bytes(plan.fb_w), stride);
             assert_eq!(plan.fb_w * plan.fb_h, pixels);
         }
@@ -1178,6 +1171,69 @@ mod tests {
         assert_eq!((custom.fb_w, custom.fb_h), (960, 600));
         assert_eq!(rgb565_stride_bytes(custom.fb_w), 1920);
         assert_eq!(custom.fb_w * custom.fb_h, 576_000);
+    }
+
+    #[test]
+    fn production_output_route_matrix_is_explicit_and_complete() {
+        let runtime = RuntimeDisplayGeometry::from_video_words(1920, 1080, 1920, 1080);
+        let cases = [
+            (
+                "schema=1&output=hdmi",
+                ResolvedOutputRoute::Hdmi,
+                (1920, 1080),
+                (1920, 1080),
+                (960, 540),
+                (960, 540),
+            ),
+            (
+                "schema=1&output=crt-240p60",
+                ResolvedOutputRoute::Crt240p60,
+                (640, 240),
+                (640, 240),
+                (640, 240),
+                (640, 480),
+            ),
+            (
+                "schema=1&output=crt-288p50",
+                ResolvedOutputRoute::Crt288p50,
+                (640, 288),
+                (640, 288),
+                (640, 288),
+                (640, 288),
+            ),
+            (
+                "schema=1&output=crt-480p60",
+                ResolvedOutputRoute::Crt480p60,
+                (640, 480),
+                (640, 480),
+                (640, 480),
+                (640, 480),
+            ),
+            (
+                "schema=1&output=crt-576p50",
+                ResolvedOutputRoute::Crt576p50,
+                (640, 576),
+                (640, 576),
+                (640, 576),
+                (640, 576),
+            ),
+        ];
+
+        for (settings, route, output, scan, framebuffer, render) in cases {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+                runtime,
+                "[Menu]\nvideo_mode=8\n",
+                Some(settings),
+                None,
+            )
+            .expect("supported production route");
+            assert_eq!(plan.output_route, route, "{settings}");
+            assert_eq!((plan.output_w, plan.output_h), output, "{settings}");
+            assert_eq!((plan.scan_w, plan.scan_h), scan, "{settings}");
+            assert_eq!((plan.fb_w, plan.fb_h), framebuffer, "{settings}");
+            assert_eq!((plan.render_w, plan.render_h), render, "{settings}");
+            assert_eq!(plan.direct_video, route.is_crt(), "{settings}");
+        }
     }
 
     #[test]

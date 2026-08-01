@@ -1447,6 +1447,7 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn release_fields_reject_duplicates() {
@@ -1551,5 +1552,66 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn semantic_acceptance_assertions_reject_missing_wrong_and_empty_values() {
+        let snapshot = json!({
+            "semantic": {
+                "view": "arcade",
+                "ready": true,
+                "generation": 1,
+                "selection": "game.mra",
+            }
+        });
+        require_semantic(&snapshot, "view", "arcade").unwrap();
+        require_bool(&snapshot, "ready", true).unwrap();
+        require_nonzero(&snapshot, "generation").unwrap();
+        require_nonempty(&snapshot, "selection").unwrap();
+        assert!(require_semantic(&snapshot, "view", "settings").is_err());
+        assert!(require_bool(&snapshot, "ready", false).is_err());
+        assert!(require_nonzero(&json!({"semantic": {"generation": 0}}), "generation").is_err());
+        assert!(require_nonempty(&json!({"semantic": {"selection": ""}}), "selection").is_err());
+        assert!(active_nonce(&None).is_err());
+        assert_eq!(active_nonce(&Some("nonce".into())).unwrap(), "nonce");
+    }
+
+    #[test]
+    fn evidence_files_require_exact_size_digest_and_safe_leaf_names() {
+        let root =
+            std::env::temp_dir().join(format!("agent-alpha-evidence-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("checkpoint.png");
+        fs::write(&path, b"evidence").unwrap();
+        let sha = digest(b"evidence");
+        verify_evidence_file(&path, Some(8), Some(&sha)).unwrap();
+        assert!(verify_evidence_file(&path, Some(7), Some(&sha)).is_err());
+        assert!(verify_evidence_file(&path, Some(8), Some(&"0".repeat(64))).is_err());
+        assert!(verify_evidence_file(&path, None, Some(&sha)).is_err());
+        assert!(require_evidence_leaf("checkpoint.png").is_ok());
+        for invalid in [
+            "",
+            "../checkpoint.png",
+            "nested/checkpoint.png",
+            "bad name.png",
+        ] {
+            assert!(require_evidence_leaf(invalid).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_field_and_hash_validation_is_closed() {
+        assert_eq!(
+            parse_fields(b"format=release-v1\nversion=0.2.4\n").unwrap()["version"],
+            "0.2.4"
+        );
+        assert!(parse_fields(b"missing-separator\n").is_err());
+        assert!(parse_fields(b"=empty-key\n").is_err());
+        assert!(require_sha("sha", &"a".repeat(64)).is_ok());
+        assert!(require_sha("sha", &"z".repeat(64)).is_err());
+        assert!(require_relative("/absolute").is_err());
+        assert!(require_relative("nested/../escape").is_err());
     }
 }

@@ -1452,7 +1452,7 @@ mod tests {
     fn ab_probe_has_exact_twenty_four_pixel_ruler_offset() {
         let frame_a = render_crt_probe_pattern(640, 576, 1, 0, None);
         let frame_b = render_crt_probe_pattern(640, 576, 2, 24, None);
-        let row = 32;
+        let row = 33;
 
         assert_eq!(frame_a[row * 640].0, 0x8410);
         assert_eq!(frame_b[row * 640 + 24].0, 0x8410);

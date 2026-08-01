@@ -700,4 +700,34 @@ mod tests {
         assert!(check_shell_ownership(&root).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn fragment_contract_reports_missing_before_forbidden_content() {
+        assert!(require_fragments("workflow", "alpha beta", &["alpha"], &["gamma"]).is_ok());
+        assert_eq!(
+            require_fragments("workflow", "alpha", &["beta"], &["alpha"]).unwrap_err(),
+            "workflow_contract_missing: beta"
+        );
+        assert_eq!(
+            require_fragments("workflow", "alpha gamma", &["alpha"], &["gamma"]).unwrap_err(),
+            "workflow_contract_forbidden: gamma"
+        );
+    }
+
+    #[test]
+    fn license_scope_excludes_generated_vendor_and_historical_content() {
+        assert!(license_target(Path::new("src/lib.rs")));
+        assert!(license_target(Path::new("Dockerfile.arm")));
+        assert!(!license_target(Path::new("Cargo.lock")));
+        assert!(!license_target(Path::new("history/old.rs")));
+        assert!(!license_target(Path::new("apps/desktop/vendor/lib.rs")));
+        assert!(!has_license_header(
+            Path::new("src/lib.rs"),
+            "// SPDX-License-Identifier: GPL-3.0-or-later\n"
+        ));
+        assert!(!has_license_header(
+            Path::new("src/lib.rs"),
+            "// SPDX-License-Identifier: GPL-3.0-or-later\n// Copyright (C) 2026 Nigel Breslaw\n"
+        ));
+    }
 }
