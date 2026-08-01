@@ -122,10 +122,12 @@ use catalog_worker::*;
 use controller_loop::*;
 use controller_setup_input_session::*;
 use crt_trial_loop::*;
+#[cfg(all(mister_experiments, not(target_os = "macos")))]
+use experiments::effects::run_screensaver_loop;
 #[cfg(mister_experiments)]
 use experiments::effects::{
-    run_camera_effects_loop, run_raster_effects_loop, run_screensaver_loop,
-    run_sprite_effects_loop, run_text_effects_loop, run_transition_effects_loop,
+    run_camera_effects_loop, run_raster_effects_loop, run_sprite_effects_loop,
+    run_text_effects_loop, run_transition_effects_loop,
 };
 use latch_v4_qualification::*;
 use launch_handoff_session::*;
@@ -341,7 +343,7 @@ pub fn run_ui(f: &mut Fpga) {
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
     }
-    #[cfg(mister_experiments)]
+    #[cfg(all(mister_experiments, not(target_os = "macos")))]
     if scene == "screensaver" {
         run_screensaver_loop(secs, &ui, f, &mut display_session);
         return;

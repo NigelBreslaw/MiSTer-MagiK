@@ -4526,6 +4526,7 @@ mod tests {
                     width: 47,
                     height: 5,
                 },
+                ..NavigationTransitionGeometry::default()
             },
         )
     }

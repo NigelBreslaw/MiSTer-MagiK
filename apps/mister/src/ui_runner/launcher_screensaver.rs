@@ -30,7 +30,6 @@ const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
 const DEFAULT_PARTICLE_COUNT: usize = 16_384;
 const DEFAULT_PARTICLE_SEED: u64 = 0x4d61_6769_4b;
 
-#[cfg(not(mister_bench_scenes))]
 fn hash2_u8(x: usize, y: usize) -> u8 {
     let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
     v ^= v >> 16;
@@ -38,14 +37,12 @@ fn hash2_u8(x: usize, y: usize) -> u8 {
     (v >> 24) as u8
 }
 
-#[cfg(not(mister_bench_scenes))]
 fn triangle_wave_u8(x: usize, phase: u8) -> u8 {
     let v = ((x as u32).wrapping_mul(13).wrapping_add(phase as u32)) & 0xff;
     let v = if v < 128 { v } else { 255 - v };
     (v * 2).min(255) as u8
 }
 
-#[cfg(not(mister_bench_scenes))]
 fn plasma_gate(x: usize, y: usize, phase: u8) -> u8 {
     ((triangle_wave_u8(x / 3 + y / 7, phase) as u16
         + triangle_wave_u8(x / 9 + y / 2, phase.wrapping_mul(3)) as u16)
