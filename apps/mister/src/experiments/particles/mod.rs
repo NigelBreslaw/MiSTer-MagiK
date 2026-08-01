@@ -9,5 +9,6 @@
 pub mod fireworks;
 pub mod fireworks_v2;
 pub mod form;
+pub mod live_reload;
 pub mod material;
 pub mod showcase;
