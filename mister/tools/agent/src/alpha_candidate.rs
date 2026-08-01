@@ -193,8 +193,7 @@ fn require_single_canonical_section_at(root: &Path, canonical: &Path) -> Result<
             owners.push(entry.path());
         }
     }
-    if owners.as_slice() != [canonical.to_path_buf()] && !(owners.is_empty() && !canonical.exists())
-    {
+    if !owners.is_empty() && owners.as_slice() != [canonical.to_path_buf()] {
         return Err(format!(
             "MiSTer MagiK Downloader section must have one canonical owner: {owners:?}"
         ));
@@ -409,5 +408,25 @@ mod tests {
         transaction.restore().expect("restore config");
         assert!(!canonical.exists());
         fs::remove_dir(root).expect("remove fixture");
+    }
+
+    #[test]
+    fn canonical_config_without_a_section_is_restored_byte_for_byte() {
+        let root = fixture("canonical-without-section");
+        let canonical = root.join("downloader_mister_magik.ini");
+        let original = b"[other]\ndb_url = https://example.invalid/other.zip\n";
+        fs::write(&canonical, original).expect("write canonical config");
+        assert!(require_single_canonical_section_at(&root, &canonical).is_ok());
+
+        let mut transaction = ConfigTransaction::begin(&canonical).expect("begin transaction");
+        transaction
+            .replace(b"[mister_magik]\ndb_url = https://example.invalid/db.zip\n")
+            .expect("replace config");
+        transaction.restore().expect("restore config");
+        assert_eq!(
+            fs::read(&canonical).expect("read restored config"),
+            original
+        );
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 }
