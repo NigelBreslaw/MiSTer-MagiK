@@ -620,8 +620,9 @@ impl NavigationTransitionInput {
             && !self.right
     }
 
-    pub fn without_back(mut self) -> Option<Self> {
+    pub fn without_back_or_home(mut self) -> Option<Self> {
         self.back = false;
+        self.home = false;
         (!self.is_empty()).then_some(self)
     }
 
@@ -646,6 +647,13 @@ impl NavigationTransitionInput {
         now.rebuild_pressed_now();
         (previous, now)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct NavigationTransitionInputDelivery {
+    pub previous: PadState,
+    pub now: PadState,
+    pub replayed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1421,6 +1429,57 @@ impl NavigationTransitionRuntime {
 
     pub fn clear_queued_inputs(&mut self) {
         self.queued_inputs.clear();
+    }
+
+    pub fn route_input(
+        &mut self,
+        physical_now: &PadState,
+        physical_previous: &PadState,
+        consumed_back_or_home: bool,
+    ) -> Option<NavigationTransitionInputDelivery> {
+        let physical_input =
+            NavigationTransitionInput::rising_edges(physical_now, physical_previous).and_then(
+                |input| {
+                    if consumed_back_or_home {
+                        input.without_back_or_home()
+                    } else {
+                        Some(input)
+                    }
+                },
+            );
+        if self.is_active() {
+            if let Some(input) = physical_input {
+                self.queue_input(input);
+            }
+            return None;
+        }
+        if let Some(queued_input) = self.take_queued_input() {
+            if let Some(input) = physical_input {
+                self.queue_input(input);
+            }
+            let (previous, now) = queued_input.replay(physical_now);
+            return Some(NavigationTransitionInputDelivery {
+                previous,
+                now,
+                replayed: true,
+            });
+        }
+        if consumed_back_or_home {
+            let (previous, now) = physical_input.map_or_else(
+                || (physical_now.clone(), physical_now.clone()),
+                |input| input.replay(physical_now),
+            );
+            return Some(NavigationTransitionInputDelivery {
+                previous,
+                now,
+                replayed: true,
+            });
+        }
+        Some(NavigationTransitionInputDelivery {
+            previous: physical_previous.clone(),
+            now: physical_now.clone(),
+            replayed: false,
+        })
     }
 
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
@@ -6290,6 +6349,86 @@ mod tests {
         runtime.set_enabled(16, 12, false);
 
         assert_eq!(runtime.take_queued_input(), None);
+    }
+
+    #[test]
+    fn routed_input_replays_every_rapid_back_edge_in_order() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        runtime
+            .begin_settings_page(NavigationTransitionDirection::Reverse, &source, 0)
+            .unwrap();
+        let released = PadState::default();
+        let pressed = PadState {
+            btn_b: true,
+            ..PadState::default()
+        };
+
+        assert!(runtime.route_input(&pressed, &released, false).is_none());
+        assert!(runtime.route_input(&released, &pressed, false).is_none());
+        assert!(runtime.route_input(&pressed, &released, false).is_none());
+        runtime.settle_at_destination();
+        assert!(runtime.complete().is_some());
+
+        let first = runtime.route_input(&released, &released, false).unwrap();
+        assert!(first.replayed);
+        assert!(!first.previous.btn_b);
+        assert!(first.now.btn_b);
+        let second = runtime.route_input(&released, &released, false).unwrap();
+        assert!(second.replayed);
+        assert!(!second.previous.btn_b);
+        assert!(second.now.btn_b);
+        let live = runtime.route_input(&released, &released, false).unwrap();
+        assert!(!live.replayed);
+    }
+
+    #[test]
+    fn routed_input_preserves_new_physical_edges_behind_the_backlog() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        runtime.queue_input(NavigationTransitionInput {
+            activate: true,
+            ..NavigationTransitionInput::default()
+        });
+        let released = PadState::default();
+        let physical_back = PadState {
+            btn_b: true,
+            ..PadState::default()
+        };
+
+        let activate = runtime
+            .route_input(&physical_back, &released, false)
+            .unwrap();
+        assert!(activate.replayed);
+        assert!(activate.now.btn_a);
+        assert!(activate.previous.btn_b);
+        assert!(activate.now.btn_b);
+        let back = runtime
+            .route_input(&released, &physical_back, false)
+            .unwrap();
+        assert!(back.replayed);
+        assert!(back.now.btn_b);
+    }
+
+    #[test]
+    fn routed_input_removes_consumed_cancel_edges_only() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let released = PadState::default();
+        let physical = PadState {
+            btn_b: true,
+            btn_home: true,
+            dpad_down: true,
+            ..PadState::default()
+        };
+
+        let remaining = runtime.route_input(&physical, &released, true).unwrap();
+
+        assert!(remaining.replayed);
+        assert!(remaining.previous.btn_b);
+        assert!(remaining.previous.btn_home);
+        assert!(!remaining.previous.dpad_down);
+        assert!(remaining.now.btn_b);
+        assert!(remaining.now.btn_home);
+        assert!(remaining.now.dpad_down);
     }
 
     #[test]

@@ -3524,39 +3524,29 @@ pub(super) fn run_launcher_loop(
                     }
                     transition_picker_prev_left = launcher_state.dpad_left;
                     transition_picker_prev_right = launcher_state.dpad_right;
-                    let mut nav_state = launcher_state.clone();
+                    let mut physical_nav_state = launcher_state.clone();
                     if let Some(test_state) =
                         library_changed_dialog_test.input_for(&nav, loop_start, start)
                     {
-                        nav_state = test_state;
+                        physical_nav_state = test_state;
                     }
                     if let Some(script_state) = launcher_input_script.input_for() {
-                        nav_state = script_state;
+                        physical_nav_state = script_state;
                     }
                     let lifecycle_view = lifecycle.view();
                     let launch_failure_visible = lifecycle_view.launch_failure_dialog().is_some();
                     let recovery_dialog_visible =
                         lifecycle_view.catalog_recovery_dialog().is_some();
-                    let recovery_prev =
-                        std::mem::replace(&mut catalog_recovery_prev, nav_state.clone());
-                    if navigation_transition.is_active() && nav_state.btn_b && !recovery_prev.btn_b
-                    {
-                        let now_us = frame_now
-                            .saturating_duration_since(start)
-                            .as_micros()
-                            .min(u64::MAX as u128) as u64;
-                        navigation_transition.request_reverse(now_us);
-                    }
-                    if navigation_transition.is_active() {
-                        nav.absorb_input(&nav_state);
-                    }
-                    if cancel_pending_collection_entry_for_input(
+                    let physical_previous =
+                        std::mem::replace(&mut catalog_recovery_prev, physical_nav_state.clone());
+                    let pending_collection_cancelled = cancel_pending_collection_entry_for_input(
                         &mut pending_collection_entry,
                         &mut nav,
-                        &nav_state,
-                        &recovery_prev,
+                        &physical_nav_state,
+                        &physical_previous,
                         start,
-                    ) {
+                    );
+                    if pending_collection_cancelled {
                         arcade_entry_latency.cancel_enter();
                         if navigation_transition.is_active() {
                             let now_us = frame_now
@@ -3567,20 +3557,39 @@ pub(super) fn run_launcher_loop(
                             navigation_transition.request_reverse(now_us);
                         }
                     }
+                    let routed_input = navigation_transition.route_input(
+                        &physical_nav_state,
+                        &physical_previous,
+                        pending_collection_cancelled,
+                    );
+                    if routed_input.is_none() {
+                        nav.absorb_input(&physical_nav_state);
+                    }
+                    let input_previous = routed_input
+                        .as_ref()
+                        .map_or(&physical_previous, |input| &input.previous);
+                    let nav_state = routed_input
+                        .as_ref()
+                        .map_or(&physical_nav_state, |input| &input.now);
+                    if routed_input.as_ref().is_some_and(|input| input.replayed) {
+                        nav.absorb_input(input_previous);
+                    }
                     let settings_transition_source = (!launch_failure_visible
                         && !recovery_dialog_visible
                         && !navigation_transition.is_active()
                         && navigation_transition.enabled()
                         && settings_navigation_input_candidate(
                             nav.screen,
-                            &nav_state,
-                            &recovery_prev,
+                            nav_state,
+                            input_previous,
                         ))
                     .then(|| (nav.screen, nav.navigation_transition_state()));
-                    let event = if launch_failure_visible {
-                        if (nav_state.btn_a && !recovery_prev.btn_a)
-                            || (nav_state.btn_b && !recovery_prev.btn_b)
-                            || (nav_state.btn_home && !recovery_prev.btn_home)
+                    let event = if navigation_transition.is_active() {
+                        None
+                    } else if launch_failure_visible {
+                        if (nav_state.btn_a && !input_previous.btn_a)
+                            || (nav_state.btn_b && !input_previous.btn_b)
+                            || (nav_state.btn_home && !input_previous.btn_home)
                         {
                             lifecycle.handle(
                                 LauncherLifecycleInput::LaunchFailureAcknowledge,
@@ -3591,14 +3600,14 @@ pub(super) fn run_launcher_loop(
                         }
                         None
                     } else if recovery_dialog_visible {
-                        let recovery_input = if nav_state.dpad_left && !recovery_prev.dpad_left {
+                        let recovery_input = if nav_state.dpad_left && !input_previous.dpad_left {
                             Some(LauncherLifecycleInput::CatalogRecoveryLeft)
-                        } else if nav_state.dpad_right && !recovery_prev.dpad_right {
+                        } else if nav_state.dpad_right && !input_previous.dpad_right {
                             Some(LauncherLifecycleInput::CatalogRecoveryRight)
-                        } else if nav_state.btn_a && !recovery_prev.btn_a {
+                        } else if nav_state.btn_a && !input_previous.btn_a {
                             Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
-                        } else if (nav_state.btn_b && !recovery_prev.btn_b)
-                            || (nav_state.btn_home && !recovery_prev.btn_home)
+                        } else if (nav_state.btn_b && !input_previous.btn_b)
+                            || (nav_state.btn_home && !input_previous.btn_home)
                         {
                             Some(LauncherLifecycleInput::CatalogRecoveryCancel)
                         } else {
@@ -3609,8 +3618,6 @@ pub(super) fn run_launcher_loop(
                             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                             full_bridge_dirty = true;
                         }
-                        None
-                    } else if navigation_transition.is_active() {
                         None
                     } else if scheduler.should_request_benchmark_launch()
                         && catalog_ready
@@ -3646,9 +3653,9 @@ pub(super) fn run_launcher_loop(
                     } else if scheduler.launch_benchmark_enabled() {
                         None
                     } else if navigation_transition.enabled() {
-                        nav.handle_input_with_navigation_intents(&nav_state, frame_now, &catalog)
+                        nav.handle_input_with_navigation_intents(nav_state, frame_now, &catalog)
                     } else {
-                        nav.handle_input_with_collection_intents(&nav_state, frame_now, &catalog)
+                        nav.handle_input_with_collection_intents(nav_state, frame_now, &catalog)
                     };
                     if let Some((source_screen, source_state)) = settings_transition_source
                         && let Some(direction) =
@@ -7637,6 +7644,57 @@ mod tests {
             settings_page_transition_direction(Screen::Screensaver, Screen::About),
             None
         );
+    }
+
+    #[test]
+    fn rapid_back_inputs_queue_through_the_settings_hierarchy_without_bouncing() {
+        let catalog = catalog_for_media_systems(&[]);
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Info;
+        let released = PadState::default();
+        let back = PadState {
+            btn_b: true,
+            ..PadState::default()
+        };
+        let now = Instant::now();
+        nav.absorb_input(&released);
+        assert!(
+            nav.handle_input_with_navigation_intents(&back, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.screen, Screen::About);
+
+        let pixels = vec![Rgb565Pixel(0); 4 * 3];
+        let mut transition = NavigationTransitionRuntime::new(4, 3, true);
+        transition
+            .begin_settings_page(NavigationTransitionDirection::Reverse, &pixels, 0)
+            .unwrap();
+        assert!(transition.route_input(&back, &released, false).is_none());
+        assert!(transition.route_input(&released, &back, false).is_none());
+        assert!(transition.route_input(&back, &released, false).is_none());
+        transition.settle_at_destination();
+        assert!(transition.complete().is_some());
+
+        let to_settings = transition.route_input(&released, &back, false).unwrap();
+        nav.absorb_input(&to_settings.previous);
+        assert!(
+            nav.handle_input_with_navigation_intents(&to_settings.now, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.screen, Screen::Settings);
+        transition
+            .begin_settings_page(NavigationTransitionDirection::Reverse, &pixels, 1)
+            .unwrap();
+        transition.settle_at_destination();
+        assert!(transition.complete().is_some());
+
+        let to_home = transition.route_input(&released, &released, false).unwrap();
+        nav.absorb_input(&to_home.previous);
+        assert!(
+            nav.handle_input_with_navigation_intents(&to_home.now, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.screen, Screen::Home);
     }
 
     #[test]
