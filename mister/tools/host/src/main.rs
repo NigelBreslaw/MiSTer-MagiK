@@ -4858,13 +4858,13 @@ fn parse_boot_events(text: &str) -> Result<Vec<Value>> {
 }
 
 fn boot_event_us(events: &[Value], name: &str, last: bool) -> Result<u64> {
-    let matching = events.iter().filter(|event| {
+    let mut matching = events.iter().filter(|event| {
         event.get("event").and_then(Value::as_str) == Some(name)
             && (event.get("ts_boot_us").and_then(Value::as_u64).is_some()
                 || event.get("ts_boot_ms").and_then(Value::as_u64).is_some())
     });
     let event = if last {
-        matching.last()
+        matching.next_back()
     } else {
         matching.into_iter().next()
     }
