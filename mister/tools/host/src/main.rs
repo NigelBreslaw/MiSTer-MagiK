@@ -9608,8 +9608,10 @@ fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
     }
 }
 
-fn delivery_reboot_mode(running_main: &str) -> RebootMode {
-    if matches!(running_main.trim(), "MiSTer_MagiKDev" | "MiSTer_MagiK") {
+fn delivery_reboot_mode(running_main: &str, launcher_state: Option<&str>) -> RebootMode {
+    if matches!(running_main.trim(), "MiSTer_MagiKDev" | "MiSTer_MagiK")
+        && launcher_state == Some("LauncherActive")
+    {
         RebootMode::Supervised
     } else {
         RebootMode::Raw
@@ -9625,7 +9627,13 @@ fn issue_delivery_reboot(sess: &Session) -> Result<String> {
     if let Some(message) = exec_failure_message("delivery reboot probe", &probe) {
         return Err(message.into());
     }
-    issue_reboot(sess, delivery_reboot_mode(&probe.stdout))
+    let launcher_state = remote_read(sess, MAIN_STATUS_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|status| status.get("launcher_state")?.as_str().map(str::to_owned));
+    issue_reboot(
+        sess,
+        delivery_reboot_mode(&probe.stdout, launcher_state.as_deref()),
+    )
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -15527,12 +15535,26 @@ video_mode=14
     #[test]
     fn delivery_reboot_uses_the_running_main_capability() {
         assert_eq!(
-            delivery_reboot_mode("MiSTer_MagiKDev"),
+            delivery_reboot_mode("MiSTer_MagiKDev", Some("LauncherActive")),
             RebootMode::Supervised
         );
-        assert_eq!(delivery_reboot_mode("MiSTer_MagiK"), RebootMode::Supervised);
-        assert_eq!(delivery_reboot_mode("MiSTer"), RebootMode::Raw);
-        assert_eq!(delivery_reboot_mode(""), RebootMode::Raw);
+        assert_eq!(
+            delivery_reboot_mode("MiSTer_MagiK", Some("LauncherActive")),
+            RebootMode::Supervised
+        );
+        assert_eq!(
+            delivery_reboot_mode("MiSTer_MagiKDev", Some("Unconfigured")),
+            RebootMode::Raw
+        );
+        assert_eq!(
+            delivery_reboot_mode("MiSTer_MagiKDev", None),
+            RebootMode::Raw
+        );
+        assert_eq!(
+            delivery_reboot_mode("MiSTer", Some("LauncherActive")),
+            RebootMode::Raw
+        );
+        assert_eq!(delivery_reboot_mode("", None), RebootMode::Raw);
     }
 
     #[test]
