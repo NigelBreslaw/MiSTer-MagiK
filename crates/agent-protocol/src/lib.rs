@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 8 adds the closed, self-restoring alpha Downloader transaction.
-pub const AGENT_VERSION: u64 = 8;
+// Version 9 accepts and restores sectionless canonical Downloader configuration.
+pub const AGENT_VERSION: u64 = 9;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
