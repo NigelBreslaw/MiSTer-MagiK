@@ -83,13 +83,26 @@ pub(super) fn begin(
         }),
         Duration::from_secs(3),
     )?;
-    validate_nonce(
-        result
-            .get("nonce")
-            .and_then(Value::as_str)
-            .ok_or("automation begin response has no nonce")?,
-    )?;
-    Ok(serde_json::to_string(&result)?)
+    let nonce = result
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("automation begin response has no nonce")?;
+    validate_nonce(nonce)?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut last_error = None;
+    while Instant::now() < deadline {
+        match snapshot(config, nonce) {
+            Ok(_) => return Ok(serde_json::to_string(&result)?),
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let _ = end(config, nonce);
+    return Err(format!(
+        "launcher automation socket did not become responsive: {}",
+        last_error.as_deref().unwrap_or("no response")
+    )
+    .into());
 }
 
 pub(super) fn send_action(
@@ -403,22 +416,16 @@ pub(super) fn exercise_launch_return(
     let new_nonce = begun
         .get("nonce")
         .and_then(Value::as_str)
-        .ok_or_else(|| LaunchReturnError::Failed("replacement session has no nonce".into()))?;
-    let released: Value = serde_json::from_str(
-        &send_action(config, new_nonce, &AutomationAction::ReleaseAll)
-            .map_err(|error| LaunchReturnError::Failed(error.to_string()))?,
-    )
-    .map_err(|error| LaunchReturnError::Failed(format!("decode release action: {error}")))?;
-    let post_return_sequence = released
-        .get("action_sequence")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| LaunchReturnError::Failed("release action has no sequence".into()))?;
-    await_presented(config, new_nonce, post_return_sequence, 3_000)
-        .map_err(|error| LaunchReturnError::Failed(error.to_string()))?;
-    let restored_snapshot = snapshot(config, new_nonce)
-        .map_err(|error| LaunchReturnError::Failed(error.to_string()))?;
-    validate_restored_snapshot(&restored_snapshot, expected_game_id)
-        .map_err(|error| LaunchReturnError::Failed(error.to_string()))?;
+        .ok_or_else(|| LaunchReturnError::Failed("replacement session has no nonce".into()))?
+        .to_owned();
+    let (post_return_sequence, restored_snapshot) =
+        match prepare_replacement_session(config, &new_nonce, expected_game_id) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                let _ = end(config, &new_nonce);
+                return Err(LaunchReturnError::Failed(error.to_string()));
+            }
+        };
 
     serde_json::to_string(&json!({
         "schema": "mister-magik-launcher-automation-launch-return-v1",
@@ -430,6 +437,26 @@ pub(super) fn exercise_launch_return(
         "restored_snapshot": restored_snapshot,
     }))
     .map_err(|error| LaunchReturnError::Failed(error.to_string()))
+}
+
+fn prepare_replacement_session(
+    config: &NativeDeviceConfig,
+    new_nonce: &str,
+    expected_game_id: &str,
+) -> Result<(u64, Value)> {
+    let released: Value = serde_json::from_str(
+        &send_action(config, new_nonce, &AutomationAction::ReleaseAll)
+            .map_err(|error| format!("release replacement automation input: {error}"))?,
+    )
+    .map_err(|error| format!("decode release action: {error}"))?;
+    let post_return_sequence = released
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("release action has no sequence")?;
+    await_presented(config, new_nonce, post_return_sequence, 3_000)?;
+    let restored_snapshot = snapshot(config, new_nonce)?;
+    validate_restored_snapshot(&restored_snapshot, expected_game_id)?;
+    Ok((post_return_sequence, restored_snapshot))
 }
 
 fn fail_before_launch<T>(
