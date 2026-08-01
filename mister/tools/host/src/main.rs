@@ -2751,7 +2751,7 @@ const DISPLAY_MATRIX_MODES: &[DisplayMatrixMode] = &[
 
 static DISPLAY_MATRIX_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static SCREENSAVER_PROFILE_INTERRUPTED: std::sync::atomic::AtomicBool =
+static ATTENDED_OPERATION_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
@@ -2764,24 +2764,24 @@ extern "C" fn display_matrix_interrupt_handler(_: libc::c_int) {
     DISPLAY_MATRIX_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-extern "C" fn screensaver_profile_interrupt_handler(_: libc::c_int) {
-    SCREENSAVER_PROFILE_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
+extern "C" fn attended_operation_interrupt_handler(_: libc::c_int) {
+    ATTENDED_OPERATION_INTERRUPTED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-pub(crate) fn screensaver_profile_interrupted() -> bool {
-    SCREENSAVER_PROFILE_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
+pub(crate) fn attended_operation_interrupted() -> bool {
+    ATTENDED_OPERATION_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-struct ScreensaverProfileSignalGuard([(libc::c_int, libc::sighandler_t); 3]);
+struct AttendedOperationSignalGuard([(libc::c_int, libc::sighandler_t); 3]);
 
-impl ScreensaverProfileSignalGuard {
+impl AttendedOperationSignalGuard {
     fn install() -> Self {
-        SCREENSAVER_PROFILE_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
+        ATTENDED_OPERATION_INTERRUPTED.store(false, std::sync::atomic::Ordering::SeqCst);
         Self([libc::SIGHUP, libc::SIGINT, libc::SIGTERM].map(|signal| {
             let previous = unsafe {
                 libc::signal(
                     signal,
-                    screensaver_profile_interrupt_handler as *const () as libc::sighandler_t,
+                    attended_operation_interrupt_handler as *const () as libc::sighandler_t,
                 )
             };
             (signal, previous)
@@ -2789,7 +2789,7 @@ impl ScreensaverProfileSignalGuard {
     }
 }
 
-impl Drop for ScreensaverProfileSignalGuard {
+impl Drop for AttendedOperationSignalGuard {
     fn drop(&mut self) {
         for (signal, previous) in self.0 {
             unsafe {
@@ -5134,7 +5134,7 @@ fn profile_installed_launch_return(
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
-    let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let _signal_guard = AttendedOperationSignalGuard::install();
     let mut cycles = Vec::new();
     let installed_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("launch-return benchmark cannot read the installed Dev manifest")?;
@@ -5687,7 +5687,7 @@ fn wait_launch_return_state(
 ) -> Result<Value> {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if screensaver_profile_interrupted() {
+        if attended_operation_interrupted() {
             return Err("launch-return benchmark interrupted".into());
         }
         if let Some(text) = remote_read(session, LAUNCH_RETURN_STATE_REMOTE)
@@ -5713,7 +5713,7 @@ fn wait_launch_return_ready(
     let started = Instant::now();
     let mut last_status = Value::Null;
     while started.elapsed() < timeout {
-        if screensaver_profile_interrupted() {
+        if attended_operation_interrupted() {
             return Err("launch-return benchmark interrupted".into());
         }
         if let Ok(status) = read_launcher_status(session) {
@@ -5747,7 +5747,7 @@ fn wait_launch_return_ready(
 fn wait_launch_return_artifact(session: &Session, path: &str, timeout: Duration) -> Result<String> {
     let started = Instant::now();
     while started.elapsed() < timeout {
-        if screensaver_profile_interrupted() {
+        if attended_operation_interrupted() {
             return Err("launch-return benchmark interrupted".into());
         }
         if let Some(text) = remote_read(session, path)
@@ -5767,7 +5767,7 @@ fn wait_launch_return_artifact(session: &Session, path: &str, timeout: Duration)
 fn wait_launch_return_duration(duration: Duration) -> Result<()> {
     let started = Instant::now();
     while started.elapsed() < duration {
-        if screensaver_profile_interrupted() {
+        if attended_operation_interrupted() {
             return Err("launch-return benchmark interrupted".into());
         }
         thread::sleep(Duration::from_millis(100));
@@ -6521,7 +6521,7 @@ fn profile_installed_particles(
         .ok_or_else(|| format!("particle benchmark cannot restore unknown mode {original_mode}"))?;
     fs::create_dir_all(output_dir)?;
     drop(session);
-    let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let _signal_guard = AttendedOperationSignalGuard::install();
 
     let run_result = (|| -> Result<Value> {
         apply_confirmed_display_mode(config, benchmark_mode, "particle benchmark")?;
@@ -6700,7 +6700,7 @@ fn profile_installed_particle_cpu(
         })?;
     fs::create_dir_all(output_dir)?;
     drop(session);
-    let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let _signal_guard = AttendedOperationSignalGuard::install();
 
     let run_result = (|| -> Result<Value> {
         apply_confirmed_display_mode(config, benchmark_mode, "particle CPU profile")?;
@@ -6830,7 +6830,7 @@ fn profile_installed_particle_showcase_cpu(
         })?;
     fs::create_dir_all(output_dir)?;
     drop(session);
-    let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let _signal_guard = AttendedOperationSignalGuard::install();
 
     let run_result = (|| -> Result<Value> {
         apply_confirmed_display_mode(config, benchmark_mode, "particle showcase CPU profile")?;
@@ -8580,7 +8580,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     }
     fs::create_dir_all(output_dir)?;
     drop(session);
-    let _signal_guard = ScreensaverProfileSignalGuard::install();
+    let _signal_guard = AttendedOperationSignalGuard::install();
     let mut benchmark_ini = None;
 
     let run_result = (|| -> Result<(Vec<Value>, String, String, String)> {
@@ -8614,7 +8614,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         drop(session);
         let mut summaries = Vec::new();
         for run in 1..=1 {
-            if screensaver_profile_interrupted() {
+            if attended_operation_interrupted() {
                 return Err("screensaver benchmark interrupted".into());
             }
             summaries.push(profile_installed_screensaver_run(config, output_dir, run)?);
