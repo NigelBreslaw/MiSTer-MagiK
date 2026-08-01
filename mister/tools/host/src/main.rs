@@ -4602,6 +4602,10 @@ fn profile_installed_launch_return(
                 "total_return_us": present_us.saturating_sub(request_us),
                 "capture_file": capture_file,
                 "capture_metadata_file": capture_metadata_file,
+                "flamegraph_file": format!("cycle-{cycle_number}-flamegraph.svg"),
+                "folded_stacks_file": format!("cycle-{cycle_number}-stacks.folded"),
+                "frame_profile_file": format!("cycle-{cycle_number}-frames.tsv"),
+                "timeline_file": format!("cycle-{cycle_number}-timeline.json"),
                 "restored": restored,
             });
             fs::write(

@@ -138,6 +138,11 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
     {
         return Err("launch-return benchmark summary has the wrong schema".into());
     }
+    if summary.get("timing_class").and_then(Value::as_str) != Some("instrumented-full-symbol")
+        || summary.get("latency").and_then(Value::as_object).is_none()
+    {
+        return Err("launch-return benchmark summary lacks full-profile timing evidence".into());
+    }
     let cycles = summary
         .get("cycles")
         .and_then(Value::as_array)
@@ -155,9 +160,34 @@ fn evaluate_launch_return_summary(summary: &Value) -> AgentResult<()> {
             .get("black_interval_ms")
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX);
-        if !restored || elapsed_ms >= 2_000 {
+        let total_return_us = cycle
+            .get("total_return_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let preview_verified = cycle.get("preview_verified").and_then(Value::as_bool) == Some(true);
+        let artifacts_present = [
+            "capture_file",
+            "capture_metadata_file",
+            "flamegraph_file",
+            "folded_stacks_file",
+            "frame_profile_file",
+            "timeline_file",
+        ]
+        .iter()
+        .all(|field| {
+            cycle
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        });
+        if !restored
+            || elapsed_ms >= 2_000
+            || total_return_us == 0
+            || !preview_verified
+            || !artifacts_present
+        {
             return Err(format!(
-                "launch-return cycle {} failed: restored={restored} black_interval_ms={elapsed_ms}",
+                "launch-return cycle {} failed: restored={restored} black_interval_ms={elapsed_ms} total_return_us={total_return_us} preview_verified={preview_verified} artifacts_present={artifacts_present}",
                 index + 1
             )
             .into());
@@ -765,9 +795,22 @@ mod tests {
 
     #[test]
     fn launch_return_requires_three_fast_restored_cycles() {
-        let cycle = json!({"restored": true, "black_interval_ms": 1_999});
+        let cycle = json!({
+            "restored": true,
+            "black_interval_ms": 1_999,
+            "total_return_us": 123_456,
+            "preview_verified": true,
+            "capture_file": "capture.png",
+            "capture_metadata_file": "capture.json",
+            "flamegraph_file": "flamegraph.svg",
+            "folded_stacks_file": "stacks.folded",
+            "frame_profile_file": "frames.tsv",
+            "timeline_file": "timeline.json",
+        });
         let passing = json!({
             "schema": "mister-magik-launch-return-benchmark-v2",
+            "timing_class": "instrumented-full-symbol",
+            "latency": {"total_return": {"min_us": 1, "median_us": 2, "max_us": 3}},
             "cycles": [cycle.clone(), cycle.clone(), cycle]
         });
         evaluate_launch_return_summary(&passing).unwrap();
