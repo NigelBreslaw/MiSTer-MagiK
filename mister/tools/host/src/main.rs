@@ -4787,7 +4787,11 @@ fn profile_installed_launch_return(
                         "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
                         // Leave the returned launcher alive long enough for the 240-frame
                         // profile and its artifacts to be copied before the next core handoff.
-                        "wait:360,down,wait:12,a".into(),
+                        // Let the one-row motion reach its canonical settled scroll
+                        // position before launch state is captured. Twelve frames can
+                        // catch the final interpolation pixels (for example 6190
+                        // instead of the settled 6192) and falsely fail exact return.
+                        "wait:360,down,wait:60,a".into(),
                     ),
                     (
                         "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
