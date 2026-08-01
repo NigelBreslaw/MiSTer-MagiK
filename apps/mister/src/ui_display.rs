@@ -33,18 +33,14 @@ pub enum ResolvedOutputRoute {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
-    MagikPixel,
-    MagikPixelPal576,
-    MagikPixelPal288,
+    PressStart2P,
 }
 
 impl CrtFontFamily {
     /// Slint family name embedded in the route's selected font asset.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::MagikPixel => "MagiK Pixel",
-            Self::MagikPixelPal576 => "MagiK Pixel PAL 576",
-            Self::MagikPixelPal288 => "MagiK Pixel PAL 288",
+            Self::PressStart2P => "Press Start 2P",
         }
     }
 }
@@ -98,7 +94,7 @@ impl CrtUiMetrics {
             game_row_height: 24,
             header_height: 48,
             footer_height: 24,
-            font_family: CrtFontFamily::MagikPixel,
+            font_family: CrtFontFamily::PressStart2P,
         }
     }
 
@@ -116,7 +112,7 @@ impl CrtUiMetrics {
                 game_row_height: 32,
                 header_height: 80,
                 footer_height: 40,
-                font_family: CrtFontFamily::MagikPixel,
+                font_family: CrtFontFamily::PressStart2P,
             },
             ResolvedOutputRoute::Crt288p50 => Self {
                 grid_x: 8,
@@ -130,7 +126,7 @@ impl CrtUiMetrics {
                 game_row_height: 19,
                 header_height: 56,
                 footer_height: 24,
-                font_family: CrtFontFamily::MagikPixelPal288,
+                font_family: CrtFontFamily::PressStart2P,
             },
             ResolvedOutputRoute::Crt480p60 => Self {
                 grid_x: 4,
@@ -144,7 +140,7 @@ impl CrtUiMetrics {
                 game_row_height: 32,
                 header_height: 48,
                 footer_height: 24,
-                font_family: CrtFontFamily::MagikPixel,
+                font_family: CrtFontFamily::PressStart2P,
             },
             ResolvedOutputRoute::Crt576p50 => Self {
                 grid_x: 4,
@@ -158,7 +154,7 @@ impl CrtUiMetrics {
                 game_row_height: 39,
                 header_height: 56,
                 footer_height: 29,
-                font_family: CrtFontFamily::MagikPixelPal576,
+                font_family: CrtFontFamily::PressStart2P,
             },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
@@ -1470,12 +1466,7 @@ mod tests {
                 ),
                 expected_metrics
             );
-            let expected_font = match route {
-                ResolvedOutputRoute::Crt288p50 => CrtFontFamily::MagikPixelPal288,
-                ResolvedOutputRoute::Crt576p50 => CrtFontFamily::MagikPixelPal576,
-                _ => CrtFontFamily::MagikPixel,
-            };
-            assert_eq!(metrics.font_family, expected_font);
+            assert_eq!(metrics.font_family, CrtFontFamily::PressStart2P);
         }
     }
 
