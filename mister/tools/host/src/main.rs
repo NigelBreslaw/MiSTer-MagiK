@@ -4507,14 +4507,15 @@ fn profile_installed_launch_return(
                 output_dir.join(format!("cycle-{cycle_number}-frames.tsv")),
                 frame_profile,
             )?;
-            for (remote, local) in [(&remote_svg, format!("cycle-{cycle_number}-flamegraph.svg"))] {
-                let artifact = remote_read(&session, remote)
-                    .filter(|text| !text.trim().is_empty())
-                    .ok_or_else(|| {
-                        format!("launch-return profile artifact is missing: {remote}")
-                    })?;
-                fs::write(output_dir.join(local), artifact)?;
-            }
+            let artifact = remote_read(&session, &remote_svg)
+                .filter(|text| !text.trim().is_empty())
+                .ok_or_else(|| {
+                    format!("launch-return profile artifact is missing: {remote_svg}")
+                })?;
+            fs::write(
+                output_dir.join(format!("cycle-{cycle_number}-flamegraph.svg")),
+                artifact,
+            )?;
             for (remote, local) in [
                 (
                     "/tmp/mister-magik/events.jsonl",
@@ -10534,7 +10535,7 @@ fn validate_runtime_bundle_identity(
             return Err(format!("runtime manifest field {key} is not canonical").into());
         }
     }
-    Ok(file_sha256(manifest_local.to_path_buf())?)
+    file_sha256(manifest_local.to_path_buf())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
