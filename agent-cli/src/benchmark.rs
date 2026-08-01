@@ -243,7 +243,12 @@ fn evaluate_launch_return_summary(
             "launch-return benchmark summary lacks installed-runtime profile evidence".into(),
         );
     }
-    for (field, length) in [("main_revision", 40), ("main_sha256", 64)] {
+    for (field, length) in [
+        ("main_revision", 40),
+        ("main_sha256", 64),
+        ("magik_revision", 40),
+        ("gui_sha256", 64),
+    ] {
         let value = summary.get(field).and_then(Value::as_str).unwrap_or("");
         if value.len() != length
             || !value
@@ -997,6 +1002,8 @@ mod tests {
             "timing_class": "instrumented-installed-dev-symbols",
             "main_revision": "a".repeat(40),
             "main_sha256": "b".repeat(64),
+            "magik_revision": "c".repeat(40),
+            "gui_sha256": "d".repeat(64),
             "latency": {
                 "command_to_process": {"min_us": 1, "median_us": 2, "max_us": 3},
                 "process_to_context": {"min_us": 1, "median_us": 2, "max_us": 3},
