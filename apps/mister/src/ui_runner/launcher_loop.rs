@@ -6169,6 +6169,15 @@ fn should_defer_catalog_message(
     stationary_edge_since: Option<Instant>,
     now: Instant,
 ) -> bool {
+    if matches!(
+        message,
+        CatalogWorkerMessage::Ready {
+            source: CatalogSource::NavigationProjection,
+            ..
+        }
+    ) {
+        return false;
+    }
     if !catalog_ready
         || nav.screen != Screen::Arcade
         || !matches!(message, CatalogWorkerMessage::Ready { .. })
@@ -7401,8 +7410,9 @@ mod tests {
 
     #[test]
     fn committed_navigation_can_restore_its_exact_source_menu() {
-        let catalog = catalog_for_media_systems(&[]);
+        let catalog = catalog_for_media_systems(&["psx"]);
         let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
         let enter = launcher::LauncherEvent {
             action: LauncherAction::OpenMenu,
             path: Some(crate::launcher_taxonomy::CONSOLES_MENU_ID.to_string()),
@@ -7749,16 +7759,16 @@ mod tests {
 
     #[test]
     fn pending_launch_return_requests_its_registry_shard_before_home_prefetch() {
-        let full_catalog = catalog_for_media_systems(&["arcade"]);
+        let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&full_catalog, "arcade"));
+        assert!(launched_nav.open_system(&full_catalog, "c64"));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
-            "/media/fat/_Arcade/arcade.mra",
+            "/media/fat/_Arcade/c64.mra",
         )
         .expect("return state");
-        let registry = arcade_catalog(Vec::new(), vec![arcade_system("arcade", 1)]);
+        let registry = arcade_catalog(Vec::new(), vec![arcade_system("c64", 1)]);
         let mut restored_nav = LauncherNav::new();
         restored_nav.sync_launcher_taxonomy(&registry);
         let mut scheduler = LauncherScheduler::new(false);
@@ -7773,9 +7783,9 @@ mod tests {
             now,
             now,
         ));
-        assert!(scheduler.system_shard_attempted("arcade"));
+        assert!(scheduler.system_shard_attempted("c64"));
         assert!(!scheduler.request_system_shard(
-            "arcade".to_string(),
+            "c64".to_string(),
             SystemShardPriority::Selected,
             "home-highlight",
             now,

@@ -1285,7 +1285,6 @@ mod tests {
     use std::cell::Cell;
     use std::path::PathBuf;
     use std::rc::Rc;
-    use std::sync::Once;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -1465,13 +1464,9 @@ mod tests {
     }
 
     fn init_test_slint_platform() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
-            let _ =
-                slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
-        });
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
     }
 
     #[test]

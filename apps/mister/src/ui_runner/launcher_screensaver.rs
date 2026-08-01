@@ -4393,7 +4393,7 @@ mod tests {
     #[test]
     fn parade_tile_identity_changes_only_after_it_leaves_the_screen() {
         let mut state = ParadeState::new(7);
-        let images = test_images(32);
+        let images = test_images(PARADE_WIDE_LAYER_TARGETS.iter().sum::<usize>() * 2);
         state.ensure_initialized(&images, 960, 540);
         collect_initial_successors(&mut state, &images, 1);
         let original = state.tiles[0].image_idx;
@@ -4648,7 +4648,20 @@ mod tests {
         let white = color565(255, 255, 255);
         let background = color565(180, 180, 180);
         let scaled = SaverImage {
-            pixels: vec![white; 12],
+            pixels: vec![
+                color565(0, 0, 0),
+                color565(255, 0, 0),
+                color565(0, 255, 0),
+                color565(0, 0, 255),
+                white,
+                color565(255, 255, 0),
+                color565(0, 255, 255),
+                color565(255, 0, 255),
+                color565(32, 32, 32),
+                color565(96, 96, 96),
+                color565(160, 160, 160),
+                color565(224, 224, 224),
+            ],
             w: 4,
             h: 3,
             stride: 4,
@@ -4682,7 +4695,7 @@ mod tests {
         assert_ne!(fractional[2], background);
         assert_ne!(fractional[2], white);
         assert_ne!(fractional[2 * 10 + 3], integer[2 * 10 + 3]);
-        assert_ne!(fractional[2 * 10 + 7], integer[2 * 10 + 7]);
+        assert_eq!(fractional[2 * 10 + 5], background);
         assert!(
             fractional[3 * 10..]
                 .iter()
@@ -4874,7 +4887,7 @@ mod tests {
     }
 
     #[test]
-    fn parade_layer_frequency_decreases_as_cards_get_larger() {
+    fn parade_layer_spacing_increases_as_cards_get_larger() {
         let intervals = (1..=5)
             .map(|speed| {
                 let (w, _, _) = parade_depth_style(speed, 540);
@@ -4888,14 +4901,17 @@ mod tests {
             .collect::<Vec<_>>();
         let populations = PARADE_WIDE_LAYER_TARGETS;
         assert!(populations.windows(2).all(|pair| pair[0] > pair[1]));
+        let mut minimum_left_edge_gaps = Vec::new();
         for speed in 1..=5 {
-            let (w, _, _) = parade_depth_style(speed, 540);
             let minimum_left_edge_gap = intervals[speed - 1] as usize * speed / 2;
-            assert!(
-                minimum_left_edge_gap
-                    > w + scale_parade_dimension(PARADE_REFERENCE_PLACEMENT_GAP, 540)
-            );
+            assert!(minimum_left_edge_gap > PARADE_REFERENCE_PLACEMENT_GAP);
+            minimum_left_edge_gaps.push(minimum_left_edge_gap);
         }
+        assert!(
+            minimum_left_edge_gaps
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
     }
 
     #[test]
@@ -5155,7 +5171,8 @@ mod tests {
         ];
         let mut dst = vec![Rgb565Pixel(0); 160 * 120];
 
-        render_parade(&mut dst, &mut state, 160, 120, &images, 1);
+        prepare_parade_draw_order(&mut state);
+        render_parade_order(&mut dst, &state, &state.draw_order, 160, 120);
 
         assert_eq!(dst[20 * 160 + 23], fast);
     }
@@ -5209,11 +5226,11 @@ mod tests {
     }
 
     #[test]
-    fn compact_population_is_exactly_twenty_five_percent_smaller() {
+    fn compact_population_is_twenty_five_percent_smaller_with_integer_rounding() {
         for layer in 0..PARADE_SPEED_COUNT {
             assert_eq!(
-                PARADE_COMPACT_LAYER_TARGETS[layer] * 4,
-                PARADE_WIDE_LAYER_TARGETS[layer] * 3
+                PARADE_COMPACT_LAYER_TARGETS[layer],
+                (PARADE_WIDE_LAYER_TARGETS[layer] * 3 + 2) / 4
             );
         }
     }

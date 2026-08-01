@@ -1045,10 +1045,11 @@ mod tests {
     fn terminal_failure_becomes_idle_before_same_frame_retry() {
         let (tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard_attempted.insert("c64".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "c64".to_string(),
-            generation: None,
+            generation: Some("generation-a".to_string()),
             receiver: rx,
         };
         tx.send(CatalogWorkerMessage::SystemShardFailed {

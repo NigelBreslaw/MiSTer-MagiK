@@ -119,6 +119,30 @@ pub fn compose_preview_frame(
     {
         return matches!(frame.pixels, PreviewPixels::Empty).then_some(screen);
     }
+    let source_pixels = frame.source_width.checked_mul(frame.source_height)?;
+    match frame.pixels {
+        PreviewPixels::Empty => {}
+        PreviewPixels::Rgb565 {
+            pixels,
+            stride_pixels,
+        } => {
+            if stride_pixels < frame.source_width
+                || frame
+                    .source_height
+                    .checked_sub(1)?
+                    .checked_mul(stride_pixels)?
+                    .checked_add(frame.source_width)?
+                    > pixels.len()
+            {
+                return None;
+            }
+        }
+        PreviewPixels::Rgb8(pixels) => {
+            if source_pixels.checked_mul(3)? > pixels.len() {
+                return None;
+            }
+        }
+    }
 
     let image_x = screen.x0 as isize + (screen.width() as isize - frame.display_width as isize) / 2;
     let image_y = screen.y0 as isize + (screen.rows() as isize - frame.display_height as isize) / 2;
