@@ -17128,16 +17128,13 @@ H: Handlers=event3 js0"#
         assert!(swap.find("activating").unwrap() < main_swap);
 
         let rollback = local_main_rollback_script();
-        assert!(rollback.contains("MiSTer_MagiKDev.delivery-rollback"));
-        assert!(rollback.contains("platform-v3.manifest.delivery-rollback"));
+        let main_rollback = rollback.find("MiSTer_MagiKDev'.delivery-rollback").unwrap();
+        let manifest_rollback = rollback
+            .find("platform-v3.manifest'.delivery-rollback")
+            .unwrap();
         assert!(rollback.contains("cp -p"));
         assert!(rollback.contains("rolled-back"));
-        assert!(
-            rollback.find("MiSTer_MagiKDev.delivery-rollback").unwrap()
-                < rollback
-                    .find("platform-v3.manifest.delivery-rollback")
-                    .unwrap()
-        );
+        assert!(main_rollback < manifest_rollback);
 
         let reconcile = local_main_reconcile_script();
         assert!(reconcile.contains("validated"));

@@ -620,6 +620,7 @@ mod tests {
                 "profile-installed-catalog-lifecycle",
                 "profile-installed-launch-return",
                 "profile-installed-launch-return-fallback",
+                "profile-installed-cold-boot",
                 "profile-installed-navigation-transitions"
             ]
         );
