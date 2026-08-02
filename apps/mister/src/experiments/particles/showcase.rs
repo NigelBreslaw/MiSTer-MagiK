@@ -3714,6 +3714,7 @@ impl ParticleShowcasePool {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn reset(&mut self, kind: ParticleDemoKind, seed: u64) {
         self.reset_with_count(kind, seed, kind.starting_count());
     }
