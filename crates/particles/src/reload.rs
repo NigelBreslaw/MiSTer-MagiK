@@ -190,8 +190,7 @@ fn read_file(path: &Path) -> FileObservation {
         Err(error) => return read_error(path, error),
     };
     let mut bytes = Vec::new();
-    if let Err(error) = file
-        .by_ref()
+    if let Err(error) = Read::by_ref(&mut file)
         .take((MAX_RECIPE_FILE_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
     {
