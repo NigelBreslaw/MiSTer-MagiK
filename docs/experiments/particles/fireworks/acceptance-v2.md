@@ -30,7 +30,7 @@ Acceptance requires:
 - `SHIP` from both reviewers for all six styles;
 - no unresolved silhouette, motion, material, hierarchy, palette, clipping, or
   staging defect;
-- the first active device renderer is `particle-demos`;
+- the first active device renderer is the standalone particle lab;
 - no device telemetry frame observes `particle-magik`;
 - every capture comes from `fpga-latched-scanout-slots`;
 - the normal launcher is restored after each capture.

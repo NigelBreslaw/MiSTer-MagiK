@@ -68,10 +68,9 @@ scripts/agent benchmark firework-visual --firework oled-peony
 scripts/agent benchmark firework-visual --all
 ```
 
-The device workflow must observe `particle-demos` as the first active renderer,
-reject any observation of `particle-magik`, capture the authoritative
-framebuffer, and restore the normal launcher even if capture fails. The full
-spinning MagiK particle demo is never an initialization step for firework work.
+Those retired captures required `particle-demos` as the first active renderer.
+Current iteration uses the standalone framebuffer lab and its volatile attended
+device session; it does not launch the full Slint application.
 
 Use two visual-review milestones: one local review while the primitives are
 fluid, then one real-framebuffer review after delivery. Combine actionable

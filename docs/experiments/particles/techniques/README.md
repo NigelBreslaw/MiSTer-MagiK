@@ -31,12 +31,12 @@ would be unrealistic for MagiK's software RGB565 renderer.
 See `manifest.json` for hashes and validation metadata and `prompts.md` for the
 generation briefs.
 
-The archived deterministic renderer used the checked-in seed and advanced the
-showcase at 60 Hz so stateful techniques reproduced their device cadence:
+The current standalone lab can reproduce those frames without building Slint:
 
 ```text
-mister-magik-particle-preview --demo grid-flocking --time-ms 15000 \
-  --hud off --output /tmp/grid-flocking.ppm
+mister-magik-particle-lab --demo grid-flocking \
+  --family apps/framebuffer-lab/assets/experiments/particles/procedural.json \
+  --time-ms 15000 --output /tmp/grid-flocking.ppm
 ```
 
 The command refuses to overwrite an existing output file.
