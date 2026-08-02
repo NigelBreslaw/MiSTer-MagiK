@@ -11,9 +11,9 @@
     "preview": "astro preview"
   },
   "dependencies": {
-    "@astrojs/mdx": "^7.0.4",
-    "@astrojs/starlight": "^0.41.4",
-    "astro": "^7.1.4",
+    "@astrojs/mdx": "^7.0.5",
+    "@astrojs/starlight": "^0.41.5",
+    "astro": "^7.1.6",
     "astro-mermaid": "^2.0.4",
     "mermaid": "^11.6.0"
   },
