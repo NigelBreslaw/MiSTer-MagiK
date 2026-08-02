@@ -1672,8 +1672,8 @@ mod tests {
             assert!((-half_extent_q2..=half_extent_q2).contains(&depth));
             levels[usize::from((i16::from(depth) + i16::from(half_extent_q2)) as u16)] += 1;
         }
-        let minimum = levels.into_iter().min().unwrap();
-        let maximum = levels.into_iter().max().unwrap();
+        let minimum = *levels.iter().min().unwrap();
+        let maximum = *levels.iter().max().unwrap();
         assert!(minimum > 0);
         assert!(maximum - minimum < 100);
     }

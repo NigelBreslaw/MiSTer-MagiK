@@ -1021,7 +1021,7 @@ mod tests {
     fn embedded_magik_recipe_preserves_current_defaults() {
         let recipe = embedded_magik_recipe().unwrap();
         assert_eq!(recipe.particle_count, 16_384);
-        assert_eq!(recipe.seed, 0x4d61_6769_4b);
+        assert_eq!(recipe.seed, 0x004d_6167_694b);
         assert_eq!(recipe.timing.cycle_ms, 10_000);
         assert_eq!(recipe.depth.particle_extent, 64.0);
         assert_eq!(recipe.projection.focal_length, 720.0);
@@ -1041,7 +1041,7 @@ mod tests {
     fn embedded_cabinet_recipe_preserves_current_defaults() {
         let recipe = embedded_cabinet_recipe().unwrap();
         assert_eq!(recipe.particle_count, 12_288);
-        assert_eq!(recipe.seed, 0x4d61_6769_4b);
+        assert_eq!(recipe.seed, 0x004d_6167_694b);
         assert_eq!(recipe.timing.cycle_ms, 30_000);
         assert_eq!(recipe.camera.focal_length, 610.0);
         assert_eq!(recipe.camera.formation.dolly, 760.0);
