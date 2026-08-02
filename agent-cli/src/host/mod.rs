@@ -14382,13 +14382,13 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn capture_buffer_rejects_arguments_before_device_work() {
+    fn capture_buffer_argument_contract_uses_the_unified_cli() {
         assert!(validate_capture_buffer_args(&[]).is_ok());
         assert_eq!(
             validate_capture_buffer_args(&["extra".to_string()])
                 .unwrap_err()
                 .to_string(),
-            "usage: mister --capture-buffer"
+            "usage: scripts/agent device capture framebuffer [--output PATH]"
         );
     }
 

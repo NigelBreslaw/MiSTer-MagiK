@@ -280,13 +280,54 @@ fn add_path_operations(
                 &["agent-cli"],
             ));
         }
+        add(with_inputs(
+            cargo(
+                "agent-cli.binary",
+                "Build runnable agent CLI",
+                &[
+                    "build",
+                    "--manifest-path",
+                    "agent-cli/Cargo.toml",
+                    "--bin",
+                    "agent-cli",
+                ],
+                "agent-cli source → runnable operator binary",
+            ),
+            &["crates/agent-protocol", "agent-cli"],
+        ));
+        add(with_inputs(
+            cargo(
+                "agent-cli.signed-media-tests",
+                "Test signed-manifest agent CLI mode",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "agent-cli/Cargo.toml",
+                    "--no-default-features",
+                    "--features",
+                    "signed-media-manifests",
+                ],
+                "agent-cli media source → signed-manifest feature tests",
+            ),
+            &[
+                "crates/agent-protocol",
+                "crates/media-contract",
+                "agent-cli",
+            ],
+        ));
     }
     if path.starts_with("crates/agent-protocol") {
         add(with_inputs(
             cargo(
                 "protocol.host-binary",
                 "Build host protocol consumer",
-                &["build", "--manifest-path", "agent-cli/Cargo.toml"],
+                &[
+                    "build",
+                    "--manifest-path",
+                    "agent-cli/Cargo.toml",
+                    "--bin",
+                    "agent-cli",
+                ],
                 "agent protocol → runnable host consumer",
             ),
             &["crates/agent-protocol", "agent-cli"],
@@ -1135,6 +1176,7 @@ mod tests {
             ids,
             [
                 "catalog.builder-tests",
+                "catalog.clippy",
                 "catalog.format",
                 "catalog.reader-check"
             ]
@@ -1374,7 +1416,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_and_host_changes_refresh_the_runnable_mister_binary() {
+    fn protocol_and_host_changes_refresh_the_runnable_agent_cli_binary() {
         for path in [
             "crates/agent-protocol/src/lib.rs",
             "agent-cli/src/host/agent_client.rs",
@@ -1389,7 +1431,7 @@ mod tests {
             assert!(plan.operations.iter().any(|operation| {
                 operation.args.first().map(String::as_str) == Some("build")
                     && operation.args.contains(&"--bin".into())
-                    && operation.args.contains(&"mister".into())
+                    && operation.args.contains(&"agent-cli".into())
             }));
         }
     }
@@ -1619,8 +1661,8 @@ mod tests {
             "app.media-http-signed-tests",
             "media-contract.tests",
             "media-contract.signed-tests",
-            "mister-host.tests",
-            "mister-host.signed-media-tests",
+            "agent-cli.tests",
+            "agent-cli.signed-media-tests",
         ] {
             assert!(
                 plan.operations.iter().any(|operation| operation.id == id),

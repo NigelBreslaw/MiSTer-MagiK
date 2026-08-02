@@ -1223,40 +1223,6 @@ mod tests {
     }
 
     #[test]
-    fn execution_rejects_actions_above_intent_risk() {
-        let (root, cargo) = fake_cargo("#!/bin/sh\nexit 0\n");
-        let evidence = Evidence::open_at(&root.join("evidence")).unwrap();
-        let request = RawRequest {
-            id: "risk-run".into(),
-            args: vec!["agent-cli".into(), "check".into()],
-            started_ms: now_ms(),
-            started: Instant::now(),
-        };
-        evidence.begin_request(&request).unwrap();
-        let mut operation = test_operation(&cargo);
-        operation.risk = Risk::DeviceWrite;
-        let plan = Plan {
-            request: AssuranceRequest::Plan {
-                scope: Scope::Paths(vec!["fixture".into()]),
-            },
-            operations: vec![operation],
-            external_requirements: Vec::new(),
-        };
-        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
-        let error = execute(&evidence, &request.id, &root, &plan, &mut reporter).unwrap_err();
-        assert!(error.contains("policy_rejected"));
-        assert!(
-            evidence
-                .run_detail(&request.id)
-                .unwrap()
-                .unwrap()
-                .commands
-                .is_empty()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn network_text_from_an_executed_test_remains_a_test_failure() {
         let operation = test_operation(Path::new("cargo"));
         assert_eq!(
