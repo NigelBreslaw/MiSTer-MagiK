@@ -11860,7 +11860,7 @@ fn catalog_query(args: &[String]) -> Result<()> {
     let remote_database =
         resolve_catalog_database(&session, &remote_root, &database, temporary.path())?;
     let local_database = temporary.path().join("snapshot.sqlite3");
-    get(&session, &remote_database, &local_database)?;
+    snapshot_catalog_database(&session, &remote_database, &local_database)?;
     let connection = Connection::open_with_flags(
         &local_database,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -11871,6 +11871,50 @@ fn catalog_query(args: &[String]) -> Result<()> {
         })?;
     print!("{output}");
     Ok(())
+}
+
+fn snapshot_catalog_database(
+    session: &Session,
+    remote_database: &str,
+    local_database: &Path,
+) -> Result<()> {
+    if !is_catalog_database_path(remote_database) {
+        return Err("catalog snapshot source is outside the active catalog".into());
+    }
+    let remote_snapshot = format!(
+        "/tmp/mister-magik/catalog-query-{}-{}.sqlite3",
+        std::process::id(),
+        unix_ms_now()
+    );
+    let command = format!(
+        "set -eu; command -v sqlite3 >/dev/null; rm -f {snapshot}; sqlite3 {source} \".backup {snapshot}\"; test -s {snapshot}",
+        source = sh(remote_database),
+        snapshot = sh(&remote_snapshot),
+    );
+    exec_checked(session, "catalog database snapshot", &command)?;
+    let transfer = get(session, &remote_snapshot, local_database);
+    let cleanup = exec(session, &remove_files_command(&[&remote_snapshot]), false);
+    match (transfer, cleanup) {
+        (Ok(()), Ok(output)) if output.rc == 0 => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Ok(_)) => Err("cannot remove the temporary catalog snapshot".into()),
+        (Ok(()), Err(error)) => Err(error),
+    }
+}
+
+fn is_catalog_database_path(path: &str) -> bool {
+    let relative = [
+        "/media/fat/mister-magik/catalog-v3/",
+        "/media/fat/mister-magik-dev/catalog-v3/",
+    ]
+    .into_iter()
+    .find_map(|root| path.strip_prefix(root));
+    relative.is_some_and(|path| {
+        !path.is_empty()
+            && !path.starts_with('/')
+            && !path.split('/').any(|component| component == "..")
+            && path.ends_with(".sqlite3")
+    })
 }
 
 fn active_catalog_root(session: &Session) -> Result<String> {
@@ -16206,6 +16250,20 @@ H: Handlers=event3 js0"#
                 .unwrap();
         assert_eq!(latch["schema"], "mister-magik-latch-failure-report-v1");
         let _ = fs::remove_dir_all(out);
+    }
+
+    #[test]
+    fn catalog_snapshots_accept_only_catalog_sqlite_databases() {
+        assert!(is_catalog_database_path(
+            "/media/fat/mister-magik/catalog-v3/state/catalog-state.sqlite3"
+        ));
+        assert!(is_catalog_database_path(
+            "/media/fat/mister-magik-dev/catalog-v3/systems/arcade/active.sqlite3"
+        ));
+        assert!(!is_catalog_database_path(
+            "/media/fat/mister-magik-dev/catalog-v3/../agent.token"
+        ));
+        assert!(!is_catalog_database_path("/media/fat/MiSTer.ini"));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
