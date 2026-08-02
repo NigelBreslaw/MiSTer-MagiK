@@ -242,7 +242,7 @@ fn add_path_operations(
     {
         add(diff_check());
     }
-    if path.starts_with("agent-cli") {
+    if crate::components::classify(path) == Some(crate::components::Component::AgentCli) {
         add(with_inputs(
             cargo_format(
                 "agent-cli.format",

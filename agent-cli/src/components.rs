@@ -17,7 +17,6 @@ pub enum Component {
     PlatformContracts,
     Kernel,
     Fpga,
-    HostTool,
     DeviceAgent,
     Manager,
     Scripts,
@@ -93,7 +92,7 @@ pub fn classify(path: &Path) -> Option<Component> {
         )
     ) {
         Some(Component::PlatformContracts)
-    } else if path.starts_with("agent-cli") {
+    } else if path.starts_with("agent-cli") || is_retired_host_package(path) {
         Some(Component::AgentCli)
     } else if path.starts_with("apps/mister") {
         Some(Component::MisterApp)
@@ -130,6 +129,13 @@ pub fn classify(path: &Path) -> Option<Component> {
     } else {
         None
     }
+}
+
+fn is_retired_host_package(path: &Path) -> bool {
+    let mut components = path.iter();
+    components.next().and_then(|part| part.to_str()) == Some("mister")
+        && components.next().and_then(|part| part.to_str()) == Some("tools")
+        && components.next().and_then(|part| part.to_str()) == Some("host")
 }
 
 pub(crate) fn is_repository_dot_config(path: &Path) -> bool {
