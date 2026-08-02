@@ -3,4 +3,5 @@
 
 //! Slint-free RGB565 particle engines shared by production and focused labs.
 
+pub mod cabinet;
 pub mod engine;
