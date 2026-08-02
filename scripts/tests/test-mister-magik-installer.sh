@@ -170,6 +170,7 @@ for owned in \
   licenses/MiSTer-MagiK-GPL-3.0-or-later.txt \
   licenses/RUST-LIBRARIES.txt licenses/FFMPEG-LGPL-2.1-or-later.txt \
   licenses/PRESS-START-2P-OFL-1.1.txt \
+  licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt \
   downloader_mister_magik.ini \
   .downloader_mister_magik.ini.partial downloader_mister_magik.ini.tmp.123 \
   .MiSTer.ini.bak.before-magik.new.123 .MiSTer.ini.magik.new.123; do
@@ -190,6 +191,7 @@ for owned in \
   licenses/MiSTer-MagiK-GPL-3.0-or-later.txt \
   licenses/RUST-LIBRARIES.txt licenses/FFMPEG-LGPL-2.1-or-later.txt \
   licenses/PRESS-START-2P-OFL-1.1.txt \
+  licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt \
   downloader_mister_magik.ini \
   .downloader_mister_magik.ini.partial downloader_mister_magik.ini.tmp.123 \
   .MiSTer.ini.bak.before-magik.new.123 .MiSTer.ini.magik.new.123; do

@@ -25,6 +25,8 @@ cp "$ROOT/LICENSE" "$OUT/LICENSE"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
+cp "$ROOT/apps/mister/assets/particles/arcade-cabinet.LICENSE.txt" \
+  "$OUT/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
 cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
 MiSTer MagiK alpha distribution notices
 ========================================
@@ -32,8 +34,9 @@ MiSTer MagiK alpha distribution notices
 Copyright (C) 2026 Nigel Breslaw
 
 MiSTer MagiK is GPL-3.0-or-later. This directory contains the full GPL text,
-plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, and generated
-normal-runtime Rust dependency notices in licenses/.
+plus the FFmpeg LGPL-2.1-or-later, Press Start 2P SIL OFL-1.1, Arcade Cabinet
+CC-BY-NC-4.0 attribution, and generated normal-runtime Rust dependency notices
+in licenses/.
 
 The launcher uses Slint under its GPL-3.0-only option.
 EOF

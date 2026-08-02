@@ -856,6 +856,7 @@ fn remove_owned(paths: &Paths) -> Result<()> {
         paths.fat.join("licenses/RUST-LIBRARIES.txt"),
         paths.fat.join("licenses/FFMPEG-LGPL-2.1-or-later.txt"),
         paths.fat.join("licenses/PRESS-START-2P-OFL-1.1.txt"),
+        paths.fat.join("licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"),
     ];
     for path in &files {
         if path.is_file() {

@@ -87,7 +87,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   mister-magik/mister_magik_scanout_slots.metadata.txt
   mister-magik/fpga/menu-magik-vblank-latch.rbf
   mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
-  mister-magik/licenses/...   GPL, LGPL, OFL, and Rust dependency notices
+  mister-magik/licenses/...   GPL, LGPL, OFL, CC BY-NC, and Rust notices
   mister-magik/THIRD-PARTY-NOTICES.txt
                               Metadata and bundled-component provenance
   mister-magik/SOURCE-OFFER.txt
@@ -372,6 +372,8 @@ cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.t
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
+cp "$ROOT/apps/mister/assets/particles/arcade-cabinet.LICENSE.txt" \
+  "$STAGE/mister-magik/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
 mkdir -p "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer"
 cp "$ARCADE_DATABASE_CSV" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/ArcadeDatabase.csv"
 cp "$ARCADE_DATABASE_LICENSE" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/LICENSE.txt"
@@ -396,7 +398,8 @@ portion remains under its upstream GPL-3.0 terms.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
-and the Press Start 2P font under SIL OFL-1.1. Its complete notice is in
+the Press Start 2P font under SIL OFL-1.1, and the Arcade Cabinet particle model
+by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in
 the mister-magik/licenses/ directory.
 
 mame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media. It
