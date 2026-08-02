@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Focused, Slint-free host for the production startup particle effects.
+//! Focused, Slint-free host for portable RGB565 framebuffer scenes.
 
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
@@ -37,6 +37,15 @@ impl EffectKind {
         match self {
             Self::Magik => "magik",
             Self::Cabinet => "cabinet",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "magik" => Some(Self::Magik),
+            "cabinet" => Some(Self::Cabinet),
+            _ => None,
         }
     }
 

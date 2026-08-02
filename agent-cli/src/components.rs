@@ -96,7 +96,7 @@ pub fn classify(path: &Path) -> Option<Component> {
     } else if path.starts_with("agent-cli") || is_retired_host_package(path) {
         Some(Component::AgentCli)
     } else if path.starts_with("apps/framebuffer-lab")
-        || path.starts_with("apps/startup-particle-lab")
+        || path.starts_with("apps/framebuffer-scene-lab")
     {
         Some(Component::FramebufferLab)
     } else if path.starts_with("apps/mister") {
@@ -181,7 +181,7 @@ mod tests {
             Some(Component::FramebufferLab)
         );
         assert_eq!(
-            classify(Path::new("apps/startup-particle-lab/src/main.rs")),
+            classify(Path::new("apps/framebuffer-scene-lab/src/main.rs")),
             Some(Component::FramebufferLab)
         );
         assert_eq!(

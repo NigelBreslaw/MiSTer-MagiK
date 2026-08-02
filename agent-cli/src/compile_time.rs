@@ -27,8 +27,8 @@ pub enum CompileTimeTarget {
     FramebufferLabMacos,
     MagikFullAppArm,
     MagikFullAppMacos,
-    StartupParticleLabArm,
-    StartupParticleLabMacos,
+    FramebufferSceneLabArm,
+    FramebufferSceneLabMacos,
 }
 
 impl CompileTimeTarget {
@@ -38,8 +38,8 @@ impl CompileTimeTarget {
             Self::FramebufferLabMacos => "framebuffer-lab-macos",
             Self::MagikFullAppArm => "magik-full-app-arm",
             Self::MagikFullAppMacos => "magik-full-app-macos",
-            Self::StartupParticleLabArm => "startup-particle-lab-arm",
-            Self::StartupParticleLabMacos => "startup-particle-lab-macos",
+            Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
+            Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
     }
 }
@@ -237,13 +237,13 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             target_dir,
         ),
         CompileTimeTarget::MagikFullAppMacos => build_macos_full_app(repository, target_dir),
-        CompileTimeTarget::StartupParticleLabArm => execute_quiet_at_target_dir(
+        CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
-            &BuildSpec::startup_particle_lab_device(),
+            &BuildSpec::framebuffer_scene_lab_device(),
             target_dir,
         ),
-        CompileTimeTarget::StartupParticleLabMacos => {
-            build_macos_startup_particle_lab(repository, target_dir)
+        CompileTimeTarget::FramebufferSceneLabMacos => {
+            build_macos_framebuffer_scene_lab(repository, target_dir)
         }
     }
 }
@@ -255,7 +255,7 @@ impl CompileTimeTarget {
                 "apps/framebuffer-lab/src/particles/showcase.rs"
             }
             Self::MagikFullAppArm | Self::MagikFullAppMacos => "apps/mister/src/particle_engine.rs",
-            Self::StartupParticleLabArm | Self::StartupParticleLabMacos => {
+            Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => {
                 "crates/particles/src/engine.rs"
             }
         }
@@ -314,9 +314,9 @@ fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
     Ok(())
 }
 
-fn build_macos_startup_particle_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
+fn build_macos_framebuffer_scene_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
     let mut child = Command::new("cargo")
-        .current_dir(repository.join("apps/startup-particle-lab"))
+        .current_dir(repository.join("apps/framebuffer-scene-lab"))
         .env("CARGO_TARGET_DIR", target_dir)
         .env("RUSTC_WRAPPER", "")
         .args(["build", "--locked", "--profile", "release-live"])
@@ -538,12 +538,12 @@ mod tests {
             "magik-full-app-macos"
         );
         assert_eq!(
-            CompileTimeTarget::StartupParticleLabArm.label(),
-            "startup-particle-lab-arm"
+            CompileTimeTarget::FramebufferSceneLabArm.label(),
+            "framebuffer-scene-lab-arm"
         );
         assert_eq!(
-            CompileTimeTarget::StartupParticleLabMacos.label(),
-            "startup-particle-lab-macos"
+            CompileTimeTarget::FramebufferSceneLabMacos.label(),
+            "framebuffer-scene-lab-macos"
         );
     }
 

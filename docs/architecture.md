@@ -25,7 +25,7 @@ details on the platform side of the seam.
 
 The production MagiK text and arcade-cabinet particle effects live in the
 Slint-free `crates/particles` engine. The focused
-`apps/startup-particle-lab` compiles that engine without the launcher, while
+`apps/framebuffer-scene-lab` compiles that engine without the launcher, while
 production uses it through a thin adapter. Both effects use validated,
 versioned JSON defaults and RGB565 rendering; mutable recipe watching exists
 only in the focused lab and the structurally gated Dev launcher. See

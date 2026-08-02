@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 The production-quality MagiK text and arcade-cabinet effects share the
 Slint-free `crates/particles` engine. They are developed in the focused
-`apps/startup-particle-lab` application and consumed by the production launcher
+`apps/framebuffer-scene-lab` application and consumed by the production launcher
 through a thin host adapter. The engine owns deterministic simulation,
 validated recipes, target assets, RGB565 drawing commands, and ARM MagiK NEON
 kernels. The hosts continue to own preparation threads, framebuffer/latch
@@ -87,7 +87,7 @@ The preview and focused-lab modes accept either schema. Dev-launcher mode
 rejects cabinet recipes.
 
 For deterministic visual evidence, the focused binary also supports a headless
-fixed-time capture. See `apps/startup-particle-lab/README.md` for the direct
+fixed-time capture. See `apps/framebuffer-scene-lab/README.md` for the direct
 binary interface.
 
 ## RGB565 authority

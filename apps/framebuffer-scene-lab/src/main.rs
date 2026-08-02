@@ -1,14 +1,12 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_particles::cabinet::Rgb565Pixel;
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-use mister_magik_startup_particle_lab::EffectKind;
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
-use mister_magik_startup_particle_lab::LiveParticleRenderer;
-use mister_magik_startup_particle_lab::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, FocusedParticleRenderer, read_effect_recipe,
+use mister_magik_framebuffer_scene_lab::LiveParticleRenderer;
+use mister_magik_framebuffer_scene_lab::{
+    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, read_effect_recipe,
 };
+use mister_magik_particles::cabinet::Rgb565Pixel;
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -20,11 +18,18 @@ const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
+    let selected = read_effect_recipe(&options.recipe)?;
+    if selected.kind() != options.scene {
+        return Err(format!(
+            "--scene {} does not match the {} recipe",
+            options.scene.label(),
+            selected.kind().label()
+        ));
+    }
     if options.check {
-        let recipe = read_effect_recipe(&options.recipe)?;
-        let renderer = FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe)?;
+        let renderer = FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, selected)?;
         println!(
-            "startup-particle-lab check passed effect={}",
+            "framebuffer-scene-lab check passed effect={}",
             renderer.kind().label()
         );
         return Ok(());
@@ -68,12 +73,12 @@ fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<()
 #[cfg(target_os = "macos")]
 fn run_window(recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
-        .map_err(|error| format!("create startup-particle-lab event loop: {error}"))?;
+        .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
     let mut application = macos::ParticleLabApplication::new(recipe)?;
     event_loop
         .run_app(&mut application)
-        .map_err(|error| format!("run startup-particle-lab window: {error}"))
+        .map_err(|error| format!("run framebuffer-scene-lab window: {error}"))
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -98,12 +103,12 @@ fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), St
     .map_err(|error| format!("open scaled hidden RGB565 latch presenter: {error}"))?;
     if presenter.stride_pixels() != DEFAULT_WIDTH {
         return Err(format!(
-            "startup particle lab requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
+            "framebuffer scene lab requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
             presenter.stride_pixels()
         ));
     }
     println!(
-        "startup-particle-lab source={}x{} destination={}x{} format=rgb565",
+        "framebuffer-scene-lab source={}x{} destination={}x{} format=rgb565",
         presenter.width(),
         presenter.height(),
         presenter.destination_width(),
@@ -178,7 +183,7 @@ fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), St
                 )
             };
             println!(
-                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.status_state(),
@@ -257,6 +262,7 @@ fn run_window(_recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), 
 }
 
 struct Options {
+    scene: EffectKind,
     recipe: PathBuf,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
@@ -267,6 +273,7 @@ struct Options {
 impl Options {
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut recipe = None;
+        let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
         let mut check = false;
@@ -275,6 +282,15 @@ impl Options {
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
+                "--scene" => {
+                    let value = arguments.next().ok_or("--scene requires a scene name")?;
+                    scene = EffectKind::parse(&value);
+                    if scene.is_none() {
+                        return Err(format!(
+                            "invalid scene {value:?}; expected magik or cabinet"
+                        ));
+                    }
+                }
                 "--recipe" => recipe = arguments.next().map(PathBuf::from),
                 "--time-ms" => {
                     let value = arguments.next().ok_or("--time-ms requires milliseconds")?;
@@ -295,7 +311,7 @@ impl Options {
                         Some(parse_dimension("--destination-height", arguments.next())?);
                 }
                 "--help" | "-h" => return Err(usage().into()),
-                other => return Err(format!("unknown startup-particle-lab argument {other:?}")),
+                other => return Err(format!("unknown framebuffer-scene-lab argument {other:?}")),
             }
         }
         let destination = match (destination_width, destination_height) {
@@ -304,6 +320,7 @@ impl Options {
             _ => return Err("scanout destination requires both width and height".into()),
         };
         let options = Self {
+            scene: scene.ok_or("--scene is required")?,
             recipe: recipe.ok_or("--recipe is required")?,
             time_ms,
             output,
@@ -338,7 +355,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-startup-particle-lab --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-startup-particle-lab --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-startup-particle-lab --recipe FILE.json --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -453,12 +470,12 @@ mod macos {
             let window = Arc::new(
                 event_loop
                     .create_window(attributes)
-                    .expect("create startup-particle-lab window"),
+                    .expect("create framebuffer-scene-lab window"),
             );
             let context = Context::new(Arc::clone(&window))
-                .expect("create startup-particle-lab softbuffer context");
+                .expect("create framebuffer-scene-lab softbuffer context");
             let surface = Surface::new(&context, Arc::clone(&window))
-                .expect("create startup-particle-lab softbuffer surface");
+                .expect("create framebuffer-scene-lab softbuffer surface");
             self.window = Some(window);
             self.surface = Some(surface);
         }
@@ -470,7 +487,7 @@ mod macos {
                 .or_else(|| self.renderer.last_error())
                 .map_or_else(String::new, |error| format!(" — error: {error}"));
             format!(
-                "MiSTer MagiK Startup Particles — {} — generation {} {:?} — {:.1} fps{error}",
+                "MiSTer MagiK Framebuffer Scenes — {} — generation {} {:?} — {:.1} fps{error}",
                 self.renderer.effect().label(),
                 self.renderer.generation(),
                 self.renderer.status_state(),
@@ -524,7 +541,7 @@ mod macos {
             };
             surface
                 .resize(width, height)
-                .expect("resize startup-particle-lab surface");
+                .expect("resize framebuffer-scene-lab surface");
             self.xrgb8888
                 .resize(size.width as usize * size.height as usize, 0);
             scale_rgb565_nearest(
@@ -535,11 +552,11 @@ mod macos {
             );
             let mut buffer = surface
                 .buffer_mut()
-                .expect("map startup-particle-lab surface");
+                .expect("map framebuffer-scene-lab surface");
             buffer.copy_from_slice(&self.xrgb8888);
             buffer
                 .present()
-                .expect("present startup-particle-lab surface");
+                .expect("present framebuffer-scene-lab surface");
             self.update_title();
         }
     }
@@ -628,17 +645,21 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_magik_framebuffer_scene_lab::EffectRecipe;
     use mister_magik_particles::recipes::{embedded_cabinet_recipe, embedded_magik_recipe};
-    use mister_magik_startup_particle_lab::EffectRecipe;
 
     #[test]
     fn parses_interactive_capture_and_check_contracts() {
-        let interactive = Options::parse(["--recipe", "magik.json"].map(String::from)).unwrap();
+        let interactive =
+            Options::parse(["--scene", "magik", "--recipe", "magik.json"].map(String::from))
+                .unwrap();
         assert_eq!(interactive.recipe, PathBuf::from("magik.json"));
         assert!(interactive.output.is_none());
 
         let device = Options::parse(
             [
+                "--scene",
+                "magik",
                 "--recipe",
                 "magik.json",
                 "--destination-width",
@@ -653,6 +674,8 @@ mod tests {
 
         let capture = Options::parse(
             [
+                "--scene",
+                "cabinet",
                 "--recipe",
                 "cabinet.json",
                 "--time-ms",
@@ -666,26 +689,55 @@ mod tests {
         assert_eq!(capture.time_ms, Some(5_000));
         assert_eq!(capture.output, Some(PathBuf::from("cabinet.ppm")));
 
-        let check =
-            Options::parse(["--recipe", "magik.json", "--check"].map(String::from)).unwrap();
+        let check = Options::parse(
+            ["--scene", "magik", "--recipe", "magik.json", "--check"].map(String::from),
+        )
+        .unwrap();
         assert!(check.check);
     }
 
     #[test]
     fn rejects_partial_or_conflicting_modes() {
         assert!(
-            Options::parse(["--recipe", "magik.json", "--output", "x.ppm"].map(String::from))
-                .is_err()
-        );
-        assert!(
             Options::parse(
-                ["--recipe", "magik.json", "--destination-width", "1920",].map(String::from)
+                [
+                    "--scene",
+                    "magik",
+                    "--recipe",
+                    "magik.json",
+                    "--output",
+                    "x.ppm",
+                ]
+                .map(String::from),
             )
             .is_err()
         );
         assert!(
             Options::parse(
-                ["--recipe", "magik.json", "--check", "--time-ms", "1"].map(String::from)
+                [
+                    "--scene",
+                    "magik",
+                    "--recipe",
+                    "magik.json",
+                    "--destination-width",
+                    "1920",
+                ]
+                .map(String::from)
+            )
+            .is_err()
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "magik",
+                    "--recipe",
+                    "magik.json",
+                    "--check",
+                    "--time-ms",
+                    "1",
+                ]
+                .map(String::from)
             )
             .is_err()
         );

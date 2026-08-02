@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [package]
-name = "mister-magik-startup-particle-lab"
+name = "mister-magik-framebuffer-scene-lab"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97.1"
@@ -16,7 +16,7 @@ warnings = "deny"
 all = "deny"
 
 [[bin]]
-name = "mister-magik-startup-particle-lab"
+name = "mister-magik-framebuffer-scene-lab"
 path = "src/main.rs"
 
 [dependencies]

@@ -637,7 +637,7 @@ name = "mister-magik-core"
 version = "0.1.0"
 
 [[package]]
-name = "mister-magik-startup-particle-lab"
+name = "mister-magik-framebuffer-scene-lab"
 version = "0.1.0"
 dependencies = [
  "libc",

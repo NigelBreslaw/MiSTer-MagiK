@@ -20,7 +20,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const REMOTE_DIR: &str = "/tmp/mister-magik/startup-particles";
-const REMOTE_BINARY: &str = "/tmp/mister-magik/startup-particles/mister-magik-startup-particle-lab";
+const REMOTE_BINARY: &str =
+    "/tmp/mister-magik/startup-particles/mister-magik-framebuffer-scene-lab";
 const REMOTE_LAB_RECIPE: &str = "/tmp/mister-magik/startup-particles/recipe.json";
 const REMOTE_MAGIK_RECIPE: &str = "/tmp/mister-magik/startup-particles/magik.json";
 const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
@@ -28,6 +29,8 @@ const DEVELOPMENT_LAUNCHER_ENV: &str = "/media/fat/mister-magik-dev/launcher.env
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
 const ACK_DEADLINE: Duration = Duration::from_secs(1);
 const LAUNCHER_START_DEADLINE: Duration = Duration::from_secs(45);
+const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
+const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 
 pub(super) fn run(
     device: &mut NativeDevice,
@@ -55,9 +58,10 @@ pub(super) fn run(
 }
 
 fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Result<()> {
+    let scene = local_recipe_scene(recipe)?;
     let session = connect_with(&prepared.config.connection, 10)?;
     let destination = active_lab_destination(&session)?;
-    if let Err(error) = prepare_lab_files(&session, binary, recipe) {
+    if let Err(error) = prepare_lab_files(&session, binary, recipe, scene) {
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
@@ -72,10 +76,10 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
     let run_config = prepared.config.connection.clone();
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = match thread::Builder::new()
-        .name("startup-particle-lab-device".into())
+        .name("framebuffer-scene-lab-device".into())
         .spawn(move || {
             let result =
-                run_remote_lab(&run_config, destination).map_err(|error| error.to_string());
+                run_remote_lab(&run_config, destination, scene).map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
         }) {
         Ok(worker) => worker,
@@ -254,7 +258,7 @@ fn validate_local_input(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_lab_files(session: &Session, binary: &Path, recipe: &Path) -> Result<()> {
+fn prepare_lab_files(session: &Session, binary: &Path, recipe: &Path, scene: &str) -> Result<()> {
     exec_checked(
         session,
         "startup particle lab preflight",
@@ -273,8 +277,9 @@ fn prepare_lab_files(session: &Session, binary: &Path, recipe: &Path) -> Result<
         session,
         "validate startup particle lab",
         &format!(
-            "{} --check --recipe {}",
+            "{} --check --scene {} --recipe {}",
             sh(REMOTE_BINARY),
+            sh(scene),
             sh(REMOTE_LAB_RECIPE)
         ),
     )
@@ -508,9 +513,13 @@ const fn cleanup_requires_embedded_ack(recipe_removed: bool, already_embedded: b
     recipe_removed || !already_embedded
 }
 
-fn run_remote_lab(config: &super::remote::ConnectionConfig, destination: (u16, u16)) -> Result<()> {
+fn run_remote_lab(
+    config: &super::remote::ConnectionConfig,
+    destination: (u16, u16),
+    scene: &str,
+) -> Result<()> {
     let session = connect_with(config, 10)?;
-    stream_exec(&session, &remote_run_lab_command(destination))
+    stream_exec(&session, &remote_run_lab_command(destination, scene))
 }
 
 fn stream_exec(session: &Session, command: &str) -> Result<()> {
@@ -541,7 +550,7 @@ fn stop_remote_lab(session: &Session) -> Result<()> {
     exec_checked(
         session,
         "stop startup particle lab",
-        "set -eu; pid=$(pidof mister-magik-startup-particle-lab || true); test -z \"$pid\" || kill -TERM $pid",
+        "set -eu; pid=$(pidof mister-magik-framebuffer-scene-lab || true); test -z \"$pid\" || kill -TERM $pid",
     )
 }
 
@@ -552,7 +561,7 @@ fn stop_remote_lab_connection(config: &super::remote::ConnectionConfig) -> Resul
 
 fn lab_preflight_command() -> String {
     format!(
-        "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-startup-particle-lab >/dev/null 2>&1; {}; rm -rf {}; mkdir -p {}",
+        "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-framebuffer-scene-lab >/dev/null 2>&1; {}; rm -rf {}; mkdir -p {}",
         safety_clear_checks(),
         sh(REMOTE_DIR),
         sh(REMOTE_DIR)
@@ -607,17 +616,28 @@ fn remote_publish_lab_command(binary_hash: &str, recipe_hash: &str) -> String {
     )
 }
 
-fn remote_run_lab_command(destination: (u16, u16)) -> String {
+fn remote_run_lab_command(destination: (u16, u16), scene: &str) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} --recipe {recipe} --destination-width {destination_width} --destination-height {destination_height}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} --scene {scene} --recipe {recipe} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
+        scene = sh(scene),
         recipe = sh(REMOTE_LAB_RECIPE),
         destination_width = destination.0,
         destination_height = destination.1,
     )
+}
+
+fn local_recipe_scene(recipe: &Path) -> Result<&'static str> {
+    let bytes = std::fs::read(recipe)?;
+    let value: Value = serde_json::from_slice(&bytes)?;
+    match value.get("schema").and_then(Value::as_str) {
+        Some(MAGIK_SCHEMA) => Ok("magik"),
+        Some(CABINET_SCHEMA) => Ok("cabinet"),
+        _ => Err("scene lab accepts only MagiK V1 or cabinet V1 recipes".into()),
+    }
 }
 
 fn combine_results(run: Result<()>, cleanup: Result<()>) -> Result<()> {
@@ -637,7 +657,7 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080));
+        let run = remote_run_lab_command((1920, 1080), "magik");
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));

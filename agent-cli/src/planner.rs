@@ -474,7 +474,7 @@ fn add_path_operations(
             &["apps/framebuffer-lab"],
         ));
     }
-    if path.starts_with("apps/startup-particle-lab") {
+    if path.starts_with("apps/framebuffer-scene-lab") {
         add(diff_check());
     }
     if matches!(
@@ -950,8 +950,8 @@ fn add_path_operations(
     add_crate(path, "crates/particles", "particles", out);
     add_crate(
         path,
-        "apps/startup-particle-lab",
-        "startup-particle-lab",
+        "apps/framebuffer-scene-lab",
+        "framebuffer-scene-lab",
         out,
     );
     add_crate(path, "crates/framebuffer-stream", "framebuffer-stream", out);
@@ -1246,12 +1246,12 @@ mod tests {
     }
 
     #[test]
-    fn startup_particle_lab_changes_select_only_focused_assurance() {
+    fn framebuffer_scene_lab_changes_select_only_focused_assurance() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
-            vec!["apps/startup-particle-lab/src/main.rs".into()],
+            vec!["apps/framebuffer-scene-lab/src/main.rs".into()],
         )
         .unwrap();
         let ids = plan
@@ -1263,9 +1263,9 @@ mod tests {
             ids,
             [
                 "repo.diff-check",
-                "startup-particle-lab.clippy",
-                "startup-particle-lab.format",
-                "startup-particle-lab.tests"
+                "framebuffer-scene-lab.clippy",
+                "framebuffer-scene-lab.format",
+                "framebuffer-scene-lab.tests"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {

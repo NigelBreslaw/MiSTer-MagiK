@@ -3,18 +3,19 @@ Copyright (C) 2026 Nigel Breslaw
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# Startup particle lab
+# Framebuffer scene lab
 
 This is the focused, Slint-free development app for the production-quality
-MagiK text and arcade-cabinet particle effects. The recipe schema selects the
-effect; there is deliberately no demo registry or recipe-family abstraction.
+MagiK text and arcade-cabinet particle effects. The command line selects one
+concrete scene; there is deliberately no demo registry or recipe-family abstraction.
 The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
 dependency of this app.
 
 Use the supported host workflow for a macOS preview:
 
 ```text
-scripts/agent startup-particles preview RECIPE
+scripts/agent scene-lab preview --scene magik --recipe RECIPE
+scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
 ```
 
 For attended MiSTer sessions, use one of:
@@ -24,7 +25,9 @@ scripts/agent device startup-particles RECIPE --runtime lab --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
-The focused lab accepts the MagiK and cabinet schemas. The Dev launcher accepts
+The older `startup-particles preview RECIPE` and attended `--runtime lab`
+commands remain typed compatibility aliases. The focused lab accepts the MagiK
+and cabinet schemas. The Dev launcher accepts
 only MagiK and watches the fixed volatile
 `/tmp/mister-magik/startup-particles/magik.json` path. The public launcher never
 watches an external recipe.
@@ -39,7 +42,7 @@ launcher because their direct-video porch offsets are route-specific.
 Run a live macOS preview with a validated recipe:
 
 ```text
-mister-magik-startup-particle-lab --recipe path/to/magik.json
+mister-magik-framebuffer-scene-lab --scene magik --recipe path/to/magik.json
 ```
 
 Saving the recipe reloads the renderer. The last valid renderer stays visible
@@ -50,7 +53,8 @@ generation, and restores the embedded recipe once after two missing polls.
 Create a deterministic capture without opening a window:
 
 ```text
-mister-magik-startup-particle-lab \
+mister-magik-framebuffer-scene-lab \
+  --scene cabinet \
   --recipe path/to/cabinet.json \
   --time-ms 5000 \
   --output cabinet.ppm

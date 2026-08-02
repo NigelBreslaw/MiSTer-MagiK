@@ -6,7 +6,7 @@ use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
 use crate::live_particles::LiveParticlesCommand;
 use crate::model::{BenchmarkScenario, Scope};
-use crate::startup_particles::StartupParticlesCommand;
+use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -84,6 +84,10 @@ pub enum Command {
     StartupParticles {
         #[command(subcommand)]
         command: StartupParticlesCommand,
+    },
+    SceneLab {
+        #[command(subcommand)]
+        command: SceneLabCommand,
     },
     #[command(hide = true)]
     Build {

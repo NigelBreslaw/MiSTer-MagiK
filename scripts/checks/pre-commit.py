@@ -39,7 +39,7 @@ CLASSIFIED_PREFIXES = (
     "agent-cli",
     "apps/desktop",
     "apps/framebuffer-lab",
-    "apps/startup-particle-lab",
+    "apps/framebuffer-scene-lab",
     "apps/mister",
     "crates",
     "docs",
@@ -58,9 +58,9 @@ CLASSIFIED_PREFIXES = (
 
 CRATE_FORMATTERS = (
     (
-        "startup-particle-lab.format",
-        "apps/startup-particle-lab",
-        "apps/startup-particle-lab/Cargo.toml",
+        "framebuffer-scene-lab.format",
+        "apps/framebuffer-scene-lab",
+        "apps/framebuffer-scene-lab/Cargo.toml",
     ),
     (
         "framebuffer-lab.format",
