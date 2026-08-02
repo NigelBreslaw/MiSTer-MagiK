@@ -5,3 +5,4 @@
 
 pub mod cabinet;
 pub mod engine;
+pub mod recipes;

@@ -1,0 +1,59 @@
+{
+  "schema": "mister-magik-particle-magik-v1",
+  "particle_count": 16384,
+  "seed": 332346648907,
+  "timing": {
+    "static_ms": 3000,
+    "form_ms": 2000,
+    "hold_ms": 3000,
+    "disperse_ms": 2000
+  },
+  "initial": {
+    "duplicate_target_jitter_px": 0.4,
+    "velocity_xy_max": 42.0,
+    "velocity_z_max": 10.0
+  },
+  "depth": {
+    "particle_extent": 64.0,
+    "target_extent": 10.0
+  },
+  "projection": {
+    "focal_length": 720.0,
+    "near_denominator": 1.0,
+    "center_offset_x": 0.0,
+    "center_offset_y": 0.0
+  },
+  "rotation": {
+    "hold_turns": 1.0,
+    "easing": "smoothstep"
+  },
+  "static_motion": {
+    "acceleration_xy": 75.0,
+    "acceleration_z": 8.0,
+    "damping_xy": 0.985,
+    "damping_z": 0.98
+  },
+  "form_motion": {
+    "stiffness": 18.0,
+    "jitter_px": 0.08,
+    "damping": 0.88
+  },
+  "hold_motion": {
+    "stiffness": 34.0,
+    "jitter_px": 0.35,
+    "damping": 0.78
+  },
+  "disperse_motion": {
+    "outward_acceleration": 2.2,
+    "jitter_xy": 115.0,
+    "jitter_z": 55.0,
+    "damping": 0.99
+  },
+  "appearance": {
+    "background": "#000000",
+    "palette": ["#202020", "#585C58", "#B8BCB8", "#FFFFFF"],
+    "formed_neighbor_when_depth_below": 0.0,
+    "unformed_palette_index": 3,
+    "neighbor_palette_index": 2
+  }
+}

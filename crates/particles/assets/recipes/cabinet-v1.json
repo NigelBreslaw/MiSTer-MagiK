@@ -1,0 +1,77 @@
+{
+  "schema": "mister-magik-particle-cabinet-v1",
+  "particle_count": 12288,
+  "seed": 332346648907,
+  "timing": {
+    "formation_ms": 4000,
+    "orbit_ms": 20000,
+    "return_ms": 5000,
+    "disperse_ms": 1000,
+    "formation_easing": "ease_out_cubic",
+    "return_easing": "ease_out_cubic",
+    "disperse_easing": "linear"
+  },
+  "model": {
+    "x_half_extent": 390.0,
+    "y_extent": 440.0,
+    "z_half_extent": 390.0,
+    "y_origin": 220.0
+  },
+  "source_scatter": {
+    "x_half_extent": 510.0,
+    "y_half_extent": 300.0,
+    "z_half_extent": 360.0
+  },
+  "dispersal": {
+    "radial_base": 0.9,
+    "radial_life_gain": 1.6,
+    "vertical_jitter": 90.0
+  },
+  "camera": {
+    "center_offset_x": 0.0,
+    "center_offset_y": 16.0,
+    "focal_length": 610.0,
+    "near_depth": 48.0,
+    "formation": {
+      "yaw_radians": 0.95079637,
+      "pitch_radians": -0.08,
+      "dolly": 760.0
+    },
+    "orbit": {
+      "yaw_center_radians": 0.95079637,
+      "yaw_amplitude_radians": 1.15,
+      "yaw_turns": 1.0,
+      "pitch_triangle_rate": 2.0,
+      "pitch_amplitude_radians": 0.13,
+      "dolly_center": 720.0,
+      "dolly_triangle_rate": 1.0,
+      "dolly_triangle_phase": 0.25,
+      "dolly_amplitude": 82.0
+    },
+    "return_pose": {
+      "yaw_radians": 0.72,
+      "pitch_radians": 0.11,
+      "dolly": 755.0
+    }
+  },
+  "appearance": {
+    "background": "#000000",
+    "palette": [
+      "#18189C",
+      "#3138BD",
+      "#00599C",
+      "#00B6FF",
+      "#BD0063",
+      "#FF5529",
+      "#FFDB42",
+      "#FFFFFF"
+    ],
+    "priority_feature_mask": 2,
+    "priority_palette_index": 7,
+    "accent_feature_mask": 1,
+    "accent_palette_add": 2,
+    "neighbor_feature_mask": 3,
+    "neighbor_every": 4,
+    "neighbor_palette_subtract": 1
+  }
+}
