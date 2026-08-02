@@ -55,10 +55,7 @@ fn main() {
             .flag("-mfpu=neon-vfpv3")
             .flag("-mfloat-abi=hard")
             .flag("-ffp-contract=off");
-        if experiments {
-            particle_neon.define("MISTER_MAGIK_EXPERIMENTS", None);
-        }
-        particle_neon.compile("mister_magik_particle_neon");
+        particle_neon.compile("mister_magik_scanline_neon");
     }
 }
 
