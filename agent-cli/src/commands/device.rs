@@ -238,6 +238,9 @@ pub struct MediaDownloadArgs {
 }
 
 pub fn run(command: DeviceCommand) -> AgentResult<()> {
+    if command.requires_repository() {
+        return Err("live particle sessions require the repository workflow".into());
+    }
     let mutation = command.is_mutation();
     let mut device = crate::device::DeviceClient::default();
     if mutation {

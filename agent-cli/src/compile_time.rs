@@ -23,8 +23,6 @@ const PARTICLE_REBUILD_SAMPLES: usize = 5;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompileTimeTarget {
-    BaselineArm,
-    BaselineMacos,
     FramebufferLabArm,
     FramebufferLabMacos,
 }
@@ -32,8 +30,6 @@ pub enum CompileTimeTarget {
 impl CompileTimeTarget {
     const fn label(self) -> &'static str {
         match self {
-            Self::BaselineArm => "baseline-arm",
-            Self::BaselineMacos => "baseline-macos",
             Self::FramebufferLabArm => "framebuffer-lab-arm",
             Self::FramebufferLabMacos => "framebuffer-lab-macos",
         }
@@ -84,18 +80,6 @@ pub fn execute(
     command: &CompileTimeCommand,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
-    if matches!(
-        command,
-        CompileTimeCommand::Build {
-            target: CompileTimeTarget::FramebufferLabArm | CompileTimeTarget::FramebufferLabMacos,
-            ..
-        } | CompileTimeCommand::Measure {
-            target: CompileTimeTarget::FramebufferLabArm | CompileTimeTarget::FramebufferLabMacos,
-            ..
-        }
-    ) {
-        crate::live_particles::ensure_lockfile(repository)?;
-    }
     match command {
         CompileTimeCommand::Build { target, target_dir } => {
             validate_target_dir(repository, target_dir, false)?;
@@ -190,7 +174,7 @@ fn measure(
     let source_sha256_after = source_guard.finish()?;
     require_clean_source(repository, &source)?;
     let report = CompileTimeReport {
-        schema: "mister-magik-compile-time-v1",
+        schema: "mister-magik-compile-time-v2",
         target,
         source_revision: command_output(repository, "git", &["rev-parse", "HEAD"])?,
         source_path: source
@@ -233,12 +217,6 @@ fn timed_build(
 
 fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) -> AgentResult<()> {
     match target {
-        CompileTimeTarget::BaselineArm => execute_quiet_at_target_dir(
-            repository,
-            &BuildSpec::live_particles_baseline(),
-            target_dir,
-        ),
-        CompileTimeTarget::BaselineMacos => build_macos_preview(repository, target_dir),
         CompileTimeTarget::FramebufferLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_lab_device(),
@@ -251,44 +229,11 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
 impl CompileTimeTarget {
     const fn source_path(self) -> &'static str {
         match self {
-            Self::BaselineArm | Self::BaselineMacos => {
-                "apps/mister/src/experiments/particles/showcase.rs"
-            }
             Self::FramebufferLabArm | Self::FramebufferLabMacos => {
                 "apps/framebuffer-lab/src/particles/showcase.rs"
             }
         }
     }
-}
-
-fn build_macos_preview(repository: &Path, target_dir: &Path) -> AgentResult<()> {
-    let mut child = Command::new("cargo")
-        .current_dir(repository.join("apps/mister"))
-        .env("CARGO_TARGET_DIR", target_dir)
-        .env("RUSTC_WRAPPER", "")
-        .env("SLINT_EMIT_DEBUG_INFO", "1")
-        .args([
-            "build",
-            "--locked",
-            "--bin",
-            "mister-magik-ui-preview",
-            "--features",
-            "ui-preview,experiments",
-        ])
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot start macOS particle preview build: {error}"))?;
-    let status = process::wait(
-        &mut child,
-        Some(BUILD_DEADLINE),
-        "macOS particle preview build",
-        None,
-        || Ok(()),
-    )?;
-    if !status.success() {
-        return Err(format!("macOS particle preview build exited with {status}").into());
-    }
-    Ok(())
 }
 
 fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
@@ -399,7 +344,7 @@ impl SourceStampGuard {
         self.restore_source()?;
         let after = sha256(&self.path)?;
         if after != self.original_sha256 {
-            return Err("particle source content changed during compile-time measurement".into());
+            return Err("particle source was not restored after compile-time measurement".into());
         }
         self.finished = true;
         Ok(after)
@@ -498,7 +443,34 @@ mod tests {
 
     #[test]
     fn compile_target_labels_are_stable() {
-        assert_eq!(CompileTimeTarget::BaselineArm.label(), "baseline-arm");
-        assert_eq!(CompileTimeTarget::BaselineMacos.label(), "baseline-macos");
+        assert_eq!(
+            CompileTimeTarget::FramebufferLabArm.label(),
+            "framebuffer-lab-arm"
+        );
+        assert_eq!(
+            CompileTimeTarget::FramebufferLabMacos.label(),
+            "framebuffer-lab-macos"
+        );
+    }
+
+    #[test]
+    fn rebuild_guard_changes_bytes_and_restores_the_source() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-compile-time-guard-{}",
+            std::process::id()
+        ));
+        let original = b"fn particle_source() {}\n";
+        std::fs::write(&path, original).unwrap();
+        let mut guard = SourceStampGuard::new(&path).unwrap();
+
+        guard.force_rebuild().unwrap();
+        let first = std::fs::read(&path).unwrap();
+        guard.force_rebuild().unwrap();
+        let second = std::fs::read(&path).unwrap();
+
+        assert_ne!(first, second);
+        assert_eq!(guard.finish().unwrap(), sha256_bytes(original));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
     }
 }

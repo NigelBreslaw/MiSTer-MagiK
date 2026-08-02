@@ -438,7 +438,7 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "build",
-                "baseline-macos",
+                "framebuffer-lab-macos",
                 "--target-dir",
                 "/tmp/mac-target",
             ])
@@ -449,7 +449,7 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "measure",
-                "baseline-arm",
+                "framebuffer-lab-arm",
                 "--target-dir",
                 "/tmp/arm-target",
                 "--output",
@@ -473,7 +473,7 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "measure",
-                "baseline-arm",
+                "framebuffer-lab-arm",
                 "--target-dir",
                 "/tmp/arm-target",
             ])

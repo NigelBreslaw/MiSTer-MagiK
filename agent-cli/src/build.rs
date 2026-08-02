@@ -210,20 +210,6 @@ impl BuildSpec {
         spec
     }
 
-    /// Reproduces the retired live-particle full-application build without
-    /// installing or otherwise contacting a device.
-    #[must_use]
-    pub fn live_particles_baseline() -> Self {
-        Self::from_configuration((
-            BuildTarget::Runtime,
-            BuildMode::Build,
-            "release-live",
-            vec!["ui", "experiments"],
-            UiScope::Launcher,
-            runtime_artifact("release-live"),
-        ))
-    }
-
     #[must_use]
     pub fn framebuffer_lab_device() -> Self {
         Self::for_command(BuildCommand::FramebufferLabDevice)
@@ -1598,16 +1584,6 @@ mod tests {
             !runtime.features.contains(&"signed-media-manifests"),
             "signed manifests require a separately authorized rollout release"
         );
-    }
-
-    #[test]
-    fn live_particle_baseline_reproduces_the_retired_full_app_build() {
-        let spec = BuildSpec::live_particles_baseline();
-        assert_eq!(spec.target, BuildTarget::Runtime);
-        assert_eq!(spec.mode, BuildMode::Build);
-        assert_eq!(spec.profile, "release-live");
-        assert_eq!(spec.features, ["ui", "experiments"]);
-        assert_eq!(spec.ui_scope, UiScope::Launcher);
     }
 
     #[test]

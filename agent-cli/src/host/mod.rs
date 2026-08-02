@@ -264,16 +264,6 @@ impl NativeDevice {
             LauncherCommand, MediaCommand, ModeCommand,
         };
 
-        if let DeviceCommand::LiveParticles(args) = command {
-            return self.run_live_particles(
-                Path::new(
-                    "apps/framebuffer-lab/target/armv7-unknown-linux-gnueabihf/release-live/mister-magik-particle-lab",
-                ),
-                &args.family,
-                &args.demo,
-            );
-        }
-
         let agent = matches!(
             command,
             DeviceCommand::Capture { .. }
@@ -309,7 +299,9 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
-                DeviceCommand::LiveParticles(_) => unreachable!("handled before device setup"),
+                DeviceCommand::LiveParticles(_) => {
+                    unreachable!("live particle sessions use the repository workflow")
+                }
                 DeviceCommand::Mode { command } => match command {
                     ModeCommand::Status => mode_cli(&device_strings(["status"])),
                     ModeCommand::Set(args) => mode_cli(&device_strings([args.mode.as_str()])),

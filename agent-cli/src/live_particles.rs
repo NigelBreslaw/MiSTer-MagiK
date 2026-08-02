@@ -40,7 +40,6 @@ pub fn execute_device(
     args: &LiveParticlesArgs,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
-    ensure_lockfile(repository)?;
     let spec = BuildSpec::framebuffer_lab_device();
     execute(repository, &spec, reporter)?;
     crate::commands::device::run_live_particles(args, &repository.join(spec.artifact()))
@@ -50,7 +49,6 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     if !cfg!(target_os = "macos") {
         return Err("particle lab preview is available only on macOS".into());
     }
-    ensure_lockfile(repository)?;
     let lab = repository.join(LAB_DIR);
     let mut build = Command::new("cargo");
     build
@@ -81,29 +79,4 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     } else {
         Err(format!("particle lab preview exited with {status}").into())
     }
-}
-
-pub(crate) fn ensure_lockfile(repository: &Path) -> AgentResult<()> {
-    let manifest = repository.join(LAB_DIR).join("Cargo.toml");
-    let lockfile = repository.join(LAB_DIR).join("Cargo.lock");
-    if lockfile.is_file() {
-        return Ok(());
-    }
-    let mut child = Command::new("cargo")
-        .args(["generate-lockfile", "--manifest-path"])
-        .arg(&manifest)
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("cannot generate framebuffer lab lockfile: {error}"))?;
-    let status = process::wait(
-        &mut child,
-        Some(BUILD_DEADLINE),
-        "framebuffer lab lockfile",
-        None,
-        || Ok(()),
-    )?;
-    if !status.success() {
-        return Err(format!("framebuffer lab lockfile generation exited with {status}").into());
-    }
-    Ok(())
 }
