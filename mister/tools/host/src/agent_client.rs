@@ -545,7 +545,7 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
     let mut samples = Vec::new();
     let mut legacy_complete_status_sequence = None;
     while started.elapsed() < timeout {
-        if crate::screensaver_profile_interrupted() {
+        if crate::attended_operation_interrupted() {
             return Err("screensaver benchmark interrupted".into());
         }
         let mut line = String::new();
@@ -626,7 +626,7 @@ pub(crate) fn agent_telemetry_for_duration(
 
     let mut samples = Vec::new();
     while started.elapsed() < duration {
-        if crate::screensaver_profile_interrupted() {
+        if crate::attended_operation_interrupted() {
             return Err("particle benchmark interrupted".into());
         }
         let mut line = String::new();
@@ -697,7 +697,7 @@ pub(crate) fn agent_telemetry_for_particle_renderer_trial(
     let mut measurement_started: Option<Instant> = None;
     let mut last_sample = Value::Null;
     loop {
-        if crate::screensaver_profile_interrupted() {
+        if crate::attended_operation_interrupted() {
             return Err("particle benchmark interrupted".into());
         }
         if measurement_started.is_none() && started.elapsed() >= startup_timeout {
