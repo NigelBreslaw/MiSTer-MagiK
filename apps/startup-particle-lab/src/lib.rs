@@ -309,7 +309,9 @@ impl LiveParticleRenderer {
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<FrameStats, String> {
-        self.apply_latest(elapsed)?;
+        if let Err(error) = self.apply_latest(elapsed) {
+            self.last_error = Some(error);
+        }
         self.renderer
             .render(destination, elapsed.saturating_sub(self.logical_origin))
     }

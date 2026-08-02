@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_particles::cabinet::Rgb565Pixel;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_startup_particle_lab::LiveParticleRenderer;
 use mister_magik_startup_particle_lab::{
     DEFAULT_HEIGHT, DEFAULT_WIDTH, FocusedParticleRenderer, read_effect_recipe,
@@ -73,12 +73,71 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
         .map_err(|error| format!("run startup-particle-lab window: {error}"))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn run_window(recipe: PathBuf) -> Result<(), String> {
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use std::time::Instant;
+
+    let mut renderer = LiveParticleRenderer::start(
+        DEFAULT_WIDTH,
+        DEFAULT_HEIGHT,
+        recipe.clone(),
+        status_path(&recipe),
+    )?;
+    let mut presenter = HiddenLatchPresenter::open(DEFAULT_WIDTH as u16, DEFAULT_HEIGHT as u16)
+        .map_err(|error| format!("open hidden RGB565 latch presenter: {error}"))?;
+    if presenter.stride_pixels() != DEFAULT_WIDTH {
+        return Err(format!(
+            "startup particle lab requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
+            presenter.stride_pixels()
+        ));
+    }
+    let started = Instant::now();
+    let mut next_frame = started;
+    let mut status_started = started;
+    let mut status_frames = 0_u64;
+    loop {
+        let elapsed = Instant::now().saturating_duration_since(started);
+        let pixels = presenter.pixels_mut();
+        // SAFETY: both pixel types are repr(transparent) wrappers around u16,
+        // have identical length/alignment, and accept every u16 bit pattern.
+        let pixels = unsafe {
+            std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<Rgb565Pixel>(), pixels.len())
+        };
+        let stats = renderer.render(pixels, elapsed)?;
+        let receipt = presenter
+            .present()
+            .map_err(|error| format!("present hidden RGB565 startup particle frame: {error}"))?;
+        status_frames = status_frames.saturating_add(1);
+        if status_started.elapsed() >= Duration::from_secs(1) {
+            let seconds = status_started.elapsed().as_secs_f64();
+            let error = renderer.last_error().unwrap_or("none");
+            println!(
+                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} visible={} slot={} sequence={} reload_error={}",
+                stats.effect.label(),
+                renderer.generation(),
+                renderer.status_state(),
+                status_frames as f64 / seconds,
+                stats.visible,
+                receipt.slot_index,
+                receipt.sequence,
+                error,
+            );
+            status_started = Instant::now();
+            status_frames = 0;
+        }
+        next_frame += FRAME_DURATION;
+        if let Some(remaining) = next_frame.checked_duration_since(Instant::now()) {
+            std::thread::sleep(remaining);
+        } else {
+            next_frame = Instant::now();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
 fn run_window(_recipe: PathBuf) -> Result<(), String> {
-    Err(
-        "interactive startup particle preview requires macOS; use --output for headless capture"
-            .into(),
-    )
+    Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
 
 struct Options {
@@ -137,7 +196,6 @@ fn usage() -> &'static str {
     "usage:\n  mister-magik-startup-particle-lab --recipe FILE.json\n  mister-magik-startup-particle-lab --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-startup-particle-lab --recipe FILE.json --check"
 }
 
-#[cfg(target_os = "macos")]
 fn status_path(recipe: &Path) -> PathBuf {
     recipe
         .parent()
