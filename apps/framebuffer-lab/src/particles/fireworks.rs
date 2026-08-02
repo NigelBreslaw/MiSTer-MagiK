@@ -537,7 +537,6 @@ fn draw_trail_segment(
     intensity: f32,
     pixel_writes: &mut usize,
 ) -> bool {
-    let (width, height) = dimensions;
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let steps = dx.abs().max(dy.abs()).ceil().clamp(1.0, 64.0) as usize;
