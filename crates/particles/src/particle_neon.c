@@ -7,13 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
-static const float DEPTH_EXTENT = 64.0f;
 static const float DEPTH_FIXED_SCALE = 128.0f;
 static const float DEPTH_FIXED_SCALE_RECIP = 1.0f / 128.0f;
 static const float TARGET_FIXED_SCALE_RECIP = 1.0f / 16.0f;
 static const float TARGET_DEPTH_Q2_RECIP = 1.0f / 4.0f;
 static const float RANDOM_UNIT_RECIP = 1.0f / 16777215.0f;
-static const float FOCAL_LENGTH = 720.0f;
 static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
 static const uint32_t COMMAND_PALETTE_SHIFT = 20;
 static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
@@ -61,10 +59,10 @@ static inline float32x4_t target_z(const int8_t *depths) {
     return vmulq_n_f32(vcvtq_f32_s32(wide32), TARGET_DEPTH_Q2_RECIP);
 }
 
-static inline float32x4_t clamp_depth(float32x4_t value) {
+static inline float32x4_t clamp_depth(float32x4_t value, float depth_extent) {
     return vminq_f32(
-        vmaxq_f32(value, vdupq_n_f32(-DEPTH_EXTENT)),
-        vdupq_n_f32(DEPTH_EXTENT)
+        vmaxq_f32(value, vdupq_n_f32(-depth_extent)),
+        vdupq_n_f32(depth_extent)
     );
 }
 
@@ -75,8 +73,15 @@ static inline float32x4_t load_depth_q7(const int16_t *depths) {
     );
 }
 
-static inline void store_depth_q7(int16_t *depths, float32x4_t value) {
-    float32x4_t scaled = vmulq_n_f32(clamp_depth(value), DEPTH_FIXED_SCALE);
+static inline void store_depth_q7(
+    int16_t *depths,
+    float32x4_t value,
+    float depth_extent
+) {
+    float32x4_t scaled = vmulq_n_f32(
+        clamp_depth(value, depth_extent),
+        DEPTH_FIXED_SCALE
+    );
     uint32x4_t negative = vcltq_f32(scaled, vdupq_n_f32(0.0f));
     float32x4_t adjustment = vbslq_f32(
         negative,
@@ -114,6 +119,11 @@ size_t mister_magik_particle_neon_static(
     float width,
     float height,
     float delta,
+    float depth_extent,
+    float acceleration_xy,
+    float acceleration_z,
+    float damping_xy,
+    float damping_z,
     uint32_t *restrict random_states,
     float *restrict x,
     float *restrict y,
@@ -124,8 +134,8 @@ size_t mister_magik_particle_neon_static(
 ) {
     size_t vector_end = count & ~(size_t)3;
     float32x4_t delta_vector = vdupq_n_f32(delta);
-    float jitter_xy_gain = 75.0f * delta;
-    float jitter_z_gain = 8.0f * delta;
+    float jitter_xy_gain = acceleration_xy * delta;
+    float jitter_z_gain = acceleration_z * delta;
     for (size_t index = 0; index < vector_end; index += 4) {
         uint32x4_t noise = next_random(random_states + index);
         float32x4_t jitter_x = signed_unit_vector(noise);
@@ -135,11 +145,11 @@ size_t mister_magik_particle_neon_static(
         float32x4_t force_y = vmulq_n_f32(jitter_y, jitter_xy_gain);
         float32x4_t force_z = vmulq_n_f32(jitter_z, jitter_z_gain);
         float32x4_t next_vx =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), 0.985f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), damping_xy);
         float32x4_t next_vy =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vy + index), force_y), 0.985f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vy + index), force_y), damping_xy);
         float32x4_t next_vz =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vz + index), force_z), 0.98f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vz + index), force_z), damping_z);
         vst1q_f32(vx + index, next_vx);
         vst1q_f32(vy + index, next_vy);
         vst1q_f32(vz + index, next_vz);
@@ -158,7 +168,8 @@ size_t mister_magik_particle_neon_static(
             vaddq_f32(
                 load_depth_q7(z_q7 + index),
                 vmulq_f32(next_vz, delta_vector)
-            )
+            ),
+            depth_extent
         );
         uint32x4_t exceptional = vorrq_u32(
             vorrq_u32(
@@ -192,6 +203,7 @@ size_t mister_magik_particle_neon_attract(
     float stiffness,
     float jitter,
     float damping,
+    float depth_extent,
     const uint32_t *restrict packed_targets,
     const int8_t *restrict target_depth_q2,
     uint32_t *restrict random_states,
@@ -247,7 +259,8 @@ size_t mister_magik_particle_neon_attract(
         vst1q_f32(y + index, vaddq_f32(old_y, vmulq_f32(next_vy, delta_vector)));
         store_depth_q7(
             z_q7 + index,
-            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector))
+            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector)),
+            depth_extent
         );
     }
     return vector_end;
@@ -256,6 +269,11 @@ size_t mister_magik_particle_neon_attract(
 size_t mister_magik_particle_neon_disperse(
     size_t count,
     float delta,
+    float depth_extent,
+    float outward_acceleration,
+    float jitter_xy_acceleration,
+    float jitter_z_acceleration,
+    float damping,
     const uint32_t *restrict packed_targets,
     uint32_t *restrict random_states,
     float *restrict x,
@@ -267,9 +285,9 @@ size_t mister_magik_particle_neon_disperse(
 ) {
     size_t vector_end = count & ~(size_t)3;
     float32x4_t delta_vector = vdupq_n_f32(delta);
-    float repulsion_gain = 2.2f * delta;
-    float jitter_xy_gain = 115.0f * delta;
-    float jitter_z_gain = 55.0f * delta;
+    float repulsion_gain = outward_acceleration * delta;
+    float jitter_xy_gain = jitter_xy_acceleration * delta;
+    float jitter_z_gain = jitter_z_acceleration * delta;
     for (size_t index = 0; index < vector_end; index += 4) {
         uint32x4_t noise = next_random(random_states + index);
         float32x4_t jitter_x = signed_unit_vector(noise);
@@ -293,11 +311,11 @@ size_t mister_magik_particle_neon_disperse(
         force_y = vaddq_f32(force_y, vmulq_n_f32(jitter_y, jitter_xy_gain));
         float32x4_t force_z = vmulq_n_f32(jitter_z, jitter_z_gain);
         float32x4_t next_vx =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), 0.99f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vx + index), force_x), damping);
         float32x4_t next_vy =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vy + index), force_y), 0.99f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vy + index), force_y), damping);
         float32x4_t next_vz =
-            vmulq_n_f32(vaddq_f32(vld1q_f32(vz + index), force_z), 0.99f);
+            vmulq_n_f32(vaddq_f32(vld1q_f32(vz + index), force_z), damping);
         vst1q_f32(vx + index, next_vx);
         vst1q_f32(vy + index, next_vy);
         vst1q_f32(vz + index, next_vz);
@@ -305,7 +323,8 @@ size_t mister_magik_particle_neon_disperse(
         vst1q_f32(y + index, vaddq_f32(old_y, vmulq_f32(next_vy, delta_vector)));
         store_depth_q7(
             z_q7 + index,
-            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector))
+            vaddq_f32(old_z, vmulq_f32(next_vz, delta_vector)),
+            depth_extent
         );
     }
     return vector_end;
@@ -324,6 +343,10 @@ static inline uint32x4_t project_four_commands(
     uint32_t width,
     uint32_t visual,
     uint32_t formed,
+    float focal_length,
+    float near_denominator,
+    float formed_neighbor_when_depth_below,
+    uint32_t unformed_palette_index,
     float32x4_t center_x,
     float32x4_t center_y,
     float32x4_t max_x,
@@ -347,9 +370,9 @@ static inline uint32x4_t project_four_commands(
         vmulq_f32(relative_x, sin_y)
     );
     float32x4_t denominator =
-        vaddq_f32(vdupq_n_f32(FOCAL_LENGTH), rotated_z);
+        vaddq_f32(vdupq_n_f32(focal_length), rotated_z);
     float32x4_t scale =
-        vmulq_n_f32(reciprocal_once(denominator), FOCAL_LENGTH);
+        vmulq_n_f32(reciprocal_once(denominator), focal_length);
     float32x4_t screen_x =
         vaddq_f32(center_x, vmulq_f32(rotated_x, scale));
     float32x4_t screen_y = vaddq_f32(
@@ -357,7 +380,7 @@ static inline uint32x4_t project_four_commands(
         vmulq_f32(vsubq_f32(vld1q_f32(y + index), center_y), scale)
     );
     uint32x4_t visible_mask =
-        vcgtq_f32(denominator, vdupq_n_f32(1.0f));
+        vcgtq_f32(denominator, vdupq_n_f32(near_denominator));
     visible_mask = vandq_u32(
         visible_mask,
         vcgtq_f32(screen_x, vdupq_n_f32(-0.5f))
@@ -386,8 +409,11 @@ static inline uint32x4_t project_four_commands(
             vdupq_n_u32(width - 1)
         );
         uint32x4_t phase_neighbor = formed != 0
-            ? vcltq_f32(rotated_z, vdupq_n_f32(0.0f))
-            : vceqq_u32(palette, vdupq_n_u32(3));
+            ? vcltq_f32(
+                rotated_z,
+                vdupq_n_f32(formed_neighbor_when_depth_below)
+            )
+            : vceqq_u32(palette, vdupq_n_u32(unformed_palette_index));
         neighbor_mask = vandq_u32(
             visible_mask,
             vandq_u32(neighbor_mask, phase_neighbor)
@@ -413,6 +439,10 @@ size_t mister_magik_particle_neon_project_commands(
     size_t width,
     uint32_t visual,
     uint32_t phase,
+    float focal_length,
+    float near_denominator,
+    float formed_neighbor_when_depth_below,
+    uint32_t unformed_palette_index,
     float projection_center_x,
     float projection_center_y,
     float projection_max_x,
@@ -443,6 +473,10 @@ size_t mister_magik_particle_neon_project_commands(
                 width_u32,
                 visual,
                 formed,
+                focal_length,
+                near_denominator,
+                formed_neighbor_when_depth_below,
+                unformed_palette_index,
                 center_x,
                 center_y,
                 max_x,
@@ -463,6 +497,10 @@ size_t mister_magik_particle_neon_project_commands(
                 width_u32,
                 visual,
                 formed,
+                focal_length,
+                near_denominator,
+                formed_neighbor_when_depth_below,
+                unformed_palette_index,
                 center_x,
                 center_y,
                 max_x,
@@ -484,8 +522,8 @@ size_t mister_magik_particle_neon_project_commands(
             relative_x * rotation_y_cos + source_z * rotation_y_sin;
         float rotated_z =
             -relative_x * rotation_y_sin + source_z * rotation_y_cos;
-        float denominator = FOCAL_LENGTH + rotated_z;
-        if (denominator <= 1.0f) {
+        float denominator = focal_length + rotated_z;
+        if (denominator <= near_denominator) {
             commands[index] = PARTICLE_NOT_VISIBLE;
             continue;
         }
@@ -495,7 +533,7 @@ size_t mister_magik_particle_neon_project_commands(
             reciprocal,
             vrecps_f32(denominator_vector, reciprocal)
         );
-        float scale = FOCAL_LENGTH * vget_lane_f32(reciprocal, 0);
+        float scale = focal_length * vget_lane_f32(reciprocal, 0);
         float screen_x = projection_center_x + rotated_x * scale;
         float screen_y = projection_center_y +
             (y[index] - projection_center_y) * scale;
@@ -510,7 +548,9 @@ size_t mister_magik_particle_neon_project_commands(
         if (visual != 0) {
             uint32_t palette = random_states[index] >> 30;
             uint32_t neighbor = pixel_x + 1 < width_u32 &&
-                (formed != 0 ? rotated_z < 0.0f : palette == 3);
+                (formed != 0
+                    ? rotated_z < formed_neighbor_when_depth_below
+                    : palette == unformed_palette_index);
             command |= palette << COMMAND_PALETTE_SHIFT;
             command |= neighbor != 0 ? COMMAND_NEIGHBOR : 0;
         }

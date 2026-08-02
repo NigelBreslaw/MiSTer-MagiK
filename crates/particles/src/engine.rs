@@ -3,20 +3,14 @@
 
 //! Deterministic scalar particle simulation for software-rendered effects.
 
+use crate::recipes::{MagikRecipe, MagikTiming, RecipeEasing, embedded_magik_recipe};
 use std::time::Duration;
 use std::{mem::MaybeUninit, ops::Range};
 
 pub const PARTICLE_COUNT_MAX: usize = 524_288;
-pub const PARTICLE_CYCLE: Duration = Duration::from_secs(10);
-const STATIC_END_US: u64 = 3_000_000;
-const FORM_END_US: u64 = 5_000_000;
-const HOLD_END_US: u64 = 8_000_000;
-const CYCLE_US: u64 = 10_000_000;
 const MAX_STEP_SECONDS: f32 = 1.0 / 15.0;
-const DEPTH_EXTENT: f32 = 64.0;
 const DEPTH_FIXED_SCALE: f32 = 128.0;
 const DEPTH_FIXED_SCALE_RECIP: f32 = 1.0 / DEPTH_FIXED_SCALE;
-const FOCAL_LENGTH: f32 = 720.0;
 const RECIPROCAL_TABLE_MIN: f32 = 192.0;
 const RECIPROCAL_TABLE_MAX: f32 = 1_248.0;
 const RECIPROCAL_TABLE_STEP: f32 = 4.0;
@@ -25,11 +19,11 @@ const RECIPROCAL_TABLE_COUNT: usize =
     ((RECIPROCAL_TABLE_MAX - RECIPROCAL_TABLE_MIN) / RECIPROCAL_TABLE_STEP) as usize + 1;
 const TARGET_FIXED_SCALE: f32 = 16.0;
 const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
-const TARGET_DEPTH_Q2_HALF_EXTENT: i8 = 40;
-const TARGET_DEPTH_LEVELS: u64 = 81;
 const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
-const HOLD_DURATION_US: u64 = HOLD_END_US - FORM_END_US;
 pub const PARTICLE_NOT_VISIBLE_OFFSET: u32 = u32::MAX;
+const COMMAND_OFFSET_BITS: u32 = 20;
+const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
+const COMMAND_NEIGHBOR: u32 = 1 << (COMMAND_PALETTE_SHIFT + 2);
 const MAGIK_MASK: &[u8] = include_bytes!("../assets/magik-alpha-mask.bin");
 const MAGIK_MASK_MAGIC: &[u8; 8] = b"MAGIKMSK";
 const MAGIK_MASK_HEADER_BYTES: usize = 16;
@@ -82,12 +76,15 @@ impl ParticlePhase {
     }
 
     #[must_use]
-    pub const fn at_cycle_us(cycle_us: u64) -> Self {
-        if cycle_us < STATIC_END_US {
+    pub const fn at_timing_us(cycle_us: u64, timing: &MagikTiming) -> Self {
+        let static_end_us = timing.static_ms * 1_000;
+        let form_end_us = static_end_us + timing.form_ms * 1_000;
+        let hold_end_us = form_end_us + timing.hold_ms * 1_000;
+        if cycle_us < static_end_us {
             Self::Static
-        } else if cycle_us < FORM_END_US {
+        } else if cycle_us < form_end_us {
             Self::Form
-        } else if cycle_us < HOLD_END_US {
+        } else if cycle_us < hold_end_us {
             Self::Hold
         } else {
             Self::Disperse
@@ -240,6 +237,7 @@ pub struct ProjectedParticle {
 #[derive(Debug)]
 pub struct ParticleEngine {
     config: ParticleConfig,
+    recipe: MagikRecipe,
     projection_center_x: f32,
     projection_center_y: f32,
     projection_max_x: f32,
@@ -270,8 +268,48 @@ pub struct ParticleEngine {
 }
 
 impl ParticleEngine {
+    /// Builds an engine from the embedded checked-in recipe. `count` and
+    /// `seed` remain explicit compatibility overrides for existing production
+    /// callers; new recipe-reload callers should use [`Self::from_recipe`].
     pub fn new(config: ParticleConfig, mask: TargetMask) -> Result<Self, String> {
+        let mut recipe = embedded_magik_recipe()
+            .map_err(|error| format!("embedded Magik particle recipe is invalid: {error}"))?;
+        recipe.particle_count = config.count;
+        recipe.seed = config.seed;
+        Self::new_with_recipe(config, mask, recipe)
+    }
+
+    /// Builds a complete replacement engine whose particle identity and
+    /// effect behavior are both supplied by one validated recipe.
+    pub fn from_recipe(
+        width: usize,
+        height: usize,
+        preset: ParticlePreset,
+        recipe: MagikRecipe,
+        mask: TargetMask,
+    ) -> Result<Self, String> {
+        let config = ParticleConfig {
+            count: recipe.particle_count,
+            width,
+            height,
+            seed: recipe.seed,
+            preset,
+        };
+        Self::new_with_recipe(config, mask, recipe)
+    }
+
+    /// Builds an engine after checking that the engineering configuration and
+    /// the validated effect recipe describe the same deterministic particle
+    /// population.
+    pub fn new_with_recipe(
+        config: ParticleConfig,
+        mask: TargetMask,
+        recipe: MagikRecipe,
+    ) -> Result<Self, String> {
         let config = config.validate()?;
+        if config.count != recipe.particle_count || config.seed != recipe.seed {
+            return Err("particle configuration count and seed must match the Magik recipe".into());
+        }
         if mask.width > config.width || mask.height > config.height {
             return Err("particle target mask does not fit the viewport".into());
         }
@@ -287,8 +325,8 @@ impl ParticleEngine {
             .collect::<Vec<_>>();
         let mut engine = Self {
             config,
-            projection_center_x: config.width as f32 * 0.5,
-            projection_center_y: config.height as f32 * 0.5,
+            projection_center_x: config.width as f32 * 0.5 + recipe.projection.center_offset_x,
+            projection_center_y: config.height as f32 * 0.5 + recipe.projection.center_offset_y,
             projection_max_x: config.width as f32 - 0.5,
             projection_max_y: config.height as f32 - 0.5,
             reciprocal_table: std::array::from_fn(|index| {
@@ -316,6 +354,7 @@ impl ParticleEngine {
             validate_neon_projection: particle_neon_projection_validation_enabled(),
             use_table_projection: particle_table_projection_enabled(),
             use_alternating_cohorts: particle_alternating_cohorts_enabled(),
+            recipe,
         };
         engine.initialize_particles(&target_points)?;
         Ok(engine)
@@ -324,6 +363,16 @@ impl ParticleEngine {
     #[must_use]
     pub const fn config(&self) -> ParticleConfig {
         self.config
+    }
+
+    #[must_use]
+    pub const fn recipe(&self) -> &MagikRecipe {
+        &self.recipe
+    }
+
+    #[must_use]
+    pub fn cycle_duration(&self) -> Duration {
+        Duration::from_millis(self.recipe.timing.cycle_ms)
     }
 
     #[must_use]
@@ -343,19 +392,20 @@ impl ParticleEngine {
 
     pub fn step(&mut self, elapsed: Duration) -> ParticleFrameStats {
         let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
-        let next_cycle = elapsed_us / CYCLE_US;
+        let cycle_us_total = self.recipe.timing.cycle_ms * 1_000;
+        let next_cycle = elapsed_us / cycle_us_total;
         if next_cycle != self.cycle {
             self.cycle = next_cycle;
         }
-        let cycle_us = elapsed_us % CYCLE_US;
-        let next_phase = ParticlePhase::at_cycle_us(cycle_us);
+        let cycle_us = elapsed_us % cycle_us_total;
+        let next_phase = ParticlePhase::at_timing_us(cycle_us, &self.recipe.timing);
         let delta = elapsed
             .saturating_sub(self.last_elapsed)
             .as_secs_f32()
             .min(MAX_STEP_SECONDS);
         self.last_elapsed = elapsed;
         self.phase = next_phase;
-        self.rotation_y_radians = rotation_y_at_cycle_us(cycle_us);
+        self.rotation_y_radians = rotation_y_at_cycle_us(cycle_us, &self.recipe);
         (self.rotation_y_sin, self.rotation_y_cos) = self.rotation_y_radians.sin_cos();
         let mut simulation_update = ParticleSimulationUpdate::None;
         if delta > 0.0 {
@@ -400,8 +450,9 @@ impl ParticleEngine {
             self.rotation_y_sin,
             self.rotation_y_cos,
         );
-        let denominator = FOCAL_LENGTH + rotated_z;
-        if denominator <= 1.0 {
+        let focal_length = self.recipe.projection.focal_length;
+        let denominator = focal_length + rotated_z;
+        if denominator <= self.recipe.projection.near_denominator {
             return None;
         }
         let relative_y = self.y[index] - self.projection_center_y;
@@ -419,7 +470,7 @@ impl ParticleEngine {
                 relative_y.abs() * scale_error,
             ))
         {
-            scale = FOCAL_LENGTH / denominator;
+            scale = focal_length / denominator;
             screen_x = self.projection_center_x + rotated_x * scale;
             screen_y = self.projection_center_y + relative_y * scale;
         }
@@ -456,11 +507,7 @@ impl ParticleEngine {
             // every particle and never retains any supplied pointer.
             return unsafe { neon::project_commands(self, output.as_mut_ptr().cast(), visual) };
         }
-        debug_assert!(
-            !visual,
-            "visual packed projection requires the NEON backend"
-        );
-        self.project_offsets_scalar(output, 0..self.particle_count())
+        self.project_packed_commands_scalar(output, 0..self.particle_count(), visual)
     }
 
     /// Updates a contiguous range in an already initialized fixed command
@@ -481,26 +528,23 @@ impl ParticleEngine {
                 neon::project_commands_range(self, output.as_mut_ptr(), range, visual)
             };
         }
-        debug_assert!(
-            !visual,
-            "visual packed projection requires the NEON backend"
-        );
         let mut visible = 0;
         for index in range {
             output[index] = self
                 .project(index)
                 .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
                     visible += 1;
-                    (particle.y as usize * self.config.width + particle.x as usize) as u32
+                    self.pack_projected_command(index, particle, visual)
                 });
         }
         visible
     }
 
-    fn project_offsets_scalar(
+    fn project_packed_commands_scalar(
         &self,
         output: &mut [MaybeUninit<u32>],
         range: Range<usize>,
+        visual: bool,
     ) -> usize {
         let mut visible = 0usize;
         for index in range {
@@ -508,11 +552,36 @@ impl ParticleEngine {
                 .project(index)
                 .map_or(PARTICLE_NOT_VISIBLE_OFFSET, |particle| {
                     visible += 1;
-                    (particle.y as usize * self.config.width + particle.x as usize) as u32
+                    self.pack_projected_command(index, particle, visual)
                 });
             output[index].write(offset);
         }
         visible
+    }
+
+    #[inline(always)]
+    fn pack_projected_command(
+        &self,
+        index: usize,
+        particle: ProjectedParticle,
+        visual: bool,
+    ) -> u32 {
+        let offset = (particle.y as usize * self.config.width + particle.x as usize) as u32;
+        if !visual {
+            return offset;
+        }
+        debug_assert!(offset < (1 << COMMAND_OFFSET_BITS));
+        let palette_index = self.flicker_key(index) >> 30;
+        let formed = matches!(self.phase, ParticlePhase::Form | ParticlePhase::Hold);
+        let neighbor = particle.x + 1 < self.config.width as i32
+            && if formed {
+                particle.depth < self.recipe.appearance.formed_neighbor_when_depth_below
+            } else {
+                palette_index == u32::from(self.recipe.appearance.unformed_palette_index)
+            };
+        offset
+            | (palette_index << COMMAND_PALETTE_SHIFT)
+            | if neighbor { COMMAND_NEIGHBOR } else { 0 }
     }
 
     #[must_use]
@@ -558,12 +627,16 @@ impl ParticleEngine {
             };
             let mut target = target_points[target_index];
             if self.config.count > point_count {
-                target.x += signed_unit(mix32(seed ^ 0xbb67_ae85)) * 0.4;
-                target.y += signed_unit(mix32(seed ^ 0x3c6e_f372)) * 0.4;
+                target.x += signed_unit(mix32(seed ^ 0xbb67_ae85))
+                    * self.recipe.initial.duplicate_target_jitter_px;
+                target.y += signed_unit(mix32(seed ^ 0x3c6e_f372))
+                    * self.recipe.initial.duplicate_target_jitter_px;
             }
             self.packed_targets.push(pack_target(target)?);
-            self.target_depth_q2
-                .push(distributed_target_depth_q2(mix32(seed ^ 0x510e_527f)));
+            self.target_depth_q2.push(distributed_target_depth_q2(
+                mix32(seed ^ 0x510e_527f),
+                self.recipe.depth.target_extent,
+            ));
             self.random_states.push(seed);
             self.x.push(0.0);
             self.y.push(0.0);
@@ -583,10 +656,16 @@ impl ParticleEngine {
             let seed = self.random_states[index];
             self.x[index] = unit_float(mix32(seed ^ 0xa511_e9b3)) * width;
             self.y[index] = unit_float(mix32(seed ^ 0x63d8_3595)) * height;
-            self.z_q7[index] = pack_depth(signed_unit(mix32(seed ^ 0x7f4a_7c15)) * DEPTH_EXTENT);
-            self.vx[index] = signed_unit(mix32(seed ^ 0x94d0_49bb)) * 42.0;
-            self.vy[index] = signed_unit(mix32(seed ^ 0x2c1b_3c6d)) * 42.0;
-            self.vz[index] = signed_unit(mix32(seed ^ 0x297a_2d39)) * 10.0;
+            self.z_q7[index] = pack_depth(
+                signed_unit(mix32(seed ^ 0x7f4a_7c15)) * self.recipe.depth.particle_extent,
+                self.recipe.depth.particle_extent,
+            );
+            self.vx[index] = signed_unit(mix32(seed ^ 0x94d0_49bb))
+                * self.recipe.initial.velocity_xy_max;
+            self.vy[index] = signed_unit(mix32(seed ^ 0x2c1b_3c6d))
+                * self.recipe.initial.velocity_xy_max;
+            self.vz[index] = signed_unit(mix32(seed ^ 0x297a_2d39))
+                * self.recipe.initial.velocity_z_max;
         }
     }
 
@@ -628,28 +707,36 @@ impl ParticleEngine {
     fn advance_static_scalar(&mut self, delta: f32, range: Range<usize>) {
         let width = self.config.width as f32;
         let height = self.config.height as f32;
+        let motion = self.recipe.static_motion;
+        let depth_extent = self.recipe.depth.particle_extent;
         for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            let vx = (self.vx[index] + jitter_x * 75.0 * delta) * 0.985;
-            let vy = (self.vy[index] + jitter_y * 75.0 * delta) * 0.985;
-            let vz = (self.vz[index] + signed_unit(noise.rotate_left(21)) * 8.0 * delta) * 0.98;
+            let vx = (self.vx[index] + jitter_x * motion.acceleration_xy * delta)
+                * motion.damping_xy;
+            let vy = (self.vy[index] + jitter_y * motion.acceleration_xy * delta)
+                * motion.damping_xy;
+            let vz = (self.vz[index]
+                + signed_unit(noise.rotate_left(21)) * motion.acceleration_z * delta)
+                * motion.damping_z;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
             self.x[index] = wrap_coordinate(self.x[index] + vx * delta, width);
             self.y[index] = wrap_coordinate(self.y[index] + vy * delta, height);
-            let next_z = (self.depth(index) + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT);
-            self.z_q7[index] = pack_depth(next_z);
+            let next_z = (self.depth(index) + vz * delta).clamp(-depth_extent, depth_extent);
+            self.z_q7[index] = pack_depth(next_z, depth_extent);
         }
     }
 
     fn advance_form(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
+        let motion = self.recipe.form_motion;
+        #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: see `advance_static`.
-            unsafe { neon::advance_attract(self, delta, 18.0, 0.08, 0.88, range.clone()) }
+            unsafe { neon::advance_attract(self, delta, motion, range.clone()) }
         } else {
             range.start
         };
@@ -659,6 +746,8 @@ impl ParticleEngine {
     }
 
     fn advance_form_scalar(&mut self, delta: f32, range: Range<usize>) {
+        let motion = self.recipe.form_motion;
+        let depth_extent = self.recipe.depth.particle_extent;
         for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
@@ -667,23 +756,33 @@ impl ParticleEngine {
             let x = self.x[index];
             let y = self.y[index];
             let z = self.depth(index);
-            let vx = (self.vx[index] + (target_x + jitter_x * 0.08 - x) * 18.0 * delta) * 0.88;
-            let vy = (self.vy[index] + (target_y + jitter_y * 0.08 - y) * 18.0 * delta) * 0.88;
-            let vz = (self.vz[index] + (target_z - z) * 18.0 * delta) * 0.88;
+            let vx = (self.vx[index]
+                + (target_x + jitter_x * motion.jitter_px - x) * motion.stiffness * delta)
+                * motion.damping;
+            let vy = (self.vy[index]
+                + (target_y + jitter_y * motion.jitter_px - y) * motion.stiffness * delta)
+                * motion.damping;
+            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta)
+                * motion.damping;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
+            self.z_q7[index] = pack_depth(
+                (z + vz * delta).clamp(-depth_extent, depth_extent),
+                depth_extent,
+            );
         }
     }
 
     fn advance_hold(&mut self, delta: f32, range: Range<usize>) {
         #[cfg(target_arch = "arm")]
+        let motion = self.recipe.hold_motion;
+        #[cfg(target_arch = "arm")]
         let first_scalar = if self.use_neon {
             // SAFETY: see `advance_static`.
-            unsafe { neon::advance_attract(self, delta, 34.0, 0.35, 0.78, range.clone()) }
+            unsafe { neon::advance_attract(self, delta, motion, range.clone()) }
         } else {
             range.start
         };
@@ -693,6 +792,8 @@ impl ParticleEngine {
     }
 
     fn advance_hold_scalar(&mut self, delta: f32, range: Range<usize>) {
+        let motion = self.recipe.hold_motion;
+        let depth_extent = self.recipe.depth.particle_extent;
         for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
@@ -701,15 +802,23 @@ impl ParticleEngine {
             let x = self.x[index];
             let y = self.y[index];
             let z = self.depth(index);
-            let vx = (self.vx[index] + (target_x + jitter_x * 0.35 - x) * 34.0 * delta) * 0.78;
-            let vy = (self.vy[index] + (target_y + jitter_y * 0.35 - y) * 34.0 * delta) * 0.78;
-            let vz = (self.vz[index] + (target_z - z) * 34.0 * delta) * 0.78;
+            let vx = (self.vx[index]
+                + (target_x + jitter_x * motion.jitter_px - x) * motion.stiffness * delta)
+                * motion.damping;
+            let vy = (self.vy[index]
+                + (target_y + jitter_y * motion.jitter_px - y) * motion.stiffness * delta)
+                * motion.damping;
+            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta)
+                * motion.damping;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
+            self.z_q7[index] = pack_depth(
+                (z + vz * delta).clamp(-depth_extent, depth_extent),
+                depth_extent,
+            );
         }
     }
 
@@ -727,6 +836,8 @@ impl ParticleEngine {
     }
 
     fn advance_disperse_scalar(&mut self, delta: f32, range: Range<usize>) {
+        let motion = self.recipe.disperse_motion;
+        let depth_extent = self.recipe.depth.particle_extent;
         for index in range {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
@@ -735,15 +846,28 @@ impl ParticleEngine {
             let x = self.x[index];
             let y = self.y[index];
             let z = self.depth(index);
-            let vx = (self.vx[index] + ((x - target_x) * 2.2 + jitter_x * 115.0) * delta) * 0.99;
-            let vy = (self.vy[index] + ((y - target_y) * 2.2 + jitter_y * 115.0) * delta) * 0.99;
-            let vz = (self.vz[index] + signed_unit(noise.rotate_left(21)) * 55.0 * delta) * 0.99;
+            let vx = (self.vx[index]
+                + ((x - target_x) * motion.outward_acceleration
+                    + jitter_x * motion.jitter_xy)
+                    * delta)
+                * motion.damping;
+            let vy = (self.vy[index]
+                + ((y - target_y) * motion.outward_acceleration
+                    + jitter_y * motion.jitter_xy)
+                    * delta)
+                * motion.damping;
+            let vz = (self.vz[index]
+                + signed_unit(noise.rotate_left(21)) * motion.jitter_z * delta)
+                * motion.damping;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
             self.x[index] = x + vx * delta;
             self.y[index] = y + vy * delta;
-            self.z_q7[index] = pack_depth((z + vz * delta).clamp(-DEPTH_EXTENT, DEPTH_EXTENT));
+            self.z_q7[index] = pack_depth(
+                (z + vz * delta).clamp(-depth_extent, depth_extent),
+                depth_extent,
+            );
         }
     }
 
@@ -767,7 +891,7 @@ impl ParticleEngine {
         if !self.use_table_projection
             || !(RECIPROCAL_TABLE_MIN..RECIPROCAL_TABLE_MAX).contains(&denominator)
         {
-            return (FOCAL_LENGTH / denominator, 0.0);
+            return (self.recipe.projection.focal_length / denominator, 0.0);
         }
         let table_position = (denominator - RECIPROCAL_TABLE_MIN) * RECIPROCAL_TABLE_STEP_RECIP;
         let index = table_position as usize;
@@ -779,8 +903,8 @@ impl ParticleEngine {
         let reciprocal_error_bound = RECIPROCAL_TABLE_STEP * RECIPROCAL_TABLE_STEP
             / (4.0 * lower_denominator * lower_denominator * lower_denominator);
         (
-            FOCAL_LENGTH * reciprocal,
-            FOCAL_LENGTH * reciprocal_error_bound,
+            self.recipe.projection.focal_length * reciprocal,
+            self.recipe.projection.focal_length * reciprocal_error_bound,
         )
     }
 
@@ -859,6 +983,7 @@ const fn particle_alternating_cohorts_enabled() -> bool {
 #[cfg(target_arch = "arm")]
 mod neon {
     use super::ParticleEngine;
+    use crate::recipes::MagikAttractionMotion;
     use std::ops::Range;
 
     unsafe extern "C" {
@@ -867,6 +992,11 @@ mod neon {
             width: f32,
             height: f32,
             delta: f32,
+            depth_extent: f32,
+            acceleration_xy: f32,
+            acceleration_z: f32,
+            damping_xy: f32,
+            damping_z: f32,
             random_states: *mut u32,
             x: *mut f32,
             y: *mut f32,
@@ -881,6 +1011,7 @@ mod neon {
             stiffness: f32,
             jitter: f32,
             damping: f32,
+            depth_extent: f32,
             packed_targets: *const u32,
             target_depth_q2: *const i8,
             random_states: *mut u32,
@@ -894,6 +1025,11 @@ mod neon {
         fn mister_magik_particle_neon_disperse(
             count: usize,
             delta: f32,
+            depth_extent: f32,
+            outward_acceleration: f32,
+            jitter_xy: f32,
+            jitter_z: f32,
+            damping: f32,
             packed_targets: *const u32,
             random_states: *mut u32,
             x: *mut f32,
@@ -908,6 +1044,10 @@ mod neon {
             width: usize,
             visual: u32,
             phase: u32,
+            focal_length: f32,
+            near_denominator: f32,
+            formed_neighbor_when_depth_below: f32,
+            unformed_palette_index: u32,
             projection_center_x: f32,
             projection_center_y: f32,
             projection_max_x: f32,
@@ -933,6 +1073,11 @@ mod neon {
                 engine.config.width as f32,
                 engine.config.height as f32,
                 delta,
+                engine.recipe.depth.particle_extent,
+                engine.recipe.static_motion.acceleration_xy,
+                engine.recipe.static_motion.acceleration_z,
+                engine.recipe.static_motion.damping_xy,
+                engine.recipe.static_motion.damping_z,
                 engine.random_states.as_mut_ptr().add(range.start),
                 engine.x.as_mut_ptr().add(range.start),
                 engine.y.as_mut_ptr().add(range.start),
@@ -948,18 +1093,17 @@ mod neon {
     pub(super) unsafe fn advance_attract(
         engine: &mut ParticleEngine,
         delta: f32,
-        stiffness: f32,
-        jitter: f32,
-        damping: f32,
+        motion: MagikAttractionMotion,
         range: Range<usize>,
     ) -> usize {
         let processed = unsafe {
             mister_magik_particle_neon_attract(
                 range.len(),
                 delta,
-                stiffness,
-                jitter,
-                damping,
+                motion.stiffness,
+                motion.jitter_px,
+                motion.damping,
+                engine.recipe.depth.particle_extent,
                 engine.packed_targets.as_ptr().add(range.start),
                 engine.target_depth_q2.as_ptr().add(range.start),
                 engine.random_states.as_mut_ptr().add(range.start),
@@ -983,6 +1127,11 @@ mod neon {
             mister_magik_particle_neon_disperse(
                 range.len(),
                 delta,
+                engine.recipe.depth.particle_extent,
+                engine.recipe.disperse_motion.outward_acceleration,
+                engine.recipe.disperse_motion.jitter_xy,
+                engine.recipe.disperse_motion.jitter_z,
+                engine.recipe.disperse_motion.damping,
                 engine.packed_targets.as_ptr().add(range.start),
                 engine.random_states.as_mut_ptr().add(range.start),
                 engine.x.as_mut_ptr().add(range.start),
@@ -1013,6 +1162,10 @@ mod neon {
                 engine.config.width,
                 u32::from(visual),
                 phase,
+                engine.recipe.projection.focal_length,
+                engine.recipe.projection.near_denominator,
+                engine.recipe.appearance.formed_neighbor_when_depth_below,
+                u32::from(engine.recipe.appearance.unformed_palette_index),
                 engine.projection_center_x,
                 engine.projection_center_y,
                 engine.projection_max_x,
@@ -1046,6 +1199,10 @@ mod neon {
                 engine.config.width,
                 u32::from(visual),
                 phase,
+                engine.recipe.projection.focal_length,
+                engine.recipe.projection.near_denominator,
+                engine.recipe.appearance.formed_neighbor_when_depth_below,
+                u32::from(engine.recipe.appearance.unformed_palette_index),
                 engine.projection_center_x,
                 engine.projection_center_y,
                 engine.projection_max_x,
@@ -1107,25 +1264,37 @@ fn next_random(state: &mut u32) -> u32 {
     value
 }
 
-fn distributed_target_depth_q2(value: u32) -> i8 {
-    let level = (u64::from(value) * TARGET_DEPTH_LEVELS) >> 32;
-    (level as i16 - i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as i8
+fn distributed_target_depth_q2(value: u32, target_extent: f32) -> i8 {
+    let half_extent_q2 = (target_extent * 4.0) as i16;
+    let levels = u64::try_from(half_extent_q2 * 2 + 1).expect("validated target depth range");
+    let level = (u64::from(value) * levels) >> 32;
+    (level as i16 - half_extent_q2) as i8
 }
 
 #[inline(always)]
-fn pack_depth(value: f32) -> i16 {
+fn pack_depth(value: f32, extent: f32) -> i16 {
     debug_assert!(value.is_finite());
-    debug_assert!((-DEPTH_EXTENT..=DEPTH_EXTENT).contains(&value));
+    debug_assert!((-extent..=extent).contains(&value));
     (value * DEPTH_FIXED_SCALE).round() as i16
 }
 
-fn rotation_y_at_cycle_us(cycle_us: u64) -> f32 {
-    if !(FORM_END_US..HOLD_END_US).contains(&cycle_us) {
+fn rotation_y_at_cycle_us(cycle_us: u64, recipe: &MagikRecipe) -> f32 {
+    let hold_start_us = (recipe.timing.static_ms + recipe.timing.form_ms) * 1_000;
+    let hold_duration_us = recipe.timing.hold_ms * 1_000;
+    let hold_end_us = hold_start_us + hold_duration_us;
+    if !(hold_start_us..hold_end_us).contains(&cycle_us) {
         return 0.0;
     }
-    let progress = (cycle_us - FORM_END_US) as f32 / HOLD_DURATION_US as f32;
-    let eased = progress * progress * (3.0 - 2.0 * progress);
-    std::f32::consts::TAU * eased
+    let progress = (cycle_us - hold_start_us) as f32 / hold_duration_us as f32;
+    std::f32::consts::TAU * recipe.rotation.hold_turns * ease(progress, recipe.rotation.easing)
+}
+
+fn ease(progress: f32, easing: RecipeEasing) -> f32 {
+    match easing {
+        RecipeEasing::Linear => progress,
+        RecipeEasing::Smoothstep => progress * progress * (3.0 - 2.0 * progress),
+        RecipeEasing::EaseOutCubic => 1.0 - (1.0 - progress).powi(3),
+    }
 }
 
 #[inline(always)]
@@ -1221,16 +1390,26 @@ mod tests {
 
     #[test]
     fn phase_boundaries_follow_the_ten_second_cycle() {
-        assert_eq!(ParticlePhase::at_cycle_us(0), ParticlePhase::Static);
-        assert_eq!(ParticlePhase::at_cycle_us(2_999_999), ParticlePhase::Static);
-        assert_eq!(ParticlePhase::at_cycle_us(3_000_000), ParticlePhase::Form);
-        assert_eq!(ParticlePhase::at_cycle_us(5_000_000), ParticlePhase::Hold);
+        let timing = embedded_magik_recipe().unwrap().timing;
+        assert_eq!(ParticlePhase::at_timing_us(0, &timing), ParticlePhase::Static);
         assert_eq!(
-            ParticlePhase::at_cycle_us(8_000_000),
+            ParticlePhase::at_timing_us(2_999_999, &timing),
+            ParticlePhase::Static
+        );
+        assert_eq!(
+            ParticlePhase::at_timing_us(3_000_000, &timing),
+            ParticlePhase::Form
+        );
+        assert_eq!(
+            ParticlePhase::at_timing_us(5_000_000, &timing),
+            ParticlePhase::Hold
+        );
+        assert_eq!(
+            ParticlePhase::at_timing_us(8_000_000, &timing),
             ParticlePhase::Disperse
         );
         assert_eq!(
-            ParticlePhase::at_cycle_us(9_999_999),
+            ParticlePhase::at_timing_us(9_999_999, &timing),
             ParticlePhase::Disperse
         );
     }
@@ -1248,6 +1427,63 @@ mod tests {
             .map(|index| second.project(index))
             .collect::<Vec<_>>();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn recipe_constructor_owns_the_complete_particle_identity() {
+        let mut recipe = embedded_magik_recipe().unwrap();
+        recipe.particle_count = 32;
+        recipe.seed = 42;
+        let engine = ParticleEngine::from_recipe(
+            32,
+            24,
+            ParticlePreset::Visual,
+            recipe.clone(),
+            mask(),
+        )
+        .unwrap();
+
+        assert_eq!(engine.config.count, recipe.particle_count);
+        assert_eq!(engine.config.seed, recipe.seed);
+        assert_eq!(engine.recipe(), &recipe);
+        assert_eq!(engine.cycle_duration(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn recipe_and_engineering_identity_must_match() {
+        let recipe = embedded_magik_recipe().unwrap();
+        let config = ParticleConfig {
+            count: recipe.particle_count - 1,
+            width: 960,
+            height: 540,
+            seed: recipe.seed,
+            preset: ParticlePreset::Visual,
+        };
+
+        assert!(ParticleEngine::new_with_recipe(config, magik_target_mask().unwrap(), recipe).is_err());
+    }
+
+    #[test]
+    fn scalar_visual_commands_follow_recipe_neighbor_semantics() {
+        let mut engine = engine(1);
+        engine.x[0] = engine.projection_center_x;
+        engine.y[0] = engine.projection_center_y;
+        engine.z_q7[0] = pack_depth(0.0, engine.recipe.depth.particle_extent);
+        engine.random_states[0] = 3 << 30;
+        engine.recipe.appearance.unformed_palette_index = 3;
+        let mut commands = [MaybeUninit::uninit()];
+
+        assert_eq!(engine.project_packed_commands(&mut commands, true), 1);
+        // SAFETY: packed projection initializes every command slot.
+        let command = unsafe { commands[0].assume_init() };
+        assert_eq!((command >> COMMAND_PALETTE_SHIFT) & 3, 3);
+        assert_ne!(command & COMMAND_NEIGHBOR, 0);
+
+        engine.recipe.appearance.unformed_palette_index = 2;
+        assert_eq!(engine.project_packed_commands(&mut commands, true), 1);
+        // SAFETY: packed projection initializes every command slot.
+        let command = unsafe { commands[0].assume_init() };
+        assert_eq!(command & COMMAND_NEIGHBOR, 0);
     }
 
     #[test]
@@ -1287,15 +1523,20 @@ mod tests {
 
     #[test]
     fn hold_rotation_eases_through_one_complete_turn() {
-        assert_eq!(rotation_y_at_cycle_us(FORM_END_US), 0.0);
+        let recipe = embedded_magik_recipe().unwrap();
+        let hold_start_us = (recipe.timing.static_ms + recipe.timing.form_ms) * 1_000;
+        let hold_duration_us = recipe.timing.hold_ms * 1_000;
+        let hold_end_us = hold_start_us + hold_duration_us;
+        assert_eq!(rotation_y_at_cycle_us(hold_start_us, &recipe), 0.0);
         assert!(
-            (rotation_y_at_cycle_us(FORM_END_US + HOLD_DURATION_US / 2) - std::f32::consts::PI)
+            (rotation_y_at_cycle_us(hold_start_us + hold_duration_us / 2, &recipe)
+                - std::f32::consts::PI)
                 .abs()
                 < 1.0e-6
         );
-        let final_hold_angle = rotation_y_at_cycle_us(HOLD_END_US - 1);
+        let final_hold_angle = rotation_y_at_cycle_us(hold_end_us - 1, &recipe);
         assert!((final_hold_angle - std::f32::consts::TAU).abs() < 1.0e-5);
-        assert_eq!(rotation_y_at_cycle_us(HOLD_END_US), 0.0);
+        assert_eq!(rotation_y_at_cycle_us(hold_end_us, &recipe), 0.0);
     }
 
     #[test]
@@ -1303,7 +1544,7 @@ mod tests {
         let mut engine = engine(1);
         engine.x[0] = engine.projection_center_x;
         engine.y[0] = engine.projection_center_y;
-        engine.z_q7[0] = pack_depth(0.0);
+        engine.z_q7[0] = pack_depth(0.0, engine.recipe.depth.particle_extent);
         for angle in [
             0.0,
             std::f32::consts::FRAC_PI_2,
@@ -1321,10 +1562,11 @@ mod tests {
     #[test]
     fn perspective_separates_near_and_far_particles() {
         let mut engine = engine(2);
+        let depth_extent = engine.recipe.depth.particle_extent;
         engine.x.fill(engine.projection_center_x + 8.0);
         engine.y.fill(engine.projection_center_y);
-        engine.z_q7[0] = pack_depth(-DEPTH_EXTENT);
-        engine.z_q7[1] = pack_depth(DEPTH_EXTENT);
+        engine.z_q7[0] = pack_depth(-depth_extent, depth_extent);
+        engine.z_q7[1] = pack_depth(depth_extent, depth_extent);
         let near = engine.project(0).unwrap();
         let far = engine.project(1).unwrap();
         assert!(near.x > far.x);
@@ -1427,12 +1669,11 @@ mod tests {
         let second = engine(16_384);
         assert_eq!(first.target_depth_q2, second.target_depth_q2);
         assert_eq!(ParticleEngine::bytes_per_particle(), 31);
-        let mut levels = [0usize; TARGET_DEPTH_LEVELS as usize];
+        let half_extent_q2 = (first.recipe.depth.target_extent * 4.0) as i8;
+        let mut levels = vec![0usize; usize::from((half_extent_q2 as u8) * 2 + 1)];
         for &depth in &first.target_depth_q2 {
-            assert!((-TARGET_DEPTH_Q2_HALF_EXTENT..=TARGET_DEPTH_Q2_HALF_EXTENT).contains(&depth));
-            levels[usize::from(
-                (i16::from(depth) + i16::from(TARGET_DEPTH_Q2_HALF_EXTENT)) as u16,
-            )] += 1;
+            assert!((-half_extent_q2..=half_extent_q2).contains(&depth));
+            levels[usize::from((i16::from(depth) + i16::from(half_extent_q2)) as u16)] += 1;
         }
         let minimum = levels.into_iter().min().unwrap();
         let maximum = levels.into_iter().max().unwrap();
@@ -1476,8 +1717,9 @@ mod tests {
 
     #[test]
     fn packed_depth_preserves_q8_7_precision_across_the_simulation_range() {
-        for depth in [-DEPTH_EXTENT, -10.123, 0.0, 10.123, DEPTH_EXTENT] {
-            let unpacked = f32::from(pack_depth(depth)) * DEPTH_FIXED_SCALE_RECIP;
+        let depth_extent = embedded_magik_recipe().unwrap().depth.particle_extent;
+        for depth in [-depth_extent, -10.123, 0.0, 10.123, depth_extent] {
+            let unpacked = f32::from(pack_depth(depth, depth_extent)) * DEPTH_FIXED_SCALE_RECIP;
             assert!((unpacked - depth).abs() <= 1.0 / (DEPTH_FIXED_SCALE * 2.0));
         }
     }
@@ -1485,7 +1727,7 @@ mod tests {
     #[test]
     fn checked_projection_matches_rounding_at_viewport_edges() {
         let mut engine = engine(1);
-        engine.z_q7[0] = pack_depth(0.0);
+        engine.z_q7[0] = pack_depth(0.0, engine.recipe.depth.particle_extent);
         for (x, expected) in [
             (-0.5, None),
             (-0.499, Some(0)),
