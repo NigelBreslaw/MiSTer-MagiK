@@ -4,9 +4,10 @@
 //! Focused, Slint-free host for the production startup particle effects.
 
 use mister_magik_particles::cabinet::{ArcadeCabinetFormation, Rgb565Pixel};
-use mister_magik_particles::engine::{
-    ParticleEngine, ParticlePhase, ParticlePreset, magik_target_mask,
+use mister_magik_particles::commands::{
+    raster_packed_visual_commands, write_packed_visual_commands,
 };
+use mister_magik_particles::engine::{ParticleEngine, ParticlePreset, magik_target_mask};
 use mister_magik_particles::recipes::{
     CABINET_RECIPE_SCHEMA_V1, CabinetRecipe, MAGIK_RECIPE_SCHEMA_V1, MagikRecipe,
     embedded_cabinet_recipe, embedded_magik_recipe, parse_cabinet_recipe, parse_magik_recipe,
@@ -105,6 +106,8 @@ pub struct FrameStats {
     pub effect: EffectKind,
     pub particles: usize,
     pub visible: usize,
+    pub simulation_backend: &'static str,
+    pub projection_backend: &'static str,
 }
 
 pub struct FocusedParticleRenderer {
@@ -150,6 +153,8 @@ impl FocusedParticleRenderer {
                     effect: EffectKind::Cabinet,
                     particles: stats.particles,
                     visible: stats.visible,
+                    simulation_backend: "cabinet-scalar",
+                    projection_backend: "cabinet-scalar",
                 })
             }
         }
@@ -159,6 +164,7 @@ impl FocusedParticleRenderer {
 struct MagikRenderer {
     engine: ParticleEngine,
     recipe: MagikRecipe,
+    commands: Vec<u32>,
 }
 
 impl MagikRenderer {
@@ -170,7 +176,12 @@ impl MagikRenderer {
             recipe.clone(),
             magik_target_mask()?,
         )?;
-        Ok(Self { engine, recipe })
+        let commands = Vec::with_capacity(recipe.particle_count);
+        Ok(Self {
+            engine,
+            recipe,
+            commands,
+        })
     }
 
     fn render(
@@ -191,36 +202,22 @@ impl MagikRenderer {
         }
         destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
         let frame = self.engine.step(elapsed);
-        let width = self.engine.config().width;
-        let mut visible = 0usize;
-        for index in 0..self.engine.particle_count() {
-            let Some(projected) = self.engine.project(index) else {
-                continue;
-            };
-            let offset = projected.y as usize * width + projected.x as usize;
-            let palette_index = (self.engine.flicker_key(index) >> 30) as usize;
-            destination[offset] = Rgb565Pixel(self.recipe.appearance.palette[palette_index].0);
-            visible = visible.saturating_add(1);
-            let neighbor = match frame.phase {
-                ParticlePhase::Form | ParticlePhase::Hold => {
-                    projected.depth < self.recipe.appearance.formed_neighbor_when_depth_below
-                }
-                ParticlePhase::Static | ParticlePhase::Disperse => {
-                    palette_index == usize::from(self.recipe.appearance.unformed_palette_index)
-                }
-            };
-            if neighbor && projected.x + 1 < width as i32 {
-                destination[offset + 1] = Rgb565Pixel(
-                    self.recipe.appearance.palette
-                        [usize::from(self.recipe.appearance.neighbor_palette_index)]
-                    .0,
-                );
-            }
-        }
+        let visible = write_packed_visual_commands(&self.engine, &mut self.commands);
+        raster_packed_visual_commands(
+            destination,
+            &self.commands,
+            self.recipe
+                .appearance
+                .palette
+                .map(|color| Rgb565Pixel(color.0)),
+            usize::from(self.recipe.appearance.neighbor_palette_index),
+        );
         Ok(FrameStats {
             effect: EffectKind::Magik,
             particles: frame.count,
             visible,
+            simulation_backend: frame.simulation_backend,
+            projection_backend: frame.projection_backend,
         })
     }
 }

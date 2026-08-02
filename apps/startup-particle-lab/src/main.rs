@@ -142,7 +142,7 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
             };
             let error = renderer.last_error().unwrap_or("none");
             println!(
-                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} visible={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.status_state(),
@@ -152,6 +152,8 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
                 render_p99_us,
                 render_max_us,
                 stats.visible,
+                stats.simulation_backend,
+                stats.projection_backend,
                 receipt.slot_index,
                 receipt.sequence,
                 repeated_presentations,

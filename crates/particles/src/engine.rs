@@ -3,6 +3,7 @@
 
 //! Deterministic scalar particle simulation for software-rendered effects.
 
+use crate::commands::{COMMAND_NEIGHBOR, COMMAND_PALETTE_SHIFT, pack_visual_command};
 use crate::recipes::{MagikRecipe, MagikTiming, RecipeEasing, embedded_magik_recipe};
 use std::time::Duration;
 use std::{mem::MaybeUninit, ops::Range};
@@ -21,9 +22,6 @@ const TARGET_FIXED_SCALE: f32 = 16.0;
 const TARGET_FIXED_SCALE_RECIP: f32 = 1.0 / TARGET_FIXED_SCALE;
 const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
 pub const PARTICLE_NOT_VISIBLE_OFFSET: u32 = u32::MAX;
-const COMMAND_OFFSET_BITS: u32 = 20;
-const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
-const COMMAND_NEIGHBOR: u32 = 1 << (COMMAND_PALETTE_SHIFT + 2);
 const MAGIK_MASK: &[u8] = include_bytes!("../assets/magik-alpha-mask.bin");
 const MAGIK_MASK_MAGIC: &[u8; 8] = b"MAGIKMSK";
 const MAGIK_MASK_HEADER_BYTES: usize = 16;
@@ -570,7 +568,6 @@ impl ParticleEngine {
         if !visual {
             return offset;
         }
-        debug_assert!(offset < (1 << COMMAND_OFFSET_BITS));
         let palette_index = self.flicker_key(index) >> 30;
         let formed = matches!(self.phase, ParticlePhase::Form | ParticlePhase::Hold);
         let neighbor = particle.x + 1 < self.config.width as i32
@@ -579,9 +576,7 @@ impl ParticleEngine {
             } else {
                 palette_index == u32::from(self.recipe.appearance.unformed_palette_index)
             };
-        offset
-            | (palette_index << COMMAND_PALETTE_SHIFT)
-            | if neighbor { COMMAND_NEIGHBOR } else { 0 }
+        pack_visual_command(offset, palette_index as usize, neighbor)
     }
 
     #[must_use]

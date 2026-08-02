@@ -6,6 +6,11 @@ use crate::particle_engine::{
     ParticlePreset, ParticleSimulationUpdate, TargetMask, magik_target_mask,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_particles::cabinet::Rgb565Pixel as SharedRgb565Pixel;
+use mister_magik_particles::commands::{
+    COMMAND_NEIGHBOR, COMMAND_OFFSET_BITS, COMMAND_OFFSET_MASK, COMMAND_PALETTE_SHIFT,
+    pack_visual_command, raster_packed_visual_commands_recording,
+};
 use mister_magik_particles::recipes::MagikRecipe;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::VecDeque;
@@ -22,10 +27,6 @@ const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
 ];
 const HIDDEN_SLOT_COUNT: usize = 2;
 const FULL_CLEAR_DIRTY_DIVISOR: usize = 4;
-const COMMAND_OFFSET_BITS: u32 = 20;
-const COMMAND_OFFSET_MASK: u32 = (1 << COMMAND_OFFSET_BITS) - 1;
-const COMMAND_PALETTE_SHIFT: u32 = COMMAND_OFFSET_BITS;
-const COMMAND_NEIGHBOR: u32 = 1 << (COMMAND_PALETTE_SHIFT + 2);
 const COMMAND_BIN_SHIFT: u32 = 11;
 const COMMAND_BIN_COUNT: usize = (1 << (COMMAND_OFFSET_BITS - COMMAND_BIN_SHIFT)) + 1;
 const COMMAND_INVISIBLE_BIN: usize = COMMAND_BIN_COUNT - 1;
@@ -70,7 +71,7 @@ pub struct ParticleRenderStats {
 pub struct ParticleRenderer {
     config: ParticleConfig,
     background: Rgb565Pixel,
-    visual_palette: [Rgb565Pixel; 4],
+    visual_palette: [SharedRgb565Pixel; 4],
     neighbor_palette_index: usize,
     engine: Option<ParticleEngine>,
     preparation_pipeline: Option<ParticlePreparationPipeline>,
@@ -205,7 +206,7 @@ impl ParticleRenderer {
         Ok(Self {
             config,
             background: Rgb565Pixel(appearance.background.0),
-            visual_palette: appearance.palette.map(|color| Rgb565Pixel(color.0)),
+            visual_palette: appearance.palette.map(|color| SharedRgb565Pixel(color.0)),
             neighbor_palette_index: usize::from(appearance.neighbor_palette_index),
             engine,
             preparation_pipeline,
@@ -349,13 +350,24 @@ impl ParticleRenderer {
     }
 
     fn raster_visual(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
-        raster_packed_visual_commands_with_palette_and_neighbor(
-            destination,
+        raster_packed_visual_commands_recording(
+            shared_rgb565_pixels_mut(destination),
             &self.commands,
-            dirty_offsets,
             self.visual_palette,
             self.neighbor_palette_index,
+            dirty_offsets,
         );
+    }
+}
+
+fn shared_rgb565_pixels_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
+    // SAFETY: both RGB565 pixel types are transparent u16 wrappers with equal
+    // size/alignment, and every u16 bit pattern is valid for either type.
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            destination.as_mut_ptr().cast::<SharedRgb565Pixel>(),
+            destination.len(),
+        )
     }
 }
 
@@ -787,76 +799,6 @@ fn particle_command_order_requested() -> bool {
             .as_deref(),
         Some("1" | "on" | "true" | "locality")
     )
-}
-
-pub(crate) fn pack_visual_command(offset: u32, palette_index: usize, neighbor: bool) -> u32 {
-    debug_assert!(offset <= COMMAND_OFFSET_MASK);
-    offset
-        | ((palette_index as u32) << COMMAND_PALETTE_SHIFT)
-        | if neighbor { COMMAND_NEIGHBOR } else { 0 }
-}
-
-pub(crate) fn unpack_visual_command(command: u32) -> Option<(usize, usize, bool)> {
-    (command != PARTICLE_NOT_VISIBLE_OFFSET).then(|| {
-        (
-            (command & COMMAND_OFFSET_MASK) as usize,
-            ((command >> COMMAND_PALETTE_SHIFT) & 3) as usize,
-            command & COMMAND_NEIGHBOR != 0,
-        )
-    })
-}
-
-pub(crate) fn raster_packed_visual_commands(
-    destination: &mut [Rgb565Pixel],
-    commands: &[u32],
-    dirty_offsets: &mut Vec<u32>,
-) -> usize {
-    raster_packed_visual_commands_with_palette(destination, commands, dirty_offsets, VISUAL_PALETTE)
-}
-
-pub(crate) fn raster_packed_visual_commands_with_palette(
-    destination: &mut [Rgb565Pixel],
-    commands: &[u32],
-    dirty_offsets: &mut Vec<u32>,
-    palette: [Rgb565Pixel; 4],
-) -> usize {
-    raster_packed_visual_commands_with_palette_and_neighbor(
-        destination,
-        commands,
-        dirty_offsets,
-        palette,
-        2,
-    )
-}
-
-fn raster_packed_visual_commands_with_palette_and_neighbor(
-    destination: &mut [Rgb565Pixel],
-    commands: &[u32],
-    dirty_offsets: &mut Vec<u32>,
-    palette: [Rgb565Pixel; 4],
-    neighbor_palette_index: usize,
-) -> usize {
-    let mut written = 0usize;
-    for &command in commands {
-        let Some((offset, palette_index, neighbor)) = unpack_visual_command(command) else {
-            continue;
-        };
-        let Some(pixel) = destination.get_mut(offset) else {
-            continue;
-        };
-        *pixel = palette[palette_index];
-        dirty_offsets.push(offset as u32);
-        written = written.saturating_add(1);
-        if neighbor {
-            let Some(pixel) = destination.get_mut(offset.saturating_add(1)) else {
-                continue;
-            };
-            *pixel = palette[neighbor_palette_index];
-            dirty_offsets.push(offset.saturating_add(1) as u32);
-            written = written.saturating_add(1);
-        }
-    }
-    written
 }
 
 fn visual_particle_has_neighbor(
@@ -1550,36 +1492,6 @@ mod tests {
             commands,
             vec![second, first, third, PARTICLE_NOT_VISIBLE_OFFSET]
         );
-    }
-
-    #[test]
-    fn packed_visual_commands_accept_a_transition_local_palette() {
-        let palette = [
-            Rgb565Pixel(0x0001),
-            Rgb565Pixel(0x0002),
-            Rgb565Pixel(0x0003),
-            Rgb565Pixel(0x0004),
-        ];
-        let commands = [
-            pack_visual_command(2, 1, false),
-            pack_visual_command(5, 3, true),
-        ];
-        let mut destination = [Rgb565Pixel(0); 8];
-        let mut dirty = Vec::new();
-
-        assert_eq!(
-            raster_packed_visual_commands_with_palette(
-                &mut destination,
-                &commands,
-                &mut dirty,
-                palette,
-            ),
-            3
-        );
-        assert_eq!(destination[2], palette[1]);
-        assert_eq!(destination[5], palette[3]);
-        assert_eq!(destination[6], palette[2]);
-        assert_eq!(dirty, vec![2, 5, 6]);
     }
 
     #[test]
