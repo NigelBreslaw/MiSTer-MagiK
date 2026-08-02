@@ -21,8 +21,8 @@ scripts/agent device mode set public --attended
 scripts/agent device mode set stock --attended
 scripts/agent device scene launcher --attended
 scripts/agent device capture framebuffer
-scripts/agent device display set hdmi-1280x720p60 --attended
-scripts/agent device display set hdmi-1920x1080p60 --attended --keep
+scripts/agent device display set hdmi1280x720p60 --attended
+scripts/agent device display set hdmi1920x1080p60 --attended --keep
 ```
 
 `display-mode` applies one provisional Main-owned transaction, verifies the
