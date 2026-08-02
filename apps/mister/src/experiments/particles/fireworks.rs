@@ -721,7 +721,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected() {
-        let invalid = OLED_PEONY.replacen(
+        let invalid = embedded_firework_json("oled-peony").unwrap().replacen(
             "\"duration_ms\": 5500,",
             "\"duration_ms\": 5500, \"surprise\": true,",
             1,
