@@ -10,6 +10,10 @@ use super::material::{
     MaterialRasterStats, MaterialShape, MaterialStamp, MaterialStroke, raster_stamp,
     raster_tapered_segment,
 };
+use super::recipes::{
+    CompiledRecipe, ParticleRecipeCategory, ParticleRecipeFamily, embedded_firework_duration_ms,
+    form_recipe, procedural_recipe,
+};
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -544,7 +548,7 @@ impl ParticleDemoKind {
     }
 
     #[must_use]
-    pub const fn starting_count(self) -> usize {
+    pub fn starting_count(self) -> usize {
         match self {
             Self::SolarChrysanthemum
             | Self::RecursiveHalo
@@ -558,29 +562,10 @@ impl ParticleDemoKind {
             | Self::PhoenixCometV2
             | Self::MagneticFlowerV2
             | Self::OledPeonyV2 => 0,
-            Self::FireEmbers | Self::MeteorShower => 20_480,
-            Self::SpiralGalaxy => 81_920,
-            Self::WarpSpeed => 45_056,
-            Self::Weather => 49_152,
-            Self::ParticlePortal => 65_536,
-            Self::ElectricStorm => 16_384,
-            Self::FountainWaterfall => 32_768,
-            Self::ArcadeCabinet => 12_288,
-            Self::ProceduralSpriteMaterials => 16_384,
-            Self::VariableWidthRibbons => 8_192,
-            Self::CurlNoiseFlowField => 32_768,
-            Self::LowResolutionDensityBloom => 24_576,
-            Self::LayeredChildSystems => 4_096,
-            Self::SpatialFieldStack => 24_576,
-            Self::DepthAwareMaterialLod => 40_960,
-            Self::SourceDrivenMorph => 12_288,
-            Self::SdfCollisionEvents => 8_192,
-            Self::GridAcceleratedFlocking => 12_288,
-            Self::FractalGridTerrain => 49_152,
-            Self::LayerMappedHologram => 40_960,
-            Self::SphericalFieldObservatory => 32_768,
-            Self::TwistedMultiFormCathedral => 65_536,
-            Self::PointCloudMorphPassage => 24_576,
+            demo if demo.form_scene().is_some() => {
+                form_recipe(demo.telemetry_label()).particle_count
+            }
+            demo => procedural_recipe(demo.telemetry_label()).particle_count,
         }
     }
 
@@ -658,6 +643,9 @@ pub struct ParticleShowcaseRenderer {
     demo: ParticleDemoKind,
     demo_started_at: Duration,
     firework_renderer: Option<ShowcaseFireworkRenderer>,
+    fireworks_family: Option<ParticleRecipeFamily>,
+    procedural_family: Option<ParticleRecipeFamily>,
+    form_family: Option<ParticleRecipeFamily>,
     firework_capture_time: Option<Duration>,
     hud_visible: bool,
     pool: ParticleShowcasePool,
@@ -738,6 +726,45 @@ struct ParticleShowcaseDirtySlot {
 }
 
 impl ParticleShowcaseRenderer {
+    fn recipe_for(&self, demo: ParticleDemoKind) -> &CompiledRecipe {
+        let id = demo.telemetry_label();
+        let override_family = if demo.form_scene().is_some() {
+            self.form_family.as_ref()
+        } else {
+            self.procedural_family.as_ref()
+        };
+        override_family
+            .and_then(|family| family.recipe(id))
+            .unwrap_or_else(|| {
+                if demo.form_scene().is_some() {
+                    form_recipe(id)
+                } else {
+                    procedural_recipe(id)
+                }
+            })
+    }
+
+    fn param(&self, name: &str) -> f32 {
+        self.recipe_for(self.demo).param(name)
+    }
+
+    fn palette(&self) -> &[Rgb565Pixel; 8] {
+        if self.firework_renderer.is_some() {
+            &FIREWORKS_PALETTE
+        } else {
+            let recipe = self.recipe_for(self.demo);
+            let has_override = if self.demo.form_scene().is_some() {
+                self.form_family.is_some()
+            } else {
+                self.procedural_family.is_some()
+            };
+            if !has_override {
+                debug_assert_eq!(&recipe.palette, showcase_palette(self.demo));
+            }
+            &recipe.palette
+        }
+    }
+
     pub fn new(config: ParticleShowcaseConfig) -> Result<Self, String> {
         let config = config.validate()?;
         let pool = ParticleShowcasePool::new();
@@ -843,6 +870,9 @@ impl ParticleShowcaseRenderer {
             demo: config.initial_demo,
             demo_started_at: Duration::ZERO,
             firework_renderer: None,
+            fireworks_family: None,
+            procedural_family: None,
+            form_family: None,
             firework_capture_time: None,
             hud_visible: true,
             pool,
@@ -881,6 +911,20 @@ impl ParticleShowcaseRenderer {
     #[must_use]
     pub const fn particle_count(&self) -> usize {
         self.pool.active()
+    }
+
+    /// Atomically replaces one validated recipe family and restarts the active
+    /// composition only when that family owns it.
+    pub fn replace_family(&mut self, family: ParticleRecipeFamily, elapsed: Duration) {
+        let restart_active = family.contains(self.demo);
+        match family.category() {
+            ParticleRecipeCategory::Fireworks => self.fireworks_family = Some(family),
+            ParticleRecipeCategory::Procedural => self.procedural_family = Some(family),
+            ParticleRecipeCategory::Form => self.form_family = Some(family),
+        }
+        if restart_active {
+            self.reset_demo(self.demo, elapsed);
+        }
     }
 
     pub fn render(
@@ -1060,10 +1104,26 @@ impl ParticleShowcaseRenderer {
             return;
         }
         let demo_elapsed = elapsed.saturating_sub(self.demo_started_at);
-        if demo_elapsed >= PARTICLE_DEMO_DURATION {
-            let advances = (demo_elapsed.as_micros() / PARTICLE_DEMO_DURATION.as_micros()) as i32;
+        let duration = self.demo_duration();
+        if demo_elapsed >= duration {
+            let advances = (demo_elapsed.as_micros() / duration.as_micros()) as i32;
             self.begin_transition(elapsed);
             self.reset_demo(self.demo.offset_wrapped(advances), elapsed);
+        }
+    }
+
+    fn demo_duration(&self) -> Duration {
+        if self.demo.firework_id().is_some() || self.demo.firework_v2_id().is_some() {
+            let duration_ms = self
+                .fireworks_family
+                .as_ref()
+                .and_then(|family| family.duration_ms(self.demo))
+                .or_else(|| embedded_firework_duration_ms(self.demo.telemetry_label()));
+            duration_ms
+                .map(Duration::from_millis)
+                .unwrap_or(PARTICLE_DEMO_DURATION)
+        } else {
+            Duration::from_millis(self.recipe_for(self.demo).duration_ms)
         }
     }
 
@@ -1073,9 +1133,15 @@ impl ParticleShowcaseRenderer {
         self.firework_renderer = demo
             .firework_id()
             .map(|id| {
+                let json = self
+                    .fireworks_family
+                    .as_ref()
+                    .and_then(|family| family.firework_show(id, "mister-magik-firework-v1"))
+                    .or_else(|| embedded_firework_json(id))
+                    .expect("registered firework must be embedded");
                 ShowcaseFireworkRenderer::V1(
                     FireworkRenderer::from_json(
-                        embedded_firework_json(id).expect("registered firework must be embedded"),
+                        &json,
                         self.config.width,
                         self.config.height,
                         self.config.seed,
@@ -1085,10 +1151,15 @@ impl ParticleShowcaseRenderer {
             })
             .or_else(|| {
                 demo.firework_v2_id().map(|id| {
+                    let json = self
+                        .fireworks_family
+                        .as_ref()
+                        .and_then(|family| family.firework_show(id, "mister-magik-firework-v2"))
+                        .or_else(|| embedded_firework_v2_json(id))
+                        .expect("registered V2 firework must be embedded");
                     ShowcaseFireworkRenderer::V2(
                         FireworkV2Renderer::from_json(
-                            embedded_firework_v2_json(id)
-                                .expect("registered V2 firework must be embedded"),
+                            &json,
                             self.config.width,
                             self.config.height,
                             self.config.seed,
@@ -1106,9 +1177,15 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         self.material_stamps.clear();
         self.material_strokes.clear();
-        self.pool.reset(demo, self.config.seed);
+        let active = if self.firework_renderer.is_some() {
+            0
+        } else {
+            self.recipe_for(demo).particle_count
+        };
+        self.pool.reset_with_count(demo, self.config.seed, active);
         if let Some(scene) = demo.form_scene() {
-            self.form_renderer.reset(scene);
+            let recipe = self.recipe_for(demo).clone();
+            self.form_renderer.reset_with_recipe(scene, &recipe);
         }
         self.heat.fill(0);
         self.heat_frame = u64::MAX;
@@ -1245,7 +1322,7 @@ impl ParticleShowcaseRenderer {
     }
 
     fn effect_beat(&self, elapsed: Duration) -> &'static str {
-        let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let logical = elapsed.saturating_sub(self.demo_started_at);
         match self.demo {
             ParticleDemoKind::SolarChrysanthemum
             | ParticleDemoKind::RecursiveHalo
@@ -1258,117 +1335,22 @@ impl ParticleShowcaseRenderer {
             | ParticleDemoKind::CopperWillowRainV2
             | ParticleDemoKind::PhoenixCometV2
             | ParticleDemoKind::MagneticFlowerV2
-            | ParticleDemoKind::OledPeonyV2 => firework_beat(Duration::from_secs_f32(seconds)),
-            ParticleDemoKind::FireEmbers => match seconds.rem_euclid(10.0) {
-                value if value < 3.5 => "flame",
-                value if value < 7.0 => "gust",
-                _ => "embers",
-            },
-            ParticleDemoKind::SpiralGalaxy => match seconds {
-                value if value < 10.0 => "wide-orbit",
-                value if value < 20.0 => "arm-pass",
-                _ => "core-pulse",
-            },
-            ParticleDemoKind::WarpSpeed => match seconds {
-                value if value < 7.0 => "calm",
-                value if value < 14.0 => "accelerate",
-                value if value < 23.0 => "warp",
-                _ => "decelerate",
-            },
-            ParticleDemoKind::MeteorShower => match seconds {
-                value if value < 8.0 => "quiet",
-                value if value < 20.0 => "shower",
-                _ => "peak",
-            },
-            ParticleDemoKind::Weather => match seconds {
-                value if value < 10.0 => "rain",
-                value if value < 20.0 => "snow",
-                _ => "ash",
-            },
-            ParticleDemoKind::ParticlePortal => match seconds {
-                value if value < 8.0 => "gather",
-                value if value < 20.0 => "vortex",
-                value if value < 26.0 => "pulse",
-                _ => "surge",
-            },
-            ParticleDemoKind::ElectricStorm => match seconds {
-                value if value < 8.0 => "charge",
-                value if value < 16.0 => "leader",
-                value if value < 22.0 => "return-stroke",
-                _ => "branches",
-            },
-            ParticleDemoKind::FountainWaterfall => match seconds {
-                value if value < 9.0 => "fountain",
-                value if value < 13.0 => "morph",
-                value if value < 24.0 => "waterfall",
-                _ => "impact",
-            },
-            ParticleDemoKind::ArcadeCabinet => match seconds {
-                value if value < 4.0 => "formation",
-                value if value < 24.0 => "fly-around",
-                value if value < 29.0 => "three-quarter",
-                _ => "dispersal",
-            },
-            ParticleDemoKind::ProceduralSpriteMaterials => match seconds {
-                value if value < 6.0 => "ignite",
-                value if value < 20.0 => "material-bloom",
-                _ => "cooling",
-            },
-            ParticleDemoKind::VariableWidthRibbons => match seconds {
-                value if value < 6.0 => "draw",
-                value if value < 22.0 => "crossover",
-                _ => "breakup",
-            },
-            ParticleDemoKind::CurlNoiseFlowField => match seconds {
-                value if value < 8.0 => "counter-current",
-                value if value < 22.0 => "curl-pair",
-                _ => "eddy-shift",
-            },
-            ParticleDemoKind::LowResolutionDensityBloom => match seconds {
-                value if value < 8.0 => "splat",
-                value if value < 22.0 => "crescent-ridge",
-                _ => "cavity-pulse",
-            },
-            ParticleDemoKind::LayeredChildSystems => match seconds {
-                value if value < 7.0 => "parents",
-                value if value < 18.0 => "event-rings",
-                _ => "terminal-children",
-            },
-            ParticleDemoKind::SpatialFieldStack => match seconds {
-                value if value < 9.0 => "attract-repel",
-                value if value < 22.0 => "capture-orbit",
-                _ => "release",
-            },
-            ParticleDemoKind::DepthAwareMaterialLod => match seconds {
-                value if value < 8.0 => "far-field",
-                value if value < 22.0 => "focal-plane",
-                _ => "near-pass",
-            },
-            ParticleDemoKind::SourceDrivenMorph => match seconds {
-                value if value < 6.0 => "joystick-hold",
-                value if value < 14.0 => "assignment-morph",
-                value if value < 23.0 => "controller-hold",
-                _ => "return",
-            },
-            ParticleDemoKind::SdfCollisionEvents => match seconds {
-                value if value < 8.0 => "waterfall-impact",
-                value if value < 22.0 => "slide-bounce",
-                _ => "splash-mist",
-            },
-            ParticleDemoKind::GridAcceleratedFlocking => match seconds {
-                value if value < 8.0 => "wing-arcs",
-                value if value < 22.0 => "split-rejoin",
-                _ => "chaser-pass",
-            },
-            ParticleDemoKind::FractalGridTerrain
-            | ParticleDemoKind::LayerMappedHologram
-            | ParticleDemoKind::SphericalFieldObservatory
-            | ParticleDemoKind::TwistedMultiFormCathedral
-            | ParticleDemoKind::PointCloudMorphPassage => self
-                .demo
-                .form_scene()
-                .expect("Form demo must map to a Form scene")
-                .beat(seconds),
+            | ParticleDemoKind::OledPeonyV2 => firework_beat(logical),
+            demo => {
+                let phase = self.recipe_for(demo).beat_phase(logical.as_millis() as u64);
+                let embedded = if demo.form_scene().is_some() {
+                    form_recipe(demo.telemetry_label())
+                } else {
+                    procedural_recipe(demo.telemetry_label())
+                };
+                embedded
+                    .beats
+                    .phases
+                    .get(phase)
+                    .or_else(|| embedded.beats.phases.last())
+                    .map(|phase| phase.label.as_str())
+                    .expect("validated embedded recipe has beat phases")
+            }
         }
     }
 
@@ -1413,11 +1395,14 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_grid_flocking(&mut self) {
+        let spawn_inner = self.param("spawn_inner");
+        let spawn_span = self.param("spawn_span");
+        let spawn_y_span = self.param("spawn_y_span");
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             let side = if index & 1 == 0 { -1.0 } else { 1.0 };
-            self.pool.x[index] = 480.0 + side * (70.0 + unit01(random) * 330.0);
-            self.pool.y[index] = 270.0 + unit_signed(random.rotate_left(11)) * 185.0;
+            self.pool.x[index] = 480.0 + side * (spawn_inner + unit01(random) * spawn_span);
+            self.pool.y[index] = 270.0 + unit_signed(random.rotate_left(11)) * spawn_y_span;
             let angle = unit_signed(random.rotate_left(21)) * 0.65
                 + if side < 0.0 {
                     0.15
@@ -1432,6 +1417,13 @@ impl ParticleShowcaseRenderer {
     }
 
     fn update_grid_flocking(&mut self, elapsed: Duration) {
+        let alignment = self.param("alignment");
+        let separation = self.param("separation");
+        let chaser_radius = self.param("chaser_radius");
+        let chaser_force = self.param("chaser_force");
+        let cavity_radius = self.param("cavity_radius");
+        let cavity_force = self.param("cavity_force");
+        let max_speed = self.param("max_speed");
         let dt = elapsed
             .saturating_sub(self.flock_last_elapsed)
             .as_secs_f32()
@@ -1480,8 +1472,10 @@ impl ParticleShowcaseRenderer {
                 }
             }
             if count > 0 {
-                self.pool.vx[index] += (sum_vx / count as f32 - self.pool.vx[index]) * dt * 2.6;
-                self.pool.vy[index] += (sum_vy / count as f32 - self.pool.vy[index]) * dt * 2.6;
+                self.pool.vx[index] +=
+                    (sum_vx / count as f32 - self.pool.vx[index]) * dt * alignment;
+                self.pool.vy[index] +=
+                    (sum_vy / count as f32 - self.pool.vy[index]) * dt * alignment;
             }
             let left = self.flock_counts[cell_y * FLOCK_GRID_W + cell_x.saturating_sub(1)];
             let right =
@@ -1489,25 +1483,25 @@ impl ParticleShowcaseRenderer {
             let above = self.flock_counts[cell_y.saturating_sub(1) * FLOCK_GRID_W + cell_x];
             let below =
                 self.flock_counts[(cell_y + 1).min(FLOCK_GRID_H - 1) * FLOCK_GRID_W + cell_x];
-            self.pool.vx[index] += (f32::from(left) - f32::from(right)) * dt * 1.8;
-            self.pool.vy[index] += (f32::from(above) - f32::from(below)) * dt * 1.8;
+            self.pool.vx[index] += (f32::from(left) - f32::from(right)) * dt * separation;
+            self.pool.vy[index] += (f32::from(above) - f32::from(below)) * dt * separation;
             for chaser in (0..self.pool.active()).step_by(1_024) {
                 let chaser_dx = self.pool.x[index] - self.pool.x[chaser];
                 let chaser_dy = self.pool.y[index] - self.pool.y[chaser];
                 let chaser_distance2 = chaser_dx * chaser_dx + chaser_dy * chaser_dy;
-                if chaser_distance2 > 16.0 && chaser_distance2 < 132.0 * 132.0 {
+                if chaser_distance2 > 16.0 && chaser_distance2 < chaser_radius * chaser_radius {
                     let inverse = chaser_distance2.sqrt().recip();
-                    self.pool.vx[index] += chaser_dx * inverse * dt * 94.0;
-                    self.pool.vy[index] += chaser_dy * inverse * dt * 94.0;
+                    self.pool.vx[index] += chaser_dx * inverse * dt * chaser_force;
+                    self.pool.vy[index] += chaser_dy * inverse * dt * chaser_force;
                 }
             }
             let dx = self.pool.x[index] - cavity_x;
             let dy = self.pool.y[index] - cavity_y;
             let distance2 = dx * dx + dy * dy;
-            if distance2 < 118.0 * 118.0 {
+            if distance2 < cavity_radius * cavity_radius {
                 let inverse = distance2.max(64.0).sqrt().recip();
-                self.pool.vx[index] += dx * inverse * dt * 260.0;
-                self.pool.vy[index] += dy * inverse * dt * 260.0;
+                self.pool.vx[index] += dx * inverse * dt * cavity_force;
+                self.pool.vy[index] += dy * inverse * dt * cavity_force;
             }
             let side = if index & 1 == 0 { -1.0 } else { 1.0 };
             let target_y = 270.0
@@ -1520,7 +1514,7 @@ impl ParticleShowcaseRenderer {
                 + self.pool.vy[index] * self.pool.vy[index])
                 .sqrt()
                 .max(1.0);
-            let limited = 72.0 / speed.max(72.0);
+            let limited = max_speed / speed.max(max_speed);
             self.pool.vx[index] *= limited;
             self.pool.vy[index] *= limited;
             self.pool.x[index] =
@@ -1562,10 +1556,12 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_sdf_collision_events(&mut self) {
+        let x_span = self.param("spawn_x_span");
+        let y_span = self.param("spawn_y_span");
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random) * 96.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 42.0;
+            self.pool.x[index] = unit_signed(random) * x_span;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * y_span;
             self.pool.age[index] = unit01(random.rotate_left(21)) * 4.0;
             self.pool.life[index] = 0.72 + unit01(random.rotate_left(7)) * 0.65;
             self.pool.style[index] = ((random >> 29) & 7) as u8;
@@ -1577,37 +1573,45 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let warm_rate = self.param("warm_rate");
+        let sphere_x = self.param("sphere_x");
+        let sphere_y = self.param("sphere_y");
+        let sphere_radius = self.param("sphere_radius");
+        let cool_rate = self.param("cool_rate");
+        let bowl_y_base = self.param("bowl_y");
+        let bowl_curve = self.param("bowl_curve");
         let mut clipped = 0usize;
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             let warm = self.pool.flags[index] != 0;
             let (x, y, collided, style) = if warm {
-                let phase = (seconds * 0.18 * self.pool.life[index] + self.pool.age[index]).fract();
+                let phase =
+                    (seconds * warm_rate * self.pool.life[index] + self.pool.age[index]).fract();
                 let angle = std::f32::consts::TAU * unit01(random.rotate_left(13));
                 let travel = 190.0 - phase * 165.0;
-                let mut local_x = 172.0 + angle.cos() * travel;
-                let mut local_y = 4.0 + angle.sin() * travel;
-                let dx = local_x - 172.0;
-                let dy = local_y - 4.0;
+                let mut local_x = sphere_x + angle.cos() * travel;
+                let mut local_y = sphere_y + angle.sin() * travel;
+                let dx = local_x - sphere_x;
+                let dy = local_y - sphere_y;
                 let distance = (dx * dx + dy * dy).sqrt().max(0.001);
-                let collided = distance < 88.0;
+                let collided = distance < sphere_radius;
                 if collided {
-                    let bounce = 88.0 + (phase * 19.0).sin().abs() * 22.0;
-                    local_x = 172.0 + dx / distance * bounce;
-                    local_y = 4.0 + dy / distance * bounce;
+                    let bounce = sphere_radius + (phase * 19.0).sin().abs() * 22.0;
+                    local_x = sphere_x + dx / distance * bounce;
+                    local_y = sphere_y + dy / distance * bounce;
                 }
                 (local_x, local_y, collided, 4 + usize::from(collided) * 2)
             } else {
-                let phase =
-                    (seconds * 0.28 * self.pool.life[index] + self.pool.age[index]).rem_euclid(3.2);
+                let phase = (seconds * cool_rate * self.pool.life[index] + self.pool.age[index])
+                    .rem_euclid(3.2);
                 let mut local_x = -176.0 + self.pool.x[index] * 0.48;
                 let mut local_y = -252.0 + phase * 172.0 + 42.0 * phase * phase;
-                let bowl_y = 116.0 + (local_x + 176.0).powi(2) * 0.0026;
+                let bowl_y = bowl_y_base + (local_x + 176.0).powi(2) * bowl_curve;
                 let collided = local_y > bowl_y;
                 if collided {
                     let slide = (phase - 1.55).max(0.0);
                     local_x += self.pool.x[index].signum() * slide * 92.0;
-                    local_y = 116.0 + (local_x + 176.0).powi(2) * 0.0026
+                    local_y = bowl_y_base + (local_x + 176.0).powi(2) * bowl_curve
                         - (slide * 8.0).sin().abs() * 16.0;
                 }
                 (local_x, local_y, collided, 2 + usize::from(collided))
@@ -1644,13 +1648,17 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_source_driven_morph(&mut self) {
+        let source_body_x = self.param("source_body_x");
+        let source_body_y = self.param("source_body_y");
+        let target_radius = self.param("target_radius");
+        let target_radius_jitter = self.param("target_radius_jitter");
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             let u = unit_signed(random);
             let v = unit_signed(random.rotate_left(11));
             let group = index % 8;
             let (source_x, source_y) = if group < 5 {
-                (u * 180.0, 78.0 + v * 72.0)
+                (u * source_body_x, 78.0 + v * source_body_y)
             } else if group < 7 {
                 (u * 34.0, -12.0 + v * 110.0)
             } else {
@@ -1659,7 +1667,8 @@ impl ParticleShowcaseRenderer {
             };
             let (target_x, target_y) = if group < 5 {
                 let angle = std::f32::consts::TAU * unit01(random.rotate_left(7));
-                let radius = 118.0 + unit_signed(random.rotate_left(17)) * 46.0;
+                let radius =
+                    target_radius + unit_signed(random.rotate_left(17)) * target_radius_jitter;
                 (angle.cos() * radius, angle.sin() * radius * 0.55)
             } else if group < 7 {
                 (u * 205.0, 42.0 + v.abs() * 112.0 + u.abs() * 48.0)
@@ -1688,14 +1697,19 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let blend = if seconds < 6.0 {
+        let morph_start = self.param("morph_start");
+        let morph_end = self.param("morph_end");
+        let return_start = self.param("return_start");
+        let arc_min = self.param("arc_min");
+        let arc_span = self.param("arc_span");
+        let blend = if seconds < morph_start {
             0.0
-        } else if seconds < 14.0 {
-            ease_out_cubic((seconds - 6.0) / 8.0)
-        } else if seconds < 23.0 {
+        } else if seconds < morph_end {
+            ease_out_cubic((seconds - morph_start) / (morph_end - morph_start))
+        } else if seconds < return_start {
             1.0
         } else {
-            1.0 - ease_out_cubic((seconds - 23.0) / 7.0)
+            1.0 - ease_out_cubic((seconds - return_start) / (30.0 - return_start))
         };
         let arc = (blend * std::f32::consts::PI).sin();
         let mut clipped = 0usize;
@@ -1706,7 +1720,7 @@ impl ParticleShowcaseRenderer {
             let target_y = self.pool.y[index];
             let x = 480.0 + source_x + (target_x - source_x) * blend;
             let y = 270.0 + source_y + (target_y - source_y) * blend
-                - arc * (18.0 + self.pool.age[index] * 54.0);
+                - arc * (arc_min + self.pool.age[index] * arc_span);
             if !push_screen_command(
                 &mut self.commands,
                 self.config.width,
@@ -1735,10 +1749,12 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_depth_aware_material_lod(&mut self) {
+        let x_span = self.param("spawn_x_span");
+        let y_span = self.param("spawn_y_span");
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random) * 520.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 310.0;
+            self.pool.x[index] = unit_signed(random) * x_span;
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * y_span;
             self.pool.z[index] = unit01(random.rotate_left(21));
             self.pool.age[index] = unit01(random.rotate_left(7));
             self.pool.life[index] = 0.6 + unit01(random.rotate_left(17)) * 0.8;
@@ -1750,14 +1766,21 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let depth_rate = self.param("depth_rate");
+        let parallax_min = self.param("parallax_min");
+        let parallax_span = self.param("parallax_span");
+        let drift_min = self.param("drift_min");
+        let drift_span = self.param("drift_span");
+        let corridor_min = self.param("corridor_min");
+        let corridor_span = self.param("corridor_span");
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let depth =
-                (self.pool.z[index] + seconds * self.pool.life[index] * 0.025).rem_euclid(1.0);
-            let parallax = 0.35 + depth * 1.05;
-            let drift = seconds * (12.0 + depth * 68.0) * self.pool.life[index];
+                (self.pool.z[index] + seconds * self.pool.life[index] * depth_rate).rem_euclid(1.0);
+            let parallax = parallax_min + depth * parallax_span;
+            let drift = seconds * (drift_min + depth * drift_span) * self.pool.life[index];
             let x = (480.0 + self.pool.x[index] * parallax + drift + 960.0).rem_euclid(960.0);
-            let corridor = 34.0 + (1.0 - depth) * 42.0;
+            let corridor = corridor_min + (1.0 - depth) * corridor_span;
             let mut y = 270.0 + self.pool.y[index] * parallax;
             if y > 270.0 - corridor && y < 270.0 + corridor {
                 y += if self.pool.y[index].is_sign_negative() {
@@ -1812,8 +1835,8 @@ impl ParticleShowcaseRenderer {
     fn initialize_spatial_field_stack(&mut self) {
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random) * 148.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(11)) * 226.0;
+            self.pool.x[index] = unit_signed(random) * self.param("spawn_x_span");
+            self.pool.y[index] = unit_signed(random.rotate_left(11)) * self.param("spawn_y_span");
             self.pool.age[index] = unit01(random.rotate_left(21));
             self.pool.life[index] = 0.55 + unit01(random.rotate_left(7)) * 0.9;
             self.pool.style[index] = ((random >> 29) & 7) as u8;
@@ -1828,7 +1851,9 @@ impl ParticleShowcaseRenderer {
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let lane = self.pool.flags[index];
-            let phase = (seconds * 0.08 * self.pool.life[index] + self.pool.age[index]).fract();
+            let phase = (seconds * self.param("phase_rate") * self.pool.life[index]
+                + self.pool.age[index])
+                .fract();
             let base_x = self.pool.x[index];
             let base_y = self.pool.y[index];
             let (center, x, y, style) = match lane {
@@ -1837,13 +1862,23 @@ impl ParticleShowcaseRenderer {
                     let angle = seconds * 0.17 + self.pool.age[index] * 4.0;
                     let rotated_x = base_x * angle.cos() - base_y * 0.22 * angle.sin();
                     let rotated_y = base_x * angle.sin() * 0.35 + base_y * angle.cos();
-                    (240.0, rotated_x * contraction, rotated_y * contraction, 5)
+                    (
+                        self.param("left_center"),
+                        rotated_x * contraction,
+                        rotated_y * contraction,
+                        5,
+                    )
                 }
                 1 => {
                     let radius = (base_x * base_x + base_y * base_y).sqrt().max(1.0);
-                    let cavity = 68.0 + phase * 145.0;
+                    let cavity = self.param("cavity_min") + phase * self.param("cavity_span");
                     let scale = cavity.max(radius) / radius;
-                    (480.0, base_x * scale, base_y * scale, 6)
+                    (
+                        self.param("middle_center"),
+                        base_x * scale,
+                        base_y * scale,
+                        6,
+                    )
                 }
                 _ => {
                     let capture = if phase < 0.72 {
@@ -1854,7 +1889,12 @@ impl ParticleShowcaseRenderer {
                     let angle = seconds * (0.62 + self.pool.age[index] * 0.3);
                     let rotated_x = base_x * angle.cos() - base_y * angle.sin();
                     let rotated_y = base_x * angle.sin() + base_y * angle.cos();
-                    (720.0, rotated_x * capture, rotated_y * capture, 4)
+                    (
+                        self.param("right_center"),
+                        rotated_x * capture,
+                        rotated_y * capture,
+                        4,
+                    )
                 }
             };
             if !push_screen_command(
@@ -1886,16 +1926,20 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let cycle = seconds.rem_euclid(10.0) / 10.0;
+        let cycle_seconds = self.param("cycle");
+        let cycle = seconds.rem_euclid(cycle_seconds) / cycle_seconds;
         for parent in 0..3usize {
             let offset = parent as f32 - 1.0;
-            let head_x = 480.0 + offset * 215.0 + (cycle * std::f32::consts::TAU).sin() * 58.0;
-            let head_y = 420.0 - cycle * 330.0
+            let head_x = 480.0
+                + offset * self.param("parent_spacing")
+                + (cycle * std::f32::consts::TAU).sin() * self.param("head_x_amplitude");
+            let head_y = 420.0 - cycle * self.param("head_travel")
                 + (cycle * std::f32::consts::PI).sin() * (-72.0 - parent as f32 * 18.0);
             let color = CHILD_PALETTE[3 + parent];
             let mut previous = None;
-            for sample in 0..14usize {
-                let trail = sample as f32 / 13.0;
+            let trail_samples = self.param("trail_length") as usize;
+            for sample in 0..trail_samples {
+                let trail = sample as f32 / (trail_samples - 1).max(1) as f32;
                 let x = head_x - (cycle * 5.0 + parent as f32).cos() * trail * 92.0
                     + (trail * 17.0 + parent as f32).sin() * 7.0;
                 let y = head_y + trail * (80.0 + parent as f32 * 12.0);
@@ -1921,9 +1965,9 @@ impl ParticleShowcaseRenderer {
                 color: Rgb565Pixel(0xffff),
                 shape: MaterialShape::Star,
             });
-            let ring_age = (cycle * 3.0 + parent as f32 * 0.27).fract();
+            let ring_age = (cycle * self.param("ring_growth") + parent as f32 * 0.27).fract();
             if ring_age < 0.58 {
-                let ring_radius = 22.0 + ring_age * 90.0;
+                let ring_radius = self.param("ring_radius") + ring_age * 90.0;
                 for ring in 0..32usize {
                     let angle = std::f32::consts::TAU * ring as f32 / 32.0;
                     self.material_stamps.push(MaterialStamp {
@@ -1947,7 +1991,9 @@ impl ParticleShowcaseRenderer {
             let angle = std::f32::consts::TAU * unit01(random.rotate_left(11));
             let speed = 18.0 + unit01(random.rotate_left(21)) * 105.0;
             let x = origin_x + angle.cos() * speed * release;
-            let y = origin_y + angle.sin() * speed * release + 72.0 * release * release;
+            let y = origin_y
+                + angle.sin() * speed * release
+                + self.param("child_gravity") * release * release;
             let style = if release < 0.18 {
                 7
             } else {
@@ -1981,18 +2027,19 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         self.density.fill(0);
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let pulse = 0.92 + (seconds * 0.7).sin() * 0.06;
+        let pulse = self.param("pulse_base")
+            + (seconds * self.param("pulse_rate")).sin() * self.param("pulse_amplitude");
         for index in (0..self.pool.active()).step_by(4) {
             let random = self.pool.random[index];
             let angle = std::f32::consts::TAU
                 * (unit01(random) + seconds * (0.006 + self.pool.age[index] * 0.004));
             let radial = (0.45 + unit01(random.rotate_left(11)) * 0.55).sqrt();
-            let radius = (54.0 + radial * 168.0) * pulse;
-            let world_x = angle.cos() * radius + 42.0;
-            let world_y = angle.sin() * radius * 0.82;
+            let radius = (self.param("radius_min") + radial * self.param("radius_span")) * pulse;
+            let world_x = angle.cos() * radius + self.param("x_offset");
+            let world_y = angle.sin() * radius * self.param("y_scale");
             let cavity_x = world_x + 58.0;
             let cavity_y = world_y;
-            if cavity_x * cavity_x + cavity_y * cavity_y < 118.0 * 118.0 {
+            if cavity_x * cavity_x + cavity_y * cavity_y < self.param("cavity_radius").powi(2) {
                 continue;
             }
             let x = ((480.0 + world_x) * 0.25) as i32;
@@ -2064,24 +2111,31 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let cohort = ((elapsed.as_micros() / 16_667) & 3) as usize;
         for index in (cohort..self.pool.active()).step_by(4) {
-            let normalized_x = (self.pool.x[index] - 480.0) / 260.0;
-            let normalized_y = (self.pool.y[index] - 270.0) / 180.0;
-            let phase = seconds * 0.19 + self.pool.age[index] * 9.0;
-            let left_dx = normalized_x + 0.78;
-            let right_dx = normalized_x - 0.78;
-            let left_radius = (left_dx * left_dx + normalized_y * normalized_y + 0.18).recip();
-            let right_radius = (right_dx * right_dx + normalized_y * normalized_y + 0.18).recip();
+            let normalized_x = (self.pool.x[index] - 480.0) / self.param("normal_x");
+            let normalized_y = (self.pool.y[index] - 270.0) / self.param("normal_y");
+            let phase = seconds * self.param("phase_rate") + self.pool.age[index] * 9.0;
+            let left_dx = normalized_x + self.param("vortex_offset");
+            let right_dx = normalized_x - self.param("vortex_offset");
+            let left_radius =
+                (left_dx * left_dx + normalized_y * normalized_y + self.param("softening")).recip();
+            let right_radius =
+                (right_dx * right_dx + normalized_y * normalized_y + self.param("softening"))
+                    .recip();
             let vx = -normalized_y * left_radius + normalized_y * right_radius
                 - (normalized_y * 2.7 - phase * 0.29).cos() * 0.52
                 + 0.32;
             let vy = left_dx * left_radius - right_dx * right_radius
                 + (normalized_x * 2.1 + phase * 0.37).sin() * 0.48;
-            self.pool.vx[index] = vx * 58.0;
-            self.pool.vy[index] = vy * 58.0;
-            self.pool.x[index] =
-                (self.pool.x[index] + self.pool.vx[index] * dt * 4.0 + 960.0).rem_euclid(960.0);
-            self.pool.y[index] =
-                (self.pool.y[index] + self.pool.vy[index] * dt * 4.0 + 540.0).rem_euclid(540.0);
+            self.pool.vx[index] = vx * self.param("velocity_scale");
+            self.pool.vy[index] = vy * self.param("velocity_scale");
+            self.pool.x[index] = (self.pool.x[index]
+                + self.pool.vx[index] * dt * self.param("integration_scale")
+                + 960.0)
+                .rem_euclid(960.0);
+            self.pool.y[index] = (self.pool.y[index]
+                + self.pool.vy[index] * dt * self.param("integration_scale")
+                + 540.0)
+                .rem_euclid(540.0);
         }
     }
 
@@ -2111,8 +2165,8 @@ impl ParticleShowcaseRenderer {
             }
             if tracer {
                 self.material_strokes.push(MaterialStroke {
-                    x0: x - self.pool.vx[index] * 0.12,
-                    y0: y - self.pool.vy[index] * 0.12,
+                    x0: x - self.pool.vx[index] * self.param("trail_scale"),
+                    y0: y - self.pool.vy[index] * self.param("trail_scale"),
                     x1: x,
                     y1: y,
                     start_radius: 1,
@@ -2140,26 +2194,28 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
-        const RIBBON_COUNT: usize = 24;
-        const RIBBON_SAMPLES: usize = 16;
-        for ribbon in 0..RIBBON_COUNT {
+        let ribbon_count = self.param("ribbon_count") as usize;
+        let ribbon_samples = self.param("ribbon_samples") as usize;
+        for ribbon in 0..ribbon_count {
             let lane = ribbon % RIBBON_PALETTE.len();
             let random = self.pool.random[ribbon];
             let depth = unit01(random.rotate_left(9));
             let hero = ribbon % 4 == 0;
             let lane_offset =
-                (ribbon as f32 - (RIBBON_COUNT as f32 - 1.0) * 0.5) * (3.2 + depth * 1.6);
+                (ribbon as f32 - (ribbon_count as f32 - 1.0) * 0.5) * (3.2 + depth * 1.6);
             let start_t = unit01(random.rotate_left(19)) * 0.18;
             let end_t = 0.76
                 + unit01(random.rotate_left(29)) * 0.24
-                + (seconds * 0.11 + ribbon as f32).sin() * 0.018;
+                + (seconds * self.param("motion_rate") + ribbon as f32).sin() * 0.018;
             let mut previous = None;
-            for sample in 0..RIBBON_SAMPLES {
-                let progress = sample as f32 / (RIBBON_SAMPLES - 1) as f32;
+            for sample in 0..ribbon_samples {
+                let progress = sample as f32 / (ribbon_samples - 1).max(1) as f32;
                 let t = start_t + (end_t - start_t) * progress;
                 let u = t * 2.0 - 1.0;
-                let x = center_x + u * (350.0 + depth * 48.0);
-                let y = center_y - (u * std::f32::consts::PI).sin() * (128.0 + depth * 52.0)
+                let x = center_x + u * (self.param("path_x") + depth * self.param("depth_x"));
+                let y = center_y
+                    - (u * std::f32::consts::PI).sin()
+                        * (self.param("path_y") + depth * self.param("depth_y"))
                     + lane_offset * (u * std::f32::consts::PI).cos();
                 if let Some((previous_x, previous_y)) = previous {
                     let previous_radius = u8::from(hero && (4..=13).contains(&sample)) + 1;
@@ -2190,8 +2246,10 @@ impl ParticleShowcaseRenderer {
                 previous = Some((x, y));
             }
             let head_u = end_t * 2.0 - 1.0;
-            let head_x = center_x + head_u * (350.0 + depth * 48.0);
-            let head_y = center_y - (head_u * std::f32::consts::PI).sin() * (128.0 + depth * 52.0)
+            let head_x = center_x + head_u * (self.param("path_x") + depth * self.param("depth_x"));
+            let head_y = center_y
+                - (head_u * std::f32::consts::PI).sin()
+                    * (self.param("path_y") + depth * self.param("depth_y"))
                 + lane_offset * (head_u * std::f32::consts::PI).cos();
             self.material_stamps.push(MaterialStamp {
                 x: head_x as i16,
@@ -2202,8 +2260,8 @@ impl ParticleShowcaseRenderer {
                 shape: MaterialShape::Star,
             });
         }
-        for streak in 0..192usize {
-            let index = RIBBON_COUNT + streak;
+        for streak in 0..self.param("streak_count") as usize {
+            let index = ribbon_count + streak;
             let random = self.pool.random[index];
             let t = unit01(random);
             let u = t * 2.0 - 1.0;
@@ -2228,8 +2286,8 @@ impl ParticleShowcaseRenderer {
     fn initialize_procedural_sprite_materials(&mut self) {
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 430.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(13)) * 230.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * self.param("spawn_x_span");
+            self.pool.y[index] = unit_signed(random.rotate_left(13)) * self.param("spawn_y_span");
             self.pool.z[index] = unit01(random.rotate_left(23));
             self.pool.age[index] = unit01(random.rotate_left(7));
             self.pool.life[index] = 0.55 + unit01(random.rotate_left(17)) * 0.9;
@@ -2246,17 +2304,20 @@ impl ParticleShowcaseRenderer {
         let center_y = self.config.height as f32 * 0.94;
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(4) {
-            let phase =
-                (seconds * self.pool.life[index] * 0.12 + self.pool.age[index]).rem_euclid(1.0);
+            let phase = (seconds * self.pool.life[index] * self.param("phase_rate")
+                + self.pool.age[index])
+                .rem_euclid(1.0);
             let random = self.pool.random[index];
             let shape_lane = self.pool.flags[index];
-            let angle = unit_signed(random.rotate_left(11)) * 1.15 - std::f32::consts::FRAC_PI_2
-                + (seconds * 0.17 + self.pool.age[index] * 9.0).sin() * 0.08;
-            let speed = 90.0 + unit01(random.rotate_left(21)) * 360.0;
+            let angle = unit_signed(random.rotate_left(11)) * self.param("angle_span")
+                - std::f32::consts::FRAC_PI_2
+                + (seconds * self.param("angle_rate") + self.pool.age[index] * 9.0).sin() * 0.08;
+            let speed =
+                self.param("speed_min") + unit01(random.rotate_left(21)) * self.param("speed_span");
             let travel = phase * speed;
             let spread = 0.45 + f32::from(shape_lane) * 0.11;
             let x = center_x + angle.cos() * travel * spread + self.pool.x[index] * phase * 0.28;
-            let y = center_y + angle.sin() * travel + 90.0 * phase * phase;
+            let y = center_y + angle.sin() * travel + self.param("gravity") * phase * phase;
             let over_life = (1.0 - phase).clamp(0.0, 1.0);
             let radius = match shape_lane {
                 0 => 3,
@@ -2317,9 +2378,12 @@ impl ParticleShowcaseRenderer {
         debug_assert_eq!(count, ParticleDemoKind::ArcadeCabinet.starting_count());
         for index in 0..count {
             let random = self.pool.random[index];
-            self.pool.previous_x[index] = unit_signed(random.rotate_left(3)) * 510.0;
-            self.pool.previous_y[index] = unit_signed(random.rotate_left(13)) * 300.0;
-            self.pool.previous_z[index] = unit_signed(random.rotate_left(23)) * 360.0;
+            self.pool.previous_x[index] =
+                unit_signed(random.rotate_left(3)) * self.param("source_x_span");
+            self.pool.previous_y[index] =
+                unit_signed(random.rotate_left(13)) * self.param("source_y_span");
+            self.pool.previous_z[index] =
+                unit_signed(random.rotate_left(23)) * self.param("source_z_span");
         }
     }
 
@@ -2327,11 +2391,16 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let (formation, yaw, pitch, dolly, dispersal) = arcade_camera(seconds);
+        let (formation, yaw, pitch, dolly, dispersal) = arcade_camera(
+            seconds,
+            self.param("formation_end"),
+            self.param("orbit_end"),
+            self.param("return_end"),
+        );
         let (sin_yaw, cos_yaw) = yaw.sin_cos();
         let (sin_pitch, cos_pitch) = pitch.sin_cos();
         let center_x = self.config.width as f32 * 0.5;
-        let center_y = self.config.height as f32 * 0.5 + 16.0;
+        let center_y = self.config.height as f32 * 0.5 + self.param("center_y_offset");
         let mut clipped = 0usize;
         for index in 0..self.pool.active() {
             let target_x = self.pool.x[index];
@@ -2358,7 +2427,7 @@ impl ParticleShowcaseRenderer {
                 clipped = clipped.saturating_add(1);
                 continue;
             }
-            let scale = 610.0 / depth;
+            let scale = self.param("focal") / depth;
             let x = center_x + rotated_x * scale;
             let y = center_y + rotated_y * scale;
             let feature = self.pool.flags[index];
@@ -2389,12 +2458,14 @@ impl ParticleShowcaseRenderer {
             let random = self.pool.random[index];
             let angle = std::f32::consts::TAU * unit01(random.rotate_left(5));
             let (sin_angle, cos_angle) = angle.sin_cos();
-            let radial_speed = 58.0 + unit01(random.rotate_left(15)) * 118.0;
+            let radial_speed = self.param("radial_speed_min")
+                + unit01(random.rotate_left(15)) * self.param("radial_speed_span");
             self.pool.x[index] = unit_signed(random.rotate_left(25)) * 72.0;
             self.pool.y[index] = unit_signed(random.rotate_left(9)) * 18.0;
             self.pool.z[index] = unit_signed(random.rotate_left(19)) * 92.0;
             self.pool.vx[index] = cos_angle * radial_speed;
-            self.pool.vy[index] = -285.0 - unit01(random.rotate_left(13)) * 150.0;
+            self.pool.vy[index] = self.param("vertical_speed")
+                - unit01(random.rotate_left(13)) * self.param("vertical_speed_span");
             self.pool.vz[index] = sin_angle * radial_speed;
             self.pool.age[index] = unit01(random.rotate_left(23)) * 2.4;
             self.pool.life[index] = 0.78 + unit01(random.rotate_left(29)) * 0.54;
@@ -2410,11 +2481,15 @@ impl ParticleShowcaseRenderer {
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(4) {
             let fountain = self.fountain_particle(index, seconds);
-            let waterfall = self.waterfall_particle(index, (seconds - 9.0).max(0.0));
-            let (world_x, world_y, world_z, style, neighbor) = if seconds < 9.0 {
+            let fountain_end = self.param("fountain_end");
+            let morph_end = self.param("morph_end");
+            let waterfall = self.waterfall_particle(index, (seconds - fountain_end).max(0.0));
+            let (world_x, world_y, world_z, style, neighbor) = if seconds < fountain_end {
                 fountain
-            } else if seconds < 13.0 {
-                let blend = ease_out_cubic((seconds - 9.0) * 0.25);
+            } else if seconds < morph_end {
+                let blend = ease_out_cubic(
+                    (seconds - fountain_end) / (morph_end - fountain_end).max(0.001),
+                );
                 (
                     fountain.0 + (waterfall.0 - fountain.0) * blend,
                     fountain.1 + (waterfall.1 - fountain.1) * blend,
@@ -2427,12 +2502,14 @@ impl ParticleShowcaseRenderer {
                     fountain.4 || waterfall.4,
                 )
             } else {
-                self.waterfall_particle(index, seconds - 13.0)
+                self.waterfall_particle(index, seconds - morph_end)
             };
-            let camera_x = if seconds < 9.0 {
+            let camera_x = if seconds < fountain_end {
                 0.0
             } else {
-                ease_out_cubic(((seconds - 9.0) * 0.25).min(1.0)) * 72.0
+                ease_out_cubic(
+                    ((seconds - fountain_end) / (morph_end - fountain_end).max(0.001)).min(1.0),
+                ) * 72.0
             };
             if let Some((x, y)) = project_world(
                 world_x - camera_x,
@@ -2440,7 +2517,7 @@ impl ParticleShowcaseRenderer {
                 world_z,
                 self.config.width,
                 self.config.height,
-                610.0,
+                self.param("camera_z"),
             ) {
                 if !push_screen_command(
                     &mut self.commands,
@@ -2471,7 +2548,7 @@ impl ParticleShowcaseRenderer {
         let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(2.4);
         let drag = 1.0 / (1.0 + age * 0.16);
         let x = self.pool.vx[index] * age * drag;
-        let y = 196.0 + self.pool.vy[index] * age * drag + 118.0 * age * age;
+        let y = 196.0 + self.pool.vy[index] * age * drag + self.param("gravity") * age * age;
         let z = self.pool.vz[index] * age * drag;
         let brightness = (7.0 - age * 1.45).clamp(2.0, 7.0) as u8;
         (
@@ -2569,8 +2646,8 @@ impl ParticleShowcaseRenderer {
     fn initialize_electric_storm(&mut self) {
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random.rotate_left(5)) * 510.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(15)) * 300.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(5)) * self.param("cloud_x_span");
+            self.pool.y[index] = unit_signed(random.rotate_left(15)) * self.param("cloud_y_span");
             self.pool.z[index] = unit01(random.rotate_left(25));
             self.pool.age[index] = unit01(random.rotate_left(9));
             self.pool.style[index] = 1 + ((random >> 30) as u8).min(3);
@@ -2585,7 +2662,8 @@ impl ParticleShowcaseRenderer {
         let mut clipped = 0usize;
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
-        let charge = ((seconds * 3.7).sin() * 0.5 + 0.5).powi(3);
+        let charge = ((seconds * self.param("charge_rate")).sin() * 0.5 + 0.5)
+            .powf(self.param("charge_power"));
         for index in (0..self.pool.active()).step_by(2) {
             let layer = 0.7 + self.pool.z[index] * 0.6;
             let drift = triangle_wave(seconds * 0.09 + self.pool.age[index]) * 18.0;
@@ -2606,13 +2684,18 @@ impl ParticleShowcaseRenderer {
             }
         }
 
-        if seconds >= 8.0 {
-            let epoch = (seconds * if seconds < 16.0 { 1.5 } else { 4.0 }) as u32;
+        if seconds >= self.param("leader_start") {
+            let epoch = (seconds
+                * if seconds < self.param("bright_start") {
+                    1.5
+                } else {
+                    4.0
+                }) as u32;
             let seed = xorshift32(epoch ^ fold_seed(self.config.seed, self.demo));
-            let bright = seconds >= 16.0;
-            let branches = seconds >= 22.0;
+            let bright = seconds >= self.param("bright_start");
+            let branches = seconds >= self.param("branch_start");
             self.append_lightning_bolt(seed, bright, branches);
-            if seconds >= 22.0 {
+            if branches {
                 self.append_lightning_bolt(seed.rotate_left(13), false, true);
             }
         }
@@ -2626,7 +2709,7 @@ impl ParticleShowcaseRenderer {
         let steps = 40usize;
         for step in 0..steps {
             state = xorshift32(state);
-            let next_x = (x + unit_signed(state) * 18.0).clamp(36.0, 924.0);
+            let next_x = (x + unit_signed(state) * self.param("bolt_x_jitter")).clamp(36.0, 924.0);
             let next_y = y + 12.0;
             for (offset, style) in [(-1.0, 3), (1.0, 5), (0.0, if bright { 7 } else { 6 })] {
                 self.segments.push(ParticleShowcaseSegment {
@@ -2670,8 +2753,9 @@ impl ParticleShowcaseRenderer {
                     + unit_signed(random.rotate_left(7)) * 0.08;
             let minor_angle = major_angle * (3.0 + band as f32 * 2.0)
                 + std::f32::consts::TAU * unit01(random.rotate_left(17));
-            let minor_radius = 28.0 + unit01(random.rotate_left(23)) * 34.0;
-            let radius = 160.0 + minor_angle.cos() * minor_radius;
+            let minor_radius = self.param("minor_radius_min")
+                + unit01(random.rotate_left(23)) * self.param("minor_radius_span");
+            let radius = self.param("major_radius") + minor_angle.cos() * minor_radius;
             self.pool.x[index] = major_angle.cos() * radius;
             self.pool.y[index] = major_angle.sin() * radius;
             self.pool.z[index] = minor_angle.sin() * minor_radius;
@@ -2689,14 +2773,14 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let forward_angle = seconds * 0.42;
-        let reverse_angle = seconds * -0.31;
+        let forward_angle = seconds * self.param("forward_rate");
+        let reverse_angle = seconds * self.param("reverse_rate");
         let (forward_sin, forward_cos) = forward_angle.sin_cos();
         let (reverse_sin, reverse_cos) = reverse_angle.sin_cos();
         let (previous_forward_sin, previous_forward_cos) = (-0.035_f32).sin_cos();
         let (previous_reverse_sin, previous_reverse_cos) = 0.035_f32.sin_cos();
-        let (tilt_sin, tilt_cos) = 0.42_f32.sin_cos();
-        let pulse = 0.94 + ((seconds * 1.9).sin() * 0.5 + 0.5) * 0.12;
+        let (tilt_sin, tilt_cos) = self.param("tilt").sin_cos();
+        let pulse = 0.94 + ((seconds * self.param("pulse_rate")).sin() * 0.5 + 0.5) * 0.12;
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
@@ -2717,7 +2801,8 @@ impl ParticleShowcaseRenderer {
                 let rim_z = triangle_wave(angle * 1.5 + seconds * 0.12) * 14.0;
                 let y = rim_y.mul_add(tilt_cos, -(rim_z * tilt_sin));
                 let depth_axis = rim_y.mul_add(tilt_sin, rim_z * tilt_cos);
-                let scale = 570.0 / (570.0 + depth_axis);
+                let camera_z = self.param("camera_z");
+                let scale = camera_z / (camera_z + depth_axis);
                 if !push_screen_command(
                     &mut self.commands,
                     self.config.width,
@@ -2752,8 +2837,9 @@ impl ParticleShowcaseRenderer {
             let z = self.pool.z[index] + tendril;
             let y = ring_y.mul_add(tilt_cos, -(z * tilt_sin));
             let depth_axis = ring_y.mul_add(tilt_sin, z * tilt_cos);
-            let depth = 570.0 + depth_axis;
-            let scale = 570.0 / depth.max(96.0);
+            let camera_z = self.param("camera_z");
+            let depth = camera_z + depth_axis;
+            let scale = camera_z / depth.max(96.0);
             let screen_x = center_x + x * scale;
             let screen_y = center_y + y * scale;
             let depth_style = ((depth_axis + 230.0) * (3.0 / 460.0)).clamp(0.0, 3.0) as u8;
@@ -2793,7 +2879,7 @@ impl ParticleShowcaseRenderer {
     fn initialize_weather(&mut self) {
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 520.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * self.param("spawn_x_span");
             self.pool.y[index] = unit01(random.rotate_left(13)) * 620.0 - 40.0;
             self.pool.z[index] = unit01(random.rotate_left(23));
             self.pool.age[index] = unit01(random.rotate_left(7)) * 8.0;
@@ -2807,18 +2893,21 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        if seconds < 10.0 {
+        let rain_end = self.param("rain_end");
+        let snow_end = self.param("snow_end");
+        if seconds < rain_end {
             self.project_weather_rain(seconds)
-        } else if seconds < 20.0 {
-            self.project_weather_snow(seconds - 10.0)
+        } else if seconds < snow_end {
+            self.project_weather_snow(seconds - rain_end)
         } else {
-            self.project_weather_ash(seconds - 20.0)
+            self.project_weather_ash(seconds - snow_end)
         }
     }
 
     fn project_weather_rain(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
-        let wind = 34.0 + triangle_wave(seconds * 0.08) * 24.0;
+        let wind = self.param("rain_wind")
+            + triangle_wave(seconds * 0.08) * self.param("rain_wind_amplitude");
         for index in (0..self.pool.active()).step_by(4) {
             let layer = 0.62 + self.pool.z[index] * 0.72;
             let fall = (self.pool.y[index] + seconds * (410.0 + 330.0 * self.pool.z[index]))
@@ -2855,7 +2944,7 @@ impl ParticleShowcaseRenderer {
 
     fn project_weather_snow(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
-        let gust = triangle_wave(seconds * 0.055) * 42.0;
+        let gust = triangle_wave(seconds * 0.055) * self.param("snow_gust");
         for index in (0..self.pool.active()).step_by(8) {
             let layer = 0.72 + self.pool.z[index] * 0.58;
             let fall = (self.pool.y[index]
@@ -2887,7 +2976,7 @@ impl ParticleShowcaseRenderer {
 
     fn project_weather_ash(&mut self, seconds: f32) -> usize {
         let mut clipped = 0usize;
-        let wind = triangle_wave(seconds * 0.07) * 55.0;
+        let wind = triangle_wave(seconds * 0.07) * self.param("ash_wind");
         for index in (0..self.pool.active()).step_by(8) {
             let age = (seconds * self.pool.life[index] + self.pool.age[index]).rem_euclid(6.4);
             let layer = 0.68 + self.pool.z[index] * 0.7;
@@ -2927,9 +3016,10 @@ impl ParticleShowcaseRenderer {
         let star_count = self.pool.active().saturating_sub(METEOR_PARTICLE_COUNT);
         for index in 0..star_count {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random.rotate_left(3)) * 760.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(13)) * 430.0;
-            self.pool.z[index] = unit01(random.rotate_left(23)) * 760.0 - 80.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(3)) * self.param("star_x_span");
+            self.pool.y[index] = unit_signed(random.rotate_left(13)) * self.param("star_y_span");
+            self.pool.z[index] =
+                unit01(random.rotate_left(23)) * self.param("star_camera_z") - 80.0;
             self.pool.style[index] = 1 + ((random >> 30) as u8).min(2);
             self.pool.flags[index] = u8::from(random & 255 == 0);
         }
@@ -2940,7 +3030,7 @@ impl ParticleShowcaseRenderer {
             let radius = 280.0 + unit01(random.rotate_left(17)) * 1_050.0;
             let invariant_x = angle.cos() * radius;
             let invariant_y = angle.sin() * radius;
-            let phase = unit01(random.rotate_left(27)) * 3.1;
+            let phase = unit01(random.rotate_left(27)) * self.param("track_cycle");
             for sample in 0..METEOR_TRAIL_SAMPLES {
                 let index = first + sample;
                 self.pool.x[index] = invariant_x;
@@ -2957,7 +3047,7 @@ impl ParticleShowcaseRenderer {
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let star_count = self.pool.active().saturating_sub(METEOR_PARTICLE_COUNT);
-        let (sin_drift, cos_drift) = (seconds * 0.018).sin_cos();
+        let (sin_drift, cos_drift) = (seconds * self.param("star_drift_rate")).sin_cos();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
@@ -2967,8 +3057,9 @@ impl ParticleShowcaseRenderer {
             let z = self.pool.z[index];
             let rotated_x = x.mul_add(cos_drift, z * sin_drift);
             let rotated_z = (-x).mul_add(sin_drift, z * cos_drift);
-            let depth = 760.0 + rotated_z;
-            let scale = 760.0 / depth.max(96.0);
+            let camera_z = self.param("star_camera_z");
+            let depth = camera_z + rotated_z;
+            let scale = camera_z / depth.max(96.0);
             if !push_screen_command(
                 &mut self.commands,
                 self.config.width,
@@ -2989,9 +3080,9 @@ impl ParticleShowcaseRenderer {
         } else {
             METEOR_TRACK_COUNT
         };
-        let focal = 620.0;
-        let radiant_x = center_x + 186.0;
-        let radiant_y = center_y - 154.0;
+        let focal = self.param("focal");
+        let radiant_x = center_x + self.param("radiant_x");
+        let radiant_y = center_y + self.param("radiant_y");
         for track in 0..METEOR_TRACK_COUNT {
             let first = star_count + track * METEOR_TRAIL_SAMPLES;
             if track >= active_tracks {
@@ -3001,8 +3092,8 @@ impl ParticleShowcaseRenderer {
             }
             let random = self.pool.random[first];
             let rate = 0.82 + unit01(random.rotate_left(11)) * 0.34;
-            let age = (seconds * rate + self.pool.z[first]).rem_euclid(3.1);
-            let head_depth = 1_900.0 - age * 590.0;
+            let age = (seconds * rate + self.pool.z[first]).rem_euclid(self.param("track_cycle"));
+            let head_depth = self.param("head_depth") - age * self.param("depth_speed");
             let mut tail = None;
             let mut head = None;
             for sample in 0..METEOR_TRAIL_SAMPLES {
@@ -3041,8 +3132,8 @@ impl ParticleShowcaseRenderer {
     fn initialize_warp_speed(&mut self) {
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = unit_signed(random.rotate_left(5)) * 580.0;
-            self.pool.y[index] = unit_signed(random.rotate_left(17)) * 330.0;
+            self.pool.x[index] = unit_signed(random.rotate_left(5)) * self.param("spawn_x_span");
+            self.pool.y[index] = unit_signed(random.rotate_left(17)) * self.param("spawn_y_span");
             self.pool.z[index] = unit01(random.rotate_left(27));
             self.pool.style[index] = 3 + ((random >> 30) as u8).min(4);
             self.pool.flags[index] = 1;
@@ -3054,7 +3145,14 @@ impl ParticleShowcaseRenderer {
         self.previous_commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let (travel, speed) = warp_travel_and_speed(seconds);
+        let (travel, speed) = warp_travel_and_speed(
+            seconds,
+            self.param("accelerate_end"),
+            self.param("cruise_end"),
+            self.param("calm_end"),
+            self.param("min_speed"),
+            self.param("max_speed"),
+        );
         let previous_step = (speed * 0.05).clamp(0.002, 0.048);
         #[cfg(target_arch = "arm")]
         let visible = {
@@ -3113,8 +3211,10 @@ impl ParticleShowcaseRenderer {
         for index in 0..self.pool.active() {
             let depth = (self.pool.z[index] - travel).rem_euclid(1.0);
             let previous_depth = (depth + previous_step).rem_euclid(1.0);
-            let scale = 0.22 / (0.14 + depth);
-            let previous_scale = 0.22 / (0.14 + previous_depth);
+            let numerator = self.param("projection_numerator");
+            let bias = self.param("projection_bias");
+            let scale = numerator / (bias + depth);
+            let previous_scale = numerator / (bias + previous_depth);
             let x = center_x + self.pool.x[index] * scale;
             let y = center_y + self.pool.y[index] * scale;
             let previous_x = center_x + self.pool.x[index] * previous_scale;
@@ -3144,12 +3244,12 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_galaxy(&mut self) -> usize {
-        let bulge_count = self.pool.active() * 3 / 20;
+        let bulge_count = (self.pool.active() as f32 * self.param("bulge_fraction")) as usize;
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             let azimuth = std::f32::consts::TAU * unit01(random);
             if index < bulge_count {
-                let radius = 94.0 * unit01(random.rotate_left(7)).cbrt();
+                let radius = self.param("bulge_radius") * unit01(random.rotate_left(7)).cbrt();
                 let vertical = unit_signed(random.rotate_left(17));
                 let planar = (1.0 - vertical * vertical).max(0.0).sqrt() * radius;
                 self.pool.x[index] = azimuth.cos() * planar;
@@ -3160,10 +3260,13 @@ impl ParticleShowcaseRenderer {
                 continue;
             }
 
-            let radius = 32.0 + unit01(random.rotate_left(5)).sqrt() * 382.0;
+            let radius = self.param("arm_inner_radius")
+                + unit01(random.rotate_left(5)).sqrt() * self.param("arm_radial_span");
             let arm = (random.rotate_left(11) & 3) as f32;
             let uneven = unit_signed(random.rotate_left(19)) * (0.16 + radius * 0.0007);
-            let angle = arm * std::f32::consts::FRAC_PI_2 + (radius / 32.0).ln() * 1.48 + uneven;
+            let angle = arm * std::f32::consts::FRAC_PI_2
+                + (radius / self.param("arm_inner_radius")).ln() * self.param("arm_winding")
+                + uneven;
             let thickness = (34.0 - radius * 0.055).max(7.0) * unit_signed(random.rotate_left(23));
             self.pool.x[index] = angle.cos() * radius;
             self.pool.y[index] = thickness;
@@ -3177,13 +3280,14 @@ impl ParticleShowcaseRenderer {
                 1 | (u8::from(random & 511 == 0) << 1)
             };
         }
-        let (sin_tilt, cos_tilt) = 0.92_f32.sin_cos();
+        let (sin_tilt, cos_tilt) = self.param("tilt").sin_cos();
         for index in 0..self.pool.active() {
             let y = self.pool.y[index];
             let z = self.pool.z[index];
             let tilted_y = y.mul_add(cos_tilt, -(z * sin_tilt));
             let tilted_z = y.mul_add(sin_tilt, z * cos_tilt);
-            let perspective = 650.0 / (650.0 + tilted_z);
+            let camera_z = self.param("camera_z");
+            let perspective = camera_z / (camera_z + tilted_z);
             self.pool.x[index] *= perspective;
             self.pool.y[index] = tilted_y * perspective;
             self.pool.z[index] = tilted_z;
@@ -3205,9 +3309,10 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let (sin_yaw, cos_yaw) = (seconds * 0.042).sin_cos();
-        let core_pulse = ((seconds * 1.7).sin() * 0.5 + 0.5) * 0.18 + 0.82;
-        let bulge_count = self.pool.active() * 3 / 20;
+        let (sin_yaw, cos_yaw) = (seconds * self.param("yaw_rate")).sin_cos();
+        let core_pulse =
+            ((seconds * self.param("core_pulse_rate")).sin() * 0.5 + 0.5) * 0.18 + 0.82;
+        let bulge_count = (self.pool.active() as f32 * self.param("bulge_fraction")) as usize;
         #[cfg(target_arch = "arm")]
         {
             self.commands.resize(self.galaxy_projected_count, u32::MAX);
@@ -3308,27 +3413,34 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
-        let wind = (seconds * 0.72).sin() * 26.0 + (seconds * 0.19).sin() * 13.0;
+        let wind = (seconds * self.param("wind_rate_fast")).sin()
+            * self.param("wind_amplitude_fast")
+            + (seconds * self.param("wind_rate_slow")).sin() * self.param("wind_amplitude_slow");
         let mut clipped = 0usize;
         let live_embers = self.pool.active() / 4;
         for ember in 0..live_embers {
             let index = ember * 4;
             let random = self.pool.random[index];
             let age = (seconds * (0.72 + unit01(random.rotate_left(13)) * 0.38)
-                + unit01(random) * 5.6)
-                .rem_euclid(5.6);
+                + unit01(random) * self.param("ember_life"))
+            .rem_euclid(self.param("ember_life"));
             if age < 0.12 {
                 continue;
             }
-            let base_x = unit_signed(random.rotate_left(7)) * 390.0;
+            let base_x = unit_signed(random.rotate_left(7)) * self.param("ember_x_span");
             let turbulence = unit_signed(random.rotate_left(19)) * age * age * 7.0;
             let x = base_x + wind * age * 0.12 + turbulence;
             let y = 252.0 - age * (67.0 + unit01(random.rotate_left(3)) * 31.0);
             let z = unit_signed(random.rotate_left(23)) * 72.0 + age * 5.0;
-            let style = ((1.0 - age / 5.6) * 7.0).clamp(2.0, 7.0) as u8;
-            let Some((screen_x, screen_y)) =
-                project_world(x, y, z, self.config.width, self.config.height, 520.0)
-            else {
+            let style = ((1.0 - age / self.param("ember_life")) * 7.0).clamp(2.0, 7.0) as u8;
+            let Some((screen_x, screen_y)) = project_world(
+                x,
+                y,
+                z,
+                self.config.width,
+                self.config.height,
+                self.param("camera_z"),
+            ) else {
                 self.commands.push(u32::MAX);
                 clipped = clipped.saturating_add(1);
                 continue;
@@ -3441,7 +3553,7 @@ impl ParticleShowcaseRenderer {
                 self.config.width,
                 self.config.height,
                 *segment,
-                showcase_palette(self.demo),
+                self.palette(),
             ));
         }
         writes
@@ -3565,7 +3677,7 @@ impl ParticleShowcaseRenderer {
             }
             let offset = (command & COMMAND_OFFSET_MASK) as usize;
             let style = ((command >> COMMAND_STYLE_SHIFT) & 7) as usize;
-            let color = showcase_palette(self.demo)[style];
+            let color = self.palette()[style];
             destination[offset] = color;
             dirty_offsets.push(offset as u32);
             writes = writes.saturating_add(1);
@@ -3573,7 +3685,7 @@ impl ParticleShowcaseRenderer {
                 let neighbor_color = if self.demo == ParticleDemoKind::LayerMappedHologram {
                     color
                 } else {
-                    showcase_palette(self.demo)[style.saturating_sub(1)]
+                    self.palette()[style.saturating_sub(1)]
                 };
                 destination[offset + 1] = neighbor_color;
                 dirty_offsets.push((offset + 1) as u32);
@@ -3699,7 +3811,11 @@ impl ParticleShowcasePool {
     }
 
     pub(crate) fn reset(&mut self, kind: ParticleDemoKind, seed: u64) {
-        self.active = kind.starting_count();
+        self.reset_with_count(kind, seed, kind.starting_count());
+    }
+
+    pub(crate) fn reset_with_count(&mut self, kind: ParticleDemoKind, seed: u64, active: usize) {
+        self.active = active.min(PARTICLE_DEMO_MAX_COUNT);
         let mut state = fold_seed(seed, kind);
         for index in 0..self.active {
             state = xorshift32(state);
@@ -3861,9 +3977,14 @@ fn triangle_wave(value: f32) -> f32 {
     }
 }
 
-fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
-    let formation = ease_out_cubic((seconds * 0.25).clamp(0.0, 1.0));
-    if seconds < 4.0 {
+fn arcade_camera(
+    seconds: f32,
+    formation_end: f32,
+    orbit_end: f32,
+    return_end: f32,
+) -> (f32, f32, f32, f32, f32) {
+    let formation = ease_out_cubic((seconds / formation_end).clamp(0.0, 1.0));
+    if seconds < formation_end {
         return (
             formation,
             std::f32::consts::FRAC_PI_2 - 0.62,
@@ -3872,8 +3993,8 @@ fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
             0.0,
         );
     }
-    if seconds < 24.0 {
-        let phase = (seconds - 4.0) / 20.0;
+    if seconds < orbit_end {
+        let phase = (seconds - formation_end) / (orbit_end - formation_end);
         return (
             1.0,
             std::f32::consts::FRAC_PI_2 - 0.62 + (phase * std::f32::consts::TAU).sin() * 1.15,
@@ -3882,8 +4003,8 @@ fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
             0.0,
         );
     }
-    if seconds < 29.0 {
-        let return_t = ease_out_cubic((seconds - 24.0) * 0.2);
+    if seconds < return_end {
+        let return_t = ease_out_cubic((seconds - orbit_end) / (return_end - orbit_end));
         return (
             1.0,
             (std::f32::consts::FRAC_PI_2 - 0.62) * (1.0 - return_t) + 0.72 * return_t,
@@ -3895,25 +4016,42 @@ fn arcade_camera(seconds: f32) -> (f32, f32, f32, f32, f32) {
     (1.0, 0.72, 0.11, 755.0, (seconds - 29.0).clamp(0.0, 1.0))
 }
 
-fn warp_travel_and_speed(seconds: f32) -> (f32, f32) {
+fn warp_travel_and_speed(
+    seconds: f32,
+    accelerate_end: f32,
+    cruise_end: f32,
+    calm_end: f32,
+    min_speed: f32,
+    max_speed: f32,
+) -> (f32, f32) {
     let cycle = seconds.rem_euclid(30.0);
-    let (distance, speed) = if cycle < 7.0 {
-        (cycle * 0.03, 0.03)
-    } else if cycle < 14.0 {
-        let time = cycle - 7.0;
-        let acceleration = 0.87 / 7.0;
+    let calm_distance = calm_end * min_speed;
+    let acceleration_duration = accelerate_end - calm_end;
+    let acceleration = (max_speed - min_speed) / acceleration_duration;
+    let accelerate_distance = calm_distance
+        + min_speed * acceleration_duration
+        + 0.5 * acceleration * acceleration_duration * acceleration_duration;
+    let cruise_distance = accelerate_distance + (cruise_end - accelerate_end) * max_speed;
+    let deceleration_duration = 30.0 - cruise_end;
+    let deceleration = (max_speed - min_speed) / deceleration_duration;
+    let (distance, speed) = if cycle < calm_end {
+        (cycle * min_speed, min_speed)
+    } else if cycle < accelerate_end {
+        let time = cycle - calm_end;
         (
-            0.21 + 0.03 * time + 0.5 * acceleration * time * time,
-            0.03 + acceleration * time,
+            calm_distance + min_speed * time + 0.5 * acceleration * time * time,
+            min_speed + acceleration * time,
         )
-    } else if cycle < 23.0 {
-        (3.465 + (cycle - 14.0) * 0.9, 0.9)
-    } else {
-        let time = cycle - 23.0;
-        let deceleration = 0.87 / 7.0;
+    } else if cycle < cruise_end {
         (
-            11.565 + 0.9 * time - 0.5 * deceleration * time * time,
-            0.9 - deceleration * time,
+            accelerate_distance + (cycle - accelerate_end) * max_speed,
+            max_speed,
+        )
+    } else {
+        let time = cycle - cruise_end;
+        (
+            cruise_distance + max_speed * time - 0.5 * deceleration * time * time,
+            max_speed - deceleration * time,
         )
     };
     (distance.rem_euclid(1.0), speed)
@@ -3941,30 +4079,8 @@ fn showcase_palette(demo: ParticleDemoKind) -> &'static [Rgb565Pixel; 8] {
         | ParticleDemoKind::PhoenixCometV2
         | ParticleDemoKind::MagneticFlowerV2
         | ParticleDemoKind::OledPeonyV2 => &FIREWORKS_PALETTE,
-        ParticleDemoKind::FireEmbers => &FIRE_PALETTE,
-        ParticleDemoKind::SpiralGalaxy => &GALAXY_PALETTE,
-        ParticleDemoKind::WarpSpeed => &WARP_PALETTE,
-        ParticleDemoKind::MeteorShower => &METEOR_PALETTE,
-        ParticleDemoKind::Weather => &WEATHER_PALETTE,
-        ParticleDemoKind::ParticlePortal => &PORTAL_PALETTE,
-        ParticleDemoKind::ElectricStorm => &ELECTRIC_PALETTE,
-        ParticleDemoKind::FountainWaterfall => &WATER_PALETTE,
-        ParticleDemoKind::ArcadeCabinet => &ARCADE_PALETTE,
-        ParticleDemoKind::ProceduralSpriteMaterials => &MATERIAL_PALETTE,
-        ParticleDemoKind::VariableWidthRibbons => &RIBBON_PALETTE,
-        ParticleDemoKind::CurlNoiseFlowField => &FLOW_PALETTE,
-        ParticleDemoKind::LowResolutionDensityBloom => &DENSITY_PALETTE,
-        ParticleDemoKind::LayeredChildSystems => &CHILD_PALETTE,
-        ParticleDemoKind::SpatialFieldStack => &FIELD_PALETTE,
-        ParticleDemoKind::DepthAwareMaterialLod => &DEPTH_PALETTE,
-        ParticleDemoKind::SourceDrivenMorph => &MORPH_PALETTE,
-        ParticleDemoKind::SdfCollisionEvents => &COLLISION_PALETTE,
-        ParticleDemoKind::GridAcceleratedFlocking => &FLOCK_PALETTE,
-        ParticleDemoKind::FractalGridTerrain => &FORM_TERRAIN_PALETTE,
-        ParticleDemoKind::LayerMappedHologram => &FORM_HOLOGRAM_PALETTE,
-        ParticleDemoKind::SphericalFieldObservatory => &FORM_OBSERVATORY_PALETTE,
-        ParticleDemoKind::TwistedMultiFormCathedral => &FORM_CATHEDRAL_PALETTE,
-        ParticleDemoKind::PointCloudMorphPassage => &FORM_MORPH_PALETTE,
+        demo if demo.form_scene().is_some() => &form_recipe(demo.telemetry_label()).palette,
+        demo => &procedural_recipe(demo.telemetry_label()).palette,
     }
 }
 
@@ -4225,6 +4341,37 @@ mod tests {
                 frame_signature(&second_frame)
             );
         }
+    }
+
+    #[test]
+    fn replacing_the_active_family_restarts_with_live_recipe_values() {
+        let mut value: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../assets/experiments/particles/procedural.json"
+        ))
+        .unwrap();
+        let fire = value["recipes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|recipe| recipe["id"].as_str() == Some("fire-embers"))
+            .unwrap();
+        fire["particle_count"] = 12_345.into();
+        fire["beats"]["phases"][0]["until_ms"] = 4_000.into();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let family = ParticleRecipeFamily::from_json(&bytes).unwrap();
+        let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+            width: 960,
+            height: 540,
+            seed: 827_141_709_451,
+            initial_demo: ParticleDemoKind::FireEmbers,
+        })
+        .unwrap();
+
+        renderer.replace_family(family, Duration::from_secs(7));
+
+        assert_eq!(renderer.demo_started_at, Duration::from_secs(7));
+        assert_eq!(renderer.particle_count(), 12_345);
+        assert_eq!(renderer.effect_beat(Duration::from_secs(7)), "flame");
     }
 
     #[test]
