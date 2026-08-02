@@ -66,7 +66,7 @@ pub fn execute_with_changes(
             {
                 index += 1;
             }
-            if let Err(error) = run_builtin_batch(
+            run_builtin_batch(
                 evidence,
                 request_id,
                 repository,
@@ -74,9 +74,7 @@ pub fn execute_with_changes(
                 &fingerprints,
                 reporter,
                 command,
-            ) {
-                return Err(error);
-            }
+            )?;
             continue;
         }
         let heartbeat = operation_heartbeat(operation);
@@ -1155,13 +1153,6 @@ mod tests {
         let changes = vec![PathBuf::from("fixture/a.rs")];
         let first =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
-        let plan = Plan {
-            request: AssuranceRequest::Plan {
-                scope: Scope::WorkingTree,
-            },
-            operations: vec![operation.clone()],
-            external_requirements: Vec::new(),
-        };
         let first_key = operation_cache_key(&operation, &first).unwrap();
         fs::write(root.join("fixture/b.rs"), "changed").unwrap();
         let second =
@@ -1205,13 +1196,6 @@ mod tests {
         let mut operation = test_operation(&cargo);
         operation.inputs = vec!["apps/mister".into()];
         let changes = vec![PathBuf::from("apps/mister/ui/launcher.slint")];
-        let plan = Plan {
-            request: AssuranceRequest::Plan {
-                scope: Scope::Paths(changes.clone()),
-            },
-            operations: vec![operation.clone()],
-            external_requirements: Vec::new(),
-        };
         let first =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
         let first_key = operation_cache_key(&operation, &first)

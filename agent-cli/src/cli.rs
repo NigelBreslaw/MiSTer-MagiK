@@ -27,6 +27,7 @@ pub struct Cli {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)] // Parsed once; keeping Clap's command tree direct avoids dispatch indirection.
 pub enum Command {
     #[command(hide = true)]
     PrePush {
@@ -308,6 +309,7 @@ pub enum GameDatabaseCommand {
 }
 
 #[derive(Debug, Subcommand)]
+#[allow(clippy::large_enum_variant)] // CI-only parsed data; boxing a single field would obscure the schema.
 pub enum PlatformManifestCommand {
     Generate {
         #[arg(long)]

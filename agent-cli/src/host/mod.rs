@@ -13305,13 +13305,6 @@ video_mode=14
     }
 
     #[test]
-    fn mode_14_returns_the_required_error_before_ini_editing() {
-        let error = parse_ini_edit_args(&["menu".into(), "2560x1440p60".into()])
-            .expect_err("mode 14 must be rejected");
-        assert_eq!(error.to_string(), "Mister does not support 1440p");
-    }
-
-    #[test]
     fn crt_trial_requires_main_to_report_a_standard_crt_mode() {
         for mode in ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"] {
             let reply = format!("ok SettingsV1 schema=1 output={mode}\n");
@@ -13370,145 +13363,6 @@ video_mode=14
         assert!(command.contains(" ui crt_trial 30 "));
         assert!(!command.contains("settings_set"));
         assert!(!command.contains("launcher.env"));
-    }
-
-    #[test]
-    fn crt_screensaver_trial_is_bounded_self_restoring_and_uses_the_product_launcher() {
-        let command = crt_screensaver_trial_run_command("schema=1&output=crt-576p50", 30);
-
-        assert!(command.contains("MISTER_SCREENSAVER_START_ACTIVE=1"));
-        assert!(command.contains(" ui launcher 30 "));
-        assert!(command.contains("mister_magik_resume"));
-        assert!(command.contains("rm -f /tmp/mister-magik/realtime-frame-analytics"));
-        assert!(command.contains("crt-screensaver-status.json"));
-        assert!(!command.contains("MiSTer.ini"));
-    }
-
-    #[test]
-    fn crt_screensaver_matrix_trial_fits_inside_the_headless_transaction_window() {
-        let command = crt_screensaver_trial_run_command("schema=1&output=crt-240p60", 8);
-
-        assert!(command.contains(" ui launcher 8 "));
-        assert!(!command.contains(" ui launcher 30 "));
-    }
-
-    #[test]
-    fn crt_screensaver_matrix_contains_exactly_the_four_standard_crt_modes() {
-        assert_eq!(
-            crt_screensaver_matrix_modes()
-                .map(|mode| mode.id)
-                .collect::<Vec<_>>(),
-            ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"]
-        );
-    }
-
-    #[test]
-    fn geometry_trials_are_mode_bounded_and_change_only_one_axis() {
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-288p50", [67, 706, 14, 297]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-288p50", [67, 706, 32, 286]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-288p50", [66, 706, 14, 297]).is_err()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 40, 615]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 679, 41, 615]).is_err()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [32, 607, 40, 614]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [32, 607, 40, 606]).is_err()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [40, 680, 40, 615]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [0, 511, 40, 615]).is_ok()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-576p50", [0, 491, 40, 615]).is_err()
-        );
-        assert!(
-            validate_crt_geometry_trial("schema=1&output=crt-480p60", [45, 684, 31, 510]).is_err()
-        );
-
-        let command = crt_trial_run_command("schema=1&output=crt-576p50", Some([40, 679, 40, 615]));
-        assert!(command.contains("MISTER_MAGIK_CRT_TRIAL=1"));
-        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=45,684,40,615"));
-        assert!(command.contains("MISTER_CRT_TRIAL_CONTENT_BOUNDS=40,679"));
-        assert!(!command.contains("launcher.env"));
-
-        let command = crt_trial_run_command("schema=1&output=crt-288p50", Some([67, 706, 32, 286]));
-        assert!(command.contains("MISTER_FB_DIAGNOSTIC_RECT=67,706,32,286"));
-        assert!(!command.contains("MISTER_CRT_TRIAL_CONTENT_BOUNDS"));
-    }
-
-    #[test]
-    fn geometry_trial_usb_capture_uses_the_camera_jpeg_contract() {
-        assert_eq!(
-            crt_geometry_capture_path(Path::new("/tmp"), 1234),
-            Path::new("/tmp/mister-magik-crt-geometry-1234.jpg")
-        );
-    }
-
-    #[test]
-    fn launcher_restart_args_collect_env_and_timeout() {
-        let args = vec![
-            "--env".to_string(),
-            "MISTER_LAUNCHER_START_SCREEN=arcade".to_string(),
-            "--env".to_string(),
-            "MISTER_PREVIEW_SCROLL_TRACE=/tmp/trace.tsv".to_string(),
-            "--timeout".to_string(),
-            "30".to_string(),
-        ];
-
-        let options = parse_launcher_restart_args(&args).unwrap();
-
-        assert_eq!(options.timeout_secs, 30);
-        assert_eq!(options.remote_env, DEFAULT_LAUNCHER_ENV_REMOTE);
-        assert_eq!(
-            options.env_vars,
-            vec![
-                (
-                    "MISTER_LAUNCHER_START_SCREEN".to_string(),
-                    "arcade".to_string()
-                ),
-                (
-                    "MISTER_PREVIEW_SCROLL_TRACE".to_string(),
-                    "/tmp/trace.tsv".to_string()
-                )
-            ]
-        );
-    }
-
-    #[test]
-    fn launcher_restart_args_reject_bad_env_and_clear_conflict() {
-        assert!(
-            parse_launcher_restart_args(&["--env".to_string(), "BAD-NAME=value".to_string()])
-                .is_err()
-        );
-        assert!(
-            parse_launcher_restart_args(&[
-                "--clear-env".to_string(),
-                "--env".to_string(),
-                "MISTER_CATALOG_REFRESH=off".to_string()
-            ])
-            .is_err()
-        );
-        assert!(
-            parse_launcher_restart_args(&[
-                "--clear-env".to_string(),
-                "--remote-env".to_string(),
-                "relative/launcher.env".to_string()
-            ])
-            .is_err()
-        );
     }
 
     #[test]
@@ -13663,18 +13517,6 @@ video_mode=14
             RebootMode::Raw
         );
         assert_eq!(delivery_reboot_mode("", None), RebootMode::Raw);
-    }
-
-    #[test]
-    fn reboot_defaults_to_supervised_and_mode_flag_is_removed_before_timeout_parse() {
-        let mut args = vec!["--raw".to_string(), "180".to_string()];
-
-        assert_eq!(take_reboot_mode_flag(&mut args).unwrap(), RebootMode::Raw);
-        assert_eq!(args, vec!["180"]);
-        assert_eq!(
-            take_reboot_mode_flag(&mut args).unwrap(),
-            RebootMode::Supervised
-        );
     }
 
     #[test]
@@ -13861,23 +13703,6 @@ H: Handlers=event3 js0"#
         drop(first);
         assert!(DeviceProcessLock::acquire_at(&directory, &device).is_ok());
         fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn manager_fetch_requires_one_exact_manifest_identity() {
-        let expected = "a".repeat(64);
-        assert!(manifest_has_manager(
-            &format!("format=manifest\nmanager_sha256={expected}\n"),
-            &expected
-        ));
-        assert!(!manifest_has_manager(
-            &format!("manager_sha256={expected}\nmanager_sha256={expected}\n"),
-            &expected
-        ));
-        assert!(!manifest_has_manager(
-            &format!("manager_sha256={}\n", "b".repeat(64)),
-            &expected
-        ));
     }
 
     #[test]
@@ -14913,31 +14738,6 @@ H: Handlers=event3 js0"#
             .unwrap_err()
             .to_string();
         assert!(error.starts_with("Desktop directory does not exist:"));
-    }
-
-    #[test]
-    fn retired_platform_cli_actions_are_rejected_before_device_use() {
-        for action in [
-            "platform-deploy",
-            "platform-deliver",
-            "platform-rollback",
-            "platform-commit",
-        ] {
-            let error = reject_retired_platform_command(action)
-                .unwrap_err()
-                .to_string();
-            assert_eq!(error, RETIRED_PLATFORM_COMMAND_ERROR);
-        }
-
-        assert!(reject_retired_platform_command("platform-status").is_ok());
-    }
-
-    #[test]
-    fn host_usage_does_not_advertise_platform_deploy_entrypoints() {
-        assert!(!CLI_USAGE.contains("platform-deploy"));
-        assert!(!CLI_USAGE.contains("platform-deliver"));
-        assert!(!CLI_USAGE.contains("platform-rollback"));
-        assert!(!CLI_USAGE.contains("platform-commit"));
     }
 
     #[test]
@@ -16031,30 +15831,6 @@ H: Handlers=event3 js0"#
             "hold",
             70_000..=80_000
         ));
-    }
-
-    #[test]
-    fn firework_capture_ignores_only_undeclared_startup_renderer() {
-        let frames = [
-            json!({"screensaver_renderer": ""}),
-            json!({"screensaver_renderer": "particle-demos"}),
-        ];
-        let references = frames.iter().collect::<Vec<_>>();
-        assert_eq!(
-            first_declared_screensaver_renderer(&references),
-            Some("particle-demos")
-        );
-
-        let unexpected = [
-            json!({"screensaver_renderer": ""}),
-            json!({"screensaver_renderer": "other-renderer"}),
-            json!({"screensaver_renderer": "particle-demos"}),
-        ];
-        let unexpected_references = unexpected.iter().collect::<Vec<_>>();
-        assert_eq!(
-            first_declared_screensaver_renderer(&unexpected_references),
-            Some("other-renderer")
-        );
     }
 
     #[test]

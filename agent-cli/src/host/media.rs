@@ -6,7 +6,6 @@ use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
 use std::env;
 #[cfg(test)]
-use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -1629,7 +1628,6 @@ mod tests {
         );
     }
 
-    #[test]
     #[test]
     fn manifest_parsing_rejects_incomplete_or_unsupported_packs() {
         let missing_schema = json!({ "packs": [] });

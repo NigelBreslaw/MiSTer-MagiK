@@ -596,6 +596,7 @@ impl EvidenceMigrationLock {
             .create(true)
             .read(true)
             .write(true)
+            .truncate(false)
             .open(path)
             .map_err(|error| format!("cannot open evidence migration lock: {error}"))?;
         let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
