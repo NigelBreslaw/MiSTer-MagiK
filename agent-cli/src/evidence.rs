@@ -1180,64 +1180,6 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn record_delivery_fixture(
-        evidence: &Evidence,
-        suffix: &str,
-        decision: &str,
-        outcome: Outcome,
-        execution_ms: i64,
-    ) {
-        let mut request =
-            RawRequest::capture([OsString::from("agent-cli"), OsString::from("deliver")]);
-        request.id.push_str(suffix);
-        evidence.begin_request(&request).unwrap();
-        evidence
-            .record_intent(&request.id, &serde_json::json!({"command":"deliver"}))
-            .unwrap();
-        evidence
-            .record_events(&[
-                ProgressEvent {
-                    v: 1,
-                    kind: EventKind::Progress,
-                    run: request.id.clone(),
-                    seq: 0,
-                    elapsed_ms: 10,
-                    phase: "reconciliation".into(),
-                    message: "delivery reconciliation".into(),
-                    percent: Some(15),
-                },
-                ProgressEvent {
-                    v: 1,
-                    kind: EventKind::Progress,
-                    run: request.id.clone(),
-                    seq: 1,
-                    elapsed_ms: 30,
-                    phase: "cleanup".into(),
-                    message: "cleaning transient delivery staging".into(),
-                    percent: None,
-                },
-                ProgressEvent {
-                    v: 1,
-                    kind: EventKind::Completed,
-                    run: request.id.clone(),
-                    seq: 2,
-                    elapsed_ms: 35,
-                    phase: "delivery-decision".into(),
-                    message: decision.into(),
-                    percent: Some(100),
-                },
-            ])
-            .unwrap();
-        evidence.finish(&request.id, outcome).unwrap();
-        evidence
-            .connection
-            .execute(
-                "UPDATE requests SET execution_ms=?2, parent_request_id=NULL WHERE id=?1",
-                params![request.id, execution_ms],
-            )
-            .unwrap();
-    }
-
     #[test]
     fn request_timing_includes_bootstrap() {
         let root = temporary_root("request-timing");

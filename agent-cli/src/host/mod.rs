@@ -13129,57 +13129,6 @@ mod tests {
         );
     }
 
-    fn status_fixture() -> Value {
-        json!({
-            "boot": {
-                "ini_keys": {
-                    "MiSTer": {
-                        "main": {"value": "MiSTer_MagiK"},
-                        "direct_video": {"value": "0"}
-                    },
-                    "arcade": {
-                        "direct_video": {"value": "1", "line": 20}
-                    },
-                    "arcade_vertical": {
-                        "direct_video": {"value": "0", "line": 24},
-                        "video_mode": {"value": "8"}
-                    },
-                    "Menu": {
-                        "direct_video": {"value": "0"},
-                        "menu_pal": {"value": "0"},
-                        "forced_scandoubler": {"value": "0"},
-                        "video_mode": {"value": "8"}
-                    }
-                }
-            },
-            "processes": {
-                "MiSTer": [],
-                "MiSTer_MagiK": [{"pid": 10}],
-                "mister-magik-fb": [{"pid": 11}]
-            },
-            "display": {
-                "active_vt": "tty2",
-                "fb0_visual": {"class": "slint_like"}
-            },
-            "runtime": {
-                "main_status": {
-                    "visible_owner": "fb0",
-                    "launcher_state": "LauncherActive",
-                    "launcher_ready_phase": "ready",
-                    "launcher_ready_attempt": 1,
-                    "launcher_ready_remaining_ms": 0,
-                    "launcher_ready_last_failure": "none"
-                },
-                "slint_status": {}
-            },
-            "owners": {
-                "by_device": {
-                    "/dev/fb0": [{"process": "mister-magik-fb", "pid": 11, "fd": 5}]
-                }
-            }
-        })
-    }
-
     fn raw_frame_with<F>(f: F) -> Vec<u8>
     where
         F: FnMut(usize, usize) -> (u8, u8, u8),
