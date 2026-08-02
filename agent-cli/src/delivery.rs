@@ -324,7 +324,8 @@ impl<D: DeviceOperations> ProcessActions<'_, D> {
     }
 
     fn prepare_manager(&mut self) -> AgentResult<PathBuf> {
-        let spec = crate::build::BuildSpec::for_recipe(crate::build::BuildRecipe::ManagerDevice);
+        let spec = crate::build::BuildSpec::for_command(crate::build::BuildCommand::ManagerDevice)
+            .expect("manager builds have a specification");
         crate::build::execute_quiet(self.repository, &spec)?;
         let receipt = spec.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {

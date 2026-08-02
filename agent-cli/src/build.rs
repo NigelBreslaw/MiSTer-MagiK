@@ -52,36 +52,6 @@ pub enum BuildCommand {
     ReleaseBinaries,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BuildRecipe {
-    RuntimeDevice(UiScope),
-    LiveParticles,
-    RuntimeFast,
-    RuntimeAnalysis,
-    ValidateLauncher,
-    ValidateLibrary,
-    DeviceAgent,
-    ManagerDevice,
-}
-
-impl BuildRecipe {
-    #[must_use]
-    pub fn for_command(command: BuildCommand) -> Option<Self> {
-        match command {
-            BuildCommand::RuntimeDevice => Some(Self::RuntimeDevice(UiScope::All)),
-            BuildCommand::RuntimeFast => Some(Self::RuntimeFast),
-            BuildCommand::RuntimeAnalysis => Some(Self::RuntimeAnalysis),
-            BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => {
-                Some(Self::ValidateLauncher)
-            }
-            BuildCommand::ValidateLibrary => Some(Self::ValidateLibrary),
-            BuildCommand::DeviceAgent => Some(Self::DeviceAgent),
-            BuildCommand::ManagerDevice => Some(Self::ManagerDevice),
-            BuildCommand::ReleaseBinaries => None,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BuildTarget {
@@ -120,27 +90,18 @@ pub struct BuildSpec {
 
 impl BuildSpec {
     #[must_use]
-    pub fn for_recipe(recipe: BuildRecipe) -> Self {
-        let (target, mode, profile, features, scope, artifact, strict_receipt) = match recipe {
-            BuildRecipe::RuntimeDevice(scope) => (
+    pub fn for_command(command: BuildCommand) -> Option<Self> {
+        let configuration = match command {
+            BuildCommand::RuntimeDevice => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device",
                 vec!["ui", "profile"],
-                scope,
+                UiScope::All,
                 runtime_artifact("release-device"),
                 true,
             ),
-            BuildRecipe::LiveParticles => (
-                BuildTarget::Runtime,
-                BuildMode::Build,
-                "release-live",
-                vec!["ui", "experiments"],
-                UiScope::Launcher,
-                runtime_artifact("release-live"),
-                true,
-            ),
-            BuildRecipe::RuntimeFast => (
+            BuildCommand::RuntimeFast => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release",
@@ -149,7 +110,7 @@ impl BuildSpec {
                 runtime_artifact("release"),
                 true,
             ),
-            BuildRecipe::RuntimeAnalysis => (
+            BuildCommand::RuntimeAnalysis => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
                 "release-device-profile",
@@ -158,7 +119,7 @@ impl BuildSpec {
                 runtime_artifact("release-device-profile"),
                 true,
             ),
-            BuildRecipe::ValidateLauncher => (
+            BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => (
                 BuildTarget::Runtime,
                 BuildMode::Check,
                 "release-device",
@@ -167,7 +128,7 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 false,
             ),
-            BuildRecipe::ValidateLibrary => (
+            BuildCommand::ValidateLibrary => (
                 BuildTarget::Runtime,
                 BuildMode::CheckLibrary,
                 "release-device",
@@ -176,7 +137,7 @@ impl BuildSpec {
                 runtime_artifact("release-device"),
                 false,
             ),
-            BuildRecipe::DeviceAgent => (
+            BuildCommand::DeviceAgent => (
                 BuildTarget::DeviceAgent,
                 BuildMode::Build,
                 "release",
@@ -187,7 +148,7 @@ impl BuildSpec {
                 ),
                 false,
             ),
-            BuildRecipe::ManagerDevice => (
+            BuildCommand::ManagerDevice => (
                 BuildTarget::Manager,
                 BuildMode::Build,
                 "release",
@@ -198,7 +159,22 @@ impl BuildSpec {
                 ),
                 true,
             ),
+            BuildCommand::ReleaseBinaries => return None,
         };
+        Some(Self::from_configuration(configuration))
+    }
+
+    fn from_configuration(
+        (target, mode, profile, features, scope, artifact, strict_receipt): (
+            BuildTarget,
+            BuildMode,
+            &'static str,
+            Vec<&'static str>,
+            UiScope,
+            PathBuf,
+            bool,
+        ),
+    ) -> Self {
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
         let cache_identity = format!(
             "v5:{TARGET}:{target:?}:{mode:?}:{profile}:{}:{}",
@@ -220,7 +196,18 @@ impl BuildSpec {
 
     #[must_use]
     pub fn canonical(ui_scope: UiScope) -> Self {
-        Self::for_recipe(BuildRecipe::RuntimeDevice(ui_scope))
+        let mut spec = Self::for_command(BuildCommand::RuntimeDevice)
+            .expect("runtime device builds have a specification");
+        spec.ui_scope = ui_scope;
+        spec.cache_identity = format!(
+            "v5:{TARGET}:{:?}:{:?}:{}:{}:{}",
+            spec.target,
+            spec.mode,
+            spec.profile,
+            spec.features.join(","),
+            ui_scope.label()
+        );
+        spec
     }
 
     #[must_use]
@@ -438,17 +425,18 @@ pub fn execute_command(
     match command {
         BuildCommand::ValidateRuntime => execute_runtime_validation(repository, reporter),
         BuildCommand::ReleaseBinaries => execute_release_binaries(repository, reporter),
-        other => {
-            let recipe = BuildRecipe::for_command(other)
-                .ok_or("combined build command cannot be converted to one recipe")?;
-            execute(repository, &BuildSpec::for_recipe(recipe), reporter)
-        }
+        other => execute(
+            repository,
+            &BuildSpec::for_command(other).ok_or("build command has no single specification")?,
+            reporter,
+        ),
     }
 }
 
 fn execute_release_binaries(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<()> {
-    let runtime = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
-    let manager = BuildSpec::for_recipe(BuildRecipe::ManagerDevice);
+    let runtime = BuildSpec::canonical(UiScope::All);
+    let manager = BuildSpec::for_command(BuildCommand::ManagerDevice)
+        .expect("manager builds have a specification");
     let mut session = BuildSession::new(repository)?;
     let manager_receipt = session.reusable_clean_receipt(&manager).ok();
     execute_with_session(&mut session, &runtime, reporter)?;
@@ -480,12 +468,14 @@ pub fn execute_runtime_validation(
         build_minimal_ffmpeg(repository, session.backend, FfmpegVerification::Full)?;
         execute_with_session(
             &mut session,
-            &BuildSpec::for_recipe(BuildRecipe::ValidateLauncher),
+            &BuildSpec::for_command(BuildCommand::ValidateLauncher)
+                .expect("launcher validation has a specification"),
             reporter,
         )?;
         return execute_with_session(
             &mut session,
-            &BuildSpec::for_recipe(BuildRecipe::ValidateLibrary),
+            &BuildSpec::for_command(BuildCommand::ValidateLibrary)
+                .expect("library validation has a specification"),
             reporter,
         );
     }
@@ -1492,7 +1482,7 @@ mod tests {
 
     fn manager_receipt_fixture() -> (PathBuf, BuildSpec, BuildMetadata) {
         let repository = temporary_directory("manager-receipt");
-        let spec = BuildSpec::for_recipe(BuildRecipe::ManagerDevice);
+        let spec = BuildSpec::for_command(BuildCommand::ManagerDevice).unwrap();
         let metadata = fixed_metadata(false);
         let artifact = repository.join(&spec.artifact);
         let lock = repository.join(lockfile(spec.target));
@@ -1541,16 +1531,16 @@ mod tests {
 
     #[test]
     fn runtime_and_validation_intents_infer_fixed_identity() {
-        let runtime = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
+        let runtime = BuildSpec::canonical(UiScope::All);
         assert_eq!(runtime.profile, "release-device");
         assert_eq!(runtime.features, ["ui", "profile"]);
         assert_eq!(runtime.ui_scope, UiScope::All);
-        let launcher = BuildSpec::for_recipe(BuildRecipe::ValidateLauncher);
+        let launcher = BuildSpec::for_command(BuildCommand::ValidateLauncher).unwrap();
         assert_eq!(launcher.mode, BuildMode::Check);
         assert_eq!(launcher.ui_scope, UiScope::Launcher);
-        let library = BuildSpec::for_recipe(BuildRecipe::ValidateLibrary);
+        let library = BuildSpec::for_command(BuildCommand::ValidateLibrary).unwrap();
         assert_eq!(library.mode, BuildMode::CheckLibrary);
-        assert!(BuildRecipe::for_command(BuildCommand::ReleaseBinaries).is_none());
+        assert!(BuildSpec::for_command(BuildCommand::ReleaseBinaries).is_none());
     }
 
     #[test]
@@ -1565,9 +1555,9 @@ mod tests {
 
     #[test]
     fn cache_identity_changes_with_profile_scope_and_target() {
-        let device = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
-        let fast = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);
-        let agent = BuildSpec::for_recipe(BuildRecipe::DeviceAgent);
+        let device = BuildSpec::canonical(UiScope::All);
+        let fast = BuildSpec::for_command(BuildCommand::RuntimeFast).unwrap();
+        let agent = BuildSpec::for_command(BuildCommand::DeviceAgent).unwrap();
         assert_ne!(device.cache_identity, fast.cache_identity);
         assert_ne!(device.cache_identity, agent.cache_identity);
         assert_ne!(
@@ -1603,7 +1593,7 @@ mod tests {
         assert!(!cargo_timings_enabled(Some("0")).unwrap());
         assert!(cargo_timings_enabled(Some("true")).is_err());
 
-        let spec = BuildSpec::for_recipe(BuildRecipe::RuntimeFast);
+        let spec = BuildSpec::for_command(BuildCommand::RuntimeFast).unwrap();
         assert!(
             cargo_args(&spec, true)
                 .iter()
@@ -1751,7 +1741,7 @@ mod tests {
 
     #[test]
     fn apple_container_build_executes_cargo_directly_without_a_shell() {
-        let spec = BuildSpec::for_recipe(BuildRecipe::RuntimeDevice(UiScope::All));
+        let spec = BuildSpec::canonical(UiScope::All);
         let command = apple_container_cargo_command(
             Path::new("/checkout"),
             &spec,
