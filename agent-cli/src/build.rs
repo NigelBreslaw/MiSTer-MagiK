@@ -216,6 +216,21 @@ impl BuildSpec {
             .expect("framebuffer lab device builds have a specification")
     }
 
+    /// Reproduces the current full Slint application build used to quantify
+    /// the cost of editing the production Magik particle engine. The build is
+    /// build-only and never installs or runs the artifact.
+    #[must_use]
+    pub fn magik_full_app_baseline() -> Self {
+        Self::from_configuration((
+            BuildTarget::Runtime,
+            BuildMode::Build,
+            "release-live",
+            vec!["ui"],
+            UiScope::Launcher,
+            runtime_artifact("release-live"),
+        ))
+    }
+
     #[must_use]
     pub fn artifact(&self) -> &Path {
         &self.artifact
@@ -1574,6 +1589,16 @@ mod tests {
         let library = BuildSpec::for_command(BuildCommand::ValidateLibrary).unwrap();
         assert_eq!(library.mode, BuildMode::CheckLibrary);
         assert!(BuildSpec::for_command(BuildCommand::ReleaseBinaries).is_none());
+    }
+
+    #[test]
+    fn magik_full_app_baseline_reproduces_the_iteration_build() {
+        let spec = BuildSpec::magik_full_app_baseline();
+        assert_eq!(spec.target, BuildTarget::Runtime);
+        assert_eq!(spec.mode, BuildMode::Build);
+        assert_eq!(spec.profile, "release-live");
+        assert_eq!(spec.features, ["ui"]);
+        assert_eq!(spec.ui_scope, UiScope::Launcher);
     }
 
     #[test]

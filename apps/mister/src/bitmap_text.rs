@@ -479,11 +479,12 @@ mod tests {
     fn alpha_mask_tightly_contains_press_start_text() {
         let mut font = ConsoleFont::new_with_typeface(128.0, ConsoleTypeface::PressStart2P);
         let mask = font.rasterize_alpha_mask("MagiK").unwrap();
-        assert!(mask.width > 400);
-        assert!(mask.width < 900);
-        assert!(mask.height > 80);
-        assert!(mask.height < 200);
-        assert_eq!(mask.stride, mask.width);
+        let alpha_signature = mask.alpha.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+
+        assert_eq!((mask.width, mask.height, mask.stride), (624, 128, 624));
+        assert_eq!(alpha_signature, 0x2654_8c31_ed92_3025);
         assert!(mask.alpha.iter().any(|alpha| *alpha >= 128));
         assert!(mask.alpha.iter().any(|alpha| *alpha == 0));
     }

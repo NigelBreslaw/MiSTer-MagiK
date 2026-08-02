@@ -25,6 +25,8 @@ const PARTICLE_REBUILD_SAMPLES: usize = 5;
 pub enum CompileTimeTarget {
     FramebufferLabArm,
     FramebufferLabMacos,
+    MagikFullAppArm,
+    MagikFullAppMacos,
 }
 
 impl CompileTimeTarget {
@@ -32,6 +34,8 @@ impl CompileTimeTarget {
         match self {
             Self::FramebufferLabArm => "framebuffer-lab-arm",
             Self::FramebufferLabMacos => "framebuffer-lab-macos",
+            Self::MagikFullAppArm => "magik-full-app-arm",
+            Self::MagikFullAppMacos => "magik-full-app-macos",
         }
     }
 }
@@ -223,6 +227,12 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             target_dir,
         ),
         CompileTimeTarget::FramebufferLabMacos => build_macos_lab(repository, target_dir),
+        CompileTimeTarget::MagikFullAppArm => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::magik_full_app_baseline(),
+            target_dir,
+        ),
+        CompileTimeTarget::MagikFullAppMacos => build_macos_full_app(repository, target_dir),
     }
 }
 
@@ -232,8 +242,39 @@ impl CompileTimeTarget {
             Self::FramebufferLabArm | Self::FramebufferLabMacos => {
                 "apps/framebuffer-lab/src/particles/showcase.rs"
             }
+            Self::MagikFullAppArm | Self::MagikFullAppMacos => "apps/mister/src/particle_engine.rs",
         }
     }
+}
+
+fn build_macos_full_app(repository: &Path, target_dir: &Path) -> AgentResult<()> {
+    let mut child = Command::new("cargo")
+        .current_dir(repository.join("apps/mister"))
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("RUSTC_WRAPPER", "")
+        .env("SLINT_EMIT_DEBUG_INFO", "1")
+        .args([
+            "build",
+            "--locked",
+            "--bin",
+            "mister-magik-ui-preview",
+            "--features",
+            "ui-preview",
+        ])
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start macOS full-app Magik build: {error}"))?;
+    let status = process::wait(
+        &mut child,
+        Some(BUILD_DEADLINE),
+        "macOS full-app Magik build",
+        None,
+        || Ok(()),
+    )?;
+    if !status.success() {
+        return Err(format!("macOS full-app Magik build exited with {status}").into());
+    }
+    Ok(())
 }
 
 fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
@@ -450,6 +491,14 @@ mod tests {
         assert_eq!(
             CompileTimeTarget::FramebufferLabMacos.label(),
             "framebuffer-lab-macos"
+        );
+        assert_eq!(
+            CompileTimeTarget::MagikFullAppArm.label(),
+            "magik-full-app-arm"
+        );
+        assert_eq!(
+            CompileTimeTarget::MagikFullAppMacos.label(),
+            "magik-full-app-macos"
         );
     }
 

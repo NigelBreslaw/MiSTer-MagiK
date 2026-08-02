@@ -454,6 +454,30 @@ mod tests {
                 "agent-cli",
                 "compile-time",
                 "build",
+                "magik-full-app-macos",
+                "--target-dir",
+                "/tmp/magik-mac-target",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "measure",
+                "magik-full-app-arm",
+                "--target-dir",
+                "/tmp/magik-arm-target",
+                "--output",
+                "/tmp/magik-arm.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "build",
                 "unknown",
                 "--target-dir",
                 "/tmp/target",
