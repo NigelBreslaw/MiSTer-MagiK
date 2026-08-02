@@ -116,11 +116,12 @@ static PROCEDURAL_FAMILY: LazyLock<Result<CompiledFamily, String>> = LazyLock::n
     compile_recipe_family(
         PROCEDURAL_FAMILY_JSON,
         PROCEDURAL_FAMILY_SCHEMA,
+        19,
         procedural_keys,
     )
 });
 static FORM_FAMILY: LazyLock<Result<CompiledFamily, String>> =
-    LazyLock::new(|| compile_recipe_family(FORM_FAMILY_JSON, FORM_FAMILY_SCHEMA, form_keys));
+    LazyLock::new(|| compile_recipe_family(FORM_FAMILY_JSON, FORM_FAMILY_SCHEMA, 5, form_keys));
 
 #[derive(Clone)]
 pub struct ParticleRecipeFamily {
@@ -157,6 +158,7 @@ impl ParticleRecipeFamily {
                 family: RecipeFamily::Procedural(compile_recipe_family(
                     json,
                     PROCEDURAL_FAMILY_SCHEMA,
+                    19,
                     procedural_keys,
                 )?),
             }),
@@ -164,6 +166,7 @@ impl ParticleRecipeFamily {
                 family: RecipeFamily::Form(compile_recipe_family(
                     json,
                     FORM_FAMILY_SCHEMA,
+                    5,
                     form_keys,
                 )?),
             }),
@@ -230,6 +233,7 @@ impl CompiledFamily {
 fn compile_recipe_family(
     json: &str,
     expected_schema: &str,
+    expected_count: usize,
     known_keys: fn(&str) -> Option<&'static [&'static str]>,
 ) -> Result<CompiledFamily, String> {
     let raw: RawRecipeFamily = serde_json::from_str(json)
@@ -237,6 +241,12 @@ fn compile_recipe_family(
     if raw.schema != expected_schema {
         return Err(format!(
             "unsupported particle recipe family {:?}",
+            raw.schema
+        ));
+    }
+    if raw.recipes.len() != expected_count {
+        return Err(format!(
+            "particle recipe family {:?} must contain exactly {expected_count} recipes",
             raw.schema
         ));
     }
@@ -648,12 +658,23 @@ impl FireworkFamily {
                 .get("duration_ms")
                 .and_then(Value::as_u64)
                 .ok_or("fireworks family show duration must be an integer")?;
-            if recipe.beats.repeat_ms != Some(show_duration) || ids.contains(&id) {
+            let show_schema = recipe
+                .show
+                .get("schema")
+                .and_then(Value::as_str)
+                .ok_or("fireworks family show schema must be a string")?;
+            if firework_schema(id) != Some(show_schema)
+                || recipe.beats.repeat_ms != Some(show_duration)
+                || ids.contains(&id)
+            {
                 return Err(
                     "fireworks family show ids and beat periods must be unique and aligned".into(),
                 );
             }
             ids.push(id);
+        }
+        if FIREWORK_IDS.iter().any(|id| !ids.contains(id)) {
+            return Err("fireworks family must contain every registered show exactly once".into());
         }
         Ok(())
     }
@@ -685,6 +706,34 @@ impl FireworkFamily {
     }
 }
 
+const FIREWORK_IDS: [&str; 12] = [
+    "solar-chrysanthemum",
+    "recursive-halo",
+    "copper-willow-rain",
+    "phoenix-comet",
+    "magnetic-flower",
+    "oled-peony",
+    "solar-chrysanthemum-v2",
+    "recursive-halo-v2",
+    "copper-willow-rain-v2",
+    "phoenix-comet-v2",
+    "magnetic-flower-v2",
+    "oled-peony-v2",
+];
+
+fn firework_schema(id: &str) -> Option<&'static str> {
+    FIREWORK_IDS
+        .iter()
+        .position(|expected| *expected == id)
+        .map(|index| {
+            if index < 6 {
+                "mister-magik-firework-v1"
+            } else {
+                "mister-magik-firework-v2"
+            }
+        })
+}
+
 pub(super) fn embedded_firework_show(id: &str, schema: &str) -> Option<String> {
     let family = FIREWORKS_FAMILY.as_ref().ok()?;
     family.show_json(id, schema)
@@ -708,5 +757,20 @@ mod tests {
         assert!(
             embedded_firework_show("solar-chrysanthemum-v2", "mister-magik-firework-v2").is_some()
         );
+    }
+
+    #[test]
+    fn live_families_require_the_complete_registered_set() {
+        for embedded in [
+            FIREWORKS_FAMILY_JSON,
+            PROCEDURAL_FAMILY_JSON,
+            FORM_FAMILY_JSON,
+        ] {
+            assert!(ParticleRecipeFamily::from_json(embedded.as_bytes()).is_ok());
+            let mut value: Value = serde_json::from_str(embedded).unwrap();
+            value["recipes"].as_array_mut().unwrap().pop();
+            let incomplete = serde_json::to_vec(&value).unwrap();
+            assert!(ParticleRecipeFamily::from_json(&incomplete).is_err());
+        }
     }
 }
