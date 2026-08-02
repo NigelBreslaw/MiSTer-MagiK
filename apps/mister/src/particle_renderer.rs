@@ -371,6 +371,7 @@ fn shared_rgb565_pixels_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb5
     }
 }
 
+#[cfg(mister_experiments)]
 pub(crate) fn raster_packed_visual_commands_with_palette(
     destination: &mut [Rgb565Pixel],
     commands: &[u32],
