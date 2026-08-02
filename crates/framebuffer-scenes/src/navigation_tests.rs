@@ -138,6 +138,64 @@ fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
 }
 
 #[test]
+fn failed_recap_does_not_expose_stale_snapshot() {
+    let mut buffers = NavigationTransitionBuffers::new(4, 3);
+    let pixels = vec![Rgb565Pixel(0x1234); 12];
+    buffers.capture_source(&pixels).unwrap();
+    buffers.capture_destination(&pixels).unwrap();
+
+    assert_eq!(
+        buffers.capture_source(&pixels[..11]),
+        Err(NavigationTransitionFailure::SnapshotSizeMismatch)
+    );
+    assert!(!buffers.source_ready());
+    assert_eq!(buffers.source(), None);
+    assert!(buffers.destination_ready());
+
+    assert_eq!(
+        buffers.capture_destination(&pixels[..11]),
+        Err(NavigationTransitionFailure::SnapshotSizeMismatch)
+    );
+    assert!(!buffers.destination_ready());
+    assert_eq!(buffers.destination(), None);
+}
+
+#[test]
+fn buffers_reuse_storage_without_clearing_live_snapshots() {
+    let mut buffers = NavigationTransitionBuffers::new(4, 3);
+    let pixels = (0..12)
+        .map(|value| Rgb565Pixel(value as u16))
+        .collect::<Vec<_>>();
+    buffers.capture_source(&pixels).unwrap();
+    buffers.capture_destination(&pixels).unwrap();
+
+    assert_eq!(buffers.source(), Some(pixels.as_slice()));
+    assert_eq!(buffers.destination(), Some(pixels.as_slice()));
+
+    let working_ptr = buffers.working().as_ptr();
+    buffers.resize(4, 3);
+    assert_eq!(buffers.working().as_ptr(), working_ptr);
+    assert!(buffers.source_ready());
+    assert!(buffers.destination_ready());
+
+    buffers.begin_capture();
+    assert!(!buffers.source_ready());
+    assert!(!buffers.destination_ready());
+}
+
+#[test]
+fn zero_sized_buffers_do_not_allocate_storage() {
+    let buffers = NavigationTransitionBuffers::new(0, 0);
+    assert!(buffers.source.is_empty());
+    assert!(buffers.destination.is_empty());
+    assert!(buffers.working.is_empty());
+    assert!(buffers.scale_source_x.is_empty());
+    assert!(buffers.scale_source_y.is_empty());
+    assert!(buffers.scale_excluded_x.is_empty());
+    assert!(buffers.scale_dither_x.is_empty());
+}
+
+#[test]
 fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
     let width = 8;
     let height = 2;

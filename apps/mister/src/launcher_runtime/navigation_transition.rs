@@ -1322,52 +1322,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_recap_does_not_expose_stale_snapshot() {
-        let mut buffers = NavigationTransitionBuffers::new(4, 3);
-        let pixels = vec![Rgb565Pixel(0x1234); 12];
-        buffers.capture_source(&pixels).unwrap();
-        buffers.capture_destination(&pixels).unwrap();
-
-        assert_eq!(
-            buffers.capture_source(&pixels[..11]),
-            Err(NavigationTransitionFailure::SnapshotSizeMismatch)
-        );
-        assert!(!buffers.source_ready());
-        assert_eq!(buffers.source(), None);
-        assert!(buffers.destination_ready());
-
-        assert_eq!(
-            buffers.capture_destination(&pixels[..11]),
-            Err(NavigationTransitionFailure::SnapshotSizeMismatch)
-        );
-        assert!(!buffers.destination_ready());
-        assert_eq!(buffers.destination(), None);
-    }
-
-    #[test]
-    fn buffers_reuse_storage_without_clearing_live_snapshots() {
-        let mut buffers = NavigationTransitionBuffers::new(4, 3);
-        let pixels = (0..12)
-            .map(|value| Rgb565Pixel(value as u16))
-            .collect::<Vec<_>>();
-        buffers.capture_source(&pixels).unwrap();
-        buffers.capture_destination(&pixels).unwrap();
-
-        assert_eq!(buffers.source(), Some(pixels.as_slice()));
-        assert_eq!(buffers.destination(), Some(pixels.as_slice()));
-
-        let working_ptr = buffers.working().as_ptr();
-        buffers.resize(4, 3);
-        assert_eq!(buffers.working().as_ptr(), working_ptr);
-        assert!(buffers.source_ready());
-        assert!(buffers.destination_ready());
-
-        buffers.begin_capture();
-        assert!(!buffers.source_ready());
-        assert!(!buffers.destination_ready());
-    }
-
-    #[test]
     fn timeout_completion_reports_the_failure_atomically() {
         let mut timed = request();
         timed.preparation_timeout_us = 50_000;
@@ -1814,15 +1768,13 @@ mod tests {
     }
 
     #[test]
-    fn disabled_runtime_does_not_allocate_frame_buffers() {
+    fn disabled_runtime_uses_empty_frame_buffers() {
         let poc = NavigationTransitionRuntime::new(960, 540, false);
         assert!(!poc.enabled());
-        assert!(poc.buffers.source.is_empty());
-        assert!(poc.buffers.destination.is_empty());
-        assert!(poc.buffers.working.is_empty());
-        assert!(poc.buffers.scale_source_x.is_empty());
-        assert!(poc.buffers.scale_source_y.is_empty());
-        assert!(poc.buffers.scale_excluded_x.is_empty());
-        assert!(poc.buffers.scale_dither_x.is_empty());
+        assert_eq!(poc.buffers.width(), 0);
+        assert_eq!(poc.buffers.height(), 0);
+        assert!(poc.buffers.working().is_empty());
+        assert!(!poc.buffers.source_ready());
+        assert!(!poc.buffers.destination_ready());
     }
 }
