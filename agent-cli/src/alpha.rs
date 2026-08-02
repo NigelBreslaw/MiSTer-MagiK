@@ -6,9 +6,7 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{
-    AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceOperations, DeviceRequest,
-};
+use crate::transport::{AlphaCandidateHashes, AutomationAction, AutomationButton};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -114,45 +112,30 @@ trait AlphaDevice {
     ) -> AgentResult<Value>;
 }
 
-impl<D: DeviceOperations> AlphaDevice for DeviceClient<D> {
+impl AlphaDevice for DeviceClient {
     fn install_candidate(
         &mut self,
         tag: String,
         hashes: AlphaCandidateHashes,
         restore_on_failure: bool,
     ) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::InstallAlphaCandidate {
-            tag,
-            hashes,
-            restore_on_failure,
-        })?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse alpha activation: {error}").into())
+        self.mutate(|device| device.install_alpha_candidate(&tag, &hashes, restore_on_failure))
     }
 
     fn restore_host_mode(&mut self, original_main: Option<String>) -> AgentResult<()> {
-        self.execute(DeviceRequest::RestoreAlphaHostMode { original_main })
-            .map(|_| ())
+        self.mutate(|device| device.restore_alpha_host_mode(original_main))
     }
 
     fn ensure_launcher(&mut self, version: String, revision: String) -> AgentResult<()> {
-        self.execute(DeviceRequest::EnsureInstalledAlphaLauncher {
-            expected_build_version: version,
-            expected_source_revision: revision,
-        })
-        .map(|_| ())
+        self.mutate(|device| device.ensure_installed_alpha_launcher(&version, &revision))
     }
 
     fn status(&mut self) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::Status)?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse device status: {error}").into())
+        self.read(crate::NativeDevice::status)
     }
 
     fn inspect_public_catalog(&mut self) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::InspectPublicCatalog)?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse completed public catalog: {error}").into())
+        self.read(crate::NativeDevice::inspect_public_catalog)
     }
 
     fn begin_automation(
@@ -162,44 +145,24 @@ impl<D: DeviceOperations> AlphaDevice for DeviceClient<D> {
         main_generation: u64,
         lifetime_seconds: u64,
     ) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::BeginLauncherAutomation {
-            expected_build_version: version,
-            expected_source_revision: revision,
-            expected_main_generation: main_generation,
-            lifetime_seconds,
-        })?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse automation session: {error}").into())
+        self.mutate(|device| {
+            device.begin_launcher_automation(&version, &revision, main_generation, lifetime_seconds)
+        })
     }
 
     fn end_automation(&mut self, nonce: String) -> AgentResult<()> {
-        self.execute(DeviceRequest::EndLauncherAutomation { nonce })
-            .map(|_| ())
+        self.mutate(|device| device.end_launcher_automation(&nonce))
     }
 
     fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64> {
-        let detail = self.execute(DeviceRequest::SendLauncherAutomationAction {
-            nonce: nonce.clone(),
-            action,
-        })?;
-        let response: Value = serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse automation action: {error}"))?;
-        let sequence = response
-            .get("action_sequence")
-            .and_then(Value::as_u64)
-            .ok_or("automation action has no sequence")?;
-        self.execute(DeviceRequest::AwaitLauncherAutomationPresented {
-            nonce,
-            action_sequence: sequence,
-            timeout_ms: 3_000,
-        })?;
+        let sequence =
+            self.mutate(|device| device.send_launcher_automation_action(&nonce, &action))?;
+        self.read(|device| device.await_launcher_automation_presented(&nonce, sequence, 3_000))?;
         Ok(sequence)
     }
 
     fn snapshot(&mut self, nonce: String) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::ReadLauncherAutomationSnapshot { nonce })?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse automation snapshot: {error}").into())
+        self.read(|device| device.launcher_automation_snapshot(&nonce))
     }
 
     fn checkpoint(
@@ -209,14 +172,14 @@ impl<D: DeviceOperations> AlphaDevice for DeviceClient<D> {
         label: String,
         output_dir: PathBuf,
     ) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::CaptureLauncherAutomationCheckpoint {
-            nonce,
-            action_sequence,
-            label: label.clone(),
-            output_dir,
-        })?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse checkpoint {label}: {error}").into())
+        self.mutate(|device| {
+            device.capture_launcher_automation_checkpoint(
+                &nonce,
+                action_sequence,
+                &label,
+                &output_dir,
+            )
+        })
     }
 
     fn exercise_launch_return(
@@ -225,13 +188,13 @@ impl<D: DeviceOperations> AlphaDevice for DeviceClient<D> {
         expected_game_id: String,
         lifetime_seconds: u64,
     ) -> AgentResult<Value> {
-        let detail = self.execute(DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
-            nonce,
-            expected_game_id,
-            lifetime_seconds,
-        })?;
-        serde_json::from_str(&detail)
-            .map_err(|error| format!("cannot parse launch-return evidence: {error}").into())
+        self.mutate(|device| {
+            device.exercise_launcher_automation_launch_return(
+                &nonce,
+                &expected_game_id,
+                lifetime_seconds,
+            )
+        })
     }
 }
 

@@ -7,7 +7,6 @@ use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::platform_stage::{generate_platform_manifest, stage_published_platform_components};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceOperations, DeviceRequest};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -180,32 +179,27 @@ struct RuntimeDelivery {
     expected_sha256: String,
 }
 
-impl<D: DeviceOperations> DeliveryDevice for DeviceClient<D> {
+impl DeliveryDevice for DeviceClient {
     fn connect(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::Discover).map(|_| ())
+        self.read(crate::NativeDevice::discover)
     }
 
     fn read_development_manifest(&mut self) -> AgentResult<String> {
-        self.execute(DeviceRequest::ReadDevelopmentManifest)
+        self.read(crate::NativeDevice::read_development_manifest)
     }
 
     fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()> {
-        self.execute(DeviceRequest::DeliverRuntimeTransaction {
-            local: delivery.local,
-            remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
-            manifest_local: delivery.manifest_local,
-            manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest".into(),
-            expected_sha256: delivery.expected_sha256,
+        self.mutate(|device| {
+            device.deliver_runtime(
+                &delivery.local,
+                &delivery.manifest_local,
+                &delivery.expected_sha256,
+            )
         })
-        .map(|_| ())
     }
 
     fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()> {
-        self.execute(DeviceRequest::DeliverPlatformTransaction {
-            stage,
-            expected_sha256,
-        })
-        .map(|_| ())
+        self.mutate(|device| device.deliver_platform(&stage, &expected_sha256))
     }
 }
 

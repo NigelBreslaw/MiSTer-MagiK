@@ -2,148 +2,90 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::error::{AgentError, AgentResult};
-use crate::transport::{DeviceOperations, DeviceRequest};
+use crate::transport::DeviceFailure;
 use std::thread;
 use std::time::Duration;
 
 const READ_ONLY_RETRY_DELAY: Duration = Duration::from_millis(250);
 
-pub struct DeviceClient<D = crate::NativeDevice> {
-    device: D,
+#[derive(Default)]
+pub struct DeviceClient {
+    device: crate::NativeDevice,
 }
 
-impl Default for DeviceClient<crate::NativeDevice> {
-    fn default() -> Self {
-        Self {
-            device: crate::NativeDevice::default(),
-        }
-    }
-}
-
-impl<D: DeviceOperations> DeviceClient<D> {
-    #[must_use]
-    pub const fn new(device: D) -> Self {
-        Self { device }
-    }
-
-    pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
-        match self.execute_typed(request.clone()) {
-            Ok(response) => Ok(response.detail),
-            Err(crate::transport::DeviceFailure::Unavailable(_))
-                if request.retryable_after_unavailable() =>
-            {
+impl DeviceClient {
+    pub(crate) fn read<T>(
+        &mut self,
+        mut operation: impl FnMut(&mut crate::NativeDevice) -> Result<T, DeviceFailure>,
+    ) -> AgentResult<T> {
+        match operation(&mut self.device) {
+            Ok(value) => Ok(value),
+            Err(DeviceFailure::Unavailable(_)) => {
                 thread::sleep(READ_ONLY_RETRY_DELAY);
-                self.execute_typed(request)
-                    .map(|response| response.detail)
-                    .map_err(AgentError::from)
+                operation(&mut self.device).map_err(AgentError::from)
             }
             Err(error) => Err(AgentError::from(error)),
         }
     }
 
-    pub fn execute_typed(
+    pub(crate) fn mutate<T>(
         &mut self,
-        request: DeviceRequest,
-    ) -> Result<crate::transport::DeviceResponse, crate::transport::DeviceFailure> {
-        self.device.execute(&request)
+        operation: impl FnOnce(&mut crate::NativeDevice) -> Result<T, DeviceFailure>,
+    ) -> AgentResult<T> {
+        operation(&mut self.device).map_err(AgentError::from)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::{DeviceFailure, DeviceResponse, FakeDevice};
-    use std::cell::RefCell;
+    use std::cell::Cell;
     use std::rc::Rc;
-
-    struct RecordingDevice(Rc<RefCell<Vec<DeviceRequest>>>);
-
-    impl DeviceOperations for RecordingDevice {
-        fn execute(&mut self, request: &DeviceRequest) -> Result<DeviceResponse, DeviceFailure> {
-            self.0.borrow_mut().push(request.clone());
-            Ok(DeviceResponse {
-                operation: request.label(),
-                detail: "snapshotted".into(),
-            })
-        }
-    }
-
-    #[test]
-    fn typed_failures_have_actionable_stable_classifications() {
-        let fake =
-            FakeDevice::with_results([Err(DeviceFailure::Authentication("bad token".into()))]);
-        let error = DeviceClient::new(fake)
-            .execute(DeviceRequest::Status)
-            .unwrap_err();
-        assert_eq!(error.to_string(), "authentication_required: bad token");
-    }
-
-    #[test]
-    fn typed_success_returns_only_operation_detail() {
-        let fake = FakeDevice::with_results([Ok(DeviceResponse {
-            operation: "status",
-            detail: "healthy".into(),
-        })]);
-        assert_eq!(
-            DeviceClient::new(fake)
-                .execute(DeviceRequest::Status)
-                .unwrap(),
-            "healthy"
-        );
-    }
-
-    #[test]
-    fn typed_requests_are_forwarded_unchanged() {
-        let request = DeviceRequest::ProfileInstalledCatalogLifecycle {
-            output_dir: "/tmp/catalog-profile".into(),
-        };
-        let recorded = Rc::new(RefCell::new(Vec::new()));
-        let mut client = DeviceClient::new(RecordingDevice(Rc::clone(&recorded)));
-
-        assert_eq!(client.execute(request.clone()).unwrap(), "snapshotted");
-        assert_eq!(recorded.borrow().as_slice(), &[request]);
-    }
 
     #[test]
     fn read_only_unavailability_gets_one_bounded_retry() {
-        let fake = FakeDevice::with_results([
-            Err(DeviceFailure::Unavailable("transient route failure".into())),
-            Ok(DeviceResponse {
-                operation: "status",
-                detail: "healthy".into(),
-            }),
-        ]);
-        assert_eq!(
-            DeviceClient::new(fake)
-                .execute(DeviceRequest::Status)
-                .unwrap(),
-            "healthy"
-        );
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        let value = DeviceClient::default()
+            .read(move |_| {
+                observed.set(observed.get() + 1);
+                if observed.get() == 1 {
+                    Err(DeviceFailure::Unavailable("transient route failure".into()))
+                } else {
+                    Ok("healthy")
+                }
+            })
+            .unwrap();
+        assert_eq!(value, "healthy");
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]
     fn mutations_are_never_replayed_after_unavailability() {
-        struct UnavailableDevice(Rc<RefCell<Vec<DeviceRequest>>>);
-
-        impl DeviceOperations for UnavailableDevice {
-            fn execute(
-                &mut self,
-                request: &DeviceRequest,
-            ) -> Result<DeviceResponse, DeviceFailure> {
-                self.0.borrow_mut().push(request.clone());
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        let error = DeviceClient::default()
+            .mutate(move |_| -> Result<(), DeviceFailure> {
+                observed.set(observed.get() + 1);
                 Err(DeviceFailure::Unavailable("ambiguous timeout".into()))
-            }
-        }
-
-        let recorded = Rc::new(RefCell::new(Vec::new()));
-        let error = DeviceClient::new(UnavailableDevice(Rc::clone(&recorded)))
-            .execute(DeviceRequest::RecoverWithOneShotReboot)
+            })
             .unwrap_err();
         assert_eq!(error.to_string(), "device_unavailable: ambiguous timeout");
-        assert_eq!(
-            recorded.borrow().as_slice(),
-            &[DeviceRequest::RecoverWithOneShotReboot]
-        );
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn authentication_failures_are_not_retried() {
+        let calls = Rc::new(Cell::new(0));
+        let observed = Rc::clone(&calls);
+        let error = DeviceClient::default()
+            .read(move |_| -> Result<(), DeviceFailure> {
+                observed.set(observed.get() + 1);
+                Err(DeviceFailure::Authentication("bad token".into()))
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "authentication_required: bad token");
+        assert_eq!(calls.get(), 1);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::transport::{DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout};
+use crate::transport::{AutomationAction, DeviceFailure, Layout};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use rusqlite::{Connection, OpenFlags, params};
@@ -162,22 +162,51 @@ impl Drop for DeviceProcessLock {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DeviceAccess {
+    agent: bool,
+    mutation: bool,
+}
+
+impl DeviceAccess {
+    const SSH_READ: Self = Self {
+        agent: false,
+        mutation: false,
+    };
+    const SSH_MUTATION: Self = Self {
+        agent: false,
+        mutation: true,
+    };
+    const AGENT_READ: Self = Self {
+        agent: true,
+        mutation: false,
+    };
+    const AGENT_MUTATION: Self = Self {
+        agent: true,
+        mutation: true,
+    };
+}
+
+struct PreparedDevice {
+    config: NativeDeviceConfig,
+    _lock: Option<DeviceProcessLock>,
+}
+
 impl NativeDevice {
     fn prepare(
         &mut self,
-        request: &DeviceRequest,
-    ) -> std::result::Result<Option<DeviceProcessLock>, DeviceFailure> {
+        access: DeviceAccess,
+    ) -> std::result::Result<PreparedDevice, DeviceFailure> {
         if self.config.is_none() {
             let device = discovery::resolve().map_err(device_failure)?;
             let connection = ConnectionConfig::for_resolved_host(device.address.to_string());
             self.config = Some(NativeDeviceConfig::new(connection, device.id));
         }
-
         let config = self.config.as_ref().ok_or_else(|| {
             DeviceFailure::OperationFailed("device configuration is unavailable".into())
         })?;
-        let needs_bootstrap = request.requires_agent() && config.agent.is_none();
-        let mut lock = if request.mutates_device() || needs_bootstrap {
+        let needs_bootstrap = access.agent && config.agent.is_none();
+        let mut lock = if access.mutation || needs_bootstrap {
             Some(DeviceProcessLock::acquire(&config.device_id)?)
         } else {
             None
@@ -191,434 +220,608 @@ impl NativeDevice {
                 &config.device_id,
                 explicit_token.as_deref(),
             )
-            .map_err(device_failure)?;
-            let endpoint = AgentEndpoint::new(config.connection.host(), token);
+            .map_err(|error| {
+                DeviceFailure::OperationFailed(format!("agent bootstrap failed: {error}"))
+            })?;
             self.config
                 .as_mut()
                 .expect("device configuration was just resolved")
-                .agent = Some(endpoint);
+                .agent = Some(AgentEndpoint::new(config.connection.host(), token));
         }
-        if !request.mutates_device() {
+        if !access.mutation {
             lock.take();
         }
-        Ok(lock)
+        Ok(PreparedDevice {
+            config: self.config.clone().ok_or_else(|| {
+                DeviceFailure::OperationFailed("device configuration is unavailable".into())
+            })?,
+            _lock: lock,
+        })
+    }
+
+    pub(crate) fn discover(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        Ok(())
+    }
+
+    pub(crate) fn status(&mut self) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        collect_status(&session).map_err(device_failure)
+    }
+
+    pub(crate) fn read_development_manifest(
+        &mut self,
+    ) -> std::result::Result<String, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        Ok(
+            remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+                .unwrap_or_default(),
+        )
+    }
+
+    pub(crate) fn verify_development_platform(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        exec_checked(
+            &session,
+            "development platform verify",
+            &installed_platform_verify_command(Layout::Development),
+        )
+        .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))
+    }
+
+    pub(crate) fn deliver_runtime(
+        &mut self,
+        local: &Path,
+        manifest_local: &Path,
+        expected_sha256: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        deliver_runtime_transaction(
+            &prepared.config,
+            local,
+            "/media/fat/mister-magik-dev/mister-magik-fb",
+            manifest_local,
+            "/media/fat/mister-magik-dev/platform-v3.manifest",
+            expected_sha256,
+        )
+        .map(|_| ())
+    }
+
+    pub(crate) fn deliver_platform(
+        &mut self,
+        stage: &Path,
+        expected_sha256: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        deliver_platform_transaction(&prepared.config, stage, expected_sha256).map(|_| ())
+    }
+
+    pub(crate) fn deliver_local_main(
+        &mut self,
+        local: &Path,
+        manifest_local: &Path,
+        expected_main_sha256: &str,
+        expected_gui_sha256: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        deliver_local_main_transaction(
+            &prepared.config,
+            local,
+            manifest_local,
+            expected_main_sha256,
+            expected_gui_sha256,
+        )
+        .map(|_| ())
+    }
+
+    fn benchmark_profile(
+        &mut self,
+        operation: impl FnOnce(&NativeDeviceConfig) -> Result<String>,
+    ) -> std::result::Result<String, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        operation(&prepared.config).map_err(device_failure)
+    }
+
+    pub(crate) fn profile_screensaver(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_screensaver(config, output_dir))
+    }
+
+    pub(crate) fn profile_particles(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_particles(config, output_dir, ParticleBenchmarkRun::Complete)
+        })
+    }
+
+    pub(crate) fn profile_particle_capacity(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_particles(config, output_dir, ParticleBenchmarkRun::Capacity)
+        })
+    }
+
+    pub(crate) fn profile_particle_demo_40k(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_particles(config, output_dir, ParticleBenchmarkRun::Demo40k)
+        })
+    }
+
+    pub(crate) fn profile_particle_step(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_particles(config, output_dir, ParticleBenchmarkRun::Step)
+        })
+    }
+
+    pub(crate) fn profile_particle_cpu(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_particle_cpu(config, output_dir))
+    }
+
+    pub(crate) fn profile_search(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_search(config, output_dir))
+    }
+
+    pub(crate) fn verify_search_ui(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| verify_installed_search_ui(config, output_dir))
+    }
+
+    pub(crate) fn profile_catalog_lifecycle(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_catalog_lifecycle(config, output_dir))
+    }
+
+    pub(crate) fn profile_launch_return(
+        &mut self,
+        output_dir: &Path,
+        fallback: bool,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_launch_return(config, output_dir, fallback)
+        })
+    }
+
+    pub(crate) fn profile_cold_boot(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_cold_boot(config, output_dir))
+    }
+
+    pub(crate) fn profile_navigation_transitions(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_navigation_transitions(config, output_dir)
+        })
+    }
+
+    pub(crate) fn verify_development_health(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
+        wait_delivery_health(&session, "dev", Duration::from_secs(10))
+            .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))
     }
 }
 
-impl DeviceOperations for NativeDevice {
-    fn execute(
+impl NativeDevice {
+    fn release_ssh_mutation(
         &mut self,
-        request: &DeviceRequest,
-    ) -> std::result::Result<DeviceResponse, DeviceFailure> {
-        let _lock = self.prepare(request)?;
-        let config = self.config.clone().ok_or_else(|| {
-            DeviceFailure::OperationFailed("device configuration is unavailable".into())
-        })?;
-        debug_assert!(!config.device_id.is_empty());
-        let connect = |timeout_secs| connect_with(&config.connection, timeout_secs);
-        let detail = match request {
-            DeviceRequest::Discover => "connected".into(),
-            DeviceRequest::Status => {
-                let session = connect(10).map_err(device_failure)?;
-                serde_json::to_string(&collect_status(&session).map_err(device_failure)?)
-                    .map_err(device_failure)?
+        operation: impl FnOnce(&NativeDeviceConfig) -> Result<()>,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
+        operation(&prepared.config).map_err(device_failure)
+    }
+
+    pub(crate) fn begin_release_qualification(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "release recovery preflight",
+                &release_begin_command(),
+            )
+        })
+    }
+
+    pub(crate) fn qualify_release_runtime(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| {
+            let session = connect_with(&config.connection, 10)?;
+            let command = format!(
+                "if pidof MiSTer_MagiKDev >/dev/null 2>&1; then {}; else {}; fi",
+                delivery_health_command("dev")?,
+                delivery_health_command("public")?
+            );
+            exec_checked(&session, "release runtime", &command)
+        })
+    }
+
+    pub(crate) fn qualify_release_catalog(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(&session, "release catalog", &release_catalog_command())
+        })
+    }
+
+    pub(crate) fn qualify_release_input_and_handoff(
+        &mut self,
+    ) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &session,
+                "release input and handoff",
+                &release_handoff_command(),
+            )
+        })
+    }
+
+    pub(crate) fn qualify_release_display(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        qualify_release_display_matrix_with(
+            &prepared.config.connection,
+            prepared.config.agent().map_err(device_failure)?,
+        )
+        .map(|_| ())
+        .map_err(device_failure)
+    }
+
+    pub(crate) fn qualify_release_latch_v4_stress(
+        &mut self,
+    ) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| latch_v4_qualification::run(config).map(|_| ()))
+    }
+
+    pub(crate) fn qualify_release_recovery(&mut self) -> std::result::Result<(), DeviceFailure> {
+        self.release_ssh_mutation(|config| {
+            let session = connect_with(&config.connection, 10)?;
+            exec_checked(&session, "release recovery", &release_recovery_command())
+        })
+    }
+
+    pub(crate) fn restore_release_qualification(
+        &mut self,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        exec_checked(&session, "release restore", &release_restore_command())
+            .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+        issue_reboot(&session, RebootMode::Supervised)
+            .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
+        drop(session);
+        if !wait_down_with(&prepared.config.connection, 40.0)
+            || wait_up_with(&prepared.config.connection, 120.0)
+                .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?
+                != 0
+        {
+            return Err(DeviceFailure::RecoveryRequired(
+                "device did not reboot after restoring release configuration".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn collect_diagnostic_facts(&mut self) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        collect_diagnostic_facts(&prepared.config)
+    }
+
+    pub(crate) fn repair_safe_device_state(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
+            .map_err(device_failure)
+    }
+
+    pub(crate) fn recover_with_one_shot_reboot(
+        &mut self,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
+        one_shot_recovery_reboot_wait(&prepared.config)
+    }
+}
+
+fn collect_diagnostic_facts(
+    config: &NativeDeviceConfig,
+) -> std::result::Result<Value, DeviceFailure> {
+    let session = connect_with(&config.connection, 10).map_err(device_failure)?;
+    let output = exec(&session, &diagnostic_facts_command(), false).map_err(device_failure)?;
+    if let Some(message) = exec_failure_message("diagnostic facts", &output) {
+        return Err(device_failure(message));
+    }
+    let mut facts: Value = serde_json::from_str(output.stdout.trim()).map_err(device_failure)?;
+    for (path, keys) in [
+        (
+            MAIN_STATUS_REMOTE,
+            &[
+                "launcher_state",
+                "crash_count",
+                "last_crash_reason",
+                "last_crash_report",
+                "last_crash_report_id",
+                "last_crash_kind",
+            ][..],
+        ),
+        (
+            SLINT_STATUS_REMOTE,
+            &[
+                "scene",
+                "screen",
+                "effective_view",
+                "return_screen",
+                "input_enabled",
+                "present_backend",
+                "present_status",
+                "latch_failure_state",
+                "latch_failure_stage",
+                "latch_failure_reason",
+                "latch_failure_detail",
+                "compatibility_prompt_visible",
+            ][..],
+        ),
+    ] {
+        if let Some(status) =
+            remote_read(&session, path).and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            && let (Some(facts), Some(status)) = (facts.as_object_mut(), status.as_object())
+        {
+            for key in keys {
+                if let Some(value) = status.get(*key) {
+                    facts.insert((*key).to_owned(), value.clone());
+                }
             }
-            DeviceRequest::ReadDevelopmentManifest => {
-                let session = connect(10).map_err(device_failure)?;
-                remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
-                    .unwrap_or_default()
+        }
+    }
+    if let Some(failure) = remote_read(&session, LATCH_FAILURE_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        && let (Some(facts), Some(failure)) = (facts.as_object_mut(), failure.as_object())
+    {
+        for (fact_key, failure_key) in [
+            ("latch_failure_state", "state"),
+            ("latch_failure_stage", "stage"),
+            ("latch_failure_reason", "reason"),
+            ("latch_failure_detail", "detail"),
+            ("latch_latest_state", "latest_state"),
+            ("latch_latest_stage", "latest_stage"),
+            ("latch_latest_reason", "latest_reason"),
+            ("latch_latest_detail", "latest_detail"),
+            ("latch_recovery_attempt_count", "attempt_count"),
+            ("latch_latest_retry_result", "latest_result"),
+            ("latch_recovery_state", "recovery_state"),
+        ] {
+            if let Some(value) = failure.get(failure_key) {
+                facts.insert(fact_key.to_owned(), value.clone());
             }
-            DeviceRequest::VerifyDevelopmentPlatform => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "development platform verify",
-                    &installed_platform_verify_command(Layout::Development),
-                )
-                .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
-                "verified".into()
-            }
-            DeviceRequest::DeliverRuntimeTransaction {
-                local,
-                remote,
-                manifest_local,
-                manifest_remote,
-                expected_sha256,
-            } => deliver_runtime_transaction(
-                &config,
-                local,
-                remote,
-                manifest_local,
-                manifest_remote,
-                expected_sha256,
-            )?,
-            DeviceRequest::DeliverPlatformTransaction {
-                stage,
-                expected_sha256,
-            } => deliver_platform_transaction(&config, stage, expected_sha256)?,
-            DeviceRequest::DeliverLocalMainTransaction {
-                local,
-                manifest_local,
-                expected_main_sha256,
-                expected_gui_sha256,
-            } => deliver_local_main_transaction(
-                &config,
-                local,
-                manifest_local,
-                expected_main_sha256,
-                expected_gui_sha256,
-            )?,
-            DeviceRequest::ProfileInstalledScreensaver { output_dir } => {
-                profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledParticles { output_dir } => {
-                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Complete)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledParticleCapacity { output_dir } => {
-                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Capacity)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledParticleDemo40k { output_dir } => {
-                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Demo40k)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledParticleStep { output_dir } => {
-                profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Step)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledParticleCpu { output_dir } => {
-                profile_installed_particle_cpu(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledSearch { output_dir } => {
-                profile_installed_search(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::VerifyInstalledSearchUi { output_dir } => {
-                verify_installed_search_ui(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
-                profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledLaunchReturn { output_dir } => {
-                profile_installed_launch_return(&config, output_dir, false)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledLaunchReturnFallback { output_dir } => {
-                profile_installed_launch_return(&config, output_dir, true)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledColdBoot { output_dir } => {
-                profile_installed_cold_boot(&config, output_dir).map_err(device_failure)?
-            }
-            DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
-                profile_installed_navigation_transitions(&config, output_dir)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::VerifyHealth(layout) => {
-                let label = match layout {
-                    Layout::Development => "dev",
-                    Layout::Public => "public",
-                };
-                let session = connect(10).map_err(device_failure)?;
-                wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
-                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                wait_delivery_health(&session, label, Duration::from_secs(10))
-                    .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
-                "healthy".into()
-            }
-            DeviceRequest::BeginReleaseQualification => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "release recovery preflight",
-                    &release_begin_command(),
-                )
-                .map_err(device_failure)?;
-                "volatile-token=armed recovery=confirmed".into()
-            }
-            DeviceRequest::QualifyReleaseRuntime => {
-                let session = connect(10).map_err(device_failure)?;
-                let command = format!(
-                    "if pidof MiSTer_MagiKDev >/dev/null 2>&1; then {}; else {}; fi",
-                    delivery_health_command("dev").map_err(device_failure)?,
-                    delivery_health_command("public").map_err(device_failure)?
+        }
+    }
+    if let Some(facts) = facts.as_object_mut() {
+        match config
+            .agent
+            .as_ref()
+            .ok_or("device agent was not prepared for diagnostic capture")
+            .map_err(Into::<Box<dyn std::error::Error>>::into)
+            .and_then(request_framebuffer_png_at)
+        {
+            Ok(capture) => {
+                facts.insert(
+                    "capture_source".into(),
+                    Value::String(
+                        capture_source_label(&capture.result)
+                            .map_err(device_failure)?
+                            .to_owned(),
+                    ),
                 );
-                exec_checked(&session, "release runtime", &command).map_err(device_failure)?;
-                "runtime=healthy".into()
+                facts.insert(
+                    "capture_authoritative_scanout".into(),
+                    Value::Bool(
+                        capture
+                            .result
+                            .get("authoritative_scanout")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    ),
+                );
             }
-            DeviceRequest::QualifyReleaseCatalog => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "release catalog", &release_catalog_command())
-                    .map_err(device_failure)?;
-                "catalog=valid".into()
+            Err(error) => {
+                facts.insert("capture_error".into(), Value::String(error.to_string()));
             }
-            DeviceRequest::QualifyReleaseInputAndHandoff => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(
-                    &session,
-                    "release input and handoff",
-                    &release_handoff_command(),
-                )
-                .map_err(device_failure)?;
-                "input=ready handoff=ready return=ready".into()
+        }
+    }
+    let evidence_dir = retain_diagnostic_evidence(&session, &facts).map_err(device_failure)?;
+    if let Some(facts) = facts.as_object_mut() {
+        facts.insert(
+            "evidence_dir".into(),
+            Value::String(evidence_dir.display().to_string()),
+        );
+    }
+    Ok(facts)
+}
+
+impl NativeDevice {
+    pub(crate) fn install_alpha_candidate(
+        &mut self,
+        tag: &str,
+        hashes: &crate::transport::AlphaCandidateHashes,
+        restore_on_failure: bool,
+    ) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let detail = install_alpha_candidate(&prepared.config, tag, hashes, restore_on_failure)?;
+        serde_json::from_str(&detail).map_err(device_failure)
+    }
+
+    pub(crate) fn restore_alpha_host_mode(
+        &mut self,
+        original_main: Option<String>,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_MUTATION)?;
+        restore_alpha_host_mode(&prepared.config, original_main).map(|_| ())
+    }
+
+    pub(crate) fn ensure_installed_alpha_launcher(
+        &mut self,
+        expected_build_version: &str,
+        expected_source_revision: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        launcher_automation::ensure_installed_alpha_launcher(
+            &prepared.config,
+            expected_build_version,
+            expected_source_revision,
+        )
+        .map(|_| ())
+        .map_err(device_failure)
+    }
+
+    pub(crate) fn inspect_public_catalog(&mut self) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        let inspect = exec(
+            &session,
+            "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
+            true,
+        )
+        .map_err(device_failure)?;
+        if let Some(error) = exec_failure_message("public catalog inspect", &inspect) {
+            return Err(DeviceFailure::Unhealthy(error));
+        }
+        parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(device_failure)
+    }
+
+    pub(crate) fn begin_launcher_automation(
+        &mut self,
+        expected_build_version: &str,
+        expected_source_revision: &str,
+        expected_main_generation: u64,
+        lifetime_seconds: u64,
+    ) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let detail = launcher_automation::begin(
+            &prepared.config,
+            expected_build_version,
+            expected_source_revision,
+            expected_main_generation,
+            lifetime_seconds,
+        )
+        .map_err(device_failure)?;
+        serde_json::from_str(&detail).map_err(device_failure)
+    }
+
+    pub(crate) fn send_launcher_automation_action(
+        &mut self,
+        nonce: &str,
+        action: &AutomationAction,
+    ) -> std::result::Result<u64, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let detail = launcher_automation::send_action(&prepared.config, nonce, action)
+            .map_err(device_failure)?;
+        let response: Value = serde_json::from_str(&detail).map_err(device_failure)?;
+        response
+            .get("action_sequence")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DeviceFailure::OperationFailed("automation action has no sequence".into())
+            })
+    }
+
+    pub(crate) fn await_launcher_automation_presented(
+        &mut self,
+        nonce: &str,
+        action_sequence: u64,
+        timeout_ms: u64,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
+        launcher_automation::await_presented(&prepared.config, nonce, action_sequence, timeout_ms)
+            .map(|_| ())
+            .map_err(device_failure)
+    }
+
+    pub(crate) fn launcher_automation_snapshot(
+        &mut self,
+        nonce: &str,
+    ) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_READ)?;
+        launcher_automation::snapshot(&prepared.config, nonce).map_err(device_failure)
+    }
+
+    pub(crate) fn capture_launcher_automation_checkpoint(
+        &mut self,
+        nonce: &str,
+        action_sequence: u64,
+        label: &str,
+        output_dir: &Path,
+    ) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let detail = launcher_automation::capture_checkpoint(
+            &prepared.config,
+            nonce,
+            action_sequence,
+            label,
+            output_dir,
+        )
+        .map_err(device_failure)?;
+        serde_json::from_str(&detail).map_err(device_failure)
+    }
+
+    pub(crate) fn exercise_launcher_automation_launch_return(
+        &mut self,
+        nonce: &str,
+        expected_game_id: &str,
+        lifetime_seconds: u64,
+    ) -> std::result::Result<Value, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let detail = match launcher_automation::exercise_launch_return(
+            &prepared.config,
+            nonce,
+            expected_game_id,
+            lifetime_seconds,
+        ) {
+            Ok(detail) => detail,
+            Err(launcher_automation::LaunchReturnError::Failed(detail)) => {
+                return Err(DeviceFailure::OperationFailed(detail));
             }
-            DeviceRequest::QualifyReleaseDisplay => qualify_release_display_matrix_with(
-                &config.connection,
-                config.agent().map_err(device_failure)?,
-            )
-            .map_err(device_failure)?,
-            DeviceRequest::QualifyReleaseLatchV4Stress => {
-                latch_v4_qualification::run(&config).map_err(device_failure)?
-            }
-            DeviceRequest::QualifyReleaseRecovery => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "release recovery", &release_recovery_command())
-                    .map_err(device_failure)?;
-                "recovery=qualified token=volatile".into()
-            }
-            DeviceRequest::RestoreReleaseQualification => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "release restore", &release_restore_command())
-                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                issue_reboot(&session, RebootMode::Supervised)
-                    .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?;
-                drop(session);
-                if !wait_down_with(&config.connection, 40.0)
-                    || wait_up_with(&config.connection, 120.0)
-                        .map_err(|error| DeviceFailure::RecoveryRequired(error.to_string()))?
-                        != 0
-                {
-                    return Err(DeviceFailure::RecoveryRequired(
-                        "device did not reboot after restoring release configuration".into(),
-                    ));
-                }
-                "restored arming=clear".into()
-            }
-            DeviceRequest::CollectDiagnosticFacts => {
-                let session = connect(10).map_err(device_failure)?;
-                let output =
-                    exec(&session, &diagnostic_facts_command(), false).map_err(device_failure)?;
-                if let Some(message) = exec_failure_message("diagnostic facts", &output) {
-                    return Err(device_failure(message));
-                }
-                let mut facts: Value =
-                    serde_json::from_str(output.stdout.trim()).map_err(device_failure)?;
-                if let Some(main_status) = remote_read(&session, MAIN_STATUS_REMOTE)
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    && let (Some(facts), Some(main)) =
-                        (facts.as_object_mut(), main_status.as_object())
-                {
-                    for key in [
-                        "launcher_state",
-                        "crash_count",
-                        "last_crash_reason",
-                        "last_crash_report",
-                        "last_crash_report_id",
-                        "last_crash_kind",
-                    ] {
-                        if let Some(value) = main.get(key) {
-                            facts.insert(key.to_owned(), value.clone());
-                        }
-                    }
-                }
-                if let Some(slint_status) = remote_read(&session, SLINT_STATUS_REMOTE)
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    && let (Some(facts), Some(slint)) =
-                        (facts.as_object_mut(), slint_status.as_object())
-                {
-                    for key in [
-                        "scene",
-                        "screen",
-                        "effective_view",
-                        "return_screen",
-                        "input_enabled",
-                        "present_backend",
-                        "present_status",
-                        "latch_failure_state",
-                        "latch_failure_stage",
-                        "latch_failure_reason",
-                        "latch_failure_detail",
-                        "compatibility_prompt_visible",
-                    ] {
-                        if let Some(value) = slint.get(key) {
-                            facts.insert(key.to_owned(), value.clone());
-                        }
-                    }
-                }
-                if let Some(latch_failure) = remote_read(&session, LATCH_FAILURE_REMOTE)
-                    .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-                    && let (Some(facts), Some(failure)) =
-                        (facts.as_object_mut(), latch_failure.as_object())
-                {
-                    for (fact_key, failure_key) in [
-                        ("latch_failure_state", "state"),
-                        ("latch_failure_stage", "stage"),
-                        ("latch_failure_reason", "reason"),
-                        ("latch_failure_detail", "detail"),
-                        ("latch_latest_state", "latest_state"),
-                        ("latch_latest_stage", "latest_stage"),
-                        ("latch_latest_reason", "latest_reason"),
-                        ("latch_latest_detail", "latest_detail"),
-                        ("latch_recovery_attempt_count", "attempt_count"),
-                        ("latch_latest_retry_result", "latest_result"),
-                        ("latch_recovery_state", "recovery_state"),
-                    ] {
-                        if let Some(value) = failure.get(failure_key) {
-                            facts.insert(fact_key.to_owned(), value.clone());
-                        }
-                    }
-                }
-                if let Some(facts) = facts.as_object_mut() {
-                    let capture = match config.agent.as_ref() {
-                        Some(agent) => request_framebuffer_png_at(agent),
-                        None => Err("device agent was not prepared for diagnostic capture".into()),
-                    };
-                    match capture {
-                        Ok(capture) => {
-                            facts.insert(
-                                "capture_source".into(),
-                                Value::String(
-                                    capture_source_label(&capture.result)
-                                        .map_err(device_failure)?
-                                        .to_owned(),
-                                ),
-                            );
-                            facts.insert(
-                                "capture_authoritative_scanout".into(),
-                                Value::Bool(
-                                    capture
-                                        .result
-                                        .get("authoritative_scanout")
-                                        .and_then(Value::as_bool)
-                                        .unwrap_or(false),
-                                ),
-                            );
-                        }
-                        Err(error) => {
-                            facts.insert("capture_error".into(), Value::String(error.to_string()));
-                        }
-                    }
-                }
-                let evidence_dir =
-                    retain_diagnostic_evidence(&session, &facts).map_err(device_failure)?;
-                if let Some(facts) = facts.as_object_mut() {
-                    facts.insert(
-                        "evidence_dir".into(),
-                        Value::String(evidence_dir.display().to_string()),
-                    );
-                }
-                serde_json::to_string(&facts).map_err(device_failure)?
-            }
-            DeviceRequest::RepairSafeDeviceState => {
-                let session = connect(10).map_err(device_failure)?;
-                exec_checked(&session, "safe diagnostic repair", &safe_repair_command())
-                    .map_err(device_failure)?;
-                "temporary-state=clear launcher=unchanged".into()
-            }
-            DeviceRequest::RecoverWithOneShotReboot => {
-                one_shot_recovery_reboot_wait(&config)?;
-                "reboot=raw recovery=healthy arming=clear".into()
-            }
-            DeviceRequest::InstallAlphaCandidate {
-                tag,
-                hashes,
-                restore_on_failure,
-            } => install_alpha_candidate(&config, tag, hashes, *restore_on_failure)?,
-            DeviceRequest::RestoreAlphaHostMode { original_main } => {
-                restore_alpha_host_mode(&config, original_main.clone())?
-            }
-            DeviceRequest::EnsureInstalledAlphaLauncher {
-                expected_build_version,
-                expected_source_revision,
-            } => launcher_automation::ensure_installed_alpha_launcher(
-                &config,
-                expected_build_version,
-                expected_source_revision,
-            )
-            .map_err(device_failure)?,
-            DeviceRequest::InspectPublicCatalog => {
-                let session = connect(10).map_err(device_failure)?;
-                let inspect = exec(
-                    &session,
-                    "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
-                    true,
-                )
-                .map_err(device_failure)?;
-                if let Some(error) = exec_failure_message("public catalog inspect", &inspect) {
-                    return Err(DeviceFailure::Unhealthy(error));
-                }
-                serde_json::to_string(
-                    &parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(device_failure)?,
-                )
-                .map_err(device_failure)?
-            }
-            DeviceRequest::BeginLauncherAutomation {
-                expected_build_version,
-                expected_source_revision,
-                expected_main_generation,
-                lifetime_seconds,
-            } => launcher_automation::begin(
-                &config,
-                expected_build_version,
-                expected_source_revision,
-                *expected_main_generation,
-                *lifetime_seconds,
-            )
-            .map_err(device_failure)?,
-            DeviceRequest::SendLauncherAutomationAction { nonce, action } => {
-                launcher_automation::send_action(&config, nonce, action).map_err(device_failure)?
-            }
-            DeviceRequest::AwaitLauncherAutomationPresented {
-                nonce,
-                action_sequence,
-                timeout_ms,
-            } => {
-                launcher_automation::await_presented(&config, nonce, *action_sequence, *timeout_ms)
-                    .map_err(device_failure)?
-            }
-            DeviceRequest::ReadLauncherAutomationSnapshot { nonce } => serde_json::to_string(
-                &launcher_automation::snapshot(&config, nonce).map_err(device_failure)?,
-            )
-            .map_err(device_failure)?,
-            DeviceRequest::CaptureLauncherAutomationCheckpoint {
-                nonce,
-                action_sequence,
-                label,
-                output_dir,
-            } => launcher_automation::capture_checkpoint(
-                &config,
-                nonce,
-                *action_sequence,
-                label,
-                output_dir,
-            )
-            .map_err(device_failure)?,
-            DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
-                nonce,
-                expected_game_id,
-                lifetime_seconds,
-            } => match launcher_automation::exercise_launch_return(
-                &config,
-                nonce,
-                expected_game_id,
-                *lifetime_seconds,
-            ) {
-                Ok(detail) => detail,
-                Err(launcher_automation::LaunchReturnError::Failed(detail)) => {
-                    return Err(DeviceFailure::OperationFailed(detail));
-                }
-                Err(launcher_automation::LaunchReturnError::RecoveryRequired(detail)) => {
-                    return Err(DeviceFailure::RecoveryRequired(detail));
-                }
-            },
-            DeviceRequest::EndLauncherAutomation { nonce } => {
-                launcher_automation::end(&config, nonce).map_err(device_failure)?
+            Err(launcher_automation::LaunchReturnError::RecoveryRequired(detail)) => {
+                return Err(DeviceFailure::RecoveryRequired(detail));
             }
         };
-        Ok(DeviceResponse {
-            operation: request.label(),
-            detail,
-        })
+        serde_json::from_str(&detail).map_err(device_failure)
+    }
+
+    pub(crate) fn end_launcher_automation(
+        &mut self,
+        nonce: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        launcher_automation::end(&prepared.config, nonce)
+            .map(|_| ())
+            .map_err(device_failure)
     }
 }
 

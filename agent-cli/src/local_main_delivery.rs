@@ -4,7 +4,6 @@
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceOperations, DeviceRequest};
 use std::env;
 use std::fs::{self, File};
 use std::io::Read;
@@ -38,28 +37,28 @@ struct LocalMainDelivery {
     expected_gui_sha256: String,
 }
 
-impl<D: DeviceOperations> LocalMainDevice for DeviceClient<D> {
+impl LocalMainDevice for DeviceClient {
     fn connect(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::Discover).map(|_| ())
+        self.read(crate::NativeDevice::discover)
     }
 
     fn verify_development_platform(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::VerifyDevelopmentPlatform)
-            .map(|_| ())
+        self.read(crate::NativeDevice::verify_development_platform)
     }
 
     fn read_development_manifest(&mut self) -> AgentResult<String> {
-        self.execute(DeviceRequest::ReadDevelopmentManifest)
+        self.read(crate::NativeDevice::read_development_manifest)
     }
 
     fn deliver_local_main(&mut self, delivery: LocalMainDelivery) -> AgentResult<()> {
-        self.execute(DeviceRequest::DeliverLocalMainTransaction {
-            local: delivery.local,
-            manifest_local: delivery.manifest_local,
-            expected_main_sha256: delivery.expected_main_sha256,
-            expected_gui_sha256: delivery.expected_gui_sha256,
+        self.mutate(|device| {
+            device.deliver_local_main(
+                &delivery.local,
+                &delivery.manifest_local,
+                &delivery.expected_main_sha256,
+                &delivery.expected_gui_sha256,
+            )
         })
-        .map(|_| ())
     }
 }
 

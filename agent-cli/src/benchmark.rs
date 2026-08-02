@@ -5,7 +5,6 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceOperations, DeviceRequest, Layout as DeviceLayout};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,60 +42,43 @@ enum BenchmarkProfile {
     NavigationTransitions,
 }
 
-impl<D: DeviceOperations> BenchmarkDevice for DeviceClient<D> {
+impl BenchmarkDevice for DeviceClient {
     fn connect(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::Discover).map(|_| ())
+        self.read(crate::NativeDevice::discover)
     }
 
     fn verify_development_platform(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::VerifyDevelopmentPlatform)
-            .map(|_| ())
+        self.read(crate::NativeDevice::verify_development_platform)
     }
 
     fn verify_health(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))
-            .map(|_| ())
+        self.read(crate::NativeDevice::verify_development_health)
     }
 
     fn read_development_manifest(&mut self) -> AgentResult<String> {
-        self.execute(DeviceRequest::ReadDevelopmentManifest)
+        self.read(crate::NativeDevice::read_development_manifest)
     }
 
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String> {
-        let request = match profile {
-            BenchmarkProfile::Screensaver => {
-                DeviceRequest::ProfileInstalledScreensaver { output_dir }
-            }
-            BenchmarkProfile::Particles => DeviceRequest::ProfileInstalledParticles { output_dir },
-            BenchmarkProfile::ParticleCapacity => {
-                DeviceRequest::ProfileInstalledParticleCapacity { output_dir }
-            }
-            BenchmarkProfile::ParticleDemo40k => {
-                DeviceRequest::ProfileInstalledParticleDemo40k { output_dir }
-            }
-            BenchmarkProfile::ParticleStep => {
-                DeviceRequest::ProfileInstalledParticleStep { output_dir }
-            }
-            BenchmarkProfile::ParticleCpu => {
-                DeviceRequest::ProfileInstalledParticleCpu { output_dir }
-            }
-            BenchmarkProfile::Search => DeviceRequest::ProfileInstalledSearch { output_dir },
-            BenchmarkProfile::SearchUi => DeviceRequest::VerifyInstalledSearchUi { output_dir },
-            BenchmarkProfile::CatalogLifecycle => {
-                DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir }
-            }
-            BenchmarkProfile::LaunchReturn => {
-                DeviceRequest::ProfileInstalledLaunchReturn { output_dir }
-            }
+        self.mutate(|device| match profile {
+            BenchmarkProfile::Screensaver => device.profile_screensaver(&output_dir),
+            BenchmarkProfile::Particles => device.profile_particles(&output_dir),
+            BenchmarkProfile::ParticleCapacity => device.profile_particle_capacity(&output_dir),
+            BenchmarkProfile::ParticleDemo40k => device.profile_particle_demo_40k(&output_dir),
+            BenchmarkProfile::ParticleStep => device.profile_particle_step(&output_dir),
+            BenchmarkProfile::ParticleCpu => device.profile_particle_cpu(&output_dir),
+            BenchmarkProfile::Search => device.profile_search(&output_dir),
+            BenchmarkProfile::SearchUi => device.verify_search_ui(&output_dir),
+            BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
+            BenchmarkProfile::LaunchReturn => device.profile_launch_return(&output_dir, false),
             BenchmarkProfile::LaunchReturnFallback => {
-                DeviceRequest::ProfileInstalledLaunchReturnFallback { output_dir }
+                device.profile_launch_return(&output_dir, true)
             }
-            BenchmarkProfile::ColdBoot => DeviceRequest::ProfileInstalledColdBoot { output_dir },
+            BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
             BenchmarkProfile::NavigationTransitions => {
-                DeviceRequest::ProfileInstalledNavigationTransitions { output_dir }
+                device.profile_navigation_transitions(&output_dir)
             }
-        };
-        self.execute(request)
+        })
     }
 }
 

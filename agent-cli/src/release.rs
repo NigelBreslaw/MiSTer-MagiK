@@ -5,7 +5,6 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceOperations, DeviceRequest};
 use std::io::{self, IsTerminal, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,45 +53,37 @@ trait ReleaseDevice {
     fn restore(&mut self) -> AgentResult<()>;
 }
 
-impl<D: DeviceOperations> ReleaseDevice for DeviceClient<D> {
+impl ReleaseDevice for DeviceClient {
     fn begin(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::BeginReleaseQualification)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::begin_release_qualification)
     }
 
     fn qualify_runtime(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseRuntime)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_runtime)
     }
 
     fn qualify_catalog(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseCatalog)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_catalog)
     }
 
     fn qualify_input_and_handoff(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseInputAndHandoff)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_input_and_handoff)
     }
 
     fn qualify_display(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseDisplay)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_display)
     }
 
     fn qualify_latch_v4_stress(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseLatchV4Stress)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_latch_v4_stress)
     }
 
     fn qualify_recovery(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::QualifyReleaseRecovery)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::qualify_release_recovery)
     }
 
     fn restore(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::RestoreReleaseQualification)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::restore_release_qualification)
     }
 }
 

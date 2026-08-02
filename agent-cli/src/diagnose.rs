@@ -5,7 +5,6 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceOperations, DeviceRequest};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -175,25 +174,23 @@ trait DiagnosticDevice {
     fn recover_with_one_shot_reboot(&mut self) -> AgentResult<()>;
 }
 
-impl<D: DeviceOperations> DiagnosticDevice for DeviceClient<D> {
+impl DiagnosticDevice for DeviceClient {
     fn connect(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::Discover).map(|_| ())
+        self.read(crate::NativeDevice::discover)
     }
 
     fn collect_facts(&mut self) -> AgentResult<DeviceFacts> {
-        let detail = self.execute(DeviceRequest::CollectDiagnosticFacts)?;
-        serde_json::from_str(&detail)
+        let facts = self.read(crate::NativeDevice::collect_diagnostic_facts)?;
+        serde_json::from_value(facts)
             .map_err(|error| format!("invalid structured device facts: {error}").into())
     }
 
     fn repair_safe_state(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::RepairSafeDeviceState)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::repair_safe_device_state)
     }
 
     fn recover_with_one_shot_reboot(&mut self) -> AgentResult<()> {
-        self.execute(DeviceRequest::RecoverWithOneShotReboot)
-            .map(|_| ())
+        self.mutate(crate::NativeDevice::recover_with_one_shot_reboot)
     }
 }
 
