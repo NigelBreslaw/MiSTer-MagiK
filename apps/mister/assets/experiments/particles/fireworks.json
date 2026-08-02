@@ -1,0 +1,6497 @@
+/Users/nigelb/.zlogin:9: nice(5) failed: operation not permitted
+{
+  "schema": "mister-magik-particle-fireworks-family-v1",
+  "recipes": [
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 8000,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 8000,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "copper-willow-rain",
+        "label": "COPPER WILLOW RAIN",
+        "duration_ms": 8000,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 92,
+            "shape": "comet",
+            "direction_deg": -91.0,
+            "spread_deg": 2.8,
+            "speed": [
+              234.0,
+              246.0
+            ],
+            "gravity": 35.0,
+            "drag": 0.06,
+            "life_ms": [
+              1240,
+              1400
+            ],
+            "palette": [
+              "#fff3c2",
+              "#ffb02e",
+              "#d45b12"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 24,
+              "step_ms": 10
+            },
+            "twinkle": 0.04
+          },
+          {
+            "start_ms": 1320,
+            "origin": [
+              0.50,
+              0.20
+            ],
+            "count": 72,
+            "shape": "radial",
+            "speed": [
+              0.0,
+              18.0
+            ],
+            "gravity": 4.0,
+            "drag": 0.10,
+            "life_ms": [
+              1900,
+              2300
+            ],
+            "palette": [
+              "#ffffff",
+              "#ffe1a0",
+              "#ff8d2a"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 4,
+              "step_ms": 12
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1350,
+            "origin": [
+              0.50,
+              0.20
+            ],
+            "count": 1180,
+            "shape": "fan",
+            "strands": 72,
+            "strand_spread_deg": 0.8,
+            "direction_deg": 90.0,
+            "spread_deg": 220.0,
+            "curl_deg": [
+              -18.0,
+              18.0
+            ],
+            "speed": [
+              0.0,
+              300.0
+            ],
+            "gravity": 105.0,
+            "drag": 0.22,
+            "life_ms": [
+              3900,
+              5700
+            ],
+            "palette": [
+              "#ffd27a",
+              "#ee8d2f",
+              "#c65318",
+              "#8f2c0f"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 32,
+              "step_ms": 24
+            },
+            "twinkle": 0.28
+          },
+          {
+            "start_ms": 1420,
+            "origin": [
+              0.50,
+              0.20
+            ],
+            "count": 80,
+            "shape": "fan",
+            "strands": 28,
+            "strand_spread_deg": 0.9,
+            "direction_deg": 90.0,
+            "spread_deg": 180.0,
+            "curl_deg": [
+              -5.0,
+              5.0
+            ],
+            "speed": [
+              0.0,
+              292.0
+            ],
+            "gravity": 68.0,
+            "drag": 0.28,
+            "life_ms": [
+              3300,
+              4900
+            ],
+            "palette": [
+              "#b6b747",
+              "#839b2d",
+              "#5e6f20"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 24,
+              "step_ms": 24
+            },
+            "twinkle": 0.18
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 7000,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 7000,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "magnetic-flower",
+        "label": "MAGNETIC FLOWER",
+        "duration_ms": 7000,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 82,
+            "shape": "comet",
+            "direction_deg": -90.0,
+            "spread_deg": 2.6,
+            "speed": [
+              218.0,
+              232.0
+            ],
+            "gravity": 34.0,
+            "drag": 0.07,
+            "life_ms": [
+              1160,
+              1300
+            ],
+            "palette": [
+              "#ffffff",
+              "#d1ff45",
+              "#ff4fb3"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 18,
+              "step_ms": 9
+            },
+            "twinkle": 0.08
+          },
+          {
+            "start_ms": 1240,
+            "origin": [
+              0.50,
+              0.46
+            ],
+            "count": 72,
+            "shape": "radial",
+            "speed": [
+              0.0,
+              18.0
+            ],
+            "gravity": 0.0,
+            "drag": 0.10,
+            "life_ms": [
+              1700,
+              2200
+            ],
+            "palette": [
+              "#ffffff",
+              "#e6c7ff",
+              "#ff64dc"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 4,
+              "step_ms": 10
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1270,
+            "origin": [
+              0.50,
+              0.46
+            ],
+            "count": 760,
+            "shape": "rosette",
+            "petals": 6,
+            "rotation_deg": -8.0,
+            "angular_velocity_deg": 82.0,
+            "speed": [
+              0.0,
+              215.0
+            ],
+            "gravity": 22.0,
+            "drag": 0.16,
+            "life_ms": [
+              3000,
+              4300
+            ],
+            "palette": [
+              "#ff27a8",
+              "#ff48c6",
+              "#ff8ee1"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 32,
+              "step_ms": 12
+            },
+            "twinkle": 0.18
+          },
+          {
+            "start_ms": 1340,
+            "origin": [
+              0.50,
+              0.46
+            ],
+            "count": 720,
+            "shape": "rosette",
+            "petals": 6,
+            "rotation_deg": 22.0,
+            "angular_velocity_deg": -76.0,
+            "speed": [
+              0.0,
+              200.0
+            ],
+            "gravity": 20.0,
+            "drag": 0.17,
+            "life_ms": [
+              2900,
+              4200
+            ],
+            "palette": [
+              "#315bff",
+              "#397fff",
+              "#64caff",
+              "#b4e8ff"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 32,
+              "step_ms": 12
+            },
+            "twinkle": 0.16
+          },
+          {
+            "start_ms": 1460,
+            "origin": [
+              0.50,
+              0.46
+            ],
+            "count": 180,
+            "shape": "ring",
+            "rotation_deg": 12.0,
+            "angular_velocity_deg": 48.0,
+            "speed": [
+              245.0,
+              245.0
+            ],
+            "gravity": 2.0,
+            "drag": 0.14,
+            "life_ms": [
+              2100,
+              3000
+            ],
+            "palette": [
+              "#b4ff20",
+              "#7ee80f",
+              "#dcff4a"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 16,
+              "step_ms": 13
+            },
+            "twinkle": 0.30
+          },
+          {
+            "start_ms": 2380,
+            "origin": [
+              0.72,
+              0.29
+            ],
+            "count": 72,
+            "shape": "radial",
+            "speed": [
+              34.0,
+              112.0
+            ],
+            "gravity": 32.0,
+            "drag": 0.16,
+            "life_ms": [
+              1400,
+              2100
+            ],
+            "palette": [
+              "#ffffff",
+              "#ffd24f",
+              "#ff951f"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 12,
+              "step_ms": 10
+            },
+            "twinkle": 0.20
+          },
+          {
+            "start_ms": 2500,
+            "origin": [
+              0.27,
+              0.70
+            ],
+            "count": 72,
+            "shape": "radial",
+            "speed": [
+              34.0,
+              112.0
+            ],
+            "gravity": 32.0,
+            "drag": 0.16,
+            "life_ms": [
+              1400,
+              2100
+            ],
+            "palette": [
+              "#ffffff",
+              "#ffd24f",
+              "#ff951f"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 12,
+              "step_ms": 10
+            },
+            "twinkle": 0.20
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 5500,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 5500,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "oled-peony",
+        "label": "OLED PEONY",
+        "duration_ms": 5500,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.93
+            ],
+            "count": 84,
+            "shape": "comet",
+            "direction_deg": -90.0,
+            "spread_deg": 3.5,
+            "speed": [
+              205.0,
+              222.0
+            ],
+            "gravity": 31.0,
+            "drag": 0.08,
+            "life_ms": [
+              1120,
+              1260
+            ],
+            "palette": [
+              "#fff4c2",
+              "#ffd15a",
+              "#ff8b31"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 8,
+              "step_ms": 20
+            },
+            "twinkle": 0.08
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.49
+            ],
+            "count": 52,
+            "shape": "radial",
+            "rotation_deg": 4.0,
+            "speed": [
+              0.0,
+              12.0
+            ],
+            "gravity": 9.0,
+            "drag": 0.18,
+            "life_ms": [
+              1200,
+              1550
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff0b0",
+              "#ff77dc"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 3,
+              "step_ms": 12
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1210,
+            "origin": [
+              0.50,
+              0.49
+            ],
+            "count": 1080,
+            "shape": "radial",
+            "strands": 144,
+            "strand_spread_deg": 0.9,
+            "rotation_deg": -2.0,
+            "speed": [
+              0.0,
+              270.0
+            ],
+            "gravity": 34.0,
+            "drag": 0.23,
+            "life_ms": [
+              2350,
+              3150
+            ],
+            "palette": [
+              "#ff2a52",
+              "#ff367f",
+              "#ff48bf",
+              "#d922ff"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 22,
+              "step_ms": 18
+            },
+            "twinkle": 0.18
+          },
+          {
+            "start_ms": 1225,
+            "origin": [
+              0.50,
+              0.49
+            ],
+            "count": 960,
+            "shape": "radial",
+            "strands": 160,
+            "strand_spread_deg": 0.9,
+            "rotation_deg": 1.0,
+            "speed": [
+              0.0,
+              328.0
+            ],
+            "gravity": 31.0,
+            "drag": 0.22,
+            "life_ms": [
+              2250,
+              3000
+            ],
+            "palette": [
+              "#275bff",
+              "#347eff",
+              "#30c9ff",
+              "#65efff"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 22,
+              "step_ms": 18
+            },
+            "twinkle": 0.15
+          },
+          {
+            "start_ms": 1240,
+            "origin": [
+              0.50,
+              0.49
+            ],
+            "count": 148,
+            "shape": "radial",
+            "rotation_deg": 7.0,
+            "speed": [
+              270.0,
+              350.0
+            ],
+            "gravity": 37.0,
+            "drag": 0.20,
+            "life_ms": [
+              1450,
+              2150
+            ],
+            "palette": [
+              "#fff7c7",
+              "#ffd45e",
+              "#ff9d34"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 12,
+              "step_ms": 11
+            },
+            "twinkle": 0.32
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6500,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6500,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "phoenix-comet",
+        "label": "PHOENIX COMET",
+        "duration_ms": 6500,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.08,
+              0.92
+            ],
+            "count": 260,
+            "shape": "comet",
+            "direction_deg": -34.0,
+            "spread_deg": 5.0,
+            "speed": [
+              336.0,
+              362.0
+            ],
+            "gravity": 24.0,
+            "drag": 0.08,
+            "life_ms": [
+              1320,
+              1510
+            ],
+            "palette": [
+              "#ffffff",
+              "#ffd35b",
+              "#ff891f",
+              "#f02a16"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 32,
+              "step_ms": 10
+            },
+            "twinkle": 0.10
+          },
+          {
+            "start_ms": 0,
+            "origin": [
+              0.08,
+              0.92
+            ],
+            "count": 340,
+            "shape": "comet",
+            "direction_deg": -34.0,
+            "spread_deg": 9.0,
+            "speed": [
+              118.0,
+              286.0
+            ],
+            "gravity": 40.0,
+            "drag": 0.16,
+            "life_ms": [
+              3100,
+              4300
+            ],
+            "palette": [
+              "#fff3a0",
+              "#ffad24",
+              "#ed3d12",
+              "#ff195f"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 30,
+              "step_ms": 12
+            },
+            "twinkle": 0.24
+          },
+          {
+            "start_ms": 1400,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 72,
+            "shape": "fan",
+            "direction_deg": -72.0,
+            "spread_deg": 28.0,
+            "speed": [
+              0.0,
+              52.0
+            ],
+            "gravity": 8.0,
+            "drag": 0.10,
+            "life_ms": [
+              1400,
+              1850
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff3a0",
+              "#ffab2f"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 5,
+              "step_ms": 10
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1430,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 620,
+            "shape": "fan",
+            "strands": 44,
+            "strand_spread_deg": 1.0,
+            "direction_deg": 180.0,
+            "spread_deg": 116.0,
+            "curl_deg": [
+              -18.0,
+              7.0
+            ],
+            "speed": [
+              0.0,
+              360.0
+            ],
+            "gravity": 54.0,
+            "drag": 0.18,
+            "life_ms": [
+              2400,
+              3500
+            ],
+            "palette": [
+              "#ff2c9d",
+              "#ff1763",
+              "#f32d23",
+              "#ff8c18"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 28,
+              "step_ms": 18
+            },
+            "twinkle": 0.20
+          },
+          {
+            "start_ms": 1460,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 460,
+            "shape": "fan",
+            "strands": 34,
+            "strand_spread_deg": 0.8,
+            "direction_deg": 4.0,
+            "spread_deg": 96.0,
+            "curl_deg": [
+              -7.0,
+              18.0
+            ],
+            "speed": [
+              0.0,
+              315.0
+            ],
+            "gravity": 56.0,
+            "drag": 0.19,
+            "life_ms": [
+              2300,
+              3300
+            ],
+            "palette": [
+              "#ff3ca7",
+              "#ff235e",
+              "#ff7b18",
+              "#ffd24f"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 26,
+              "step_ms": 18
+            },
+            "twinkle": 0.20
+          },
+          {
+            "start_ms": 1490,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 360,
+            "shape": "fan",
+            "strands": 22,
+            "strand_spread_deg": 0.8,
+            "direction_deg": 142.0,
+            "spread_deg": 34.0,
+            "curl_deg": [
+              -9.0,
+              9.0
+            ],
+            "speed": [
+              0.0,
+              370.0
+            ],
+            "gravity": 82.0,
+            "drag": 0.20,
+            "life_ms": [
+              2900,
+              4300
+            ],
+            "palette": [
+              "#fff5ac",
+              "#ffc03d",
+              "#ff7415",
+              "#dc2411"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 32,
+              "step_ms": 20
+            },
+            "twinkle": 0.24
+          },
+          {
+            "start_ms": 1540,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 88,
+            "shape": "fan",
+            "direction_deg": 180.0,
+            "spread_deg": 120.0,
+            "speed": [
+              276.0,
+              390.0
+            ],
+            "gravity": 44.0,
+            "drag": 0.14,
+            "life_ms": [
+              1600,
+              2300
+            ],
+            "palette": [
+              "#54ffff",
+              "#23e9ed",
+              "#11aecd"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 18,
+              "step_ms": 11
+            },
+            "twinkle": 0.14
+          },
+          {
+            "start_ms": 1580,
+            "origin": [
+              0.62,
+              0.38
+            ],
+            "count": 72,
+            "shape": "fan",
+            "direction_deg": 2.0,
+            "spread_deg": 90.0,
+            "speed": [
+              257.0,
+              370.0
+            ],
+            "gravity": 44.0,
+            "drag": 0.14,
+            "life_ms": [
+              1600,
+              2300
+            ],
+            "palette": [
+              "#54ffff",
+              "#23e9ed",
+              "#11aecd"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 18,
+              "step_ms": 11
+            },
+            "twinkle": 0.14
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6500,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6500,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "recursive-halo",
+        "label": "RECURSIVE HALO",
+        "duration_ms": 6500,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 72,
+            "shape": "comet",
+            "direction_deg": -90.0,
+            "spread_deg": 2.0,
+            "speed": [
+              220.0,
+              230.0
+            ],
+            "gravity": 32.0,
+            "drag": 0.07,
+            "life_ms": [
+              1120,
+              1240
+            ],
+            "palette": [
+              "#ffffff",
+              "#a47cff",
+              "#ffca3b"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 14,
+              "step_ms": 9
+            },
+            "twinkle": 0.05
+          },
+          {
+            "start_ms": 1120,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 44,
+            "shape": "radial",
+            "speed": [
+              0.0,
+              10.0
+            ],
+            "gravity": 0.0,
+            "drag": 0.10,
+            "life_ms": [
+              1500,
+              1900
+            ],
+            "palette": [
+              "#ffffff",
+              "#d8a3ff",
+              "#7040ff"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 3,
+              "step_ms": 10
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1120,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 188,
+            "shape": "ring",
+            "speed": [
+              132.0,
+              132.0
+            ],
+            "gravity": 8.0,
+            "drag": 0.12,
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#ff4be1",
+              "#fa62ff",
+              "#ff9cf4"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 11,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1240,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 280,
+            "shape": "ring",
+            "rotation_deg": 0.7,
+            "speed": [
+              238.0,
+              238.0
+            ],
+            "gravity": 13.0,
+            "drag": 0.10,
+            "life_ms": [
+              2100,
+              2800
+            ],
+            "palette": [
+              "#7741ff",
+              "#9f5bff",
+              "#c189ff"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 9,
+              "step_ms": 10
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1320,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 240,
+            "shape": "ring",
+            "rotation_deg": 1.4,
+            "speed": [
+              290.0,
+              290.0
+            ],
+            "gravity": 18.0,
+            "drag": 0.10,
+            "life_ms": [
+              1750,
+              2400
+            ],
+            "palette": [
+              "#1764ff",
+              "#318dff",
+              "#57c7ff"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 7,
+              "step_ms": 11
+            },
+            "twinkle": 0.26
+          },
+          {
+            "start_ms": 1520,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 220,
+            "shape": "radial",
+            "speed": [
+              110.0,
+              292.0
+            ],
+            "gravity": 128.0,
+            "drag": 0.20,
+            "life_ms": [
+              2300,
+              3300
+            ],
+            "palette": [
+              "#ffd96a",
+              "#ff9d18",
+              "#ff6b00"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 12,
+              "step_ms": 11
+            },
+            "twinkle": 0.30
+          },
+          {
+            "start_ms": 1660,
+            "origin": [
+              0.50,
+              0.20
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1700,
+            "origin": [
+              0.68,
+              0.28
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1740,
+            "origin": [
+              0.75,
+              0.47
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1780,
+            "origin": [
+              0.68,
+              0.66
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1820,
+            "origin": [
+              0.50,
+              0.74
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1860,
+            "origin": [
+              0.32,
+              0.66
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1900,
+            "origin": [
+              0.25,
+              0.47
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1940,
+            "origin": [
+              0.32,
+              0.28
+            ],
+            "count": 86,
+            "shape": "radial",
+            "speed": [
+              48.0,
+              105.0
+            ],
+            "gravity": 36.0,
+            "drag": 0.16,
+            "life_ms": [
+              1450,
+              2100
+            ],
+            "palette": [
+              "#47ffe3",
+              "#74ffd3",
+              "#c7fff0"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 10,
+              "step_ms": 10
+            },
+            "twinkle": 0.12
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6000,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6000,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v1",
+        "id": "solar-chrysanthemum",
+        "label": "SOLAR CHRYSANTHEMUM",
+        "duration_ms": 6000,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 96,
+            "shape": "comet",
+            "direction_deg": -90.0,
+            "spread_deg": 2.4,
+            "speed": [
+              218.0,
+              232.0
+            ],
+            "gravity": 34.0,
+            "drag": 0.07,
+            "life_ms": [
+              1160,
+              1300
+            ],
+            "palette": [
+              "#fff7c8",
+              "#ffc42f",
+              "#ff751b"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 16,
+              "step_ms": 9
+            },
+            "twinkle": 0.06
+          },
+          {
+            "start_ms": 1230,
+            "origin": [
+              0.50,
+              0.44
+            ],
+            "count": 72,
+            "shape": "radial",
+            "speed": [
+              0.0,
+              20.0
+            ],
+            "gravity": 2.0,
+            "drag": 0.12,
+            "life_ms": [
+              900,
+              1250
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff4aa",
+              "#ffb31f"
+            ],
+            "brush": "flare",
+            "trail": {
+              "samples": 3,
+              "step_ms": 12
+            },
+            "twinkle": 0.0
+          },
+          {
+            "start_ms": 1260,
+            "origin": [
+              0.50,
+              0.44
+            ],
+            "count": 980,
+            "shape": "radial",
+            "strands": 96,
+            "strand_spread_deg": 1.2,
+            "rotation_deg": -1.0,
+            "curl_deg": [
+              -12.0,
+              12.0
+            ],
+            "speed": [
+              0.0,
+              304.0
+            ],
+            "gravity": 72.0,
+            "drag": 0.19,
+            "life_ms": [
+              2800,
+              3900
+            ],
+            "palette": [
+              "#fff4a4",
+              "#ffd044",
+              "#ff9d10",
+              "#ff6d00"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 24,
+              "step_ms": 22
+            },
+            "twinkle": 0.24
+          },
+          {
+            "start_ms": 1280,
+            "origin": [
+              0.50,
+              0.44
+            ],
+            "count": 320,
+            "shape": "radial",
+            "strands": 48,
+            "strand_spread_deg": 1.4,
+            "rotation_deg": 5.0,
+            "curl_deg": [
+              -8.0,
+              8.0
+            ],
+            "speed": [
+              0.0,
+              172.0
+            ],
+            "gravity": 42.0,
+            "drag": 0.20,
+            "life_ms": [
+              1900,
+              2800
+            ],
+            "palette": [
+              "#ff2a23",
+              "#ff451e",
+              "#ff6a24"
+            ],
+            "brush": "glow",
+            "trail": {
+              "samples": 16,
+              "step_ms": 18
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1310,
+            "origin": [
+              0.50,
+              0.44
+            ],
+            "count": 260,
+            "shape": "ring",
+            "rotation_deg": 2.0,
+            "speed": [
+              290.0,
+              290.0
+            ],
+            "gravity": 0.0,
+            "drag": 0.11,
+            "life_ms": [
+              1080,
+              1550
+            ],
+            "palette": [
+              "#12bfee",
+              "#24ddff",
+              "#81f7ff"
+            ],
+            "brush": "spark",
+            "trail": {
+              "samples": 7,
+              "step_ms": 10
+            },
+            "twinkle": 0.18
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 7200,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 7200,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "copper-willow-rain-v2",
+        "label": "COPPER WILLOW RAIN V2",
+        "duration_ms": 7200,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.95
+            ],
+            "count": 90,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1200,
+              1500
+            ],
+            "palette": [
+              "#fff9dc",
+              "#ffc05a",
+              "#ff7a18"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 280
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.49,
+                0.75
+              ],
+              "control2": [
+                0.51,
+                0.52
+              ],
+              "end": [
+                0.50,
+                0.31
+              ],
+              "duration_ms": 1180,
+              "path_spread_px": 3.0,
+              "time_power": 0.9
+            },
+            "material": {
+              "head_radius": 1.8,
+              "head_intensity": 1.6,
+              "head_white": 0.78,
+              "trail_width": [
+                0.35,
+                0.9
+              ],
+              "trail_intensity": 0.58,
+              "trail_white": 0.2,
+              "halo_radius": 2.4,
+              "halo_intensity": 0.12,
+              "bead_every": 5,
+              "bead_intensity": 0.5,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 26,
+              "step_ms": 18,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 1050,
+            "origin": [
+              0.50,
+              0.31
+            ],
+            "count": 40,
+            "strands": 40,
+            "trajectory_seed": 5201,
+            "shape": "fan",
+            "direction_deg": -90.0,
+            "spread_deg": 170.0,
+            "speed": [
+              172.0,
+              248.0
+            ],
+            "gravity": 242.0,
+            "drag": 0.10,
+            "life_ms": [
+              3600,
+              4700
+            ],
+            "palette": [
+              "#fff4c4",
+              "#ffbc55",
+              "#f37822",
+              "#b83d0c"
+            ],
+            "palette_mode": "strand",
+            "tip_palette": [
+              "#ffffff",
+              "#fff5da"
+            ],
+            "tip_fraction": 0.18,
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -3.5,
+                3.5
+              ],
+              "perspective": 0.12
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.56,
+              "decay_power": 1.7
+            },
+            "topology": {
+              "path_variation_px": 12.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.32,
+              "width_variation": 0.26,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "material": {
+              "head_radius": 1.52,
+              "head_intensity": 1.94,
+              "head_white": 0.72,
+              "trail_width": [
+                0.36,
+                0.78
+              ],
+              "trail_intensity": 0.28,
+              "trail_white": 0.14,
+              "halo_radius": 2.0,
+              "halo_intensity": 0.13,
+              "bead_every": 2,
+              "bead_intensity": 1.76,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 42,
+              "step_ms": 26,
+              "fade_power": 1.35
+            },
+            "twinkle": 0.12
+          },
+          {
+            "start_ms": 1050,
+            "origin": [
+              0.50,
+              0.31
+            ],
+            "count": 2000,
+            "strands": 40,
+            "trajectory_seed": 5201,
+            "shape": "fan",
+            "direction_deg": -90.0,
+            "spread_deg": 170.0,
+            "speed": [
+              172.0,
+              248.0
+            ],
+            "gravity": 255.0,
+            "drag": 0.14,
+            "life_ms": [
+              1500,
+              2700
+            ],
+            "palette": [
+              "#ffbc55",
+              "#f07a24",
+              "#d84b17",
+              "#8f2b0b"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1700,
+              "inherit_velocity": 0.30,
+              "scatter_speed": [
+                5.0,
+                32.0
+              ],
+              "scatter_deg": 22.0
+            },
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -3.5,
+                3.5
+              ],
+              "perspective": 0.12
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.20,
+              "decay_power": 2.5
+            },
+            "topology": {
+              "path_variation_px": 12.0,
+              "time_variation": 0.20,
+              "brightness_variation": 0.42,
+              "width_variation": 0.35,
+              "breakup_start": 0.16,
+              "trail_dropout": 0.72
+            },
+            "material": {
+              "head_radius": 0.96,
+              "head_intensity": 1.84,
+              "head_white": 0.18,
+              "trail_width": [
+                0.20,
+                0.44
+              ],
+              "trail_intensity": 0.14,
+              "trail_white": 0.01,
+              "halo_radius": 1.1,
+              "halo_intensity": 0.08,
+              "bead_every": 2,
+              "bead_intensity": 1.88,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 14,
+              "step_ms": 24,
+              "fade_power": 2.0
+            },
+            "twinkle": 0.44
+          },
+          {
+            "start_ms": 1090,
+            "origin": [
+              0.50,
+              0.31
+            ],
+            "count": 18,
+            "strands": 18,
+            "trajectory_seed": 5211,
+            "shape": "fan",
+            "direction_deg": -90.0,
+            "spread_deg": 150.0,
+            "speed": [
+              165.0,
+              245.0
+            ],
+            "gravity": 164.0,
+            "drag": 0.08,
+            "life_ms": [
+              3300,
+              4300
+            ],
+            "palette": [
+              "#81952b",
+              "#a8b83c",
+              "#c8cc5b"
+            ],
+            "palette_mode": "strand",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -5.0,
+                5.0
+              ],
+              "perspective": 0.14
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.44,
+              "decay_power": 1.8
+            },
+            "topology": {
+              "path_variation_px": 8.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.38,
+              "width_variation": 0.28,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.52
+            },
+            "material": {
+              "head_radius": 0.62,
+              "head_intensity": 0.85,
+              "head_white": 0.02,
+              "trail_width": [
+                0.22,
+                0.45
+              ],
+              "trail_intensity": 0.34,
+              "trail_white": 0.0,
+              "halo_radius": 0.8,
+              "halo_intensity": 0.04,
+              "bead_every": 3,
+              "bead_intensity": 0.52,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 36,
+              "step_ms": 26,
+              "fade_power": 1.6
+            }
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6800,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6800,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "magnetic-flower-v2",
+        "label": "MAGNETIC FLOWER V2",
+        "duration_ms": 6800,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.91
+            ],
+            "count": 80,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1100,
+              1450
+            ],
+            "palette": [
+              "#fff8d8",
+              "#ffb21b"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 220
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.48,
+                0.72
+              ],
+              "control2": [
+                0.52,
+                0.58
+              ],
+              "end": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 1050,
+              "path_spread_px": 3.0
+            },
+            "material": {
+              "head_radius": 1.7,
+              "head_intensity": 1.5,
+              "head_white": 0.75,
+              "trail_width": [
+                0.35,
+                0.85
+              ],
+              "trail_intensity": 0.55,
+              "trail_white": 0.2,
+              "halo_radius": 2.3,
+              "halo_intensity": 0.12,
+              "bead_every": 4,
+              "bead_intensity": 0.5,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 24,
+              "step_ms": 18,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 224,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": -90.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#ff188e",
+              "#ff38c1",
+              "#ff78dd"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 850
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2260,
+              "radius_px": [
+                8.0,
+                205.0
+              ],
+              "turns": [
+                0.38,
+                0.62
+              ],
+              "path_spread_px": 2.5,
+              "time_power": 0.8
+            },
+            "topology": {
+              "path_variation_px": 14.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.38,
+              "width_variation": 0.32,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.78,
+              "head_white": 0.26,
+              "trail_width": [
+                0.18,
+                0.44
+              ],
+              "trail_intensity": 0.12,
+              "trail_white": 0.02,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.74,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 308,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": -30.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#1e5dff",
+              "#1e88ff",
+              "#65b7ff"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1250
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2440,
+              "radius_px": [
+                8.0,
+                260.0
+              ],
+              "turns": [
+                0.30,
+                0.56
+              ],
+              "path_spread_px": 3.0,
+              "time_power": 0.82
+            },
+            "topology": {
+              "path_variation_px": 16.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.28,
+              "trail_dropout": 0.62
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.78,
+              "head_intensity": 1.68,
+              "head_white": 0.20,
+              "trail_width": [
+                0.18,
+                0.42
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.08,
+              "bead_every": 2,
+              "bead_intensity": 1.64,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 252,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": 30.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#ff188e",
+              "#ff38c1",
+              "#ff78dd"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1050
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2380,
+              "radius_px": [
+                8.0,
+                285.0
+              ],
+              "turns": [
+                0.28,
+                0.52
+              ],
+              "path_spread_px": 3.5,
+              "time_power": 0.76
+            },
+            "topology": {
+              "path_variation_px": 18.0,
+              "time_variation": 0.20,
+              "brightness_variation": 0.42,
+              "width_variation": 0.36,
+              "breakup_start": 0.28,
+              "trail_dropout": 0.62
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.96,
+              "head_intensity": 1.82,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.50
+              ],
+              "trail_intensity": 0.14,
+              "trail_white": 0.02,
+              "halo_radius": 1.4,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.82,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 336,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": 90.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#1e5dff",
+              "#1e88ff",
+              "#65b7ff"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1450
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2180,
+              "radius_px": [
+                8.0,
+                220.0
+              ],
+              "turns": [
+                0.44,
+                0.70
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.86
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.38,
+              "width_variation": 0.32,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.80,
+              "head_intensity": 1.70,
+              "head_white": 0.18,
+              "trail_width": [
+                0.17,
+                0.40
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.08,
+              "bead_every": 2,
+              "bead_intensity": 1.66,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 196,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": 150.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#ff188e",
+              "#ff38c1",
+              "#ff78dd"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 950
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2480,
+              "radius_px": [
+                8.0,
+                275.0
+              ],
+              "turns": [
+                0.38,
+                0.74
+              ],
+              "path_spread_px": 4.0,
+              "time_power": 0.78
+            },
+            "topology": {
+              "path_variation_px": 17.0,
+              "time_variation": 0.20,
+              "brightness_variation": 0.44,
+              "width_variation": 0.36,
+              "breakup_start": 0.26,
+              "trail_dropout": 0.64
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 1.00,
+              "head_intensity": 1.86,
+              "head_white": 0.30,
+              "trail_width": [
+                0.22,
+                0.54
+              ],
+              "trail_intensity": 0.14,
+              "trail_white": 0.02,
+              "halo_radius": 1.5,
+              "halo_intensity": 0.12,
+              "bead_every": 2,
+              "bead_intensity": 1.86,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1040,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 280,
+            "strands": 14,
+            "shape": "point",
+            "direction_deg": 210.0,
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2600,
+              3300
+            ],
+            "palette": [
+              "#1e5dff",
+              "#1e88ff",
+              "#65b7ff"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1350
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2320,
+              "radius_px": [
+                8.0,
+                240.0
+              ],
+              "turns": [
+                0.24,
+                0.50
+              ],
+              "path_spread_px": 3.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 15.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.28,
+              "trail_dropout": 0.62
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.65,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.84,
+              "head_intensity": 1.72,
+              "head_white": 0.20,
+              "trail_width": [
+                0.18,
+                0.44
+              ],
+              "trail_intensity": 0.11,
+              "trail_white": 0.01,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.70,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.6
+            },
+            "twinkle": 0.22
+          },
+          {
+            "start_ms": 1110,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 72,
+            "strands": 36,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2400,
+              3000
+            ],
+            "palette": [
+              "#8fff00",
+              "#baff16",
+              "#dfff74"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 620
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.50
+              ],
+              "duration_ms": 2300,
+              "radius_px": [
+                238.0,
+                252.0
+              ],
+              "turns": [
+                0.15,
+                0.25
+              ],
+              "path_spread_px": 2.0
+            },
+            "topology": {
+              "path_variation_px": 10.0,
+              "time_variation": 0.10,
+              "brightness_variation": 0.42,
+              "width_variation": 0.30,
+              "breakup_start": 0.22,
+              "trail_dropout": 0.68
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.54,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.66,
+              "head_intensity": 0.92,
+              "head_white": 0.05,
+              "trail_width": [
+                0.20,
+                0.42
+              ],
+              "trail_intensity": 0.18,
+              "trail_white": 0.0,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.05,
+              "bead_every": 3,
+              "bead_intensity": 0.58,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 10,
+              "step_ms": 20,
+              "fade_power": 2.1
+            }
+          },
+          {
+            "start_ms": 1070,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 260,
+            "shape": "hemisphere",
+            "speed": [
+              70.0,
+              240.0
+            ],
+            "gravity": 160.0,
+            "drag": 0.17,
+            "life_ms": [
+              1700,
+              3100
+            ],
+            "palette": [
+              "#ff1a18",
+              "#ff4925",
+              "#ff9a32"
+            ],
+            "palette_mode": "speed",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -7.0,
+                7.0
+              ],
+              "perspective": 0.18
+            },
+            "envelope": {
+              "attack": 0.015,
+              "hold": 0.20,
+              "decay_power": 2.5
+            },
+            "topology": {
+              "path_variation_px": 8.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.24,
+              "trail_dropout": 0.64
+            },
+            "material": {
+              "head_radius": 0.74,
+              "head_intensity": 1.28,
+              "head_white": 0.15,
+              "trail_width": [
+                0.24,
+                0.55
+              ],
+              "trail_intensity": 0.42,
+              "trail_white": 0.02,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.07,
+              "bead_every": 4,
+              "bead_intensity": 0.72,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 17,
+              "step_ms": 23,
+              "fade_power": 2.0
+            },
+            "twinkle": 0.28
+          },
+          {
+            "start_ms": 1080,
+            "origin": [
+              0.50,
+              0.50
+            ],
+            "count": 14,
+            "shape": "sphere",
+            "speed": [
+              0.0,
+              8.0
+            ],
+            "life_ms": [
+              1800,
+              2400
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff3b0"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "perspective": 0.18
+            },
+            "envelope": {
+              "attack": 0.005,
+              "hold": 0.76,
+              "decay_power": 3.2
+            },
+            "material": {
+              "head_radius": 4.0,
+              "head_intensity": 1.98,
+              "head_white": 0.98,
+              "trail_width": [
+                0.7,
+                1.2
+              ],
+              "trail_intensity": 0.64,
+              "trail_white": 0.78,
+              "halo_radius": 5.2,
+              "halo_intensity": 0.30,
+              "bead_every": 0,
+              "bead_intensity": 0.0,
+              "blend": "add"
+            },
+            "trail": {
+              "samples": 8,
+              "step_ms": 16,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 1120,
+            "origin": [
+              0.73,
+              0.19
+            ],
+            "count": 36,
+            "shape": "ring",
+            "speed": [
+              58.0,
+              82.0
+            ],
+            "gravity": 22.0,
+            "drag": 0.12,
+            "life_ms": [
+              1700,
+              2200
+            ],
+            "palette": [
+              "#fff0a8",
+              "#ffc02f",
+              "#ff8212"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -4.0,
+                4.0
+              ],
+              "perspective": 0.12
+            },
+            "topology": {
+              "path_variation_px": 4.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.34,
+              "width_variation": 0.28,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.55
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.56,
+              "head_white": 0.48,
+              "trail_width": [
+                0.22,
+                0.52
+              ],
+              "trail_intensity": 0.32,
+              "trail_white": 0.08,
+              "halo_radius": 1.4,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.15,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 14,
+              "step_ms": 18,
+              "fade_power": 1.9
+            }
+          },
+          {
+            "start_ms": 1160,
+            "origin": [
+              0.82,
+              0.62
+            ],
+            "count": 36,
+            "shape": "ring",
+            "speed": [
+              52.0,
+              76.0
+            ],
+            "gravity": 28.0,
+            "drag": 0.12,
+            "life_ms": [
+              1650,
+              2150
+            ],
+            "palette": [
+              "#fff0a8",
+              "#ffc02f",
+              "#ff8212"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -4.0,
+                4.0
+              ],
+              "perspective": 0.12
+            },
+            "topology": {
+              "path_variation_px": 4.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.36,
+              "width_variation": 0.30,
+              "breakup_start": 0.28,
+              "trail_dropout": 0.58
+            },
+            "material": {
+              "head_radius": 0.86,
+              "head_intensity": 1.52,
+              "head_white": 0.46,
+              "trail_width": [
+                0.22,
+                0.50
+              ],
+              "trail_intensity": 0.30,
+              "trail_white": 0.08,
+              "halo_radius": 1.4,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.12,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 14,
+              "step_ms": 18,
+              "fade_power": 1.9
+            }
+          },
+          {
+            "start_ms": 1200,
+            "origin": [
+              0.28,
+              0.76
+            ],
+            "count": 34,
+            "shape": "ring",
+            "speed": [
+              50.0,
+              72.0
+            ],
+            "gravity": 32.0,
+            "drag": 0.12,
+            "life_ms": [
+              1600,
+              2100
+            ],
+            "palette": [
+              "#fff0a8",
+              "#ffc02f",
+              "#ff8212"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -4.0,
+                4.0
+              ],
+              "perspective": 0.12
+            },
+            "topology": {
+              "path_variation_px": 4.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.38,
+              "width_variation": 0.30,
+              "breakup_start": 0.26,
+              "trail_dropout": 0.60
+            },
+            "material": {
+              "head_radius": 0.84,
+              "head_intensity": 1.48,
+              "head_white": 0.44,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.28,
+              "trail_white": 0.07,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.08,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 13,
+              "step_ms": 18,
+              "fade_power": 1.9
+            }
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6500,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6500,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "oled-peony-v2",
+        "label": "OLED PEONY V2",
+        "duration_ms": 6500,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.95
+            ],
+            "count": 96,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1150,
+              1500
+            ],
+            "palette": [
+              "#fffbe3",
+              "#ffc154",
+              "#ff8021"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 260
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.49,
+                0.73
+              ],
+              "control2": [
+                0.51,
+                0.53
+              ],
+              "end": [
+                0.50,
+                0.39
+              ],
+              "duration_ms": 1120,
+              "path_spread_px": 2.6
+            },
+            "material": {
+              "head_radius": 1.8,
+              "head_intensity": 1.55,
+              "head_white": 0.78,
+              "trail_width": [
+                0.35,
+                0.86
+              ],
+              "trail_intensity": 0.58,
+              "trail_white": 0.20,
+              "halo_radius": 2.4,
+              "halo_intensity": 0.12,
+              "bead_every": 4,
+              "bead_intensity": 0.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 26,
+              "step_ms": 18,
+              "fade_power": 1.75
+            }
+          },
+          {
+            "start_ms": 1110,
+            "origin": [
+              0.50,
+              0.39
+            ],
+            "count": 420,
+            "shape": "sphere",
+            "speed": [
+              90.0,
+              145.0
+            ],
+            "gravity": 110.0,
+            "drag": 0.11,
+            "life_ms": [
+              2900,
+              3800
+            ],
+            "palette": [
+              "#ff075b",
+              "#ff197d",
+              "#ff32a4",
+              "#ff5bc8"
+            ],
+            "palette_mode": "depth",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -14.0,
+                14.0
+              ],
+              "perspective": 0.34
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.52,
+              "decay_power": 1.9
+            },
+            "topology": {
+              "path_variation_px": 8.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.34,
+              "width_variation": 0.28,
+              "breakup_start": 0.38,
+              "trail_dropout": 0.42
+            },
+            "material": {
+              "head_radius": 0.90,
+              "head_intensity": 1.78,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.18,
+              "trail_white": 0.04,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.58,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 27,
+              "step_ms": 21,
+              "fade_power": 1.55
+            },
+            "twinkle": 0.20
+          },
+          {
+            "start_ms": 1120,
+            "origin": [
+              0.50,
+              0.39
+            ],
+            "count": 620,
+            "shape": "sphere",
+            "speed": [
+              205.0,
+              278.0
+            ],
+            "gravity": 120.0,
+            "drag": 0.13,
+            "life_ms": [
+              3100,
+              4100
+            ],
+            "palette": [
+              "#0a3cff",
+              "#075eff",
+              "#078dff",
+              "#12c8ff"
+            ],
+            "palette_mode": "depth",
+            "tip_palette": [
+              "#fff3c4",
+              "#ffb847",
+              "#ffffff"
+            ],
+            "tip_fraction": 0.10,
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -16.0,
+                16.0
+              ],
+              "perspective": 0.38
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.50,
+              "decay_power": 1.85
+            },
+            "topology": {
+              "path_variation_px": 11.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.38,
+              "width_variation": 0.30,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.48
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.80,
+              "head_white": 0.32,
+              "trail_width": [
+                0.18,
+                0.46
+              ],
+              "trail_intensity": 0.16,
+              "trail_white": 0.06,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.12,
+              "bead_every": 2,
+              "bead_intensity": 1.56,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 21,
+              "fade_power": 1.52
+            },
+            "twinkle": 0.24
+          },
+          {
+            "start_ms": 1110,
+            "origin": [
+              0.50,
+              0.39
+            ],
+            "count": 78,
+            "shape": "sphere",
+            "speed": [
+              268.0,
+              318.0
+            ],
+            "gravity": 112.0,
+            "drag": 0.12,
+            "life_ms": [
+              2800,
+              3600
+            ],
+            "palette": [
+              "#fff6c6",
+              "#ffc45a",
+              "#ff8d21"
+            ],
+            "palette_mode": "speed",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -11.0,
+                11.0
+              ],
+              "perspective": 0.28
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.56,
+              "decay_power": 2.0
+            },
+            "topology": {
+              "path_variation_px": 8.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.36,
+              "width_variation": 0.28,
+              "breakup_start": 0.40,
+              "trail_dropout": 0.46
+            },
+            "material": {
+              "head_radius": 1.18,
+              "head_intensity": 1.96,
+              "head_white": 0.72,
+              "trail_width": [
+                0.20,
+                0.44
+              ],
+              "trail_intensity": 0.05,
+              "trail_white": 0.10,
+              "halo_radius": 1.8,
+              "halo_intensity": 0.16,
+              "bead_every": 4,
+              "bead_intensity": 0.26,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 6,
+              "step_ms": 22,
+              "fade_power": 2.2
+            }
+          },
+          {
+            "start_ms": 1080,
+            "origin": [
+              0.50,
+              0.39
+            ],
+            "count": 14,
+            "shape": "sphere",
+            "speed": [
+              0.0,
+              7.0
+            ],
+            "life_ms": [
+              1000,
+              1450
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff4ca",
+              "#ffd263"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "perspective": 0.18
+            },
+            "envelope": {
+              "attack": 0.005,
+              "hold": 0.74,
+              "decay_power": 3.1
+            },
+            "material": {
+              "head_radius": 3.2,
+              "head_intensity": 1.94,
+              "head_white": 0.96,
+              "trail_width": [
+                0.6,
+                1.1
+              ],
+              "trail_intensity": 0.60,
+              "trail_white": 0.70,
+              "halo_radius": 4.4,
+              "halo_intensity": 0.27,
+              "bead_every": 0,
+              "bead_intensity": 0.0,
+              "blend": "add"
+            },
+            "trail": {
+              "samples": 8,
+              "step_ms": 16,
+              "fade_power": 1.8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 7000,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 7000,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "phoenix-comet-v2",
+        "label": "PHOENIX COMET V2",
+        "duration_ms": 7000,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.03,
+              0.88
+            ],
+            "count": 360,
+            "strands": 18,
+            "trajectory_seed": 6301,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              3200,
+              4000
+            ],
+            "palette": [
+              "#ff6a00",
+              "#ff9b00",
+              "#ffd35a",
+              "#fff3b2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1850
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.28,
+                0.79
+              ],
+              "control2": [
+                0.49,
+                0.55
+              ],
+              "end": [
+                0.64,
+                0.29
+              ],
+              "duration_ms": 2450,
+              "path_spread_px": 2.5,
+              "time_power": 0.86
+            },
+            "topology": {
+              "path_variation_px": 15.0,
+              "time_variation": 0.12,
+              "brightness_variation": 0.35,
+              "width_variation": 0.30,
+              "breakup_start": 0.38,
+              "trail_dropout": 0.48
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.68,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.98,
+              "head_intensity": 1.76,
+              "head_white": 0.30,
+              "trail_width": [
+                0.20,
+                0.52
+              ],
+              "trail_intensity": 0.12,
+              "trail_white": 0.04,
+              "halo_radius": 1.5,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.72,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 25,
+              "step_ms": 18,
+              "fade_power": 1.75
+            },
+            "twinkle": 0.28
+          },
+          {
+            "start_ms": 80,
+            "origin": [
+              0.18,
+              0.69
+            ],
+            "count": 280,
+            "strands": 14,
+            "trajectory_seed": 6311,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              3000,
+              3800
+            ],
+            "palette": [
+              "#ff2414",
+              "#ff194f",
+              "#ff188f",
+              "#ff48bd"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1800
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.40,
+                0.62
+              ],
+              "control2": [
+                0.56,
+                0.44
+              ],
+              "end": [
+                0.64,
+                0.29
+              ],
+              "duration_ms": 2300,
+              "path_spread_px": 2.5,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.13,
+              "brightness_variation": 0.38,
+              "width_variation": 0.32,
+              "breakup_start": 0.36,
+              "trail_dropout": 0.52
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.66,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 0.90,
+              "head_intensity": 1.70,
+              "head_white": 0.20,
+              "trail_width": [
+                0.19,
+                0.48
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.02,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.68,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 23,
+              "step_ms": 18,
+              "fade_power": 1.8
+            },
+            "twinkle": 0.32
+          },
+          {
+            "start_ms": 180,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 200,
+            "strands": 10,
+            "trajectory_seed": 6321,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2900,
+              3700
+            ],
+            "palette": [
+              "#ff1c52",
+              "#ff1798",
+              "#ff52c8",
+              "#ff8b20"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1750
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.49,
+                0.23
+              ],
+              "control2": [
+                0.27,
+                0.08
+              ],
+              "end": [
+                0.06,
+                0.11
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 2.0,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.15,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.86,
+              "head_intensity": 1.72,
+              "head_white": 0.20,
+              "trail_width": [
+                0.18,
+                0.44
+              ],
+              "trail_intensity": 0.11,
+              "trail_white": 0.01,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.72,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.34
+          },
+          {
+            "start_ms": 210,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 200,
+            "strands": 10,
+            "trajectory_seed": 6331,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2900,
+              3700
+            ],
+            "palette": [
+              "#ff1a38",
+              "#ff175f",
+              "#ff179f",
+              "#ff8120"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1750
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.46,
+                0.33
+              ],
+              "control2": [
+                0.25,
+                0.27
+              ],
+              "end": [
+                0.05,
+                0.34
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 14.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.84,
+              "head_intensity": 1.70,
+              "head_white": 0.18,
+              "trail_width": [
+                0.18,
+                0.43
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.68,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.34
+          },
+          {
+            "start_ms": 240,
+            "origin": [
+              0.60,
+              0.40
+            ],
+            "count": 220,
+            "strands": 11,
+            "trajectory_seed": 6341,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2900,
+              3700
+            ],
+            "palette": [
+              "#ff3115",
+              "#ff175d",
+              "#ff159e",
+              "#ff8c1d"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1750
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.45,
+                0.48
+              ],
+              "control2": [
+                0.27,
+                0.55
+              ],
+              "end": [
+                0.09,
+                0.63
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 15.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.60
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.60,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.74,
+              "head_white": 0.18,
+              "trail_width": [
+                0.19,
+                0.46
+              ],
+              "trail_intensity": 0.11,
+              "trail_white": 0.01,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.74,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.36
+          },
+          {
+            "start_ms": 180,
+            "origin": [
+              0.65,
+              0.33
+            ],
+            "count": 144,
+            "strands": 9,
+            "trajectory_seed": 6351,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2850,
+              3600
+            ],
+            "palette": [
+              "#ff7c0a",
+              "#ff2b3d",
+              "#ff168f",
+              "#ff56c4"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1700
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.75,
+                0.19
+              ],
+              "control2": [
+                0.87,
+                0.12
+              ],
+              "end": [
+                0.97,
+                0.17
+              ],
+              "duration_ms": 2180,
+              "path_spread_px": 2.0,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 11.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.40,
+              "width_variation": 0.32,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.56
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.82,
+              "head_intensity": 1.66,
+              "head_white": 0.18,
+              "trail_width": [
+                0.17,
+                0.41
+              ],
+              "trail_intensity": 0.08,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.08,
+              "bead_every": 2,
+              "bead_intensity": 1.58,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.34
+          },
+          {
+            "start_ms": 205,
+            "origin": [
+              0.65,
+              0.34
+            ],
+            "count": 140,
+            "strands": 10,
+            "trajectory_seed": 6361,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2850,
+              3600
+            ],
+            "palette": [
+              "#ff7c0a",
+              "#ff2b3d",
+              "#ff168f",
+              "#ff56c4"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1700
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.77,
+                0.30
+              ],
+              "control2": [
+                0.89,
+                0.29
+              ],
+              "end": [
+                0.98,
+                0.36
+              ],
+              "duration_ms": 2180,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 12.0,
+              "time_variation": 0.15,
+              "brightness_variation": 0.40,
+              "width_variation": 0.32,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.56
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.80,
+              "head_intensity": 1.62,
+              "head_white": 0.16,
+              "trail_width": [
+                0.17,
+                0.40
+              ],
+              "trail_intensity": 0.07,
+              "trail_white": 0.01,
+              "halo_radius": 1.1,
+              "halo_intensity": 0.07,
+              "bead_every": 2,
+              "bead_intensity": 1.52,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.34
+          },
+          {
+            "start_ms": 235,
+            "origin": [
+              0.64,
+              0.36
+            ],
+            "count": 150,
+            "strands": 10,
+            "trajectory_seed": 6371,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2850,
+              3600
+            ],
+            "palette": [
+              "#ff7510",
+              "#ff2838",
+              "#ff168c",
+              "#ff5ac8"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1700
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.76,
+                0.46
+              ],
+              "control2": [
+                0.86,
+                0.55
+              ],
+              "end": [
+                0.94,
+                0.65
+              ],
+              "duration_ms": 2200,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.60
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.60,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.80,
+              "head_intensity": 1.62,
+              "head_white": 0.16,
+              "trail_width": [
+                0.17,
+                0.40
+              ],
+              "trail_intensity": 0.07,
+              "trail_white": 0.01,
+              "halo_radius": 1.1,
+              "halo_intensity": 0.07,
+              "bead_every": 2,
+              "bead_intensity": 1.52,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.36
+          },
+          {
+            "start_ms": 190,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 96,
+            "strands": 6,
+            "trajectory_seed": 6381,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2800,
+              3500
+            ],
+            "palette": [
+              "#24ffff",
+              "#00dce8",
+              "#a7ffff"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1680
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.48,
+                0.24
+              ],
+              "control2": [
+                0.27,
+                0.08
+              ],
+              "end": [
+                0.06,
+                0.11
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 1.0,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 5.0,
+              "time_variation": 0.08,
+              "brightness_variation": 0.26,
+              "width_variation": 0.20,
+              "breakup_start": 0.38,
+              "trail_dropout": 0.48
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.66,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 1.08,
+              "head_intensity": 1.78,
+              "head_white": 0.48,
+              "trail_width": [
+                0.20,
+                0.50
+              ],
+              "trail_intensity": 0.16,
+              "trail_white": 0.08,
+              "halo_radius": 1.8,
+              "halo_intensity": 0.14,
+              "bead_every": 2,
+              "bead_intensity": 1.56,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 20,
+              "step_ms": 18,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 210,
+            "origin": [
+              0.65,
+              0.34
+            ],
+            "count": 96,
+            "strands": 6,
+            "trajectory_seed": 6391,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2800,
+              3500
+            ],
+            "palette": [
+              "#24ffff",
+              "#00dce8",
+              "#a7ffff"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1650
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.77,
+                0.30
+              ],
+              "control2": [
+                0.89,
+                0.29
+              ],
+              "end": [
+                0.98,
+                0.36
+              ],
+              "duration_ms": 2180,
+              "path_spread_px": 1.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 5.0,
+              "time_variation": 0.08,
+              "brightness_variation": 0.26,
+              "width_variation": 0.20,
+              "breakup_start": 0.38,
+              "trail_dropout": 0.48
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.66,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.98,
+              "head_intensity": 1.66,
+              "head_white": 0.42,
+              "trail_width": [
+                0.18,
+                0.44
+              ],
+              "trail_intensity": 0.12,
+              "trail_white": 0.06,
+              "halo_radius": 1.6,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.42,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 20,
+              "step_ms": 18,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 1050,
+            "origin": [
+              0.64,
+              0.29
+            ],
+            "count": 14,
+            "shape": "sphere",
+            "speed": [
+              0.0,
+              7.0
+            ],
+            "life_ms": [
+              1700,
+              2300
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff5c9",
+              "#ffb72e"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "perspective": 0.20
+            },
+            "envelope": {
+              "attack": 0.005,
+              "hold": 0.70,
+              "decay_power": 2.8
+            },
+            "material": {
+              "head_radius": 3.2,
+              "head_intensity": 1.96,
+              "head_white": 0.96,
+              "trail_width": [
+                0.62,
+                1.1
+              ],
+              "trail_intensity": 0.60,
+              "trail_white": 0.68,
+              "halo_radius": 4.3,
+              "halo_intensity": 0.27,
+              "bead_every": 0,
+              "bead_intensity": 0.0,
+              "blend": "add"
+            },
+            "trail": {
+              "samples": 8,
+              "step_ms": 16,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 0,
+            "origin": [
+              0.03,
+              0.88
+            ],
+            "count": 1000,
+            "strands": 18,
+            "trajectory_seed": 6301,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 58.0,
+            "drag": 0.17,
+            "life_ms": [
+              900,
+              1800
+            ],
+            "palette": [
+              "#ff5a00",
+              "#ff8c00",
+              "#ffc43c",
+              "#fff0a0"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1850,
+              "inherit_velocity": 0.12,
+              "scatter_speed": [
+                7.0,
+                42.0
+              ],
+              "scatter_deg": 24.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.28,
+                0.79
+              ],
+              "control2": [
+                0.49,
+                0.55
+              ],
+              "end": [
+                0.64,
+                0.29
+              ],
+              "duration_ms": 2450,
+              "path_spread_px": 2.5,
+              "time_power": 0.86
+            },
+            "topology": {
+              "path_variation_px": 15.0,
+              "time_variation": 0.12,
+              "brightness_variation": 0.48,
+              "width_variation": 0.42,
+              "breakup_start": 0.14,
+              "trail_dropout": 0.78
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.30,
+              "decay_power": 2.3
+            },
+            "material": {
+              "head_radius": 0.94,
+              "head_intensity": 1.84,
+              "head_white": 0.24,
+              "trail_width": [
+                0.18,
+                0.44
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.84,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 19,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.48
+          },
+          {
+            "start_ms": 80,
+            "origin": [
+              0.18,
+              0.69
+            ],
+            "count": 800,
+            "strands": 14,
+            "trajectory_seed": 6311,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 66.0,
+            "drag": 0.18,
+            "life_ms": [
+              850,
+              1650
+            ],
+            "palette": [
+              "#ff2115",
+              "#ff1850",
+              "#ff158e",
+              "#ff52bf"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1800,
+              "inherit_velocity": 0.11,
+              "scatter_speed": [
+                8.0,
+                38.0
+              ],
+              "scatter_deg": 28.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.40,
+                0.62
+              ],
+              "control2": [
+                0.56,
+                0.44
+              ],
+              "end": [
+                0.64,
+                0.29
+              ],
+              "duration_ms": 2300,
+              "path_spread_px": 2.5,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.13,
+              "brightness_variation": 0.50,
+              "width_variation": 0.42,
+              "breakup_start": 0.14,
+              "trail_dropout": 0.78
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.28,
+              "decay_power": 2.4
+            },
+            "material": {
+              "head_radius": 0.90,
+              "head_intensity": 1.82,
+              "head_white": 0.20,
+              "trail_width": [
+                0.18,
+                0.42
+              ],
+              "trail_intensity": 0.09,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.80,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 11,
+              "step_ms": 19,
+              "fade_power": 2.15
+            },
+            "twinkle": 0.50
+          },
+          {
+            "start_ms": 180,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 700,
+            "strands": 10,
+            "trajectory_seed": 6321,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 54.0,
+            "drag": 0.18,
+            "life_ms": [
+              850,
+              1550
+            ],
+            "palette": [
+              "#ff164f",
+              "#ff1695",
+              "#ff50c5",
+              "#ff861e"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1750,
+              "inherit_velocity": 0.10,
+              "scatter_speed": [
+                8.0,
+                38.0
+              ],
+              "scatter_deg": 28.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.49,
+                0.23
+              ],
+              "control2": [
+                0.27,
+                0.08
+              ],
+              "end": [
+                0.06,
+                0.11
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 2.0,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 13.0,
+              "time_variation": 0.15,
+              "brightness_variation": 0.48,
+              "width_variation": 0.40,
+              "breakup_start": 0.16,
+              "trail_dropout": 0.76
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.24,
+              "decay_power": 2.4
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.84,
+              "head_white": 0.18,
+              "trail_width": [
+                0.17,
+                0.40
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.84,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 19,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.46
+          },
+          {
+            "start_ms": 210,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 700,
+            "strands": 10,
+            "trajectory_seed": 6331,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 62.0,
+            "drag": 0.18,
+            "life_ms": [
+              850,
+              1550
+            ],
+            "palette": [
+              "#ff1835",
+              "#ff165f",
+              "#ff169e",
+              "#ff841d"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1750,
+              "inherit_velocity": 0.10,
+              "scatter_speed": [
+                8.0,
+                40.0
+              ],
+              "scatter_deg": 30.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.46,
+                0.33
+              ],
+              "control2": [
+                0.25,
+                0.27
+              ],
+              "end": [
+                0.05,
+                0.34
+              ],
+              "duration_ms": 2250,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 14.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.48,
+              "width_variation": 0.40,
+              "breakup_start": 0.16,
+              "trail_dropout": 0.76
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.24,
+              "decay_power": 2.4
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.84,
+              "head_white": 0.18,
+              "trail_width": [
+                0.17,
+                0.40
+              ],
+              "trail_intensity": 0.10,
+              "trail_white": 0.01,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.84,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 19,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.46
+          },
+          {
+            "start_ms": 180,
+            "origin": [
+              0.65,
+              0.33
+            ],
+            "count": 500,
+            "strands": 10,
+            "trajectory_seed": 6351,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 54.0,
+            "drag": 0.18,
+            "life_ms": [
+              850,
+              1550
+            ],
+            "palette": [
+              "#ff7910",
+              "#ff2a3f",
+              "#ff168f",
+              "#ff54c3"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1700,
+              "inherit_velocity": 0.10,
+              "scatter_speed": [
+                8.0,
+                38.0
+              ],
+              "scatter_deg": 28.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.75,
+                0.19
+              ],
+              "control2": [
+                0.87,
+                0.12
+              ],
+              "end": [
+                0.97,
+                0.17
+              ],
+              "duration_ms": 2180,
+              "path_spread_px": 2.0,
+              "time_power": 0.88
+            },
+            "topology": {
+              "path_variation_px": 11.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.48,
+              "width_variation": 0.40,
+              "breakup_start": 0.16,
+              "trail_dropout": 0.76
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.24,
+              "decay_power": 2.4
+            },
+            "material": {
+              "head_radius": 0.82,
+              "head_intensity": 1.72,
+              "head_white": 0.16,
+              "trail_width": [
+                0.16,
+                0.38
+              ],
+              "trail_intensity": 0.08,
+              "trail_white": 0.01,
+              "halo_radius": 1.1,
+              "halo_intensity": 0.07,
+              "bead_every": 2,
+              "bead_intensity": 1.66,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 19,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.46
+          },
+          {
+            "start_ms": 205,
+            "origin": [
+              0.65,
+              0.34
+            ],
+            "count": 450,
+            "strands": 10,
+            "trajectory_seed": 6361,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "gravity": 62.0,
+            "drag": 0.18,
+            "life_ms": [
+              850,
+              1550
+            ],
+            "palette": [
+              "#ff7610",
+              "#ff2941",
+              "#ff168e",
+              "#ff52c0"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 1700,
+              "inherit_velocity": 0.10,
+              "scatter_speed": [
+                8.0,
+                40.0
+              ],
+              "scatter_deg": 30.0
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.77,
+                0.30
+              ],
+              "control2": [
+                0.89,
+                0.29
+              ],
+              "end": [
+                0.98,
+                0.36
+              ],
+              "duration_ms": 2180,
+              "path_spread_px": 2.0,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 12.0,
+              "time_variation": 0.15,
+              "brightness_variation": 0.48,
+              "width_variation": 0.40,
+              "breakup_start": 0.16,
+              "trail_dropout": 0.76
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.24,
+              "decay_power": 2.4
+            },
+            "material": {
+              "head_radius": 0.80,
+              "head_intensity": 1.68,
+              "head_white": 0.15,
+              "trail_width": [
+                0.16,
+                0.36
+              ],
+              "trail_intensity": 0.07,
+              "trail_white": 0.01,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.06,
+              "bead_every": 2,
+              "bead_intensity": 1.60,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 19,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.46
+          },
+          {
+            "start_ms": 195,
+            "origin": [
+              0.61,
+              0.39
+            ],
+            "count": 180,
+            "strands": 9,
+            "trajectory_seed": 6401,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2850,
+              3600
+            ],
+            "palette": [
+              "#ff283c",
+              "#ff176c",
+              "#ff18a8",
+              "#ff7d1a"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1740
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.47,
+                0.27
+              ],
+              "control2": [
+                0.27,
+                0.16
+              ],
+              "end": [
+                0.08,
+                0.21
+              ],
+              "duration_ms": 2230,
+              "path_spread_px": 1.8,
+              "time_power": 0.89
+            },
+            "topology": {
+              "path_variation_px": 11.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.68,
+              "head_intensity": 1.24,
+              "head_white": 0.12,
+              "trail_width": [
+                0.16,
+                0.36
+              ],
+              "trail_intensity": 0.05,
+              "trail_white": 0.01,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.04,
+              "bead_every": 3,
+              "bead_intensity": 0.82,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.35
+          },
+          {
+            "start_ms": 225,
+            "origin": [
+              0.60,
+              0.40
+            ],
+            "count": 190,
+            "strands": 10,
+            "trajectory_seed": 6411,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2850,
+              3600
+            ],
+            "palette": [
+              "#ff2f22",
+              "#ff174f",
+              "#ff188f",
+              "#ff7420"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1740
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.44,
+                0.41
+              ],
+              "control2": [
+                0.28,
+                0.42
+              ],
+              "end": [
+                0.10,
+                0.49
+              ],
+              "duration_ms": 2240,
+              "path_spread_px": 1.8,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 12.0,
+              "time_variation": 0.15,
+              "brightness_variation": 0.42,
+              "width_variation": 0.34,
+              "breakup_start": 0.30,
+              "trail_dropout": 0.58
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.68,
+              "head_intensity": 1.24,
+              "head_white": 0.12,
+              "trail_width": [
+                0.16,
+                0.36
+              ],
+              "trail_intensity": 0.05,
+              "trail_white": 0.01,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.04,
+              "bead_every": 3,
+              "bead_intensity": 0.82,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.35
+          },
+          {
+            "start_ms": 195,
+            "origin": [
+              0.65,
+              0.34
+            ],
+            "count": 110,
+            "strands": 9,
+            "trajectory_seed": 6421,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2800,
+              3500
+            ],
+            "palette": [
+              "#ff7c0b",
+              "#ff3041",
+              "#ff1888",
+              "#ff4ebd"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1680
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.77,
+                0.23
+              ],
+              "control2": [
+                0.86,
+                0.19
+              ],
+              "end": [
+                0.94,
+                0.25
+              ],
+              "duration_ms": 2160,
+              "path_spread_px": 1.8,
+              "time_power": 0.89
+            },
+            "topology": {
+              "path_variation_px": 9.0,
+              "time_variation": 0.13,
+              "brightness_variation": 0.40,
+              "width_variation": 0.32,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.56
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.62,
+              "head_intensity": 1.10,
+              "head_white": 0.10,
+              "trail_width": [
+                0.15,
+                0.34
+              ],
+              "trail_intensity": 0.04,
+              "trail_white": 0.01,
+              "halo_radius": 0.9,
+              "halo_intensity": 0.03,
+              "bead_every": 3,
+              "bead_intensity": 0.70,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.35
+          },
+          {
+            "start_ms": 225,
+            "origin": [
+              0.64,
+              0.36
+            ],
+            "count": 110,
+            "strands": 9,
+            "trajectory_seed": 6431,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              2800,
+              3500
+            ],
+            "palette": [
+              "#ff7210",
+              "#ff2d3f",
+              "#ff1686",
+              "#ff4cbb"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 1680
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.76,
+                0.39
+              ],
+              "control2": [
+                0.85,
+                0.41
+              ],
+              "end": [
+                0.92,
+                0.49
+              ],
+              "duration_ms": 2170,
+              "path_spread_px": 1.8,
+              "time_power": 0.9
+            },
+            "topology": {
+              "path_variation_px": 10.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.40,
+              "width_variation": 0.32,
+              "breakup_start": 0.32,
+              "trail_dropout": 0.56
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 1.9
+            },
+            "material": {
+              "head_radius": 0.62,
+              "head_intensity": 1.10,
+              "head_white": 0.10,
+              "trail_width": [
+                0.15,
+                0.34
+              ],
+              "trail_intensity": 0.04,
+              "trail_white": 0.01,
+              "halo_radius": 0.9,
+              "halo_intensity": 0.03,
+              "bead_every": 3,
+              "bead_intensity": 0.70,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 22,
+              "step_ms": 18,
+              "fade_power": 1.85
+            },
+            "twinkle": 0.35
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6200,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6200,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "recursive-halo-v2",
+        "label": "RECURSIVE HALO V2",
+        "duration_ms": 6200,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 72,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1100,
+              1450
+            ],
+            "palette": [
+              "#fff6cc",
+              "#ffb82b"
+            ],
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 220
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.49,
+                0.76
+              ],
+              "control2": [
+                0.51,
+                0.58
+              ],
+              "end": [
+                0.50,
+                0.48
+              ],
+              "duration_ms": 1060,
+              "path_spread_px": 2.5
+            },
+            "material": {
+              "head_radius": 1.5,
+              "head_intensity": 1.4,
+              "head_white": 0.75,
+              "trail_width": [
+                0.35,
+                0.8
+              ],
+              "trail_intensity": 0.52,
+              "trail_white": 0.2,
+              "halo_radius": 2.0,
+              "halo_intensity": 0.1,
+              "bead_every": 4,
+              "bead_intensity": 0.5,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 24,
+              "step_ms": 18,
+              "fade_power": 1.8
+            }
+          },
+          {
+            "start_ms": 1080,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 140,
+            "shape": "ring",
+            "speed": [
+              88.0,
+              88.0
+            ],
+            "drag": 0.10,
+            "life_ms": [
+              1800,
+              2200
+            ],
+            "palette": [
+              "#ff43e6",
+              "#ff71f0",
+              "#d641ff"
+            ],
+            "palette_mode": "strand",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -2.0,
+                2.0
+              ],
+              "perspective": 0.02
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.38,
+              "decay_power": 2.1
+            },
+            "topology": {
+              "path_variation_px": 5.0,
+              "time_variation": 0.10,
+              "brightness_variation": 0.28,
+              "width_variation": 0.20,
+              "breakup_start": 0.28,
+              "trail_dropout": 0.48
+            },
+            "material": {
+              "head_radius": 1.05,
+              "head_intensity": 1.76,
+              "head_white": 0.30,
+              "trail_width": [
+                0.26,
+                0.60
+              ],
+              "trail_intensity": 0.18,
+              "trail_white": 0.04,
+              "halo_radius": 1.4,
+              "halo_intensity": 0.12,
+              "bead_every": 2,
+              "bead_intensity": 1.62,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 14,
+              "step_ms": 18,
+              "fade_power": 2.0
+            },
+            "twinkle": 0.18
+          },
+          {
+            "start_ms": 1120,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 260,
+            "shape": "ring",
+            "speed": [
+              180.0,
+              180.0
+            ],
+            "drag": 0.09,
+            "life_ms": [
+              2100,
+              2550
+            ],
+            "palette": [
+              "#8358ff",
+              "#a875ff",
+              "#c59aff"
+            ],
+            "palette_mode": "strand",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -1.5,
+                1.5
+              ],
+              "perspective": 0.02
+            },
+            "envelope": {
+              "attack": 0.015,
+              "hold": 0.46,
+              "decay_power": 1.8
+            },
+            "topology": {
+              "path_variation_px": 8.0,
+              "time_variation": 0.12,
+              "brightness_variation": 0.32,
+              "width_variation": 0.22,
+              "breakup_start": 0.24,
+              "trail_dropout": 0.58
+            },
+            "material": {
+              "head_radius": 0.88,
+              "head_intensity": 1.58,
+              "head_white": 0.20,
+              "trail_width": [
+                0.22,
+                0.48
+              ],
+              "trail_intensity": 0.16,
+              "trail_white": 0.02,
+              "halo_radius": 1.2,
+              "halo_intensity": 0.10,
+              "bead_every": 2,
+              "bead_intensity": 1.52,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 10,
+              "step_ms": 17,
+              "fade_power": 2.3
+            },
+            "twinkle": 0.31
+          },
+          {
+            "start_ms": 1160,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 150,
+            "shape": "ring",
+            "speed": [
+              226.0,
+              226.0
+            ],
+            "gravity": 18.0,
+            "drag": 0.11,
+            "life_ms": [
+              2050,
+              2450
+            ],
+            "palette": [
+              "#116dff",
+              "#1e9cff",
+              "#73c8ff"
+            ],
+            "palette_mode": "strand",
+            "tip_palette": [
+              "#ffffff",
+              "#89e6ff"
+            ],
+            "tip_fraction": 0.12,
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -1.0,
+                1.0
+              ],
+              "perspective": 0.02
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.42,
+              "decay_power": 2.2
+            },
+            "topology": {
+              "path_variation_px": 10.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.36,
+              "width_variation": 0.25,
+              "breakup_start": 0.18,
+              "trail_dropout": 0.68
+            },
+            "material": {
+              "head_radius": 1.0,
+              "head_intensity": 1.82,
+              "head_white": 0.50,
+              "trail_width": [
+                0.24,
+                0.54
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.10,
+              "halo_radius": 1.6,
+              "halo_intensity": 0.14,
+              "bead_every": 3,
+              "bead_intensity": 1.48,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 20,
+              "fade_power": 1.9
+            }
+          },
+          {
+            "start_ms": 1160,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 360,
+            "shape": "hemisphere",
+            "direction_deg": 90.0,
+            "speed": [
+              60.0,
+              255.0
+            ],
+            "gravity": 128.0,
+            "drag": 0.18,
+            "life_ms": [
+              1300,
+              2700
+            ],
+            "palette": [
+              "#ff9b08",
+              "#ffc12e",
+              "#ffe18a"
+            ],
+            "palette_mode": "speed",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -5.0,
+                5.0
+              ],
+              "perspective": 0.16
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.14,
+              "decay_power": 2.6
+            },
+            "topology": {
+              "path_variation_px": 6.0,
+              "time_variation": 0.18,
+              "brightness_variation": 0.38,
+              "width_variation": 0.30,
+              "breakup_start": 0.24,
+              "trail_dropout": 0.58
+            },
+            "material": {
+              "head_radius": 0.90,
+              "head_intensity": 1.70,
+              "head_white": 0.30,
+              "trail_width": [
+                0.20,
+                0.44
+              ],
+              "trail_intensity": 0.12,
+              "trail_white": 0.02,
+              "halo_radius": 1.1,
+              "halo_intensity": 0.09,
+              "bead_every": 2,
+              "bead_intensity": 1.72,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 16,
+              "step_ms": 23,
+              "fade_power": 2.1
+            },
+            "twinkle": 0.32
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.24
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.71,
+                0.31
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.79,
+                0.52
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.70,
+                0.71
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.30,
+                0.71
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.21,
+                0.52
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.29,
+                0.31
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                0.02,
+                0.18
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.92,
+              "head_intensity": 1.68,
+              "head_white": 0.28,
+              "trail_width": [
+                0.20,
+                0.48
+              ],
+              "trail_intensity": 0.15,
+              "trail_white": 0.03,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.11,
+              "bead_every": 2,
+              "bead_intensity": 1.54,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1180,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 160,
+            "strands": 20,
+            "shape": "ring",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1800,
+              2300
+            ],
+            "palette": [
+              "#39ffd3",
+              "#73ffe8",
+              "#b1fff2"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 440
+            },
+            "motion": {
+              "kind": "vortex",
+              "center": [
+                0.50,
+                0.77
+              ],
+              "duration_ms": 1550,
+              "radius_px": [
+                7.0,
+                58.0
+              ],
+              "turns": [
+                -0.18,
+                -0.02
+              ],
+              "path_spread_px": 2.0,
+              "time_power": 0.84
+            },
+            "topology": {
+              "path_variation_px": 7.0,
+              "time_variation": 0.16,
+              "brightness_variation": 0.30,
+              "width_variation": 0.22,
+              "breakup_start": 0.34,
+              "trail_dropout": 0.44
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.45,
+              "decay_power": 2.0
+            },
+            "material": {
+              "head_radius": 0.98,
+              "head_intensity": 1.74,
+              "head_white": 0.32,
+              "trail_width": [
+                0.20,
+                0.50
+              ],
+              "trail_intensity": 0.13,
+              "trail_white": 0.03,
+              "halo_radius": 1.4,
+              "halo_intensity": 0.12,
+              "bead_every": 2,
+              "bead_intensity": 1.66,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 12,
+              "step_ms": 18,
+              "fade_power": 2.0
+            }
+          },
+          {
+            "start_ms": 1080,
+            "origin": [
+              0.50,
+              0.48
+            ],
+            "count": 12,
+            "shape": "sphere",
+            "speed": [
+              0.0,
+              6.0
+            ],
+            "life_ms": [
+              1500,
+              2100
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff4c6",
+              "#ff7aff"
+            ],
+            "motion": {
+              "kind": "ballistic",
+              "perspective": 0.18
+            },
+            "envelope": {
+              "attack": 0.005,
+              "hold": 0.66,
+              "decay_power": 2.8
+            },
+            "material": {
+              "head_radius": 3.0,
+              "head_intensity": 1.8,
+              "head_white": 0.92,
+              "trail_width": [
+                0.6,
+                1.1
+              ],
+              "trail_intensity": 0.58,
+              "trail_white": 0.62,
+              "halo_radius": 4.2,
+              "halo_intensity": 0.24,
+              "bead_every": 0,
+              "bead_intensity": 0.0,
+              "blend": "add"
+            },
+            "trail": {
+              "samples": 7,
+              "step_ms": 16,
+              "fade_power": 1.8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 6500,
+        "phases": [
+          {
+            "until_ms": 1200,
+            "label": "launch"
+          },
+          {
+            "until_ms": 2800,
+            "label": "burst"
+          },
+          {
+            "until_ms": 6500,
+            "label": "fall"
+          }
+        ]
+      },
+      "show": {
+        "schema": "mister-magik-firework-v2",
+        "id": "solar-chrysanthemum-v2",
+        "label": "SOLAR CHRYSANTHEMUM V2",
+        "duration_ms": 6500,
+        "emitters": [
+          {
+            "start_ms": 0,
+            "origin": [
+              0.50,
+              0.94
+            ],
+            "count": 84,
+            "strands": 1,
+            "shape": "point",
+            "speed": [
+              1.0,
+              1.0
+            ],
+            "life_ms": [
+              1200,
+              1500
+            ],
+            "palette": [
+              "#fff8d5",
+              "#ffc33d",
+              "#ff711b"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "stream",
+              "duration_ms": 260
+            },
+            "motion": {
+              "kind": "bezier",
+              "control1": [
+                0.48,
+                0.76
+              ],
+              "control2": [
+                0.52,
+                0.56
+              ],
+              "end": [
+                0.50,
+                0.47
+              ],
+              "duration_ms": 1120,
+              "path_spread_px": 3.0,
+              "time_power": 0.88,
+              "perspective": 0.08
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.55,
+              "decay_power": 2.6
+            },
+            "material": {
+              "head_radius": 1.8,
+              "head_intensity": 1.25,
+              "head_white": 0.72,
+              "trail_width": [
+                0.35,
+                0.85
+              ],
+              "trail_intensity": 0.48,
+              "trail_white": 0.20,
+              "halo_radius": 2.2,
+              "halo_intensity": 0.10,
+              "bead_every": 5,
+              "bead_intensity": 0.42,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 28,
+              "step_ms": 18,
+              "fade_power": 1.8
+            },
+            "twinkle": 0.08
+          },
+          {
+            "start_ms": 1140,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 14,
+            "shape": "sphere",
+            "speed": [
+              0.0,
+              8.0
+            ],
+            "gravity": 5.0,
+            "drag": 0.10,
+            "life_ms": [
+              1250,
+              1700
+            ],
+            "palette": [
+              "#ffffff",
+              "#fff3ce",
+              "#ffad2f"
+            ],
+            "palette_mode": "random",
+            "motion": {
+              "kind": "ballistic",
+              "perspective": 0.20
+            },
+            "envelope": {
+              "attack": 0.01,
+              "hold": 0.62,
+              "decay_power": 3.0
+            },
+            "material": {
+              "head_radius": 3.4,
+              "head_intensity": 1.95,
+              "head_white": 0.92,
+              "trail_width": [
+                0.8,
+                1.6
+              ],
+              "trail_intensity": 0.75,
+              "trail_white": 0.65,
+              "halo_radius": 4.4,
+              "halo_intensity": 0.26,
+              "bead_every": 0,
+              "bead_intensity": 0.0,
+              "blend": "add"
+            },
+            "trail": {
+              "samples": 8,
+              "step_ms": 16,
+              "fade_power": 1.6
+            }
+          },
+          {
+            "start_ms": 1170,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 42,
+            "strands": 42,
+            "trajectory_seed": 4101,
+            "strand_spread_deg": 0.35,
+            "shape": "fan",
+            "direction_deg": -90.0,
+            "spread_deg": 210.0,
+            "speed": [
+              210.0,
+              282.0
+            ],
+            "gravity": 185.0,
+            "drag": 0.16,
+            "life_ms": [
+              3000,
+              3900
+            ],
+            "palette": [
+              "#ffc34a",
+              "#ff9b1c",
+              "#f66a09",
+              "#c83d04"
+            ],
+            "palette_mode": "strand",
+            "tip_palette": [
+              "#ffffff",
+              "#ffd77a"
+            ],
+            "tip_fraction": 0.14,
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -8.0,
+                8.0
+              ],
+              "perspective": 0.10
+            },
+            "envelope": {
+              "attack": 0.015,
+              "hold": 0.44,
+              "decay_power": 2.1
+            },
+            "topology": {
+              "path_variation_px": 10.0,
+              "time_variation": 0.12,
+              "brightness_variation": 0.28,
+              "width_variation": 0.24,
+              "breakup_start": 0.40,
+              "trail_dropout": 0.38
+            },
+            "material": {
+              "head_radius": 2.05,
+              "head_intensity": 1.75,
+              "head_white": 0.78,
+              "trail_width": [
+                0.55,
+                1.22
+              ],
+              "trail_intensity": 0.30,
+              "trail_white": 0.28,
+              "halo_radius": 2.3,
+              "halo_intensity": 0.16,
+              "bead_every": 2,
+              "bead_intensity": 1.82,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 36,
+              "step_ms": 25,
+              "fade_power": 1.55
+            },
+            "twinkle": 0.10
+          },
+          {
+            "start_ms": 1170,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 1600,
+            "strands": 42,
+            "trajectory_seed": 4101,
+            "strand_spread_deg": 0.35,
+            "shape": "fan",
+            "direction_deg": -90.0,
+            "spread_deg": 210.0,
+            "speed": [
+              210.0,
+              282.0
+            ],
+            "gravity": 205.0,
+            "drag": 0.22,
+            "life_ms": [
+              900,
+              1700
+            ],
+            "palette": [
+              "#ffad2f",
+              "#f77c12",
+              "#d94c08",
+              "#9f2604"
+            ],
+            "palette_mode": "strand",
+            "emission": {
+              "mode": "trail-children",
+              "duration_ms": 820,
+              "inherit_velocity": 0.48,
+              "scatter_speed": [
+                10.0,
+                38.0
+              ],
+              "scatter_deg": 26.0
+            },
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -8.0,
+                8.0
+              ],
+              "perspective": 0.10
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.20,
+              "decay_power": 2.6
+            },
+            "topology": {
+              "path_variation_px": 10.0,
+              "time_variation": 0.14,
+              "brightness_variation": 0.34,
+              "width_variation": 0.30,
+              "breakup_start": 0.24,
+              "trail_dropout": 0.62
+            },
+            "material": {
+              "head_radius": 1.08,
+              "head_intensity": 1.82,
+              "head_white": 0.32,
+              "trail_width": [
+                0.28,
+                0.62
+              ],
+              "trail_intensity": 0.16,
+              "trail_white": 0.04,
+              "halo_radius": 1.3,
+              "halo_intensity": 0.08,
+              "bead_every": 2,
+              "bead_intensity": 1.86,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 18,
+              "step_ms": 22,
+              "fade_power": 2.0
+            },
+            "twinkle": 0.34
+          },
+          {
+            "start_ms": 1210,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 520,
+            "shape": "sphere",
+            "speed": [
+              56.0,
+              148.0
+            ],
+            "gravity": 38.0,
+            "drag": 0.22,
+            "life_ms": [
+              1500,
+              2250
+            ],
+            "palette": [
+              "#ff2018",
+              "#ff3a20",
+              "#ff5d27",
+              "#ff8b34"
+            ],
+            "palette_mode": "depth",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -4.0,
+                4.0
+              ],
+              "perspective": 0.26
+            },
+            "envelope": {
+              "attack": 0.018,
+              "hold": 0.52,
+              "decay_power": 1.8
+            },
+            "material": {
+              "head_radius": 1.05,
+              "head_intensity": 1.62,
+              "head_white": 0.18,
+              "trail_width": [
+                0.28,
+                0.68
+              ],
+              "trail_intensity": 0.74,
+              "trail_white": 0.02,
+              "halo_radius": 1.5,
+              "halo_intensity": 0.12,
+              "bead_every": 4,
+              "bead_intensity": 1.28,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 16,
+              "step_ms": 20,
+              "fade_power": 1.9
+            },
+            "twinkle": 0.16
+          },
+          {
+            "start_ms": 1260,
+            "origin": [
+              0.50,
+              0.47
+            ],
+            "count": 146,
+            "shape": "ring",
+            "rotation_deg": 1.5,
+            "spread_deg": 360.0,
+            "speed": [
+              286.0,
+              286.0
+            ],
+            "gravity": 0.0,
+            "drag": 0.14,
+            "life_ms": [
+              1300,
+              1600
+            ],
+            "palette": [
+              "#15b9e6",
+              "#29dcff",
+              "#77f3ff"
+            ],
+            "palette_mode": "strand",
+            "motion": {
+              "kind": "ballistic",
+              "turn_deg": [
+                -1.2,
+                1.2
+              ],
+              "perspective": 0.02
+            },
+            "envelope": {
+              "attack": 0.02,
+              "hold": 0.30,
+              "decay_power": 1.8
+            },
+            "topology": {
+              "path_variation_px": 5.0,
+              "time_variation": 0.09,
+              "brightness_variation": 0.35,
+              "width_variation": 0.25,
+              "breakup_start": 0.20,
+              "trail_dropout": 0.72
+            },
+            "material": {
+              "head_radius": 0.62,
+              "head_intensity": 1.18,
+              "head_white": 0.12,
+              "trail_width": [
+                0.28,
+                0.52
+              ],
+              "trail_intensity": 0.50,
+              "trail_white": 0.0,
+              "halo_radius": 1.0,
+              "halo_intensity": 0.09,
+              "bead_every": 5,
+              "bead_intensity": 0.58,
+              "blend": "screen"
+            },
+            "trail": {
+              "samples": 10,
+              "step_ms": 18,
+              "fade_power": 2.3
+            },
+            "twinkle": 0.28
+          }
+        ]
+      }
+    }
+  ]
+}

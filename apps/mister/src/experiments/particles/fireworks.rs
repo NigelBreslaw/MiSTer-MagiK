@@ -7,22 +7,12 @@ use serde::Deserialize;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
 
+use super::recipes::embedded_firework_show;
+
 const SCHEMA: &str = "mister-magik-firework-v1";
 const MAX_PARTICLES: usize = 98_304;
 const MAX_TRAIL_SAMPLES: u8 = 32;
 pub const FIREWORK_VISUAL_SEED: u64 = 827_141_709_451;
-const COPPER_WILLOW_RAIN: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/copper-willow-rain.json");
-const MAGNETIC_FLOWER: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/magnetic-flower.json");
-const OLED_PEONY: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/oled-peony.json");
-const PHOENIX_COMET: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/phoenix-comet.json");
-const RECURSIVE_HALO: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/recursive-halo.json");
-const SOLAR_CHRYSANTHEMUM: &str =
-    include_str!("../../../assets/experiments/particles/fireworks/solar-chrysanthemum.json");
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct FireworkRenderStats {
@@ -170,16 +160,17 @@ impl FireworkRenderer {
     }
 }
 
-pub fn embedded_firework_json(id: &str) -> Option<&'static str> {
-    match id.trim().to_ascii_lowercase().as_str() {
-        "copper-willow-rain" | "copper-willow" | "copper" => Some(COPPER_WILLOW_RAIN),
-        "magnetic-flower" | "magnetic" => Some(MAGNETIC_FLOWER),
-        "oled-peony" | "oled" => Some(OLED_PEONY),
-        "phoenix-comet" | "phoenix" => Some(PHOENIX_COMET),
-        "recursive-halo" | "halo" => Some(RECURSIVE_HALO),
-        "solar-chrysanthemum" | "solar" => Some(SOLAR_CHRYSANTHEMUM),
-        _ => None,
-    }
+pub fn embedded_firework_json(id: &str) -> Option<String> {
+    let canonical = match id.trim().to_ascii_lowercase().as_str() {
+        "copper-willow-rain" | "copper-willow" | "copper" => "copper-willow-rain",
+        "magnetic-flower" | "magnetic" => "magnetic-flower",
+        "oled-peony" | "oled" => "oled-peony",
+        "phoenix-comet" | "phoenix" => "phoenix-comet",
+        "recursive-halo" | "halo" => "recursive-halo",
+        "solar-chrysanthemum" | "solar" => "solar-chrysanthemum",
+        _ => return None,
+    };
+    embedded_firework_show(canonical, SCHEMA)
 }
 
 #[derive(Deserialize)]
@@ -703,7 +694,7 @@ mod tests {
 
         for (id, hero_ms) in hero_frames {
             let json = embedded_firework_json(id).unwrap();
-            let renderer = FireworkRenderer::from_json(json, 96, 54, 7).unwrap();
+            let renderer = FireworkRenderer::from_json(&json, 96, 54, 7).unwrap();
             assert_eq!(renderer.id(), id);
 
             let mut first = vec![Rgb565Pixel(0); 96 * 54];

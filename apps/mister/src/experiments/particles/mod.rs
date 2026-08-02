@@ -11,4 +11,7 @@ pub mod fireworks_v2;
 pub mod form;
 pub mod live_reload;
 pub mod material;
+mod recipes;
 pub mod showcase;
+
+pub use recipes::ParticleRecipeFamily;
