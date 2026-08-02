@@ -2877,10 +2877,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-framebuffer-scenes"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-particles"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "mister-magik-framebuffer-scenes",
  "serde",
  "serde_json",
 ]

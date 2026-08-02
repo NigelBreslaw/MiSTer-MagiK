@@ -16,6 +16,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
+mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

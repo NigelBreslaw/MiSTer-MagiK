@@ -19,9 +19,7 @@ const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
 const ARCADE_DEMO_NUMBER: u64 = 21;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct Rgb565Pixel(pub u16);
+pub use mister_magik_framebuffer_scenes::Rgb565Pixel;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ArcadeCabinetFrameStats {
