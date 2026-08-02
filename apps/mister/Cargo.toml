@@ -29,7 +29,7 @@ required-features = ["ui"]
 [[bin]]
 name = "mister-magik-ui-preview"
 path = "src/bin/ui_preview.rs"
-required-features = ["ui-preview", "experiments"]
+required-features = ["ui-preview"]
 
 [[bin]]
 name = "mister-magik-particle-preview"
@@ -80,7 +80,7 @@ cc = "1.3"
 default = []
 profile = ["dep:pprof"]
 ui = ["dep:slint", "dep:mister-magik-ui", "dep:ffmpeg-next", "mister-magik-mister-runtime/ui"]
-ui-preview = ["dep:slint", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui"]
+ui-preview = ["dep:slint", "dep:mister-magik-ui", "dep:softbuffer", "dep:winit", "mister-magik-mister-runtime/ui", "experiments"]
 bench-tools = ["mister-magik-mister-runtime/bench-tools"]
 bench-scenes = ["mister-magik-ui?/bench-scenes", "mister-magik-mister-runtime/bench-scenes"]
 experiments = ["bench-scenes"]
