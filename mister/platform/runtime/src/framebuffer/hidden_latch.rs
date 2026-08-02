@@ -16,6 +16,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 const DEFAULT_SETTLE_TIMEOUT: Duration = Duration::from_millis(50);
+const STATUS_POLL_BACKOFF: Duration = Duration::from_micros(100);
 
 #[derive(Debug)]
 pub enum HiddenLatchError {
@@ -238,7 +239,7 @@ fn wait_for_settled_status(
                 timeout.as_millis()
             )));
         }
-        std::thread::yield_now();
+        std::thread::sleep(STATUS_POLL_BACKOFF);
     }
 }
 
@@ -267,7 +268,7 @@ fn wait_for_posted_status(
                 status.pending_sequence
             )));
         }
-        std::thread::yield_now();
+        std::thread::sleep(STATUS_POLL_BACKOFF);
     }
 }
 
