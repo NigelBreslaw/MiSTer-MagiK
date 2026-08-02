@@ -407,17 +407,21 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
 }
 
 fn print_benchmark_capabilities() {
-    crate::ui_logln!(
-        "{}",
-        serde_json::json!({
-            "schema": "mister-magik-benchmark-capabilities-v1",
-            "screensaver-pprof-v1": cfg!(feature = "profile"),
-            "screensaver-frame-evidence-v4": cfg!(feature = "profile"),
-            "particle-capacity-v1": true,
-            "particle-live-v1": cfg!(mister_experiments),
-            "persisted-search-v1": true,
-        })
-    );
+    let mut capabilities = serde_json::json!({
+        "schema": "mister-magik-benchmark-capabilities-v1",
+        "screensaver-pprof-v1": cfg!(feature = "profile"),
+        "particle-capacity-v1": true,
+        "particle-live-v1": cfg!(mister_experiments),
+        "persisted-search-v1": true,
+    });
+    capabilities
+        .as_object_mut()
+        .expect("benchmark capabilities must be an object")
+        .insert(
+            mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY.to_owned(),
+            serde_json::Value::Bool(cfg!(feature = "profile")),
+        );
+    crate::ui_logln!("{}", capabilities);
 }
 
 fn run_catalog_v3_inspect() {

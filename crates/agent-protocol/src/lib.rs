@@ -10,6 +10,7 @@ pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
 pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1";
+pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v4";
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
 
 pub fn request(token: &str, id: u64, command: &str, args: Value) -> Value {

@@ -42,6 +42,7 @@ crc32fast = "1"
 flate2 = "1"
 libc = "0.2"
 lz4_flex = "0.14.0"
+mister-magik-agent-protocol = { path = "../../crates/agent-protocol" }
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-framebuffer-stream = { path = "../../crates/framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }

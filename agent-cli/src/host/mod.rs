@@ -7470,11 +7470,15 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
         return Err("installed app does not support screensaver-pprof-v1".into());
     }
     if capability
-        .get("screensaver-frame-evidence-v3")
+        .get(mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY)
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support screensaver-frame-evidence-v3".into());
+        return Err(format!(
+            "installed app does not support {}",
+            mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY
+        )
+        .into());
     }
     let initial_status = read_launcher_status(&session)?;
     if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
@@ -15860,14 +15864,15 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn installed_benchmark_capability_accepts_the_runtime_log_prefix() {
-        let capability = last_json_line(
+        let capability_name = mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY;
+        let output = format!(
             "mister-magik-fb [benchmark-capabilities] (arch=arm)\n\
-             {\"screensaver-pprof-v1\":true,\"screensaver-frame-evidence-v3\":true}\n",
-        )
-        .unwrap();
+             {{\"screensaver-pprof-v1\":true,\"{capability_name}\":true}}\n"
+        );
+        let capability = last_json_line(&output).unwrap();
 
         assert_eq!(capability["screensaver-pprof-v1"], true);
-        assert_eq!(capability["screensaver-frame-evidence-v3"], true);
+        assert_eq!(capability[capability_name], true);
         assert!(last_json_line("no structured report").is_none());
     }
 
