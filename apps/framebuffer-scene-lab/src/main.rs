@@ -165,6 +165,7 @@ impl LabScene {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn effect(&self) -> EffectKind {
         match self {
             Self::Particle(renderer) => renderer.effect(),
