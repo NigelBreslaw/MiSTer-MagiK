@@ -43,7 +43,8 @@ fn main() -> Result<(), String> {
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
     let recipe = read_effect_recipe(recipe_path)?;
-    let mut renderer = FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe)?;
+    let mut renderer =
+        FocusedParticleRenderer::new_synchronous(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe)?;
     let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
     let target = Duration::from_millis(time_ms);
     let mut elapsed = Duration::ZERO;
@@ -122,6 +123,7 @@ fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), St
     let mut repeated_presentations = 0_u64;
     loop {
         let elapsed = Instant::now().saturating_duration_since(started);
+        let writable_slot = presenter.writable_slot_index();
         let pixels = presenter.pixels_mut();
         // SAFETY: both pixel types are repr(transparent) wrappers around u16,
         // have identical length/alignment, and accept every u16 bit pattern.
@@ -129,7 +131,12 @@ fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), St
             std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<Rgb565Pixel>(), pixels.len())
         };
         let render_started = Instant::now();
-        let stats = renderer.render(pixels, elapsed)?;
+        let stats = renderer.render_buffer(
+            pixels,
+            writable_slot - 1,
+            elapsed,
+            Some(elapsed.saturating_add(FRAME_DURATION)),
+        )?;
         render_samples_us.push(render_started.elapsed().as_micros() as u64);
         if let Some(stages) = stats.magik_stages {
             clear_samples_us.push(stages.clear_us);
@@ -485,7 +492,13 @@ mod macos {
             let Some(window) = self.window.as_ref() else {
                 return;
             };
-            if let Err(error) = self.renderer.render(&mut self.pixels, self.epoch.elapsed()) {
+            let elapsed = self.epoch.elapsed();
+            if let Err(error) = self.renderer.render_buffer(
+                &mut self.pixels,
+                0,
+                elapsed,
+                Some(elapsed.saturating_add(FRAME_DURATION)),
+            ) {
                 self.render_error = Some(error);
                 self.update_title();
                 return;
@@ -698,11 +711,18 @@ mod tests {
             ),
         ] {
             let mut renderer =
-                FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe).unwrap();
+                FocusedParticleRenderer::new_synchronous(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe)
+                    .unwrap();
             let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
-            renderer
-                .render(&mut pixels, Duration::from_millis(5_000))
-                .unwrap();
+            let target = Duration::from_millis(5_000);
+            let mut elapsed = Duration::ZERO;
+            loop {
+                renderer.render(&mut pixels, elapsed).unwrap();
+                if elapsed >= target {
+                    break;
+                }
+                elapsed = (elapsed + FRAME_DURATION).min(target);
+            }
             assert_eq!(frame_hash(&pixels), expected);
         }
     }

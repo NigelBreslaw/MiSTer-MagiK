@@ -981,6 +981,18 @@ mod tests {
         .unwrap()
     }
 
+    fn lookahead_scene(preset: ParticlePreset) -> MagikScene {
+        MagikScene::new(
+            config(preset),
+            mask(),
+            MagikSceneOptions {
+                preparation: PreparationMode::Lookahead,
+                ..MagikSceneOptions::default()
+            },
+        )
+        .unwrap()
+    }
+
     fn buffer(value: u8) -> SceneBufferId {
         SceneBufferId::new(value, 2).unwrap()
     }
@@ -1207,6 +1219,41 @@ mod tests {
         assert_eq!(third.lookahead_mismatch_count, 0);
         assert_eq!(third.preparation_queue_depth, 1);
         assert_eq!(pipeline.in_flight.len(), 2);
+    }
+
+    #[test]
+    fn synchronous_and_lookahead_frames_match_across_reusable_buffers() {
+        let mut synchronous = scene(ParticlePreset::Visual);
+        let mut lookahead = lookahead_scene(ParticlePreset::Visual);
+        let mut synchronous_pixels = [vec![Rgb565Pixel(0); 32 * 24], vec![Rgb565Pixel(0); 32 * 24]];
+        let mut lookahead_pixels = synchronous_pixels.clone();
+        for frame in 0..24_u64 {
+            let buffer_index = (frame % 2) as usize;
+            let elapsed = Duration::from_micros(frame * 16_667);
+            let next_elapsed = Duration::from_micros((frame + 1) * 16_667);
+            let synchronous_stats = synchronous
+                .render_with_lookahead(
+                    &mut synchronous_pixels[buffer_index],
+                    buffer(buffer_index as u8),
+                    elapsed,
+                    Some(next_elapsed),
+                )
+                .unwrap();
+            let lookahead_stats = lookahead
+                .render_with_lookahead(
+                    &mut lookahead_pixels[buffer_index],
+                    buffer(buffer_index as u8),
+                    elapsed,
+                    Some(next_elapsed),
+                )
+                .unwrap();
+            assert_eq!(lookahead_stats.phase, synchronous_stats.phase);
+            assert_eq!(lookahead_stats.visible, synchronous_stats.visible);
+            assert_eq!(
+                lookahead_pixels[buffer_index],
+                synchronous_pixels[buffer_index]
+            );
+        }
     }
 
     #[test]

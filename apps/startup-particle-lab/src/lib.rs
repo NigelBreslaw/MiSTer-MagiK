@@ -3,11 +3,12 @@
 
 //! Focused, Slint-free host for the production startup particle effects.
 
-use mister_magik_particles::cabinet::{ArcadeCabinetFormation, Rgb565Pixel};
-use mister_magik_particles::commands::{
-    raster_packed_visual_commands, write_packed_visual_commands,
+use mister_magik_framebuffer_scenes::{Rgb565Pixel, SceneBufferId};
+use mister_magik_particles::cabinet::ArcadeCabinetFormation;
+use mister_magik_particles::engine::ParticlePreset;
+use mister_magik_particles::magik::{
+    MagikScene, MagikSceneOptions, MagikSceneStats, PreparationMode,
 };
-use mister_magik_particles::engine::{ParticleEngine, ParticlePreset, magik_target_mask};
 use mister_magik_particles::recipes::{
     CABINET_RECIPE_SCHEMA_V1, CabinetRecipe, MAGIK_RECIPE_SCHEMA_V1, MagikRecipe,
     embedded_cabinet_recipe, embedded_magik_recipe, parse_cabinet_recipe, parse_magik_recipe,
@@ -20,7 +21,7 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EffectKind {
@@ -128,15 +129,43 @@ pub struct FocusedParticleRenderer {
 }
 
 enum PreparedEffect {
-    Magik(Box<MagikRenderer>),
+    Magik(Box<MagikScene>),
     Cabinet(Box<ArcadeCabinetFormation>),
 }
 
 impl FocusedParticleRenderer {
     pub fn new(width: usize, height: usize, recipe: EffectRecipe) -> Result<Self, String> {
+        Self::new_with_preparation(width, height, recipe, PreparationMode::Lookahead)
+    }
+
+    pub fn new_synchronous(
+        width: usize,
+        height: usize,
+        recipe: EffectRecipe,
+    ) -> Result<Self, String> {
+        Self::new_with_preparation(width, height, recipe, PreparationMode::Synchronous)
+    }
+
+    fn new_with_preparation(
+        width: usize,
+        height: usize,
+        recipe: EffectRecipe,
+        preparation: PreparationMode,
+    ) -> Result<Self, String> {
         let effect = match recipe {
             EffectRecipe::Magik(recipe) => {
-                PreparedEffect::Magik(Box::new(MagikRenderer::new(width, height, recipe)?))
+                PreparedEffect::Magik(Box::new(MagikScene::from_magik_recipe_with_options(
+                    width,
+                    height,
+                    ParticlePreset::Visual,
+                    recipe,
+                    MagikSceneOptions {
+                        preparation,
+                        order_commands: false,
+                        reusable_buffers: 2,
+                        worker_start: None,
+                    },
+                )?))
             }
             EffectRecipe::Cabinet(recipe) => PreparedEffect::Cabinet(Box::new(
                 ArcadeCabinetFormation::new(width, height, recipe)?,
@@ -158,8 +187,23 @@ impl FocusedParticleRenderer {
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<FrameStats, String> {
+        self.render_buffer(destination, 0, elapsed, None)
+    }
+
+    pub fn render_buffer(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        buffer_id: u8,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> Result<FrameStats, String> {
         match &mut self.effect {
-            PreparedEffect::Magik(renderer) => renderer.render(destination, elapsed),
+            PreparedEffect::Magik(renderer) => {
+                let buffer = SceneBufferId::new(buffer_id, 2).map_err(|error| error.to_string())?;
+                let stats =
+                    renderer.render_with_lookahead(destination, buffer, elapsed, next_elapsed)?;
+                Ok(magik_frame_stats(stats))
+            }
             PreparedEffect::Cabinet(renderer) => {
                 let stats = renderer.render(destination, elapsed)?;
                 Ok(FrameStats {
@@ -175,78 +219,19 @@ impl FocusedParticleRenderer {
     }
 }
 
-struct MagikRenderer {
-    engine: ParticleEngine,
-    recipe: MagikRecipe,
-    commands: Vec<u32>,
-}
-
-impl MagikRenderer {
-    fn new(width: usize, height: usize, recipe: MagikRecipe) -> Result<Self, String> {
-        let engine = ParticleEngine::from_recipe(
-            width,
-            height,
-            ParticlePreset::Visual,
-            recipe.clone(),
-            magik_target_mask()?,
-        )?;
-        let commands = Vec::with_capacity(recipe.particle_count);
-        Ok(Self {
-            engine,
-            recipe,
-            commands,
-        })
-    }
-
-    fn render(
-        &mut self,
-        destination: &mut [Rgb565Pixel],
-        elapsed: Duration,
-    ) -> Result<FrameStats, String> {
-        let expected = self
-            .engine
-            .config()
-            .width
-            .saturating_mul(self.engine.config().height);
-        if destination.len() != expected {
-            return Err(format!(
-                "MagiK destination has {} pixels, expected {expected}",
-                destination.len()
-            ));
-        }
-        let clear_started = Instant::now();
-        destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
-        let clear_us = clear_started.elapsed().as_micros() as u64;
-        let simulation_started = Instant::now();
-        let frame = self.engine.step(elapsed);
-        let simulation_us = simulation_started.elapsed().as_micros() as u64;
-        let projection_started = Instant::now();
-        let visible = write_packed_visual_commands(&self.engine, &mut self.commands);
-        let projection_us = projection_started.elapsed().as_micros() as u64;
-        let raster_started = Instant::now();
-        raster_packed_visual_commands(
-            destination,
-            &self.commands,
-            self.recipe
-                .appearance
-                .palette
-                .map(|color| Rgb565Pixel(color.0)),
-            usize::from(self.recipe.appearance.neighbor_palette_index),
-        );
-        let raster_us = raster_started.elapsed().as_micros() as u64;
-        Ok(FrameStats {
-            effect: EffectKind::Magik,
-            particles: frame.count,
-            visible,
-            simulation_backend: frame.simulation_backend,
-            projection_backend: frame.projection_backend,
-            magik_stages: Some(MagikStageTimings {
-                clear_us,
-                simulation_us,
-                projection_us,
-                raster_us,
-            }),
-        })
+fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
+    FrameStats {
+        effect: EffectKind::Magik,
+        particles: stats.count,
+        visible: stats.visible,
+        simulation_backend: stats.simulation_backend,
+        projection_backend: stats.projection_backend,
+        magik_stages: Some(MagikStageTimings {
+            clear_us: stats.clear_us.min(u128::from(u64::MAX)) as u64,
+            simulation_us: stats.simulation_us.min(u128::from(u64::MAX)) as u64,
+            projection_us: stats.projection_us.min(u128::from(u64::MAX)) as u64,
+            raster_us: stats.raster_us.min(u128::from(u64::MAX)) as u64,
+        }),
     }
 }
 
@@ -340,11 +325,23 @@ impl LiveParticleRenderer {
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<FrameStats, String> {
+        self.render_buffer(destination, 0, elapsed, None)
+    }
+
+    pub fn render_buffer(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        buffer_id: u8,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> Result<FrameStats, String> {
         if let Err(error) = self.apply_latest(elapsed) {
             self.last_error = Some(error);
         }
+        let logical_elapsed = elapsed.saturating_sub(self.logical_origin);
+        let logical_next = next_elapsed.map(|next| next.saturating_sub(self.logical_origin));
         self.renderer
-            .render(destination, elapsed.saturating_sub(self.logical_origin))
+            .render_buffer(destination, buffer_id, logical_elapsed, logical_next)
     }
 
     fn apply_latest(&mut self, elapsed: Duration) -> Result<(), String> {
