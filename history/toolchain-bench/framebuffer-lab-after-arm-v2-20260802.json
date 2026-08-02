@@ -1,0 +1,29 @@
+{
+  "schema": "mister-magik-compile-time-v2",
+  "target": "framebuffer-lab-arm",
+  "source_revision": "00c0a14b95d4ae9537116e526c5610848c7edaeb",
+  "source_path": "apps/framebuffer-lab/src/particles/showcase.rs",
+  "source_sha256_before": "872f8d60d1bf0216f63a64bb40c83113db5b8307e8c80961d26bbfb16f83d478",
+  "source_sha256_after": "872f8d60d1bf0216f63a64bb40c83113db5b8307e8c80961d26bbfb16f83d478",
+  "target_dir": "/private/tmp/mister-magik-framebuffer-lab-after-arm-v4-20260802",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cold_ms": 13802,
+  "no_op_ms": [
+    1902,
+    1813,
+    1855,
+    1864,
+    1869
+  ],
+  "particle_warmup_ms": 5559,
+  "particle_rebuild_ms": [
+    5694,
+    5712,
+    6033,
+    5890,
+    5862
+  ]
+}
