@@ -260,7 +260,7 @@ class PreCommitTests(unittest.TestCase):
             "mister/platform/runtime/src/lib.rs",
             "mister/platform/contracts/latch/src/lib.rs",
             "mister/platform/contracts/scanout/src/lib.rs",
-            "mister/tools/host/src/lib.rs",
+            "agent-cli/src/host/mod.rs",
         ]
         self.assertEqual(
             PRE_COMMIT.formatters(paths),
@@ -274,7 +274,6 @@ class PreCommitTests(unittest.TestCase):
                     "mister/platform/contracts/latch/Cargo.toml",
                 ),
                 ("magik-core.format", "crates/magik-core/Cargo.toml"),
-                ("mister-host.format", "mister/tools/host/Cargo.toml"),
                 ("mister-runtime.format", "mister/platform/runtime/Cargo.toml"),
                 (
                     "scanout-contract.format",
@@ -304,7 +303,7 @@ class PreCommitTests(unittest.TestCase):
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
             "crates/catalog/src/lib.rs",
-            "mister/tools/host/src/lib.rs",
+            "agent-cli/src/host/mod.rs",
         ]:
             self.repository.stage(path, "fn probe() {}\n")
         started = time.monotonic()
@@ -317,7 +316,6 @@ class PreCommitTests(unittest.TestCase):
                 "fmt --manifest-path agent-cli/Cargo.toml --check",
                 "fmt --manifest-path apps/mister/Cargo.toml --check",
                 "fmt --manifest-path crates/catalog/Cargo.toml --check",
-                "fmt --manifest-path mister/tools/host/Cargo.toml --check",
             ],
         )
 

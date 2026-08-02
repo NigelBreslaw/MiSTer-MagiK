@@ -6,9 +6,7 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{
-    AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceRequest,
-};
+use crate::transport::{AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

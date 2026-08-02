@@ -15,7 +15,13 @@ dependencies = [
  "block2",
  "clap",
  "dispatch2",
- "mister-tool",
+ "flate2",
+ "libc",
+ "lz4_flex",
+ "mister-magik-agent-protocol",
+ "mister-magik-catalog",
+ "mister-magik-ini",
+ "mister-magik-media-contract",
  "objc2",
  "objc2-av-foundation",
  "objc2-core-graphics",
@@ -23,10 +29,12 @@ dependencies = [
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation",
+ "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "ssh2",
  "thiserror",
  "zip",
 ]
@@ -570,24 +578,6 @@ dependencies = [
  "ed25519-dalek",
  "mister-magik-catalog",
  "serde_json",
-]
-
-[[package]]
-name = "mister-tool"
-version = "0.1.0"
-dependencies = [
- "flate2",
- "libc",
- "lz4_flex",
- "mister-magik-agent-protocol",
- "mister-magik-catalog",
- "mister-magik-ini",
- "mister-magik-media-contract",
- "quick-xml",
- "rusqlite",
- "serde_json",
- "sha2 0.11.0",
- "ssh2",
 ]
 
 [[package]]

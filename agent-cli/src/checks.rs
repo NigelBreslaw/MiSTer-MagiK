@@ -94,7 +94,7 @@ fn check_kernel_workflow(repository: &Path) -> Result<(), String> {
             "mister/platform/contracts/scanout/src/lib.rs",
             "mister/tools/agent/src/scanout_slots_contract.rs",
             "agent-cli/src/platform_stage.rs",
-            "mister/tools/host/src/platform_deploy.rs",
+            "agent-cli/src/host/platform_deploy.rs",
         ],
         &[
             "Linux-Kernel_MiSTer",
@@ -103,7 +103,7 @@ fn check_kernel_workflow(repository: &Path) -> Result<(), String> {
             "upload-artifact",
             "workflow_dispatch",
             "agent-cli/src/delivery.rs",
-            "mister/tools/host/src/main.rs",
+            "agent-cli/src/host/mod.rs",
         ],
     )
 }
@@ -298,7 +298,6 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
         "docs/agents/file-authority.md",
         "apps/mister/AGENTS.md",
         "apps/mister/src/ui_runner/AGENTS.md",
-        "mister/tools/host/AGENTS.md",
         "mister/tools/agent/AGENTS.md",
         "scripts/AGENTS.md",
         "apps/desktop/AGENTS.md",
@@ -445,7 +444,7 @@ fn check_license_headers(repository: &Path) -> Result<(), String> {
         "crates/catalog/Cargo.toml",
         "apps/mister/ui-generated/Cargo.toml",
         "mister/tools/agent/Cargo.toml",
-        "mister/tools/host/Cargo.toml",
+        "agent-cli/Cargo.toml",
     ] {
         if !read(repository, manifest)?.contains("license = \"GPL-3.0-or-later\"") {
             failures.push(format!("{manifest}: incorrect package license"));

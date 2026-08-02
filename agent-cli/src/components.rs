@@ -113,8 +113,6 @@ pub fn classify(path: &Path) -> Option<Component> {
         Some(Component::Kernel)
     } else if path.starts_with("mister/platform/fpga") {
         Some(Component::Fpga)
-    } else if path.starts_with("mister/tools/host") {
-        Some(Component::HostTool)
     } else if path.starts_with("mister/tools/agent") {
         Some(Component::DeviceAgent)
     } else if path.starts_with("mister/tools/manager") {

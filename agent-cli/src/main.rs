@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use agent_cli::cli::{Cli, OutputFormat};
+use agent_cli::cli::{Cli, Command as CliCommand, OutputFormat};
 use agent_cli::error::AgentResult;
 use agent_cli::evidence::Evidence;
 use agent_cli::executor;
@@ -13,38 +13,55 @@ use agent_cli::scope;
 use clap::Parser;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::process::ExitCode;
 
-fn main() {
-    let args: Vec<_> = std::env::args_os().collect();
-    if is_discovery_request(&args) {
-        let _ = Cli::parse_from(args);
-        return;
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("agent-cli: {error}");
+            ExitCode::from(70)
+        }
     }
-    let raw = RawRequest::capture(args.clone());
-    let repository = std::env::current_dir().unwrap_or_else(|error| fatal(&error.to_string()));
-    let evidence = Evidence::open_for_repository(&repository).unwrap_or_else(|error| fatal(&error));
-    evidence
-        .begin_request(&raw)
-        .unwrap_or_else(|error| fatal(&error));
+}
+
+fn run() -> Result<ExitCode, String> {
+    let args: Vec<_> = std::env::args_os().collect();
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(error) => {
-            evidence
-                .reject_parse(&raw.id, &error.to_string())
-                .unwrap_or_else(|audit_error| fatal(&audit_error));
             eprint!("{error}");
-            std::process::exit(2);
+            return Ok(ExitCode::from(error.exit_code() as u8));
         }
     };
-    let output = cli.output_format;
+    let Cli {
+        output_format: output,
+        command,
+    } = cli;
+    let command = match command {
+        Some(CliCommand::Device { command }) => {
+            return match agent_cli::commands::device::run(command) {
+                Ok(()) => Ok(ExitCode::SUCCESS),
+                Err(error) => {
+                    eprintln!("{error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            };
+        }
+        command => command,
+    };
+    let cli = Cli {
+        output_format: output,
+        command,
+    };
+    let raw = RawRequest::capture(std::env::args_os());
+    let repository = std::env::current_dir().map_err(|error| error.to_string())?;
+    let evidence = Evidence::open_for_repository(&repository)?;
+    evidence.begin_request(&raw)?;
     let intent = cli.into_intent();
-    evidence
-        .record_intent(&raw.id, &intent)
-        .unwrap_or_else(|error| fatal(&error));
+    evidence.record_intent(&raw.id, &intent)?;
     let mut reporter = Reporter::new_at(&evidence, output, &raw.id, raw.started);
-    reporter
-        .emit(EventKind::Started, "request", "Accepted request", None)
-        .unwrap_or_else(|error| fatal(&error));
+    reporter.emit(EventKind::Started, "request", "Accepted request", None)?;
     let outcome = match dispatch(
         &evidence,
         &raw.id,
@@ -62,11 +79,9 @@ fn main() {
                 .unwrap_or(("request", rendered.as_str()));
             reporter
                 .emit(EventKind::Failed, phase, message, None)
-                .unwrap_or_else(|audit_error| fatal(&audit_error));
-            evidence
-                .finish(&raw.id, Outcome::Failed)
-                .unwrap_or_else(|audit_error| fatal(&audit_error));
-            std::process::exit(1);
+                .map_err(|error| error.to_string())?;
+            evidence.finish(&raw.id, Outcome::Failed)?;
+            return Ok(ExitCode::FAILURE);
         }
     };
     reporter
@@ -76,28 +91,12 @@ fn main() {
             "Request complete",
             Some(100),
         )
-        .unwrap_or_else(|error| fatal(&error));
-    evidence
-        .finish(&raw.id, outcome)
-        .unwrap_or_else(|error| fatal(&error));
-    if matches!(intent, Intent::DatabaseRotate) {
-        let sha = agent_cli::git::value(&repository, &["rev-parse", "HEAD"])
-            .unwrap_or_else(|error| fatal(&error));
-        let archive = evidence.rotate(&sha).unwrap_or_else(|error| fatal(&error));
-        println!("archived evidence: {}", archive.display());
-    }
+        .map_err(|error| error.to_string())?;
+    evidence.finish(&raw.id, outcome)?;
     if outcome == Outcome::ExternalRequired {
-        std::process::exit(3);
+        return Ok(ExitCode::from(3));
     }
-}
-
-fn is_discovery_request(args: &[std::ffi::OsString]) -> bool {
-    args.len() == 1
-        || matches!(
-            args.last().and_then(|arg| arg.to_str()),
-            Some("-h" | "--help")
-        )
-        || (args.len() == 2 && matches!(args[1].to_str(), Some("-V" | "--version")))
+    Ok(ExitCode::SUCCESS)
 }
 
 fn dispatch(
@@ -145,20 +144,6 @@ fn dispatch(
         }
         Intent::Deliver => return deliver(evidence, repository, reporter),
         Intent::DeliverLocalMain => return deliver_local_main(repository, reporter),
-        Intent::InstallLiveParticles => return install_live_particles(repository, reporter),
-        Intent::ClearLatchDiagnostics => {
-            reporter.emit(
-                EventKind::Progress,
-                "diagnostics",
-                "Clearing latch diagnostics from the public and development layouts",
-                Some(50),
-            )?;
-            let mut device = agent_cli::device::DeviceClient::default();
-            let detail =
-                device.execute(mister_tool::transport::DeviceRequest::ClearLatchDiagnostics)?;
-            println!("{detail}");
-            return Ok(Outcome::Passed);
-        }
         Intent::Benchmark { scenario } => {
             return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
@@ -172,12 +157,7 @@ fn dispatch(
                 }
                 None => agent_cli::capture::execute(destination.as_deref())?,
             };
-            match output {
-                OutputFormat::Human => println!("{}", artifact.markdown_link()),
-                OutputFormat::Ndjson => {
-                    println!("{}", serde_json::to_string(&artifact).unwrap());
-                }
-            }
+            println!("{}", artifact.markdown_link());
             return Ok(Outcome::Passed);
         }
         Intent::ReleaseQualify => {
@@ -213,6 +193,7 @@ fn dispatch(
         }
         Intent::Build { intent } => {
             agent_cli::build::execute_command(repository, *intent, reporter)?;
+            return Ok(Outcome::Passed);
         }
         Intent::CiPlatformCandidates { artifacts, name } => {
             reporter.emit(
@@ -315,6 +296,45 @@ fn dispatch(
                 Some(30),
             )?;
             match command {
+                GameDatabaseCommand::BuildMame {
+                    out,
+                    listxml,
+                    mame,
+                    machine_sqlite,
+                    software_dir,
+                } => {
+                    let mut args = vec![
+                        "mame-metadata-build".to_owned(),
+                        "--out".to_owned(),
+                        out.to_string_lossy().into_owned(),
+                    ];
+                    for (flag, path) in [
+                        ("--listxml", listxml.as_ref()),
+                        ("--mame", mame.as_ref()),
+                        ("--machine-sqlite", machine_sqlite.as_ref()),
+                        ("--software-dir", software_dir.as_ref()),
+                    ] {
+                        if let Some(path) = path {
+                            args.extend([flag.to_owned(), path.to_string_lossy().into_owned()]);
+                        }
+                    }
+                    agent_cli::commands::ci::run_local_host(args)?;
+                }
+                GameDatabaseCommand::ImportArcade {
+                    sqlite,
+                    csv,
+                    source_sha,
+                } => {
+                    agent_cli::commands::ci::run_local_host(vec![
+                        "arcade-database-import".to_owned(),
+                        "--sqlite".to_owned(),
+                        sqlite.to_string_lossy().into_owned(),
+                        "--csv".to_owned(),
+                        csv.to_string_lossy().into_owned(),
+                        "--source-sha".to_owned(),
+                        source_sha.clone(),
+                    ])?;
+                }
                 GameDatabaseCommand::Create {
                     mame_sqlite,
                     hbmame_sqlite,
@@ -651,40 +671,16 @@ fn dispatch(
         Intent::Check { .. } | Intent::Verify { .. } => {
             return Err("retired_validation_intent: use Rust analyzer, pre-push, or CI".into());
         }
-        Intent::Doctor => {
-            return agent_cli::doctor::execute(repository, reporter);
-        }
-        Intent::DatabaseStatus => {
-            let status = evidence.status()?;
-            if output == OutputFormat::Human {
-                println!("{}", serde_json::to_string_pretty(&status).unwrap());
-            }
-        }
         Intent::DatabaseReport => {
             let report = evidence.report()?;
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             }
         }
-        Intent::DatabaseRotate => {
-            return Ok(Outcome::Passed);
-        }
-        Intent::ListRuns { failed, recent } => {
-            let runs = evidence.recent_runs(*failed, *recent)?;
-            if output == OutputFormat::Human {
-                println!("{}", serde_json::to_string_pretty(&runs).unwrap());
-            }
-        }
         Intent::ShowRun { run_id } => {
             let detail = evidence.run_detail(run_id)?;
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&detail).unwrap());
-            }
-        }
-        Intent::PruneLogs => {
-            let removed = evidence.prune_logs()?;
-            if output == OutputFormat::Human {
-                println!("removed {removed} captured logs");
             }
         }
     }
@@ -807,55 +803,6 @@ fn deliver_local_main(
     }
 }
 
-fn install_live_particles(
-    repository: &std::path::Path,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        return Err(
-            "dirty_worktree: commit or discard changes before live-particle installation".into(),
-        );
-    }
-    let app_revision = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
-    let installation =
-        agent_cli::live_particles_delivery::execute(repository, &app_revision, reporter);
-    reporter.emit(
-        EventKind::Progress,
-        "cleanup",
-        "cleaning transient live-particle staging",
-        None,
-    )?;
-    let cleanup = agent_cli::delivery::cleanup_workspace(repository);
-    match (installation, cleanup) {
-        (Ok(execution), Ok(())) => {
-            reporter.emit(
-                EventKind::Completed,
-                "live-particles",
-                &format!(
-                    "installed app_revision={} gui_sha256={} candidate={}",
-                    execution.app_revision,
-                    execution.gui_sha256,
-                    execution.qualification_candidate_id,
-                ),
-                Some(100),
-            )?;
-            Ok(Outcome::Passed)
-        }
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Ok(())) => Err(error),
-        (Err(error), Err(cleanup)) => Err(format!(
-            "live-particle installation failed ({error}); staging cleanup failed ({cleanup})"
-        )
-        .into()),
-    }
-}
-
-fn fatal(message: &str) -> ! {
-    eprintln!("agent-cli: {message}");
-    std::process::exit(70);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -872,13 +819,6 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
-    }
-
-    #[test]
-    fn bare_invocation_is_help_discovery() {
-        assert!(is_discovery_request(&["agent-cli".into()]));
-        assert!(is_discovery_request(&["agent-cli".into(), "--help".into()]));
-        assert!(!is_discovery_request(&["agent-cli".into(), "check".into()]));
     }
 
     #[test]

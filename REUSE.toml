@@ -75,7 +75,7 @@ path = [
   "crates/catalog/data/*.json",
   "apps/mister/testdata/*.ppm",
   "mister/tools/agent/Cargo.lock",
-  "mister/tools/host/Cargo.lock",
+  "agent-cli/Cargo.lock",
   "mister/platform/runtime/Cargo.lock",
 ]
 precedence = "aggregate"

@@ -25,7 +25,7 @@ scripts/agent ci host-assurance --paths \
   crates/magik-core/src/lib.rs \
   crates/framebuffer-stream/src/lib.rs \
   mister/platform/runtime/src/lib.rs \
-  mister/tools/host/src/main.rs \
+  agent-cli/src/host/mod.rs \
   mister/tools/agent/src/main.rs \
   apps/mister/src/lib.rs
 

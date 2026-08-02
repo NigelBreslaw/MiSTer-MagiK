@@ -1,12 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_tool::transport::{
-    DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout,
-};
+use crate::transport::{DeviceFailure, DeviceOperations, DeviceRequest, DeviceResponse, Layout};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ssh2::Session;
@@ -128,14 +126,6 @@ impl RebootMode {
 
     fn is_direct_reset(self) -> bool {
         matches!(self, Self::DirectReset | Self::DirectResetNoSync)
-    }
-}
-
-#[allow(dead_code)]
-fn main() {
-    if let Err(e) = run_cli() {
-        eprintln!("{e}");
-        std::process::exit(1);
     }
 }
 
@@ -771,7 +761,7 @@ impl DeviceOperations for NativeDevice {
 fn install_alpha_candidate(
     config: &NativeDeviceConfig,
     tag: &str,
-    hashes: &mister_tool::transport::AlphaCandidateHashes,
+    hashes: &crate::transport::AlphaCandidateHashes,
     restore_on_failure: bool,
 ) -> std::result::Result<String, DeviceFailure> {
     for hash in [
@@ -2499,8 +2489,7 @@ fn live_cli(options: LiveParticleCliOptions) -> Result<()> {
     Ok(())
 }
 
-pub fn run_cli() -> Result<()> {
-    let mut args: Vec<String> = env::args().skip(1).collect();
+pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
     if args.is_empty() {
         usage();
         return Ok(());
@@ -2524,18 +2513,11 @@ pub fn run_cli() -> Result<()> {
     if action_uses_device(&action) {
         if env::var_os(RESOLVED_DEVICE_CHILD).is_none() {
             let device = discovery::resolve()?;
-            let status = Command::new(env::current_exe()?)
-                .args(env::args_os().skip(1))
-                .env("MISTER_IP", device.address.to_string())
-                .env("MISTER_DEVICE_ID", &device.id)
-                .env(RESOLVED_DEVICE_CHILD, "1")
-                .status()?;
-            if status.success() {
-                return Ok(());
-            }
-            std::process::exit(status.code().unwrap_or(1));
+            install_resolved_device_environment(&device);
         }
-        if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
+        if action_requires_agent(&action)
+            && std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none()
+        {
             bootstrap_agent()?;
         }
     }
@@ -2568,6 +2550,7 @@ pub fn run_cli() -> Result<()> {
             let sess = connect(10)?;
             run_catalog_inspect(&sess, &args)?;
         }
+        "catalog-query" => catalog_query(&args)?,
         "wait" => {
             let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
             std::process::exit(wait_up(secs)?);
@@ -2777,6 +2760,17 @@ pub fn run_cli() -> Result<()> {
         other => return Err(format!("unknown action: {other}").into()),
     }
     Ok(())
+}
+
+fn install_resolved_device_environment(device: &discovery::Device) {
+    // Rust 2024 marks process-environment mutation unsafe because concurrent
+    // readers in foreign code may race it. Device resolution runs once, before
+    // SSH/libssh2 or any worker thread is started by an operator command.
+    unsafe {
+        env::set_var("MISTER_IP", device.address.to_string());
+        env::set_var("MISTER_DEVICE_ID", &device.id);
+        env::set_var(RESOLVED_DEVICE_CHILD, "1");
+    }
 }
 
 const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|live|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build|arcade-database-import> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       live particles FAMILY.json --demo ID --attended\n         ID: 1..=36; Ctrl-C restores the launcher and removes volatile live state\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       arcade-database-import --sqlite <mame.sqlite3> --csv <ArcadeDatabase.csv> --source-sha <commit>\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
@@ -11059,6 +11053,10 @@ fn action_uses_device(action: &str) -> bool {
     )
 }
 
+fn action_requires_agent(action: &str) -> bool {
+    matches!(action, "--capture-buffer" | "agent")
+}
+
 const RETIRED_PLATFORM_COMMAND_ERROR: &str =
     "platform deployment is only available through scripts/agent deliver";
 
@@ -12660,13 +12658,31 @@ fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
         "framebuffer capture source={}",
         capture_source_label(&capture.result)?
     );
-    if io::stdout().is_terminal() {
+    if let Some(output) = option_value(args, "--output") {
+        let path = write_explicit_capture(Path::new(&output), &capture.png)?;
+        println!("{}", capture_markdown_link(&path));
+    } else if io::stdout().is_terminal() {
         println!("{}", write_desktop_capture(&capture.png)?.display());
     } else {
         let path = write_temporary_capture(&capture.png)?;
         println!("{}", capture_markdown_link(&path));
     }
     Ok(())
+}
+
+fn write_explicit_capture(path: &Path, png: &[u8]) -> Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()?.join(path)
+    };
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    file.write_all(png)?;
+    file.sync_all()?;
+    Ok(path)
 }
 
 fn write_temporary_capture(png: &[u8]) -> Result<PathBuf> {
@@ -12842,10 +12858,10 @@ fn valid_rgb565_stride(width: u64, stride: u64) -> bool {
 }
 
 fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
-    if args.is_empty() {
+    if args.is_empty() || (args.len() == 2 && args[0] == "--output" && !args[1].trim().is_empty()) {
         Ok(())
     } else {
-        Err("usage: mister --capture-buffer".into())
+        Err("usage: scripts/agent device capture framebuffer [--output PATH]".into())
     }
 }
 
@@ -14822,6 +14838,134 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn catalog_query(args: &[String]) -> Result<()> {
+    if args.len() != 4 {
+        return Err(
+            "catalog query requires --database <registry|library|system:ID> --sql SQL".into(),
+        );
+    }
+    let database = option_value(args, "--database")
+        .ok_or("catalog query requires --database <registry|library|system:ID>")?;
+    let sql = option_value(args, "--sql").ok_or("catalog query requires --sql SQL")?;
+    let session = connect(10)?;
+    let remote_root = active_catalog_root(&session)?;
+    let temporary = CatalogQueryTemporary::create()?;
+    let remote_database =
+        resolve_catalog_database(&session, &remote_root, &database, temporary.path())?;
+    let local_database = temporary.path().join("snapshot.sqlite3");
+    get(&session, &remote_database, &local_database)?;
+    let connection = Connection::open_with_flags(
+        &local_database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let output = mister_magik_catalog::sqlite_inspect::sqlite_query_to_tsv(&connection, &sql)
+        .map_err(|error| {
+            format!("catalog query must be one read-only SELECT or PRAGMA: {error}")
+        })?;
+    print!("{output}");
+    Ok(())
+}
+
+fn active_catalog_root(session: &Session) -> Result<String> {
+    let output = exec(
+        session,
+        "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf /media/fat/mister-magik-dev/catalog-v3; else printf /media/fat/mister-magik/catalog-v3; fi",
+        false,
+    )?;
+    if let Some(message) = exec_failure_message("resolve catalog root", &output) {
+        return Err(message.into());
+    }
+    let root = output.stdout.trim();
+    if !matches!(
+        root,
+        "/media/fat/mister-magik/catalog-v3" | "/media/fat/mister-magik-dev/catalog-v3"
+    ) {
+        return Err("device returned an invalid catalog root".into());
+    }
+    Ok(root.to_owned())
+}
+
+fn resolve_catalog_database(
+    session: &Session,
+    remote_root: &str,
+    database: &str,
+    temporary: &Path,
+) -> Result<String> {
+    match database {
+        "registry" => Ok(format!("{remote_root}/state/catalog-state.sqlite3")),
+        "library" => Ok(format!("{remote_root}/state/scanner-cache.sqlite3")),
+        value if value.starts_with("system:") => {
+            let system_id = value.trim_start_matches("system:");
+            if system_id.is_empty()
+                || !system_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            {
+                return Err(
+                    "catalog system id must contain only lowercase letters, digits, or '-'".into(),
+                );
+            }
+            let registry = temporary.join("registry");
+            fs::create_dir_all(&registry)?;
+            let mut slots = 0_u8;
+            for slot in ["manifest-a.json", "manifest-b.json"] {
+                if get(
+                    session,
+                    &format!("{remote_root}/registry/{slot}"),
+                    &registry.join(slot),
+                )
+                .is_ok()
+                {
+                    slots += 1;
+                }
+            }
+            if slots == 0 {
+                return Err("device catalog has no readable registry manifest".into());
+            }
+            let manifest = mister_magik_catalog::shard_registry::read_latest_manifest_lazy(
+                temporary,
+                mister_magik_catalog::shard_registry::production_registry_limits(),
+            )?;
+            let relative = manifest
+                .systems
+                .into_iter()
+                .find(|system| system.system_id.as_str() == system_id)
+                .map(|system| system.active.sqlite_path)
+                .ok_or_else(|| format!("catalog has no active system '{system_id}'"))?;
+            let relative = relative
+                .to_str()
+                .filter(|path| !path.starts_with('/') && !path.contains(".."))
+                .ok_or("catalog manifest contains an invalid system database path")?;
+            Ok(format!("{remote_root}/{relative}"))
+        }
+        _ => Err("catalog database must be registry, library, or system:ID".into()),
+    }
+}
+
+struct CatalogQueryTemporary(PathBuf);
+
+impl CatalogQueryTemporary {
+    fn create() -> Result<Self> {
+        let path = env::temp_dir().join(format!(
+            "mister-magik-catalog-query-{}-{}",
+            std::process::id(),
+            unix_ms_now()
+        ));
+        fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for CatalogQueryTemporary {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[cfg(test)]
 fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
     let mut remote_path =
@@ -15048,7 +15192,7 @@ fn edit_remote_ini(sess: &Session, edit: IniEdit, dry_run: bool) -> Result<()> {
         print!("{edited}");
         return Ok(());
     }
-    let tmp = "/media/fat/MiSTer.ini.mister-tool-new";
+    let tmp = "/media/fat/MiSTer.ini.agent-cli-new";
     remote_write(sess, tmp, edited.as_bytes())?;
     let out = exec(sess, &format!("mv {} {} && sync", sh(tmp), sh(INI)), true)?;
     if out.rc != 0 {
@@ -15066,7 +15210,7 @@ fn ensure_stock_inittab(sess: &Session, dry_run: bool) -> Result<()> {
         print!("{edited}");
         return Ok(());
     }
-    let tmp = "/tmp/inittab.mister-tool-new";
+    let tmp = "/tmp/inittab.agent-cli-new";
     remote_write(sess, tmp, edited.as_bytes())?;
     let out = exec(
         sess,
@@ -16637,7 +16781,7 @@ mod tests {
 
     fn temp_path(name: &str) -> PathBuf {
         let mut path = env::temp_dir();
-        path.push(format!("mister-tool-test-{name}-{}", unix_secs()));
+        path.push(format!("agent-cli-test-{name}-{}", unix_secs()));
         path
     }
 

@@ -194,7 +194,7 @@ jobs:
           sparse-checkout: hash
 
       - name: Build MAME database
-        run: cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- mame-metadata-build --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
+        run: scripts/agent ci game-databases build-mame --listxml build/mame-listxml.xml --software-dir "$GITHUB_WORKSPACE/mame-source/hash" --out build/mame.sqlite3
 
       - name: Verify Atari Lynx software list
         run: |
@@ -307,8 +307,7 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/ArcadeDatabase.csv" -o build/ArcadeDatabase.csv
           curl -fsSL "https://raw.githubusercontent.com/MiSTer-devel/ArcadeDatabase_MiSTer/$ARCADE_DATABASE_SHA/LICENSE" -o build/ArcadeDatabase-LICENSE.txt
-          cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- \
-            arcade-database-import --sqlite build/mame.sqlite3 \
+          scripts/agent ci game-databases import-arcade --sqlite build/mame.sqlite3 \
             --csv build/ArcadeDatabase.csv --source-sha "$ARCADE_DATABASE_SHA"
 
       - name: Reuse unchanged ArcadeDatabase source
@@ -326,7 +325,7 @@ jobs:
 
       - name: Build HBMAME database
         if: needs.inspect.outputs.hbmame-changed == 'true'
-        run: cargo run --locked --manifest-path mister/tools/host/Cargo.toml --bin mister -- mame-metadata-build --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
+        run: scripts/agent ci game-databases build-mame --listxml build/hbmame-listxml.xml --out build/hbmame.sqlite3
 
       - name: Reuse unchanged HBMAME database
         if: needs.inspect.outputs.hbmame-changed != 'true'

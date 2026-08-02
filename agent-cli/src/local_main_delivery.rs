@@ -4,7 +4,7 @@
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceOperations, DeviceRequest};
+use crate::transport::{DeviceOperations, DeviceRequest};
 use std::env;
 use std::fs::{self, File};
 use std::io::Read;
@@ -269,7 +269,7 @@ fn test_manifest(magik_revision: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_tool::transport::{DeviceFailure, DeviceResponse, FakeDevice};
+    use crate::transport::{DeviceFailure, DeviceResponse, FakeDevice};
 
     #[test]
     fn arm_validation_rejects_non_arm_and_accepts_arm_elf32() {

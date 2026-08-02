@@ -104,9 +104,9 @@ def observed_cores_from_fixture(path: Path) -> list[ObservedCore]:
     return cores
 
 
-def observed_cores_from_device(mister: Path) -> list[ObservedCore]:
+def observed_cores_from_device(agent: Path) -> list[ObservedCore]:
     result = subprocess.run(
-        [str(mister), "core-list"],
+        [str(agent), "device", "catalog", "cores"],
         check=True,
         text=True,
         stdout=subprocess.PIPE,
@@ -186,11 +186,10 @@ def parse_args() -> argparse.Namespace:
         help="Main_MiSTer checkout used for source evidence",
     )
     parser.add_argument(
-        "--mister-tool",
+        "--agent",
         type=Path,
-        default=Path(os.environ.get("MISTER_TOOL", "mister")),
-        dest="mister",
-        help="typed Rust mister host binary used for device core listing",
+        default=Path(os.environ.get("MAGIK_AGENT", root / "scripts/agent")),
+        help="MiSTer MagiK agent entrypoint used for device core listing",
     )
     parser.add_argument("--device-core-list", type=Path, help="fixture TSV: size, mtime, path")
     parser.add_argument("--skip-device", action="store_true", help="do not query the MiSTer")
@@ -206,7 +205,7 @@ def main() -> int:
     elif args.skip_device:
         observed = []
     else:
-        observed = observed_cores_from_device(args.mister)
+        observed = observed_cores_from_device(args.agent)
     annotated = annotate_manifest(manifest, args.main_dir, observed)
     text = json.dumps(annotated, indent=2, sort_keys=False) + "\n"
     if args.output:

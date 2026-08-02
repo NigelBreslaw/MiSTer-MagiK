@@ -8,7 +8,7 @@ use super::{
     NativeDeviceConfig, PngCapture, Result, capture_source_label, encode_hex,
     request_framebuffer_png_at_when_latched, validate_visible_launcher_capture,
 };
-use mister_tool::transport::{AutomationAction, AutomationButton};
+use crate::transport::{AutomationAction, AutomationButton};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;

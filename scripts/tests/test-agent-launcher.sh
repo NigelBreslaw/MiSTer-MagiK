@@ -10,7 +10,6 @@ trap 'rm -rf "$FIXTURE"' EXIT
 
 mkdir -p \
   "$FIXTURE/agent-cli/src" \
-  "$FIXTURE/mister/tools/host/src" \
   "$FIXTURE/crates/catalog/src" \
   "$FIXTURE/crates/catalog/data" \
   "$FIXTURE/crates/media-contract/src" \
@@ -21,8 +20,6 @@ touch \
   "$FIXTURE/agent-cli/Cargo.toml" \
   "$FIXTURE/agent-cli/Cargo.lock" \
   "$FIXTURE/agent-cli/src/main.rs" \
-  "$FIXTURE/mister/tools/host/Cargo.toml" \
-  "$FIXTURE/mister/tools/host/src/lib.rs" \
   "$FIXTURE/crates/catalog/Cargo.toml" \
   "$FIXTURE/crates/catalog/src/lib.rs" \
   "$FIXTURE/crates/catalog/data/system.json" \

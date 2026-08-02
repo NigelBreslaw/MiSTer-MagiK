@@ -57,7 +57,7 @@ Do not introduce the retired `magic` spelling or mixed-case path variants.
 
 - `apps/mister/` — device frontend; read `apps/mister/AGENTS.md`
 - `apps/mister/src/ui_runner/` — launcher runtime; read its local `AGENTS.md`
-- `mister/tools/host/` — host device tool; read its local `AGENTS.md`
+- `agent-cli/` — unified workflow and typed device tool
 - `mister/tools/agent/` — device agent; read its local `AGENTS.md`
 - `apps/desktop/` — macOS companion; read `apps/desktop/AGENTS.md`
 - `scripts/` — validation/deploy/benchmark tooling; read `scripts/AGENTS.md`

@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 
-use crate::Result;
+use super::Result;
 
 const SOURCE_REPOSITORY: &str = "MiSTer-devel/ArcadeDatabase_MiSTer";
 const SOURCE_PATH: &str = "ArcadeDatabase.csv";

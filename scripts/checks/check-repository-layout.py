@@ -33,7 +33,6 @@ required = (
     "mister/platform/contracts/scanout",
     "mister/platform/runtime",
     "mister/tools/agent",
-    "mister/tools/host",
 )
 
 errors = [f"obsolete source path still exists: {path}" for path in obsolete if (ROOT / path).exists()]

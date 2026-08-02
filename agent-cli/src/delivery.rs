@@ -7,7 +7,7 @@ use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
 use crate::platform_stage::{generate_platform_manifest, stage_published_platform_components};
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceOperations, DeviceRequest};
+use crate::transport::{DeviceOperations, DeviceRequest};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -254,7 +254,7 @@ pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
-struct ProcessActions<'a, D = mister_tool::NativeDevice> {
+struct ProcessActions<'a, D = crate::NativeDevice> {
     repository: &'a Path,
     deployment: DeploymentPlan,
     expected_commit: &'a str,
@@ -629,7 +629,7 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_tool::transport::{DeviceFailure, DeviceResponse};
+    use crate::transport::{DeviceFailure, DeviceResponse};
     use std::cell::RefCell;
     use std::rc::Rc;
 

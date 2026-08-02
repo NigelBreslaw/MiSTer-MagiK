@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![recursion_limit = "256"]
+
 pub mod alpha;
 mod archive;
 pub mod benchmark;
@@ -9,6 +11,7 @@ pub mod capture;
 pub mod checks;
 pub mod ci;
 pub mod cli;
+pub mod commands;
 pub mod components;
 pub mod delivery;
 pub mod deploy;
@@ -21,6 +24,7 @@ pub mod executor;
 pub mod game_databases;
 pub mod git;
 pub mod hooks;
+mod host;
 pub mod live_particles_delivery;
 pub mod local_main_delivery;
 pub mod model;
@@ -37,4 +41,7 @@ pub mod release;
 pub mod request;
 pub mod scope;
 mod shell;
+pub mod transport;
 pub mod workflow;
+
+pub use host::NativeDevice;

@@ -74,7 +74,6 @@ impl ProgressGate {
 
 pub struct Reporter<'a> {
     evidence: &'a Evidence,
-    output: OutputFormat,
     run: &'a str,
     started: Instant,
     sequence: u32,
@@ -91,13 +90,12 @@ impl<'a> Reporter<'a> {
     #[must_use]
     pub fn new_at(
         evidence: &'a Evidence,
-        output: OutputFormat,
+        _output: OutputFormat,
         run: &'a str,
         started: Instant,
     ) -> Self {
         Self {
             evidence,
-            output,
             run,
             started,
             sequence: 0,
@@ -138,16 +136,10 @@ impl<'a> Reporter<'a> {
             self.evidence.record_events(&self.pending)?;
             self.pending.clear();
         }
-        match self.output {
-            OutputFormat::Ndjson => println!("{}", serde_json::to_string(&event).unwrap()),
-            OutputFormat::Human
-                if event.kind != EventKind::Started
-                    && !(event.kind == EventKind::Completed
-                        && event.message == "Request complete") =>
-            {
-                eprintln!("{}", render_human(&event));
-            }
-            OutputFormat::Human => {}
+        if event.kind != EventKind::Started
+            && !(event.kind == EventKind::Completed && event.message == "Request complete")
+        {
+            eprintln!("{}", render_human(&event));
         }
         Ok(())
     }

@@ -122,23 +122,13 @@ pub enum Intent {
     Verify {
         scope: Scope,
     },
-    ListRuns {
-        failed: bool,
-        recent: usize,
-    },
     ShowRun {
         run_id: String,
     },
-    DatabaseStatus,
     DatabaseReport,
-    DatabaseRotate,
-    PruneLogs,
-    Doctor,
     Diagnose,
-    ClearLatchDiagnostics,
     Deliver,
     DeliverLocalMain,
-    InstallLiveParticles,
     Benchmark {
         scenario: BenchmarkScenario,
     },
@@ -213,12 +203,9 @@ impl Intent {
             | Self::CiHostAssurance { .. }
             | Self::CaptureUsbVideo { .. }
             | Self::AlphaVerify { .. } => Risk::LocalWrite,
-            Self::ReleaseQualify | Self::DatabaseRotate | Self::ClearLatchDiagnostics => {
-                Risk::Destructive
-            }
+            Self::ReleaseQualify => Risk::Destructive,
             Self::Deliver { .. }
             | Self::DeliverLocalMain
-            | Self::InstallLiveParticles
             | Self::Benchmark { .. }
             | Self::Diagnose
             | Self::AlphaAccept { .. } => Risk::DeviceWrite,

@@ -9,6 +9,10 @@ rust-version = "1.97.1"
 # Keep the command harness aligned with the repository's pinned Rust toolchain.
 license = "GPL-3.0-or-later"
 
+[features]
+default = []
+signed-media-manifests = ["mister-magik-media-contract/signed-media-manifests"]
+
 [lints.rust]
 warnings = "deny"
 
@@ -17,13 +21,24 @@ all = "deny"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+flate2 = "1"
+libc = "0.2"
+lz4_flex = "0.14.0"
+mister-magik-agent-protocol = { path = "../crates/agent-protocol" }
+mister-magik-catalog = { path = "../crates/catalog" }
+mister-magik-ini = { path = "../crates/mister-ini" }
+mister-magik-media-contract = { path = "../crates/media-contract", default-features = false }
+quick-xml = "0.41"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
+ssh2 = "0.9"
 thiserror = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.40", default-features = false, features = ["bundled", "modern_sqlite"] }
-mister-tool = { path = "../mister/tools/host" }
+
+[profile.dev.package.lz4_flex]
+opt-level = 3
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

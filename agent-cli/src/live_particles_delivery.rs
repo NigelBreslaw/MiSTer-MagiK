@@ -5,7 +5,7 @@ use crate::build::{BuildRecipe, BuildSpec};
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceOperations, DeviceRequest};
+use crate::transport::{DeviceOperations, DeviceRequest};
 use std::fs;
 use std::path::Path;
 
@@ -111,7 +111,7 @@ fn require_clean_revision(repository: &Path, expected: &str) -> AgentResult<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_tool::transport::{DeviceResponse, FakeDevice};
+    use crate::transport::{DeviceResponse, FakeDevice};
     use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 

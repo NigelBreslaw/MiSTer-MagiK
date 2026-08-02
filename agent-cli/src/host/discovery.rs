@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use crate::Result;
+use super::Result;
 
 const CACHED_TIMEOUT: Duration = Duration::from_millis(300);
 const SCAN_TIMEOUT: Duration = Duration::from_millis(450);

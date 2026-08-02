@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 forbidden='latch_readiness_json\\t|agent magik \{action\} ok after'
 if rg -n "$forbidden" \
   "$ROOT/apps/mister/src/main.rs" \
-  "$ROOT/mister/tools/host/src/main.rs"; then
+  "$ROOT/agent-cli/src/host/mod.rs"; then
   echo "default device workflows must not print duplicate or full-result success JSON" >&2
   exit 1
 fi

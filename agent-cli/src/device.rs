@@ -2,21 +2,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::error::{AgentError, AgentResult};
-use mister_tool::transport::{DeviceOperations, DeviceRequest};
+use crate::transport::{DeviceOperations, DeviceRequest};
 use std::thread;
 use std::time::Duration;
 
 const READ_ONLY_RETRY_DELAY: Duration = Duration::from_millis(250);
 
-pub struct DeviceClient<D = mister_tool::NativeDevice> {
+pub struct DeviceClient<D = crate::NativeDevice> {
     device: D,
 }
 
-pub struct BenchmarkDeviceClient<D = mister_tool::NativeDevice> {
+pub struct BenchmarkDeviceClient<D = crate::NativeDevice> {
     client: DeviceClient<D>,
 }
 
-impl Default for BenchmarkDeviceClient<mister_tool::NativeDevice> {
+impl Default for BenchmarkDeviceClient<crate::NativeDevice> {
     fn default() -> Self {
         Self {
             client: DeviceClient::default(),
@@ -44,10 +44,10 @@ impl<D: DeviceOperations> BenchmarkDeviceClient<D> {
     }
 }
 
-impl Default for DeviceClient<mister_tool::NativeDevice> {
+impl Default for DeviceClient<crate::NativeDevice> {
     fn default() -> Self {
         Self {
-            device: mister_tool::NativeDevice::default(),
+            device: crate::NativeDevice::default(),
         }
     }
 }
@@ -61,7 +61,7 @@ impl<D: DeviceOperations> DeviceClient<D> {
     pub fn execute(&mut self, request: DeviceRequest) -> AgentResult<String> {
         match self.execute_typed(request.clone()) {
             Ok(response) => Ok(response.detail),
-            Err(mister_tool::transport::DeviceFailure::Unavailable(_))
+            Err(crate::transport::DeviceFailure::Unavailable(_))
                 if request.retryable_after_unavailable() =>
             {
                 thread::sleep(READ_ONLY_RETRY_DELAY);
@@ -76,7 +76,7 @@ impl<D: DeviceOperations> DeviceClient<D> {
     pub fn execute_typed(
         &mut self,
         request: DeviceRequest,
-    ) -> Result<mister_tool::transport::DeviceResponse, mister_tool::transport::DeviceFailure> {
+    ) -> Result<crate::transport::DeviceResponse, crate::transport::DeviceFailure> {
         self.device.execute(&request)
     }
 }
@@ -84,7 +84,7 @@ impl<D: DeviceOperations> DeviceClient<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_tool::transport::{DeviceFailure, DeviceResponse, FakeDevice};
+    use crate::transport::{DeviceFailure, DeviceResponse, FakeDevice};
     use std::cell::RefCell;
     use std::rc::Rc;
 

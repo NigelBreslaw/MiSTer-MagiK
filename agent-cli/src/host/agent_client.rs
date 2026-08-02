@@ -12,9 +12,9 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::Result;
-use crate::discovery::{secure_write, token_path};
-use crate::remote::{ConnectionConfig, connect_with, exec, host, put, put_bytes};
+use super::Result;
+use super::discovery::{secure_write, token_path};
+use super::remote::{ConnectionConfig, connect_with, exec, host, put, put_bytes};
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
 const REMOTE_AGENT: &str = "/media/fat/mister-magik-dev/mister-magik-agent";
@@ -545,7 +545,7 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
     let mut samples = Vec::new();
     let mut legacy_complete_status_sequence = None;
     while started.elapsed() < timeout {
-        if crate::attended_operation_interrupted() {
+        if super::attended_operation_interrupted() {
             return Err("screensaver benchmark interrupted".into());
         }
         let mut line = String::new();
@@ -626,7 +626,7 @@ pub(crate) fn agent_telemetry_for_duration(
 
     let mut samples = Vec::new();
     while started.elapsed() < duration {
-        if crate::attended_operation_interrupted() {
+        if super::attended_operation_interrupted() {
             return Err("particle benchmark interrupted".into());
         }
         let mut line = String::new();
@@ -697,7 +697,7 @@ pub(crate) fn agent_telemetry_for_particle_renderer_trial(
     let mut measurement_started: Option<Instant> = None;
     let mut last_sample = Value::Null;
     loop {
-        if crate::attended_operation_interrupted() {
+        if super::attended_operation_interrupted() {
             return Err("particle benchmark interrupted".into());
         }
         if measurement_started.is_none() && started.elapsed() >= startup_timeout {

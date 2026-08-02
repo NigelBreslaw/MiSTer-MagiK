@@ -48,6 +48,7 @@ CLASSIFIED_PREFIXES = (
     "mister/platform/kernel",
     "mister/platform/runtime",
     "mister/tools/agent",
+    # Migration-only classification for staged deletions of the retired package.
     "mister/tools/host",
     "mister/tools/manager",
     "private",
@@ -78,7 +79,6 @@ CRATE_FORMATTERS = (
         "crates/media-contract/Cargo.toml",
     ),
     ("mister-agent.format", "mister/tools/agent", "mister/tools/agent/Cargo.toml"),
-    ("mister-host.format", "mister/tools/host", "mister/tools/host/Cargo.toml"),
     ("mister-ini.format", "crates/mister-ini", "crates/mister-ini/Cargo.toml"),
     (
         "mister-manager.format",

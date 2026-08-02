@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_tool::transport::DeviceFailure;
+use crate::transport::DeviceFailure;
 use thiserror::Error;
 
 pub type AgentResult<T> = Result<T, AgentError>;

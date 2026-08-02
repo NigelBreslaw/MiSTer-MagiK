@@ -31,8 +31,6 @@ REQUIRED_INPUTS=(
   "$SOURCE_ROOT/src"
 )
 DEPENDENCY_INPUTS=(
-  "$SOURCE_ROOT/../mister/tools/host/Cargo.toml"
-  "$SOURCE_ROOT/../mister/tools/host/src"
   "$SOURCE_ROOT/../crates/catalog/Cargo.toml"
   "$SOURCE_ROOT/../crates/catalog/src"
   "$SOURCE_ROOT/../crates/catalog/data"

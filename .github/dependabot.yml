@@ -18,7 +18,6 @@ updates:
       - "/mister/platform/contracts/scanout"
       - "/mister/platform/runtime"
       - "/mister/tools/agent"
-      - "/mister/tools/host"
     schedule:
       interval: "weekly"
       day: "friday"

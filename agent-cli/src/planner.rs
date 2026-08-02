@@ -303,16 +303,10 @@ fn add_path_operations(
             cargo(
                 "protocol.host-binary",
                 "Build host protocol consumer",
-                &[
-                    "build",
-                    "--manifest-path",
-                    "mister/tools/host/Cargo.toml",
-                    "--bin",
-                    "mister",
-                ],
+                &["build", "--manifest-path", "agent-cli/Cargo.toml"],
                 "agent protocol → runnable host consumer",
             ),
-            &["crates/agent-protocol", "mister/tools/host"],
+            &["crates/agent-protocol", "agent-cli"],
         ));
         add(with_inputs(
             cargo(
@@ -322,43 +316,6 @@ fn add_path_operations(
                 "agent protocol → device-agent consumer",
             ),
             &["crates/agent-protocol", "mister/tools/agent"],
-        ));
-    }
-    if path.starts_with("mister/tools/host") {
-        add(with_inputs(
-            cargo(
-                "mister-host.binary",
-                "Build runnable mister host tool",
-                &[
-                    "build",
-                    "--manifest-path",
-                    "mister/tools/host/Cargo.toml",
-                    "--bin",
-                    "mister",
-                ],
-                "host source → runnable operator binary",
-            ),
-            &["crates/agent-protocol", "mister/tools/host"],
-        ));
-        add(with_inputs(
-            cargo(
-                "mister-host.signed-media-tests",
-                "Test signed-manifest host mode",
-                &[
-                    "test",
-                    "--manifest-path",
-                    "mister/tools/host/Cargo.toml",
-                    "--no-default-features",
-                    "--features",
-                    "signed-media-manifests",
-                ],
-                "host media source → signed-manifest feature tests",
-            ),
-            &[
-                "crates/agent-protocol",
-                "crates/media-contract",
-                "mister/tools/host",
-            ],
         ));
     }
     if path.starts_with("crates/catalog") {
@@ -945,7 +902,6 @@ fn add_path_operations(
         depth,
         out,
     );
-    add_crate(path, "mister/tools/host", "mister-host", depth, out);
     add_crate(path, "mister/tools/agent", "mister-agent", depth, out);
     add_crate(path, "mister/tools/manager", "mister-manager", depth, out);
 }
@@ -1484,7 +1440,7 @@ mod tests {
     fn protocol_and_host_changes_refresh_the_runnable_mister_binary() {
         for path in [
             "crates/agent-protocol/src/lib.rs",
-            "mister/tools/host/src/agent_client.rs",
+            "agent-cli/src/host/agent_client.rs",
         ] {
             let plan = affected_plan(
                 Intent::Check {
@@ -1716,7 +1672,7 @@ mod tests {
             vec![
                 "apps/mister/src/media_http.rs".into(),
                 "crates/media-contract/src/lib.rs".into(),
-                "mister/tools/host/src/media.rs".into(),
+                "agent-cli/src/host/media.rs".into(),
             ],
         )
         .unwrap();

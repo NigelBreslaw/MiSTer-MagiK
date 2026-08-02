@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use crate::Result;
+use super::Result;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConnectionConfig {

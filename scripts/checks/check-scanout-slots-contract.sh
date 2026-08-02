@@ -14,7 +14,7 @@ AGENT="$ROOT/mister/tools/agent/src/scanout_slots_contract.rs"
 RUST_CONTRACT="$ROOT/mister/platform/contracts/scanout/src/lib.rs"
 DOC="$ROOT/documentation/src/content/docs/architecture/kernel-scanout-plugin.mdx"
 KO="$ROOT/build/scanout-slots/mister_magik_scanout_slots.ko"
-DEPLOY="$ROOT/mister/tools/host/src/platform_deploy.rs"
+DEPLOY="$ROOT/agent-cli/src/host/platform_deploy.rs"
 PLATFORM_STAGE="$ROOT/agent-cli/src/platform_stage.rs"
 
 if ! command -v rg >/dev/null 2>&1; then

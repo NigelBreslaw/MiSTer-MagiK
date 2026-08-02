@@ -5,7 +5,7 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::DeviceRequest;
+use crate::transport::DeviceRequest;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

@@ -133,7 +133,6 @@ def main() -> int:
                 ("host_target", "arm_target", "agent_cli"),
             ),
             ("mister/platform/runtime/src/**/*.rs", ("host_target", "arm_target")),
-            ("mister/tools/host/src/**/*.rs", ("host_target", "agent_cli")),
             ("mister/tools/agent/src/**/*.rs", ("host_target", "agent_target")),
             ("agent-cli/src/**/*.rs", ("host_target", "agent_cli")),
             ("crates/media-contract/src/**/*.rs", ("agent_cli",)),

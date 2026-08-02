@@ -5,7 +5,7 @@ use crate::device::BenchmarkDeviceClient;
 use crate::error::AgentResult;
 use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
-use mister_tool::transport::{DeviceRequest, Layout as DeviceLayout};
+use crate::transport::{DeviceRequest, Layout as DeviceLayout};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};

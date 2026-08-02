@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::build::BuildCommand;
+use crate::commands::device::DeviceCommand;
 use crate::model::{BenchmarkScenario, Intent, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputFormat {
     Human,
-    Ndjson,
 }
 
 #[derive(Debug, Parser)]
@@ -20,12 +20,7 @@ pub enum OutputFormat {
     arg_required_else_help = true
 )]
 pub struct Cli {
-    #[arg(
-        long = "output-format",
-        value_enum,
-        default_value_t = OutputFormat::Human,
-        global = true
-    )]
+    #[arg(skip = OutputFormat::Human)]
     pub output_format: OutputFormat,
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -33,18 +28,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(hide = true)]
     PrePush {
         #[arg(long)]
         remote: String,
     },
     Plan(ScopeArgs),
-    #[command(hide = true)]
-    Runs {
-        #[arg(long)]
-        failed: bool,
-        #[arg(long, default_value_t = 20)]
-        recent: usize,
-    },
     #[command(hide = true)]
     Run {
         #[command(subcommand)]
@@ -55,17 +44,14 @@ pub enum Command {
         #[command(subcommand)]
         command: DbCommand,
     },
-    #[command(hide = true)]
-    Doctor,
     Diagnose,
-    ClearLatchDiagnostics,
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
     Deliver {
         #[arg(value_enum)]
         target: Option<DeliverTarget>,
-    },
-    LiveParticles {
-        #[command(subcommand)]
-        command: LiveParticlesCommand,
     },
     Benchmark {
         #[arg(value_enum, default_value_t)]
@@ -128,11 +114,6 @@ pub enum CiCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum DeliverTarget {
     LocalMain,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum LiveParticlesCommand {
-    Install,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
@@ -248,6 +229,26 @@ pub enum PlatformBundleCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
 pub enum GameDatabaseCommand {
+    BuildMame {
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, conflicts_with_all = ["mame", "machine_sqlite"])]
+        listxml: Option<PathBuf>,
+        #[arg(long, conflicts_with_all = ["listxml", "machine_sqlite"])]
+        mame: Option<PathBuf>,
+        #[arg(long, conflicts_with_all = ["listxml", "mame"])]
+        machine_sqlite: Option<PathBuf>,
+        #[arg(long)]
+        software_dir: Option<PathBuf>,
+    },
+    ImportArcade {
+        #[arg(long)]
+        sqlite: PathBuf,
+        #[arg(long)]
+        csv: PathBuf,
+        #[arg(long)]
+        source_sha: String,
+    },
     Create {
         #[arg(long)]
         mame_sqlite: PathBuf,
@@ -395,27 +396,18 @@ pub enum RunCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum DbCommand {
-    Status,
     Report,
-    Rotate,
-    PruneLogs,
 }
 
 #[derive(Clone, Debug, Args)]
 pub struct ScopeArgs {
-    #[arg(long)]
-    pub verbose: bool,
-    #[arg(long, conflicts_with = "paths")]
-    pub staged: bool,
-    #[arg(long, value_name = "PATH", num_args = 1.., conflicts_with = "staged")]
+    #[arg(long, value_name = "PATH", num_args = 1..)]
     pub paths: Vec<PathBuf>,
 }
 
 impl ScopeArgs {
     fn into_scope(self) -> Scope {
-        if self.staged {
-            Scope::Staged
-        } else if !self.paths.is_empty() {
+        if !self.paths.is_empty() {
             Scope::Paths(self.paths)
         } else {
             Scope::WorkingTree
@@ -430,35 +422,23 @@ impl Cli {
             None => unreachable!("clap requires a workflow command"),
             Some(Command::PrePush { remote }) => Intent::PrePush { remote },
             Some(Command::Plan(scope)) => Intent::Plan {
-                verbose: scope.verbose,
+                verbose: false,
                 scope: scope.into_scope(),
             },
-            Some(Command::Runs { failed, recent }) => Intent::ListRuns { failed, recent },
             Some(Command::Run {
                 command: RunCommand::Show { run_id },
             }) => Intent::ShowRun { run_id },
             Some(Command::Db {
-                command: DbCommand::Status,
-            }) => Intent::DatabaseStatus,
-            Some(Command::Db {
                 command: DbCommand::Report,
             }) => Intent::DatabaseReport,
-            Some(Command::Db {
-                command: DbCommand::Rotate,
-            }) => Intent::DatabaseRotate,
-            Some(Command::Db {
-                command: DbCommand::PruneLogs,
-            }) => Intent::PruneLogs,
-            Some(Command::Doctor) => Intent::Doctor,
             Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::ClearLatchDiagnostics) => Intent::ClearLatchDiagnostics,
+            Some(Command::Device { .. }) => {
+                unreachable!("device commands dispatch before repository workflow intents")
+            }
             Some(Command::Deliver { target: None }) => Intent::Deliver,
             Some(Command::Deliver {
                 target: Some(DeliverTarget::LocalMain),
             }) => Intent::DeliverLocalMain,
-            Some(Command::LiveParticles {
-                command: LiveParticlesCommand::Install,
-            }) => Intent::InstallLiveParticles,
             Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
             Some(Command::Capture {
                 command: CaptureCommand::UsbVideo { output, seconds },
@@ -608,23 +588,6 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
-    }
-
-    #[test]
-    fn live_particles_install_is_a_closed_explicit_command() {
-        let cli = Cli::try_parse_from(["agent-cli", "live-particles", "install"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::InstallLiveParticles);
-        assert!(Cli::try_parse_from(["agent-cli", "live-particles"]).is_err());
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "live-particles",
-                "install",
-                "--remote",
-                "/tmp/runtime",
-            ])
-            .is_err()
-        );
     }
 
     #[test]
@@ -872,16 +835,6 @@ mod tests {
     }
 
     #[test]
-    fn clear_latch_diagnostics_maps_to_the_bounded_device_intent() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "clear-latch-diagnostics"])
-                .unwrap()
-                .into_intent(),
-            Intent::ClearLatchDiagnostics
-        );
-    }
-
-    #[test]
     fn git_hook_commands_have_closed_interfaces() {
         assert_eq!(
             Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"])
@@ -927,7 +880,7 @@ mod tests {
     }
 
     #[test]
-    fn platform_bundle_output_paths_do_not_collide_with_output_format() {
+    fn platform_bundle_output_paths_parse_without_a_global_output_mode() {
         let main_id = "a".repeat(64);
         let fpga_id = "b".repeat(64);
         let kernel_id = "c".repeat(64);
@@ -936,8 +889,6 @@ mod tests {
         let kernel_sha = "f".repeat(40);
         let create = [
             "agent-cli",
-            "--output-format",
-            "ndjson",
             "ci",
             "platform-bundle",
             "create",
@@ -977,7 +928,8 @@ mod tests {
             "bundle",
         ];
         let cli = Cli::try_parse_from(create).unwrap();
-        assert_eq!(cli.output_format, OutputFormat::Ndjson);
+        assert_eq!(cli.output_format, OutputFormat::Human);
+        assert!(Cli::try_parse_from(["agent-cli", "--output-format", "ndjson", "plan"]).is_err());
 
         assert!(
             Cli::try_parse_from([
