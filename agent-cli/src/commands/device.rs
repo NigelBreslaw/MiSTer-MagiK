@@ -47,7 +47,7 @@ pub enum DeviceCommand {
 #[derive(Debug, Args)]
 pub struct StatusArgs {
     #[arg(long)]
-    json: bool,
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -59,7 +59,7 @@ pub enum ModeCommand {
 #[derive(Debug, Args)]
 pub struct ModeSetArgs {
     #[arg(value_enum)]
-    mode: DeviceMode,
+    pub(crate) mode: DeviceMode,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -74,11 +74,11 @@ pub enum DeviceMode {
 #[derive(Debug, Args)]
 pub struct SceneArgs {
     #[arg(value_enum)]
-    scene: Scene,
+    pub(crate) scene: Scene,
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long)]
-    seconds: Option<u64>,
+    pub(crate) seconds: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -99,11 +99,11 @@ pub enum DisplayCommand {
 #[derive(Debug, Args)]
 pub struct DisplaySetArgs {
     #[arg(value_enum)]
-    mode: DisplayMode,
+    pub(crate) mode: DisplayMode,
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long)]
-    keep: bool,
+    pub(crate) keep: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -126,11 +126,11 @@ pub struct DisplayMatrixArgs {
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long)]
-    out: PathBuf,
+    pub(crate) out: PathBuf,
     #[arg(long)]
-    usb_video: bool,
+    pub(crate) usb_video: bool,
     #[arg(long)]
-    screensaver_wait: Option<u64>,
+    pub(crate) screensaver_wait: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -145,7 +145,7 @@ pub struct CrtQualifyArgs {
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long)]
-    out: Option<PathBuf>,
+    pub(crate) out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -153,11 +153,11 @@ pub struct CrtProbeArgs {
     #[arg(long, required = true)]
     attended: bool,
     #[arg(long)]
-    pattern: String,
+    pub(crate) pattern: String,
     #[arg(long)]
-    seconds: u64,
+    pub(crate) seconds: u64,
     #[arg(long)]
-    out: PathBuf,
+    pub(crate) out: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -168,7 +168,7 @@ pub enum CaptureCommand {
 #[derive(Debug, Args)]
 pub struct FramebufferArgs {
     #[arg(long)]
-    output: Option<PathBuf>,
+    pub(crate) output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -180,7 +180,7 @@ pub struct AttendedArgs {
 #[derive(Debug, Args)]
 pub struct DiagnosticsArgs {
     #[arg(long)]
-    out: PathBuf,
+    pub(crate) out: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
@@ -200,9 +200,9 @@ pub enum CatalogCommand {
 #[derive(Debug, Args)]
 pub struct CatalogQueryArgs {
     #[arg(long)]
-    database: String,
+    pub(crate) database: String,
     #[arg(long)]
-    sql: String,
+    pub(crate) sql: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -214,145 +214,50 @@ pub enum MediaCommand {
 #[derive(Debug, Args)]
 pub struct MediaArgs {
     #[arg(long)]
-    system: Option<String>,
+    pub(crate) system: Option<String>,
     #[arg(long)]
-    manifest_url: Option<String>,
+    pub(crate) manifest_url: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct MediaDownloadArgs {
     #[command(flatten)]
-    media: MediaArgs,
+    pub(crate) media: MediaArgs,
     #[arg(long, required = true)]
     attended: bool,
 }
 
 pub fn run(command: DeviceCommand) -> AgentResult<()> {
-    crate::host::run_cli_args(legacy_args(command)).map_err(|error| error.to_string().into())
+    let mutation = command.is_mutation();
+    let mut device = crate::device::DeviceClient::default();
+    if mutation {
+        device.mutate(|device| device.run_operator(&command))
+    } else {
+        device.read(|device| device.run_operator(&command))
+    }
 }
 
-fn legacy_args(command: DeviceCommand) -> Vec<String> {
-    match command {
-        DeviceCommand::Status(args) => with_flag(strings(["status"]), "--json", args.json),
-        DeviceCommand::ArmingStatus => strings(["arming-status"]),
-        DeviceCommand::Mode { command } => match command {
-            ModeCommand::Status => strings(["mode", "status"]),
-            ModeCommand::Set(args) => strings(["mode", args.mode.as_str()]),
-        },
-        DeviceCommand::Scene(args) => {
-            let mut values = strings(["scene", args.scene.as_str()]);
-            if let Some(seconds) = args.seconds {
-                values.push(seconds.to_string());
-            }
-            values
+impl DeviceCommand {
+    pub(crate) fn is_mutation(&self) -> bool {
+        match self {
+            Self::Status(_)
+            | Self::ArmingStatus
+            | Self::Logs
+            | Self::Events
+            | Self::Diagnostics(_)
+            | Self::Capture { .. } => false,
+            Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
+            Self::Scene(_) | Self::Reboot(_) => true,
+            Self::Display { .. } | Self::Crt { .. } => true,
+            Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
+            Self::Catalog { .. } => false,
+            Self::Media { command } => matches!(command, MediaCommand::Download(_)),
         }
-        DeviceCommand::Display { command } => match command {
-            DisplayCommand::Set(args) => with_flag(
-                strings(["display-mode", args.mode.as_str(), "--attended"]),
-                "--keep",
-                args.keep,
-            ),
-            DisplayCommand::Matrix(args) => {
-                let mut values = strings([
-                    "display-matrix",
-                    "--attended",
-                    "--out",
-                    &args.out.to_string_lossy(),
-                ]);
-                if args.usb_video {
-                    values.push("--usb-video".into());
-                }
-                if let Some(seconds) = args.screensaver_wait {
-                    values.extend(["--screensaver-wait".into(), seconds.to_string()]);
-                }
-                values
-            }
-        },
-        DeviceCommand::Crt { command } => match command {
-            CrtCommand::Qualify(args) => {
-                let mut values = strings(["crt", "qualify", "--attended"]);
-                if let Some(out) = args.out {
-                    values.extend(["--out".into(), out.to_string_lossy().into_owned()]);
-                }
-                values
-            }
-            CrtCommand::Probe(args) => strings([
-                "crt",
-                "probe",
-                "--attended",
-                "--pattern",
-                &args.pattern,
-                "--seconds",
-                &args.seconds.to_string(),
-                "--out",
-                &args.out.to_string_lossy(),
-            ]),
-            CrtCommand::Restore(_) => strings(["crt", "qualify", "--restore"]),
-        },
-        DeviceCommand::Capture { command } => match command {
-            CaptureCommand::Framebuffer(args) => {
-                let mut values = strings(["--capture-buffer"]);
-                if let Some(output) = args.output {
-                    values.extend(["--output".into(), output.to_string_lossy().into_owned()]);
-                }
-                values
-            }
-        },
-        DeviceCommand::Reboot(_) => strings(["agent", "reboot-wait"]),
-        DeviceCommand::Logs => strings(["agent", "logs"]),
-        DeviceCommand::Events => strings(["agent", "timeline"]),
-        DeviceCommand::Diagnostics(args) => {
-            strings(["agent", "diagnostics", "--out", &args.out.to_string_lossy()])
-        }
-        DeviceCommand::Launcher { command } => match command {
-            LauncherCommand::Status => strings(["agent", "magik", "status"]),
-            LauncherCommand::Restart(_) => strings(["launcher-restart"]),
-            LauncherCommand::ReturnToLauncher(_) => {
-                strings(["agent", "magik", "return-to-launcher"])
-            }
-        },
-        DeviceCommand::Catalog { command } => match command {
-            CatalogCommand::Inspect => strings(["catalog"]),
-            CatalogCommand::Query(args) => strings([
-                "catalog-query",
-                "--database",
-                &args.database,
-                "--sql",
-                &args.sql,
-            ]),
-            CatalogCommand::Cores => strings(["core-list"]),
-        },
-        DeviceCommand::Media { command } => match command {
-            MediaCommand::Check(args) => media_args("media-check", args),
-            MediaCommand::Download(args) => media_args("media-download", args.media),
-        },
     }
-}
-
-fn media_args(action: &str, args: MediaArgs) -> Vec<String> {
-    let mut values = vec![action.to_owned()];
-    if let Some(system) = args.system {
-        values.extend(["--system".into(), system]);
-    }
-    if let Some(url) = args.manifest_url {
-        values.extend(["--manifest-url".into(), url]);
-    }
-    values
-}
-
-fn with_flag(mut values: Vec<String>, flag: &str, enabled: bool) -> Vec<String> {
-    if enabled {
-        values.push(flag.to_owned());
-    }
-    values
-}
-
-fn strings<const N: usize>(values: [&str; N]) -> Vec<String> {
-    values.into_iter().map(str::to_owned).collect()
 }
 
 impl DeviceMode {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Dev => "dev",
             Self::Public => "public",
@@ -362,7 +267,7 @@ impl DeviceMode {
 }
 
 impl Scene {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Launcher => "launcher",
             Self::ControllerTest => "controller_test",
@@ -374,7 +279,7 @@ impl Scene {
 }
 
 impl DisplayMode {
-    const fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Auto => "auto",
             Self::Hdmi1280x720p60 => "hdmi-1280x720p60",
@@ -414,5 +319,13 @@ mod tests {
         for command in ["get", "wait", "recover", "doctor", "connected", "agent"] {
             assert!(TestCli::try_parse_from(["test", command]).is_err());
         }
+    }
+
+    #[test]
+    fn retry_category_is_derived_from_the_typed_command() {
+        let status = TestCli::try_parse_from(["test", "status"]).unwrap();
+        assert!(!status.command.is_mutation());
+        let reboot = TestCli::try_parse_from(["test", "reboot", "--attended"]).unwrap();
+        assert!(reboot.command.is_mutation());
     }
 }

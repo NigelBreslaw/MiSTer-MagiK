@@ -231,11 +231,6 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
     Ok(parsed)
 }
 
-pub(crate) fn media_help_requested(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
-}
-
 pub(crate) fn media_usage() {
     println!("media options: --manifest-url URL --system id|all");
 }
@@ -1479,7 +1474,6 @@ mod tests {
 
         assert_eq!(parsed.manifest_url, "https://example.test/manifest.json");
         assert_eq!(parsed.system, "nes");
-        assert!(media_help_requested(&["--help".to_string()]));
     }
 
     #[test]

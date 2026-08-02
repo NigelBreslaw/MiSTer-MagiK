@@ -31,7 +31,7 @@ mod remote;
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
     agent_telemetry_for_duration, agent_telemetry_for_particle_trial,
-    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent, bootstrap_agent_with,
+    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -56,7 +56,6 @@ const RETURN_CATALOG_CAPSULE_REMOTE: &str = "/tmp/mister-magik/launcher-return-c
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 const LATCH_FAILURE_REMOTE: &str = "/tmp/mister-magik/latch-failure.json";
-const RESOLVED_DEVICE_CHILD: &str = "MISTER_MAGIK_RESOLVED_DEVICE_CHILD";
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -243,6 +242,163 @@ impl NativeDevice {
         let prepared = self.prepare(DeviceAccess::SSH_READ)?;
         connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
         Ok(())
+    }
+
+    pub(crate) fn run_operator(
+        &mut self,
+        command: &crate::commands::device::DeviceCommand,
+    ) -> std::result::Result<(), DeviceFailure> {
+        use crate::commands::device::{
+            CaptureCommand, CatalogCommand, CrtCommand, DeviceCommand, DisplayCommand,
+            LauncherCommand, MediaCommand, ModeCommand,
+        };
+
+        let agent = matches!(
+            command,
+            DeviceCommand::Capture { .. }
+                | DeviceCommand::Reboot(_)
+                | DeviceCommand::Logs
+                | DeviceCommand::Events
+                | DeviceCommand::Diagnostics(_)
+                | DeviceCommand::Display { .. }
+                | DeviceCommand::Crt { .. }
+                | DeviceCommand::Launcher {
+                    command: LauncherCommand::Status | LauncherCommand::ReturnToLauncher(_),
+                }
+        );
+        let mutation = command.is_mutation();
+        let access = match (agent, mutation) {
+            (false, false) => DeviceAccess::SSH_READ,
+            (false, true) => DeviceAccess::SSH_MUTATION,
+            (true, false) => DeviceAccess::AGENT_READ,
+            (true, true) => DeviceAccess::AGENT_MUTATION,
+        };
+        let prepared = self.prepare(access)?;
+        install_prepared_device_environment(&prepared.config);
+        let result = (|| -> Result<()> {
+            match command {
+                DeviceCommand::Status(args) => {
+                    let session = connect(10)?;
+                    let status = collect_status(&session)?;
+                    if args.json {
+                        println!("{}", serde_json::to_string_pretty(&status)?);
+                    } else {
+                        print_status_summary(&status);
+                    }
+                    Ok(())
+                }
+                DeviceCommand::ArmingStatus => arming_status(),
+                DeviceCommand::Mode { command } => match command {
+                    ModeCommand::Status => mode_cli(&device_strings(["status"])),
+                    ModeCommand::Set(args) => mode_cli(&device_strings([args.mode.as_str()])),
+                },
+                DeviceCommand::Scene(args) => {
+                    let mut values = device_strings([args.scene.as_str()]);
+                    if let Some(seconds) = args.seconds {
+                        values.push(seconds.to_string());
+                    }
+                    scene_cli(&values)
+                }
+                DeviceCommand::Display { command } => match command {
+                    DisplayCommand::Set(args) => {
+                        let mut values = device_strings([args.mode.as_str(), "--attended"]);
+                        if args.keep {
+                            values.push("--keep".into());
+                        }
+                        display_mode_cli(&values)
+                    }
+                    DisplayCommand::Matrix(args) => {
+                        let mut values =
+                            device_strings(["--attended", "--out", &args.out.to_string_lossy()]);
+                        if args.usb_video {
+                            values.push("--usb-video".into());
+                        }
+                        if let Some(seconds) = args.screensaver_wait {
+                            values.extend(["--screensaver-wait".into(), seconds.to_string()]);
+                        }
+                        display_matrix_cli(&values)
+                    }
+                },
+                DeviceCommand::Crt { command } => match command {
+                    CrtCommand::Qualify(args) => {
+                        let mut values = device_strings(["qualify", "--attended"]);
+                        if let Some(out) = &args.out {
+                            values.extend(["--out".into(), out.to_string_lossy().into_owned()]);
+                        }
+                        crt_qualification::run(&values)
+                    }
+                    CrtCommand::Probe(args) => crt_qualification::run(&device_strings([
+                        "probe",
+                        "--attended",
+                        "--pattern",
+                        &args.pattern,
+                        "--seconds",
+                        &args.seconds.to_string(),
+                        "--out",
+                        &args.out.to_string_lossy(),
+                    ])),
+                    CrtCommand::Restore(_) => {
+                        crt_qualification::run(&device_strings(["qualify", "--restore"]))
+                    }
+                },
+                DeviceCommand::Capture { command } => match command {
+                    CaptureCommand::Framebuffer(args) => {
+                        let mut values = Vec::new();
+                        if let Some(output) = &args.output {
+                            values
+                                .extend(["--output".into(), output.to_string_lossy().into_owned()]);
+                        }
+                        capture_buffer_at(prepared.config.agent()?, &values)
+                    }
+                },
+                DeviceCommand::Reboot(_) => agent_reboot_wait(&[]),
+                DeviceCommand::Logs => agent_cli(&device_strings(["logs"])),
+                DeviceCommand::Events => agent_cli(&device_strings(["timeline"])),
+                DeviceCommand::Diagnostics(args) => {
+                    agent_diagnostics(&device_strings(["--out", &args.out.to_string_lossy()]))
+                }
+                DeviceCommand::Launcher { command } => match command {
+                    LauncherCommand::Status => agent_magik(&device_strings(["status"])),
+                    LauncherCommand::Restart(_) => {
+                        let session = connect(10)?;
+                        launcher_restart(
+                            &session,
+                            &LauncherRestartOptions {
+                                clear_env: true,
+                                ..LauncherRestartOptions::default()
+                            },
+                        )
+                    }
+                    LauncherCommand::ReturnToLauncher(_) => {
+                        agent_magik(&device_strings(["return-to-launcher"]))
+                    }
+                },
+                DeviceCommand::Catalog { command } => match command {
+                    CatalogCommand::Inspect => {
+                        let session = connect(10)?;
+                        run_catalog_inspect(&session, &[])
+                    }
+                    CatalogCommand::Query(args) => catalog_query(&device_strings([
+                        "--database",
+                        &args.database,
+                        "--sql",
+                        &args.sql,
+                    ])),
+                    CatalogCommand::Cores => core_list(),
+                },
+                DeviceCommand::Media { command } => match command {
+                    MediaCommand::Check(args) => {
+                        let session = connect(10)?;
+                        media::media_check(&session, &device_media_args(args))
+                    }
+                    MediaCommand::Download(args) => {
+                        let session = connect(10)?;
+                        media::media_download(&session, &device_media_args(&args.media))
+                    }
+                },
+            }
+        })();
+        result.map_err(device_failure)
     }
 
     pub(crate) fn status(&mut self) -> std::result::Result<Value, DeviceFailure> {
@@ -2414,79 +2570,12 @@ fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
     }
 }
 
-pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
+pub(crate) fn run_local_data_args(mut args: Vec<String>) -> Result<()> {
     let Some(action) = args.first().cloned() else {
-        return Err("missing typed device operation".into());
+        return Err("missing local data operation".into());
     };
     args.remove(0);
-    if action == "--capture-buffer" {
-        validate_capture_buffer_args(&args)?;
-    }
-    if action_uses_device(&action) {
-        if env::var_os(RESOLVED_DEVICE_CHILD).is_none() {
-            let device = discovery::resolve()?;
-            install_resolved_device_environment(&device);
-        }
-        if action_requires_agent(&action) {
-            bootstrap_agent()?;
-        }
-    }
     match action.as_str() {
-        "--capture-buffer" => capture_buffer(&args)?,
-        "arming-status" => arming_status()?,
-        "core-list" => core_list()?,
-        "mode" => mode_cli(&args)?,
-        "scene" => scene_cli(&args)?,
-        "display-mode" => display_mode_cli(&args)?,
-        "display-matrix" => display_matrix_cli(&args)?,
-        "crt" => crt_qualification::run(&args)?,
-        "catalog" => {
-            let sess = connect(10)?;
-            run_catalog_inspect(&sess, &args)?;
-        }
-        "catalog-query" => catalog_query(&args)?,
-        "media-check" => {
-            if media::media_help_requested(&args) {
-                media::media_usage();
-                return Ok(());
-            }
-            let sess = connect(10)?;
-            media::media_check(&sess, &args)?;
-        }
-        "media-download" => {
-            if media::media_help_requested(&args) {
-                media::media_usage();
-                return Ok(());
-            }
-            let sess = connect(10)?;
-            media::media_download(&sess, &args)?;
-        }
-        "launcher-restart" => {
-            if !args.is_empty() {
-                return Err("launcher restart accepts only --attended".into());
-            }
-            let sess = connect(10)?;
-            launcher_restart(
-                &sess,
-                &LauncherRestartOptions {
-                    clear_env: true,
-                    ..LauncherRestartOptions::default()
-                },
-            )?;
-        }
-        "agent" => {
-            agent_cli(&args)?;
-        }
-        "status" => {
-            let json_out = args.iter().any(|a| a == "--json");
-            let sess = connect(10)?;
-            let status = collect_status(&sess)?;
-            if json_out {
-                println!("{}", serde_json::to_string_pretty(&status)?);
-            } else {
-                print_status_summary(&status);
-            }
-        }
         "mame-metadata-build" => {
             mame_metadata_build(&args)?;
         }
@@ -2501,20 +2590,34 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
                 arcade_database::import(Path::new(&sqlite), Path::new(&csv), &source_sha)?;
             println!("{}", serde_json::to_string(&summary)?);
         }
-        other => return Err(format!("unknown action: {other}").into()),
+        other => return Err(format!("unknown local data operation: {other}").into()),
     }
     Ok(())
 }
 
-fn install_resolved_device_environment(device: &discovery::Device) {
+fn install_prepared_device_environment(config: &NativeDeviceConfig) {
     // Rust 2024 marks process-environment mutation unsafe because concurrent
     // readers in foreign code may race it. Device resolution runs once, before
     // SSH/libssh2 or any worker thread is started by an operator command.
     unsafe {
-        env::set_var("MISTER_IP", device.address.to_string());
-        env::set_var("MISTER_DEVICE_ID", &device.id);
-        env::set_var(RESOLVED_DEVICE_CHILD, "1");
+        env::set_var("MISTER_IP", config.connection.host());
+        env::set_var("MISTER_DEVICE_ID", &config.device_id);
     }
+}
+
+fn device_strings<const N: usize>(values: [&str; N]) -> Vec<String> {
+    values.into_iter().map(str::to_owned).collect()
+}
+
+fn device_media_args(args: &crate::commands::device::MediaArgs) -> Vec<String> {
+    let mut values = Vec::new();
+    if let Some(system) = &args.system {
+        values.extend(["--system".into(), system.clone()]);
+    }
+    if let Some(url) = &args.manifest_url {
+        values.extend(["--manifest-url".into(), url.clone()]);
+    }
+    values
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -9362,14 +9465,6 @@ fn percentile_99(values: &[u64]) -> u64 {
     values[(values.len() * 99).div_ceil(100).saturating_sub(1)]
 }
 
-fn action_uses_device(action: &str) -> bool {
-    !matches!(action, "mame-metadata-build" | "arcade-database-import")
-}
-
-fn action_requires_agent(action: &str) -> bool {
-    matches!(action, "--capture-buffer" | "agent")
-}
-
 fn reboot_remote_command(mode: RebootMode) -> String {
     match mode {
         RebootMode::Supervised => acknowledged_main_command("mister_magik_reboot"),
@@ -10606,10 +10701,6 @@ struct PngCapture {
     result: Value,
     png: Vec<u8>,
     elapsed_ms: u128,
-}
-
-fn capture_buffer(args: &[String]) -> Result<()> {
-    capture_buffer_at(&AgentEndpoint::from_environment()?, args)
 }
 
 fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
@@ -14792,11 +14883,9 @@ H: Handlers=event3 js0"#
                 .unwrap_err()
                 .to_string();
             assert_eq!(error, RETIRED_PLATFORM_COMMAND_ERROR);
-            assert!(!action_uses_device(action));
         }
 
         assert!(reject_retired_platform_command("platform-status").is_ok());
-        assert!(action_uses_device("platform-status"));
     }
 
     #[test]

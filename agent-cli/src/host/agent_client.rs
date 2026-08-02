@@ -73,15 +73,6 @@ pub(crate) fn agent_token_for_device(
         .to_string())
 }
 
-pub(crate) fn bootstrap_agent() -> Result<String> {
-    let connection = ConnectionConfig::from_environment();
-    let explicit_token = env::var("MISTER_AGENT_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty());
-    let device_id = env::var("MISTER_DEVICE_ID")?;
-    bootstrap_agent_with(&connection, &device_id, explicit_token.as_deref())
-}
-
 pub(crate) fn bootstrap_agent_with(
     connection: &ConnectionConfig,
     device_id: &str,
