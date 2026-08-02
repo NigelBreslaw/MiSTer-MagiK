@@ -3,7 +3,9 @@
 
 //! Deterministic scalar particle simulation for software-rendered effects.
 
-use crate::commands::{COMMAND_NEIGHBOR, COMMAND_PALETTE_SHIFT, pack_visual_command};
+use crate::commands::pack_visual_command;
+#[cfg(test)]
+use crate::commands::{COMMAND_NEIGHBOR, COMMAND_PALETTE_SHIFT};
 use crate::recipes::{MagikRecipe, MagikTiming, RecipeEasing, embedded_magik_recipe};
 use std::time::Duration;
 use std::{mem::MaybeUninit, ops::Range};
