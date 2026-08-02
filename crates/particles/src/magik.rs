@@ -1248,8 +1248,8 @@ mod tests {
 
     #[test]
     fn realtime_construction_always_starts_the_preparation_pipeline() {
-        let renderer = MagikScene::new(config(ParticlePreset::Visual), mask(), Default::default())
-            .unwrap();
+        let renderer =
+            MagikScene::new(config(ParticlePreset::Visual), mask(), Default::default()).unwrap();
         assert!(renderer.preparation_pipeline.is_some());
         assert!(renderer.engine.is_none());
     }
