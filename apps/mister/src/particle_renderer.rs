@@ -1,10 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::particle_engine::{
     PARTICLE_NOT_VISIBLE_OFFSET, ParticleConfig, ParticleEngine, ParticleFrameStats, ParticlePhase,
-    ParticlePreset, ParticleSimulationUpdate, TargetMask,
+    ParticlePreset, ParticleSimulationUpdate, TargetMask, magik_target_mask,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -13,10 +12,6 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const MAGIK_FONT_PX: f32 = 128.0;
-const MAGIK_TEXT: &str = "MagiK";
-const MAGIK_MASK_THRESHOLD: u8 = 128;
-const MAGIK_MASK_SAMPLE_STEP: usize = 2;
 const CAPACITY_COLOR: Rgb565Pixel = Rgb565Pixel(0xbdf7);
 const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
     Rgb565Pixel(0x2104),
@@ -852,21 +847,6 @@ fn hidden_slot_offset(hidden_slot: u8) -> Result<usize, String> {
     }
 }
 
-fn magik_target_mask() -> Result<TargetMask, String> {
-    let mut font = ConsoleFont::new_with_typeface(MAGIK_FONT_PX, ConsoleTypeface::PressStart2P);
-    let alpha = font
-        .rasterize_alpha_mask(MAGIK_TEXT)
-        .ok_or("Press Start 2P produced no MagiK alpha mask")?;
-    TargetMask::from_alpha(
-        alpha.width,
-        alpha.height,
-        alpha.stride,
-        &alpha.alpha,
-        MAGIK_MASK_THRESHOLD,
-        MAGIK_MASK_SAMPLE_STEP,
-    )
-}
-
 fn stats(
     frame: ParticleFrameStats,
     visible: usize,
@@ -1239,6 +1219,25 @@ mod tests {
         assert!(mask.width() < 960);
         assert!(mask.height() < 540);
         assert!(mask.points().len() > 1_000);
+    }
+
+    #[test]
+    fn checked_in_magik_mask_matches_the_authoritative_font_rasterization() {
+        let mut font = crate::bitmap_text::ConsoleFont::new_with_typeface(
+            128.0,
+            crate::bitmap_text::ConsoleTypeface::PressStart2P,
+        );
+        let alpha = font.rasterize_alpha_mask("MagiK").unwrap();
+        let rasterized = TargetMask::from_alpha(
+            alpha.width,
+            alpha.height,
+            alpha.stride,
+            &alpha.alpha,
+            128,
+            2,
+        )
+        .unwrap();
+        assert_eq!(magik_target_mask().unwrap(), rasterized);
     }
 
     #[test]

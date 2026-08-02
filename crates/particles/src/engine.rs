@@ -30,6 +30,12 @@ const TARGET_DEPTH_LEVELS: u64 = 81;
 const TARGET_DEPTH_Q2_RECIP: f32 = 0.25;
 const HOLD_DURATION_US: u64 = HOLD_END_US - FORM_END_US;
 pub const PARTICLE_NOT_VISIBLE_OFFSET: u32 = u32::MAX;
+const MAGIK_MASK: &[u8] = include_bytes!("../assets/magik-alpha-mask.bin");
+const MAGIK_MASK_MAGIC: &[u8; 8] = b"MAGIKMSK";
+const MAGIK_MASK_HEADER_BYTES: usize = 16;
+const MAGIK_MASK_VERSION: u16 = 1;
+const MAGIK_MASK_THRESHOLD: u8 = 128;
+const MAGIK_MASK_SAMPLE_STEP: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParticlePreset {
@@ -155,6 +161,31 @@ impl TargetMask {
     pub fn points(&self) -> &[ParticleTarget] {
         &self.points
     }
+}
+
+pub fn magik_target_mask() -> Result<TargetMask, String> {
+    if MAGIK_MASK.len() < MAGIK_MASK_HEADER_BYTES || &MAGIK_MASK[..8] != MAGIK_MASK_MAGIC {
+        return Err("MagiK particle target has an invalid header".into());
+    }
+    let version = u16::from_le_bytes([MAGIK_MASK[8], MAGIK_MASK[9]]);
+    if version != MAGIK_MASK_VERSION {
+        return Err(format!("unsupported MagiK particle target version {version}"));
+    }
+    let width = usize::from(u16::from_le_bytes([MAGIK_MASK[10], MAGIK_MASK[11]]));
+    let height = usize::from(u16::from_le_bytes([MAGIK_MASK[12], MAGIK_MASK[13]]));
+    let stride = usize::from(u16::from_le_bytes([MAGIK_MASK[14], MAGIK_MASK[15]]));
+    let expected = MAGIK_MASK_HEADER_BYTES.saturating_add(stride.saturating_mul(height));
+    if width == 0 || height == 0 || stride < width || MAGIK_MASK.len() != expected {
+        return Err("MagiK particle target dimensions do not match its payload".into());
+    }
+    TargetMask::from_alpha(
+        width,
+        height,
+        stride,
+        &MAGIK_MASK[MAGIK_MASK_HEADER_BYTES..],
+        MAGIK_MASK_THRESHOLD,
+        MAGIK_MASK_SAMPLE_STEP,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

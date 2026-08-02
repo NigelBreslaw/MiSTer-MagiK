@@ -54,6 +54,7 @@ SPDX-License-Identifier = "LGPL-2.1-or-later"
 path = [
   "apps/mister/licenses/PRESS-START-2P.txt",
   "apps/mister/ui/fonts/PressStart2P-Regular.ttf",
+  "crates/particles/assets/magik-alpha-mask.bin",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2012 The Press Start 2P Project Authors"
