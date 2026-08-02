@@ -10,13 +10,18 @@ use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
+use mister_magik_particles::recipes::{embedded_magik_recipe, parse_magik_recipe};
+use mister_magik_particles::reload::{
+    LastGoodRecipeFile, ReloadAction, StartupParticleRecipe, StartupParticleStatus,
+    publish_startup_particle_status,
+};
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -27,8 +32,8 @@ use super::particle_renderer::ParticleRenderer;
 use mister_magik_fb::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
 
 const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
-const DEFAULT_PARTICLE_COUNT: usize = 16_384;
-const DEFAULT_PARTICLE_SEED: u64 = 0x4d61_6769_4b;
+const DEV_MAGIK_RECIPE_PATH: &str = "/tmp/mister-magik/startup-particles/magik.json";
+const DEV_MAGIK_STATUS_PATH: &str = "/tmp/mister-magik/startup-particles/status.json";
 
 fn hash2_u8(x: usize, y: usize) -> u8 {
     let mut v = (x as u32).wrapping_mul(0x45d9f3b) ^ (y as u32).wrapping_mul(0x119de1f3);
@@ -246,12 +251,107 @@ struct ScreensaverRenderState {
 pub struct LauncherScreensaver {
     parade: ParadeState,
     particle: Option<ParticleRenderer>,
+    particle_reload: Option<MagikRecipeReload>,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
     frame: u64,
     motion_started_at: Instant,
     motion_ticks_fp: u64,
+}
+
+struct MagikRecipeReload {
+    watcher: LastGoodRecipeFile<ParticleRenderer>,
+    embedded_spare: Option<ParticleRenderer>,
+    current_embedded: bool,
+    logical_origin: Duration,
+}
+
+impl MagikRecipeReload {
+    fn for_layout(
+        layout: DeviceLayout,
+        width: usize,
+        height: usize,
+        preset: ParticlePreset,
+    ) -> Result<Option<Self>, String> {
+        if layout != DeviceLayout::Dev {
+            return Ok(None);
+        }
+        publish_startup_particle_status(
+            Path::new(DEV_MAGIK_STATUS_PATH),
+            &StartupParticleStatus::embedded(0, StartupParticleRecipe::Magik),
+        )?;
+        let watcher =
+            LastGoodRecipeFile::spawn(PathBuf::from(DEV_MAGIK_RECIPE_PATH), move |bytes| {
+                ParticleRenderer::from_magik_recipe(
+                    width,
+                    height,
+                    preset,
+                    parse_magik_recipe(bytes)?,
+                )
+            })?;
+        Ok(Some(Self {
+            watcher,
+            embedded_spare: None,
+            current_embedded: true,
+            logical_origin: Duration::ZERO,
+        }))
+    }
+
+    fn apply_latest(&mut self, renderer: &mut ParticleRenderer, elapsed: Duration) {
+        let Some(attempt) = self.watcher.take_latest() else {
+            return;
+        };
+        let generation = attempt.generation;
+        let status = match attempt.action {
+            ReloadAction::Apply(mut candidate) => {
+                if self.current_embedded {
+                    std::mem::swap(renderer, &mut candidate);
+                    self.embedded_spare = Some(candidate);
+                } else {
+                    *renderer = candidate;
+                }
+                self.current_embedded = false;
+                self.logical_origin = elapsed;
+                StartupParticleStatus::applied(generation, StartupParticleRecipe::Magik)
+            }
+            ReloadAction::ResetToEmbedded if self.current_embedded => {
+                self.logical_origin = elapsed;
+                StartupParticleStatus::embedded(generation, StartupParticleRecipe::Magik)
+            }
+            ReloadAction::ResetToEmbedded => {
+                let Some(mut embedded) = self.embedded_spare.take() else {
+                    let status = StartupParticleStatus::rejected(
+                        generation,
+                        StartupParticleRecipe::Magik,
+                        "embedded Magik renderer is unavailable",
+                    );
+                    Self::publish(&status);
+                    return;
+                };
+                std::mem::swap(renderer, &mut embedded);
+                self.current_embedded = true;
+                self.logical_origin = elapsed;
+                StartupParticleStatus::embedded(generation, StartupParticleRecipe::Magik)
+            }
+            ReloadAction::Reject(error) => {
+                StartupParticleStatus::rejected(generation, StartupParticleRecipe::Magik, &error)
+            }
+        };
+        Self::publish(&status);
+    }
+
+    fn publish(status: &StartupParticleStatus) {
+        if let Err(error) =
+            publish_startup_particle_status(Path::new(DEV_MAGIK_STATUS_PATH), status)
+        {
+            crate::ui_errln!("particle recipe status failed: {error}");
+        }
+    }
+
+    fn logical_elapsed(&self, elapsed: Duration) -> Duration {
+        elapsed.saturating_sub(self.logical_origin)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -335,6 +435,7 @@ impl LauncherScreensaver {
         Self {
             parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
             particle: None,
+            particle_reload: None,
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
@@ -344,11 +445,16 @@ impl LauncherScreensaver {
         }
     }
 
-    fn particle(renderer: ParticleRenderer, archive_cancelled: Arc<AtomicBool>) -> Self {
+    fn particle(
+        renderer: ParticleRenderer,
+        particle_reload: Option<MagikRecipeReload>,
+        archive_cancelled: Arc<AtomicBool>,
+    ) -> Self {
         let now = Instant::now();
         Self {
             parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
             particle: Some(renderer),
+            particle_reload,
             archive_rx: None,
             archive_cancelled,
             startup_started_at: None,
@@ -411,10 +517,18 @@ impl LauncherScreensaver {
         next_elapsed: Option<Duration>,
     ) -> ScreensaverFrameTrace {
         if let Some(particle) = self.particle.as_mut() {
+            let particle_elapsed = if let Some(reload) = self.particle_reload.as_mut() {
+                reload.apply_latest(particle, elapsed);
+                reload.logical_elapsed(elapsed)
+            } else {
+                elapsed
+            };
             return match hidden_slot
                 .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
                 .and_then(|hidden_slot| {
-                    particle.render_with_lookahead(dst, hidden_slot, elapsed, next_elapsed)
+                    let next_elapsed = next_elapsed
+                        .map(|next| next.saturating_sub(elapsed.saturating_sub(particle_elapsed)));
+                    particle.render_with_lookahead(dst, hidden_slot, particle_elapsed, next_elapsed)
                 }) {
                 Ok(stats) => ScreensaverFrameTrace {
                     renderer: PARTICLE_RENDERER_LABEL,
@@ -588,6 +702,7 @@ impl LauncherScreensaver {
         Ok(Self {
             parade,
             particle: None,
+            particle_reload: None,
             archive_rx: None,
             archive_cancelled: Arc::new(AtomicBool::new(false)),
             startup_started_at: None,
@@ -621,10 +736,18 @@ impl LauncherScreensaverLoader {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         if magik_particle_renderer_requested() {
             let archive_cancelled = Arc::new(AtomicBool::new(false));
-            match particle_config_from_env(w, h).and_then(ParticleRenderer::new_magik) {
-                Ok(renderer) => {
-                    let _ =
-                        ready_tx.send(LauncherScreensaver::particle(renderer, archive_cancelled));
+            match particle_config_from_env(w, h).and_then(|config| {
+                let renderer = ParticleRenderer::new_magik(config)?;
+                let reload =
+                    MagikRecipeReload::for_layout(DeviceLayout::current(), w, h, config.preset)?;
+                Ok((renderer, reload))
+            }) {
+                Ok((renderer, reload)) => {
+                    let _ = ready_tx.send(LauncherScreensaver::particle(
+                        renderer,
+                        reload,
+                        archive_cancelled,
+                    ));
                 }
                 Err(error) => {
                     crate::ui_errln!("particle renderer initialization failed: {error}");
@@ -698,6 +821,8 @@ fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfi
             "particle experiment requires 960x540, received {width}x{height}"
         ));
     }
+    let embedded = embedded_magik_recipe()
+        .map_err(|error| format!("embedded Magik particle recipe is invalid: {error}"))?;
     let count = std::env::var("MISTER_PARTICLE_COUNT")
         .ok()
         .map(|value| {
@@ -706,7 +831,7 @@ fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfi
                 .map_err(|error| format!("invalid MISTER_PARTICLE_COUNT={value:?}: {error}"))
         })
         .transpose()?
-        .unwrap_or(DEFAULT_PARTICLE_COUNT);
+        .unwrap_or(embedded.particle_count);
     let preset = std::env::var("MISTER_PARTICLE_PRESET")
         .ok()
         .map(|value| {
@@ -723,7 +848,7 @@ fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfi
                 .map_err(|error| format!("invalid MISTER_PARTICLE_SEED={value:?}: {error}"))
         })
         .transpose()?
-        .unwrap_or(DEFAULT_PARTICLE_SEED);
+        .unwrap_or(embedded.seed);
     ParticleConfig {
         count,
         width,
@@ -5356,6 +5481,15 @@ mod tests {
     }
 
     #[test]
+    fn public_layout_never_constructs_the_mutable_recipe_watcher() {
+        assert!(
+            MagikRecipeReload::for_layout(DeviceLayout::Public, 960, 540, ParticlePreset::Visual)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn particle_renderer_requires_the_direct_hidden_pipeline() {
         let renderer = ParticleRenderer::new_magik(ParticleConfig {
             count: 1_024,
@@ -5365,7 +5499,8 @@ mod tests {
             preset: ParticlePreset::Capacity,
         })
         .unwrap();
-        let screensaver = LauncherScreensaver::particle(renderer, Arc::new(AtomicBool::new(false)));
+        let screensaver =
+            LauncherScreensaver::particle(renderer, None, Arc::new(AtomicBool::new(false)));
         assert!(screensaver.requires_direct_hidden());
         assert!(!screensaver.is_loading_archive());
         assert!(screensaver.has_rendered_card());
