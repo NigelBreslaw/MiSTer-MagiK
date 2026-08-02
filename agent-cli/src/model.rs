@@ -107,102 +107,16 @@ pub enum Scope {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Intent {
-    PrePush {
-        remote: String,
-    },
-    Plan {
-        scope: Scope,
-    },
-    ShowRun {
-        run_id: String,
-    },
-    DatabaseReport,
-    Diagnose,
-    Deliver,
-    DeliverLocalMain,
-    Benchmark {
-        scenario: BenchmarkScenario,
-    },
-    CaptureUsbVideo {
-        output: Option<PathBuf>,
-        seconds: Option<u64>,
-    },
-    AlphaAccept {
-        candidate: PathBuf,
-        output: PathBuf,
-        reuse_installed: bool,
-        restore_host_mode: bool,
-    },
-    AlphaVerify {
-        candidate: PathBuf,
-        receipt: PathBuf,
-        marker: PathBuf,
-    },
-    ReleaseQualify,
-    Build {
-        intent: crate::build::BuildCommand,
-    },
-    CiHostAssurance {
-        scope: Scope,
-    },
-    CiPlatformCandidates {
-        artifacts: PathBuf,
-        name: String,
-    },
-    CiPlatformEligibleRun {
-        run: PathBuf,
-        head_sha: String,
-    },
-    CiRequireAlphaPromotion {
-        channel: String,
-        alpha_sha: String,
-        candidate_sha: String,
-    },
-    CiPlatformManifestGenerate {
-        output: PathBuf,
-        main: PathBuf,
-        gui: PathBuf,
-        manager: PathBuf,
-        scanout_module: PathBuf,
-        scanout_metadata: PathBuf,
-        latch_rbf: PathBuf,
-        latch_metadata: PathBuf,
-        platform_bundle_manifest: PathBuf,
-        main_revision: String,
-        magik_revision: String,
-        layout: String,
-    },
-    CiPlatformManifestVerify {
-        manifest: PathBuf,
-        root: Option<PathBuf>,
-        layout: String,
-    },
-    CiGameDatabases {
-        command: crate::cli::GameDatabaseCommand,
-    },
-    CiPlatformBundle {
-        command: crate::cli::PlatformBundleCommand,
-    },
+pub enum AssuranceRequest {
+    PrePush { remote: String },
+    Plan { scope: Scope },
+    CiHostAssurance { scope: Scope },
 }
 
-impl Intent {
+impl AssuranceRequest {
     #[must_use]
     pub const fn risk(&self) -> Risk {
-        match self {
-            Self::PrePush { .. }
-            | Self::CiHostAssurance { .. }
-            | Self::CaptureUsbVideo { .. }
-            | Self::AlphaVerify { .. } => Risk::LocalWrite,
-            Self::ReleaseQualify => Risk::Destructive,
-            Self::Deliver { .. }
-            | Self::DeliverLocalMain
-            | Self::Benchmark { .. }
-            | Self::Diagnose
-            | Self::AlphaAccept { .. } => Risk::DeviceWrite,
-            Self::Build { .. } => Risk::LocalWrite,
-            _ => Risk::ReadOnly,
-        }
+        Risk::LocalWrite
     }
 }
 
@@ -274,7 +188,7 @@ impl ResourceClass {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
-    pub intent: Intent,
+    pub request: AssuranceRequest,
     pub operations: Vec<Operation>,
     pub external_requirements: Vec<ExternalRequirement>,
 }
@@ -293,21 +207,4 @@ pub enum Outcome {
     Rejected,
     NoOp,
     ExternalRequired,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn usb_video_capture_is_a_local_write() {
-        assert_eq!(
-            Intent::CaptureUsbVideo {
-                output: None,
-                seconds: None,
-            }
-            .risk(),
-            Risk::LocalWrite
-        );
-    }
 }

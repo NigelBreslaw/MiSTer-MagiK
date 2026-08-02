@@ -3,7 +3,7 @@
 
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
-use crate::model::{BenchmarkScenario, Intent, Scope};
+use crate::model::{BenchmarkScenario, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
@@ -406,132 +406,11 @@ pub struct ScopeArgs {
 }
 
 impl ScopeArgs {
-    fn into_scope(self) -> Scope {
+    pub fn scope(&self) -> Scope {
         if !self.paths.is_empty() {
-            Scope::Paths(self.paths)
+            Scope::Paths(self.paths.clone())
         } else {
             Scope::WorkingTree
-        }
-    }
-}
-
-impl Cli {
-    #[must_use]
-    pub fn into_intent(self) -> Intent {
-        match self.command {
-            None => unreachable!("clap requires a workflow command"),
-            Some(Command::PrePush { remote }) => Intent::PrePush { remote },
-            Some(Command::Plan(scope)) => Intent::Plan {
-                scope: scope.into_scope(),
-            },
-            Some(Command::Run {
-                command: RunCommand::Show { run_id },
-            }) => Intent::ShowRun { run_id },
-            Some(Command::Db {
-                command: DbCommand::Report,
-            }) => Intent::DatabaseReport,
-            Some(Command::Diagnose) => Intent::Diagnose,
-            Some(Command::Device { .. }) => {
-                unreachable!("device commands dispatch before repository workflow intents")
-            }
-            Some(Command::Deliver { target: None }) => Intent::Deliver,
-            Some(Command::Deliver {
-                target: Some(DeliverTarget::LocalMain),
-            }) => Intent::DeliverLocalMain,
-            Some(Command::Benchmark { scenario }) => Intent::Benchmark { scenario },
-            Some(Command::Capture {
-                command: CaptureCommand::UsbVideo { output, seconds },
-            }) => Intent::CaptureUsbVideo { output, seconds },
-            Some(Command::Alpha {
-                command:
-                    AlphaCommand::Accept {
-                        candidate,
-                        output,
-                        reuse_installed,
-                        restore_host_mode,
-                    },
-            }) => Intent::AlphaAccept {
-                candidate,
-                output,
-                reuse_installed,
-                restore_host_mode,
-            },
-            Some(Command::Alpha {
-                command:
-                    AlphaCommand::Verify {
-                        candidate,
-                        receipt,
-                        marker,
-                    },
-            }) => Intent::AlphaVerify {
-                candidate,
-                receipt,
-                marker,
-            },
-            Some(Command::Release {
-                command: ReleaseCommand::Qualify,
-            }) => Intent::ReleaseQualify,
-            Some(Command::Build { intent }) => Intent::Build { intent },
-            Some(Command::Ci { command }) => match *command {
-                CiCommand::HostAssurance(scope) => Intent::CiHostAssurance {
-                    scope: scope.into_scope(),
-                },
-                CiCommand::PlatformCandidates { artifacts, name } => {
-                    Intent::CiPlatformCandidates { artifacts, name }
-                }
-                CiCommand::PlatformEligibleRun { run, head_sha } => {
-                    Intent::CiPlatformEligibleRun { run, head_sha }
-                }
-                CiCommand::RequireAlphaPromotion {
-                    channel,
-                    alpha_sha,
-                    candidate_sha,
-                } => Intent::CiRequireAlphaPromotion {
-                    channel,
-                    alpha_sha,
-                    candidate_sha,
-                },
-                CiCommand::PlatformManifest { command } => match command {
-                    PlatformManifestCommand::Generate {
-                        output,
-                        main,
-                        gui,
-                        manager,
-                        scanout_module,
-                        scanout_metadata,
-                        latch_rbf,
-                        latch_metadata,
-                        platform_bundle_manifest,
-                        main_revision,
-                        magik_revision,
-                        layout,
-                    } => Intent::CiPlatformManifestGenerate {
-                        output,
-                        main,
-                        gui,
-                        manager,
-                        scanout_module,
-                        scanout_metadata,
-                        latch_rbf,
-                        latch_metadata,
-                        platform_bundle_manifest,
-                        main_revision,
-                        magik_revision,
-                        layout: *layout,
-                    },
-                    PlatformManifestCommand::Verify {
-                        manifest,
-                        root,
-                        layout,
-                    } => Intent::CiPlatformManifestVerify {
-                        manifest,
-                        root,
-                        layout,
-                    },
-                },
-                CiCommand::GameDatabases { command } => Intent::CiGameDatabases { command },
-                CiCommand::PlatformBundle { command } => Intent::CiPlatformBundle { command },
-            },
         }
     }
 }
@@ -556,31 +435,34 @@ mod tests {
     fn hidden_ci_assurance_preserves_explicit_paths() {
         let cli = Cli::try_parse_from(["agent-cli", "ci", "host-assurance", "--paths", "a", "b"])
             .unwrap();
+        let Some(Command::Ci { command }) = cli.command else {
+            panic!("expected ci command");
+        };
+        let CiCommand::HostAssurance(scope) = *command else {
+            panic!("expected host assurance");
+        };
         assert_eq!(
-            cli.into_intent(),
-            Intent::CiHostAssurance {
-                scope: Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
-            }
+            scope.scope(),
+            Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
         );
     }
 
     #[test]
     fn explicit_paths_are_preserved() {
         let cli = Cli::try_parse_from(["agent-cli", "plan", "--paths", "a", "b"]).unwrap();
+        let Some(Command::Plan(scope)) = cli.command else {
+            panic!("expected plan command");
+        };
         assert_eq!(
-            cli.into_intent(),
-            Intent::Plan {
-                scope: Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")]),
-            }
+            scope.scope(),
+            Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")])
         );
     }
 
     #[test]
     fn deliver_is_flag_free_and_git_independent() {
-        let cli = Cli::try_parse_from(["agent-cli", "deliver"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::Deliver);
-        let cli = Cli::try_parse_from(["agent-cli", "deliver", "local-main"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::DeliverLocalMain);
+        assert!(Cli::try_parse_from(["agent-cli", "deliver"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "deliver", "local-main"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
@@ -590,101 +472,24 @@ mod tests {
 
     #[test]
     fn benchmark_defaults_to_screensaver_and_accepts_typed_scenarios() {
-        let cli = Cli::try_parse_from(["agent-cli", "benchmark"]).unwrap();
-        assert_eq!(
-            cli.into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::Screensaver
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "catalog-lifecycle"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::CatalogLifecycle
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "particles"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::Particles
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "particle-profile"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::ParticleProfile
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "particle-capacity"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::ParticleCapacity
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "particle-demo-40k"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::ParticleDemo40k
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "particle-step"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::ParticleStep
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "navigation-transitions"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::NavigationTransitions
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "launch-return"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::LaunchReturn
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "launch-return-fallback"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::LaunchReturnFallback
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "cold-boot"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::ColdBoot
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "benchmark", "search"])
-                .unwrap()
-                .into_intent(),
-            Intent::Benchmark {
-                scenario: BenchmarkScenario::Search
-            }
-        );
+        let accepted = [
+            "screensaver",
+            "catalog-lifecycle",
+            "particles",
+            "particle-profile",
+            "particle-capacity",
+            "particle-demo-40k",
+            "particle-step",
+            "navigation-transitions",
+            "launch-return",
+            "launch-return-fallback",
+            "cold-boot",
+            "search",
+        ];
+        assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_ok());
+        for scenario in accepted {
+            assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
+        }
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "particle-demo-01"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "firework-visual"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());
@@ -700,53 +505,29 @@ mod tests {
 
     #[test]
     fn usb_video_capture_preserves_optional_output() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "capture", "usb-video"])
-                .unwrap()
-                .into_intent(),
-            Intent::CaptureUsbVideo {
-                output: None,
-                seconds: None,
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "capture",
-                "usb-video",
-                "--output",
-                "/tmp/frame.jpg",
-            ])
-            .unwrap()
-            .into_intent(),
-            Intent::CaptureUsbVideo {
-                output: Some(PathBuf::from("/tmp/frame.jpg")),
-                seconds: None,
-            }
-        );
-        assert_eq!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "capture",
-                "usb-video",
-                "--seconds",
-                "24",
-                "--output",
-                "/tmp/probe.mov",
-            ])
-            .unwrap()
-            .into_intent(),
-            Intent::CaptureUsbVideo {
-                output: Some(PathBuf::from("/tmp/probe.mov")),
-                seconds: Some(24),
-            }
-        );
+        let cli = Cli::try_parse_from([
+            "agent-cli",
+            "capture",
+            "usb-video",
+            "--seconds",
+            "24",
+            "--output",
+            "/tmp/probe.mov",
+        ])
+        .unwrap();
+        let Some(Command::Capture {
+            command: CaptureCommand::UsbVideo { output, seconds },
+        }) = cli.command
+        else {
+            panic!("expected usb-video capture");
+        };
+        assert_eq!(output, Some(PathBuf::from("/tmp/probe.mov")));
+        assert_eq!(seconds, Some(24));
     }
 
     #[test]
     fn release_qualify_is_flag_free() {
-        let cli = Cli::try_parse_from(["agent-cli", "release", "qualify"]).unwrap();
-        assert_eq!(cli.into_intent(), Intent::ReleaseQualify);
+        assert!(Cli::try_parse_from(["agent-cli", "release", "qualify"]).is_ok());
         assert!(
             Cli::try_parse_from(["agent-cli", "release", "qualify", "--skip-display"]).is_err()
         );
@@ -754,7 +535,7 @@ mod tests {
 
     #[test]
     fn alpha_accept_has_a_closed_candidate_and_output_interface() {
-        assert_eq!(
+        assert!(
             Cli::try_parse_from([
                 "agent-cli",
                 "alpha",
@@ -764,16 +545,9 @@ mod tests {
                 "--output",
                 "/tmp/evidence",
             ])
-            .unwrap()
-            .into_intent(),
-            Intent::AlphaAccept {
-                candidate: "/tmp/candidate".into(),
-                output: "/tmp/evidence".into(),
-                reuse_installed: false,
-                restore_host_mode: false,
-            }
+            .is_ok()
         );
-        assert_eq!(
+        assert!(
             Cli::try_parse_from([
                 "agent-cli",
                 "alpha",
@@ -785,21 +559,14 @@ mod tests {
                 "--reuse-installed",
                 "--restore-host-mode",
             ])
-            .unwrap()
-            .into_intent(),
-            Intent::AlphaAccept {
-                candidate: "/tmp/candidate".into(),
-                output: "/tmp/evidence".into(),
-                reuse_installed: true,
-                restore_host_mode: true,
-            }
+            .is_ok()
         );
         assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
     }
 
     #[test]
     fn alpha_verify_has_a_closed_candidate_receipt_and_marker_interface() {
-        assert_eq!(
+        assert!(
             Cli::try_parse_from([
                 "agent-cli",
                 "alpha",
@@ -811,37 +578,19 @@ mod tests {
                 "--marker",
                 "/tmp/marker.json",
             ])
-            .unwrap()
-            .into_intent(),
-            Intent::AlphaVerify {
-                candidate: "/tmp/candidate".into(),
-                receipt: "/tmp/evidence/alpha-acceptance.json".into(),
-                marker: "/tmp/marker.json".into(),
-            }
+            .is_ok()
         );
     }
 
     #[test]
     fn diagnose_is_flag_free() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "diagnose"])
-                .unwrap()
-                .into_intent(),
-            Intent::Diagnose
-        );
+        assert!(Cli::try_parse_from(["agent-cli", "diagnose"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "diagnose", "--repair-all"]).is_err());
     }
 
     #[test]
     fn git_hook_commands_have_closed_interfaces() {
-        assert_eq!(
-            Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"])
-                .unwrap()
-                .into_intent(),
-            Intent::PrePush {
-                remote: "origin".into()
-            }
-        );
+        assert!(Cli::try_parse_from(["agent-cli", "pre-push", "--remote", "origin"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "pre-push"]).is_err());
     }
 

@@ -1,11 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use agent_cli::cli::{Cli, Command as CliCommand, OutputFormat};
+use agent_cli::cli::{
+    AlphaCommand, CaptureCommand, CiCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget,
+    OutputFormat, PlatformManifestCommand, ReleaseCommand, RunCommand,
+};
 use agent_cli::error::AgentResult;
 use agent_cli::evidence::Evidence;
 use agent_cli::executor;
-use agent_cli::model::{Intent, Outcome};
+use agent_cli::model::{AssuranceRequest, Outcome};
 use agent_cli::planner;
 use agent_cli::progress::{EventKind, Reporter};
 use agent_cli::request::RawRequest;
@@ -13,6 +16,7 @@ use agent_cli::scope;
 use clap::Parser;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -34,11 +38,8 @@ fn run() -> Result<ExitCode, String> {
             return Ok(ExitCode::from(error.exit_code() as u8));
         }
     };
-    let Cli {
-        output_format: output,
-        command,
-    } = cli;
-    let command = match command {
+    let output = cli.output_format;
+    let command = match cli.command {
         Some(CliCommand::Device { command }) => {
             return match agent_cli::commands::device::run(command) {
                 Ok(()) => Ok(ExitCode::SUCCESS),
@@ -48,25 +49,23 @@ fn run() -> Result<ExitCode, String> {
                 }
             };
         }
-        command => command,
-    };
-    let cli = Cli {
-        output_format: output,
-        command,
+        Some(command) => command,
+        None => unreachable!("clap requires a command"),
     };
     let raw = RawRequest::capture(std::env::args_os());
-    let repository = std::env::current_dir().map_err(|error| error.to_string())?;
-    let evidence = Evidence::open_for_repository(&repository)?;
-    evidence.begin_request(&raw)?;
-    let intent = cli.into_intent();
-    evidence.record_intent(&raw.id, &intent)?;
-    let mut reporter = Reporter::new_at(&evidence, output, &raw.id, raw.started);
+    let context = RepoContext::open()?;
+    context.evidence.begin_request(&raw)?;
+    context.evidence.record_intent(
+        &raw.id,
+        &serde_json::json!({"command": command_label(&command)}),
+    )?;
+    let mut reporter = Reporter::new_at(&context.evidence, output, &raw.id, raw.started);
     reporter.emit(EventKind::Started, "request", "Accepted request", None)?;
     let outcome = match dispatch(
-        &evidence,
+        &context.evidence,
         &raw.id,
-        &repository,
-        &intent,
+        &context.repository,
+        &command,
         output,
         &mut reporter,
     ) {
@@ -75,7 +74,7 @@ fn run() -> Result<ExitCode, String> {
             reporter
                 .emit(EventKind::Failed, "request", &error.to_string(), None)
                 .map_err(|error| error.to_string())?;
-            evidence.finish(&raw.id, Outcome::Failed)?;
+            context.evidence.finish(&raw.id, Outcome::Failed)?;
             return Ok(ExitCode::FAILURE);
         }
     };
@@ -87,23 +86,57 @@ fn run() -> Result<ExitCode, String> {
             Some(100),
         )
         .map_err(|error| error.to_string())?;
-    evidence.finish(&raw.id, outcome)?;
+    context.evidence.finish(&raw.id, outcome)?;
     if outcome == Outcome::ExternalRequired {
         return Ok(ExitCode::from(3));
     }
     Ok(ExitCode::SUCCESS)
 }
 
+struct RepoContext {
+    repository: PathBuf,
+    evidence: Evidence,
+}
+
+impl RepoContext {
+    fn open() -> Result<Self, String> {
+        let repository = std::env::current_dir().map_err(|error| error.to_string())?;
+        let evidence = Evidence::open_for_repository(&repository)?;
+        Ok(Self {
+            repository,
+            evidence,
+        })
+    }
+}
+
+fn command_label(command: &CliCommand) -> &'static str {
+    match command {
+        CliCommand::PrePush { .. } => "pre-push",
+        CliCommand::Plan(_) => "plan",
+        CliCommand::Run { .. } => "run",
+        CliCommand::Db { .. } => "db",
+        CliCommand::Diagnose => "diagnose",
+        CliCommand::Device { .. } => "device",
+        CliCommand::Deliver { .. } => "deliver",
+        CliCommand::Benchmark { .. } => "benchmark",
+        CliCommand::Capture { .. } => "capture",
+        CliCommand::Alpha { .. } => "alpha",
+        CliCommand::Release { .. } => "release",
+        CliCommand::Build { .. } => "build",
+        CliCommand::Ci { .. } => "ci",
+    }
+}
+
 fn dispatch(
     evidence: &Evidence,
     request_id: &str,
     repository: &std::path::Path,
-    intent: &Intent,
+    command: &CliCommand,
     output: OutputFormat,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    match intent {
-        Intent::PrePush { remote } => {
+    match command {
+        CliCommand::PrePush { remote } => {
             let mut updates = String::new();
             std::io::stdin()
                 .read_to_string(&mut updates)
@@ -118,7 +151,13 @@ fn dispatch(
                 )?;
                 return Ok(Outcome::NoOp);
             }
-            let plan = planner::affected_plan_at(repository, intent.clone(), paths.clone())?;
+            let plan = planner::affected_plan_at(
+                repository,
+                AssuranceRequest::PrePush {
+                    remote: remote.clone(),
+                },
+                paths.clone(),
+            )?;
             evidence.record_plan(request_id, &plan)?;
             reporter.emit(
                 EventKind::Progress,
@@ -137,14 +176,19 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        Intent::Deliver => return deliver(evidence, repository, reporter),
-        Intent::DeliverLocalMain => return deliver_local_main(repository, reporter),
-        Intent::Benchmark { scenario } => {
+        CliCommand::Deliver { target: None } => return deliver(evidence, repository, reporter),
+        CliCommand::Deliver {
+            target: Some(DeliverTarget::LocalMain),
+        } => return deliver_local_main(repository, reporter),
+        CliCommand::Benchmark { scenario } => {
             return agent_cli::benchmark::execute(repository, *scenario, reporter);
         }
-        Intent::CaptureUsbVideo {
-            output: destination,
-            seconds,
+        CliCommand::Capture {
+            command:
+                CaptureCommand::UsbVideo {
+                    output: destination,
+                    seconds,
+                },
         } => {
             let artifact = match seconds {
                 Some(seconds) => {
@@ -155,14 +199,19 @@ fn dispatch(
             println!("{}", artifact.markdown_link());
             return Ok(Outcome::Passed);
         }
-        Intent::ReleaseQualify => {
+        CliCommand::Release {
+            command: ReleaseCommand::Qualify,
+        } => {
             return agent_cli::release::execute(reporter);
         }
-        Intent::AlphaAccept {
-            candidate,
-            output,
-            reuse_installed,
-            restore_host_mode,
+        CliCommand::Alpha {
+            command:
+                AlphaCommand::Accept {
+                    candidate,
+                    output,
+                    reuse_installed,
+                    restore_host_mode,
+                },
         } => {
             let receipt = agent_cli::alpha::execute(
                 candidate,
@@ -174,493 +223,539 @@ fn dispatch(
             println!("{}", receipt.display());
             return Ok(Outcome::Passed);
         }
-        Intent::AlphaVerify {
-            candidate,
-            receipt,
-            marker,
+        CliCommand::Alpha {
+            command:
+                AlphaCommand::Verify {
+                    candidate,
+                    receipt,
+                    marker,
+                },
         } => {
             let marker = agent_cli::alpha::verify_acceptance(candidate, receipt, marker)?;
             println!("{}", marker.display());
             return Ok(Outcome::Passed);
         }
-        Intent::Diagnose => {
+        CliCommand::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }
-        Intent::Build { intent } => {
+        CliCommand::Build { intent } => {
             agent_cli::build::execute_command(repository, *intent, reporter)?;
             return Ok(Outcome::Passed);
         }
-        Intent::CiPlatformCandidates { artifacts, name } => {
-            reporter.emit(
-                EventKind::Progress,
-                "ci",
-                "Selecting reusable platform artifacts",
-                Some(50),
-            )?;
-            agent_cli::ci::print_candidates(artifacts, name)?;
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiPlatformEligibleRun { run, head_sha } => {
-            reporter.emit(
-                EventKind::Progress,
-                "ci",
-                "Checking platform run provenance",
-                Some(50),
-            )?;
-            agent_cli::ci::require_eligible_run(run, head_sha)?;
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiRequireAlphaPromotion {
-            channel,
-            alpha_sha,
-            candidate_sha,
-        } => {
-            reporter.emit(
-                EventKind::Progress,
-                "ci",
-                "Checking release promotion",
-                Some(50),
-            )?;
-            agent_cli::ci::require_alpha_promotion(channel, alpha_sha, candidate_sha)?;
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiPlatformManifestGenerate {
-            output,
-            main,
-            gui,
-            manager,
-            scanout_module,
-            scanout_metadata,
-            latch_rbf,
-            latch_metadata,
-            platform_bundle_manifest,
-            main_revision,
-            magik_revision,
-            layout,
-        } => {
-            reporter.emit(
-                EventKind::Progress,
-                "manifest",
-                "Generating platform manifest",
-                Some(40),
-            )?;
-            agent_cli::platform_manifest::generate(
-                output,
-                &agent_cli::platform_manifest::Artifacts {
-                    main: main.clone(),
-                    gui: gui.clone(),
-                    manager: manager.clone(),
-                    scanout_module: scanout_module.clone(),
-                    scanout_metadata: scanout_metadata.clone(),
-                    latch_rbf: latch_rbf.clone(),
-                    latch_metadata: latch_metadata.clone(),
-                },
-                &agent_cli::platform_manifest::ReleaseIdentity::from_bundle_manifest(
-                    platform_bundle_manifest,
-                )?,
-                main_revision,
-                magik_revision,
-                agent_cli::platform_manifest::Layout::parse(layout)?,
-            )?;
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiPlatformManifestVerify {
-            manifest,
-            root,
-            layout,
-        } => {
-            reporter.emit(
-                EventKind::Progress,
-                "manifest",
-                "Verifying platform manifest",
-                Some(40),
-            )?;
-            agent_cli::platform_manifest::verify(
-                manifest,
-                root.as_deref(),
-                agent_cli::platform_manifest::Layout::parse(layout)?,
-            )?;
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiGameDatabases { command } => {
-            use agent_cli::cli::GameDatabaseCommand;
-            reporter.emit(
-                EventKind::Progress,
-                "databases",
-                "Processing game-database bundle",
-                Some(30),
-            )?;
-            match command {
-                GameDatabaseCommand::BuildMame {
-                    out,
-                    listxml,
-                    mame,
-                    machine_sqlite,
-                    software_dir,
-                } => {
-                    let mut args = vec![
-                        "mame-metadata-build".to_owned(),
-                        "--out".to_owned(),
-                        out.to_string_lossy().into_owned(),
-                    ];
-                    for (flag, path) in [
-                        ("--listxml", listxml.as_ref()),
-                        ("--mame", mame.as_ref()),
-                        ("--machine-sqlite", machine_sqlite.as_ref()),
-                        ("--software-dir", software_dir.as_ref()),
-                    ] {
-                        if let Some(path) = path {
-                            args.extend([flag.to_owned(), path.to_string_lossy().into_owned()]);
-                        }
-                    }
-                    agent_cli::commands::ci::run_local_host(args)?;
-                }
-                GameDatabaseCommand::ImportArcade {
-                    sqlite,
-                    csv,
-                    source_sha,
-                } => {
-                    agent_cli::commands::ci::run_local_host(vec![
-                        "arcade-database-import".to_owned(),
-                        "--sqlite".to_owned(),
-                        sqlite.to_string_lossy().into_owned(),
-                        "--csv".to_owned(),
-                        csv.to_string_lossy().into_owned(),
-                        "--source-sha".to_owned(),
-                        source_sha.clone(),
-                    ])?;
-                }
-                GameDatabaseCommand::Create {
-                    mame_sqlite,
-                    hbmame_sqlite,
-                    release_version,
-                    mame_tag,
-                    mame_sha,
-                    mame_listxml_asset,
-                    mame_listxml_sha256,
-                    hbmame_tag,
-                    hbmame_sha,
-                    mame_builder_sha,
-                    hbmame_builder_sha,
-                    arcade_database_csv,
-                    arcade_database_license,
-                    arcade_database_sha,
-                    arcade_database_builder_sha,
+        CliCommand::Ci { command } => match command.as_ref() {
+            CiCommand::HostAssurance(scope) => {
+                return run_assurance(
+                    evidence,
+                    request_id,
+                    repository,
+                    AssuranceRequest::CiHostAssurance {
+                        scope: scope.scope(),
+                    },
+                    true,
+                    reporter,
+                );
+            }
+            CiCommand::PlatformCandidates { artifacts, name } => {
+                reporter.emit(
+                    EventKind::Progress,
+                    "ci",
+                    "Selecting reusable platform artifacts",
+                    Some(50),
+                )?;
+                agent_cli::ci::print_candidates(artifacts, name)?;
+                return Ok(Outcome::Passed);
+            }
+            CiCommand::PlatformEligibleRun { run, head_sha } => {
+                reporter.emit(
+                    EventKind::Progress,
+                    "ci",
+                    "Checking platform run provenance",
+                    Some(50),
+                )?;
+                agent_cli::ci::require_eligible_run(run, head_sha)?;
+                return Ok(Outcome::Passed);
+            }
+            CiCommand::RequireAlphaPromotion {
+                channel,
+                alpha_sha,
+                candidate_sha,
+            } => {
+                reporter.emit(
+                    EventKind::Progress,
+                    "ci",
+                    "Checking release promotion",
+                    Some(50),
+                )?;
+                agent_cli::ci::require_alpha_promotion(channel, alpha_sha, candidate_sha)?;
+                return Ok(Outcome::Passed);
+            }
+            CiCommand::PlatformManifest {
+                command:
+                    PlatformManifestCommand::Generate {
+                        output,
+                        main,
+                        gui,
+                        manager,
+                        scanout_module,
+                        scanout_metadata,
+                        latch_rbf,
+                        latch_metadata,
+                        platform_bundle_manifest,
+                        main_revision,
+                        magik_revision,
+                        layout,
+                    },
+            } => {
+                reporter.emit(
+                    EventKind::Progress,
+                    "manifest",
+                    "Generating platform manifest",
+                    Some(40),
+                )?;
+                agent_cli::platform_manifest::generate(
                     output,
-                } => {
-                    let archive =
-                        agent_cli::game_databases::create(&agent_cli::game_databases::Create {
-                            mame: mame_sqlite,
-                            hbmame: hbmame_sqlite,
-                            release_version: *release_version,
-                            mame_tag,
-                            mame_sha,
-                            listxml_asset: mame_listxml_asset,
-                            listxml_sha256: mame_listxml_sha256,
-                            hbmame_tag,
-                            hbmame_sha,
-                            mame_builder_sha,
-                            hbmame_builder_sha,
-                            arcade_database_csv,
-                            arcade_database_license,
-                            arcade_database_sha,
-                            arcade_database_builder_sha,
-                            output,
-                        })?;
-                    println!("{}", archive.display());
-                }
-                GameDatabaseCommand::Verify {
-                    archive,
+                    &agent_cli::platform_manifest::Artifacts {
+                        main: main.clone(),
+                        gui: gui.clone(),
+                        manager: manager.clone(),
+                        scanout_module: scanout_module.clone(),
+                        scanout_metadata: scanout_metadata.clone(),
+                        latch_rbf: latch_rbf.clone(),
+                        latch_metadata: latch_metadata.clone(),
+                    },
+                    &agent_cli::platform_manifest::ReleaseIdentity::from_bundle_manifest(
+                        platform_bundle_manifest,
+                    )?,
+                    main_revision,
+                    magik_revision,
+                    agent_cli::platform_manifest::Layout::parse(layout)?,
+                )?;
+                return Ok(Outcome::Passed);
+            }
+            CiCommand::PlatformManifest {
+                command:
+                    PlatformManifestCommand::Verify {
+                        manifest,
+                        root,
+                        layout,
+                    },
+            } => {
+                reporter.emit(
+                    EventKind::Progress,
+                    "manifest",
+                    "Verifying platform manifest",
+                    Some(40),
+                )?;
+                agent_cli::platform_manifest::verify(
                     manifest,
-                    checksums,
-                } => {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&agent_cli::game_databases::verify(
-                            archive,
-                            manifest.as_deref(),
-                            checksums.as_deref()
-                        )?)
-                        .unwrap()
-                    );
-                }
-                GameDatabaseCommand::ExtractRelease { release, output } => {
-                    println!(
-                        "{}",
-                        serde_json::to_string(&agent_cli::game_databases::extract_release(
-                            release, output
-                        )?)
-                        .unwrap()
-                    );
-                }
-                GameDatabaseCommand::PlanUpdate {
-                    manifest,
-                    mame_tag,
-                    mame_sha,
-                    hbmame_tag,
-                    hbmame_sha,
-                    arcade_database_sha,
-                    github_output,
-                } => {
-                    let current = manifest
-                        .as_ref()
-                        .map(std::fs::read_to_string)
-                        .transpose()
-                        .map_err(|error| error.to_string())?
-                        .map(|text| serde_json::from_str(&text).map_err(|error| error.to_string()))
-                        .transpose()?;
-                    let result = agent_cli::game_databases::update_plan(
-                        current.as_ref(),
+                    root.as_deref(),
+                    agent_cli::platform_manifest::Layout::parse(layout)?,
+                )?;
+                return Ok(Outcome::Passed);
+            }
+            CiCommand::GameDatabases { command } => {
+                use agent_cli::cli::GameDatabaseCommand;
+                reporter.emit(
+                    EventKind::Progress,
+                    "databases",
+                    "Processing game-database bundle",
+                    Some(30),
+                )?;
+                match command {
+                    GameDatabaseCommand::BuildMame {
+                        out,
+                        listxml,
+                        mame,
+                        machine_sqlite,
+                        software_dir,
+                    } => {
+                        let mut args = vec![
+                            "mame-metadata-build".to_owned(),
+                            "--out".to_owned(),
+                            out.to_string_lossy().into_owned(),
+                        ];
+                        for (flag, path) in [
+                            ("--listxml", listxml.as_ref()),
+                            ("--mame", mame.as_ref()),
+                            ("--machine-sqlite", machine_sqlite.as_ref()),
+                            ("--software-dir", software_dir.as_ref()),
+                        ] {
+                            if let Some(path) = path {
+                                args.extend([flag.to_owned(), path.to_string_lossy().into_owned()]);
+                            }
+                        }
+                        agent_cli::commands::ci::run_local_host(args)?;
+                    }
+                    GameDatabaseCommand::ImportArcade {
+                        sqlite,
+                        csv,
+                        source_sha,
+                    } => {
+                        agent_cli::commands::ci::run_local_host(vec![
+                            "arcade-database-import".to_owned(),
+                            "--sqlite".to_owned(),
+                            sqlite.to_string_lossy().into_owned(),
+                            "--csv".to_owned(),
+                            csv.to_string_lossy().into_owned(),
+                            "--source-sha".to_owned(),
+                            source_sha.clone(),
+                        ])?;
+                    }
+                    GameDatabaseCommand::Create {
+                        mame_sqlite,
+                        hbmame_sqlite,
+                        release_version,
+                        mame_tag,
+                        mame_sha,
+                        mame_listxml_asset,
+                        mame_listxml_sha256,
+                        hbmame_tag,
+                        hbmame_sha,
+                        mame_builder_sha,
+                        hbmame_builder_sha,
+                        arcade_database_csv,
+                        arcade_database_license,
+                        arcade_database_sha,
+                        arcade_database_builder_sha,
+                        output,
+                    } => {
+                        let archive = agent_cli::game_databases::create(
+                            &agent_cli::game_databases::Create {
+                                mame: mame_sqlite,
+                                hbmame: hbmame_sqlite,
+                                release_version: *release_version,
+                                mame_tag,
+                                mame_sha,
+                                listxml_asset: mame_listxml_asset,
+                                listxml_sha256: mame_listxml_sha256,
+                                hbmame_tag,
+                                hbmame_sha,
+                                mame_builder_sha,
+                                hbmame_builder_sha,
+                                arcade_database_csv,
+                                arcade_database_license,
+                                arcade_database_sha,
+                                arcade_database_builder_sha,
+                                output,
+                            },
+                        )?;
+                        println!("{}", archive.display());
+                    }
+                    GameDatabaseCommand::Verify {
+                        archive,
+                        manifest,
+                        checksums,
+                    } => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&agent_cli::game_databases::verify(
+                                archive,
+                                manifest.as_deref(),
+                                checksums.as_deref()
+                            )?)
+                            .unwrap()
+                        );
+                    }
+                    GameDatabaseCommand::ExtractRelease { release, output } => {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&agent_cli::game_databases::extract_release(
+                                release, output
+                            )?)
+                            .unwrap()
+                        );
+                    }
+                    GameDatabaseCommand::PlanUpdate {
+                        manifest,
                         mame_tag,
                         mame_sha,
                         hbmame_tag,
                         hbmame_sha,
                         arcade_database_sha,
-                    )?;
-                    if let Some(path) = github_output {
-                        append_github_output(
-                            path,
-                            &result,
-                            &[
-                                "current_version",
-                                "next_version",
-                                "mame_changed",
-                                "hbmame_changed",
-                                "arcade_database_changed",
-                                "update_needed",
-                            ],
+                        github_output,
+                    } => {
+                        let current = manifest
+                            .as_ref()
+                            .map(std::fs::read_to_string)
+                            .transpose()
+                            .map_err(|error| error.to_string())?
+                            .map(|text| {
+                                serde_json::from_str(&text).map_err(|error| error.to_string())
+                            })
+                            .transpose()?;
+                        let result = agent_cli::game_databases::update_plan(
+                            current.as_ref(),
+                            mame_tag,
+                            mame_sha,
+                            hbmame_tag,
+                            hbmame_sha,
+                            arcade_database_sha,
                         )?;
+                        if let Some(path) = github_output {
+                            append_github_output(
+                                path,
+                                &result,
+                                &[
+                                    "current_version",
+                                    "next_version",
+                                    "mame_changed",
+                                    "hbmame_changed",
+                                    "arcade_database_changed",
+                                    "update_needed",
+                                ],
+                            )?;
+                        }
+                        println!("{}", serde_json::to_string(&result).unwrap());
                     }
-                    println!("{}", serde_json::to_string(&result).unwrap());
                 }
+                return Ok(Outcome::Passed);
             }
-            return Ok(Outcome::Passed);
-        }
-        Intent::CiPlatformBundle { command } => {
-            use agent_cli::cli::PlatformBundleCommand;
-            reporter.emit(
-                EventKind::Progress,
-                "platform",
-                "Processing platform bundle",
-                Some(30),
-            )?;
-            let output = match command {
-                PlatformBundleCommand::Create {
-                    main_dir,
-                    fpga_dir,
-                    scanout_dir,
-                    main_id,
-                    fpga_id,
-                    kernel_id,
-                    main_run_id,
-                    fpga_run_id,
-                    kernel_run_id,
-                    main_head_sha,
-                    fpga_head_sha,
-                    kernel_head_sha,
-                    main_source,
-                    fpga_source,
-                    kernel_source,
-                    release_version,
-                    output,
-                    ..
-                } => agent_cli::platform_bundle::create(&agent_cli::platform_bundle::Create {
-                    main: main_dir,
-                    fpga: fpga_dir,
-                    scanout: scanout_dir,
-                    main_id,
-                    fpga_id,
-                    kernel_id,
-                    main_run_id,
-                    fpga_run_id,
-                    kernel_run_id,
-                    main_head_sha,
-                    fpga_head_sha,
-                    kernel_head_sha,
-                    release_version: *release_version,
-                    output,
-                    main_source,
-                    fpga_source,
-                    kernel_source,
-                })?
-                .display()
-                .to_string(),
-                PlatformBundleCommand::Verify {
-                    archive,
-                    manifest,
-                    release_version,
-                } => serde_json::to_string(&agent_cli::platform_bundle::verify(
-                    archive,
-                    manifest.as_deref(),
-                    *release_version,
-                )?)
-                .unwrap(),
-                PlatformBundleCommand::ExtractComponent {
-                    archive,
-                    manifest,
-                    component,
-                    component_id,
-                    output,
-                } => serde_json::to_string(&agent_cli::platform_bundle::extract_component(
-                    archive,
-                    manifest,
-                    component,
-                    component_id,
-                    output,
-                )?)
-                .unwrap(),
-                PlatformBundleCommand::VerifyComponent {
-                    component,
-                    artifact,
-                    component_id,
-                    revision,
-                } => serde_json::to_string(&agent_cli::platform_bundle::verify_component(
-                    component,
-                    artifact,
-                    component_id,
-                    revision.as_deref(),
-                )?)
-                .unwrap(),
-                PlatformBundleCommand::CompactComponent {
-                    component,
-                    artifact,
-                    output,
-                    component_id,
-                } => agent_cli::platform_bundle::compact_component(
-                    component,
-                    artifact,
-                    output,
-                    component_id,
-                )?
-                .display()
-                .to_string(),
-                PlatformBundleCommand::WriteComponentCache {
-                    component,
-                    artifact,
-                    component_id,
-                    run_id,
-                    head_sha,
-                } => {
-                    agent_cli::platform_bundle::write_component_cache(
+            CiCommand::PlatformBundle { command } => {
+                use agent_cli::cli::PlatformBundleCommand;
+                reporter.emit(
+                    EventKind::Progress,
+                    "platform",
+                    "Processing platform bundle",
+                    Some(30),
+                )?;
+                let output = match command {
+                    PlatformBundleCommand::Create {
+                        main_dir,
+                        fpga_dir,
+                        scanout_dir,
+                        main_id,
+                        fpga_id,
+                        kernel_id,
+                        main_run_id,
+                        fpga_run_id,
+                        kernel_run_id,
+                        main_head_sha,
+                        fpga_head_sha,
+                        kernel_head_sha,
+                        main_source,
+                        fpga_source,
+                        kernel_source,
+                        release_version,
+                        output,
+                        ..
+                    } => agent_cli::platform_bundle::create(&agent_cli::platform_bundle::Create {
+                        main: main_dir,
+                        fpga: fpga_dir,
+                        scanout: scanout_dir,
+                        main_id,
+                        fpga_id,
+                        kernel_id,
+                        main_run_id,
+                        fpga_run_id,
+                        kernel_run_id,
+                        main_head_sha,
+                        fpga_head_sha,
+                        kernel_head_sha,
+                        release_version: *release_version,
+                        output,
+                        main_source,
+                        fpga_source,
+                        kernel_source,
+                    })?
+                    .display()
+                    .to_string(),
+                    PlatformBundleCommand::Verify {
+                        archive,
+                        manifest,
+                        release_version,
+                    } => serde_json::to_string(&agent_cli::platform_bundle::verify(
+                        archive,
+                        manifest.as_deref(),
+                        *release_version,
+                    )?)
+                    .unwrap(),
+                    PlatformBundleCommand::ExtractComponent {
+                        archive,
+                        manifest,
+                        component,
+                        component_id,
+                        output,
+                    } => serde_json::to_string(&agent_cli::platform_bundle::extract_component(
+                        archive,
+                        manifest,
+                        component,
+                        component_id,
+                        output,
+                    )?)
+                    .unwrap(),
+                    PlatformBundleCommand::VerifyComponent {
+                        component,
+                        artifact,
+                        component_id,
+                        revision,
+                    } => serde_json::to_string(&agent_cli::platform_bundle::verify_component(
+                        component,
+                        artifact,
+                        component_id,
+                        revision.as_deref(),
+                    )?)
+                    .unwrap(),
+                    PlatformBundleCommand::CompactComponent {
+                        component,
+                        artifact,
+                        output,
+                        component_id,
+                    } => agent_cli::platform_bundle::compact_component(
+                        component,
+                        artifact,
+                        output,
+                        component_id,
+                    )?
+                    .display()
+                    .to_string(),
+                    PlatformBundleCommand::WriteComponentCache {
                         component,
                         artifact,
                         component_id,
                         run_id,
                         head_sha,
-                    )?;
-                    String::new()
-                }
-                PlatformBundleCommand::PlanUpdate {
-                    manifest,
-                    current_version,
-                    main_id,
-                    fpga_id,
-                    kernel_id,
-                    github_output,
-                } => {
-                    let current: Option<serde_json::Value> = manifest
-                        .as_ref()
-                        .map(std::fs::read_to_string)
-                        .transpose()
-                        .map_err(|e| e.to_string())?
-                        .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
-                        .transpose()?;
-                    let result = agent_cli::platform_bundle::update_plan(
-                        current.as_ref(),
-                        *current_version,
+                    } => {
+                        agent_cli::platform_bundle::write_component_cache(
+                            component,
+                            artifact,
+                            component_id,
+                            run_id,
+                            head_sha,
+                        )?;
+                        String::new()
+                    }
+                    PlatformBundleCommand::PlanUpdate {
+                        manifest,
+                        current_version,
                         main_id,
                         fpga_id,
                         kernel_id,
-                    )?;
-                    if let Some(path) = github_output {
-                        append_github_output(
-                            path,
-                            &result,
-                            &[
-                                "current_version",
-                                "next_version",
-                                "current_bundle_id",
-                                "bundle_id",
-                                "update_needed",
-                                "main_changed",
-                                "fpga_changed",
-                                "kernel_changed",
-                                "release_tag",
-                            ],
+                        github_output,
+                    } => {
+                        let current: Option<serde_json::Value> = manifest
+                            .as_ref()
+                            .map(std::fs::read_to_string)
+                            .transpose()
+                            .map_err(|e| e.to_string())?
+                            .map(|text| serde_json::from_str(&text).map_err(|e| e.to_string()))
+                            .transpose()?;
+                        let result = agent_cli::platform_bundle::update_plan(
+                            current.as_ref(),
+                            *current_version,
+                            main_id,
+                            fpga_id,
+                            kernel_id,
                         )?;
+                        if let Some(path) = github_output {
+                            append_github_output(
+                                path,
+                                &result,
+                                &[
+                                    "current_version",
+                                    "next_version",
+                                    "current_bundle_id",
+                                    "bundle_id",
+                                    "update_needed",
+                                    "main_changed",
+                                    "fpga_changed",
+                                    "kernel_changed",
+                                    "release_tag",
+                                ],
+                            )?;
+                        }
+                        serde_json::to_string(&result).unwrap()
                     }
-                    serde_json::to_string(&result).unwrap()
+                };
+                if !output.is_empty() {
+                    println!("{output}");
                 }
-            };
-            if !output.is_empty() {
-                println!("{output}");
+                return Ok(Outcome::Passed);
             }
-            return Ok(Outcome::Passed);
-        }
-        Intent::Plan { scope: selected } | Intent::CiHostAssurance { scope: selected } => {
-            let paths = scope::collect(evidence, request_id, repository, selected)?;
-            let claimed_paths = paths.clone();
-            let plan = planner::affected_plan_at(repository, intent.clone(), paths)?;
-            evidence.record_plan(request_id, &plan)?;
-            let summary = if plan.operations.is_empty() {
-                "No lint operations selected".to_owned()
-            } else {
-                format!("{} checks planned", plan.operations.len())
-            };
-            let phase = if matches!(intent, Intent::CiHostAssurance { .. }) {
-                "ci-assurance"
-            } else {
-                "plan"
-            };
-            reporter.emit(EventKind::Progress, phase, &summary, Some(0))?;
-            if matches!(intent, Intent::Plan { .. }) {
-                if !plan.external_requirements.is_empty() {
-                    for requirement in &plan.external_requirements {
-                        reporter.emit(
-                            EventKind::Warning,
-                            "external",
-                            &requirement.message,
-                            None,
-                        )?;
-                    }
-                    return Ok(Outcome::ExternalRequired);
-                }
-                return Ok(if plan.operations.is_empty() {
-                    Outcome::NoOp
-                } else {
-                    Outcome::Passed
-                });
-            }
-            let outcome = executor::execute_with_changes(
+        },
+        CliCommand::Plan(scope) => {
+            return run_assurance(
                 evidence,
                 request_id,
                 repository,
-                &plan,
-                &claimed_paths,
+                AssuranceRequest::Plan {
+                    scope: scope.scope(),
+                },
+                false,
                 reporter,
-            )?;
-            if !plan.external_requirements.is_empty() {
-                for requirement in &plan.external_requirements {
-                    reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
-                }
-                return Ok(Outcome::ExternalRequired);
-            }
-            return Ok(outcome);
+            );
         }
-        Intent::DatabaseReport => {
+        CliCommand::Db {
+            command: DbCommand::Report,
+        } => {
             let report = evidence.report()?;
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             }
         }
-        Intent::ShowRun { run_id } => {
+        CliCommand::Run {
+            command: RunCommand::Show { run_id },
+        } => {
             let detail = evidence.run_detail(run_id)?;
             if output == OutputFormat::Human {
                 println!("{}", serde_json::to_string_pretty(&detail).unwrap());
             }
         }
+        CliCommand::Device { .. } => unreachable!("device commands dispatch before RepoContext"),
     }
     Ok(Outcome::NoOp)
+}
+
+fn run_assurance(
+    evidence: &Evidence,
+    request_id: &str,
+    repository: &Path,
+    intent: AssuranceRequest,
+    execute: bool,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    let selected = match &intent {
+        AssuranceRequest::Plan { scope } | AssuranceRequest::CiHostAssurance { scope } => scope,
+        AssuranceRequest::PrePush { .. } => {
+            unreachable!("pre-push paths are collected by the hook")
+        }
+    };
+    let paths = scope::collect(evidence, request_id, repository, selected)?;
+    let claimed_paths = paths.clone();
+    let plan = planner::affected_plan_at(repository, intent, paths)?;
+    evidence.record_plan(request_id, &plan)?;
+    let summary = if plan.operations.is_empty() {
+        "No lint operations selected".to_owned()
+    } else {
+        format!("{} checks planned", plan.operations.len())
+    };
+    reporter.emit(
+        EventKind::Progress,
+        if execute { "ci-assurance" } else { "plan" },
+        &summary,
+        Some(0),
+    )?;
+    let outcome = if execute {
+        executor::execute_with_changes(
+            evidence,
+            request_id,
+            repository,
+            &plan,
+            &claimed_paths,
+            reporter,
+        )?
+    } else if plan.operations.is_empty() {
+        Outcome::NoOp
+    } else {
+        Outcome::Passed
+    };
+    for requirement in &plan.external_requirements {
+        reporter.emit(EventKind::Warning, "external", &requirement.message, None)?;
+    }
+    Ok(if plan.external_requirements.is_empty() {
+        outcome
+    } else {
+        Outcome::ExternalRequired
+    })
 }
 
 fn append_github_output(path: &Path, result: &serde_json::Value, keys: &[&str]) -> AgentResult<()> {

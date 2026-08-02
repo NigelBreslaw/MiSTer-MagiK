@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::model::{
-    ActionKind, BuiltinOperation, ExternalRequirement, Intent, Operation, Plan, Risk, WorkflowPhase,
+    ActionKind, AssuranceRequest, BuiltinOperation, ExternalRequirement, Operation, Plan, Risk,
+    WorkflowPhase,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -18,16 +19,16 @@ const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
     "mister/platform/runtime",
 ];
 
-pub fn affected_plan(intent: Intent, paths: Vec<PathBuf>) -> Result<Plan, String> {
+pub fn affected_plan(request: AssuranceRequest, paths: Vec<PathBuf>) -> Result<Plan, String> {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("agent-cli must live below the repository root");
-    affected_plan_at(repository, intent, paths)
+    affected_plan_at(repository, request, paths)
 }
 
 pub fn affected_plan_at(
     repository: &Path,
-    intent: Intent,
+    request: AssuranceRequest,
     paths: Vec<PathBuf>,
 ) -> Result<Plan, String> {
     let paths: BTreeSet<_> = paths.into_iter().collect();
@@ -69,7 +70,7 @@ pub fn affected_plan_at(
     });
     let operations = combine_arm_validation(subsume_cargo(normalize_operations(operations)));
     Ok(Plan {
-        intent,
+        request,
         operations,
         external_requirements,
     })
@@ -1116,7 +1117,7 @@ mod tests {
     #[test]
     fn catalog_plan_selects_builder_and_reader_without_duplicates() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1144,7 +1145,7 @@ mod tests {
     #[test]
     fn pre_commit_contract_changes_select_python_fixtures_once() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1167,7 +1168,7 @@ mod tests {
     #[test]
     fn slint_changes_select_the_full_pixel_text_contract_once() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1207,7 +1208,7 @@ mod tests {
     #[test]
     fn launcher_session_plan_uses_binary_ui_tests() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_runner/launcher_catalog_session.rs".into()],
@@ -1236,7 +1237,7 @@ mod tests {
     #[test]
     fn ui_assurance_selects_explicit_supported_feature_matrices() {
         let production = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_display.rs".into()],
@@ -1257,7 +1258,7 @@ mod tests {
         assert!(!production_test.args.contains(&"ui,experiments".into()));
 
         let preview = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/preview_state.rs".into()],
@@ -1272,7 +1273,7 @@ mod tests {
         assert!(preview_test.args.contains(&"ui-preview".into()));
 
         let bench = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/command_args.rs".into()],
@@ -1286,7 +1287,7 @@ mod tests {
         assert!(bench_test.args.contains(&"ui,bench-scenes".into()));
 
         let experimental = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/experiments/particles/showcase.rs".into()],
@@ -1303,7 +1304,7 @@ mod tests {
     #[test]
     fn ui_preview_changes_select_profile_tests_and_capture_binary() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/bin/ui_preview.rs".into()],
@@ -1323,7 +1324,7 @@ mod tests {
     #[test]
     fn app_format_cache_covers_the_complete_formatted_crate() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_runner/crt_trial_loop.rs".into()],
@@ -1342,21 +1343,21 @@ mod tests {
     fn plan_pre_push_and_ci_assurance_share_the_full_plan() {
         let paths = vec!["crates/catalog/src/lib.rs".into()];
         let planned = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(paths.clone()),
             },
             paths.clone(),
         )
         .unwrap();
         let pre_push = affected_plan(
-            Intent::PrePush {
+            AssuranceRequest::PrePush {
                 remote: "origin".into(),
             },
             paths.clone(),
         )
         .unwrap();
         let ci = affected_plan(
-            Intent::CiHostAssurance {
+            AssuranceRequest::CiHostAssurance {
                 scope: Scope::Paths(paths.clone()),
             },
             paths,
@@ -1379,7 +1380,7 @@ mod tests {
             "agent-cli/src/host/agent_client.rs",
         ] {
             let plan = affected_plan(
-                Intent::Plan {
+                AssuranceRequest::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1396,7 +1397,7 @@ mod tests {
     #[test]
     fn cargo_dependency_policy_is_not_embedded_in_plans() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["agent-cli/src/executor.rs".into()],
@@ -1418,7 +1419,7 @@ mod tests {
     fn host_tooling_changes_select_doctor_contract() {
         for path in [".codex/config.toml", "apps/mister/rust-toolchain.toml"] {
             let plan = affected_plan(
-                Intent::Plan {
+                AssuranceRequest::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1436,7 +1437,7 @@ mod tests {
     #[test]
     fn repository_dot_config_changes_select_diff_check() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![".obsolete/config.toml".into()],
@@ -1458,7 +1459,7 @@ mod tests {
     fn workflow_dot_directories_keep_workflow_contract() {
         for path in [".github/workflows/check.yml", ".githooks/pre-commit"] {
             let plan = affected_plan(
-                Intent::Plan {
+                AssuranceRequest::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1480,7 +1481,7 @@ mod tests {
     #[test]
     fn deleted_script_does_not_select_a_syntax_check() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["scripts/definitely-deleted-script.sh".into()],
@@ -1506,7 +1507,7 @@ mod tests {
     #[test]
     fn fpga_verification_requires_external_build_and_local_checks() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: crate::model::Scope::Paths(Vec::new()),
             },
             vec!["mister/platform/fpga/menu-vblank-latch/menu.sv".into()],
@@ -1524,7 +1525,7 @@ mod tests {
     #[test]
     fn fpga_change_requires_external_rbf_build() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["mister/platform/fpga/menu-vblank-latch/menu.sv".into()],
@@ -1541,7 +1542,7 @@ mod tests {
     #[test]
     fn unclassified_path_fails_closed() {
         let error = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["new-subsystem/source.xyz".into()],
@@ -1553,7 +1554,7 @@ mod tests {
     #[test]
     fn launcher_verify_selects_canonical_local_arm_check() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/ui/launcher.slint".into()],
@@ -1573,7 +1574,7 @@ mod tests {
     #[test]
     fn compiled_app_checks_fingerprint_all_local_dependency_roots() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1602,7 +1603,7 @@ mod tests {
     #[test]
     fn media_manifest_changes_test_default_and_signed_feature_modes() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1642,7 +1643,7 @@ mod tests {
     #[test]
     fn mixed_runtime_changes_select_one_combined_arm_operation() {
         let plan = affected_plan(
-            Intent::Plan {
+            AssuranceRequest::Plan {
                 scope: Scope::Paths(Vec::new()),
             },
             vec![
@@ -1750,7 +1751,7 @@ mod tests {
             .into_iter()
             .filter(|path| {
                 let plan = affected_plan(
-                    Intent::Plan {
+                    AssuranceRequest::Plan {
                         scope: Scope::Paths(vec![]),
                     },
                     vec![path.clone()],

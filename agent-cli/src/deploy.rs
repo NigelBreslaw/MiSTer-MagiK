@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::build::BuildSpec;
-use crate::model::{ActionKind, Intent, Operation, Plan, Risk, WorkflowPhase};
 use crate::platform_manifest::{self, Layout};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -79,64 +78,6 @@ pub struct DeploymentPlan {
     pub changed_paths: Vec<PathBuf>,
     pub build: BuildSpec,
     pub platform_candidate: Option<crate::platform_ci::Candidate>,
-}
-
-impl DeploymentPlan {
-    #[must_use]
-    pub fn as_evidence_plan(&self, intent: Intent) -> Plan {
-        let mut inputs = vec![
-            format!("kind={}", self.kind.label()),
-            format!("profile={}", self.profile),
-            format!("ui_scope={}", self.ui_scope.label()),
-            format!("layout={}", self.layout),
-            format!("artifact={}", self.build.artifact().display()),
-        ];
-        inputs.extend(
-            self.platform_components
-                .iter()
-                .map(|value| format!("component={value}")),
-        );
-        inputs.extend(
-            self.changed_paths
-                .iter()
-                .map(|path| format!("changed={}", path.display())),
-        );
-        if let Some(candidate) = &self.platform_candidate {
-            inputs.extend([
-                format!("ci_run_id={}", candidate.run_id),
-                format!("ci_head_sha={}", candidate.head_sha),
-                format!("ci_head_branch={}", candidate.head_branch),
-                format!("platform_cache_reused={}", candidate.reused),
-                format!("bundle_id={}", candidate.bundle_id),
-                format!("main_identity={}", candidate.main_identity),
-                format!("main_revision={}", candidate.main_revision),
-                format!("fpga_identity={}", candidate.fpga_identity),
-                format!("kernel_identity={}", candidate.kernel_identity),
-                format!("ci_archive={}", candidate.archive.display()),
-                format!("ci_manifest={}", candidate.manifest.display()),
-            ]);
-            if let Some(tag) = &candidate.release_tag {
-                inputs.push(format!("platform_release_tag={tag}"));
-            }
-        }
-        Plan {
-            intent,
-            operations: vec![Operation {
-                id: format!("deploy.{}", self.kind.label()),
-                title: format!("Deploy {} installation", self.kind.label()),
-                risk: Risk::DeviceWrite,
-                action: ActionKind::DeviceTransaction,
-                phase: WorkflowPhase::Device,
-                program: "scripts/agent".into(),
-                args: vec!["deploy".into()],
-                reason: "inferred deployment transaction".into(),
-                failure_hint: "inspect the recorded deployment phases and rollback result".into(),
-                inputs,
-                builtin: None,
-            }],
-            external_requirements: Vec::new(),
-        }
-    }
 }
 
 pub fn plan(repository: &Path, mut paths: Vec<PathBuf>) -> Result<DeploymentPlan, String> {
@@ -561,30 +502,6 @@ mod tests {
         let build = BuildSpec::canonical(UiScope::Launcher);
         assert_eq!(build.features(), ["ui", "profile"]);
         assert_eq!(build.ui_scope(), UiScope::Launcher);
-    }
-
-    #[test]
-    fn evidence_plan_preserves_deployment_risk_and_identity() {
-        let deployment = plan(
-            Path::new("."),
-            vec![PathBuf::from("apps/mister/src/launcher.rs")],
-        )
-        .unwrap();
-        let plan = deployment.as_evidence_plan(Intent::Deliver);
-        assert_eq!(plan.operations.len(), 1);
-        assert_eq!(plan.operations[0].risk, Risk::DeviceWrite);
-        assert!(
-            plan.operations[0]
-                .inputs
-                .iter()
-                .any(|input| input == "kind=runtime")
-        );
-        assert!(
-            plan.operations[0]
-                .inputs
-                .iter()
-                .any(|input| input == "changed=apps/mister/src/launcher.rs")
-        );
     }
 
     #[test]

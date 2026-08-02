@@ -38,9 +38,9 @@ pub fn execute_with_changes(
         reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
-    let command = match plan.intent {
-        crate::model::Intent::PrePush { .. } => "pre-push",
-        crate::model::Intent::CiHostAssurance { .. } => "ci host-assurance",
+    let command = match plan.request {
+        crate::model::AssuranceRequest::PrePush { .. } => "pre-push",
+        crate::model::AssuranceRequest::CiHostAssurance { .. } => "ci host-assurance",
         _ => "check",
     };
     let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
@@ -48,7 +48,7 @@ pub fn execute_with_changes(
     let mut index = 0;
     while index < plan.operations.len() {
         let operation = &plan.operations[index];
-        crate::policy::authorize(operation, plan.intent.risk()).map_err(|rejection| {
+        crate::policy::authorize(operation, plan.request.risk()).map_err(|rejection| {
             format!(
                 "policy_rejected: {}: {}",
                 rejection.operation_id, rejection.reason
@@ -66,7 +66,7 @@ pub fn execute_with_changes(
                 && plan.operations[index].builtin.is_some()
                 && plan.operations[index].risk == crate::model::Risk::ReadOnly
             {
-                crate::policy::authorize(&plan.operations[index], plan.intent.risk()).map_err(
+                crate::policy::authorize(&plan.operations[index], plan.request.risk()).map_err(
                     |rejection| {
                         format!(
                             "policy_rejected: {}: {}",
@@ -80,7 +80,6 @@ pub fn execute_with_changes(
                 evidence,
                 request_id,
                 repository,
-                plan,
                 &plan.operations[start..index],
                 &fingerprints,
                 reporter,
@@ -92,7 +91,7 @@ pub fn execute_with_changes(
             continue;
         }
         let heartbeat = operation_heartbeat(operation);
-        let cache = operation_cache_key(plan, operation, &fingerprints)?;
+        let cache = operation_cache_key(operation, &fingerprints)?;
         if let Some(fingerprint) = cache.as_ref()
             && let Some((result, detail)) =
                 evidence.cached_validation(&operation.id, fingerprint)?
@@ -237,12 +236,10 @@ fn wait_for_validation(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_builtin_batch(
     evidence: &Evidence,
     request_id: &str,
     repository: &Path,
-    plan: &Plan,
     operations: &[Operation],
     fingerprints: &FingerprintContext,
     reporter: &mut Reporter<'_>,
@@ -250,7 +247,7 @@ fn run_builtin_batch(
 ) -> Result<(), String> {
     let mut pending = Vec::new();
     for operation in operations {
-        let cache = operation_cache_key(plan, operation, fingerprints)?;
+        let cache = operation_cache_key(operation, fingerprints)?;
         if let Some(fingerprint) = cache.as_ref() {
             if evidence
                 .cached_validation(&operation.id, fingerprint)?
@@ -347,28 +344,17 @@ fn run_parallel_ordered<T: Sync>(
 }
 
 fn operation_cache_key(
-    plan: &Plan,
     operation: &Operation,
     fingerprints: &FingerprintContext,
 ) -> Result<Option<String>, String> {
-    operation_cache_key_with_schema(plan, operation, fingerprints, VALIDATION_CACHE_SCHEMA)
+    operation_cache_key_with_schema(operation, fingerprints, VALIDATION_CACHE_SCHEMA)
 }
 
 fn operation_cache_key_with_schema(
-    plan: &Plan,
     operation: &Operation,
     fingerprints: &FingerprintContext,
     schema: &str,
 ) -> Result<Option<String>, String> {
-    match &plan.intent {
-        crate::model::Intent::Plan {
-            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Paths(_),
-            ..
-        }
-        | crate::model::Intent::CiHostAssurance { .. }
-        | crate::model::Intent::PrePush { .. } => {}
-        _ => return Ok(None),
-    }
     if !is_cacheable(operation) || operation.inputs.is_empty() {
         return Ok(None);
     }
@@ -853,7 +839,7 @@ fn log_tail(path: &Path) -> Result<String, String> {
 mod tests {
     use super::*;
     use crate::cli::OutputFormat;
-    use crate::model::{ActionKind, Intent, Risk, Scope, WorkflowPhase};
+    use crate::model::{ActionKind, AssuranceRequest, Risk, Scope, WorkflowPhase};
     use crate::request::RawRequest;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -922,13 +908,13 @@ mod tests {
         evidence
             .record_intent(
                 &request.id,
-                &Intent::CiHostAssurance {
+                &AssuranceRequest::CiHostAssurance {
                     scope: Scope::Paths(vec!["fixture.rs".into()]),
                 },
             )
             .unwrap();
         let plan = Plan {
-            intent: Intent::CiHostAssurance {
+            request: AssuranceRequest::CiHostAssurance {
                 scope: Scope::Paths(vec!["fixture.rs".into()]),
             },
             operations: vec![test_operation(&cargo)],
@@ -986,7 +972,7 @@ mod tests {
         host_operation.id = "host.operation".into();
         host_operation.action = ActionKind::Script;
         let plan = Plan {
-            intent: Intent::Plan {
+            request: AssuranceRequest::Plan {
                 scope: Scope::WorkingTree,
             },
             operations: vec![cheap, host_operation],
@@ -1175,17 +1161,17 @@ mod tests {
         let first =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
         let plan = Plan {
-            intent: Intent::Plan {
+            request: AssuranceRequest::Plan {
                 scope: Scope::WorkingTree,
             },
             operations: vec![operation.clone()],
             external_requirements: Vec::new(),
         };
-        let first_key = operation_cache_key(&plan, &operation, &first).unwrap();
+        let first_key = operation_cache_key(&operation, &first).unwrap();
         fs::write(root.join("fixture/b.rs"), "changed").unwrap();
         let second =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
-        let second_key = operation_cache_key(&plan, &operation, &second).unwrap();
+        let second_key = operation_cache_key(&operation, &second).unwrap();
         assert_ne!(first_key, second_key);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1225,7 +1211,7 @@ mod tests {
         operation.inputs = vec!["apps/mister".into()];
         let changes = vec![PathBuf::from("apps/mister/ui/launcher.slint")];
         let plan = Plan {
-            intent: Intent::Plan {
+            request: AssuranceRequest::Plan {
                 scope: Scope::Paths(changes.clone()),
             },
             operations: vec![operation.clone()],
@@ -1233,13 +1219,13 @@ mod tests {
         };
         let first =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
-        let first_key = operation_cache_key(&plan, &operation, &first)
+        let first_key = operation_cache_key(&operation, &first)
             .unwrap()
             .expect("explicit path checks are cacheable");
         assert_eq!(first_key.len(), 64);
         assert!(first_key.bytes().all(|byte| byte.is_ascii_hexdigit()));
         let old_schema_key =
-            operation_cache_key_with_schema(&plan, &operation, &first, "planner-schema-2")
+            operation_cache_key_with_schema(&operation, &first, "planner-schema-2")
                 .unwrap()
                 .expect("old explicit path key");
         assert_ne!(first_key, old_schema_key);
@@ -1250,7 +1236,7 @@ mod tests {
         .unwrap();
         let second =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
-        let second_key = operation_cache_key(&plan, &operation, &second)
+        let second_key = operation_cache_key(&operation, &second)
             .unwrap()
             .expect("explicit path checks are cacheable");
         assert_ne!(first_key, second_key);
@@ -1271,7 +1257,7 @@ mod tests {
         let mut operation = test_operation(&cargo);
         operation.risk = Risk::DeviceWrite;
         let plan = Plan {
-            intent: Intent::Plan {
+            request: AssuranceRequest::Plan {
                 scope: Scope::Paths(vec!["fixture".into()]),
             },
             operations: vec![operation],

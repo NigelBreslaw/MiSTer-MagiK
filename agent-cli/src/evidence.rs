@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::model::{Intent, Outcome};
+use crate::model::Outcome;
 use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
 use rusqlite::backup::Backup;
@@ -195,7 +195,11 @@ impl Evidence {
         Ok(())
     }
 
-    pub fn record_intent(&self, request_id: &str, intent: &Intent) -> Result<(), String> {
+    pub fn record_intent(
+        &self,
+        request_id: &str,
+        intent: &impl serde::Serialize,
+    ) -> Result<(), String> {
         let intent = serde_json::to_string(intent).map_err(|error| error.to_string())?;
         let now = now_ms();
         self.connection
@@ -1187,7 +1191,7 @@ mod tests {
         request.id.push_str(suffix);
         evidence.begin_request(&request).unwrap();
         evidence
-            .record_intent(&request.id, &Intent::Deliver)
+            .record_intent(&request.id, &serde_json::json!({"command":"deliver"}))
             .unwrap();
         evidence
             .record_events(&[
@@ -1245,7 +1249,7 @@ mod tests {
         evidence
             .record_intent(
                 &request.id,
-                &Intent::Plan {
+                &crate::model::AssuranceRequest::Plan {
                     scope: crate::model::Scope::WorkingTree,
                 },
             )
