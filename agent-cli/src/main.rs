@@ -72,13 +72,8 @@ fn run() -> Result<ExitCode, String> {
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
-            let rendered = error.to_string();
-            let (phase, message) = rendered
-                .split_once(": ")
-                .filter(|(phase, _)| matches!(*phase, "check" | "verify"))
-                .unwrap_or(("request", rendered.as_str()));
             reporter
-                .emit(EventKind::Failed, phase, message, None)
+                .emit(EventKind::Failed, "request", &error.to_string(), None)
                 .map_err(|error| error.to_string())?;
             evidence.finish(&raw.id, Outcome::Failed)?;
             return Ok(ExitCode::FAILURE);
