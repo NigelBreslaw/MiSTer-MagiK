@@ -3,7 +3,7 @@
 
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
 use super::launcher_frame_accounting::{
-    FrameAnalyticsCpuStamp, LauncherCustomDrawTrace, LauncherFrameAccounting,
+    FrameAnalyticsCpuStamp, FrameAnalyticsMode, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
@@ -1671,6 +1671,14 @@ fn launcher_env_flag(name: &str) -> bool {
     )
 }
 
+fn screensaver_preview_start_ready(
+    content_ready: bool,
+    wait_for_analytics: bool,
+    analytics_mode: FrameAnalyticsMode,
+) -> bool {
+    content_ready && (!wait_for_analytics || analytics_mode == FrameAnalyticsMode::Process)
+}
+
 #[derive(Debug)]
 struct ScreensaverControl {
     last_activity: Instant,
@@ -1872,6 +1880,8 @@ pub(super) fn run_launcher_loop(
         launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY"),
         launcher_env_flag("MISTER_SCREENSAVER_START_ACTIVE"),
     );
+    let screensaver_preview_waits_for_analytics =
+        launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS");
     let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
@@ -3452,7 +3462,11 @@ pub(super) fn run_launcher_loop(
             nav.settings.screensaver_enabled,
             Duration::from_secs(u64::from(nav.settings.screensaver_delay_minutes) * 60),
             catalog_build_busy,
-            catalog_ready || particle_screensaver_requested,
+            screensaver_preview_start_ready(
+                catalog_ready || particle_screensaver_requested,
+                screensaver_preview_waits_for_analytics,
+                frame_accounting.frame_analytics_mode(),
+            ),
         );
         if !preview_was_active && screensaver.is_preview() {
             let started = Instant::now();
@@ -10125,6 +10139,30 @@ mod tests {
             screensaver_start_mode(true, true, true),
             ScreensaverStartMode::PreviewWhenReady
         );
+    }
+
+    #[test]
+    fn benchmark_preview_waits_for_process_analytics_after_content_is_ready() {
+        assert!(!screensaver_preview_start_ready(
+            false,
+            false,
+            FrameAnalyticsMode::Process
+        ));
+        assert!(screensaver_preview_start_ready(
+            true,
+            false,
+            FrameAnalyticsMode::Off
+        ));
+        assert!(!screensaver_preview_start_ready(
+            true,
+            true,
+            FrameAnalyticsMode::Wall
+        ));
+        assert!(screensaver_preview_start_ready(
+            true,
+            true,
+            FrameAnalyticsMode::Process
+        ));
     }
 
     #[test]

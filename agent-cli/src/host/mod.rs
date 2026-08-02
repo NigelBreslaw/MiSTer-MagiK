@@ -7855,6 +7855,10 @@ fn profile_installed_screensaver_run(
                     "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY".into(),
                     "1".into(),
                 ),
+                (
+                    "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS".into(),
+                    "1".into(),
+                ),
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
                 (
