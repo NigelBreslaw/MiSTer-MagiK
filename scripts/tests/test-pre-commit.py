@@ -261,6 +261,7 @@ class PreCommitTests(unittest.TestCase):
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
             "crates/catalog/src/lib.rs",
+            "crates/framebuffer-scenes/src/lib.rs",
             "crates/magik-core/src/lib.rs",
             "crates/agent-protocol/src/lib.rs",
             "mister/platform/runtime/src/lib.rs",
@@ -277,6 +278,14 @@ class PreCommitTests(unittest.TestCase):
                 ("catalog.format", "crates/catalog/Cargo.toml"),
                 ("framebuffer-lab.format", "apps/framebuffer-lab/Cargo.toml"),
                 (
+                    "framebuffer-scene-lab.format",
+                    "apps/framebuffer-scene-lab/Cargo.toml",
+                ),
+                (
+                    "framebuffer-scenes.format",
+                    "crates/framebuffer-scenes/Cargo.toml",
+                ),
+                (
                     "latch-contract.format",
                     "mister/platform/contracts/latch/Cargo.toml",
                 ),
@@ -285,10 +294,6 @@ class PreCommitTests(unittest.TestCase):
                 (
                     "scanout-contract.format",
                     "mister/platform/contracts/scanout/Cargo.toml",
-                ),
-                (
-                    "framebuffer-scene-lab.format",
-                    "apps/framebuffer-scene-lab/Cargo.toml",
                 ),
             ],
         )
