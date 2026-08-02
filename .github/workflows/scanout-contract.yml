@@ -6,6 +6,7 @@ name: Scanout contract
 on:
   pull_request:
     paths:
+      - "mister/platform/runtime/src/framebuffer/hidden_scanout.rs"
       - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
       - "mister/platform/contracts/scanout/src/lib.rs"
       - "mister/tools/agent/src/scanout_slots_contract.rs"
@@ -17,6 +18,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "mister/platform/runtime/src/framebuffer/hidden_scanout.rs"
       - "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
       - "mister/platform/contracts/scanout/src/lib.rs"
       - "mister/tools/agent/src/scanout_slots_contract.rs"
