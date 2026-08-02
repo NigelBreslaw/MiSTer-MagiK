@@ -128,7 +128,7 @@ pub struct FocusedParticleRenderer {
 }
 
 enum PreparedEffect {
-    Magik(MagikRenderer),
+    Magik(Box<MagikRenderer>),
     Cabinet(ArcadeCabinetFormation),
 }
 
@@ -136,7 +136,7 @@ impl FocusedParticleRenderer {
     pub fn new(width: usize, height: usize, recipe: EffectRecipe) -> Result<Self, String> {
         let effect = match recipe {
             EffectRecipe::Magik(recipe) => {
-                PreparedEffect::Magik(MagikRenderer::new(width, height, recipe)?)
+                PreparedEffect::Magik(Box::new(MagikRenderer::new(width, height, recipe)?))
             }
             EffectRecipe::Cabinet(recipe) => {
                 PreparedEffect::Cabinet(ArcadeCabinetFormation::new(width, height, recipe)?)
