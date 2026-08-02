@@ -1634,6 +1634,7 @@ impl ParticleShowcaseRenderer {
     fn project_grid_flocking(&mut self) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         for index in 0..self.pool.active() {
             let chaser = self.pool.flags[index] != 0;
             let style = if chaser { 6 } else { self.pool.style[index] };
@@ -1655,7 +1656,7 @@ impl ParticleShowcaseRenderer {
                     start_radius: 1,
                     end_radius: 2,
                     intensity: 14,
-                    color: FLOCK_PALETTE[6],
+                    color: palette[6],
                 });
             }
         }
@@ -1679,6 +1680,7 @@ impl ParticleShowcaseRenderer {
     fn project_sdf_collision_events(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let warm_rate = self.param("warm_rate");
         let sphere_x = self.param("sphere_x");
@@ -1742,7 +1744,7 @@ impl ParticleShowcaseRenderer {
                     y: screen_y as i16,
                     radius: 2 + u8::from(warm),
                     intensity: 11,
-                    color: COLLISION_PALETTE[style],
+                    color: palette[style],
                     shape: if warm {
                         MaterialShape::Spark
                     } else {
@@ -1803,6 +1805,7 @@ impl ParticleShowcaseRenderer {
     fn project_source_driven_morph(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let morph_start = self.param("morph_start");
         let morph_end = self.param("morph_end");
@@ -1816,7 +1819,10 @@ impl ParticleShowcaseRenderer {
         } else if seconds < return_start {
             1.0
         } else {
-            1.0 - ease_out_cubic((seconds - return_start) / (30.0 - return_start))
+            1.0 - ease_out_cubic(
+                (seconds - return_start)
+                    / (self.recipe_for(self.demo).duration_ms as f32 / 1000.0 - return_start),
+            )
         };
         let arc = (blend * std::f32::consts::PI).sin();
         let mut clipped = 0usize;
@@ -1848,7 +1854,7 @@ impl ParticleShowcaseRenderer {
                     start_radius: 1,
                     end_radius: 1,
                     intensity: 6,
-                    color: MORPH_PALETTE[usize::from(self.pool.style[index])],
+                    color: palette[usize::from(self.pool.style[index])],
                 });
             }
         }
@@ -1872,6 +1878,7 @@ impl ParticleShowcaseRenderer {
     fn project_depth_aware_material_lod(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let depth_rate = self.param("depth_rate");
         let parallax_min = self.param("parallax_min");
@@ -1909,7 +1916,7 @@ impl ParticleShowcaseRenderer {
                     y: y as i16,
                     radius: 3 + u8::from(depth > 0.9),
                     intensity: 8 + (depth * 7.0) as u8,
-                    color: DEPTH_PALETTE[style],
+                    color: palette[style],
                     shape: MaterialShape::Disc,
                 });
                 if index & 31 == 0 {
@@ -1921,7 +1928,7 @@ impl ParticleShowcaseRenderer {
                         start_radius: 1,
                         end_radius: 2,
                         intensity: 11,
-                        color: DEPTH_PALETTE[style],
+                        color: palette[style],
                     });
                 }
             } else if !push_screen_command(
@@ -2032,6 +2039,7 @@ impl ParticleShowcaseRenderer {
     fn project_layered_child_systems(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let cycle_seconds = self.param("cycle");
         let cycle = seconds.rem_euclid(cycle_seconds) / cycle_seconds;
@@ -2042,7 +2050,7 @@ impl ParticleShowcaseRenderer {
                 + (cycle * std::f32::consts::TAU).sin() * self.param("head_x_amplitude");
             let head_y = 420.0 - cycle * self.param("head_travel")
                 + (cycle * std::f32::consts::PI).sin() * (-72.0 - parent as f32 * 18.0);
-            let color = CHILD_PALETTE[3 + parent];
+            let color = palette[3 + parent];
             let mut previous = None;
             let trail_samples = self.param("trail_length") as usize;
             for sample in 0..trail_samples {
@@ -2082,7 +2090,7 @@ impl ParticleShowcaseRenderer {
                         y: (head_y + angle.sin() * ring_radius) as i16,
                         radius: 1,
                         intensity: (13.0 - ring_age * 14.0) as u8,
-                        color: CHILD_PALETTE[5],
+                        color: palette[5],
                         shape: MaterialShape::Disc,
                     });
                 }
@@ -2249,6 +2257,7 @@ impl ParticleShowcaseRenderer {
     fn project_curl_noise_flow_field(&mut self, _elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(4) {
             let x = self.pool.x[index];
@@ -2279,7 +2288,7 @@ impl ParticleShowcaseRenderer {
                     start_radius: 1,
                     end_radius: 2,
                     intensity: 13,
-                    color: FLOW_PALETTE[style],
+                    color: palette[style],
                 });
             }
         }
@@ -2298,13 +2307,14 @@ impl ParticleShowcaseRenderer {
     fn project_variable_width_ribbons(&mut self, elapsed: Duration) -> usize {
         self.commands.clear();
         self.segments.clear();
+        let palette = *self.palette();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let center_x = self.config.width as f32 * 0.5;
         let center_y = self.config.height as f32 * 0.5;
         let ribbon_count = self.param("ribbon_count") as usize;
         let ribbon_samples = self.param("ribbon_samples") as usize;
         for ribbon in 0..ribbon_count {
-            let lane = ribbon % RIBBON_PALETTE.len();
+            let lane = ribbon % palette.len();
             let random = self.pool.random[ribbon];
             let depth = unit01(random.rotate_left(9));
             let hero = ribbon % 4 == 0;
@@ -2335,7 +2345,7 @@ impl ParticleShowcaseRenderer {
                         start_radius: previous_radius,
                         end_radius: radius,
                         intensity: 7 + (depth * 8.0) as u8,
-                        color: RIBBON_PALETTE[lane],
+                        color: palette[lane],
                     });
                     if ribbon % 6 == 0 && sample > 5 {
                         self.material_strokes.push(MaterialStroke {
@@ -2346,7 +2356,7 @@ impl ParticleShowcaseRenderer {
                             start_radius: 2,
                             end_radius: 2,
                             intensity: 2,
-                            color: RIBBON_PALETTE[lane.saturating_sub(1)],
+                            color: palette[lane.saturating_sub(1)],
                         });
                     }
                 }
@@ -2363,7 +2373,7 @@ impl ParticleShowcaseRenderer {
                 y: head_y as i16,
                 radius: if hero { 4 } else { 2 },
                 intensity: 15,
-                color: RIBBON_PALETTE[lane],
+                color: palette[lane],
                 shape: MaterialShape::Star,
             });
         }
@@ -2384,7 +2394,7 @@ impl ParticleShowcaseRenderer {
                 start_radius: 1,
                 end_radius: 1,
                 intensity: 7,
-                color: RIBBON_PALETTE[usize::from(self.pool.style[index])],
+                color: palette[usize::from(self.pool.style[index])],
             });
         }
         0
@@ -2446,13 +2456,13 @@ impl ParticleShowcaseRenderer {
                 ((over_life * 6.0) as usize + usize::from(self.pool.style[index] & 1)).min(7)
             };
             let material_color = if index & 127 == 0 {
-                Rgb565Pixel(0x05ff)
+                self.recipe_for(self.demo).color("highlight")
             } else {
                 match shape {
-                    MaterialShape::Star => Rgb565Pixel(0xf81f),
-                    MaterialShape::Smoke => Rgb565Pixel(0x600f),
-                    MaterialShape::Shard => Rgb565Pixel(0xfe80),
-                    _ => MATERIAL_PALETTE[style],
+                    MaterialShape::Star => self.recipe_for(self.demo).color("star"),
+                    MaterialShape::Smoke => self.recipe_for(self.demo).color("smoke"),
+                    MaterialShape::Shard => self.recipe_for(self.demo).color("shard"),
+                    _ => self.palette()[style],
                 }
             };
             if index & 63 == 0 {
@@ -2500,6 +2510,7 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let (formation, yaw, pitch, dolly, dispersal) = arcade_camera(
             seconds,
+            self.recipe_for(self.demo).duration_ms as f32 / 1000.0,
             self.param("formation_end"),
             self.param("orbit_end"),
             self.param("return_end"),
@@ -2642,10 +2653,11 @@ impl ParticleShowcaseRenderer {
                 clipped = clipped.saturating_add(1);
             }
         }
-        if seconds < 11.0 {
+        let fountain_end = self.param("fountain_end");
+        if seconds < fountain_end + 2.0 {
             self.append_fountain_basin(seconds);
         }
-        if seconds >= 10.0 {
+        if seconds >= fountain_end + 1.0 {
             self.append_waterfall_edges(seconds);
         }
         clipped
@@ -3180,9 +3192,11 @@ impl ParticleShowcaseRenderer {
             }
         }
 
-        let active_tracks = if seconds < 8.0 {
+        let quarter_end = self.recipe_for(self.demo).phase_until_seconds(0);
+        let half_end = self.recipe_for(self.demo).phase_until_seconds(1);
+        let active_tracks = if seconds < quarter_end {
             METEOR_TRACK_COUNT / 4
-        } else if seconds < 20.0 {
+        } else if seconds < half_end {
             METEOR_TRACK_COUNT / 2
         } else {
             METEOR_TRACK_COUNT
@@ -3254,6 +3268,7 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let (travel, speed) = warp_travel_and_speed(
             seconds,
+            self.recipe_for(self.demo).duration_ms as f32 / 1000.0,
             self.param("accelerate_end"),
             self.param("cruise_end"),
             self.param("calm_end"),
@@ -3733,7 +3748,7 @@ impl ParticleShowcaseRenderer {
                     if style == 0 {
                         continue;
                     }
-                    let color = DENSITY_PALETTE[style];
+                    let color = self.palette()[style];
                     for y in cell_y * DENSITY_SCALE..(cell_y + 1) * DENSITY_SCALE {
                         let row = y * self.config.width;
                         for x in cell_x * DENSITY_SCALE..(cell_x + 1) * DENSITY_SCALE {
@@ -3756,7 +3771,7 @@ impl ParticleShowcaseRenderer {
         for heat_y in 0..FIRE_HEAT_H {
             for heat_x in 0..FIRE_HEAT_W {
                 let style = usize::from(self.heat[heat_y * FIRE_HEAT_W + heat_x] >> 5).min(7);
-                let color = FIRE_PALETTE[style];
+                let color = self.palette()[style];
                 let x0 = heat_x * FIRE_HEAT_SCALE;
                 let y0 = top + heat_y * FIRE_HEAT_SCALE;
                 for y in y0..(y0 + FIRE_HEAT_SCALE).min(self.config.height) {
@@ -4108,6 +4123,7 @@ fn triangle_wave(value: f32) -> f32 {
 
 fn arcade_camera(
     seconds: f32,
+    duration: f32,
     formation_end: f32,
     orbit_end: f32,
     return_end: f32,
@@ -4142,18 +4158,25 @@ fn arcade_camera(
             0.0,
         );
     }
-    (1.0, 0.72, 0.11, 755.0, (seconds - 29.0).clamp(0.0, 1.0))
+    (
+        1.0,
+        0.72,
+        0.11,
+        755.0,
+        ((seconds - return_end) / (duration - return_end)).clamp(0.0, 1.0),
+    )
 }
 
 fn warp_travel_and_speed(
     seconds: f32,
+    duration: f32,
     accelerate_end: f32,
     cruise_end: f32,
     calm_end: f32,
     min_speed: f32,
     max_speed: f32,
 ) -> (f32, f32) {
-    let cycle = seconds.rem_euclid(30.0);
+    let cycle = seconds.rem_euclid(duration);
     let calm_distance = calm_end * min_speed;
     let acceleration_duration = accelerate_end - calm_end;
     let acceleration = (max_speed - min_speed) / acceleration_duration;
@@ -4161,7 +4184,7 @@ fn warp_travel_and_speed(
         + min_speed * acceleration_duration
         + 0.5 * acceleration * acceleration_duration * acceleration_duration;
     let cruise_distance = accelerate_distance + (cruise_end - accelerate_end) * max_speed;
-    let deceleration_duration = 30.0 - cruise_end;
+    let deceleration_duration = duration - cruise_end;
     let deceleration = (max_speed - min_speed) / deceleration_duration;
     let (distance, speed) = if cycle < calm_end {
         (cycle * min_speed, min_speed)
@@ -4702,8 +4725,9 @@ mod tests {
 
     #[test]
     fn warp_speed_accelerates_and_emits_bounded_streaks() {
-        let (calm_travel, calm_speed) = warp_travel_and_speed(2.0);
-        let (_, warp_speed) = warp_travel_and_speed(18.0);
+        let (calm_travel, calm_speed) =
+            warp_travel_and_speed(2.0, 30.0, 14.0, 23.0, 7.0, 0.03, 0.9);
+        let (_, warp_speed) = warp_travel_and_speed(18.0, 30.0, 14.0, 23.0, 7.0, 0.03, 0.9);
         assert!((0.0..1.0).contains(&calm_travel));
         assert!(warp_speed > calm_speed * 20.0);
 

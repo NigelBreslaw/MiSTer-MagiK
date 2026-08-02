@@ -222,14 +222,14 @@ impl FormSceneRenderer {
             let broad = (x * self.param("broad_x_rate")).sin() * self.param("broad_x_amplitude")
                 + (z * self.param("broad_z_rate")).cos() * self.param("broad_z_amplitude");
             let detail = ((x + z) * 0.041).sin() * 11.0 + ((x * 0.73 - z) * 0.067).cos() * 6.0;
-            let crest = (-((u - self.param("crest_x")).powi(2) * 24.0
-                + (v - self.param("crest_depth")).powi(2) * 8.0))
+            let crest = (-((u - self.param("crest_u")).powi(2) * 24.0
+                + (v - self.param("crest_v")).powi(2) * 8.0))
                 .exp();
             self.rest_x[index] = x;
-            self.rest_y[index] = broad + detail - crest * 115.0;
+            self.rest_y[index] = broad + detail - crest * self.param("crest_drop");
             self.rest_z[index] = z;
             self.target_x[index] = crest * (v - 0.5) * 130.0;
-            self.target_y[index] = crest * self.param("crest_y");
+            self.target_y[index] = crest * self.param("crest_rise");
             self.aux_x[index] = u;
             self.aux_y[index] = v;
             self.style[index] = ((u * 3.0 + v * 5.0 + crest * 3.0) as u8).min(7);
@@ -583,8 +583,10 @@ impl FormSceneRenderer {
             self.push_world(x, y, z, self.param("camera_z"), width, height, index);
         }
         let visible = self.points.len();
-        for index in (0..visible).step_by(256) {
-            self.push_segment_from_points(index, (index + 7) % visible);
+        if visible != 0 {
+            for index in (0..visible).step_by(256) {
+                self.push_segment_from_points(index, (index + 7) % visible);
+            }
         }
     }
 
@@ -651,8 +653,10 @@ impl FormSceneRenderer {
         }
         if (0.05..0.95).contains(&morph) {
             let visible = self.points.len();
-            for index in (0..visible).step_by(128) {
-                self.push_segment_from_points(index, (index + 512) % visible);
+            if visible != 0 {
+                for index in (0..visible).step_by(128) {
+                    self.push_segment_from_points(index, (index + 512) % visible);
+                }
             }
         }
     }

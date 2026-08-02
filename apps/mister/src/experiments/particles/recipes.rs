@@ -9,6 +9,8 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use super::fireworks::FireworkRenderer;
+use super::fireworks_v2::FireworkV2Renderer;
 use super::showcase::ParticleDemoKind;
 
 const FIREWORKS_FAMILY_SCHEMA: &str = "mister-magik-particle-fireworks-family-v1";
@@ -73,6 +75,8 @@ struct RawRecipe {
     beats: BeatSpec,
     particle_count: usize,
     palette: Vec<String>,
+    #[serde(default)]
+    colors: BTreeMap<String, String>,
     params: BTreeMap<String, f32>,
 }
 
@@ -84,12 +88,21 @@ pub(super) struct CompiledRecipe {
     pub beats: BeatSpec,
     pub particle_count: usize,
     pub palette: [Rgb565Pixel; 8],
+    colors: BTreeMap<String, Rgb565Pixel>,
     params: BTreeMap<String, f32>,
 }
 
 impl CompiledRecipe {
     pub fn param(&self, name: &str) -> f32 {
         self.params[name]
+    }
+
+    pub fn color(&self, name: &str) -> Rgb565Pixel {
+        self.colors[name]
+    }
+
+    pub fn phase_until_seconds(&self, phase: usize) -> f32 {
+        self.beats.phases[phase].until_ms as f32 / 1000.0
     }
 
     pub fn beat(&self, elapsed_ms: u64) -> &str {
@@ -150,26 +163,40 @@ impl ParticleRecipeFamily {
                 let family: FireworkFamily = serde_json::from_str(json)
                     .map_err(|error| format!("parse fireworks family: {error}"))?;
                 family.validate()?;
+                family.validate_beat_labels(
+                    FIREWORKS_FAMILY
+                        .as_ref()
+                        .map_err(|error| format!("invalid embedded fireworks family: {error}"))?,
+                )?;
                 Ok(Self {
                     family: RecipeFamily::Fireworks(family),
                 })
             }
-            PROCEDURAL_FAMILY_SCHEMA => Ok(Self {
-                family: RecipeFamily::Procedural(compile_recipe_family(
-                    json,
-                    PROCEDURAL_FAMILY_SCHEMA,
-                    19,
-                    procedural_keys,
-                )?),
-            }),
-            FORM_FAMILY_SCHEMA => Ok(Self {
-                family: RecipeFamily::Form(compile_recipe_family(
-                    json,
-                    FORM_FAMILY_SCHEMA,
-                    5,
-                    form_keys,
-                )?),
-            }),
+            PROCEDURAL_FAMILY_SCHEMA => {
+                let family =
+                    compile_recipe_family(json, PROCEDURAL_FAMILY_SCHEMA, 19, procedural_keys)?;
+                validate_live_beat_labels(
+                    &family,
+                    PROCEDURAL_FAMILY
+                        .as_ref()
+                        .map_err(|error| format!("invalid embedded procedural family: {error}"))?,
+                )?;
+                Ok(Self {
+                    family: RecipeFamily::Procedural(family),
+                })
+            }
+            FORM_FAMILY_SCHEMA => {
+                let family = compile_recipe_family(json, FORM_FAMILY_SCHEMA, 5, form_keys)?;
+                validate_live_beat_labels(
+                    &family,
+                    FORM_FAMILY
+                        .as_ref()
+                        .map_err(|error| format!("invalid embedded Form family: {error}"))?,
+                )?;
+                Ok(Self {
+                    family: RecipeFamily::Form(family),
+                })
+            }
             _ => Err(format!("unsupported particle recipe family {schema:?}")),
         }
     }
@@ -230,6 +257,31 @@ impl CompiledFamily {
     }
 }
 
+fn validate_live_beat_labels(
+    live: &CompiledFamily,
+    embedded: &CompiledFamily,
+) -> Result<(), String> {
+    for recipe in &live.recipes {
+        let expected = embedded
+            .find(&recipe.id)
+            .ok_or_else(|| format!("missing embedded particle recipe {:?}", recipe.id))?;
+        if recipe.beats.phases.len() != expected.beats.phases.len()
+            || recipe
+                .beats
+                .phases
+                .iter()
+                .zip(&expected.beats.phases)
+                .any(|(live, expected)| live.label != expected.label)
+        {
+            return Err(format!(
+                "particle recipe {:?} beat labels must match the embedded trace contract",
+                recipe.id
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn compile_recipe_family(
     json: &str,
     expected_schema: &str,
@@ -268,6 +320,17 @@ fn compile_recipe_family(
                 recipe.id
             ));
         }
+        let color_keys = recipe_color_keys(&recipe.id);
+        if recipe.colors.len() != color_keys.len()
+            || color_keys
+                .iter()
+                .any(|key| !recipe.colors.contains_key(*key))
+        {
+            return Err(format!(
+                "particle recipe {:?} has missing or unknown named colors",
+                recipe.id
+            ));
+        }
         if recipe
             .params
             .values()
@@ -301,6 +364,11 @@ fn compile_recipe_family(
             .collect::<Result<Vec<_>, _>>()?
             .try_into()
             .map_err(|_| format!("particle recipe {:?} palette must have 8 colors", recipe.id))?;
+        let colors = recipe
+            .colors
+            .into_iter()
+            .map(|(name, color)| parse_rgb565(&color).map(|value| (name, Rgb565Pixel(value))))
+            .collect::<Result<_, _>>()?;
         recipes.push(CompiledRecipe {
             id: recipe.id,
             label: recipe.label,
@@ -308,10 +376,18 @@ fn compile_recipe_family(
             beats: recipe.beats,
             particle_count: recipe.particle_count,
             palette,
+            colors,
             params: recipe.params,
         });
     }
     Ok(CompiledFamily { recipes })
+}
+
+fn recipe_color_keys(id: &str) -> &'static [&'static str] {
+    match id {
+        "procedural-sprite-materials" => &["highlight", "shard", "smoke", "star"],
+        _ => &[],
+    }
 }
 
 fn validate_param_relationships(
@@ -346,6 +422,7 @@ fn validate_param_relationships(
                 && p("formation_end") < p("orbit_end")
                 && p("orbit_end") < p("return_end")
                 && p("return_end") < duration
+                && particle_count == 12_288
         }
         "variable-width-ribbons" => {
             let ribbons = p("ribbon_count");
@@ -358,6 +435,7 @@ fn validate_param_relationships(
                 && samples.fract() == 0.0
                 && streaks.fract() == 0.0
                 && ribbons + streaks <= particle_count as f32
+                && ribbons * (samples - 1.0) + streaks <= 2_048.0
         }
         "curl-noise-flow-field" => {
             0.0 < p("normal_x")
@@ -366,8 +444,12 @@ fn validate_param_relationships(
                 && 0.0 < p("integration_scale")
         }
         "layered-child-systems" => {
-            0.0 < p("cycle") && p("trail_length") >= 2.0 && p("trail_length").fract() == 0.0
+            0.0 < p("cycle")
+                && p("trail_length") >= 2.0
+                && p("trail_length").fract() == 0.0
+                && 3.0 * (p("trail_length") - 1.0) <= 2_048.0
         }
+        "meteor-shower" => particle_count >= 4_096,
         "source-morph" => {
             0.0 <= p("morph_start")
                 && p("morph_start") < p("morph_end")
@@ -647,9 +729,10 @@ fn form_keys(id: &str) -> Option<&'static [&'static str]> {
             "broad_z_amplitude",
             "broad_z_rate",
             "camera_z",
-            "crest_depth",
-            "crest_x",
-            "crest_y",
+            "crest_drop",
+            "crest_rise",
+            "crest_u",
+            "crest_v",
             "world_x_span",
             "world_z_span",
         ],
@@ -765,6 +848,14 @@ impl FireworkFamily {
                     "fireworks family show ids and beat periods must be unique and aligned".into(),
                 );
             }
+            let show_json = serde_json::to_string(&recipe.show)
+                .map_err(|error| format!("serialize fireworks family show {id:?}: {error}"))?;
+            let validation = if show_schema == "mister-magik-firework-v1" {
+                FireworkRenderer::from_json(&show_json, 960, 540, 0).map(|_| ())
+            } else {
+                FireworkV2Renderer::from_json(&show_json, 960, 540, 0).map(|_| ())
+            };
+            validation.map_err(|error| format!("invalid fireworks family show {id:?}: {error}"))?;
             ids.push(id);
         }
         if FIREWORK_IDS.iter().any(|id| !ids.contains(id)) {
@@ -778,6 +869,34 @@ impl FireworkFamily {
         self.recipes.iter().any(|recipe| {
             recipe.show.get("id").and_then(Value::as_str) == Some(normalized.as_str())
         })
+    }
+
+    fn validate_beat_labels(&self, embedded: &Self) -> Result<(), String> {
+        for recipe in &self.recipes {
+            let id = recipe
+                .show
+                .get("id")
+                .and_then(Value::as_str)
+                .expect("validated fireworks recipe has an id");
+            let expected = embedded
+                .recipes
+                .iter()
+                .find(|expected| expected.show.get("id").and_then(Value::as_str) == Some(id))
+                .expect("validated fireworks family is complete");
+            if recipe.beats.phases.len() != expected.beats.phases.len()
+                || recipe
+                    .beats
+                    .phases
+                    .iter()
+                    .zip(&expected.beats.phases)
+                    .any(|(live, expected)| live.label != expected.label)
+            {
+                return Err(format!(
+                    "fireworks recipe {id:?} beat labels must match the embedded trace contract"
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn show_json(&self, id: &str, schema: &str) -> Option<String> {
@@ -880,5 +999,18 @@ mod tests {
         warp["params"]["accelerate_end"] = warp["params"]["calm_end"].clone();
         let unsafe_family = serde_json::to_vec(&value).unwrap();
         assert!(ParticleRecipeFamily::from_json(&unsafe_family).is_err());
+    }
+
+    #[test]
+    fn live_families_preserve_trace_labels_and_validate_nested_fireworks() {
+        let mut procedural: Value = serde_json::from_str(PROCEDURAL_FAMILY_JSON).unwrap();
+        procedural["recipes"][0]["beats"]["phases"][0]["label"] = "renamed".into();
+        assert!(
+            ParticleRecipeFamily::from_json(&serde_json::to_vec(&procedural).unwrap()).is_err()
+        );
+
+        let mut fireworks: Value = serde_json::from_str(FIREWORKS_FAMILY_JSON).unwrap();
+        fireworks["recipes"][0]["show"]["unknown"] = true.into();
+        assert!(ParticleRecipeFamily::from_json(&serde_json::to_vec(&fireworks).unwrap()).is_err());
     }
 }
