@@ -4,9 +4,11 @@
 use crate::model::{Intent, Outcome};
 use crate::progress::ProgressEvent;
 use crate::request::RawRequest;
+use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -74,21 +76,7 @@ CREATE TABLE IF NOT EXISTS operation_leases (
     expires_ms INTEGER NOT NULL,
     PRIMARY KEY (operation_id, fingerprint)
 );
-CREATE TABLE IF NOT EXISTS cohorts (
-    id INTEGER PRIMARY KEY,
-    created_ms INTEGER NOT NULL,
-    git_sha TEXT NOT NULL,
-    planner_schema INTEGER NOT NULL,
-    label TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cohort_summaries (
-    archived_ms INTEGER PRIMARY KEY,
-    git_sha TEXT NOT NULL,
-    requests INTEGER NOT NULL,
-    p95_request_ms INTEGER NOT NULL,
-    cache_effectiveness_percent REAL NOT NULL
-);
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;
 "#;
 
 #[derive(Debug)]
@@ -99,59 +87,13 @@ pub struct Evidence {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DatabaseStatus {
-    pub path: PathBuf,
-    pub requests: i64,
-    pub commands: i64,
-    pub events: i64,
-}
-
-#[derive(Clone, Debug, Serialize)]
 pub struct DatabaseReport {
-    pub cohort_id: i64,
     pub requests: i64,
     pub commands: i64,
     pub wall_ms: i64,
-    pub command_ms: i64,
-    pub critical_path_ms: i64,
-    pub p50_request_ms: i64,
-    pub p95_request_ms: i64,
     pub cache_hits: i64,
     pub cache_misses: i64,
-    pub cache_effectiveness_percent: f64,
     pub failures: i64,
-    pub repeated_requests: i64,
-    pub previous_p95_request_ms: Option<i64>,
-    pub p95_regression_ms: Option<i64>,
-    pub delivery_no_op: DeliveryDecisionMetrics,
-    pub delivery_runtime: DeliveryDecisionMetrics,
-    pub delivery_platform: DeliveryDecisionMetrics,
-    pub delivery_phases: Vec<DeliveryPhaseMetrics>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeliveryDecisionMetrics {
-    pub requests: i64,
-    pub p50_ms: i64,
-    pub p95_ms: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeliveryPhaseMetrics {
-    pub phase: String,
-    pub samples: i64,
-    pub total_ms: i64,
-    pub average_ms: i64,
-    pub max_ms: i64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct RunSummary {
-    pub id: String,
-    pub started_ms: i64,
-    pub completed_ms: Option<i64>,
-    pub parse_status: String,
-    pub outcome: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -194,7 +136,6 @@ impl Evidence {
         }
         let primary = primary_worktree(repository)?;
         let root = primary.join(".agent-cli");
-        migrate_common_dir_database(repository, &root)?;
         let mut evidence = Self::open_at(&root)?;
         evidence.git_sha = crate::git::value(repository, &["rev-parse", "HEAD"])
             .unwrap_or_else(|_| "unknown".into());
@@ -205,69 +146,36 @@ impl Evidence {
         fs::create_dir_all(root).map_err(|error| {
             format!("cannot create audit directory {}: {error}", root.display())
         })?;
-        fs::create_dir_all(root.join("logs"))
-            .map_err(|error| format!("cannot create audit log directory: {error}"))?;
-        let connection = Connection::open(root.join("agent.sqlite3"))
+        let _migration_lock = EvidenceMigrationLock::acquire(&root.join("evidence.lock"))?;
+        let database = root.join("agent.sqlite3");
+        let connection = Connection::open(&database)
             .map_err(|error| format!("cannot open audit database: {error}"))?;
         connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|error| format!("cannot configure audit database: {error}"))?;
+        let version = connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .map_err(|error| format!("cannot read audit schema version: {error}"))?;
+        match version {
+            0 => connection
+                .execute_batch(SCHEMA)
+                .map_err(|error| format!("cannot initialize audit database: {error}"))?,
+            10 => migrate_v10_to_v11(&connection, root)?,
+            11 => {}
+            unknown => {
+                return Err(format!(
+                    "unsupported audit schema version {unknown}; expected 10 or 11"
+                ));
+            }
+        }
+        connection
             .pragma_update(None, "journal_mode", "WAL")
-            .and_then(|()| connection.busy_timeout(std::time::Duration::from_secs(5)))
             .and_then(|()| connection.pragma_update(None, "foreign_keys", true))
             .and_then(|()| connection.execute_batch(SCHEMA))
-            .map_err(|error| format!("cannot migrate audit database: {error}"))?;
-        ensure_column(&connection, "requests", "bootstrap_ms", "INTEGER")?;
-        ensure_column(&connection, "requests", "execution_started_ms", "INTEGER")?;
-        ensure_column(&connection, "requests", "execution_ms", "INTEGER")?;
-        ensure_column(&connection, "requests", "cohort_id", "INTEGER")?;
-        ensure_column(&connection, "requests", "parent_request_id", "TEXT")?;
-        ensure_column(&connection, "requests", "git_sha", "TEXT")?;
-        ensure_column(
-            &connection,
-            "requests",
-            "planner_schema",
-            "INTEGER NOT NULL DEFAULT 3",
-        )?;
-        ensure_column(
-            &connection,
-            "requests",
-            "queue_ms",
-            "INTEGER NOT NULL DEFAULT 0",
-        )?;
-        ensure_column(&connection, "commands", "resource_class", "TEXT")?;
-        ensure_column(&connection, "commands", "cache_decision", "TEXT")?;
-        ensure_column(&connection, "commands", "owner_request_id", "TEXT")?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO cohorts (id, created_ms, git_sha, planner_schema, label) VALUES (1, ?1, 'legacy', 3, 'legacy')",
-                [now_ms()],
-            )
-            .map_err(|error| format!("cannot initialize evidence cohort: {error}"))?;
-        connection
-            .execute(
-                "UPDATE requests SET cohort_id=1 WHERE cohort_id IS NULL",
-                [],
-            )
-            .map_err(|error| format!("cannot migrate request cohorts: {error}"))?;
-        connection
-            .execute(
-                "DELETE FROM validation_results WHERE expires_ms < ?1 OR rowid NOT IN (SELECT rowid FROM validation_results ORDER BY completed_ms DESC LIMIT 10000)",
-                [now_ms()],
-            )
-            .map_err(|error| format!("cannot prune validation cache: {error}"))?;
-        connection
-            .execute_batch(
-                "DELETE FROM events WHERE request_id IN (
-                     SELECT id FROM requests
-                     WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
-                 );
-                 DELETE FROM commands WHERE request_id IN (
-                     SELECT id FROM requests
-                     WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
-                 );
-                 DELETE FROM requests
-                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000);",
-            )
-            .map_err(|error| format!("cannot bound workflow telemetry: {error}"))?;
+            .map_err(|error| format!("cannot configure audit database: {error}"))?;
+        fs::create_dir_all(root.join("logs"))
+            .map_err(|error| format!("cannot create audit log directory: {error}"))?;
+        retain_recent_evidence(&connection)?;
         Ok(Self {
             connection,
             root: root.to_path_buf(),
@@ -275,35 +183,13 @@ impl Evidence {
         })
     }
 
-    fn legacy_common_dir(repository: &Path) -> Result<PathBuf, String> {
-        let output = Command::new("git")
-            .args(["rev-parse", "--git-common-dir"])
-            .current_dir(repository)
-            .output()
-            .map_err(|error| format!("cannot locate Git common directory: {error}"))?;
-        if !output.status.success() {
-            return Err("agent-cli must run inside a Git repository".into());
-        }
-        let common = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-        let common = if common.is_absolute() {
-            common
-        } else {
-            repository.join(common)
-        };
-        Ok(common.join("agent-cli"))
-    }
-
     pub fn begin_request(&self, request: &RawRequest) -> Result<(), String> {
         let args = serde_json::to_string(&request.args).map_err(|error| error.to_string())?;
         let parent = std::env::var("MISTER_AGENT_PARENT_REQUEST_ID").ok();
-        let cohort: i64 = self
-            .connection
-            .query_row("SELECT max(id) FROM cohorts", [], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
         self.connection
             .execute(
-                "INSERT INTO requests (id, started_ms, args_json, cohort_id, parent_request_id, git_sha) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![request.id, request.started_ms, args, cohort, parent, self.git_sha],
+                "INSERT INTO requests (id, started_ms, args_json, parent_request_id, git_sha) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![request.id, request.started_ms, args, parent, self.git_sha],
             )
             .map_err(|error| format!("cannot record request: {error}"))?;
         Ok(())
@@ -583,246 +469,52 @@ impl Evidence {
             .join(format!("{request_id}-{safe}.log"))
     }
 
-    pub fn status(&self) -> Result<DatabaseStatus, String> {
-        Ok(DatabaseStatus {
-            path: self.root.join("agent.sqlite3"),
-            requests: self.count("requests")?,
-            commands: self.count("commands")?,
-            events: self.count("events")?,
-        })
-    }
-
     pub fn report(&self) -> Result<DatabaseReport, String> {
-        let cohort_id: i64 = self
-            .connection
-            .query_row("SELECT max(id) FROM cohorts", [], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        let scalar = |sql: &str| {
-            self.connection
-                .query_row(sql, [cohort_id], |row| row.get::<_, i64>(0))
-                .map_err(|error| error.to_string())
-        };
-        let percentile = |selected_cohort: i64, offset_percent: i64| {
-            self.connection
-                .query_row(
-                    "SELECT COALESCE(execution_ms,0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL ORDER BY COALESCE(execution_ms,0) LIMIT 1 OFFSET MAX(0, ((SELECT count(*) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL AND completed_ms IS NOT NULL) * ?2 + 99) / 100 - 1)",
-                    params![selected_cohort, offset_percent],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()
-                .map(|value| value.unwrap_or(0))
-                .map_err(|error| error.to_string())
-        };
-        let previous_p95: Option<i64> = self
+        let (requests, wall_ms, failures) = self
             .connection
             .query_row(
-                "SELECT p95_request_ms FROM cohort_summaries ORDER BY archived_ms DESC LIMIT 1",
+                "WITH recent AS (
+                    SELECT started_ms, completed_ms, outcome
+                    FROM requests
+                    WHERE parent_request_id IS NULL
+                    ORDER BY started_ms DESC
+                    LIMIT 200
+                 )
+                 SELECT count(*),
+                        COALESCE(max(completed_ms)-min(started_ms), 0),
+                        COALESCE(sum(outcome IN ('failed', 'rejected')), 0)
+                 FROM recent",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
-            .optional()
             .map_err(|error| error.to_string())?;
-        let p50 = percentile(cohort_id, 50)?;
-        let p95 = percentile(cohort_id, 95)?;
-        let cache_hits = scalar(
-            "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status IN ('reused','joined')",
-        )?;
-        let cache_misses = scalar(
-            "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND cache_decision='miss'",
-        )?;
-        let delivery_metrics = |decision: &str| -> Result<DeliveryDecisionMetrics, String> {
-            let predicate = "r.cohort_id=?1 AND r.parent_request_id IS NULL AND r.intent_json='\"deliver\"' AND r.completed_ms IS NOT NULL AND ((?2='no-op' AND r.outcome='no_op') OR EXISTS (SELECT 1 FROM events e WHERE e.request_id=r.id AND e.phase='delivery-decision' AND e.message=?2))";
-            let requests = self
-                .connection
-                .query_row(
-                    &format!("SELECT count(*) FROM requests r WHERE {predicate}"),
-                    params![cohort_id, decision],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(|error| error.to_string())?;
-            let percentile = |offset_percent: i64| {
-                self.connection
-                    .query_row(
-                        &format!(
-                            "SELECT COALESCE(r.execution_ms,0) FROM requests r WHERE {predicate} ORDER BY COALESCE(r.execution_ms,0) LIMIT 1 OFFSET MAX(0, ((SELECT count(*) FROM requests r WHERE {predicate}) * ?3 + 99) / 100 - 1)"
-                        ),
-                        params![cohort_id, decision, offset_percent],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .optional()
-                    .map(|value| value.unwrap_or(0))
-                    .map_err(|error| error.to_string())
-            };
-            Ok(DeliveryDecisionMetrics {
-                requests,
-                p50_ms: percentile(50)?,
-                p95_ms: percentile(95)?,
-            })
-        };
-        let delivery_phases = {
-            let mut statement = self
-                .connection
-                .prepare(
-                    "WITH ordered AS (
-                        SELECT e.request_id, e.phase, e.elapsed_ms,
-                               LEAD(e.elapsed_ms) OVER (
-                                   PARTITION BY e.request_id ORDER BY e.sequence
-                               ) AS next_elapsed
-                        FROM events e
-                        JOIN requests r ON r.id=e.request_id
-                        WHERE r.cohort_id=?1
-                          AND r.parent_request_id IS NULL
-                          AND r.intent_json='\"deliver\"'
-                    )
-                    SELECT phase,
-                           count(*),
-                           COALESCE(sum(MAX(next_elapsed-elapsed_ms,0)),0),
-                           COALESCE(CAST(round(avg(MAX(next_elapsed-elapsed_ms,0))) AS INTEGER),0),
-                           COALESCE(max(MAX(next_elapsed-elapsed_ms,0)),0)
-                    FROM ordered
-                    WHERE next_elapsed IS NOT NULL
-                      AND phase NOT IN ('request','delivery-decision')
-                    GROUP BY phase
-                    ORDER BY phase",
-                )
-                .map_err(|error| error.to_string())?;
-            let rows = statement
-                .query_map([cohort_id], |row| {
-                    Ok(DeliveryPhaseMetrics {
-                        phase: row.get(0)?,
-                        samples: row.get(1)?,
-                        total_ms: row.get(2)?,
-                        average_ms: row.get(3)?,
-                        max_ms: row.get(4)?,
-                    })
-                })
-                .map_err(|error| error.to_string())?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?
-        };
+        let (commands, cache_hits, cache_misses) = self
+            .connection
+            .query_row(
+                "WITH recent AS (
+                    SELECT id
+                    FROM requests
+                    WHERE parent_request_id IS NULL
+                    ORDER BY started_ms DESC
+                    LIMIT 200
+                 )
+                 SELECT count(*),
+                        COALESCE(sum(status IN ('reused', 'joined')), 0),
+                        COALESCE(sum(cache_decision = 'miss'), 0)
+                 FROM commands
+                 WHERE request_id IN recent",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| error.to_string())?;
         Ok(DatabaseReport {
-            cohort_id,
-            requests: scalar("SELECT count(*) FROM requests WHERE cohort_id=?1")?,
-            commands: scalar(
-                "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)",
-            )?,
-            wall_ms: scalar(
-                "SELECT COALESCE(max(completed_ms)-min(started_ms),0) FROM requests WHERE cohort_id=?1",
-            )?,
-            command_ms: scalar(
-                "SELECT COALESCE(sum(duration_ms),0) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1)",
-            )?,
-            critical_path_ms: scalar(
-                "SELECT COALESCE(sum(CASE WHEN execution_ms > 0 THEN execution_ms ELSE 0 END),0) FROM requests WHERE cohort_id=?1 AND parent_request_id IS NULL",
-            )?,
-            p50_request_ms: p50,
-            p95_request_ms: p95,
+            requests,
+            commands,
+            wall_ms,
             cache_hits,
             cache_misses,
-            cache_effectiveness_percent: if cache_hits + cache_misses == 0 {
-                0.0
-            } else {
-                cache_hits as f64 * 100.0 / (cache_hits + cache_misses) as f64
-            },
-            failures: scalar(
-                "SELECT count(*) FROM commands WHERE request_id IN (SELECT id FROM requests WHERE cohort_id=?1) AND status='failed'",
-            )?,
-            repeated_requests: scalar(
-                "SELECT count(*) FROM requests r WHERE cohort_id=?1 AND EXISTS (SELECT 1 FROM requests p WHERE p.cohort_id=r.cohort_id AND p.id<>r.id AND p.args_json=r.args_json AND p.started_ms BETWEEN r.started_ms-60000 AND r.started_ms)",
-            )?,
-            previous_p95_request_ms: previous_p95,
-            p95_regression_ms: previous_p95.map(|previous| p95.saturating_sub(previous)),
-            delivery_no_op: delivery_metrics("no-op")?,
-            delivery_runtime: delivery_metrics("runtime")?,
-            delivery_platform: delivery_metrics("platform")?,
-            delivery_phases,
+            failures,
         })
-    }
-
-    pub fn rotate(&self, git_sha: &str) -> Result<PathBuf, String> {
-        let summary = self.report()?;
-        self.connection
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-            .map_err(|error| format!("cannot checkpoint evidence database: {error}"))?;
-        let archives = self.root.join("archives");
-        fs::create_dir_all(&archives).map_err(|error| error.to_string())?;
-        let stamp = now_ms();
-        let archive = archives.join(format!("agent-{stamp}-{git_sha}.sqlite3"));
-        fs::copy(self.root.join("agent.sqlite3"), &archive)
-            .map_err(|error| format!("cannot archive evidence database: {error}"))?;
-        let archived = Connection::open(&archive).map_err(|error| error.to_string())?;
-        let integrity: String = archived
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(|error| error.to_string())?;
-        if integrity != "ok" {
-            let _ = fs::remove_file(&archive);
-            return Err(format!(
-                "database archive failed integrity check: {integrity}"
-            ));
-        }
-        let archived_logs = archives.join(format!("agent-{stamp}-{git_sha}-logs"));
-        if self.root.join("logs").exists() {
-            fs::rename(self.root.join("logs"), &archived_logs)
-                .map_err(|error| format!("cannot archive evidence logs: {error}"))?;
-            fs::create_dir_all(self.root.join("logs")).map_err(|error| error.to_string())?;
-        }
-        self.connection
-            .execute_batch(
-                "BEGIN IMMEDIATE;
-                 DELETE FROM validation_results;
-                 DELETE FROM operation_leases;
-                 DELETE FROM events;
-                 DELETE FROM commands;
-                 DELETE FROM requests;
-                 DELETE FROM cohorts;
-                 INSERT INTO cohorts (created_ms, git_sha, planner_schema, label)
-                 VALUES (unixepoch('subsec') * 1000, 'pending', 3, 'post-optimization');
-                 COMMIT;",
-            )
-            .map_err(|error| format!("cannot reset evidence database: {error}"))?;
-        self.connection
-            .execute(
-                "UPDATE cohorts SET git_sha=?1 WHERE id=(SELECT max(id) FROM cohorts)",
-                [git_sha],
-            )
-            .map_err(|error| error.to_string())?;
-        self.connection
-            .execute(
-                "INSERT INTO cohort_summaries (archived_ms, git_sha, requests, p95_request_ms, cache_effectiveness_percent) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    stamp,
-                    git_sha,
-                    summary.requests,
-                    summary.p95_request_ms,
-                    summary.cache_effectiveness_percent
-                ],
-            )
-            .map_err(|error| error.to_string())?;
-        Ok(archive)
-    }
-
-    pub fn recent_runs(&self, failed: bool, limit: usize) -> Result<Vec<RunSummary>, String> {
-        let mut statement = self
-            .connection
-            .prepare(if failed {
-                "SELECT id, started_ms, completed_ms, parse_status, outcome FROM requests WHERE outcome IN ('failed', 'rejected') ORDER BY started_ms DESC LIMIT ?1"
-            } else {
-                "SELECT id, started_ms, completed_ms, parse_status, outcome FROM requests ORDER BY started_ms DESC LIMIT ?1"
-            })
-            .map_err(|error| error.to_string())?;
-        let rows = statement
-            .query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
-                Ok(RunSummary {
-                    id: row.get(0)?,
-                    started_ms: row.get(1)?,
-                    completed_ms: row.get(2)?,
-                    parse_status: row.get(3)?,
-                    outcome: row.get(4)?,
-                })
-            })
-            .map_err(|error| error.to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())
     }
 
     pub fn run_detail(&self, id: &str) -> Result<Option<RunDetail>, String> {
@@ -890,30 +582,82 @@ impl Evidence {
         }
         Ok(detail)
     }
+}
 
-    pub fn prune_logs(&self) -> Result<usize, String> {
-        let mut removed = 0;
-        let entries = fs::read_dir(self.root.join("logs")).map_err(|error| error.to_string())?;
-        for entry in entries {
-            let path = entry.map_err(|error| error.to_string())?.path();
-            if path.is_file() {
-                fs::remove_file(path).map_err(|error| error.to_string())?;
-                removed += 1;
-            }
+struct EvidenceMigrationLock(File);
+
+impl EvidenceMigrationLock {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|error| format!("cannot open evidence migration lock: {error}"))?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result != 0 {
+            return Err(format!(
+                "cannot acquire evidence migration lock: {}",
+                std::io::Error::last_os_error()
+            ));
         }
-        self.connection
-            .execute("UPDATE commands SET log_path = NULL", [])
-            .map_err(|error| error.to_string())?;
-        Ok(removed)
+        Ok(Self(file))
     }
+}
 
-    fn count(&self, table: &str) -> Result<i64, String> {
-        self.connection
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .map_err(|error| error.to_string())
+impl Drop for EvidenceMigrationLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
     }
+}
+
+fn migrate_v10_to_v11(connection: &Connection, root: &Path) -> Result<(), String> {
+    let backup_path = root.join(format!("agent-v10-backup-{}.sqlite3", now_ms()));
+    let mut destination = Connection::open(&backup_path)
+        .map_err(|error| format!("cannot create v10 evidence backup: {error}"))?;
+    Backup::new(connection, &mut destination)
+        .and_then(|backup| backup.run_to_completion(64, std::time::Duration::from_millis(10), None))
+        .map_err(|error| format!("cannot back up v10 evidence database: {error}"))?;
+    drop(destination);
+    let migration = connection.execute_batch(
+        "BEGIN EXCLUSIVE;
+         DROP TABLE IF EXISTS cohort_summaries;
+         DROP TABLE IF EXISTS cohorts;
+         PRAGMA user_version = 11;
+         COMMIT;",
+    );
+    if let Err(error) = migration {
+        let _ = connection.execute_batch("ROLLBACK;");
+        return Err(format!("cannot migrate evidence database to v11: {error}"));
+    }
+    Ok(())
+}
+
+fn retain_recent_evidence(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM validation_results WHERE expires_ms < ?1 OR rowid NOT IN (
+                SELECT rowid FROM validation_results ORDER BY completed_ms DESC LIMIT 10000
+            )",
+            [now_ms()],
+        )
+        .map_err(|error| format!("cannot prune validation cache: {error}"))?;
+    connection
+        .execute_batch(
+            "DELETE FROM events WHERE request_id IN (
+                 SELECT id FROM requests
+                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
+             );
+             DELETE FROM commands WHERE request_id IN (
+                 SELECT id FROM requests
+                 WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000)
+             );
+             DELETE FROM requests
+             WHERE id NOT IN (SELECT id FROM requests ORDER BY started_ms DESC LIMIT 20000);",
+        )
+        .map_err(|error| format!("cannot bound workflow telemetry: {error}"))
 }
 
 fn primary_worktree(repository: &Path) -> Result<PathBuf, String> {
@@ -982,46 +726,6 @@ fn primary_worktree_from_git(repository: &Path) -> Result<PathBuf, String> {
         .find_map(|line| line.strip_prefix("worktree "))
         .map(PathBuf::from)
         .ok_or_else(|| "Git did not report a primary worktree".into())
-}
-
-fn ensure_column(
-    connection: &Connection,
-    table: &str,
-    column: &str,
-    definition: &str,
-) -> Result<(), String> {
-    let mut statement = connection
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|error| error.to_string())?;
-    let names = statement
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| error.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())?;
-    if !names.iter().any(|name| name == column) {
-        connection
-            .execute(
-                &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
-                [],
-            )
-            .map_err(|error| format!("cannot migrate {table}.{column}: {error}"))?;
-    }
-    Ok(())
-}
-
-fn migrate_common_dir_database(repository: &Path, root: &Path) -> Result<(), String> {
-    let destination = root.join("agent.sqlite3");
-    if destination.exists() {
-        return Ok(());
-    }
-    let legacy = Evidence::legacy_common_dir(repository)?.join("agent.sqlite3");
-    if !legacy.is_file() {
-        return Ok(());
-    }
-    fs::create_dir_all(root).map_err(|error| error.to_string())?;
-    fs::copy(&legacy, &destination)
-        .map_err(|error| format!("cannot migrate legacy audit database: {error}"))?;
-    Ok(())
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -1131,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn records_malformed_requests_and_retains_metadata_after_log_pruning() {
+    fn records_malformed_requests_and_retains_metadata() {
         let root = temporary_root("audit");
         let evidence = Evidence::open_at(&root).unwrap();
         let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("bad")]);
@@ -1139,15 +843,13 @@ mod tests {
         evidence
             .reject_parse(&request.id, "unknown command")
             .unwrap();
-        fs::write(root.join("logs/output.log"), "detail").unwrap();
-        assert_eq!(evidence.prune_logs().unwrap(), 1);
         let detail = evidence.run_detail(&request.id).unwrap().unwrap();
         assert_eq!(detail.outcome.as_deref(), Some("rejected"));
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn legacy_ownership_tables_remain_inert() {
+    fn unknown_schema_versions_are_rejected_without_modification() {
         let root = temporary_root("legacy-ownership");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -1180,20 +882,104 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let evidence = Evidence::open_at(&root).unwrap();
+        let error = Evidence::open_at(&root).unwrap_err();
+        assert!(error.contains("unsupported audit schema version 9"));
+        let connection = Connection::open(root.join("agent.sqlite3")).unwrap();
         assert_eq!(
-            evidence
-                .connection
+            connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            9
         );
         assert_eq!(
-            evidence
-                .connection
+            connection
                 .query_row("SELECT count(*) FROM tasks", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
             1
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_v10_with_a_recoverable_sqlite_backup() {
+        let root = temporary_root("v10-migration");
+        let _ = fs::remove_dir_all(&root);
+        let evidence = Evidence::open_at(&root).unwrap();
+        let request = RawRequest::capture([OsString::from("agent-cli")]);
+        evidence.begin_request(&request).unwrap();
+        drop(evidence);
+        let connection = Connection::open(root.join("agent.sqlite3")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE cohorts (
+                    id INTEGER PRIMARY KEY,
+                    created_ms INTEGER NOT NULL,
+                    git_sha TEXT NOT NULL,
+                    planner_schema INTEGER NOT NULL,
+                    label TEXT NOT NULL
+                 );
+                 CREATE TABLE cohort_summaries (
+                    archived_ms INTEGER PRIMARY KEY,
+                    git_sha TEXT NOT NULL,
+                    requests INTEGER NOT NULL,
+                    p95_request_ms INTEGER NOT NULL,
+                    cache_effectiveness_percent REAL NOT NULL
+                 );
+                 PRAGMA user_version = 10;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = Evidence::open_at(&root).unwrap();
+        assert_eq!(
+            migrated
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            11
+        );
+        assert_eq!(
+            migrated
+                .connection
+                .query_row("SELECT count(*) FROM requests", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert!(
+            migrated
+                .connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cohorts'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()
+                .unwrap()
+                .is_none()
+        );
+        let backup = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("agent-v10-backup-"))
+            })
+            .expect("v10 backup");
+        let backup = Connection::open(backup).unwrap();
+        assert_eq!(
+            backup
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        assert_eq!(
+            backup
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            10
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1216,10 +1002,77 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+        let evidence = Evidence::open_at(&root).unwrap();
         assert_eq!(
-            Evidence::open_at(&root).unwrap().status().unwrap().requests,
+            evidence
+                .connection
+                .query_row("SELECT count(*) FROM requests", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
             4
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn report_is_bounded_to_latest_two_hundred_top_level_requests() {
+        let root = temporary_root("bounded-report");
+        let _ = fs::remove_dir_all(&root);
+        let evidence = Evidence::open_at(&root).unwrap();
+        for index in 0..205_i64 {
+            evidence
+                .connection
+                .execute(
+                    "INSERT INTO requests (
+                        id, started_ms, completed_ms, args_json, parse_status, outcome
+                     ) VALUES (?1, ?2, ?3, '[]', 'parsed', ?4)",
+                    params![
+                        format!("request-{index}"),
+                        index,
+                        index + 10,
+                        if matches!(index, 0 | 204) {
+                            "failed"
+                        } else {
+                            "passed"
+                        }
+                    ],
+                )
+                .unwrap();
+        }
+        evidence
+            .connection
+            .execute(
+                "INSERT INTO requests (
+                    id, started_ms, completed_ms, args_json, parse_status, outcome,
+                    parent_request_id
+                 ) VALUES ('child', 300, 301, '[]', 'parsed', 'failed', 'request-204')",
+                [],
+            )
+            .unwrap();
+        for (request, status, cache) in [
+            ("request-204", "reused", "hit"),
+            ("request-203", "passed", "miss"),
+            ("request-0", "failed", "miss"),
+        ] {
+            evidence
+                .connection
+                .execute(
+                    "INSERT INTO commands (
+                        request_id, operation_id, program, args_json, started_ms, status,
+                        cache_decision
+                     ) VALUES (?1, 'check', 'true', '[]', 0, ?2, ?3)",
+                    params![request, status, cache],
+                )
+                .unwrap();
+        }
+
+        let report = evidence.report().unwrap();
+        assert_eq!(report.requests, 200);
+        assert_eq!(report.commands, 2);
+        assert_eq!(report.failures, 1);
+        assert_eq!(report.wall_ms, 209);
+        assert_eq!(report.cache_hits, 1);
+        assert_eq!(report.cache_misses, 1);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1318,90 +1171,6 @@ mod tests {
                 .cached_validation("check.one", "fingerprint")
                 .unwrap(),
             Some(("passed".into(), None))
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn rotation_archives_integrity_checked_evidence_and_starts_empty() {
-        let root = temporary_root("rotation");
-        let evidence = Evidence::open_at(&root).unwrap();
-        let request = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
-        evidence.begin_request(&request).unwrap();
-        evidence.finish(&request.id, Outcome::Passed).unwrap();
-        evidence
-            .cache_validation("check.one", "fingerprint", "passed", None)
-            .unwrap();
-        evidence
-            .claim_validation("check.two", "fingerprint", "owner")
-            .unwrap();
-        let archive = evidence.rotate("abc123").unwrap();
-        assert!(archive.is_file());
-        let archived = Connection::open(archive).unwrap();
-        assert_eq!(
-            archived
-                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
-                .unwrap(),
-            "ok"
-        );
-        assert_eq!(evidence.status().unwrap().requests, 0);
-        let report = evidence.report().unwrap();
-        assert_eq!(report.requests, 0);
-        assert!(report.previous_p95_request_ms.is_some());
-        assert_eq!(
-            evidence
-                .connection
-                .query_row("SELECT count(*) FROM validation_results", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-        assert_eq!(
-            evidence
-                .connection
-                .query_row("SELECT count(*) FROM operation_leases", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn report_groups_delivery_decisions_and_phase_durations() {
-        let root = temporary_root("delivery-report");
-        let _ = fs::remove_dir_all(&root);
-        let evidence = Evidence::open_at(&root).unwrap();
-        record_delivery_fixture(&evidence, "noop", "no-op", Outcome::NoOp, 120);
-        record_delivery_fixture(&evidence, "runtime", "runtime", Outcome::Passed, 250);
-        record_delivery_fixture(&evidence, "platform", "platform", Outcome::Passed, 900);
-
-        let report = evidence.report().unwrap();
-        assert_eq!(
-            report.delivery_no_op,
-            DeliveryDecisionMetrics {
-                requests: 1,
-                p50_ms: 120,
-                p95_ms: 120,
-            }
-        );
-        assert_eq!(report.delivery_runtime.requests, 1);
-        assert_eq!(report.delivery_runtime.p95_ms, 250);
-        assert_eq!(report.delivery_platform.requests, 1);
-        assert_eq!(report.delivery_platform.p95_ms, 900);
-        assert_eq!(
-            report
-                .delivery_phases
-                .iter()
-                .find(|phase| phase.phase == "reconciliation")
-                .unwrap(),
-            &DeliveryPhaseMetrics {
-                phase: "reconciliation".into(),
-                samples: 3,
-                total_ms: 60,
-                average_ms: 20,
-                max_ms: 20,
-            }
         );
         fs::remove_dir_all(root).unwrap();
     }
