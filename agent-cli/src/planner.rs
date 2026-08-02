@@ -14,6 +14,7 @@ const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
     "crates/framebuffer-stream",
     "crates/magik-core",
     "crates/media-contract",
+    "crates/particles",
     "mister/platform/contracts/latch",
     "mister/platform/contracts/scanout",
     "mister/platform/runtime",
@@ -472,6 +473,9 @@ fn add_path_operations(
             ),
             &["apps/framebuffer-lab"],
         ));
+    }
+    if path.starts_with("apps/startup-particle-lab") {
+        add(diff_check());
     }
     if matches!(
         path.to_str(),
@@ -943,6 +947,7 @@ fn add_path_operations(
         ));
     }
     add_crate(path, "crates/magik-core", "magik-core", out);
+    add_crate(path, "crates/particles", "particles", out);
     add_crate(
         path,
         "apps/startup-particle-lab",
@@ -1262,6 +1267,32 @@ mod tests {
                 "startup-particle-lab.format",
                 "startup-particle-lab.tests"
             ]
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            !operation
+                .args
+                .iter()
+                .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
+
+    #[test]
+    fn particle_engine_changes_select_only_shared_crate_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["crates/particles/src/engine.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            ["particles.clippy", "particles.format", "particles.tests"]
         );
         assert!(plan.operations.iter().all(|operation| {
             !operation
