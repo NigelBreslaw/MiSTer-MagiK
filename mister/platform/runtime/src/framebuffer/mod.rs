@@ -5,6 +5,8 @@ pub mod copy;
 #[cfg(feature = "ui")]
 pub mod downsample;
 pub mod format;
+#[cfg(feature = "framebuffer-lab")]
+pub mod hidden_latch;
 pub mod hidden_scanout;
 #[cfg(feature = "ui")]
 pub mod mapped;
