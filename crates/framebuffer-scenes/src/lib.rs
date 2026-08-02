@@ -7,6 +7,8 @@ use std::error::Error;
 use std::fmt;
 use std::time::Duration;
 
+pub mod navigation;
+
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Rgb565Pixel(pub u16);
