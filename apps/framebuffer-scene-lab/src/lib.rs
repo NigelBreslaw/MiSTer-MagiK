@@ -470,6 +470,23 @@ impl PreparedCandidate {
             embedded,
         })
     }
+
+    fn prepare_for_kind(
+        width: usize,
+        height: usize,
+        expected: EffectKind,
+        recipe: EffectRecipe,
+    ) -> Result<Self, String> {
+        let actual = recipe.kind();
+        if actual != expected {
+            return Err(format!(
+                "live reload for {} cannot switch to the {} scene",
+                expected.label(),
+                actual.label()
+            ));
+        }
+        Self::prepare(width, height, recipe)
+    }
 }
 
 impl LiveParticleRenderer {
@@ -482,6 +499,7 @@ impl LiveParticleRenderer {
         let initial_bytes = read_effect_recipe_bytes(&recipe_path)?;
         let initial =
             PreparedCandidate::prepare(width, height, parse_effect_recipe(&initial_bytes)?)?;
+        let expected_kind = initial.kind;
         publish_startup_particle_status(
             &status_path,
             &StartupParticleStatus::applied(0, initial.kind.status_recipe()),
@@ -491,7 +509,7 @@ impl LiveParticleRenderer {
             &initial_bytes,
             move |bytes| {
                 let recipe = parse_effect_recipe(bytes)?;
-                PreparedCandidate::prepare(width, height, recipe)
+                PreparedCandidate::prepare_for_kind(width, height, expected_kind, recipe)
             },
         )?;
         Ok(Self {
@@ -692,6 +710,31 @@ mod tests {
     fn navigation_fixture_rejects_malformed_target() {
         let mut scene = NavigationFixtureScene::new(NavigationFixture::HomeArcade);
         assert!(scene.render(&mut [], Duration::ZERO).is_err());
+    }
+
+    #[test]
+    fn particle_reload_prepares_complete_scenes_without_switching_kind() {
+        let magik = EffectRecipe::Magik(embedded_magik_recipe().unwrap());
+        let prepared = PreparedCandidate::prepare_for_kind(
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+            EffectKind::Magik,
+            magik,
+        )
+        .unwrap();
+        assert_eq!(prepared.renderer.kind(), EffectKind::Magik);
+        assert_eq!(prepared.embedded.kind(), EffectKind::Magik);
+
+        let cabinet = EffectRecipe::Cabinet(embedded_cabinet_recipe().unwrap());
+        let error = PreparedCandidate::prepare_for_kind(
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+            EffectKind::Magik,
+            cabinet,
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains("cannot switch"));
     }
 
     fn rgb565_hash(pixels: &[Rgb565Pixel]) -> u64 {
