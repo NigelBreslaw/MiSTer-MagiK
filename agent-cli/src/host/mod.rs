@@ -103,12 +103,19 @@ pub struct NativeDevice {
     config: Option<NativeDeviceConfig>,
 }
 
-struct DeliveryProcessLock {
+struct DeviceProcessLock {
     file: fs::File,
 }
 
-impl DeliveryProcessLock {
+impl DeviceProcessLock {
     fn acquire(device_id: &str) -> std::result::Result<Self, DeviceFailure> {
+        let directory = discovery::state_dir()
+            .map_err(device_failure)?
+            .join("locks");
+        Self::acquire_at(&directory, device_id)
+    }
+
+    fn acquire_at(directory: &Path, device_id: &str) -> std::result::Result<Self, DeviceFailure> {
         let safe_id = device_id
             .chars()
             .map(|character| {
@@ -119,7 +126,8 @@ impl DeliveryProcessLock {
                 }
             })
             .collect::<String>();
-        let path = std::env::temp_dir().join(format!("mister-magik-delivery-{safe_id}.lock"));
+        fs::create_dir_all(directory).map_err(device_failure)?;
+        let path = directory.join(format!("device-{safe_id}.lock"));
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -128,21 +136,21 @@ impl DeliveryProcessLock {
             .open(&path)
             .map_err(|error| {
                 DeviceFailure::OperationFailed(format!(
-                    "cannot open delivery lock {}: {error}",
+                    "cannot open device lock {}: {error}",
                     path.display()
                 ))
             })?;
         let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         if result != 0 {
             return Err(DeviceFailure::Busy(
-                "another delivery process is already running".into(),
+                "another process is mutating this device".into(),
             ));
         }
         Ok(Self { file })
     }
 }
 
-impl Drop for DeliveryProcessLock {
+impl Drop for DeviceProcessLock {
     fn drop(&mut self) {
         unsafe {
             libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
@@ -151,11 +159,19 @@ impl Drop for DeliveryProcessLock {
 }
 
 impl NativeDevice {
-    fn prepare(&mut self) -> std::result::Result<(), DeviceFailure> {
-        if self.config.is_some() {
-            return Ok(());
+    fn prepare(
+        &mut self,
+        mutation: bool,
+    ) -> std::result::Result<Option<DeviceProcessLock>, DeviceFailure> {
+        if let Some(config) = &self.config {
+            return if mutation {
+                DeviceProcessLock::acquire(&config.device_id).map(Some)
+            } else {
+                Ok(None)
+            };
         }
         let device = discovery::resolve().map_err(device_failure)?;
+        let lock = DeviceProcessLock::acquire(&device.id)?;
         let connection = ConnectionConfig::for_resolved_host(device.address.to_string());
         let explicit_token = env::var("MISTER_AGENT_TOKEN")
             .ok()
@@ -167,7 +183,12 @@ impl NativeDevice {
             agent_token_for_device(&device.id, explicit_token.as_deref()).map_err(device_failure)?
         };
         self.config = Some(NativeDeviceConfig::new(connection, device.id, token));
-        Ok(())
+        if mutation {
+            Ok(Some(lock))
+        } else {
+            drop(lock);
+            Ok(None)
+        }
     }
 }
 
@@ -176,7 +197,7 @@ impl DeviceOperations for NativeDevice {
         &mut self,
         request: &DeviceRequest,
     ) -> std::result::Result<DeviceResponse, DeviceFailure> {
-        self.prepare()?;
+        let _lock = self.prepare(request.mutates_device())?;
         let config = self.config.clone().ok_or_else(|| {
             DeviceFailure::OperationFailed("device configuration is unavailable".into())
         })?;
@@ -214,65 +235,50 @@ impl DeviceOperations for NativeDevice {
                 manifest_local,
                 manifest_remote,
                 expected_sha256,
-            } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                deliver_runtime_transaction(
-                    &config,
-                    local,
-                    remote,
-                    manifest_local,
-                    manifest_remote,
-                    expected_sha256,
-                )?
-            }
+            } => deliver_runtime_transaction(
+                &config,
+                local,
+                remote,
+                manifest_local,
+                manifest_remote,
+                expected_sha256,
+            )?,
             DeviceRequest::DeliverPlatformTransaction {
                 stage,
                 expected_sha256,
-            } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                deliver_platform_transaction(&config, stage, expected_sha256)?
-            }
+            } => deliver_platform_transaction(&config, stage, expected_sha256)?,
             DeviceRequest::DeliverLocalMainTransaction {
                 local,
                 manifest_local,
                 expected_main_sha256,
                 expected_gui_sha256,
-            } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                deliver_local_main_transaction(
-                    &config,
-                    local,
-                    manifest_local,
-                    expected_main_sha256,
-                    expected_gui_sha256,
-                )?
-            }
+            } => deliver_local_main_transaction(
+                &config,
+                local,
+                manifest_local,
+                expected_main_sha256,
+                expected_gui_sha256,
+            )?,
             DeviceRequest::ProfileInstalledScreensaver { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_screensaver(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticles { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Complete)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleCapacity { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Capacity)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleDemo40k { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Demo40k)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleStep { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particles(&config, output_dir, ParticleBenchmarkRun::Step)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleCpu { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_particle_cpu(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledParticleShowcase {
@@ -280,7 +286,6 @@ impl DeviceOperations for NativeDevice {
                 demo,
                 cpu_profile,
             } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 if *cpu_profile {
                     profile_installed_particle_showcase_cpu(&config, output_dir, *demo)
                         .map_err(device_failure)?
@@ -298,53 +303,41 @@ impl DeviceOperations for NativeDevice {
                 demo,
                 label,
                 time_ms,
-            } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                capture_installed_firework_visual(&config, output_dir, *demo, label, *time_ms)
-                    .map_err(device_failure)?
-            }
+            } => capture_installed_firework_visual(&config, output_dir, *demo, label, *time_ms)
+                .map_err(device_failure)?,
             DeviceRequest::CaptureInstalledParticleTechnique {
                 output_dir,
                 demo,
                 label,
                 hero_secs,
             } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 capture_installed_particle_technique(&config, output_dir, *demo, label, *hero_secs)
                     .map_err(device_failure)?
             }
             DeviceRequest::WatchLiveParticles { family, demo } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 watch_live_particles(&config, family, *demo).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_search(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::VerifyInstalledSearchUi { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 verify_installed_search_ui(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_catalog_lifecycle(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledLaunchReturn { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_launch_return(&config, output_dir, false)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledLaunchReturnFallback { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_launch_return(&config, output_dir, true)
                     .map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledColdBoot { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_cold_boot(&config, output_dir).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledNavigationTransitions { output_dir } => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 profile_installed_navigation_transitions(&config, output_dir)
                     .map_err(device_failure)?
             }
@@ -539,7 +532,6 @@ impl DeviceOperations for NativeDevice {
                 serde_json::to_string(&facts).map_err(device_failure)?
             }
             DeviceRequest::ClearLatchDiagnostics => {
-                let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
                 let session = connect(10).map_err(device_failure)?;
                 exec_checked(
                     &session,
@@ -15157,15 +15149,17 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn delivery_process_lock_is_nonblocking_and_released_on_drop() {
+    fn device_process_lock_is_nonblocking_and_released_on_drop() {
         let device = format!("test-{}", std::process::id());
-        let first = DeliveryProcessLock::acquire(&device).unwrap();
+        let directory = env::temp_dir().join(format!("mister-magik-lock-test-{device}"));
+        let first = DeviceProcessLock::acquire_at(&directory, &device).unwrap();
         assert!(matches!(
-            DeliveryProcessLock::acquire(&device),
+            DeviceProcessLock::acquire_at(&directory, &device),
             Err(DeviceFailure::Busy(_))
         ));
         drop(first);
-        assert!(DeliveryProcessLock::acquire(&device).is_ok());
+        assert!(DeviceProcessLock::acquire_at(&directory, &device).is_ok());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

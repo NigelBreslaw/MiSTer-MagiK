@@ -33,8 +33,6 @@ const STRESS_CLASSES: [&str; 6] = [
 ];
 
 pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
-    let _lock = DeliveryProcessLock::acquire(&config.device_id)
-        .map_err(|error| format!("qualification lock failed: {error:?}"))?;
     let preflight_session = connect_with(&config.connection, 10)?;
     exec_checked(
         &preflight_session,

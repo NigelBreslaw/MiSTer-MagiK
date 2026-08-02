@@ -336,6 +336,25 @@ impl DeviceRequest {
                 | Self::ReadLauncherAutomationSnapshot { .. }
         )
     }
+
+    #[must_use]
+    pub const fn mutates_device(&self) -> bool {
+        !matches!(
+            self,
+            Self::Discover
+                | Self::Status
+                | Self::ReadDevelopmentManifest
+                | Self::VerifyDevelopmentPlatform
+                | Self::FetchVerifiedDevelopmentManager { .. }
+                | Self::VerifyHealth(_)
+                | Self::CollectDiagnosticFacts
+                | Self::CollectLatestCrashReport
+                | Self::CaptureFramebuffer
+                | Self::InspectPublicCatalog
+                | Self::AwaitLauncherAutomationPresented { .. }
+                | Self::ReadLauncherAutomationSnapshot { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
