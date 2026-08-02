@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Embedded, validated data contracts for the archived particle experiments.
+//! Embedded, validated data contracts for particle experiments.
 
 use serde::Deserialize;
 use serde_json::Value;

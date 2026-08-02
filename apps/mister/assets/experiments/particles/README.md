@@ -1,4 +1,4 @@
-# Archived particle assets
+# Particle recipe families
 
 These JSON recipe families belong to particle experiments compiled only with
 the explicit `experiments` feature. Production builds do not embed them.
