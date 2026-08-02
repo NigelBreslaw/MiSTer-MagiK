@@ -95,7 +95,11 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
     let started = Instant::now();
     let mut next_frame = started;
     let mut status_started = started;
+    let mut cpu_started = process_cpu_time();
     let mut status_frames = 0_u64;
+    let mut render_samples_us = Vec::with_capacity(64);
+    let mut last_sequence = None;
+    let mut repeated_presentations = 0_u64;
     loop {
         let elapsed = Instant::now().saturating_duration_since(started);
         let pixels = presenter.pixels_mut();
@@ -104,27 +108,60 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
         let pixels = unsafe {
             std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<Rgb565Pixel>(), pixels.len())
         };
+        let render_started = Instant::now();
         let stats = renderer.render(pixels, elapsed)?;
+        render_samples_us.push(render_started.elapsed().as_micros() as u64);
         let receipt = presenter
             .present()
             .map_err(|error| format!("present hidden RGB565 startup particle frame: {error}"))?;
+        if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
+            repeated_presentations = repeated_presentations.saturating_add(1);
+        }
+        last_sequence = Some(receipt.sequence);
         status_frames = status_frames.saturating_add(1);
         if status_started.elapsed() >= Duration::from_secs(1) {
             let seconds = status_started.elapsed().as_secs_f64();
+            let cpu_now = process_cpu_time();
+            let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
+            render_samples_us.sort_unstable();
+            let render_p99_us = render_samples_us
+                .get(
+                    render_samples_us
+                        .len()
+                        .saturating_mul(99)
+                        .div_ceil(100)
+                        .saturating_sub(1),
+                )
+                .copied()
+                .unwrap_or_default();
+            let render_max_us = render_samples_us.last().copied().unwrap_or_default();
+            let render_average_us = if render_samples_us.is_empty() {
+                0
+            } else {
+                render_samples_us.iter().sum::<u64>() / render_samples_us.len() as u64
+            };
             let error = renderer.last_error().unwrap_or("none");
             println!(
-                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} visible={} slot={} sequence={} reload_error={}",
+                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} visible={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.status_state(),
                 status_frames as f64 / seconds,
+                cpu_percent,
+                render_average_us,
+                render_p99_us,
+                render_max_us,
                 stats.visible,
                 receipt.slot_index,
                 receipt.sequence,
+                repeated_presentations,
                 error,
             );
             status_started = Instant::now();
+            cpu_started = cpu_now;
             status_frames = 0;
+            render_samples_us.clear();
+            repeated_presentations = 0;
         }
         next_frame += FRAME_DURATION;
         if let Some(remaining) = next_frame.checked_duration_since(Instant::now()) {
@@ -133,6 +170,20 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
             next_frame = Instant::now();
         }
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn process_cpu_time() -> Duration {
+    let mut value = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime initializes the supplied timespec on success and
+    // CLOCK_PROCESS_CPUTIME_ID requires no external resources or ownership.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, value.as_mut_ptr()) };
+    if result != 0 {
+        return Duration::ZERO;
+    }
+    // SAFETY: the successful call above initialized every field.
+    let value = unsafe { value.assume_init() };
+    Duration::new(value.tv_sec as u64, value.tv_nsec as u32)
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]

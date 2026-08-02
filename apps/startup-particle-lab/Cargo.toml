@@ -29,6 +29,7 @@ softbuffer = "0.4.8"
 winit = "0.30.13"
 
 [target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
+libc = "0.2"
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["framebuffer-lab"] }
 
 [profile.release]
