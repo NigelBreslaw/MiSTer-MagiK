@@ -287,6 +287,12 @@ fn compile_recipe_family(
                 recipe.id
             ));
         }
+        validate_param_relationships(
+            &recipe.id,
+            &recipe.params,
+            recipe.particle_count,
+            recipe.duration_ms,
+        )?;
         recipe.beats.validate(recipe.duration_ms)?;
         let palette: [Rgb565Pixel; 8] = recipe
             .palette
@@ -306,6 +312,94 @@ fn compile_recipe_family(
         });
     }
     Ok(CompiledFamily { recipes })
+}
+
+fn validate_param_relationships(
+    id: &str,
+    params: &BTreeMap<String, f32>,
+    particle_count: usize,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let p = |name: &str| params[name];
+    let duration = duration_ms as f32 / 1000.0;
+    let valid = match id {
+        "warp-speed" => {
+            0.0 < p("calm_end")
+                && p("calm_end") < p("accelerate_end")
+                && p("accelerate_end") < p("cruise_end")
+                && p("cruise_end") < duration
+                && 0.0 < p("min_speed")
+                && p("min_speed") <= p("max_speed")
+                && 0.0 < p("projection_numerator")
+                && 0.0 < p("projection_bias")
+        }
+        "weather" => {
+            0.0 < p("rain_end") && p("rain_end") < p("snow_end") && p("snow_end") < duration
+        }
+        "fountain-waterfall" => {
+            0.0 < p("fountain_end")
+                && p("fountain_end") < p("morph_end")
+                && p("morph_end") < duration
+        }
+        "arcade-cabinet" => {
+            0.0 < p("formation_end")
+                && p("formation_end") < p("orbit_end")
+                && p("orbit_end") < p("return_end")
+                && p("return_end") < duration
+        }
+        "variable-width-ribbons" => {
+            let ribbons = p("ribbon_count");
+            let samples = p("ribbon_samples");
+            let streaks = p("streak_count");
+            ribbons >= 1.0
+                && samples >= 2.0
+                && streaks >= 0.0
+                && ribbons.fract() == 0.0
+                && samples.fract() == 0.0
+                && streaks.fract() == 0.0
+                && ribbons + streaks <= particle_count as f32
+        }
+        "curl-noise-flow-field" => {
+            0.0 < p("normal_x")
+                && 0.0 < p("normal_y")
+                && 0.0 < p("softening")
+                && 0.0 < p("integration_scale")
+        }
+        "layered-child-systems" => {
+            0.0 < p("cycle") && p("trail_length") >= 2.0 && p("trail_length").fract() == 0.0
+        }
+        "source-morph" => {
+            0.0 <= p("morph_start")
+                && p("morph_start") < p("morph_end")
+                && p("morph_end") < p("return_start")
+                && p("return_start") < duration
+        }
+        "layer-mapped-hologram" => {
+            0.0 < p("reveal_end") && p("reveal_end") < p("fade_start") && p("fade_start") < duration
+        }
+        "point-cloud-morph-passage" => {
+            0.0 <= p("morph_start")
+                && p("morph_start") < p("morph_end")
+                && p("morph_end") < p("return_start")
+                && p("return_start") < p("return_end")
+                && p("return_end") < duration
+        }
+        _ => true,
+    };
+    if params
+        .iter()
+        .any(|(name, value)| (name == "camera_z" || name == "focal") && *value <= 32.0)
+    {
+        return Err(format!(
+            "particle recipe {id:?} camera or focal length is invalid"
+        ));
+    }
+    if !valid {
+        return Err(format!(
+            "particle recipe {id:?} parameter relationships are invalid"
+        ));
+    }
+    Ok(())
 }
 
 fn parse_rgb565(value: &str) -> Result<u16, String> {
@@ -644,8 +738,8 @@ impl FireworkFamily {
         }
         let mut ids = Vec::with_capacity(self.recipes.len());
         for recipe in &self.recipes {
-            if recipe.duration_ms == 0 {
-                return Err("fireworks showcase duration must be non-zero".into());
+            if !(100..=120_000).contains(&recipe.duration_ms) {
+                return Err("fireworks showcase duration is out of bounds".into());
             }
             recipe.beats.validate(recipe.duration_ms)?;
             let id = recipe
@@ -772,5 +866,19 @@ mod tests {
             let incomplete = serde_json::to_vec(&value).unwrap();
             assert!(ParticleRecipeFamily::from_json(&incomplete).is_err());
         }
+    }
+
+    #[test]
+    fn live_families_reject_unsafe_parameter_relationships() {
+        let mut value: Value = serde_json::from_str(PROCEDURAL_FAMILY_JSON).unwrap();
+        let warp = value["recipes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|recipe| recipe["id"].as_str() == Some("warp-speed"))
+            .unwrap();
+        warp["params"]["accelerate_end"] = warp["params"]["calm_end"].clone();
+        let unsafe_family = serde_json::to_vec(&value).unwrap();
+        assert!(ParticleRecipeFamily::from_json(&unsafe_family).is_err());
     }
 }
