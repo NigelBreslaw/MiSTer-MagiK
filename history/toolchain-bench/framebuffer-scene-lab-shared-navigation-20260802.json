@@ -1,0 +1,30 @@
+{
+  "schema": "mister-magik-compile-time-v3",
+  "target": "framebuffer-scene-lab-macos",
+  "edit": "shared-navigation",
+  "source_revision": "e37944151af56f11f56e74a8f59c26ed2b3c781d",
+  "source_path": "crates/framebuffer-scenes/src/navigation.rs",
+  "source_sha256_before": "4d662de899fd5bca048763407ae94c9fc368c054b91b99842d67ecee9c98edc9",
+  "source_sha256_after": "4d662de899fd5bca048763407ae94c9fc368c054b91b99842d67ecee9c98edc9",
+  "target_dir": "/private/tmp/magik-scene-compile-shared-navigation-20260802",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cold_ms": 8924,
+  "no_op_ms": [
+    186,
+    177,
+    181,
+    184,
+    175
+  ],
+  "edit_warmup_ms": 3120,
+  "edit_rebuild_ms": [
+    3143,
+    3108,
+    3171,
+    3152,
+    3109
+  ]
+}

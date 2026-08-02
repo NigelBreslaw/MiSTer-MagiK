@@ -3,15 +3,20 @@ Copyright (C) 2026 Nigel Breslaw
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# Startup particle development
+# Shared framebuffer-scene development
 
 The production-quality MagiK text and arcade-cabinet effects share the
-Slint-free `crates/particles` engine. They are developed in the focused
-`apps/framebuffer-scene-lab` application and consumed by the production launcher
-through a thin host adapter. The engine owns deterministic simulation,
-validated recipes, target assets, RGB565 drawing commands, and ARM MagiK NEON
-kernels. The hosts continue to own preparation threads, framebuffer/latch
-lifecycle, and presentation.
+Slint-free `crates/particles` engine. Portable scene contracts and pure launcher
+navigation-transition rasterization live in the Slint-free
+`crates/framebuffer-scenes` crate. All three are developed in the focused
+`apps/framebuffer-scene-lab` application and consumed by production through
+thin host adapters.
+
+The shared code owns checked RGB565 targets, deterministic simulation, complete
+MagiK lookahead preparation and caching, validated recipes, target assets,
+drawing commands, and ARM MagiK NEON kernels. Hosts own Slint snapshots,
+navigation/input policy, thread placement, PMU reporting, framebuffer/latch
+lifecycle, Main coordination, catalog access, and presentation.
 
 The older `apps/framebuffer-lab` showcase remains a separate 36-demo experiment
 surface. Its registry, recipe-family maps, and copy of the cabinet experiment
@@ -65,6 +70,7 @@ an acknowledgement by itself.
 | --- | --- |
 | macOS focused lab | Watches the selected MagiK or cabinet file and writes `status.json` beside it. |
 | Attended MiSTer focused lab | Watches the volatile recipe used for the session; accepts MagiK or cabinet. Uses the Dev framebuffer/latch lifecycle, scales its 960x540 RGB565 source to Main's confirmed fixed HDMI output rectangle in the FPGA, and restores the launcher on exit. CRT routing remains production-owned. |
+| Navigation fixture lab | Uses an immutable generated `home-arcade`, `home-consoles`, or `consoles-system` RGB565 fixture and cycles forward/reverse. It opens no recipe, Slint snapshot, or catalog. |
 | `MiSTer_MagiKDev` launcher | Watches only `/tmp/mister-magik/startup-particles/magik.json`; acknowledges through `/tmp/mister-magik/startup-particles/status.json`. Only MagiK is accepted. |
 | Public `MiSTer_MagiK` launcher | Uses the validated embedded MagiK default. It does not construct a watcher and never opens or polls the Dev recipe path. |
 
@@ -79,12 +85,20 @@ details directly:
 
 ```text
 scripts/agent startup-particles preview RECIPE
+scripts/agent scene-lab preview --scene magik --recipe RECIPE
+scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
+scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
+scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
+scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device startup-particles RECIPE --runtime lab --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
-The preview and focused-lab modes accept either schema. Dev-launcher mode
-rejects cabinet recipes.
+`scene-lab` is canonical. The older `startup-particles preview` command and
+attended `--runtime lab` path remain thin typed compatibility aliases; the old
+particle-only lab app/binary name is compatibility-only. Particle preview and
+focused-lab modes accept either schema, while Dev-launcher mode rejects cabinet
+recipes. Navigation accepts `--fixture`, never `--recipe`.
 
 For deterministic visual evidence, the focused binary also supports a headless
 fixed-time capture. See `apps/framebuffer-scene-lab/README.md` for the direct
@@ -130,50 +144,77 @@ the two defined flag bits, and no trailing data.
 
 ## Compile-time boundary and evidence
 
-Changing shared simulation, recipes, or the focused lab must not compile Slint
-or the rest of `apps/mister`. The focused lab depends directly on
-`crates/particles`; only its ARM target adds the narrow framebuffer runtime
-dependency needed by the attended latch presenter. Production depends on the
-same shared crate, so a validated default and its rendering behavior do not
-fork between development and shipping.
+Changing shared scene rendering, recipes, or the focused lab must not compile
+Slint or the rest of `apps/mister`. The focused lab depends directly on
+`crates/framebuffer-scenes` and `crates/particles`; only its ARM target adds the
+narrow framebuffer runtime dependency needed by the attended latch presenter.
+Neither shared crate contains Main, latch, framebuffer ioctl, `/dev/fb0`,
+catalog, device-layout, or presentation dependencies.
 
 The macOS measurements used the same machine and five-sample method. Moving the
 edit boundary out of the full application made cold and no-op builds much
-faster; the shared-engine edit median is also below three seconds.
+faster; shared-renderer edits remain around three seconds and lab-host edits
+stay below one second.
 
-| Path | Cold | No-op median | Particle edit median |
+| Scene-lab edit boundary | Cold | No-op median | Five-sample edit median |
 | --- | ---: | ---: | ---: |
-| Full Slint application before extraction | 79.267 s | 3.171 s | 3.092 s |
-| Focused Slint-free lab after extraction | 14.194 s | 0.289 s | 2.878 s |
+| Shared MagiK renderer | 9.701 s | 0.184 s | 2.894 s |
+| Shared navigation rasterizer | 8.924 s | 0.181 s | 3.143 s |
+| Lab host | 8.867 s | 0.184 s | 0.776 s |
+
+Use the repository-owned measurement inputs explicitly:
+
+```text
+scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-magik --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
+scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-navigation --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
+scripts/agent compile-time measure framebuffer-scene-lab-macos --edit lab-host --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
+```
 
 The focused ARM lab completed a separate build in 10.46 seconds. That is a
 single build result, not a five-sample edit median, so it must not be presented
 as directly comparable evidence. These timings are dated evidence, not CI
-gates. The reports and individual samples live in `history/toolchain-bench/`.
+gates. The reports, source hashes, and individual samples live in
+`history/toolchain-bench/framebuffer-scene-lab-*-20260802.json`.
 
-## Device qualification
+## Device evidence and pending qualification
 
-The consolidated lab preserves physical 60 Hz with no repeated presentations.
-The after-change timing includes simulation, projection, RGB565 rasterization,
-and their foreground bookkeeping. It ends before latch presentation waiting.
+Earlier attended particle-lab evidence preserved physical 60 Hz with no
+repeated presentations. Its after-change timing includes simulation,
+projection, RGB565 rasterization, and foreground bookkeeping, and ends before
+latch presentation waiting. It predates the final shared-renderer migration and
+must not be represented as final device qualification for this extraction.
 
 | Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | MagiK before extraction, production launcher | 40,960 | 60.029 | 57.55% | 4.704 / 9.229 ms | 0 |
 | MagiK after extraction, focused lab | 40,960 | 60.0 | 50.0–58.5% | 10.774 / 10.774 ms | 0 |
 | Cabinet after extraction, focused lab | 12,288 | 60.0 | 49.1–53.3% | 9.465 / 9.465 ms | 0 |
+| Navigation fixture after extraction | n/a | Pending | Pending | Pending | Pending |
 
 The pre-extraction renderer timing excluded asynchronous preparation, so its
 P99 must not be compared directly with the lab's synchronous render-work
-interval. Process CPU is the useful directional comparison. The focused MagiK
-result meets the 65% CPU, 12 ms render-work P99, 16.667 ms maximum, and
-zero-repeat targets without a projection cache or render-ahead queue.
+interval. Process CPU is the useful directional comparison. The earlier
+focused MagiK result met the 65% CPU, 12 ms render-work P99, 16.667 ms maximum,
+and zero-repeat targets. The final shared MagiK scene does include the qualified
+two-cohort projection cache, lookahead preparation, ordered commands, and
+per-buffer dirty history moved from production.
 
-Attended lab qualification also covered valid apply, invalid-save rejection
+The earlier attended lab run also covered valid apply, invalid-save rejection
 with last-good retention, and the two-poll deletion reset while frames
-continued. The implementation work in all 11 consolidation steps is complete.
-Dev-launcher hardware acknowledgement still needs one operational rerun after
-installing a coherent Dev application that contains the watcher; the installed
-revision used on 2026-08-02 predates that code. Detailed scope, timing caveats,
-and device observations are recorded in
-`history/toolchain-bench/startup-particles-after-20260802.md`.
+continued. Final MagiK, cabinet, navigation-fixture, and Dev-launcher device
+qualification requires a clean coherent Dev delivery. It was not run during
+this migration because device delivery requires separate user authorization.
+Detailed prior scope, timing caveats, and device observations are recorded in
+`history/toolchain-bench/startup-particles-after-20260802.md`; the current
+qualification status is recorded in
+`history/2026-08-02-shared-framebuffer-scenes-qualification.md`.
+
+## Next screensaver migration
+
+The existing 20-mode launcher screensaver remains application-owned in this
+phase. Its next safe migration uses the same seam: the production host loads
+archives/catalog entries and decodes assets, then passes owned RGB565 pixels and
+typed scene inputs into a portable scene. Archive traversal, catalog state,
+Slint state, route selection, and presentation do not move into the shared
+crate. No generic scene registry, scene graph, or cross-scene JSON schema is
+introduced.

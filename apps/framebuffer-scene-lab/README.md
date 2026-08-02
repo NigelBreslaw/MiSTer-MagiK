@@ -5,9 +5,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Framebuffer scene lab
 
-This is the focused, Slint-free development app for the production-quality
-MagiK text and arcade-cabinet particle effects. The command line selects one
-concrete scene; there is deliberately no demo registry or recipe-family abstraction.
+This is the focused, Slint-free development app for portable production RGB565
+scenes: the MagiK text and arcade-cabinet particle effects plus launcher
+navigation-transition rasterization. The command line selects one concrete
+scene; there is deliberately no demo registry or recipe-family abstraction.
 The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
 dependency of this app.
 
@@ -16,18 +17,23 @@ Use the supported host workflow for a macOS preview:
 ```text
 scripts/agent scene-lab preview --scene magik --recipe RECIPE
 scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
+scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
 ```
 
 For attended MiSTer sessions, use one of:
 
 ```text
-scripts/agent device startup-particles RECIPE --runtime lab --attended
+scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
+scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
 The older `startup-particles preview RECIPE` and attended `--runtime lab`
-commands remain typed compatibility aliases. The focused lab accepts the MagiK
-and cabinet schemas. The Dev launcher accepts
+commands remain typed compatibility aliases. The old particle-only lab app and
+binary names are compatibility-only; new workflows use `framebuffer-scene-lab`.
+The focused lab accepts the MagiK and cabinet schemas or one of the generated
+`home-arcade`, `home-consoles`, and `consoles-system` navigation fixtures. The
+Dev launcher accepts
 only MagiK and watches the fixed volatile
 `/tmp/mister-magik/startup-particles/magik.json` path. The public launcher never
 watches an external recipe.
@@ -50,6 +56,10 @@ after rejected or partial saves, and `status.json` is written beside the recipe.
 The watcher polls every 100 ms, accepts at most 1 MiB, retains only the newest
 generation, and restores the embedded recipe once after two missing polls.
 
+Navigation fixtures contain generated RGB565 cards and backgrounds, require no
+Slint or catalog, and cycle through forward and reverse directions. They are
+immutable; `--fixture` and `--recipe` are mutually exclusive.
+
 Create a deterministic capture without opening a window:
 
 ```text
@@ -58,6 +68,16 @@ mister-magik-framebuffer-scene-lab \
   --recipe path/to/cabinet.json \
   --time-ms 5000 \
   --output cabinet.ppm
+```
+
+The same capture contract applies to navigation fixtures:
+
+```text
+mister-magik-framebuffer-scene-lab \
+  --scene navigation-transition \
+  --fixture consoles-system \
+  --time-ms 1080 \
+  --output transition.ppm
 ```
 
 The engine, palettes, frame hashes, and MiSTer presentation remain RGB565. The

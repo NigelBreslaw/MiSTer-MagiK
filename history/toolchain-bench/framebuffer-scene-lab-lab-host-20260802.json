@@ -1,0 +1,30 @@
+{
+  "schema": "mister-magik-compile-time-v3",
+  "target": "framebuffer-scene-lab-macos",
+  "edit": "lab-host",
+  "source_revision": "e37944151af56f11f56e74a8f59c26ed2b3c781d",
+  "source_path": "apps/framebuffer-scene-lab/src/main.rs",
+  "source_sha256_before": "38308f69e2235b95781bb57df2917ea4cb710fc3ec9fdb5f53d089449dee1100",
+  "source_sha256_after": "38308f69e2235b95781bb57df2917ea4cb710fc3ec9fdb5f53d089449dee1100",
+  "target_dir": "/private/tmp/magik-scene-compile-lab-host-20260802",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cold_ms": 8867,
+  "no_op_ms": [
+    184,
+    181,
+    184,
+    185,
+    184
+  ],
+  "edit_warmup_ms": 782,
+  "edit_rebuild_ms": [
+    830,
+    830,
+    776,
+    776,
+    770
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema": "mister-magik-compile-time-v3",
+  "target": "framebuffer-scene-lab-macos",
+  "edit": "shared-magik",
+  "source_revision": "e37944151af56f11f56e74a8f59c26ed2b3c781d",
+  "source_path": "crates/particles/src/magik.rs",
+  "source_sha256_before": "acd1a3a9a9dba5d49f6d2572576a4b03bcc57c1d6d9a94870ca28cb73fdfa5f9",
+  "source_sha256_after": "acd1a3a9a9dba5d49f6d2572576a4b03bcc57c1d6d9a94870ca28cb73fdfa5f9",
+  "target_dir": "/private/tmp/magik-scene-compile-shared-magik-20260802",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cold_ms": 9701,
+  "no_op_ms": [
+    184,
+    185,
+    183,
+    239,
+    181
+  ],
+  "edit_warmup_ms": 2995,
+  "edit_rebuild_ms": [
+    2892,
+    2923,
+    2894,
+    2924,
+    2888
+  ]
+}

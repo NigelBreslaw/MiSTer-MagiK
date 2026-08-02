@@ -23,15 +23,23 @@ filesystem, process, or hardware types. The MiSTer runtime implements those
 capabilities while keeping framebuffer ioctls, FPGA commands, and Main handoff
 details on the platform side of the seam.
 
-The production MagiK text and arcade-cabinet particle effects live in the
-Slint-free `crates/particles` engine. The focused
-`apps/framebuffer-scene-lab` compiles that engine without the launcher, while
-production uses it through a thin adapter. Both effects use validated,
-versioned JSON defaults and RGB565 rendering; mutable recipe watching exists
-only in the focused lab and the structurally gated Dev launcher. See
-`docs/startup-particles.md` for the schemas, reload protocol, assets, and
-runtime boundaries. The separate 36-demo `apps/framebuffer-lab` showcase is
-unchanged experimental code, not another production-particle authority.
+Portable framebuffer scenes cross a narrow RGB565 seam. The Slint-free
+`crates/framebuffer-scenes` crate owns checked geometry, buffer identity, scene
+clock/target contracts, and pure launcher navigation-transition rasterization.
+The Slint-free `crates/particles` crate owns the complete qualified MagiK
+pipeline—lookahead preparation, projection cohorts, command ordering, dirty
+history, RGB565 rasterization, and timing—plus the cabinet scene. Production
+adapters retain Slint snapshot capture, navigation decisions, input queues,
+thread policy, PMU telemetry, Main coordination, and presentation.
+
+`apps/framebuffer-scene-lab` consumes those same concrete scene implementations
+without compiling Slint or `apps/mister`. It selects MagiK, cabinet, or generated
+navigation fixtures through an explicit enum rather than a registry. Mutable
+particle recipe watching exists only in the focused lab and the structurally
+gated Dev launcher. See `docs/startup-particles.md` for the shared-scene
+workflow, schemas, reload protocol, assets, and runtime boundaries. The separate
+36-demo `apps/framebuffer-lab` showcase is unchanged experimental code, not
+another production authority.
 
 ## Tooling Shape
 

@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const NO_OP_SAMPLES: usize = 5;
-const PARTICLE_REBUILD_SAMPLES: usize = 5;
+const EDIT_REBUILD_SAMPLES: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
@@ -29,6 +29,25 @@ pub enum CompileTimeTarget {
     MagikFullAppMacos,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum CompileTimeEdit {
+    #[default]
+    SharedMagik,
+    SharedNavigation,
+    LabHost,
+}
+
+impl CompileTimeEdit {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::SharedMagik => "shared-magik",
+            Self::SharedNavigation => "shared-navigation",
+            Self::LabHost => "lab-host",
+        }
+    }
 }
 
 impl CompileTimeTarget {
@@ -53,7 +72,7 @@ pub enum CompileTimeCommand {
         #[arg(long, value_name = "ABSOLUTE_PATH")]
         target_dir: PathBuf,
     },
-    /// Record one cold, five no-op, and five particle-source rebuild samples.
+    /// Record one cold, five no-op, and five selected-source rebuild samples.
     Measure {
         #[arg(value_enum)]
         target: CompileTimeTarget,
@@ -61,6 +80,8 @@ pub enum CompileTimeCommand {
         target_dir: PathBuf,
         #[arg(long, value_name = "NEW_JSON_PATH")]
         output: PathBuf,
+        #[arg(long, value_enum, default_value = "shared-magik")]
+        edit: CompileTimeEdit,
     },
 }
 
@@ -68,6 +89,7 @@ pub enum CompileTimeCommand {
 struct CompileTimeReport {
     schema: &'static str,
     target: CompileTimeTarget,
+    edit: CompileTimeEdit,
     source_revision: String,
     source_path: String,
     source_sha256_before: String,
@@ -79,8 +101,8 @@ struct CompileTimeReport {
     cargo: String,
     cold_ms: u128,
     no_op_ms: Vec<u128>,
-    particle_warmup_ms: u128,
-    particle_rebuild_ms: Vec<u128>,
+    edit_warmup_ms: u128,
+    edit_rebuild_ms: Vec<u128>,
 }
 
 pub fn execute(
@@ -113,13 +135,15 @@ pub fn execute(
             target,
             target_dir,
             output,
-        } => measure(repository, *target, target_dir, output, reporter),
+            edit,
+        } => measure(repository, *target, *edit, target_dir, output, reporter),
     }
 }
 
 fn measure(
     repository: &Path,
     target: CompileTimeTarget,
+    edit: CompileTimeEdit,
     target_dir: &Path,
     output: &Path,
     reporter: &mut Reporter<'_>,
@@ -128,7 +152,7 @@ fn measure(
     if output.exists() {
         return Err(format!("compile-time output already exists: {}", output.display()).into());
     }
-    let source = repository.join(target.source_path());
+    let source = repository.join(target.source_path(edit)?);
     require_clean_source(repository, &source)?;
     let mut source_guard = SourceStampGuard::new(&source)?;
     std::fs::create_dir_all(target_dir)
@@ -157,33 +181,35 @@ fn measure(
     reporter.emit(
         EventKind::Progress,
         "compile-time-warmup",
-        "warming the particle-source rebuild path",
+        &format!("warming the {} rebuild path", edit.label()),
         Some(40),
     )?;
-    let particle_warmup_ms = timed_build(repository, target, target_dir)?;
+    let edit_warmup_ms = timed_build(repository, target, target_dir)?;
 
-    let mut particle_rebuild_ms = Vec::with_capacity(PARTICLE_REBUILD_SAMPLES);
-    for sample in 0..PARTICLE_REBUILD_SAMPLES {
+    let mut edit_rebuild_ms = Vec::with_capacity(EDIT_REBUILD_SAMPLES);
+    for sample in 0..EDIT_REBUILD_SAMPLES {
         source_guard.force_rebuild()?;
         reporter.emit(
             EventKind::Progress,
-            "compile-time-particle",
+            "compile-time-edit",
             &format!(
-                "measuring particle rebuild sample {}/{}",
+                "measuring {} rebuild sample {}/{}",
+                edit.label(),
                 sample + 1,
-                PARTICLE_REBUILD_SAMPLES
+                EDIT_REBUILD_SAMPLES
             ),
             Some(50 + (sample as u8 * 8)),
         )?;
-        particle_rebuild_ms.push(timed_build(repository, target, target_dir)?);
+        edit_rebuild_ms.push(timed_build(repository, target, target_dir)?);
     }
 
     let source_sha256_before = source_guard.original_sha256.clone();
     let source_sha256_after = source_guard.finish()?;
     require_clean_source(repository, &source)?;
     let report = CompileTimeReport {
-        schema: "mister-magik-compile-time-v2",
+        schema: "mister-magik-compile-time-v3",
         target,
+        edit,
         source_revision: command_output(repository, "git", &["rev-parse", "HEAD"])?,
         source_path: source
             .strip_prefix(repository)
@@ -200,8 +226,8 @@ fn measure(
         cargo: command_output(repository, "cargo", &["--version"])?,
         cold_ms,
         no_op_ms,
-        particle_warmup_ms,
-        particle_rebuild_ms,
+        edit_warmup_ms,
+        edit_rebuild_ms,
     };
     write_report(output, &report)?;
     reporter.emit(
@@ -249,15 +275,27 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
 }
 
 impl CompileTimeTarget {
-    const fn source_path(self) -> &'static str {
+    fn source_path(self, edit: CompileTimeEdit) -> AgentResult<&'static str> {
         match self {
             Self::FramebufferLabArm | Self::FramebufferLabMacos => {
-                "apps/framebuffer-lab/src/particles/showcase.rs"
+                if edit == CompileTimeEdit::SharedMagik {
+                    Ok("apps/framebuffer-lab/src/particles/showcase.rs")
+                } else {
+                    Err("the framebuffer showcase supports only --edit shared-magik".into())
+                }
             }
-            Self::MagikFullAppArm | Self::MagikFullAppMacos => "apps/mister/src/particle_engine.rs",
-            Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => {
-                "crates/particles/src/engine.rs"
+            Self::MagikFullAppArm | Self::MagikFullAppMacos => {
+                if edit == CompileTimeEdit::SharedMagik {
+                    Ok("crates/particles/src/magik.rs")
+                } else {
+                    Err("the full-app compile target supports only --edit shared-magik".into())
+                }
             }
+            Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => Ok(match edit {
+                CompileTimeEdit::SharedMagik => "crates/particles/src/magik.rs",
+                CompileTimeEdit::SharedNavigation => "crates/framebuffer-scenes/src/navigation.rs",
+                CompileTimeEdit::LabHost => "apps/framebuffer-scene-lab/src/main.rs",
+            }),
         }
     }
 }
@@ -359,7 +397,7 @@ fn validate_target_dir(repository: &Path, target_dir: &Path, require_new: bool) 
 fn require_clean_source(repository: &Path, source: &Path) -> AgentResult<()> {
     let relative = source
         .strip_prefix(repository)
-        .map_err(|_| "particle source is outside the repository")?;
+        .map_err(|_| "compile-time edit source is outside the repository")?;
     let status = command_output(
         repository,
         "git",
@@ -372,7 +410,7 @@ fn require_clean_source(repository: &Path, source: &Path) -> AgentResult<()> {
     )?;
     if !status.is_empty() {
         return Err(format!(
-            "particle source must be clean before measurement: {}",
+            "compile-time edit source must be clean before measurement: {}",
             relative.display()
         )
         .into());
@@ -411,7 +449,7 @@ impl SourceStampGuard {
         self.generation = self.generation.saturating_add(1);
         let mut bytes = self.original_bytes.clone();
         bytes.extend_from_slice(
-            format!("\n// compile-time-rebuild-generation:{}\n", self.generation).as_bytes(),
+            format!("\n// compile-time-edit-generation:{}\n", self.generation).as_bytes(),
         );
         std::fs::write(&self.path, bytes)
             .map_err(|error| format!("cannot mark {} for rebuild: {error}", self.path.display()))?;
@@ -422,7 +460,7 @@ impl SourceStampGuard {
         self.restore_source()?;
         let after = sha256(&self.path)?;
         if after != self.original_sha256 {
-            return Err("particle source was not restored after compile-time measurement".into());
+            return Err("edit source was not restored after compile-time measurement".into());
         }
         self.finished = true;
         Ok(after)
@@ -544,6 +582,25 @@ mod tests {
         assert_eq!(
             CompileTimeTarget::FramebufferSceneLabMacos.label(),
             "framebuffer-scene-lab-macos"
+        );
+    }
+
+    #[test]
+    fn scene_lab_measurements_select_each_real_edit_boundary() {
+        let target = CompileTimeTarget::FramebufferSceneLabMacos;
+        assert_eq!(
+            target.source_path(CompileTimeEdit::SharedMagik).unwrap(),
+            "crates/particles/src/magik.rs"
+        );
+        assert_eq!(
+            target
+                .source_path(CompileTimeEdit::SharedNavigation)
+                .unwrap(),
+            "crates/framebuffer-scenes/src/navigation.rs"
+        );
+        assert_eq!(
+            target.source_path(CompileTimeEdit::LabHost).unwrap(),
+            "apps/framebuffer-scene-lab/src/main.rs"
         );
     }
 
