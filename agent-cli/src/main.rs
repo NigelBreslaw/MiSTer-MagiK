@@ -225,18 +225,6 @@ fn dispatch(
             println!("{}", receipt.display());
             return Ok(Outcome::Passed);
         }
-        CliCommand::Alpha {
-            command:
-                AlphaCommand::Verify {
-                    candidate,
-                    receipt,
-                    marker,
-                },
-        } => {
-            let marker = agent_cli::alpha::verify_acceptance(candidate, receipt, marker)?;
-            println!("{}", marker.display());
-            return Ok(Outcome::Passed);
-        }
         CliCommand::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
         }

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Closed MiSTer Downloader transaction for immutable alpha candidates.
+//! Closed MiSTer Downloader transaction for the rolling alpha release.
 
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -143,18 +143,8 @@ impl Request {
 }
 
 fn validate_tag(tag: &str) -> Result<(), String> {
-    let Some(rest) = tag.strip_prefix("alpha-candidate-v0.2.") else {
-        return Err("candidate tag has an unsupported prefix".to_string());
-    };
-    let Some((build, digest)) = rest.split_once('-') else {
-        return Err("candidate tag is missing its digest".to_string());
-    };
-    if build.is_empty()
-        || !build.bytes().all(|byte| byte.is_ascii_digit())
-        || digest.len() != 12
-        || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
-    {
-        return Err("candidate tag is invalid".to_string());
+    if tag != "alpha" {
+        return Err("alpha installation requires the rolling alpha tag".to_string());
     }
     Ok(())
 }
@@ -368,11 +358,11 @@ mod tests {
     }
 
     #[test]
-    fn candidate_tags_are_closed_and_immutable() {
-        assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef").is_ok());
-        assert!(validate_tag("alpha").is_err());
-        assert!(validate_tag("alpha-candidate-v0.2.123-latest").is_err());
-        assert!(validate_tag("alpha-candidate-v0.2.123-012345abcdef/escape").is_err());
+    fn alpha_tag_is_closed_to_the_rolling_release() {
+        assert!(validate_tag("alpha").is_ok());
+        assert!(validate_tag("beta").is_err());
+        assert!(validate_tag("alpha-old").is_err());
+        assert!(validate_tag("alpha/escape").is_err());
     }
 
     #[test]

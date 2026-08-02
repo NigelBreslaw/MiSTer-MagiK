@@ -375,14 +375,6 @@ pub enum AlphaCommand {
         #[arg(long)]
         restore_host_mode: bool,
     },
-    Verify {
-        #[arg(long)]
-        candidate: PathBuf,
-        #[arg(long)]
-        receipt: PathBuf,
-        #[arg(long)]
-        marker: PathBuf,
-    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -618,24 +610,6 @@ mod tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["agent-cli", "alpha", "accept"]).is_err());
-    }
-
-    #[test]
-    fn alpha_verify_has_a_closed_candidate_receipt_and_marker_interface() {
-        assert!(
-            Cli::try_parse_from([
-                "agent-cli",
-                "alpha",
-                "verify",
-                "--candidate",
-                "/tmp/candidate",
-                "--receipt",
-                "/tmp/evidence/alpha-acceptance.json",
-                "--marker",
-                "/tmp/marker.json",
-            ])
-            .is_ok()
-        );
     }
 
     #[test]

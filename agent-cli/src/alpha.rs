@@ -208,7 +208,7 @@ pub fn execute(
     reporter.emit(
         EventKind::Progress,
         "candidate",
-        "Verifying the immutable alpha candidate",
+        "Verifying the downloaded alpha release",
         Some(5),
     )?;
     let candidate = verify_candidate(candidate_root)?;
@@ -240,7 +240,7 @@ pub fn execute(
         reporter.emit(
             EventKind::Progress,
             "install",
-            "Installing the exact candidate through MiSTer Downloader",
+            "Installing the downloaded alpha through MiSTer Downloader",
             Some(10),
         )?;
         let activation = device.install_candidate(
@@ -283,7 +283,7 @@ pub fn execute(
     reporter.emit(
         EventKind::Progress,
         "accepted",
-        "Alpha candidate passed the real-UI journey",
+        "Alpha release passed the real-UI journey",
         Some(100),
     )?;
     Ok(receipt_path)
@@ -968,275 +968,6 @@ fn capture_usb(label: &str, output: &Path) -> AgentResult<UsbEvidence> {
     })
 }
 
-pub fn verify_acceptance(
-    candidate_root: &Path,
-    receipt_path: &Path,
-    marker_path: &Path,
-) -> AgentResult<PathBuf> {
-    let candidate = verify_candidate(candidate_root)?;
-    let receipt_bytes = fs::read(receipt_path)
-        .map_err(|error| format!("cannot read {}: {error}", receipt_path.display()))?;
-    let receipt: Value = serde_json::from_slice(&receipt_bytes)
-        .map_err(|error| format!("cannot parse {}: {error}", receipt_path.display()))?;
-    if receipt.get("format").and_then(Value::as_str) != Some("mister-magik-alpha-hil-v1")
-        || receipt.get("accepted").and_then(Value::as_bool) != Some(true)
-    {
-        return invalid_acceptance("receipt is not an accepted alpha HIL result");
-    }
-    let expected_candidate = serde_json::to_value(&candidate).unwrap();
-    if receipt.get("candidate") != Some(&expected_candidate) {
-        return invalid_acceptance("receipt candidate identity does not match immutable assets");
-    }
-    let runtime = receipt
-        .get("installed_runtime")
-        .ok_or_else(|| AgentError::from("receipt has no installed runtime"))?;
-    if runtime.pointer("/build/version").and_then(Value::as_str) != Some(&candidate.version)
-        || runtime
-            .pointer("/build/source_revision")
-            .and_then(Value::as_str)
-            != Some(&candidate.magik_revision)
-    {
-        return invalid_acceptance("installed runtime identity does not match the candidate");
-    }
-    let catalog = receipt
-        .get("catalog_creation")
-        .ok_or("receipt has no catalog-creation evidence")?;
-    if catalog.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-alpha-catalog-creation-v1")
-        || catalog.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true)
-        || catalog
-            .pointer("/catalog/total_games")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            == 0
-        || catalog
-            .pointer("/timing/complete_ms")
-            .and_then(Value::as_u64)
-            .is_none()
-    {
-        return invalid_acceptance("catalog-creation evidence is invalid");
-    }
-    let launch_return = receipt
-        .get("launch_return")
-        .ok_or_else(|| AgentError::from("receipt has no launch-return evidence"))?;
-    if launch_return.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-launcher-automation-launch-return-v1")
-        || launch_return
-            .pointer("/handoff/files/core_name")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                launch_return
-                    .pointer("/handoff/files/rbf_name")
-                    .and_then(Value::as_str)
-            })
-            .is_none_or(|core| core.is_empty() || core.to_ascii_lowercase().contains("menu"))
-    {
-        return invalid_acceptance("receipt does not prove a real non-Menu core launch and return");
-    }
-
-    let evidence_root = receipt_path
-        .parent()
-        .ok_or("acceptance receipt has no evidence directory")?;
-    verify_checkpoint_evidence(
-        evidence_root,
-        receipt
-            .get("checkpoints")
-            .and_then(Value::as_array)
-            .ok_or("receipt has no checkpoint array")?,
-    )?;
-    verify_usb_evidence(
-        evidence_root,
-        receipt
-            .get("usb_video")
-            .and_then(Value::as_array)
-            .ok_or("receipt has no USB evidence array")?,
-    )?;
-
-    let marker = json_map(&[
-        (
-            "schema",
-            Value::String("mister-magik-alpha-acceptance-marker-v1".into()),
-        ),
-        (
-            "candidate_tag",
-            Value::String(candidate.candidate_tag.clone()),
-        ),
-        ("version", Value::String(candidate.version.clone())),
-        ("build_number", Value::from(candidate.build_number)),
-        (
-            "source_revision",
-            Value::String(candidate.magik_revision.clone()),
-        ),
-        (
-            "archive_sha256",
-            Value::String(candidate.archive_sha256.clone()),
-        ),
-        (
-            "acceptance_receipt_sha256",
-            Value::String(digest(&receipt_bytes)),
-        ),
-        (
-            "accepted_at_unix",
-            receipt
-                .get("accepted_at_unix")
-                .cloned()
-                .unwrap_or(Value::Null),
-        ),
-    ]);
-    write_value_atomically(marker_path, &marker)?;
-    Ok(marker_path.to_owned())
-}
-
-fn verify_checkpoint_evidence(root: &Path, checkpoints: &[Value]) -> AgentResult<()> {
-    if checkpoints.len() < 6 {
-        return invalid_acceptance("receipt has too few visual checkpoints");
-    }
-    let mut labels = BTreeSet::new();
-    for checkpoint in checkpoints {
-        if checkpoint.get("schema").and_then(Value::as_str)
-            != Some("mister-magik-launcher-checkpoint-v1")
-        {
-            return invalid_acceptance("checkpoint schema is invalid");
-        }
-        let label = checkpoint
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("checkpoint has no label")?;
-        require_evidence_leaf(label)?;
-        if !labels.insert(label.to_owned()) {
-            return invalid_acceptance("checkpoint labels are not unique");
-        }
-        let png = checkpoint
-            .get("png")
-            .and_then(Value::as_str)
-            .ok_or("checkpoint has no PNG")?;
-        require_evidence_leaf(png)?;
-        let png_path = root.join("rgb565").join(png);
-        verify_evidence_file(
-            &png_path,
-            checkpoint.get("png_bytes").and_then(Value::as_u64),
-            checkpoint.get("png_sha256").and_then(Value::as_str),
-        )?;
-        let metadata_path = root.join("rgb565").join(format!("{label}.json"));
-        let metadata: Value = serde_json::from_slice(
-            &fs::read(&metadata_path)
-                .map_err(|error| format!("cannot read {}: {error}", metadata_path.display()))?,
-        )
-        .map_err(|error| format!("cannot parse {}: {error}", metadata_path.display()))?;
-        if metadata != *checkpoint {
-            return invalid_acceptance("checkpoint metadata does not match its receipt entry");
-        }
-    }
-    for required in [
-        "home",
-        "arcade",
-        "arcade-return",
-        "arcade-search",
-        "nested-menu",
-        "settings",
-    ] {
-        if !labels.contains(required) {
-            return invalid_acceptance(format!("receipt is missing checkpoint {required}"));
-        }
-    }
-    Ok(())
-}
-
-fn verify_usb_evidence(root: &Path, evidence: &[Value]) -> AgentResult<()> {
-    if evidence.len() < 3 {
-        return invalid_acceptance("receipt has too few physical USB captures");
-    }
-    let mut labels = BTreeSet::new();
-    for item in evidence {
-        let label = item
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("USB evidence has no label")?;
-        require_evidence_leaf(label)?;
-        labels.insert(label.to_owned());
-        let relative = item
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or("USB evidence has no path")?;
-        require_relative(relative)?;
-        if !relative.starts_with("usb-video/") {
-            return invalid_acceptance("USB evidence path is outside its evidence directory");
-        }
-        verify_evidence_file(
-            &root.join(relative),
-            item.get("bytes").and_then(Value::as_u64),
-            item.get("sha256").and_then(Value::as_str),
-        )?;
-        if item.get("width").and_then(Value::as_u64) != Some(1920)
-            || item.get("height").and_then(Value::as_u64) != Some(1080)
-        {
-            return invalid_acceptance("USB evidence is not the required 1920x1080 capture");
-        }
-    }
-    for required in ["home", "arcade", "arcade-return"] {
-        if !labels.contains(required) {
-            return invalid_acceptance(format!("receipt is missing USB capture {required}"));
-        }
-    }
-    Ok(())
-}
-
-fn verify_evidence_file(path: &Path, bytes: Option<u64>, sha256: Option<&str>) -> AgentResult<()> {
-    let expected_bytes = bytes.ok_or("evidence entry has no byte length")?;
-    let expected_sha = sha256.ok_or("evidence entry has no SHA-256")?;
-    require_sha("evidence_sha256", expected_sha)?;
-    if fs::metadata(path).map(|metadata| metadata.len()).ok() != Some(expected_bytes)
-        || digest_file(path)? != expected_sha
-    {
-        return invalid_acceptance(format!("evidence file does not match: {}", path.display()));
-    }
-    Ok(())
-}
-
-fn require_evidence_leaf(value: &str) -> AgentResult<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || Path::new(value).components().count() != 1
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-    {
-        invalid_acceptance("evidence contains an unsafe filename")
-    } else {
-        Ok(())
-    }
-}
-
-fn json_map(entries: &[(&str, Value)]) -> Value {
-    Value::Object(
-        entries
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), value.clone()))
-            .collect(),
-    )
-}
-
-fn write_value_atomically(path: &Path, value: &Value) -> AgentResult<()> {
-    if path.exists() {
-        return classified("alpha_evidence_exists", path.display().to_string());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let temporary = path.with_extension(format!("json.partial-{}", std::process::id()));
-    fs::write(
-        &temporary,
-        format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
-    )
-    .map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-fn invalid_acceptance<T>(detail: impl Into<String>) -> AgentResult<T> {
-    classified("invalid_alpha_acceptance_receipt", detail)
-}
-
 fn write_receipt_atomically(path: &Path, receipt: &AcceptanceReceipt) -> AgentResult<()> {
     if path.exists() {
         return classified("alpha_evidence_exists", path.display().to_string());
@@ -1352,16 +1083,11 @@ pub fn verify_candidate(root: &Path) -> AgentResult<CandidateIdentity> {
         );
     }
 
-    let candidate_tag = format!(
-        "alpha-candidate-v{}-{}",
-        receipt.version,
-        &receipt.archive_sha256[..12]
-    );
     Ok(CandidateIdentity {
-        format: "mister-magik-alpha-candidate-v1",
+        format: "mister-magik-alpha-release-v1",
         version: receipt.version,
         build_number: receipt.build_number,
-        candidate_tag,
+        candidate_tag: "alpha".into(),
         archive: receipt.archive,
         archive_sha256: receipt.archive_sha256,
         release_assets_sha256: digest(&receipt_bytes),
@@ -1592,10 +1318,10 @@ mod tests {
     #[test]
     fn installed_candidate_uses_the_runtime_build_identity_object() {
         let candidate = CandidateIdentity {
-            format: "mister-magik-alpha-candidate-v1",
+            format: "mister-magik-alpha-release-v1",
             version: "0.2.2954".into(),
             build_number: 2954,
-            candidate_tag: "alpha-candidate-v0.2.2954-test".into(),
+            candidate_tag: "alpha".into(),
             archive: "candidate.zip".into(),
             archive_sha256: "a".repeat(64),
             release_assets_sha256: "b".repeat(64),
@@ -1647,31 +1373,6 @@ mod tests {
         assert!(require_nonempty(&json!({"semantic": {"selection": ""}}), "selection").is_err());
         assert!(active_nonce(&None).is_err());
         assert_eq!(active_nonce(&Some("nonce".into())).unwrap(), "nonce");
-    }
-
-    #[test]
-    fn evidence_files_require_exact_size_digest_and_safe_leaf_names() {
-        let root =
-            std::env::temp_dir().join(format!("agent-alpha-evidence-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join("checkpoint.png");
-        fs::write(&path, b"evidence").unwrap();
-        let sha = digest(b"evidence");
-        verify_evidence_file(&path, Some(8), Some(&sha)).unwrap();
-        assert!(verify_evidence_file(&path, Some(7), Some(&sha)).is_err());
-        assert!(verify_evidence_file(&path, Some(8), Some(&"0".repeat(64))).is_err());
-        assert!(verify_evidence_file(&path, None, Some(&sha)).is_err());
-        assert!(require_evidence_leaf("checkpoint.png").is_ok());
-        for invalid in [
-            "",
-            "../checkpoint.png",
-            "nested/checkpoint.png",
-            "bad name.png",
-        ] {
-            assert!(require_evidence_leaf(invalid).is_err());
-        }
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

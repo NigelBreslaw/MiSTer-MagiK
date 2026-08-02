@@ -34,7 +34,7 @@ caches, and private fixtures must not be staged.
 CRT qualification additionally records a
 `mister-magik-crt-qualification-v3` evidence document. It binds the exact app,
 Main, and Menu revisions; kernel, RBF, platform-contract, platform-manifest,
-protocol, and FPGA-component hashes; the immutable candidate workflow; bounded
+protocol, and FPGA-component hashes; the local alpha device journey; bounded
 RGB565 publication trial; resolved standard mode; and external analyzer
 measurements for clock, totals, porches, sync widths, polarity, and rates. It
 also records launcher/OSD/input, native-core-timing handoff, game lifecycle,
