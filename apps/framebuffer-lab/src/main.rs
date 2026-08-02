@@ -105,12 +105,63 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
         .map_err(|error| format!("run particle-lab window: {error}"))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), String> {
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use std::time::Instant;
+
+    let mut renderer = renderer(demo, family.as_deref(), true)?;
+    let mut presenter = HiddenLatchPresenter::open(WIDTH as u16, HEIGHT as u16)
+        .map_err(|error| format!("open hidden RGB565 latch presenter: {error}"))?;
+    if presenter.stride_pixels() != WIDTH {
+        return Err(format!(
+            "particle lab requires a packed {WIDTH}-pixel stride, received {}",
+            presenter.stride_pixels()
+        ));
+    }
+    let started = Instant::now();
+    let mut next_frame = started;
+    let mut status_started = started;
+    let mut status_frames = 0_u64;
+    loop {
+        let elapsed = Instant::now().saturating_duration_since(started);
+        let slot = presenter.writable_slot_index();
+        let stats = renderer.render(presenter.pixels_mut(), slot, elapsed)?;
+        let receipt = presenter
+            .present()
+            .map_err(|error| format!("present hidden RGB565 particle frame: {error}"))?;
+        status_frames = status_frames.saturating_add(1);
+        if status_started.elapsed() >= Duration::from_secs(1) {
+            let seconds = status_started.elapsed().as_secs_f64();
+            let reload = renderer
+                .live_reload_status_label()
+                .unwrap_or_else(|| "embedded".into());
+            let error = renderer.live_reload_error().unwrap_or("none");
+            println!(
+                "particle-lab demo={} generation={} fps={:.1} visible={} slot={} sequence={} reload_error={}",
+                stats.demo.telemetry_label(),
+                reload,
+                status_frames as f64 / seconds,
+                stats.visible,
+                receipt.slot_index,
+                receipt.sequence,
+                error
+            );
+            status_started = Instant::now();
+            status_frames = 0;
+        }
+        next_frame += FRAME_DURATION;
+        if let Some(remaining) = next_frame.checked_duration_since(Instant::now()) {
+            std::thread::sleep(remaining);
+        } else {
+            next_frame = Instant::now();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
 fn run_window(_demo: ParticleDemoKind, _family: Option<PathBuf>) -> Result<(), String> {
-    Err(
-        "interactive particle lab is currently available only on macOS; use --check or --output"
-            .into(),
-    )
+    Err("interactive particle lab requires macOS or the ARM MiSTer target".into())
 }
 
 struct Options {

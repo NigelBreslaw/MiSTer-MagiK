@@ -5,8 +5,4 @@
 
 pub mod particles;
 
-/// Temporary standalone pixel boundary. The platform extraction will replace
-/// this type with the shared transparent RGB565 primitive.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[repr(transparent)]
-pub struct Rgb565Pixel(pub u16);
+pub use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565 as Rgb565Pixel;
