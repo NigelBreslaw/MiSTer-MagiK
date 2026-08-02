@@ -1394,7 +1394,14 @@ mod tests {
         assert_eq!(first.tick, 0);
         assert_eq!(first.lookahead_mismatch_count, 0);
         assert_eq!(first.preparation_queue_depth, 0);
-        assert_eq!(commands.len(), first.visible);
+        assert_eq!(commands.len(), first.frame.count);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| **command != PARTICLE_NOT_VISIBLE_OFFSET)
+                .count(),
+            first.visible
+        );
         let first_commands = commands.clone();
         let jittered_second_elapsed = second_elapsed + Duration::from_micros(500);
         let second = pipeline
@@ -1403,7 +1410,14 @@ mod tests {
         assert_eq!(second.tick, 1);
         assert_eq!(second.lookahead_mismatch_count, 0);
         assert_eq!(second.preparation_queue_depth, 2);
-        assert_eq!(commands.len(), second.visible);
+        assert_eq!(commands.len(), second.frame.count);
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| **command != PARTICLE_NOT_VISIBLE_OFFSET)
+                .count(),
+            second.visible
+        );
         assert_ne!(commands, first_commands);
         let third_elapsed = Duration::from_micros(50_001);
         let fourth_elapsed = Duration::from_micros(66_668);
