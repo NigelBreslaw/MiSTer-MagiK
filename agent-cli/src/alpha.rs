@@ -6,7 +6,9 @@ use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::platform_manifest::{self, Layout};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceRequest};
+use crate::transport::{
+    AlphaCandidateHashes, AutomationAction, AutomationButton, DeviceOperations, DeviceRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -76,6 +78,163 @@ struct UsbEvidence {
     sha256: String,
 }
 
+trait AlphaDevice {
+    fn install_candidate(
+        &mut self,
+        tag: String,
+        hashes: AlphaCandidateHashes,
+        restore_on_failure: bool,
+    ) -> AgentResult<Value>;
+    fn restore_host_mode(&mut self, original_main: Option<String>) -> AgentResult<()>;
+    fn ensure_launcher(&mut self, version: String, revision: String) -> AgentResult<()>;
+    fn status(&mut self) -> AgentResult<Value>;
+    fn inspect_public_catalog(&mut self) -> AgentResult<Value>;
+    fn begin_automation(
+        &mut self,
+        version: String,
+        revision: String,
+        main_generation: u64,
+        lifetime_seconds: u64,
+    ) -> AgentResult<Value>;
+    fn end_automation(&mut self, nonce: String) -> AgentResult<()>;
+    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64>;
+    fn snapshot(&mut self, nonce: String) -> AgentResult<Value>;
+    fn checkpoint(
+        &mut self,
+        nonce: String,
+        action_sequence: u64,
+        label: String,
+        output_dir: PathBuf,
+    ) -> AgentResult<Value>;
+    fn exercise_launch_return(
+        &mut self,
+        nonce: String,
+        expected_game_id: String,
+        lifetime_seconds: u64,
+    ) -> AgentResult<Value>;
+}
+
+impl<D: DeviceOperations> AlphaDevice for DeviceClient<D> {
+    fn install_candidate(
+        &mut self,
+        tag: String,
+        hashes: AlphaCandidateHashes,
+        restore_on_failure: bool,
+    ) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::InstallAlphaCandidate {
+            tag,
+            hashes,
+            restore_on_failure,
+        })?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse alpha activation: {error}").into())
+    }
+
+    fn restore_host_mode(&mut self, original_main: Option<String>) -> AgentResult<()> {
+        self.execute(DeviceRequest::RestoreAlphaHostMode { original_main })
+            .map(|_| ())
+    }
+
+    fn ensure_launcher(&mut self, version: String, revision: String) -> AgentResult<()> {
+        self.execute(DeviceRequest::EnsureInstalledAlphaLauncher {
+            expected_build_version: version,
+            expected_source_revision: revision,
+        })
+        .map(|_| ())
+    }
+
+    fn status(&mut self) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::Status)?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse device status: {error}").into())
+    }
+
+    fn inspect_public_catalog(&mut self) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::InspectPublicCatalog)?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse completed public catalog: {error}").into())
+    }
+
+    fn begin_automation(
+        &mut self,
+        version: String,
+        revision: String,
+        main_generation: u64,
+        lifetime_seconds: u64,
+    ) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::BeginLauncherAutomation {
+            expected_build_version: version,
+            expected_source_revision: revision,
+            expected_main_generation: main_generation,
+            lifetime_seconds,
+        })?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse automation session: {error}").into())
+    }
+
+    fn end_automation(&mut self, nonce: String) -> AgentResult<()> {
+        self.execute(DeviceRequest::EndLauncherAutomation { nonce })
+            .map(|_| ())
+    }
+
+    fn action(&mut self, nonce: String, action: AutomationAction) -> AgentResult<u64> {
+        let detail = self.execute(DeviceRequest::SendLauncherAutomationAction {
+            nonce: nonce.clone(),
+            action,
+        })?;
+        let response: Value = serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse automation action: {error}"))?;
+        let sequence = response
+            .get("action_sequence")
+            .and_then(Value::as_u64)
+            .ok_or("automation action has no sequence")?;
+        self.execute(DeviceRequest::AwaitLauncherAutomationPresented {
+            nonce,
+            action_sequence: sequence,
+            timeout_ms: 3_000,
+        })?;
+        Ok(sequence)
+    }
+
+    fn snapshot(&mut self, nonce: String) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::ReadLauncherAutomationSnapshot { nonce })?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse automation snapshot: {error}").into())
+    }
+
+    fn checkpoint(
+        &mut self,
+        nonce: String,
+        action_sequence: u64,
+        label: String,
+        output_dir: PathBuf,
+    ) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::CaptureLauncherAutomationCheckpoint {
+            nonce,
+            action_sequence,
+            label: label.clone(),
+            output_dir,
+        })?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse checkpoint {label}: {error}").into())
+    }
+
+    fn exercise_launch_return(
+        &mut self,
+        nonce: String,
+        expected_game_id: String,
+        lifetime_seconds: u64,
+    ) -> AgentResult<Value> {
+        let detail = self.execute(DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
+            nonce,
+            expected_game_id,
+            lifetime_seconds,
+        })?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("cannot parse launch-return evidence: {error}").into())
+    }
+}
+
 pub fn execute(
     candidate_root: &Path,
     output: &Path,
@@ -121,13 +280,11 @@ pub fn execute(
             "Installing the exact candidate through MiSTer Downloader",
             Some(10),
         )?;
-        let activation: Value =
-            serde_json::from_str(&device.execute(DeviceRequest::InstallAlphaCandidate {
-                tag: candidate.candidate_tag.clone(),
-                hashes: candidate_hashes(&candidate)?,
-                restore_on_failure: restore_host_mode,
-            })?)
-            .map_err(|error| format!("cannot parse alpha activation: {error}"))?;
+        let activation = device.install_candidate(
+            candidate.candidate_tag.clone(),
+            candidate_hashes(&candidate)?,
+            restore_host_mode,
+        )?;
         (
             Some(alpha_original_main(&activation)?),
             alpha_catalog_start(&activation)?,
@@ -136,12 +293,11 @@ pub fn execute(
     let acceptance =
         accept_installed_candidate(&mut device, candidate, catalog_start, output, reporter);
     let restored = if restore_host_mode {
-        device.execute(DeviceRequest::RestoreAlphaHostMode {
-            original_main: original_main
-                .ok_or("alpha acceptance has no host-mode restore target")?,
-        })
+        device.restore_host_mode(
+            original_main.ok_or("alpha acceptance has no host-mode restore target")?,
+        )
     } else {
-        Ok("host-mode=kept-public-alpha".into())
+        Ok(())
     };
     let receipt = match (acceptance, restored) {
         (Ok(receipt), Ok(_)) => receipt,
@@ -171,19 +327,15 @@ pub fn execute(
 }
 
 fn reuse_installed_catalog_start(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     candidate: &CandidateIdentity,
 ) -> AgentResult<Value> {
     let started_at_unix_ms = unix_millis();
     let deadline_unix_ms = started_at_unix_ms.saturating_add(8 * 60 * 1_000);
-    device.execute(DeviceRequest::EnsureInstalledAlphaLauncher {
-        expected_build_version: candidate.version.clone(),
-        expected_source_revision: candidate.magik_revision.clone(),
-    })?;
+    device.ensure_launcher(candidate.version.clone(), candidate.magik_revision.clone())?;
     let mut first = true;
     loop {
-        let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
-            .map_err(|error| format!("cannot parse installed alpha status: {error}"))?;
+        let status = device.status()?;
         let runtime = require_installed_candidate(&status, candidate)?;
         let ready = runtime.get("catalog_ready").and_then(Value::as_bool);
         let games = runtime
@@ -284,14 +436,13 @@ fn alpha_catalog_start(activation: &Value) -> AgentResult<Value> {
 }
 
 fn accept_installed_candidate(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     candidate: CandidateIdentity,
     catalog_start: Value,
     output: &Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<AcceptanceReceipt> {
-    let status: Value = serde_json::from_str(&device.execute(DeviceRequest::Status)?)
-        .map_err(|error| format!("cannot parse device status: {error}"))?;
+    let status = device.status()?;
     let runtime = require_installed_candidate(&status, &candidate)?;
     let main_generation = status
         .pointer("/runtime/main_status/main_generation")
@@ -305,14 +456,12 @@ fn accept_installed_candidate(
         "Running the deterministic real-UI acceptance journey",
         Some(20),
     )?;
-    let begin: Value =
-        serde_json::from_str(&device.execute(DeviceRequest::BeginLauncherAutomation {
-            expected_build_version: candidate.version.clone(),
-            expected_source_revision: candidate.magik_revision.clone(),
-            expected_main_generation: main_generation,
-            lifetime_seconds: 120,
-        })?)
-        .map_err(|error| format!("cannot parse automation session: {error}"))?;
+    let begin = device.begin_automation(
+        candidate.version.clone(),
+        candidate.magik_revision.clone(),
+        main_generation,
+        120,
+    )?;
     let nonce = begin
         .get("nonce")
         .and_then(Value::as_str)
@@ -321,10 +470,8 @@ fn accept_installed_candidate(
     let mut nonce = Some(nonce);
     let journey = run_ui_journey(device, &mut nonce, output);
     let ended = match nonce.as_ref() {
-        Some(nonce) => device.execute(DeviceRequest::EndLauncherAutomation {
-            nonce: nonce.clone(),
-        }),
-        None => Ok(String::from("automation session already closed")),
+        Some(nonce) => device.end_automation(nonce.clone()),
+        None => Ok(()),
     };
     let (checkpoints, launch_return, usb_video) = match (journey, ended) {
         (Ok(evidence), Ok(_)) => evidence,
@@ -364,7 +511,7 @@ fn accept_installed_candidate(
 }
 
 fn complete_alpha_catalog_creation(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     catalog_start: &Value,
 ) -> AgentResult<Value> {
     let started_at_unix_ms = catalog_start
@@ -376,10 +523,7 @@ fn complete_alpha_catalog_creation(
         .and_then(Value::as_u64)
         .ok_or("catalog start has no deadline")?;
     loop {
-        let status: Value =
-            serde_json::from_str(&device.execute(DeviceRequest::Status)?).map_err(|error| {
-                format!("cannot parse device status during catalog refresh: {error}")
-            })?;
+        let status = device.status()?;
         let runtime = status
             .pointer("/runtime/slint_status")
             .filter(|value| value.is_object())
@@ -398,9 +542,7 @@ fn complete_alpha_catalog_creation(
             "catalog_generation": runtime.get("catalog_generation"),
         });
         if ready == Some(true) && refresh_done == Some(true) && games > 0 {
-            let catalog: Value =
-                serde_json::from_str(&device.execute(DeviceRequest::InspectPublicCatalog)?)
-                    .map_err(|error| format!("cannot parse completed public catalog: {error}"))?;
+            let catalog = device.inspect_public_catalog()?;
             if catalog.get("valid").and_then(Value::as_bool) != Some(true)
                 || catalog
                     .get("total_games")
@@ -436,7 +578,7 @@ fn complete_alpha_catalog_creation(
 }
 
 fn run_ui_journey(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &mut Option<String>,
     output: &Path,
 ) -> AgentResult<(Vec<Value>, Value, Vec<UsbEvidence>)> {
@@ -508,14 +650,8 @@ fn run_ui_journey(
         .ok_or("arcade launch has no selected game")?
         .to_owned();
     let launch_nonce = nonce.take().ok_or("automation session is not active")?;
-    let launch_return: Value = serde_json::from_str(&device.execute(
-        DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
-            nonce: launch_nonce,
-            expected_game_id: expected_game_id.clone(),
-            lifetime_seconds: 120,
-        },
-    )?)
-    .map_err(|error| format!("cannot parse launch-return evidence: {error}"))?;
+    let launch_return =
+        device.exercise_launch_return(launch_nonce, expected_game_id.clone(), 120)?;
     let replacement_nonce = launch_return
         .get("nonce")
         .and_then(Value::as_str)
@@ -672,7 +808,7 @@ fn run_ui_journey(
 }
 
 fn select_home_item(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     expected_item_id: &str,
 ) -> AgentResult<()> {
@@ -695,7 +831,7 @@ fn select_home_item(
 }
 
 fn tap(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     button: AutomationButton,
 ) -> AgentResult<u64> {
@@ -703,58 +839,34 @@ fn tap(
 }
 
 fn action(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     action: AutomationAction,
 ) -> AgentResult<u64> {
-    let response: Value = serde_json::from_str(&device.execute(
-        DeviceRequest::SendLauncherAutomationAction {
-            nonce: active_nonce(nonce)?.to_owned(),
-            action,
-        },
-    )?)
-    .map_err(|error| format!("cannot parse automation action: {error}"))?;
-    let sequence = response
-        .get("action_sequence")
-        .and_then(Value::as_u64)
-        .ok_or("automation action has no sequence")?;
-    device.execute(DeviceRequest::AwaitLauncherAutomationPresented {
-        nonce: active_nonce(nonce)?.to_owned(),
-        action_sequence: sequence,
-        timeout_ms: 3_000,
-    })?;
-    Ok(sequence)
+    device.action(active_nonce(nonce)?.to_owned(), action)
 }
 
-fn snapshot(device: &mut DeviceClient, nonce: &Option<String>) -> AgentResult<Value> {
-    serde_json::from_str(
-        &device.execute(DeviceRequest::ReadLauncherAutomationSnapshot {
-            nonce: active_nonce(nonce)?.to_owned(),
-        })?,
-    )
-    .map_err(|error| format!("cannot parse automation snapshot: {error}").into())
+fn snapshot(device: &mut impl AlphaDevice, nonce: &Option<String>) -> AgentResult<Value> {
+    device.snapshot(active_nonce(nonce)?.to_owned())
 }
 
 fn checkpoint(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     sequence: u64,
     label: &str,
     output: &Path,
 ) -> AgentResult<Value> {
-    serde_json::from_str(
-        &device.execute(DeviceRequest::CaptureLauncherAutomationCheckpoint {
-            nonce: active_nonce(nonce)?.to_owned(),
-            action_sequence: sequence,
-            label: label.to_owned(),
-            output_dir: output.to_owned(),
-        })?,
+    device.checkpoint(
+        active_nonce(nonce)?.to_owned(),
+        sequence,
+        label.to_owned(),
+        output.to_owned(),
     )
-    .map_err(|error| format!("cannot parse checkpoint {label}: {error}").into())
 }
 
 fn await_semantic(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     field: &str,
     expected: &str,
@@ -779,7 +891,7 @@ fn await_semantic(
 }
 
 fn await_semantic_not(
-    device: &mut DeviceClient,
+    device: &mut impl AlphaDevice,
     nonce: &Option<String>,
     field: &str,
     unexpected: &str,
