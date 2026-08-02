@@ -704,11 +704,25 @@ impl ParticleShowcaseRenderer {
         }
     }
 
+    /// Loads one family once without starting a background watcher.
+    pub fn load_family_file(&mut self, path: &Path) -> Result<(), String> {
+        let family = read_live_family_now(path)?;
+        if !family.contains(self.demo) {
+            return Err(format!(
+                "particle family {} does not contain demo {}",
+                path.display(),
+                self.demo.number()
+            ));
+        }
+        self.replace_family(family, Duration::ZERO);
+        Ok(())
+    }
+
     /// Enables one attended, whole-family live-reload session.
     ///
     /// Device sessions publish their state through the fixed volatile status
-    /// path. macOS preview sessions parse the initial file synchronously so a
-    /// deterministic headless capture cannot race the watcher thread.
+    /// path. Local sessions validate the initial file before starting the
+    /// watcher; deterministic headless captures use `load_family_file`.
     pub fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String> {
         if self.live_family.is_some() {
             return Err("particle showcase already has a live family".into());
@@ -723,7 +737,6 @@ impl ParticleShowcaseRenderer {
                     self.demo.number()
                 ));
             }
-            self.replace_family(family, Duration::ZERO);
         }
         let watcher = LastGoodFile::spawn(path, ParticleRecipeFamily::from_json)?;
         let status = LiveParticleStatus::embedded(self.demo.number() as u8);

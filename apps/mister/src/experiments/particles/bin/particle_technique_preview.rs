@@ -27,7 +27,7 @@ fn main() -> Result<(), String> {
         initial_demo: demo,
     })?;
     if let Some(path) = options.family {
-        renderer.enable_live_family(path)?;
+        renderer.load_family_file(&path)?;
     }
     renderer.configure_capture_hud(options.hud);
     let mut slots = [

@@ -1819,7 +1819,11 @@ mod macos {
             .validate()?;
             let mut renderer = ParticleShowcaseRenderer::new(config)?;
             if let Some(path) = self.particle_family.clone() {
-                renderer.enable_live_family(path)?;
+                if self.headless {
+                    renderer.load_family_file(&path)?;
+                } else {
+                    renderer.enable_live_family(path)?;
+                }
             }
             self.particle_showcase_renderer = Some(renderer);
             Ok(())
