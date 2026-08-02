@@ -2475,8 +2475,7 @@ fn device_failure_message(error: DeviceFailure) -> String {
     format!("{kind}: {detail}")
 }
 
-fn live_cli(args: &[String]) -> Result<()> {
-    let options = parse_live_particle_args(args)?;
+fn live_cli(options: LiveParticleCliOptions) -> Result<()> {
     let device_id = env::var("MISTER_DEVICE_ID")
         .map_err(|_| "resolved MiSTer device identity is unavailable")?;
     let explicit_token = env::var("MISTER_AGENT_TOKEN")
@@ -2511,6 +2510,17 @@ pub fn run_cli() -> Result<()> {
         validate_capture_buffer_args(&args)?;
     }
     reject_retired_platform_command(&action)?;
+    let live_options = if action == "live" {
+        let options = parse_live_particle_args(&args)?;
+        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+            return Err(
+                "live particle editing is attended and requires an interactive terminal".into(),
+            );
+        }
+        Some(options)
+    } else {
+        None
+    };
     if action_uses_device(&action) {
         if env::var_os(RESOLVED_DEVICE_CHILD).is_none() {
             let device = discovery::resolve()?;
@@ -2538,7 +2548,7 @@ pub fn run_cli() -> Result<()> {
         "display-mode" => display_mode_cli(&args)?,
         "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
-        "live" => live_cli(&args)?,
+        "live" => live_cli(live_options.expect("live options validated before device setup"))?,
         "connected" => println!("connected"),
         "get" => {
             if args.len() < 2 {
