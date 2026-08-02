@@ -85,7 +85,6 @@ pub struct BuildSpec {
     artifact: PathBuf,
     receipt: PathBuf,
     cache_identity: String,
-    strict_receipt: bool,
 }
 
 impl BuildSpec {
@@ -99,7 +98,6 @@ impl BuildSpec {
                 vec!["ui", "profile"],
                 UiScope::All,
                 runtime_artifact("release-device"),
-                true,
             ),
             BuildCommand::RuntimeFast => (
                 BuildTarget::Runtime,
@@ -108,7 +106,6 @@ impl BuildSpec {
                 vec!["ui"],
                 UiScope::All,
                 runtime_artifact("release"),
-                true,
             ),
             BuildCommand::RuntimeAnalysis => (
                 BuildTarget::Runtime,
@@ -117,7 +114,6 @@ impl BuildSpec {
                 vec!["ui", "profile"],
                 UiScope::All,
                 runtime_artifact("release-device-profile"),
-                true,
             ),
             BuildCommand::ValidateLauncher | BuildCommand::ValidateRuntime => (
                 BuildTarget::Runtime,
@@ -126,7 +122,6 @@ impl BuildSpec {
                 vec!["ui"],
                 UiScope::Launcher,
                 runtime_artifact("release-device"),
-                false,
             ),
             BuildCommand::ValidateLibrary => (
                 BuildTarget::Runtime,
@@ -135,7 +130,6 @@ impl BuildSpec {
                 Vec::new(),
                 UiScope::All,
                 runtime_artifact("release-device"),
-                false,
             ),
             BuildCommand::DeviceAgent => (
                 BuildTarget::DeviceAgent,
@@ -146,7 +140,6 @@ impl BuildSpec {
                 PathBuf::from(
                     "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent",
                 ),
-                false,
             ),
             BuildCommand::ManagerDevice => (
                 BuildTarget::Manager,
@@ -157,7 +150,6 @@ impl BuildSpec {
                 PathBuf::from(
                     "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
-                true,
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -165,14 +157,13 @@ impl BuildSpec {
     }
 
     fn from_configuration(
-        (target, mode, profile, features, scope, artifact, strict_receipt): (
+        (target, mode, profile, features, scope, artifact): (
             BuildTarget,
             BuildMode,
             &'static str,
             Vec<&'static str>,
             UiScope,
             PathBuf,
-            bool,
         ),
     ) -> Self {
         let receipt = PathBuf::from(format!("{}.build-receipt.tsv", artifact.display()));
@@ -190,7 +181,6 @@ impl BuildSpec {
             artifact,
             receipt,
             cache_identity,
-            strict_receipt,
         }
     }
 
@@ -236,14 +226,11 @@ impl BuildSpec {
         metadata: &BuildMetadata,
     ) -> AgentResult<BuildReceipt> {
         if self.mode != BuildMode::Build {
-            return Ok(BuildReceipt::empty(self));
+            return Err("validation checks do not produce build receipts".into());
         }
         let artifact = repository.join(&self.artifact);
         if !artifact.is_file() {
             return Err(format!("build artifact is missing: {}", artifact.display()).into());
-        }
-        if !self.strict_receipt {
-            return Ok(BuildReceipt::empty(self));
         }
         let receipt_text = std::fs::read_to_string(repository.join(&self.receipt))
             .map_err(|error| format!("cannot read build receipt: {error}"))?;
@@ -285,22 +272,6 @@ pub struct BuildReceipt {
 }
 
 impl BuildReceipt {
-    fn empty(spec: &BuildSpec) -> Self {
-        Self {
-            binary_sha256: String::new(),
-            profile: spec.profile.into(),
-            features: spec.features.join(","),
-            ui_scope: spec.ui_scope.label().into(),
-            build_number: String::new(),
-            version: String::new(),
-            source_commit: String::new(),
-            source_dirty: true,
-            cache_identity: spec.cache_identity.clone(),
-            lock_sha256: String::new(),
-            toolchain_sha256: String::new(),
-        }
-    }
-
     pub fn parse(text: &str) -> AgentResult<Self> {
         let fields: BTreeMap<_, _> = text
             .trim()
@@ -737,7 +708,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
     }
 
     fn write_receipt(&self) -> AgentResult<()> {
-        if self.spec.mode != BuildMode::Build || !self.spec.strict_receipt {
+        if self.spec.mode != BuildMode::Build {
             return Ok(());
         }
         self.session.ensure_source_identity()?;
