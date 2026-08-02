@@ -30,6 +30,7 @@ pub enum DeviceCommand {
     Logs,
     Events,
     Diagnostics(DiagnosticsArgs),
+    LiveParticles(LiveParticlesArgs),
     Launcher {
         #[command(subcommand)]
         command: LauncherCommand,
@@ -183,6 +184,15 @@ pub struct DiagnosticsArgs {
     pub(crate) out: PathBuf,
 }
 
+#[derive(Debug, Args)]
+pub struct LiveParticlesArgs {
+    pub(crate) family: PathBuf,
+    #[arg(long)]
+    pub(crate) demo: String,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum LauncherCommand {
     Status,
@@ -247,7 +257,7 @@ impl DeviceCommand {
             | Self::Diagnostics(_)
             | Self::Capture { .. } => false,
             Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
-            Self::Scene(_) | Self::Reboot(_) => true,
+            Self::Scene(_) | Self::Reboot(_) | Self::LiveParticles(_) => true,
             Self::Display { .. } | Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { .. } => false,

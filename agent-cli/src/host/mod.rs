@@ -25,6 +25,7 @@ mod crt_qualification;
 mod discovery;
 mod latch_v4_qualification;
 mod launcher_automation;
+mod live_particles;
 mod media;
 mod platform_deploy;
 mod remote;
@@ -245,6 +246,15 @@ impl NativeDevice {
         Ok(())
     }
 
+    pub(crate) fn run_live_particles(
+        &mut self,
+        binary: &Path,
+        family: &Path,
+        demo: &str,
+    ) -> std::result::Result<(), DeviceFailure> {
+        live_particles::run(self, binary, family, demo)
+    }
+
     pub(crate) fn run_operator(
         &mut self,
         command: &crate::commands::device::DeviceCommand,
@@ -253,6 +263,16 @@ impl NativeDevice {
             CaptureCommand, CatalogCommand, CrtCommand, DeviceCommand, DisplayCommand,
             LauncherCommand, MediaCommand, ModeCommand,
         };
+
+        if let DeviceCommand::LiveParticles(args) = command {
+            return self.run_live_particles(
+                Path::new(
+                    "apps/framebuffer-lab/target/armv7-unknown-linux-gnueabihf/release-live/mister-magik-particle-lab",
+                ),
+                &args.family,
+                &args.demo,
+            );
+        }
 
         let agent = matches!(
             command,
@@ -289,6 +309,7 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
+                DeviceCommand::LiveParticles(_) => unreachable!("handled before device setup"),
                 DeviceCommand::Mode { command } => match command {
                     ModeCommand::Status => mode_cli(&device_strings(["status"])),
                     ModeCommand::Set(args) => mode_cli(&device_strings([args.mode.as_str()])),
