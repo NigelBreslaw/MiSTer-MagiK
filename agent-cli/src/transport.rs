@@ -68,10 +68,6 @@ pub enum DeviceRequest {
     Status,
     ReadDevelopmentManifest,
     VerifyDevelopmentPlatform,
-    FetchVerifiedDevelopmentManager {
-        local: PathBuf,
-        expected_sha256: String,
-    },
     DeliverRuntimeTransaction {
         local: PathBuf,
         remote: String,
@@ -107,27 +103,6 @@ pub enum DeviceRequest {
     ProfileInstalledParticleCpu {
         output_dir: PathBuf,
     },
-    ProfileInstalledParticleShowcase {
-        output_dir: PathBuf,
-        demo: u8,
-        cpu_profile: bool,
-    },
-    CaptureInstalledFireworkVisual {
-        output_dir: PathBuf,
-        demo: u8,
-        label: String,
-        time_ms: u64,
-    },
-    CaptureInstalledParticleTechnique {
-        output_dir: PathBuf,
-        demo: u8,
-        label: String,
-        hero_secs: u64,
-    },
-    WatchLiveParticles {
-        family: PathBuf,
-        demo: u8,
-    },
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -159,19 +134,8 @@ pub enum DeviceRequest {
     QualifyReleaseRecovery,
     RestoreReleaseQualification,
     CollectDiagnosticFacts,
-    ClearLatchDiagnostics,
-    CollectLatestCrashReport,
-    /// Runs one bounded, self-restoring CRT destination-rectangle experiment.
-    RunCrtGeometryTrial {
-        rectangle: [u16; 4],
-    },
-    /// Runs the product launcher screensaver for a bounded interval in the active CRT mode.
-    RunCrtScreensaverTrial,
-    /// Runs the product screensaver trial in each standard CRT mode and restores the original mode.
-    RunCrtScreensaverMatrix,
     RepairSafeDeviceState,
     RecoverWithOneShotReboot,
-    CaptureFramebuffer,
     InstallAlphaCandidate {
         tag: String,
         hashes: AlphaCandidateHashes,
@@ -227,7 +191,6 @@ impl DeviceRequest {
             Self::Status => "status",
             Self::ReadDevelopmentManifest => "read-development-manifest",
             Self::VerifyDevelopmentPlatform => "verify-development-platform",
-            Self::FetchVerifiedDevelopmentManager { .. } => "fetch-verified-development-manager",
             Self::DeliverRuntimeTransaction { .. } => "deliver-runtime-transaction",
             Self::DeliverPlatformTransaction { .. } => "deliver-platform-transaction",
             Self::DeliverLocalMainTransaction { .. } => "deliver-local-main-transaction",
@@ -237,17 +200,6 @@ impl DeviceRequest {
             Self::ProfileInstalledParticleDemo40k { .. } => "profile-installed-particle-demo-40k",
             Self::ProfileInstalledParticleStep { .. } => "profile-installed-particle-step",
             Self::ProfileInstalledParticleCpu { .. } => "profile-installed-particle-cpu",
-            Self::ProfileInstalledParticleShowcase {
-                cpu_profile: false, ..
-            } => "profile-installed-particle-showcase",
-            Self::ProfileInstalledParticleShowcase {
-                cpu_profile: true, ..
-            } => "profile-installed-particle-showcase-cpu",
-            Self::CaptureInstalledFireworkVisual { .. } => "capture-installed-firework-visual",
-            Self::CaptureInstalledParticleTechnique { .. } => {
-                "capture-installed-particle-technique"
-            }
-            Self::WatchLiveParticles { .. } => "watch-live-particles",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
@@ -269,14 +221,8 @@ impl DeviceRequest {
             Self::QualifyReleaseRecovery => "qualify-release-recovery",
             Self::RestoreReleaseQualification => "restore-release-qualification",
             Self::CollectDiagnosticFacts => "collect-diagnostic-facts",
-            Self::ClearLatchDiagnostics => "clear-latch-diagnostics",
-            Self::CollectLatestCrashReport => "collect-latest-crash-report",
-            Self::RunCrtGeometryTrial { .. } => "run-crt-geometry-trial",
-            Self::RunCrtScreensaverTrial => "run-crt-screensaver-trial",
-            Self::RunCrtScreensaverMatrix => "run-crt-screensaver-matrix",
             Self::RepairSafeDeviceState => "repair-safe-device-state",
             Self::RecoverWithOneShotReboot => "recover-with-one-shot-reboot",
-            Self::CaptureFramebuffer => "capture-framebuffer",
             Self::InstallAlphaCandidate { .. } => "install-alpha-candidate",
             Self::RestoreAlphaHostMode { .. } => "restore-alpha-host-mode",
             Self::EnsureInstalledAlphaLauncher { .. } => "ensure-installed-alpha-launcher",
@@ -327,10 +273,8 @@ impl DeviceRequest {
                 | Self::Status
                 | Self::ReadDevelopmentManifest
                 | Self::VerifyDevelopmentPlatform
-                | Self::FetchVerifiedDevelopmentManager { .. }
                 | Self::VerifyHealth(_)
                 | Self::CollectDiagnosticFacts
-                | Self::CollectLatestCrashReport
                 | Self::InspectPublicCatalog
                 | Self::AwaitLauncherAutomationPresented { .. }
                 | Self::ReadLauncherAutomationSnapshot { .. }
@@ -345,11 +289,8 @@ impl DeviceRequest {
                 | Self::Status
                 | Self::ReadDevelopmentManifest
                 | Self::VerifyDevelopmentPlatform
-                | Self::FetchVerifiedDevelopmentManager { .. }
                 | Self::VerifyHealth(_)
                 | Self::CollectDiagnosticFacts
-                | Self::CollectLatestCrashReport
-                | Self::CaptureFramebuffer
                 | Self::InspectPublicCatalog
                 | Self::AwaitLauncherAutomationPresented { .. }
                 | Self::ReadLauncherAutomationSnapshot { .. }
@@ -428,230 +369,17 @@ mod tests {
             Err(DeviceFailure::Unavailable("offline".into())),
         ]);
         fake.execute(&DeviceRequest::Status).unwrap();
-        assert!(fake.execute(&DeviceRequest::CaptureFramebuffer).is_err());
+        assert!(
+            fake.execute(&DeviceRequest::RecoverWithOneShotReboot)
+                .is_err()
+        );
         assert_eq!(
             fake.requests(),
-            &[DeviceRequest::Status, DeviceRequest::CaptureFramebuffer]
-        );
-    }
-
-    #[test]
-    fn normal_api_has_no_remote_shell_request() {
-        let labels = [
-            DeviceRequest::Discover,
-            DeviceRequest::Status,
-            DeviceRequest::ReadDevelopmentManifest,
-            DeviceRequest::VerifyDevelopmentPlatform,
-            DeviceRequest::FetchVerifiedDevelopmentManager {
-                local: "manager".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverRuntimeTransaction {
-                local: "l".into(),
-                remote: "r".into(),
-                manifest_local: "ml".into(),
-                manifest_remote: "m".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverPlatformTransaction {
-                stage: "s".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverLocalMainTransaction {
-                local: "main".into(),
-                manifest_local: "manifest".into(),
-                expected_main_sha256: "a".repeat(64),
-                expected_gui_sha256: "b".repeat(64),
-            },
-            DeviceRequest::VerifyHealth(Layout::Development),
-            DeviceRequest::CaptureFramebuffer,
-        ]
-        .map(|request| request.label());
-        assert!(!labels.contains(&"run"));
-        assert!(!labels.contains(&"shell"));
-    }
-
-    #[test]
-    fn every_typed_request_has_a_stable_non_shell_label() {
-        let requests = vec![
-            DeviceRequest::Discover,
-            DeviceRequest::Status,
-            DeviceRequest::ReadDevelopmentManifest,
-            DeviceRequest::VerifyDevelopmentPlatform,
-            DeviceRequest::FetchVerifiedDevelopmentManager {
-                local: "manager".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverRuntimeTransaction {
-                local: "l".into(),
-                remote: "r".into(),
-                manifest_local: "ml".into(),
-                manifest_remote: "m".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverPlatformTransaction {
-                stage: "s".into(),
-                expected_sha256: "a".repeat(64),
-            },
-            DeviceRequest::DeliverLocalMainTransaction {
-                local: "main".into(),
-                manifest_local: "manifest".into(),
-                expected_main_sha256: "a".repeat(64),
-                expected_gui_sha256: "b".repeat(64),
-            },
-            DeviceRequest::ProfileInstalledScreensaver {
-                output_dir: "profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticles {
-                output_dir: "particle-profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticleCapacity {
-                output_dir: "particle-capacity-profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticleDemo40k {
-                output_dir: "particle-demo-40k-profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticleStep {
-                output_dir: "particle-step-profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticleCpu {
-                output_dir: "particle-cpu-profiles".into(),
-            },
-            DeviceRequest::ProfileInstalledParticleShowcase {
-                output_dir: "particle-showcase-profiles".into(),
-                demo: 1,
-                cpu_profile: false,
-            },
-            DeviceRequest::ProfileInstalledParticleShowcase {
-                output_dir: "particle-showcase-cpu-profiles".into(),
-                demo: 1,
-                cpu_profile: true,
-            },
-            DeviceRequest::CaptureInstalledFireworkVisual {
-                output_dir: "firework-visual".into(),
-                demo: 1,
-                label: "solar-chrysanthemum".into(),
-                time_ms: 2100,
-            },
-            DeviceRequest::CaptureInstalledParticleTechnique {
-                output_dir: "particle-technique".into(),
-                demo: 24,
-                label: "curl-noise-flow-field".into(),
-                hero_secs: 15,
-            },
-            DeviceRequest::WatchLiveParticles {
-                family: "fireworks.json".into(),
-                demo: 1,
-            },
-            DeviceRequest::ProfileInstalledSearch {
-                output_dir: "search-profile".into(),
-            },
-            DeviceRequest::VerifyInstalledSearchUi {
-                output_dir: "search-ui".into(),
-            },
-            DeviceRequest::ProfileInstalledCatalogLifecycle {
-                output_dir: "catalog-profile".into(),
-            },
-            DeviceRequest::ProfileInstalledLaunchReturn {
-                output_dir: "launch-return-profile".into(),
-            },
-            DeviceRequest::ProfileInstalledLaunchReturnFallback {
-                output_dir: "launch-return-fallback-profile".into(),
-            },
-            DeviceRequest::ProfileInstalledColdBoot {
-                output_dir: "cold-boot-profile".into(),
-            },
-            DeviceRequest::ProfileInstalledNavigationTransitions {
-                output_dir: "navigation-transition-profile".into(),
-            },
-            DeviceRequest::VerifyHealth(Layout::Public),
-            DeviceRequest::BeginReleaseQualification,
-            DeviceRequest::QualifyReleaseRuntime,
-            DeviceRequest::QualifyReleaseCatalog,
-            DeviceRequest::QualifyReleaseInputAndHandoff,
-            DeviceRequest::QualifyReleaseDisplay,
-            DeviceRequest::QualifyReleaseLatchV4Stress,
-            DeviceRequest::QualifyReleaseRecovery,
-            DeviceRequest::RestoreReleaseQualification,
-            DeviceRequest::CollectDiagnosticFacts,
-            DeviceRequest::CollectLatestCrashReport,
-            DeviceRequest::RunCrtGeometryTrial {
-                rectangle: [45, 684, 40, 615],
-            },
-            DeviceRequest::RunCrtScreensaverTrial,
-            DeviceRequest::RunCrtScreensaverMatrix,
-            DeviceRequest::RepairSafeDeviceState,
-            DeviceRequest::RecoverWithOneShotReboot,
-            DeviceRequest::CaptureFramebuffer,
-            DeviceRequest::RestoreAlphaHostMode {
-                original_main: Some("MiSTer_MagiKDev".into()),
-            },
-            DeviceRequest::EnsureInstalledAlphaLauncher {
-                expected_build_version: "0.2.1".into(),
-                expected_source_revision: "deadbeef".into(),
-            },
-            DeviceRequest::InspectPublicCatalog,
-            DeviceRequest::BeginLauncherAutomation {
-                expected_build_version: "0.2.1".into(),
-                expected_source_revision: "deadbeef".into(),
-                expected_main_generation: 1,
-                lifetime_seconds: 120,
-            },
-            DeviceRequest::SendLauncherAutomationAction {
-                nonce: "a".repeat(64),
-                action: AutomationAction::Tap(AutomationButton::A),
-            },
-            DeviceRequest::AwaitLauncherAutomationPresented {
-                nonce: "a".repeat(64),
-                action_sequence: 1,
-                timeout_ms: 1_000,
-            },
-            DeviceRequest::ReadLauncherAutomationSnapshot {
-                nonce: "a".repeat(64),
-            },
-            DeviceRequest::CaptureLauncherAutomationCheckpoint {
-                nonce: "a".repeat(64),
-                action_sequence: 1,
-                label: "home".into(),
-                output_dir: "checkpoints".into(),
-            },
-            DeviceRequest::ExerciseLauncherAutomationLaunchReturn {
-                nonce: "a".repeat(64),
-                expected_game_id: "/media/fat/_Arcade/game.mra".into(),
-                lifetime_seconds: 120,
-            },
-            DeviceRequest::EndLauncherAutomation {
-                nonce: "a".repeat(64),
-            },
-        ];
-        let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 53);
-        assert!(labels.iter().all(|label| !label.is_empty()));
-        assert_eq!(
-            labels
-                .iter()
-                .filter(|label| label.contains("benchmark") || label.contains("profile"))
-                .copied()
-                .collect::<Vec<_>>(),
-            [
-                "profile-installed-screensaver",
-                "profile-installed-particles",
-                "profile-installed-particle-capacity",
-                "profile-installed-particle-demo-40k",
-                "profile-installed-particle-step",
-                "profile-installed-particle-cpu",
-                "profile-installed-particle-showcase",
-                "profile-installed-particle-showcase-cpu",
-                "profile-installed-search",
-                "profile-installed-catalog-lifecycle",
-                "profile-installed-launch-return",
-                "profile-installed-launch-return-fallback",
-                "profile-installed-cold-boot",
-                "profile-installed-navigation-transitions"
+            &[
+                DeviceRequest::Status,
+                DeviceRequest::RecoverWithOneShotReboot
             ]
         );
-        assert!(!labels.contains(&"run"));
-        assert!(!labels.contains(&"shell"));
     }
 
     #[test]
