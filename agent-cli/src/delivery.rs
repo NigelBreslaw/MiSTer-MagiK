@@ -166,6 +166,49 @@ pub struct DeliveryExecution {
     pub decision: DeliveryDecision,
 }
 
+trait DeliveryDevice {
+    fn connect(&mut self) -> AgentResult<()>;
+    fn read_development_manifest(&mut self) -> AgentResult<String>;
+    fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()>;
+    fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RuntimeDelivery {
+    local: PathBuf,
+    manifest_local: PathBuf,
+    expected_sha256: String,
+}
+
+impl<D: DeviceOperations> DeliveryDevice for DeviceClient<D> {
+    fn connect(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::Discover).map(|_| ())
+    }
+
+    fn read_development_manifest(&mut self) -> AgentResult<String> {
+        self.execute(DeviceRequest::ReadDevelopmentManifest)
+    }
+
+    fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()> {
+        self.execute(DeviceRequest::DeliverRuntimeTransaction {
+            local: delivery.local,
+            remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
+            manifest_local: delivery.manifest_local,
+            manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest".into(),
+            expected_sha256: delivery.expected_sha256,
+        })
+        .map(|_| ())
+    }
+
+    fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()> {
+        self.execute(DeviceRequest::DeliverPlatformTransaction {
+            stage,
+            expected_sha256,
+        })
+        .map(|_| ())
+    }
+}
+
 pub fn execute(
     repository: &Path,
     expected_commit: &str,
@@ -180,12 +223,12 @@ pub fn execute(
     )
 }
 
-fn execute_with_device<D: DeviceOperations>(
+fn execute_with_device<D: DeliveryDevice>(
     repository: &Path,
     expected_commit: &str,
     platform_candidate: Option<crate::platform_ci::Candidate>,
     reporter: &mut Reporter<'_>,
-    device: DeviceClient<D>,
+    device: D,
 ) -> AgentResult<DeliveryExecution> {
     let mut deployment = crate::deploy::plan(repository, Vec::new())?;
     deployment.platform_candidate = platform_candidate;
@@ -254,7 +297,7 @@ pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
-struct ProcessActions<'a, D = crate::NativeDevice> {
+struct ProcessActions<'a, D = DeviceClient> {
     repository: &'a Path,
     deployment: DeploymentPlan,
     expected_commit: &'a str,
@@ -264,10 +307,10 @@ struct ProcessActions<'a, D = crate::NativeDevice> {
     main_revision: Option<String>,
     installed_manifest: Option<String>,
     stage: PathBuf,
-    device: DeviceClient<D>,
+    device: D,
 }
 
-impl<D: DeviceOperations> ProcessActions<'_, D> {
+impl<D> ProcessActions<'_, D> {
     fn validate_commit(&self) -> AgentResult<()> {
         let head = crate::git::value(self.repository, &["rev-parse", "HEAD"])?;
         let dirty = !crate::git::value(self.repository, &["status", "--porcelain"])?.is_empty();
@@ -373,17 +416,15 @@ fn validate_commit_identity(
     Ok(())
 }
 
-impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
+impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::Classify => Ok(()),
             Phase::ValidateCommit => self.validate_commit(),
-            Phase::Connect => self.device.execute(DeviceRequest::Discover).map(|_| ()),
+            Phase::Connect => self.device.connect(),
             Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
-                let installed_manifest = self
-                    .device
-                    .execute(DeviceRequest::ReadDevelopmentManifest)?;
+                let installed_manifest = self.device.read_development_manifest()?;
                 let desired_main_revision = &self
                     .deployment
                     .platform_candidate
@@ -428,21 +469,17 @@ impl<D: DeviceOperations> DeliveryActions for ProcessActions<'_, D> {
                     .artifact_sha256
                     .clone()
                     .ok_or("qualified runtime identity is missing")?;
-                let request = match self.decision {
-                    DeliveryDecision::Runtime => DeviceRequest::DeliverRuntimeTransaction {
+                match self.decision {
+                    DeliveryDecision::Runtime => self.device.deliver_runtime(RuntimeDelivery {
                         local: self.repository.join(self.deployment.build.artifact()),
-                        remote: "/media/fat/mister-magik-dev/mister-magik-fb".into(),
                         manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
-                        manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest".into(),
                         expected_sha256,
-                    },
-                    DeliveryDecision::Platform => DeviceRequest::DeliverPlatformTransaction {
-                        stage: self.stage.clone(),
-                        expected_sha256,
-                    },
-                    DeliveryDecision::NoOp => return Ok(()),
-                };
-                self.device.execute(request).map(|_| ())
+                    }),
+                    DeliveryDecision::Platform => self
+                        .device
+                        .deliver_platform(self.stage.clone(), expected_sha256),
+                    DeliveryDecision::NoOp => Ok(()),
+                }
             }
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
@@ -630,19 +667,38 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::{DeviceFailure, DeviceResponse};
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    struct RequestRecorder(Rc<RefCell<Vec<DeviceRequest>>>);
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum DeliveryCall {
+        Runtime,
+        Platform,
+    }
 
-    impl DeviceOperations for RequestRecorder {
-        fn execute(&mut self, request: &DeviceRequest) -> Result<DeviceResponse, DeviceFailure> {
-            self.0.borrow_mut().push(request.clone());
-            Ok(DeviceResponse {
-                operation: request.label(),
-                detail: "ok".into(),
-            })
+    struct RequestRecorder(Rc<RefCell<Vec<DeliveryCall>>>);
+
+    impl DeliveryDevice for RequestRecorder {
+        fn connect(&mut self) -> AgentResult<()> {
+            Ok(())
+        }
+
+        fn read_development_manifest(&mut self) -> AgentResult<String> {
+            Ok(String::new())
+        }
+
+        fn deliver_runtime(&mut self, _delivery: RuntimeDelivery) -> AgentResult<()> {
+            self.0.borrow_mut().push(DeliveryCall::Runtime);
+            Ok(())
+        }
+
+        fn deliver_platform(
+            &mut self,
+            _stage: PathBuf,
+            _expected_sha256: String,
+        ) -> AgentResult<()> {
+            self.0.borrow_mut().push(DeliveryCall::Platform);
+            Ok(())
         }
     }
 
@@ -810,12 +866,12 @@ mod tests {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
             crate::deploy::DeploymentKind::Runtime,
-            DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
+            RequestRecorder(Rc::clone(&requests)),
         );
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeviceRequest::DeliverRuntimeTransaction { .. }]
+            [DeliveryCall::Runtime]
         ));
     }
 
@@ -824,18 +880,18 @@ mod tests {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
             crate::deploy::DeploymentKind::Platform,
-            DeviceClient::new(RequestRecorder(Rc::clone(&requests))),
+            RequestRecorder(Rc::clone(&requests)),
         );
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeviceRequest::DeliverPlatformTransaction { .. }]
+            [DeliveryCall::Platform]
         ));
     }
 
     fn scenario_actions(
         kind: crate::deploy::DeploymentKind,
-        device: DeviceClient<RequestRecorder>,
+        device: RequestRecorder,
     ) -> ProcessActions<'static, RequestRecorder> {
         let mut deployment = crate::deploy::plan(Path::new("."), Vec::new()).unwrap();
         deployment.kind = kind;

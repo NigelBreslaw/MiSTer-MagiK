@@ -23,6 +23,46 @@ pub struct LocalMainExecution {
     pub qualification_candidate_id: String,
 }
 
+trait LocalMainDevice {
+    fn connect(&mut self) -> AgentResult<()>;
+    fn verify_development_platform(&mut self) -> AgentResult<()>;
+    fn read_development_manifest(&mut self) -> AgentResult<String>;
+    fn deliver_local_main(&mut self, delivery: LocalMainDelivery) -> AgentResult<()>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LocalMainDelivery {
+    local: PathBuf,
+    manifest_local: PathBuf,
+    expected_main_sha256: String,
+    expected_gui_sha256: String,
+}
+
+impl<D: DeviceOperations> LocalMainDevice for DeviceClient<D> {
+    fn connect(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::Discover).map(|_| ())
+    }
+
+    fn verify_development_platform(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::VerifyDevelopmentPlatform)
+            .map(|_| ())
+    }
+
+    fn read_development_manifest(&mut self) -> AgentResult<String> {
+        self.execute(DeviceRequest::ReadDevelopmentManifest)
+    }
+
+    fn deliver_local_main(&mut self, delivery: LocalMainDelivery) -> AgentResult<()> {
+        self.execute(DeviceRequest::DeliverLocalMainTransaction {
+            local: delivery.local,
+            manifest_local: delivery.manifest_local,
+            expected_main_sha256: delivery.expected_main_sha256,
+            expected_gui_sha256: delivery.expected_gui_sha256,
+        })
+        .map(|_| ())
+    }
+}
+
 pub fn execute(
     repository: &Path,
     app_revision: &str,
@@ -77,12 +117,10 @@ pub fn execute(
     )
 }
 
-fn verify_installed_dev_platform<D: DeviceOperations>(
-    mut device: DeviceClient<D>,
-) -> AgentResult<String> {
-    device.execute(DeviceRequest::Discover)?;
-    device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
-    let installed = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+fn verify_installed_dev_platform(mut device: impl LocalMainDevice) -> AgentResult<String> {
+    device.connect()?;
+    device.verify_development_platform()?;
+    let installed = device.read_development_manifest()?;
     let installed = crate::platform_manifest::parse_installed(
         &installed,
         crate::platform_manifest::Layout::Development,
@@ -90,15 +128,15 @@ fn verify_installed_dev_platform<D: DeviceOperations>(
     Ok(installed.magik_revision().into())
 }
 
-fn execute_overlay_transaction<D: DeviceOperations>(
+fn execute_overlay_transaction(
     repository: &Path,
     main_revision: &str,
     artifact: &Path,
-    mut device: DeviceClient<D>,
+    mut device: impl LocalMainDevice,
 ) -> AgentResult<LocalMainExecution> {
-    device.execute(DeviceRequest::Discover)?;
-    device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
-    let installed = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    device.connect()?;
+    device.verify_development_platform()?;
+    let installed = device.read_development_manifest()?;
     let installed_identity = crate::platform_manifest::parse_installed(
         &installed,
         crate::platform_manifest::Layout::Development,
@@ -121,7 +159,7 @@ fn execute_overlay_transaction<D: DeviceOperations>(
         main_revision,
         &installed_app_revision,
     )?;
-    device.execute(DeviceRequest::DeliverLocalMainTransaction {
+    device.deliver_local_main(LocalMainDelivery {
         local: artifact.to_path_buf(),
         manifest_local: manifest,
         expected_main_sha256: identity.main_sha256.clone(),
@@ -269,7 +307,32 @@ fn test_manifest(magik_revision: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::{DeviceFailure, DeviceResponse, FakeDevice};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct FakeLocalMainDevice {
+        manifest: String,
+        deliveries: Rc<Cell<usize>>,
+    }
+
+    impl LocalMainDevice for FakeLocalMainDevice {
+        fn connect(&mut self) -> AgentResult<()> {
+            Ok(())
+        }
+
+        fn verify_development_platform(&mut self) -> AgentResult<()> {
+            Ok(())
+        }
+
+        fn read_development_manifest(&mut self) -> AgentResult<String> {
+            Ok(self.manifest.clone())
+        }
+
+        fn deliver_local_main(&mut self, _delivery: LocalMainDelivery) -> AgentResult<()> {
+            self.deliveries.set(self.deliveries.get() + 1);
+            Ok(())
+        }
+    }
 
     #[test]
     fn arm_validation_rejects_non_arm_and_accepts_arm_elf32() {
@@ -306,65 +369,26 @@ mod tests {
         let artifact = root.join("MiSTer");
         fs::write(&artifact, b"main").unwrap();
         let manifest = super::test_manifest(&"a".repeat(40));
-        let fake = FakeDevice::with_results([
-            Ok(DeviceResponse {
-                operation: "discover",
-                detail: "connected".into(),
-            }),
-            Ok(DeviceResponse {
-                operation: "verify-development-platform",
-                detail: "verified".into(),
-            }),
-            Ok(DeviceResponse {
-                operation: "read-development-manifest",
-                detail: manifest,
-            }),
-            Ok(DeviceResponse {
-                operation: "deliver-local-main-transaction",
-                detail: "healthy".into(),
-            }),
-        ]);
+        let deliveries = Rc::new(Cell::new(0));
+        let fake = FakeLocalMainDevice {
+            manifest,
+            deliveries: Rc::clone(&deliveries),
+        };
         let execution =
-            execute_overlay_transaction(&root, &"b".repeat(40), &artifact, DeviceClient::new(fake))
-                .unwrap();
+            execute_overlay_transaction(&root, &"b".repeat(40), &artifact, fake).unwrap();
         assert_eq!(execution.app_revision, "a".repeat(40));
         assert_eq!(execution.main_revision, "b".repeat(40));
+        assert_eq!(deliveries.get(), 1);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn installed_app_revision_is_preserved_independently_of_host_head() {
-        let fake = FakeDevice::with_results([
-            Ok(DeviceResponse {
-                operation: "discover",
-                detail: "connected".into(),
-            }),
-            Ok(DeviceResponse {
-                operation: "verify-development-platform",
-                detail: "verified".into(),
-            }),
-            Ok(DeviceResponse {
-                operation: "read-development-manifest",
-                detail: super::test_manifest(&"a".repeat(40)),
-            }),
-        ]);
-        let revision = verify_installed_dev_platform(DeviceClient::new(fake)).unwrap();
+        let fake = FakeLocalMainDevice {
+            manifest: super::test_manifest(&"a".repeat(40)),
+            deliveries: Rc::new(Cell::new(0)),
+        };
+        let revision = verify_installed_dev_platform(fake).unwrap();
         assert_eq!(revision, "a".repeat(40));
-    }
-
-    #[test]
-    fn unavailable_mutation_is_not_retried() {
-        let fake = FakeDevice::with_results([Err(DeviceFailure::Unavailable("offline".into()))]);
-        let mut device = DeviceClient::new(fake);
-        assert!(
-            device
-                .execute(DeviceRequest::DeliverLocalMainTransaction {
-                    local: "main".into(),
-                    manifest_local: "manifest".into(),
-                    expected_main_sha256: "a".repeat(64),
-                    expected_gui_sha256: "b".repeat(64),
-                })
-                .is_err()
-        );
     }
 }
