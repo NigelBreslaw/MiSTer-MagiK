@@ -18,6 +18,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 GATE = ROOT / "scripts/checks/pre-commit.py"
 WATCHDOG = ROOT / "scripts/checks/run-with-deadline.py"
+UNIFIED_AGENT_CHECK = ROOT / "scripts/checks/check-unified-agent-surface.py"
 HOOK = ROOT / ".githooks/pre-commit"
 
 SPEC = importlib.util.spec_from_file_location("pre_commit_gate", GATE)
@@ -36,6 +37,9 @@ class Repository:
         self.run("git", "init", "-q")
         self.configure_identity()
         self.run("git", "commit", "--allow-empty", "-qm", "baseline")
+        unified_agent_check = self.root / "scripts/checks/check-unified-agent-surface.py"
+        unified_agent_check.parent.mkdir(parents=True)
+        unified_agent_check.write_text(UNIFIED_AGENT_CHECK.read_text())
         cargo = self.bin / "cargo"
         cargo.write_text(
             "#!/bin/sh\n"
