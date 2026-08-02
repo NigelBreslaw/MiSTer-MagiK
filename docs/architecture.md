@@ -23,6 +23,30 @@ filesystem, process, or hardware types. The MiSTer runtime implements those
 capabilities while keeping framebuffer ioctls, FPGA commands, and Main handoff
 details on the platform side of the seam.
 
+## Tooling Shape
+
+There is one supported host entrypoint and one device-side service:
+
+```mermaid
+flowchart LR
+    U["Human or automation"] --> S["scripts/agent"]
+    S --> C["agent-cli (single host executable)"]
+    C --> R["Repository workflows, CI, and evidence"]
+    C --> D["Typed device operations"]
+    D --> SSH["Bounded SSH operations"]
+    D --> A["mister-magik-agent protocol"]
+    A --> DA["mister-magik-agent (MiSTer-side service)"]
+    SSH --> M["MiSTer"]
+    DA --> M
+    M --> MAIN["MiSTer_MagiK Main fork"]
+    MAIN --> GUI["mister-magik-fb Rust/Slint GUI"]
+```
+
+`agent-cli` is an internal binary name; documentation and operators use
+`scripts/agent`. The MiSTer-side `mister-magik-agent` is deliberately separate:
+it provides authenticated, fixed protocol operations and is not a second host
+CLI or a GUI process.
+
 ## Boot And Process Model
 
 Production boot stays compatible with stock MiSTer:
@@ -691,7 +715,7 @@ Current rules:
   attended `purge-library-data --confirm`.
   Low-level probes are diagnostic/experiment builds, not release commands.
 - Build/update the catalog outside the UI hot path through the typed benchmark
-  or delivery workflows; humans may inspect it with `mister catalog`.
+  or delivery workflows; humans may inspect it with `scripts/agent device catalog inspect`.
 - Launcher boot seeds Home/system counts from the V3 registry and eagerly
   hydrates only Arcade. Other systems load lazily. If source state is stale,
   the launcher shows a `Library changed` dialog; `Rebuild` uses the same

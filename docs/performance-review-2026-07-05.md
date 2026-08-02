@@ -370,7 +370,7 @@ Risk: low. This is mostly benchmark hygiene.
 
 Production-only run order:
 
-1. `scripts/mister status`
+1. `scripts/agent device status`
 2. `scripts/bench-toolchain.sh PERF-20260705-HOME --replace-label --device --scene-secs 30 --launcher-scenario home-repeat-hold --ui-scope launcher`
 3. `scripts/profile-arcade-scroll.sh PERF-20260705-ARCADE --secs 30 --scenario turbo-hold --skip-build --thread-sample`
 4. `scripts/profile-preview-scroll.sh PERF-20260705-PREVIEW --secs 30 --scenario turbo-hold --skip-build --visual-captures 0 --thread-sample --replace-label`

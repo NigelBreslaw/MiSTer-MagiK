@@ -48,8 +48,6 @@ CLASSIFIED_PREFIXES = (
     "mister/platform/kernel",
     "mister/platform/runtime",
     "mister/tools/agent",
-    # Migration-only classification for staged deletions of the retired package.
-    "mister/tools/host",
     "mister/tools/manager",
     "private",
     "scripts",
@@ -385,13 +383,17 @@ def execute(repository: Path) -> None:
     shells = shell_paths(repository, paths)
     cargo_formatters = formatters(paths)
     pixel_text_contract = needs_pixel_text_contract(paths)
-    planned = 3 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
+    planned = 4 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
     print(f"pre-commit: {planned} fast checks planned (0%)")
 
     check_identity(repository)
     check_forbidden_and_ignored(repository, paths)
     check_submodules(repository, paths)
     git(repository, ["diff", "--cached", "--check"])
+    run(
+        repository,
+        [sys.executable, "scripts/checks/check-unified-agent-surface.py", str(repository)],
+    )
     for path in shells:
         run(repository, ["bash", "-n", path])
     if pixel_text_contract:

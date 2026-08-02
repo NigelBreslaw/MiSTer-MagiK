@@ -17,7 +17,7 @@ ERROR: scripts/docs must not kill MiSTer or MiSTer_MagiK.
 
 Killing Main bypasses the MagiK fork's launcher ownership state and can leave
 the stock OSD/input path over the Slint UI. Stop only mister-magik-fb, or reboot
-through the typed `mister reboot-wait` operation when display ownership is confused.
+through the typed diagnosis recovery operation when display ownership is confused.
 EOF
   exit 1
 fi

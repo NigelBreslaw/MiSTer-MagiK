@@ -547,7 +547,6 @@ fn has_license_header(path: &Path, text: &str) -> bool {
 
 fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     const RETIRED: &[&str] = &[
-        "scripts/mister",
         "scripts/magik-mode.sh",
         "scripts/run-rust.sh",
         "apps/mister/build-arm.sh",

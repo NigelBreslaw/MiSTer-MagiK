@@ -1,7 +1,7 @@
 # MiSTer MagiK device agent
 
 The device agent provides authenticated, bounded operations used by the Rust
-`mister` operator tool and typed `DeviceRequest` workflows. The host tool may
+`scripts/agent device` operator commands and closed workflow services. The host tool may
 transactionally bootstrap or upgrade only the agent binary, init hook, and
 token; it verifies the authenticated replacement and rolls back before running
 the requested operation if bootstrap fails.
@@ -9,15 +9,14 @@ the requested operation if bootstrap fails.
 Useful attended operator commands include:
 
 ```text
-mister agent ping
-mister agent status
-mister agent logs
-mister agent timeline
-mister agent diagnostics --out build/agent-diagnostics/sample
-mister agent magik status
-mister agent magik restart-launcher
-mister agent magik return-to-launcher
-mister agent reboot-wait --timeout 40
+scripts/agent device status
+scripts/agent device logs
+scripts/agent device events
+scripts/agent device diagnostics --out build/agent-diagnostics/sample
+scripts/agent device launcher status
+scripts/agent device launcher restart --attended
+scripts/agent device launcher return-to-launcher --attended
+scripts/agent device reboot --attended
 ```
 
 Maintained automation must not call these through shell wrappers. Agent-facing

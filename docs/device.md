@@ -1,30 +1,28 @@
 # Device operations and recovery
 
-The Rust `mister` host binary is the operator interface for MiSTer access.
-Maintained automation must use typed `DeviceRequest` operations; raw SSH/SCP
-and generic remote-shell orchestration are not accepted interfaces.
+`scripts/agent device` is the operator interface for MiSTer access. The
+MiSTer-side `mister-magik-agent` remains a separate service. Raw SSH/SCP and
+generic remote-shell orchestration are not accepted interfaces.
 
 Public installation and removal are handled by the dedicated Rust
 `mister-magik-manager`; see [installer.md](installer.md). The Scripts-menu shell
 file is only a fail-closed, hash-verifying bootstrap.
 
-Push the committed host-tool change through pre-push assurance, then use the
-binary produced at `mister/tools/host/target/debug/mister`. Protocol and
-host-tool changes make the assurance harness rebuild that runnable binary before
-device access.
+Push committed host-tool changes through pre-push assurance. `scripts/agent`
+builds and runs the repository's sole `agent-cli` binary before device access.
 Common attended commands are:
 
 ```text
-mister status
-mister arming-status
-mister mode status
-mister mode dev
-mister mode public
-mister mode stock
-mister scene launcher
-mister --capture-buffer
-mister display-mode hdmi-1280x720p60 --attended
-mister display-mode hdmi-1920x1080p60 --attended --keep
+scripts/agent device status
+scripts/agent device arming-status
+scripts/agent device mode status
+scripts/agent device mode set dev --attended
+scripts/agent device mode set public --attended
+scripts/agent device mode set stock --attended
+scripts/agent device scene launcher --attended
+scripts/agent device capture framebuffer
+scripts/agent device display set hdmi-1280x720p60 --attended
+scripts/agent device display set hdmi-1920x1080p60 --attended --keep
 ```
 
 `display-mode` applies one provisional Main-owned transaction, verifies the
@@ -50,7 +48,7 @@ and a confirmed non-network recovery path. Every cleanup must remove:
 - `/media/fat/mister-magik/rebuild-on-next-boot`
 - `/media/fat/mister-magik-dev/rebuild-on-next-boot`
 
-Use `mister arming-status` after recovery experiments. If the device repeatedly
+Use `scripts/agent device arming-status` after recovery experiments. If the device repeatedly
 reboots, stop deployment attempts. Power it down, mount the SD card on the Mac,
 remove the listed files, and inspect
 `/media/fat/mister-magik/bootlogs/main-reboot.log`.
@@ -102,7 +100,7 @@ and performs a supervised reboot even when a qualification step fails.
 
 Production rendering is RGB565. `/dev/fb0` contents alone do not prove HDMI
 visibility. Use Analytics streaming for continuous inspection and
-`mister --capture-buffer` for a still, then pair it with attended HDMI evidence
+`scripts/agent device capture framebuffer` for a still, then pair it with attended HDMI evidence
 when making scan-out claims.
 
 Framebuffer capture v2 reads the FPGA-latched hidden RGB565 slot while MagiK
@@ -133,7 +131,7 @@ restart without RBF reload, game return, and injected preflight failure. Each
 movie is retained beside Main events/status and latch status; none of these
 physical checks may be replaced by `/dev/fb0` inspection.
 
-`mister display-matrix --attended --out DIRECTORY [--usb-video]
+`scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]
 [--screensaver-wait SECONDS]` performs the bounded runtime display
 matrix without rebooting Linux. Main applies each supported resolution as a
 provisional transaction, the launcher restarts, and the authenticated MagiK

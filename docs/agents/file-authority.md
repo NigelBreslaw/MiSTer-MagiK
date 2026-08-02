@@ -24,7 +24,7 @@ Consult this table before editing or staging an unfamiliar file.
 | `private/magik-cloud/**` | Private submodule | Private repository | `scripts/magik-cloud run -- ...` | Commit/push private repo first; parent stages only gitlink | Private submodule checks |
 | `private/test-fixtures/**` | Ignored local fixtures | Local device/library data | Manual/local | Never stage | Optional local validation only |
 | `.env*`, `.wrangler/**`, credentials, tokens | Ignored secrets | Local secret manager/environment | Never regenerate into repo | Never stage or print | `git check-ignore` |
-| Device paths under `/media/fat` and `/tmp/mister-magik` | Device-owned runtime state | Installed bundle/runtime | Typed `DeviceRequest`, `scripts/agent deliver`, or attended Rust `mister` command | Never copy into Git as source | Attended device checks only |
+| Device paths under `/media/fat` and `/tmp/mister-magik` | Device-owned runtime state | Installed bundle/runtime | `scripts/agent deliver` or an attended typed `scripts/agent device` command | Never copy into Git as source | Attended device checks only |
 
 When a generated file is not listed, find its producer before editing. If no
 producer can be found, stop and update this guide as part of the change rather

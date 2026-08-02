@@ -2581,11 +2581,11 @@ impl Drop for SignalHandlerGuard {
 
 fn parse_display_mode_args(args: &[String]) -> Result<(DisplayMatrixMode, bool)> {
     if args.len() < 2 || args.len() > 3 || args[1] != "--attended" {
-        return Err("usage: mister display-mode MODE --attended [--keep]".into());
+        return Err("usage: scripts/agent device display set MODE --attended [--keep]".into());
     }
     let keep = args.len() == 3 && args[2] == "--keep";
     if args.len() == 3 && !keep {
-        return Err("usage: mister display-mode MODE --attended [--keep]".into());
+        return Err("usage: scripts/agent device display set MODE --attended [--keep]".into());
     }
     let mode = DISPLAY_MATRIX_MODES
         .iter()
@@ -2960,7 +2960,10 @@ fn wait_display_matrix_interval(duration: Duration) -> Result<()> {
 
 fn parse_display_matrix_args(args: &[String]) -> Result<(&str, bool, Option<u64>)> {
     if args.first().map(String::as_str) != Some("--attended") {
-        return Err("usage: mister display-matrix --attended --out DIRECTORY [--usb-video]".into());
+        return Err(
+            "usage: scripts/agent device display matrix --attended --out DIRECTORY [--usb-video]"
+                .into(),
+        );
     }
     let mut directory = None;
     let mut capture_usb_video = false;
@@ -3590,7 +3593,7 @@ fn core_list() -> Result<()> {
 fn mode_cli(args: &[String]) -> Result<()> {
     let mode = args.first().map(String::as_str).unwrap_or("status");
     if args.len() > 1 || !matches!(mode, "status" | "dev" | "public" | "stock") {
-        return Err("usage: mister mode <status|dev|public|stock>".into());
+        return Err("usage: scripts/agent device mode <status|set MODE --attended>".into());
     }
     let session = connect(10)?;
     if mode == "status" {
@@ -3640,7 +3643,7 @@ fn scene_cli(args: &[String]) -> Result<()> {
         "launcher" | "controller_test" | "tear_pattern" | "video_playback" | "crt_trial"
     ) {
         return Err(
-            "usage: mister scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]"
+            "usage: scripts/agent device scene <launcher|controller-test|tear-pattern|video-playback|crt-trial> --attended [--seconds N]"
                 .into(),
         );
     }
@@ -13076,10 +13079,7 @@ fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Re
 
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
-        return Err(
-            "usage: mister catalog (Catalog V3 validates the registry and every system shard)"
-                .into(),
-        );
+        return Err("usage: scripts/agent device catalog inspect".into());
     }
     let binary = configured_remote_path(
         "MISTER_MAGIK_BIN",

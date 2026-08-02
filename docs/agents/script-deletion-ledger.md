@@ -155,7 +155,7 @@ replacement wrappers.
 
 ## Device wrapper removal and shell boundary
 
-Reviewed on 2026-07-21. `scripts/mister` compiled and forwarded to the Rust host
+Reviewed on 2026-07-21. The retired device wrapper compiled and forwarded to the Rust host
 tool while also performing hidden manifest rebinding and latch activation;
 `magik-mode.sh` and `run-rust.sh` layered mode switching, reboot fallback,
 environment files, process supervision, and scene matrices on top. Those jobs

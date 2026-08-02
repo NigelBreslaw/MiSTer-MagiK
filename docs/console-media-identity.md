@@ -166,7 +166,7 @@ if the entry is missing, the preview worker records the failed lookup and the UI
 shows the blank preview state. Preview pack changes are not catalog stamp inputs
 and do not trigger database rebuilds.
 
-For device acceptance, `mister catalog` reports `preview_keys` and
+For device acceptance, `scripts/agent device catalog inspect` reports `preview_keys` and
 `available_previews` on every `catalog_v3_system_tsv` row. Atari Lynx must have
 nonzero values for both after rebuilding with current MAME metadata and the
 installed screenshot-pack index.
@@ -182,7 +182,7 @@ does not build or copy screenshot packs or MAME/HBMAME metadata databases; treat
 those as fixed release artifacts produced by the host-side catalog/media tools.
 
 Screenshot-pack updates from Cloudflare R2 are handled by the MagiK runtime,
-`mister media-check`, `mister media-download`, and the component-selected
+`scripts/agent device media check`, `scripts/agent device media download --attended`, and the component-selected
 `scripts/agent benchmark` media scenario. Runtime v1 uses raw manifest
 `compression: "none"` with `Accept-Encoding: identity`. The launcher runtime
 queues downloads only for systems discovered by the active catalog scan and

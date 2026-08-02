@@ -97,10 +97,7 @@ fn parse_args(args: &[String]) -> Result<QualifyAction> {
         return parse_probe_args(args);
     }
     if args.first().map(String::as_str) != Some("qualify") {
-        return Err(
-            "usage: mister crt <qualify <--attended [--out DIRECTORY]|--restore>|probe --attended --pattern PATTERN --seconds 20 --out DIRECTORY>"
-                .into(),
-        );
+        return Err("usage: scripts/agent device crt <qualify|probe|restore> --attended".into());
     }
     if args.get(1).map(String::as_str) == Some("--restore") && args.len() == 2 {
         return Ok(QualifyAction::Restore);
@@ -416,11 +413,11 @@ fn run_attended(output: Option<PathBuf>) -> Result<()> {
         }
         (Err(trial), Ok(())) => Err(trial),
         (Ok(_), Err(restore)) => Err(format!(
-            "CRT trials completed but automatic restore failed: {restore}; run `mister crt qualify --restore`"
+            "CRT trials completed but automatic restore failed: {restore}; run `scripts/agent device crt restore --attended`"
         )
         .into()),
         (Err(trial), Err(restore)) => Err(format!(
-            "CRT qualification failed: {trial}; restore also failed: {restore}; run `mister crt qualify --restore`"
+            "CRT qualification failed: {trial}; restore also failed: {restore}; run `scripts/agent device crt restore --attended`"
         )
         .into()),
     }
@@ -477,7 +474,7 @@ fn ensure_no_existing_transaction(session: &Session) -> Result<()> {
         &format!("set -eu; test ! -e {REMOTE_BACKUP}; test ! -e {REMOTE_JOURNAL}"),
     )
     .map_err(|_| {
-        "unfinished CRT qualification transaction exists; run `mister crt qualify --restore`".into()
+        "unfinished CRT qualification transaction exists; run `scripts/agent device crt restore --attended`".into()
     })
 }
 

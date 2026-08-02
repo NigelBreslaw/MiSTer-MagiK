@@ -22,7 +22,7 @@ contacting the MiSTer.
 - Use Bash with `set -euo pipefail`; keep macOS Bash compatibility.
 - Preserve stable direct command shapes used by sandbox approvals.
 - Do not add device/build/deploy/profile/acceptance shell orchestrators.
-- Human device operations use the typed Rust `mister` host binary; agents use
+- Human device operations use typed `scripts/agent device` commands; agents use
   `scripts/agent deliver`, `benchmark`, or `diagnose`.
 - Local Main experiments use only the positional
   `scripts/agent deliver local-main` workflow. Do not add feature-flag or shell

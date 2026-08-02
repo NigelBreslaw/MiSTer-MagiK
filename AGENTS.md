@@ -26,7 +26,7 @@ test, confirm a non-network recovery path and interruption-safe cleanup. After
 direct-reset-no-sync experiments, verify no live arming file remains:
 
 ```bash
-mister arming-status
+scripts/agent device arming-status
 ```
 
 A single bounded recovery reboot is not a reboot loop. `scripts/agent diagnose`
@@ -82,8 +82,8 @@ those trees are part of the task.
   Use `gh`.
 - Agents use `scripts/agent deliver`, `benchmark`, or `diagnose` for device
   workflows. Diagnosis owns bounded read-only retries and one unattended
-  one-shot recovery reboot. Other operator operations use typed commands in the
-  Rust `mister` host binary; never raw SSH/SCP or generic remote-shell
+  one-shot recovery reboot. Attended operator operations use typed
+  `scripts/agent device` commands; never raw SSH/SCP or generic remote-shell
   orchestration.
 - Device workflows, Apple container, virtualization, and attended `mister`
   commands require first-attempt escalation using their direct repository

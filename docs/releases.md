@@ -28,7 +28,7 @@ and creates fresh component provenance before assembly or publication.
 
 The attended qualification is fixed and flag-free. It checks runtime, catalog,
 input/handoff/return, display, recovery capability, and restoration. Rollback is
-the typed `mister mode stock` operator command. Packaging output, credentials,
+the typed `scripts/agent device mode set stock --attended` operator command. Packaging output, credentials,
 caches, and private fixtures must not be staged.
 
 CRT qualification additionally records a

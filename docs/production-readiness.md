@@ -28,4 +28,4 @@ release fault injection never runs unattended; this is distinct from the
 single bounded raw recovery reboot owned by `scripts/agent diagnose`. No release
 command pushes Git state.
 
-Rollback is verified with the typed `mister mode stock` operator command.
+Rollback is verified with `scripts/agent device mode set stock --attended`.

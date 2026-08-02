@@ -36,7 +36,7 @@ cheap commit safety; pre-push and CI own builds, tests, feature matrices, and
 platform assurance.
 `deliver` owns build scope, artifact qualification, transport, activation,
 rollback, and smoke verification. Human-only fixed scene operation is available
-through `mister scene`; it is separate from building and deployment.
+through `scripts/agent device scene`; it is separate from building and deployment.
 
 The canonical `release-device` runtime includes dormant on-device profiling
 support and retains function symbols. Benchmarks activate that support only on
