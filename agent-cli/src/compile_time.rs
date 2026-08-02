@@ -296,7 +296,7 @@ fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
         .current_dir(repository.join("apps/framebuffer-lab"))
         .env("CARGO_TARGET_DIR", target_dir)
         .env("RUSTC_WRAPPER", "")
-        .args(["build", "--release", "--locked"])
+        .args(["build", "--locked"])
         .stdin(Stdio::null())
         .spawn()
         .map_err(|error| format!("cannot start macOS framebuffer lab build: {error}"))?;
@@ -359,10 +359,11 @@ fn require_clean_source(repository: &Path, source: &Path) -> AgentResult<()> {
 
 struct SourceStampGuard {
     path: PathBuf,
+    original_bytes: Vec<u8>,
     original_sha256: String,
     original_modified: Option<SystemTime>,
     original_accessed: Option<SystemTime>,
-    next_modified: SystemTime,
+    generation: u64,
     finished: bool,
 }
 
@@ -370,34 +371,36 @@ impl SourceStampGuard {
     fn new(path: &Path) -> AgentResult<Self> {
         let metadata = std::fs::metadata(path)
             .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
+        let original_bytes = std::fs::read(path)
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
         Ok(Self {
             path: path.to_path_buf(),
-            original_sha256: sha256(path)?,
+            original_sha256: sha256_bytes(&original_bytes),
+            original_bytes,
             original_modified: metadata.modified().ok(),
             original_accessed: metadata.accessed().ok(),
-            next_modified: SystemTime::now() + Duration::from_secs(2),
+            generation: 0,
             finished: false,
         })
     }
 
     fn force_rebuild(&mut self) -> AgentResult<()> {
-        let file = OpenOptions::new()
-            .write(true)
-            .open(&self.path)
-            .map_err(|error| format!("cannot open {}: {error}", self.path.display()))?;
-        let times = FileTimes::new().set_modified(self.next_modified);
-        file.set_times(times)
-            .map_err(|error| format!("cannot touch {}: {error}", self.path.display()))?;
-        self.next_modified += Duration::from_secs(2);
+        self.generation = self.generation.saturating_add(1);
+        let mut bytes = self.original_bytes.clone();
+        bytes.extend_from_slice(
+            format!("\n// compile-time-rebuild-generation:{}\n", self.generation).as_bytes(),
+        );
+        std::fs::write(&self.path, bytes)
+            .map_err(|error| format!("cannot mark {} for rebuild: {error}", self.path.display()))?;
         Ok(())
     }
 
     fn finish(&mut self) -> AgentResult<String> {
+        self.restore_source()?;
         let after = sha256(&self.path)?;
         if after != self.original_sha256 {
             return Err("particle source content changed during compile-time measurement".into());
         }
-        self.restore_times()?;
         self.finished = true;
         Ok(after)
     }
@@ -418,12 +421,18 @@ impl SourceStampGuard {
             .map_err(|error| format!("cannot restore {} times: {error}", self.path.display()))?;
         Ok(())
     }
+
+    fn restore_source(&self) -> AgentResult<()> {
+        std::fs::write(&self.path, &self.original_bytes)
+            .map_err(|error| format!("cannot restore {}: {error}", self.path.display()))?;
+        self.restore_times()
+    }
 }
 
 impl Drop for SourceStampGuard {
     fn drop(&mut self) {
         if !self.finished {
-            let _ = self.restore_times();
+            let _ = self.restore_source();
         }
     }
 }
@@ -431,10 +440,14 @@ impl Drop for SourceStampGuard {
 fn sha256(path: &Path) -> AgentResult<String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    Ok(Sha256::digest(bytes)
+    Ok(sha256_bytes(&bytes))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect())
+        .collect()
 }
 
 fn command_output(repository: &Path, program: &str, arguments: &[&str]) -> AgentResult<String> {
