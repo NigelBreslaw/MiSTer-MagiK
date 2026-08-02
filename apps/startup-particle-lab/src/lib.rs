@@ -129,7 +129,7 @@ pub struct FocusedParticleRenderer {
 
 enum PreparedEffect {
     Magik(Box<MagikRenderer>),
-    Cabinet(ArcadeCabinetFormation),
+    Cabinet(Box<ArcadeCabinetFormation>),
 }
 
 impl FocusedParticleRenderer {
@@ -138,9 +138,9 @@ impl FocusedParticleRenderer {
             EffectRecipe::Magik(recipe) => {
                 PreparedEffect::Magik(Box::new(MagikRenderer::new(width, height, recipe)?))
             }
-            EffectRecipe::Cabinet(recipe) => {
-                PreparedEffect::Cabinet(ArcadeCabinetFormation::new(width, height, recipe)?)
-            }
+            EffectRecipe::Cabinet(recipe) => PreparedEffect::Cabinet(Box::new(
+                ArcadeCabinetFormation::new(width, height, recipe)?,
+            )),
         };
         Ok(Self { effect })
     }
