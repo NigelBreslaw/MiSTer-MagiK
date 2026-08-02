@@ -50,6 +50,7 @@ pub enum BuildCommand {
     DeviceAgent,
     ManagerDevice,
     FramebufferLabDevice,
+    StartupParticleLabDevice,
     ReleaseBinaries,
 }
 
@@ -60,6 +61,7 @@ pub enum BuildTarget {
     DeviceAgent,
     Manager,
     FramebufferLab,
+    StartupParticleLab,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -161,6 +163,14 @@ impl BuildSpec {
                 UiScope::All,
                 framebuffer_lab_artifact("release-live"),
             ),
+            BuildCommand::StartupParticleLabDevice => (
+                BuildTarget::StartupParticleLab,
+                BuildMode::Build,
+                "release-live",
+                Vec::new(),
+                UiScope::All,
+                startup_particle_lab_artifact("release-live"),
+            ),
             BuildCommand::ReleaseBinaries => return None,
         };
         Some(Self::from_configuration(configuration))
@@ -214,6 +224,12 @@ impl BuildSpec {
     pub fn framebuffer_lab_device() -> Self {
         Self::for_command(BuildCommand::FramebufferLabDevice)
             .expect("framebuffer lab device builds have a specification")
+    }
+
+    #[must_use]
+    pub fn startup_particle_lab_device() -> Self {
+        Self::for_command(BuildCommand::StartupParticleLabDevice)
+            .expect("startup particle lab device builds have a specification")
     }
 
     /// Reproduces the current full Slint application build used to quantify
@@ -666,6 +682,9 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             BuildTarget::FramebufferLab => {
                 PathBuf::from("/private/tmp/mister-magik-framebuffer-lab-apple-container-target")
             }
+            BuildTarget::StartupParticleLab => PathBuf::from(
+                "/private/tmp/mister-magik-startup-particle-lab-apple-container-target",
+            ),
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
         Self {
@@ -1307,7 +1326,8 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
         BuildTarget::Runtime
         | BuildTarget::DeviceAgent
         | BuildTarget::Manager
-        | BuildTarget::FramebufferLab => {}
+        | BuildTarget::FramebufferLab
+        | BuildTarget::StartupParticleLab => {}
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -1323,6 +1343,7 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::DeviceAgent => "mister/tools/agent",
         BuildTarget::Manager => "mister/tools/manager",
         BuildTarget::FramebufferLab => "apps/framebuffer-lab",
+        BuildTarget::StartupParticleLab => "apps/startup-particle-lab",
     }
 }
 
@@ -1332,6 +1353,7 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
         BuildTarget::Manager => "/project/mister/tools/manager",
         BuildTarget::FramebufferLab => "/project/apps/framebuffer-lab",
+        BuildTarget::StartupParticleLab => "/project/apps/startup-particle-lab",
     }
 }
 
@@ -1341,6 +1363,7 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
         BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
         BuildTarget::FramebufferLab => "apps/framebuffer-lab/Cargo.lock",
+        BuildTarget::StartupParticleLab => "apps/startup-particle-lab/Cargo.lock",
     }
 }
 
@@ -1353,6 +1376,12 @@ fn runtime_artifact(profile: &str) -> PathBuf {
 fn framebuffer_lab_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "apps/framebuffer-lab/target/{TARGET}/{profile}/mister-magik-particle-lab"
+    ))
+}
+
+fn startup_particle_lab_artifact(profile: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "apps/startup-particle-lab/target/{TARGET}/{profile}/mister-magik-startup-particle-lab"
     ))
 }
 
@@ -1599,6 +1628,20 @@ mod tests {
         assert_eq!(spec.profile, "release-live");
         assert_eq!(spec.features, ["ui"]);
         assert_eq!(spec.ui_scope, UiScope::Launcher);
+    }
+
+    #[test]
+    fn startup_particle_lab_build_is_slint_free_and_focused() {
+        let spec = BuildSpec::startup_particle_lab_device();
+        assert_eq!(spec.target, BuildTarget::StartupParticleLab);
+        assert!(spec.features.is_empty());
+        assert_eq!(host_workdir(spec.target), "apps/startup-particle-lab");
+        assert_eq!(
+            spec.artifact,
+            PathBuf::from(
+                "apps/startup-particle-lab/target/armv7-unknown-linux-gnueabihf/release-live/mister-magik-startup-particle-lab"
+            )
+        );
     }
 
     #[test]
