@@ -949,6 +949,7 @@ fn add_path_operations(
         ));
     }
     add_crate(path, "crates/magik-core", "magik-core", out);
+    add_crate(path, "crates/framebuffer-scenes", "framebuffer-scenes", out);
     add_crate(path, "crates/particles", "particles", out);
     if path.starts_with("apps/startup-particle-lab") {
         add_crate(
@@ -1335,6 +1336,36 @@ mod tests {
         assert_eq!(
             ids,
             ["particles.clippy", "particles.format", "particles.tests"]
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            !operation
+                .args
+                .iter()
+                .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
+
+    #[test]
+    fn framebuffer_scene_changes_select_shared_crate_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["crates/framebuffer-scenes/src/navigation.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "framebuffer-scenes.clippy",
+                "framebuffer-scenes.format",
+                "framebuffer-scenes.tests"
+            ]
         );
         assert!(plan.operations.iter().all(|operation| {
             !operation

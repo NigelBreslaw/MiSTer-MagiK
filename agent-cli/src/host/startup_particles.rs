@@ -727,7 +727,11 @@ mod tests {
     fn navigation_fixture_lab_is_volatile_and_recipe_free() {
         let run =
             remote_run_lab_command((1920, 1080), "navigation-transition", Some("home-arcade"));
-        assert!(run.contains("--scene navigation-transition --fixture home-arcade"));
+        assert!(run.contains(&format!(
+            "--scene {} --fixture {}",
+            sh("navigation-transition"),
+            sh("home-arcade")
+        )));
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
