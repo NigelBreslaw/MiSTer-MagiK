@@ -473,7 +473,7 @@ fn system_background_opens_as_one_horizon_instead_of_scanline_moire() {
             .all(|rows| rows[1] == rows[0] + 1)
     );
     assert!(destination_rows.contains(&4));
-    assert!(!working.iter().any(|pixel| *pixel == Rgb565Pixel(0xf800)));
+    assert!(!working.contains(&Rgb565Pixel(0xf800)));
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn scaled_card_excludes_the_duplicate_label_surface() {
     );
 
     assert_eq!(destination[3 * width + 3], Rgb565Pixel(0x2222));
-    assert_eq!(destination[1 * width + 1], Rgb565Pixel(0x1111));
+    assert_eq!(destination[width + 1], Rgb565Pixel(0x1111));
 }
 
 #[test]
@@ -558,24 +558,9 @@ fn super_scaler_echoes_remain_visible_above_the_expanding_card() {
     )
     .unwrap();
 
-    assert!(
-        buffers
-            .working()
-            .iter()
-            .any(|pixel| *pixel == Rgb565Pixel(0x79b8))
-    );
-    assert!(
-        buffers
-            .working()
-            .iter()
-            .any(|pixel| *pixel == Rgb565Pixel(0x40ed))
-    );
-    assert!(
-        buffers
-            .working()
-            .iter()
-            .any(|pixel| *pixel == Rgb565Pixel(0x28aa))
-    );
+    assert!(buffers.working().contains(&Rgb565Pixel(0x79b8)));
+    assert!(buffers.working().contains(&Rgb565Pixel(0x40ed)));
+    assert!(buffers.working().contains(&Rgb565Pixel(0x28aa)));
 }
 
 #[test]
@@ -941,9 +926,9 @@ fn label_crossfade_deterministically_erodes_disjoint_glyph_masks() {
     }
 
     assert_eq!(first, second);
-    assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0x1111)));
-    assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0xeeee)));
-    assert!(first.iter().any(|pixel| *pixel == Rgb565Pixel(0)));
+    assert!(first.contains(&Rgb565Pixel(0x1111)));
+    assert!(first.contains(&Rgb565Pixel(0xeeee)));
+    assert!(first.contains(&Rgb565Pixel(0)));
 }
 
 #[test]
