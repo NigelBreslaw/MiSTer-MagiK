@@ -999,6 +999,7 @@ pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launc
                     format!("{} games", item.count).into()
                 },
                 focused: index == nav.selected,
+                focus_transition_enabled: false,
                 available,
                 node_kind: match item.kind {
                     crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
@@ -1490,6 +1491,11 @@ mod tests {
                     title: "Amiga".into(),
                     count: 3,
                 },
+                GameSystemEntry {
+                    id: "gb".into(),
+                    title: "Game Boy".into(),
+                    count: 4,
+                },
             ],
         );
         let mut nav = LauncherNav::new();
@@ -1497,20 +1503,72 @@ mod tests {
         let mut models = LauncherBridgeModels::default();
         let rows = models.menu_items(&nav, 1);
 
+        assert_eq!(rows.row_count(), 3);
         assert!(rows.row_data(0).expect("first row").focused);
         assert!(!rows.row_data(1).expect("second row").focused);
+        assert!((0..rows.row_count()).all(|index| {
+            !rows
+                .row_data(index)
+                .expect("initial launcher row")
+                .focus_transition_enabled
+        }));
 
         nav.selected = 1;
         let updated_rows = models.menu_items(&nav, 1);
 
-        assert!(!rows.row_data(0).expect("first row").focused);
-        assert!(rows.row_data(1).expect("second row").focused);
+        let first = rows.row_data(0).expect("first row");
+        let second = rows.row_data(1).expect("second row");
+        assert!(!first.focused);
+        assert!(first.focus_transition_enabled);
+        assert!(second.focused);
+        assert!(second.focus_transition_enabled);
+        assert!((2..rows.row_count()).all(|index| {
+            !rows
+                .row_data(index)
+                .expect("untouched launcher row")
+                .focus_transition_enabled
+        }));
         assert!(
             updated_rows
                 .row_data(1)
                 .expect("updated second row")
                 .focused
         );
+
+        nav.selected = 2;
+        let moved_again = models.menu_items(&nav, 1);
+        assert!(
+            !moved_again
+                .row_data(0)
+                .expect("settled first row")
+                .focus_transition_enabled
+        );
+        assert!(
+            moved_again
+                .row_data(1)
+                .expect("previous second row")
+                .focus_transition_enabled
+        );
+        assert!(
+            moved_again
+                .row_data(2)
+                .expect("current third row")
+                .focus_transition_enabled
+        );
+
+        let rebuilt_rows = models.menu_items(&nav, 2);
+        assert!(
+            rebuilt_rows
+                .row_data(2)
+                .expect("selected rebuilt row")
+                .focused
+        );
+        assert!((0..rebuilt_rows.row_count()).all(|index| {
+            !rebuilt_rows
+                .row_data(index)
+                .expect("rebuilt launcher row")
+                .focus_transition_enabled
+        }));
     }
 
     #[test]
@@ -1546,6 +1604,12 @@ mod tests {
 
         assert_ne!(root_rows.row_count(), computer_rows.row_count());
         assert_eq!(computer_rows.row_count(), 1);
+        assert!(
+            !computer_rows
+                .row_data(0)
+                .expect("flattened computer collection")
+                .focus_transition_enabled
+        );
         assert_eq!(
             computer_rows
                 .row_data(0)

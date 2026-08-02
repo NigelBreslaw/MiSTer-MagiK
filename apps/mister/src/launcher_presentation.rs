@@ -36,6 +36,7 @@ pub struct LauncherBridgePresenter {
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_items_selected: Option<usize>,
+    menu_items_transition_previous: Option<usize>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
 }
@@ -236,6 +237,7 @@ impl LauncherBridgePresenter {
             self.menu_items_key = Some(key);
             self.menu_items_selected =
                 (nav.selected < nav.current_menu_count()).then_some(nav.selected);
+            self.menu_items_transition_previous = None;
         } else {
             self.sync_menu_item_focus(nav.selected);
         }
@@ -276,18 +278,30 @@ impl LauncherBridgePresenter {
         if self.menu_items_selected == selected {
             return;
         }
-        if let Some(previous) = self.menu_items_selected
-            && let Some(mut row) = model.row_data(previous)
+        let previous = self.menu_items_selected;
+        let update_row = |index: usize, focused: bool, focus_transition_enabled: bool| {
+            if let Some(mut row) = model.row_data(index)
+                && (row.focused != focused
+                    || row.focus_transition_enabled != focus_transition_enabled)
+            {
+                row.focused = focused;
+                row.focus_transition_enabled = focus_transition_enabled;
+                model.set_row_data(index, row);
+            }
+        };
+        if let Some(stale) = self.menu_items_transition_previous
+            && Some(stale) != previous
+            && Some(stale) != selected
         {
-            row.focused = false;
-            model.set_row_data(previous, row);
+            update_row(stale, false, false);
         }
-        if let Some(current) = selected
-            && let Some(mut row) = model.row_data(current)
-        {
-            row.focused = true;
-            model.set_row_data(current, row);
+        if let Some(previous) = previous {
+            update_row(previous, false, true);
         }
+        if let Some(current) = selected {
+            update_row(current, true, true);
+        }
+        self.menu_items_transition_previous = previous;
         self.menu_items_selected = selected;
     }
 }
@@ -344,6 +358,7 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                     format!("{} games", item.count).into()
                 },
                 focused: index == nav.selected,
+                focus_transition_enabled: false,
                 available,
                 node_kind: match item.kind {
                     LauncherMenuItemKind::Menu => MenuItemKind::Group,

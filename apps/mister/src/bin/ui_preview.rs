@@ -2831,6 +2831,7 @@ mod macos {
                         label: label.into(),
                         subtitle: subtitle.into(),
                         focused: index == selected,
+                        focus_transition_enabled: false,
                         available,
                         node_kind: MenuItemKind::Collection,
                         status,

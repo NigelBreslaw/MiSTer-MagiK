@@ -124,6 +124,8 @@ export component HomeGrid inherits Rectangle {
                         status: MisterBridge.menu-items[menu-index].status;
                         focused: !MisterBridge.settings-focused
                             && MisterBridge.menu-items[menu-index].focused;
+                        focus-transition-enabled:
+                            MisterBridge.menu-items[menu-index].focus-transition-enabled;
                         flat-focus-style: true;
                     }
                 }
