@@ -3,8 +3,10 @@
 
 //! Focused, Slint-free host for the production startup particle effects.
 
-use mister_magik_framebuffer_scenes::{Rgb565Pixel, SceneBufferId};
-use mister_magik_particles::cabinet::ArcadeCabinetFormation;
+use mister_magik_framebuffer_scenes::{
+    FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
+};
+use mister_magik_particles::cabinet::CabinetScene;
 use mister_magik_particles::engine::ParticlePreset;
 use mister_magik_particles::magik::{
     MagikScene, MagikSceneOptions, MagikSceneStats, PreparationMode,
@@ -126,11 +128,12 @@ pub struct MagikStageTimings {
 
 pub struct FocusedParticleRenderer {
     effect: PreparedEffect,
+    geometry: SceneGeometry,
 }
 
 enum PreparedEffect {
     Magik(Box<MagikScene>),
-    Cabinet(Box<ArcadeCabinetFormation>),
+    Cabinet(Box<CabinetScene>),
 }
 
 impl FocusedParticleRenderer {
@@ -167,11 +170,13 @@ impl FocusedParticleRenderer {
                     },
                 )?))
             }
-            EffectRecipe::Cabinet(recipe) => PreparedEffect::Cabinet(Box::new(
-                ArcadeCabinetFormation::new(width, height, recipe)?,
-            )),
+            EffectRecipe::Cabinet(recipe) => {
+                PreparedEffect::Cabinet(Box::new(CabinetScene::new(width, height, recipe, 2)?))
+            }
         };
-        Ok(Self { effect })
+        let geometry =
+            SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        Ok(Self { effect, geometry })
     }
 
     #[must_use]
@@ -205,7 +210,19 @@ impl FocusedParticleRenderer {
                 Ok(magik_frame_stats(stats))
             }
             PreparedEffect::Cabinet(renderer) => {
-                let stats = renderer.render(destination, elapsed)?;
+                let buffer = SceneBufferId::new(buffer_id, 2).map_err(|error| error.to_string())?;
+                let target = SceneTarget::new(destination, self.geometry, buffer)
+                    .map_err(|error| error.to_string())?;
+                let stats = FramebufferScene::render(
+                    renderer.as_mut(),
+                    target,
+                    SceneClock {
+                        frame: 0,
+                        elapsed,
+                        next_elapsed,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
                 Ok(FrameStats {
                     effect: EffectKind::Cabinet,
                     particles: stats.particles,

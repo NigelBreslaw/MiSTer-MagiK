@@ -10,6 +10,9 @@
 use crate::recipes::{
     CabinetModel, CabinetRecipe, RecipeEasing, RecipeRgb565, embedded_cabinet_recipe,
 };
+use mister_magik_framebuffer_scenes::{
+    FramebufferScene, SceneBufferId, SceneClock, SceneError, SceneGeometry, SceneTarget,
+};
 use std::time::Duration;
 
 const ARCADE_CLOUD_POINT_COUNT: usize = 12_288;
@@ -43,6 +46,75 @@ pub struct ArcadeCabinetFormation {
     life: Vec<f32>,
     style: Vec<u8>,
     flags: Vec<u8>,
+}
+
+pub struct CabinetScene {
+    formation: ArcadeCabinetFormation,
+    geometry: SceneGeometry,
+    reusable_buffers: u8,
+}
+
+impl CabinetScene {
+    pub fn new(
+        width: usize,
+        height: usize,
+        recipe: CabinetRecipe,
+        reusable_buffers: u8,
+    ) -> Result<Self, String> {
+        if reusable_buffers == 0 {
+            return Err("cabinet scene requires at least one reusable buffer".into());
+        }
+        let geometry =
+            SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        Ok(Self {
+            formation: ArcadeCabinetFormation::new(width, height, recipe)?,
+            geometry,
+            reusable_buffers,
+        })
+    }
+
+    pub fn from_embedded(
+        width: usize,
+        height: usize,
+        reusable_buffers: u8,
+    ) -> Result<Self, String> {
+        Self::new(width, height, embedded_cabinet_recipe()?, reusable_buffers)
+    }
+}
+
+impl FramebufferScene for CabinetScene {
+    type Stats = ArcadeCabinetFrameStats;
+
+    fn geometry(&self) -> SceneGeometry {
+        self.geometry
+    }
+
+    fn render(
+        &mut self,
+        target: SceneTarget<'_>,
+        clock: SceneClock,
+    ) -> Result<Self::Stats, SceneError> {
+        if target.geometry() != self.geometry {
+            return Err(SceneError::Render(format!(
+                "cabinet target geometry {:?} does not match scene {:?}",
+                target.geometry(),
+                self.geometry
+            )));
+        }
+        if target.buffer_id().get() >= self.reusable_buffers {
+            return Err(SceneError::InvalidBufferId {
+                value: target.buffer_id().get(),
+                reusable_buffers: self.reusable_buffers,
+            });
+        }
+        self.formation
+            .render(target.into_pixels(), clock.elapsed)
+            .map_err(SceneError::Render)
+    }
+
+    fn invalidate_buffer(&mut self, _buffer: SceneBufferId) {
+        // Cabinet clears the complete target on every frame.
+    }
 }
 
 impl ArcadeCabinetFormation {
