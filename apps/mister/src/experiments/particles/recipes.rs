@@ -83,7 +83,6 @@ struct RawRecipe {
 #[derive(Clone)]
 pub(super) struct CompiledRecipe {
     pub id: String,
-    pub label: String,
     pub duration_ms: u64,
     pub beats: BeatSpec,
     pub particle_count: usize,
@@ -371,7 +370,6 @@ fn compile_recipe_family(
             .collect::<Result<_, _>>()?;
         recipes.push(CompiledRecipe {
             id: recipe.id,
-            label: recipe.label,
             duration_ms: recipe.duration_ms,
             beats: recipe.beats,
             particle_count: recipe.particle_count,
