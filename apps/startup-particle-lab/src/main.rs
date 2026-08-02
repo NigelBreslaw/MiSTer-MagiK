@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_particles::cabinet::Rgb565Pixel;
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+use mister_magik_startup_particle_lab::EffectKind;
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_startup_particle_lab::LiveParticleRenderer;
 use mister_magik_startup_particle_lab::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, read_effect_recipe,
+    DEFAULT_HEIGHT, DEFAULT_WIDTH, FocusedParticleRenderer, read_effect_recipe,
 };
 use std::env;
 use std::fs::OpenOptions;
