@@ -3242,7 +3242,7 @@ impl ParticleShowcaseRenderer {
             let hash = xorshift32(
                 (frame as u32)
                     .wrapping_mul(0x9e37_79b9)
-                    .wrapping_add((x as u32).wrapping_mul(0x45d9_f3b)),
+                    .wrapping_add((x as u32).wrapping_mul(0x045d_9f3b)),
             );
             let flicker = ((hash >> 25) & 0x7f) as u8;
             self.heat[bottom + x] = 150u8.saturating_add(envelope).saturating_add(flicker);
@@ -4424,7 +4424,7 @@ mod tests {
         let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
             width: 960,
             height: 540,
-            seed: 0x6a1a_9a,
+            seed: 0x006a_1a9a,
             initial_demo: ParticleDemoKind::SpiralGalaxy,
         })
         .unwrap();
@@ -4449,11 +4449,7 @@ mod tests {
                 .iter()
                 .any(|height| height.abs() > 8.0)
         );
-        assert!(
-            renderer.pool.flags[renderer.galaxy_projected_count..]
-                .iter()
-                .any(|flag| *flag == 0)
-        );
+        assert!(renderer.pool.flags[renderer.galaxy_projected_count..].contains(&0));
     }
 
     #[test]
@@ -4552,7 +4548,7 @@ mod tests {
         let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
             width: 960,
             height: 540,
-            seed: 0x9077_a1,
+            seed: 0x0090_77a1,
             initial_demo: ParticleDemoKind::ParticlePortal,
         })
         .unwrap();
@@ -4605,7 +4601,7 @@ mod tests {
         let config = ParticleShowcaseConfig {
             width: 960,
             height: 540,
-            seed: 0x57a7_e2,
+            seed: 0x0057_a7e2,
             initial_demo: ParticleDemoKind::FountainWaterfall,
         };
         let mut fountain = ParticleShowcaseRenderer::new(config).unwrap();

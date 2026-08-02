@@ -1567,9 +1567,9 @@ fn screen_rgb565(pixel: Rgb565Pixel, color: Rgb888, intensity: f32) -> Rgb565Pix
 fn unpack_rgb565(pixel: Rgb565Pixel) -> (u16, u16, u16) {
     let value = pixel.0;
     (
-        u16::from((value >> 11) & 0x1f) * 255 / 31,
-        u16::from((value >> 5) & 0x3f) * 255 / 63,
-        u16::from(value & 0x1f) * 255 / 31,
+        ((value >> 11) & 0x1f) * 255 / 31,
+        ((value >> 5) & 0x3f) * 255 / 63,
+        (value & 0x1f) * 255 / 31,
     )
 }
 

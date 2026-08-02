@@ -124,8 +124,7 @@ impl FireworkRenderer {
                         if let Some(previous) = previous_point
                             && draw_trail_segment(
                                 destination,
-                                self.width,
-                                self.height,
+                                (self.width, self.height),
                                 previous,
                                 point,
                                 color,
@@ -139,10 +138,8 @@ impl FireworkRenderer {
                         if sample == 0
                             && draw_brush(
                                 destination,
-                                self.width,
-                                self.height,
-                                point.0,
-                                point.1,
+                                (self.width, self.height),
+                                point,
                                 color,
                                 intensity,
                                 emitter.brush,
@@ -485,17 +482,16 @@ impl CompiledEmitter {
 
 fn draw_brush(
     destination: &mut [Rgb565Pixel],
-    width: usize,
-    height: usize,
-    x: f32,
-    y: f32,
+    dimensions: (usize, usize),
+    point: (f32, f32),
     color: Rgb888,
     intensity: f32,
     brush: Brush,
     pixel_writes: &mut usize,
 ) -> bool {
-    let x = x.round() as isize;
-    let y = y.round() as isize;
+    let (width, height) = dimensions;
+    let x = point.0.round() as isize;
+    let y = point.1.round() as isize;
     let kernel: &[(isize, isize, f32)] = match brush {
         Brush::Spark => &[(0, 0, 1.0)],
         Brush::Glow => &[
@@ -532,17 +528,16 @@ fn draw_brush(
     drew
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_trail_segment(
     destination: &mut [Rgb565Pixel],
-    width: usize,
-    height: usize,
+    dimensions: (usize, usize),
     start: (f32, f32),
     end: (f32, f32),
     color: Rgb888,
     intensity: f32,
     pixel_writes: &mut usize,
 ) -> bool {
+    let (width, height) = dimensions;
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
     let steps = dx.abs().max(dy.abs()).ceil().clamp(1.0, 64.0) as usize;
@@ -553,10 +548,8 @@ fn draw_trail_segment(
         let y = start.1 + dy * amount;
         if draw_brush(
             destination,
-            width,
-            height,
-            x,
-            y,
+            dimensions,
+            (x, y),
             color,
             intensity,
             Brush::Glow,
@@ -568,10 +561,8 @@ fn draw_trail_segment(
             for (halo_x, halo_y) in [(x - 1.0, y), (x + 1.0, y), (x, y - 1.0), (x, y + 1.0)] {
                 let _ = draw_brush(
                     destination,
-                    width,
-                    height,
-                    halo_x,
-                    halo_y,
+                    dimensions,
+                    (halo_x, halo_y),
                     color,
                     intensity * 0.16,
                     Brush::Spark,
@@ -585,9 +576,9 @@ fn draw_trail_segment(
 
 fn additive_rgb565(pixel: Rgb565Pixel, color: Rgb888, intensity: f32) -> Rgb565Pixel {
     let value = pixel.0;
-    let red = u16::from((value >> 11) & 0x1f) * 255 / 31;
-    let green = u16::from((value >> 5) & 0x3f) * 255 / 63;
-    let blue = u16::from(value & 0x1f) * 255 / 31;
+    let red = ((value >> 11) & 0x1f) * 255 / 31;
+    let green = ((value >> 5) & 0x3f) * 255 / 63;
+    let blue = (value & 0x1f) * 255 / 31;
     let amount = intensity.clamp(0.0, 1.0);
     let red = red
         .saturating_add((f32::from(color.red) * amount) as u16)

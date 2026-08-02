@@ -496,7 +496,7 @@ impl FormSceneRenderer {
             let rx = x.mul_add(cos, z * sin);
             let rz = (-x).mul_add(sin, z * cos);
             let ry = y - 45.0;
-            self.push_world(rx, ry, rz, self.param("camera_z"), width, height, index);
+            self.push_world((rx, ry, rz), self.param("camera_z"), width, height, index);
         }
     }
 
@@ -562,7 +562,7 @@ impl FormSceneRenderer {
                 self.aux_y[index],
                 scan_position,
             );
-            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
+            self.push_world((x, y, z), self.param("camera_z"), width, height, index);
             self.style[index] = original_style;
         }
     }
@@ -580,7 +580,7 @@ impl FormSceneRenderer {
             let x = self.rest_x[index] + convergence * phase_cos * field * self.param("field_x");
             let y = self.rest_y[index] + phase_sin * convergence * field * self.param("field_y");
             let z = self.rest_z[index] + phase_cos * convergence * field * self.param("field_z");
-            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
+            self.push_world((x, y, z), self.param("camera_z"), width, height, index);
         }
         let visible = self.points.len();
         if visible != 0 {
@@ -604,7 +604,7 @@ impl FormSceneRenderer {
             let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin) * pulse;
             let z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
             let y = self.rest_y[index] * pulse;
-            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
+            self.push_world((x, y, z), self.param("camera_z"), width, height, index);
         }
         let visible = self.points.len();
         for index in (0..visible.saturating_sub(16)).step_by(16) {
@@ -649,7 +649,7 @@ impl FormSceneRenderer {
                 + self.aux_x[index] * breakup * 0.55;
             let rx = x.mul_add(cos, z * sin);
             let rz = (-x).mul_add(sin, z * cos);
-            self.push_world(rx, y, rz, self.param("camera_z"), width, height, index);
+            self.push_world((rx, y, rz), self.param("camera_z"), width, height, index);
         }
         if (0.05..0.95).contains(&morph) {
             let visible = self.points.len();
@@ -663,14 +663,13 @@ impl FormSceneRenderer {
 
     fn push_world(
         &mut self,
-        x: f32,
-        y: f32,
-        z: f32,
+        point: (f32, f32, f32),
         camera_z: f32,
         width: usize,
         height: usize,
         source_index: usize,
     ) {
+        let (x, y, z) = point;
         let depth = camera_z + z;
         if depth <= 32.0 {
             return;
