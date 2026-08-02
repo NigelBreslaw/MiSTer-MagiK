@@ -2828,6 +2828,7 @@ dependencies = [
  "mister-magik-latch-contract",
  "mister-magik-media-contract",
  "mister-magik-mister-runtime",
+ "mister-magik-particles",
  "mister-magik-scanout-contract",
  "mister-magik-ui",
  "pprof",
@@ -2874,6 +2875,10 @@ dependencies = [
  "serde_json",
  "slint",
 ]
+
+[[package]]
+name = "mister-magik-particles"
+version = "0.1.0"
 
 [[package]]
 name = "mister-magik-scanout-contract"
