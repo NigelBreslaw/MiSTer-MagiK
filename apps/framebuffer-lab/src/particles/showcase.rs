@@ -4170,32 +4170,61 @@ mod tests {
     }
 
     #[test]
-    fn embedded_showcase_defaults_are_deterministic_at_the_hero_frame() {
-        for kind in ParticleDemoKind::ALL {
+    fn embedded_showcase_defaults_match_golden_hero_frames() {
+        let expected = [
+            0x6de5_4005_6f5c_1047,
+            0x4288_b811_5aa4_cc53,
+            0x1cf8_4dcb_b9f9_8b25,
+            0xe9a1_f13e_eff2_392f,
+            0x3cb9_b01c_914c_87be,
+            0xb163_f487_a847_2d45,
+            0x4125_8c0b_def3_f401,
+            0x1591_d78d_e78c_453a,
+            0x860e_d103_2073_9183,
+            0x17dc_2485_fc1e_165b,
+            0x59af_52d3_eb30_48bd,
+            0xdcb8_666b_b420_5b26,
+            0x8594_ee01_66e1_ae68,
+            0x2246_e8e4_add0_648d,
+            0xc6e1_ab4d_12fa_b44a,
+            0x2e38_4232_bc0d_ac30,
+            0xb5e7_ba49_c685_98f1,
+            0x54d3_ada9_2e92_16a7,
+            0x4295_03ed_7b11_b53e,
+            0xbb50_9235_7fe4_3817,
+            0xac1d_5455_b6dc_5fad,
+            0xae84_dbba_c3b2_ae03,
+            0x365e_8cdc_e616_3153,
+            0xb942_3be1_67c6_87e3,
+            0x5c8b_ae52_b5c3_f9d5,
+            0x37ca_6c5b_0924_a8a3,
+            0x68b0_4368_7bbe_52b3,
+            0x4e49_d829_56f3_3e32,
+            0xabaa_b094_0768_696a,
+            0x7a53_fea3_ce50_7236,
+            0xf235_37e7_00a6_58d4,
+            0x5f0a_4a86_d499_02cc,
+            0xf610_4319_497f_a537,
+            0x1b39_f651_80b2_b75b,
+            0xba86_6b65_2c31_2281,
+            0x57a7_8a53_616b_1622,
+        ];
+        for (kind, expected_signature) in ParticleDemoKind::ALL.into_iter().zip(expected) {
             let config = ParticleShowcaseConfig {
                 width: 960,
                 height: 540,
                 seed: 827_141_709_451,
                 initial_demo: kind,
             };
-            let mut first = ParticleShowcaseRenderer::new(config).unwrap();
-            let mut second = ParticleShowcaseRenderer::new(config).unwrap();
-            first.configure_capture_hud(false);
-            second.configure_capture_hud(false);
-            let mut first_frame = vec![Rgb565Pixel(0); 960 * 540];
-            let mut second_frame = vec![Rgb565Pixel(0); 960 * 540];
+            let mut renderer = ParticleShowcaseRenderer::new(config).unwrap();
+            renderer.configure_capture_hud(false);
+            let mut frame = vec![Rgb565Pixel(0); 960 * 540];
             let elapsed = Duration::from_secs(15);
 
-            let first_stats = first.render(&mut first_frame, 1, elapsed).unwrap();
-            let second_stats = second.render(&mut second_frame, 1, elapsed).unwrap();
+            let stats = renderer.render(&mut frame, 1, elapsed).unwrap();
 
-            assert_eq!(first_stats.demo, kind);
-            assert_eq!(first_stats.beat, second_stats.beat);
-            assert_eq!(first_stats.count, second_stats.count);
-            assert_eq!(
-                frame_signature(&first_frame),
-                frame_signature(&second_frame)
-            );
+            assert_eq!(stats.demo, kind);
+            assert_eq!(frame_signature(&frame), expected_signature, "{kind:?}");
         }
     }
 
