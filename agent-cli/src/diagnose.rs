@@ -5,7 +5,7 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use crate::transport::DeviceRequest;
+use crate::transport::{DeviceOperations, DeviceRequest};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -168,6 +168,35 @@ pub struct DiagnosticReport {
     pub capture_error: String,
 }
 
+trait DiagnosticDevice {
+    fn connect(&mut self) -> AgentResult<()>;
+    fn collect_facts(&mut self) -> AgentResult<DeviceFacts>;
+    fn repair_safe_state(&mut self) -> AgentResult<()>;
+    fn recover_with_one_shot_reboot(&mut self) -> AgentResult<()>;
+}
+
+impl<D: DeviceOperations> DiagnosticDevice for DeviceClient<D> {
+    fn connect(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::Discover).map(|_| ())
+    }
+
+    fn collect_facts(&mut self) -> AgentResult<DeviceFacts> {
+        let detail = self.execute(DeviceRequest::CollectDiagnosticFacts)?;
+        serde_json::from_str(&detail)
+            .map_err(|error| format!("invalid structured device facts: {error}").into())
+    }
+
+    fn repair_safe_state(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::RepairSafeDeviceState)
+            .map(|_| ())
+    }
+
+    fn recover_with_one_shot_reboot(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::RecoverWithOneShotReboot)
+            .map(|_| ())
+    }
+}
+
 fn is_zero(value: &u64) -> bool {
     *value == 0
 }
@@ -213,14 +242,6 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         repair_temporary_state: false,
         repaired: false,
         rebooted: false,
-        geometry_trial: geometry_trial_from_env()?,
-        geometry_trial_detail: None,
-        screensaver_trial: screensaver_trial_from_env(),
-        screensaver_trial_detail: None,
-        screensaver_matrix: screensaver_matrix_from_env(),
-        screensaver_matrix_detail: None,
-        crash_report: crash_report_from_env(),
-        crash_report_detail: None,
     };
     run_workflow(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
@@ -231,18 +252,6 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
         )?)
     })?;
     let report = actions.report.ok_or("diagnosis produced no report")?;
-    if let Some(detail) = actions.geometry_trial_detail.as_deref() {
-        reporter.emit(EventKind::Progress, "geometry-trial", detail, Some(95))?;
-    }
-    if let Some(detail) = actions.screensaver_trial_detail.as_deref() {
-        reporter.emit(EventKind::Progress, "screensaver-trial", detail, Some(95))?;
-    }
-    if let Some(detail) = actions.screensaver_matrix_detail.as_deref() {
-        reporter.emit(EventKind::Progress, "screensaver-matrix", detail, Some(95))?;
-    }
-    if let Some(detail) = actions.crash_report_detail.as_deref() {
-        reporter.emit(EventKind::Progress, "crash-report", detail, Some(95))?;
-    }
     reporter.emit(
         if report.next_action.is_some() {
             EventKind::Warning
@@ -260,9 +269,9 @@ pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Ou
     })
 }
 
-struct ProcessActions<'a> {
+struct ProcessActions<'a, D = DeviceClient> {
     repository: &'a Path,
-    device: DeviceClient,
+    device: D,
     facts: Option<DeviceFacts>,
     report: Option<DiagnosticReport>,
     repair_needed: bool,
@@ -270,68 +279,19 @@ struct ProcessActions<'a> {
     repair_temporary_state: bool,
     repaired: bool,
     rebooted: bool,
-    geometry_trial: Option<[u16; 4]>,
-    geometry_trial_detail: Option<String>,
-    screensaver_trial: bool,
-    screensaver_trial_detail: Option<String>,
-    screensaver_matrix: bool,
-    screensaver_matrix_detail: Option<String>,
-    crash_report: bool,
-    crash_report_detail: Option<String>,
 }
 
-fn geometry_trial_from_env() -> AgentResult<Option<[u16; 4]>> {
-    // Geometry trials are deliberately available only through `diagnose`.
-    let Some(value) = std::env::var("MISTER_CRT_GEOMETRY_TRIAL_RECT").ok() else {
-        return Ok(None);
-    };
-    let values = value
-        .split(',')
-        .map(str::parse::<u16>)
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| "MISTER_CRT_GEOMETRY_TRIAL_RECT must contain four unsigned integers")?;
-    values
-        .try_into()
-        .map(Some)
-        .map_err(|_| "MISTER_CRT_GEOMETRY_TRIAL_RECT must contain four coordinates".into())
-}
-
-fn screensaver_trial_from_env() -> bool {
-    matches!(
-        std::env::var("MISTER_CRT_SCREENSAVER_TRIAL").as_deref(),
-        Ok("1" | "true")
-    )
-}
-
-fn screensaver_matrix_from_env() -> bool {
-    matches!(
-        std::env::var("MISTER_CRT_SCREENSAVER_MATRIX").as_deref(),
-        Ok("1" | "true")
-    )
-}
-
-fn crash_report_from_env() -> bool {
-    matches!(
-        std::env::var("MISTER_CRASH_REPORT").as_deref(),
-        Ok("1" | "true")
-    )
-}
-
-impl ProcessActions<'_> {
+impl<D: DiagnosticDevice> ProcessActions<'_, D> {
     fn collect_facts(&mut self) -> AgentResult<()> {
-        let detail = self.device.execute(DeviceRequest::CollectDiagnosticFacts)?;
-        self.facts = Some(
-            serde_json::from_str(&detail)
-                .map_err(|error| format!("invalid structured device facts: {error}"))?,
-        );
+        self.facts = Some(self.device.collect_facts()?);
         Ok(())
     }
 }
 
-impl DiagnoseActions for ProcessActions<'_> {
+impl<D: DiagnosticDevice> DiagnoseActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
-            Phase::Discover => self.device.execute(DeviceRequest::Discover).map(|_| ()),
+            Phase::Discover => self.device.connect(),
             Phase::HostFacts => {
                 if !self.repository.join(".git").exists() {
                     return Err("current directory is not the repository root".into());
@@ -349,38 +309,12 @@ impl DiagnoseActions for ProcessActions<'_> {
             }
             Phase::SafeRepair => {
                 if self.repair_needed {
-                    self.device.execute(DeviceRequest::RepairSafeDeviceState)?;
+                    self.device.repair_safe_state()?;
                     self.repaired = self.repair_temporary_state;
                 }
                 if self.reboot_needed {
-                    self.device
-                        .execute(DeviceRequest::RecoverWithOneShotReboot)?;
+                    self.device.recover_with_one_shot_reboot()?;
                     self.rebooted = true;
-                }
-                if let Some(rectangle) = self.geometry_trial.take() {
-                    self.geometry_trial_detail = Some(
-                        self.device
-                            .execute(DeviceRequest::RunCrtGeometryTrial { rectangle })?,
-                    );
-                }
-                if self.screensaver_trial {
-                    self.screensaver_trial = false;
-                    self.screensaver_trial_detail =
-                        Some(self.device.execute(DeviceRequest::RunCrtScreensaverTrial)?);
-                }
-                if self.screensaver_matrix {
-                    self.screensaver_matrix = false;
-                    self.screensaver_matrix_detail = Some(
-                        self.device
-                            .execute(DeviceRequest::RunCrtScreensaverMatrix)?,
-                    );
-                }
-                if self.crash_report {
-                    self.crash_report = false;
-                    self.crash_report_detail = Some(
-                        self.device
-                            .execute(DeviceRequest::CollectLatestCrashReport)?,
-                    );
                 }
                 Ok(())
             }

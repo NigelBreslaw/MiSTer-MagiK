@@ -5,7 +5,7 @@ use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
-use crate::transport::DeviceRequest;
+use crate::transport::{DeviceOperations, DeviceRequest};
 use std::io::{self, IsTerminal, Write};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,6 +41,59 @@ pub trait ReleaseActions {
     fn run(&mut self, phase: Phase) -> AgentResult<()>;
     fn armed(&self) -> bool;
     fn restore(&mut self) -> AgentResult<()>;
+}
+
+trait ReleaseDevice {
+    fn begin(&mut self) -> AgentResult<()>;
+    fn qualify_runtime(&mut self) -> AgentResult<()>;
+    fn qualify_catalog(&mut self) -> AgentResult<()>;
+    fn qualify_input_and_handoff(&mut self) -> AgentResult<()>;
+    fn qualify_display(&mut self) -> AgentResult<()>;
+    fn qualify_latch_v4_stress(&mut self) -> AgentResult<()>;
+    fn qualify_recovery(&mut self) -> AgentResult<()>;
+    fn restore(&mut self) -> AgentResult<()>;
+}
+
+impl<D: DeviceOperations> ReleaseDevice for DeviceClient<D> {
+    fn begin(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::BeginReleaseQualification)
+            .map(|_| ())
+    }
+
+    fn qualify_runtime(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseRuntime)
+            .map(|_| ())
+    }
+
+    fn qualify_catalog(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseCatalog)
+            .map(|_| ())
+    }
+
+    fn qualify_input_and_handoff(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseInputAndHandoff)
+            .map(|_| ())
+    }
+
+    fn qualify_display(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseDisplay)
+            .map(|_| ())
+    }
+
+    fn qualify_latch_v4_stress(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseLatchV4Stress)
+            .map(|_| ())
+    }
+
+    fn qualify_recovery(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::QualifyReleaseRecovery)
+            .map(|_| ())
+    }
+
+    fn restore(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::RestoreReleaseQualification)
+            .map(|_| ())
+    }
 }
 
 pub fn run_workflow(
@@ -88,13 +141,13 @@ pub fn execute(reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     Ok(Outcome::Passed)
 }
 
-struct ProcessActions {
-    device: DeviceClient,
+struct ProcessActions<D = DeviceClient> {
+    device: D,
     confirmed: bool,
     armed: bool,
 }
 
-impl ProcessActions {
+impl<D> ProcessActions<D> {
     fn confirm_attendance(&mut self) -> AgentResult<()> {
         if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
             return Err("attendance_required: run this command in an attended terminal".into());
@@ -113,7 +166,7 @@ impl ProcessActions {
     }
 }
 
-impl ReleaseActions for ProcessActions {
+impl<D: ReleaseDevice> ReleaseActions for ProcessActions<D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::ConfirmAttendance => self.confirm_attendance(),
@@ -122,34 +175,14 @@ impl ReleaseActions for ProcessActions {
                     return Err("attendance was not confirmed".into());
                 }
                 self.armed = true;
-                self.device
-                    .execute(DeviceRequest::BeginReleaseQualification)
-                    .map(|_| ())
+                self.device.begin()
             }
-            Phase::Runtime => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseRuntime)
-                .map(|_| ()),
-            Phase::Catalog => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseCatalog)
-                .map(|_| ()),
-            Phase::InputAndHandoff => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseInputAndHandoff)
-                .map(|_| ()),
-            Phase::Display => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseDisplay)
-                .map(|_| ()),
-            Phase::LatchV4Stress => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseLatchV4Stress)
-                .map(|_| ()),
-            Phase::Recovery => self
-                .device
-                .execute(DeviceRequest::QualifyReleaseRecovery)
-                .map(|_| ()),
+            Phase::Runtime => self.device.qualify_runtime(),
+            Phase::Catalog => self.device.qualify_catalog(),
+            Phase::InputAndHandoff => self.device.qualify_input_and_handoff(),
+            Phase::Display => self.device.qualify_display(),
+            Phase::LatchV4Stress => self.device.qualify_latch_v4_stress(),
+            Phase::Recovery => self.device.qualify_recovery(),
             Phase::Restore => unreachable!("restore has a dedicated action"),
         }
     }
@@ -162,8 +195,7 @@ impl ReleaseActions for ProcessActions {
         if !self.armed {
             return Ok(());
         }
-        self.device
-            .execute(DeviceRequest::RestoreReleaseQualification)?;
+        self.device.restore()?;
         self.armed = false;
         Ok(())
     }
