@@ -721,11 +721,13 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected() {
-        let invalid = embedded_firework_json("oled-peony").unwrap().replacen(
-            "\"duration_ms\": 5500,",
-            "\"duration_ms\": 5500, \"surprise\": true,",
-            1,
-        );
+        let mut invalid: serde_json::Value =
+            serde_json::from_str(&embedded_firework_json("oled-peony").unwrap()).unwrap();
+        invalid
+            .as_object_mut()
+            .unwrap()
+            .insert("surprise".into(), serde_json::json!(true));
+        let invalid = serde_json::to_string(&invalid).unwrap();
         assert!(FireworkRenderer::from_json(&invalid, 96, 54, 7).is_err());
     }
 

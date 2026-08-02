@@ -263,12 +263,12 @@ mod tests {
         let root = temp_path("watch");
         fs::create_dir_all(&root).unwrap();
         let path = root.join("family.json");
+        fs::write(&path, br#"{"schema":"test"}"#).unwrap();
         let watcher = LastGoodFile::spawn(path.clone(), |bytes| {
             serde_json::from_slice::<serde_json::Value>(bytes).map_err(|error| error.to_string())
         })
         .unwrap();
 
-        fs::write(&path, br#"{"schema":"test"}"#).unwrap();
         let first = await_attempt(&watcher);
         assert_eq!(first.generation, 1);
         assert!(first.result.is_ok());
