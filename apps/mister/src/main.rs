@@ -488,6 +488,7 @@ fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
         crate::ui_logln!("experiments=1");
+        crate::ui_logln!("particle-showcase-v1=1");
         crate::ui_logln!(
             "commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench"
         );
