@@ -29,9 +29,10 @@ directly comparable with either macOS row.
 
 The after-change rows are steady-state observations from the attended focused
 lab using the standalone framebuffer/latch presenter. Each effect ran for more
-than 15 seconds. The reported inclusive render interval contains simulation,
-projection, RGB565 rasterization, and presentation waiting. The table records
-the worst one-second P99/maximum observed during each run.
+than 15 seconds. The reported render-work interval contains simulation,
+projection, RGB565 rasterization, and foreground bookkeeping, but ends before
+latch presentation waiting. The table records the worst one-second P99/maximum
+observed during each run.
 
 | Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -42,7 +43,7 @@ the worst one-second P99/maximum observed during each run.
 The old renderer P99 is not an apples-to-apples render comparison: asynchronous
 simulation and projection were charged to a preparation worker and excluded
 from that renderer interval. Total process CPU is the useful directional metric.
-The new MagiK run stayed below the 65% CPU and 12 ms inclusive-P99 targets; its
+The new MagiK run stayed below the 65% CPU and 12 ms render-work-P99 targets; its
 valid-reload interval briefly reached 61.2% CPU. Consequently the conditional
 projection cache and render-ahead queue were not added.
 

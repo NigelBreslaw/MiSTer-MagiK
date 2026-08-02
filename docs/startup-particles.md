@@ -155,7 +155,7 @@ gates. The reports and individual samples live in `history/toolchain-bench/`.
 
 The consolidated lab preserves physical 60 Hz with no repeated presentations.
 The after-change timing includes simulation, projection, RGB565 rasterization,
-and latch presentation waiting.
+and their foreground bookkeeping. It ends before latch presentation waiting.
 
 | Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -164,10 +164,10 @@ and latch presentation waiting.
 | Cabinet after extraction, focused lab | 12,288 | 60.0 | 49.1–53.3% | 9.465 / 9.465 ms | 0 |
 
 The pre-extraction renderer timing excluded asynchronous preparation, so its
-P99 must not be compared directly with the inclusive lab interval. Process CPU
-is the useful directional comparison. The focused MagiK result meets the 65%
-CPU, 12 ms inclusive-P99, 16.667 ms maximum, and zero-repeat targets without a
-projection cache or render-ahead queue.
+P99 must not be compared directly with the lab's synchronous render-work
+interval. Process CPU is the useful directional comparison. The focused MagiK
+result meets the 65% CPU, 12 ms render-work P99, 16.667 ms maximum, and
+zero-repeat targets without a projection cache or render-ahead queue.
 
 Attended lab qualification also covered valid apply, invalid-save rejection
 with last-good retention, and the two-poll deletion reset while frames
