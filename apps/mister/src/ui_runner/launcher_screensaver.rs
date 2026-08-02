@@ -263,6 +263,8 @@ pub struct LauncherScreensaver {
 struct MagikRecipeReload {
     watcher: LastGoodRecipeFile<ParticleRenderer>,
     embedded_spare: Option<ParticleRenderer>,
+    retire_tx: Option<Sender<ParticleRenderer>>,
+    retire_worker: Option<std::thread::JoinHandle<()>>,
     current_embedded: bool,
     logical_origin: Duration,
 }
@@ -290,9 +292,20 @@ impl MagikRecipeReload {
                     parse_magik_recipe(bytes)?,
                 )
             })?;
+        let (retire_tx, retire_rx) = mpsc::channel::<ParticleRenderer>();
+        let retire_worker = std::thread::Builder::new()
+            .name("particle-retire".into())
+            .spawn(move || {
+                while let Ok(renderer) = retire_rx.recv() {
+                    drop(renderer);
+                }
+            })
+            .map_err(|error| format!("spawn particle retirement worker: {error}"))?;
         Ok(Some(Self {
             watcher,
             embedded_spare: None,
+            retire_tx: Some(retire_tx),
+            retire_worker: Some(retire_worker),
             current_embedded: true,
             logical_origin: Duration::ZERO,
         }))
@@ -309,7 +322,8 @@ impl MagikRecipeReload {
                     std::mem::swap(renderer, &mut candidate);
                     self.embedded_spare = Some(candidate);
                 } else {
-                    *renderer = candidate;
+                    let retired = std::mem::replace(renderer, candidate);
+                    self.retire(retired);
                 }
                 self.current_embedded = false;
                 self.logical_origin = elapsed;
@@ -330,6 +344,7 @@ impl MagikRecipeReload {
                     return;
                 };
                 std::mem::swap(renderer, &mut embedded);
+                self.retire(embedded);
                 self.current_embedded = true;
                 self.logical_origin = elapsed;
                 StartupParticleStatus::embedded(generation, StartupParticleRecipe::Magik)
@@ -349,8 +364,23 @@ impl MagikRecipeReload {
         }
     }
 
+    fn retire(&self, renderer: ParticleRenderer) {
+        if let Some(retire_tx) = self.retire_tx.as_ref() {
+            let _ = retire_tx.send(renderer);
+        }
+    }
+
     fn logical_elapsed(&self, elapsed: Duration) -> Duration {
         elapsed.saturating_sub(self.logical_origin)
+    }
+}
+
+impl Drop for MagikRecipeReload {
+    fn drop(&mut self) {
+        self.retire_tx.take();
+        if let Some(worker) = self.retire_worker.take() {
+            let _ = worker.join();
+        }
     }
 }
 
