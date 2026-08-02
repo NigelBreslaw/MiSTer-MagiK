@@ -5,7 +5,6 @@ use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
 use std::env;
-#[cfg(test)]
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
