@@ -9,6 +9,8 @@
 use std::f32::consts::{PI, TAU};
 use std::time::Duration;
 
+use super::recipes::{CompiledRecipe, form_recipe};
+
 pub const FORM_MAX_PARTICLES: usize = 98_304;
 pub const FORM_MAX_SEGMENTS: usize = 32_768;
 const HOLOGRAM_BASE_END: usize = 20_480;
@@ -36,66 +38,22 @@ impl FormSceneKind {
     ];
 
     #[must_use]
-    pub const fn count(self) -> usize {
-        match self {
-            Self::FractalGridTerrain => 49_152,
-            Self::LayerMappedHologram => 40_960,
-            Self::SphericalFieldObservatory => 32_768,
-            Self::TwistedMultiFormCathedral => 65_536,
-            Self::PointCloudMorphPassage => 24_576,
-        }
+    pub fn count(self) -> usize {
+        form_recipe(self.id()).particle_count
     }
 
     #[must_use]
-    pub const fn beat(self, seconds: f32) -> &'static str {
+    pub fn beat(self, seconds: f32) -> &'static str {
+        form_recipe(self.id()).beat((seconds * 1000.0) as u64)
+    }
+
+    const fn id(self) -> &'static str {
         match self {
-            Self::FractalGridTerrain => {
-                if seconds < 8.0 {
-                    "ordered-grid"
-                } else if seconds < 23.0 {
-                    "curl-crest"
-                } else {
-                    "settle"
-                }
-            }
-            Self::LayerMappedHologram => {
-                if seconds < 8.0 {
-                    "scan-in"
-                } else if seconds < 23.0 {
-                    "terraced-hold"
-                } else {
-                    "scan-out"
-                }
-            }
-            Self::SphericalFieldObservatory => {
-                if seconds < 9.0 {
-                    "repel"
-                } else if seconds < 22.0 {
-                    "capture-orbit"
-                } else {
-                    "release"
-                }
-            }
-            Self::TwistedMultiFormCathedral => {
-                if seconds < 8.0 {
-                    "assemble"
-                } else if seconds < 23.0 {
-                    "cathedral-pulse"
-                } else {
-                    "dissolve"
-                }
-            }
-            Self::PointCloudMorphPassage => {
-                if seconds < 5.0 {
-                    "spacecraft-hold"
-                } else if seconds < 13.0 {
-                    "morph-passage"
-                } else if seconds < 21.0 {
-                    "manta-hold"
-                } else {
-                    "return-passage"
-                }
-            }
+            Self::FractalGridTerrain => "fractal-grid-terrain",
+            Self::LayerMappedHologram => "layer-mapped-hologram",
+            Self::SphericalFieldObservatory => "spherical-field-observatory",
+            Self::TwistedMultiFormCathedral => "twisted-multi-form-cathedral",
+            Self::PointCloudMorphPassage => "point-cloud-morph-passage",
         }
     }
 }
@@ -119,6 +77,7 @@ pub struct FormSegment {
 
 pub struct FormSceneRenderer {
     scene: Option<FormSceneKind>,
+    recipe: Option<CompiledRecipe>,
     seed: u64,
     rest_x: Vec<f32>,
     rest_y: Vec<f32>,
@@ -139,6 +98,7 @@ impl FormSceneRenderer {
     pub fn new(seed: u64) -> Self {
         Self {
             scene: None,
+            recipe: None,
             seed,
             rest_x: vec![0.0; FORM_MAX_PARTICLES],
             rest_y: vec![0.0; FORM_MAX_PARTICLES],
@@ -156,7 +116,12 @@ impl FormSceneRenderer {
     }
 
     pub fn reset(&mut self, scene: FormSceneKind) {
+        self.reset_with_recipe(scene, form_recipe(scene.id()));
+    }
+
+    pub(super) fn reset_with_recipe(&mut self, scene: FormSceneKind, recipe: &CompiledRecipe) {
         self.scene = Some(scene);
+        self.recipe = Some(recipe.clone());
         self.points.clear();
         self.segments.clear();
         match scene {
@@ -180,7 +145,7 @@ impl FormSceneRenderer {
         }
         self.points.clear();
         self.segments.clear();
-        let seconds = elapsed.as_secs_f32().rem_euclid(30.0);
+        let seconds = elapsed.as_secs_f32().rem_euclid(self.duration_seconds());
         match scene {
             FormSceneKind::FractalGridTerrain => {
                 self.project_terrain(seconds, width, height);
@@ -226,6 +191,24 @@ impl FormSceneRenderer {
         )
     }
 
+    fn recipe(&self) -> &CompiledRecipe {
+        self.recipe
+            .as_ref()
+            .expect("Form scene must be reset before rendering")
+    }
+
+    fn count(&self) -> usize {
+        self.recipe().particle_count
+    }
+
+    fn duration_seconds(&self) -> f32 {
+        self.recipe().duration_ms as f32 / 1000.0
+    }
+
+    fn param(&self, name: &str) -> f32 {
+        self.recipe().param(name)
+    }
+
     fn initialize_terrain(&mut self) {
         let width = 256usize;
         let height = 192usize;
@@ -234,16 +217,19 @@ impl FormSceneRenderer {
             let iy = index / width;
             let u = ix as f32 / (width - 1) as f32;
             let v = iy as f32 / (height - 1) as f32;
-            let x = (u - 0.5) * 690.0;
-            let z = (v - 0.5) * 500.0;
-            let broad = (x * 0.017).sin() * 30.0 + (z * 0.022).cos() * 25.0;
+            let x = (u - 0.5) * self.param("world_x_span");
+            let z = (v - 0.5) * self.param("world_z_span");
+            let broad = (x * self.param("broad_x_rate")).sin() * self.param("broad_x_amplitude")
+                + (z * self.param("broad_z_rate")).cos() * self.param("broad_z_amplitude");
             let detail = ((x + z) * 0.041).sin() * 11.0 + ((x * 0.73 - z) * 0.067).cos() * 6.0;
-            let crest = (-((u - 0.68).powi(2) * 24.0 + (v - 0.46).powi(2) * 8.0)).exp();
+            let crest = (-((u - self.param("crest_x")).powi(2) * 24.0
+                + (v - self.param("crest_depth")).powi(2) * 8.0))
+                .exp();
             self.rest_x[index] = x;
             self.rest_y[index] = broad + detail - crest * 115.0;
             self.rest_z[index] = z;
             self.target_x[index] = crest * (v - 0.5) * 130.0;
-            self.target_y[index] = crest * 150.0;
+            self.target_y[index] = crest * self.param("crest_y");
             self.aux_x[index] = u;
             self.aux_y[index] = v;
             self.style[index] = ((u * 3.0 + v * 5.0 + crest * 3.0) as u8).min(7);
@@ -252,7 +238,7 @@ impl FormSceneRenderer {
     }
 
     fn initialize_hologram(&mut self) {
-        let count = FormSceneKind::LayerMappedHologram.count();
+        let count = self.count();
         for index in 0..count {
             let (part_start, logical, part) = if index < HOLOGRAM_BASE_END {
                 (0, index / 4, 0)
@@ -276,9 +262,9 @@ impl FormSceneRenderer {
                 0 => {
                     const TOP_SAMPLES: usize = 64 * 44;
                     const SIDE_SAMPLES: usize = 32 * 18;
-                    let half_x = 205.0;
-                    let half_y = 48.0;
-                    let half_z = 120.0;
+                    let half_x = self.param("base_half_x");
+                    let half_y = self.param("base_half_y");
+                    let half_z = self.param("base_half_z");
                     let center_y = 96.0;
                     if logical < TOP_SAMPLES {
                         let ix = logical & 63;
@@ -326,7 +312,7 @@ impl FormSceneRenderer {
                 1 => {
                     let angle = (logical & 63) as f32 * TAU / 64.0;
                     let height = (logical >> 6) as f32 / 23.0;
-                    let radius = 19.0;
+                    let radius = self.param("shaft_radius");
                     (
                         angle.cos() * radius,
                         45.0 - height * 165.0,
@@ -344,9 +330,9 @@ impl FormSceneRenderer {
                     let angle = lerp(-PI * 0.5, PI * 0.5, front_longitude as f32 / 31.0);
                     let latitude_style = if sphere_y.abs() < 0.32 { 7 } else { 5 };
                     (
-                        angle.sin() * radial * 54.0,
-                        -169.0 + sphere_y * 54.0,
-                        -angle.cos() * radial * 54.0,
+                        angle.sin() * radial * self.param("ball_radius"),
+                        -169.0 + sphere_y * self.param("ball_radius"),
+                        -angle.cos() * radial * self.param("ball_radius"),
                         latitude_style,
                     )
                 }
@@ -358,7 +344,7 @@ impl FormSceneRenderer {
                     let ring_sample = logical >> 2;
                     let samples_per_ring = (HOLOGRAM_COLLAR_END - HOLOGRAM_BALL_END) / 16;
                     let major_angle = ring_sample as f32 * TAU / samples_per_ring as f32;
-                    let radius = 49.0 + ring as f32 * 17.0;
+                    let radius = self.param("collar_radius") + ring as f32 * 17.0;
                     (
                         major_angle.cos() * radius,
                         41.0 + ring as f32 * 3.0,
@@ -398,17 +384,19 @@ impl FormSceneRenderer {
     }
 
     fn initialize_observatory(&mut self) {
-        let count = FormSceneKind::SphericalFieldObservatory.count();
+        let count = self.count();
         for index in 0..count {
             let trail = index & 127;
             let sample = index >> 7;
             let t = sample as f32 / 255.0;
             let phase = trail as f32 * (TAU / 128.0);
             let convergence = smootherstep(t);
-            let wave = t * TAU * 1.35 + phase;
-            self.rest_x[index] = (t - 0.5) * 720.0;
-            self.rest_y[index] = wave.sin() * (125.0 - convergence * 70.0) + phase.cos() * 70.0;
-            self.rest_z[index] = phase.sin() * (95.0 - convergence * 35.0) + wave.cos() * 32.0;
+            let wave = t * TAU * self.param("wave_turns") + phase;
+            self.rest_x[index] = (t - 0.5) * self.param("world_x_span");
+            self.rest_y[index] = wave.sin() * (self.param("wave_y") - convergence * 70.0)
+                + phase.cos() * self.param("phase_y");
+            self.rest_z[index] =
+                phase.sin() * (self.param("wave_z") - convergence * 35.0) + wave.cos() * 32.0;
             self.aux_x[index] = phase.sin();
             self.aux_y[index] = phase.cos();
             self.style[index] = (2 + ((index >> 7) & 5)) as u8;
@@ -417,7 +405,7 @@ impl FormSceneRenderer {
     }
 
     fn initialize_cathedral(&mut self) {
-        let count = FormSceneKind::TwistedMultiFormCathedral.count();
+        let count = self.count();
         for index in 0..count {
             let group = index & 3;
             let local = index / 4;
@@ -426,15 +414,23 @@ impl FormSceneRenderer {
             let (x, y, z) = match group {
                 0 => {
                     let side = if local & 1 == 0 { -1.0 } else { 1.0 };
-                    (side * (80.0 + 115.0 * t), (t - 0.5) * 430.0, 0.0)
+                    (
+                        side * (self.param("spire_x") + self.param("spire_x_span") * t),
+                        (t - 0.5) * self.param("spire_y_span"),
+                        0.0,
+                    )
                 }
                 1 | 2 => {
-                    let center = if group == 1 { -175.0 } else { 175.0 };
+                    let center = if group == 1 {
+                        -self.param("dome_center")
+                    } else {
+                        self.param("dome_center")
+                    };
                     let polar = (t * PI).sin();
                     (
-                        center + angle.cos() * polar * 105.0,
-                        (t * PI).cos() * 155.0,
-                        angle.sin() * polar * 105.0,
+                        center + angle.cos() * polar * self.param("dome_radius"),
+                        (t * PI).cos() * self.param("dome_y"),
+                        angle.sin() * polar * self.param("dome_radius"),
                     )
                 }
                 _ => (
@@ -454,14 +450,15 @@ impl FormSceneRenderer {
     }
 
     fn initialize_morph(&mut self) {
-        let count = FormSceneKind::PointCloudMorphPassage.count();
+        let count = self.count();
         for index in 0..count {
             let t = index as f32 / count as f32;
             let band = index % 96;
             let across = band as f32 / 95.0;
             let longitudinal = (index / 96) as f32 / ((count / 96) - 1) as f32;
-            let ship_x = -245.0 + (longitudinal - 0.5) * 280.0;
-            let ship_y = (across - 0.5) * (65.0 + longitudinal * 190.0);
+            let ship_x = self.param("ship_x") + (longitudinal - 0.5) * self.param("ship_length");
+            let ship_y = (across - 0.5)
+                * (self.param("ship_y_min") + longitudinal * self.param("ship_y_span"));
             let ship_z = ((t * TAU * 17.0).sin()) * (18.0 + longitudinal * 35.0);
             self.rest_x[index] = ship_x;
             self.rest_y[index] = ship_y;
@@ -469,7 +466,8 @@ impl FormSceneRenderer {
 
             let wing = (across - 0.5) * 2.0;
             let manta_width = (1.0 - (longitudinal - 0.48).abs() * 1.6).max(0.08);
-            self.target_x[index] = 245.0 + wing * manta_width * 265.0;
+            self.target_x[index] =
+                self.param("manta_x") + wing * manta_width * self.param("manta_width");
             self.target_y[index] = (longitudinal - 0.5) * 210.0 + wing.abs().powf(1.6) * 68.0;
             self.target_z[index] =
                 wing.signum() * wing.abs().powi(2) * 55.0 + (longitudinal * TAU).sin() * 20.0;
@@ -482,7 +480,7 @@ impl FormSceneRenderer {
     }
 
     fn project_terrain(&mut self, seconds: f32, width: usize, height: usize) {
-        let count = FormSceneKind::FractalGridTerrain.count();
+        let count = self.count();
         let crest = smooth_envelope(seconds, 5.0, 15.0, 26.0);
         let angle = -0.22 + seconds * 0.012;
         let (sin, cos) = angle.sin_cos();
@@ -498,25 +496,29 @@ impl FormSceneRenderer {
             let rx = x.mul_add(cos, z * sin);
             let rz = (-x).mul_add(sin, z * cos);
             let ry = y - 45.0;
-            self.push_world(rx, ry, rz, 650.0, width, height, index);
+            self.push_world(rx, ry, rz, self.param("camera_z"), width, height, index);
         }
     }
 
     fn project_hologram(&mut self, seconds: f32, width: usize, height: usize) {
-        let count = FormSceneKind::LayerMappedHologram.count();
-        let reveal = if seconds < 5.0 {
-            smootherstep(seconds / 5.0)
-        } else if seconds < 24.0 {
+        let count = self.count();
+        let reveal_end = self.param("reveal_end");
+        let fade_start = self.param("fade_start");
+        let reveal = if seconds < reveal_end {
+            smootherstep(seconds / reveal_end)
+        } else if seconds < fade_start {
             1.0
         } else {
-            1.0 - smootherstep((seconds - 24.0) / 6.0) * 0.65
+            1.0 - smootherstep(
+                (seconds - fade_start) / (self.duration_seconds() - fade_start).max(0.001),
+            ) * 0.65
         };
-        let angle = -0.55 + seconds * 0.055;
+        let angle = -0.55 + seconds * self.param("yaw_rate");
         let (sin, cos) = angle.sin_cos();
         // Match the concept's high three-quarter presentation. Besides making
         // the silhouette legible, this exposes the top-plane material map and
         // separates the concentric collar terraces in screen space.
-        let (pitch_sin, pitch_cos) = (-0.55_f32).sin_cos();
+        let (pitch_sin, pitch_cos) = self.param("pitch").sin_cos();
         let scan_position = (seconds * 0.18).fract();
         for index in (0..count).step_by(4) {
             let part = self.flags[index] >> 1;
@@ -560,24 +562,25 @@ impl FormSceneRenderer {
                 self.aux_y[index],
                 scan_position,
             );
-            self.push_world(x, y, z, 650.0, width, height, index);
+            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
             self.style[index] = original_style;
         }
     }
 
     fn project_observatory(&mut self, seconds: f32, width: usize, height: usize) {
-        let count = FormSceneKind::SphericalFieldObservatory.count();
-        let orbit = seconds * 0.16;
+        let count = self.count();
+        let orbit = seconds * self.param("orbit_rate");
         let (sin, cos) = orbit.sin_cos();
         let field = smooth_envelope(seconds, 2.0, 14.0, 27.0);
         for index in (0..count).step_by(2) {
             let phase_sin = self.aux_x[index].mul_add(cos, self.aux_y[index] * sin);
             let phase_cos = self.aux_y[index].mul_add(cos, -self.aux_x[index] * sin);
-            let convergence = ((self.rest_x[index] + 360.0) / 720.0).clamp(0.0, 1.0);
-            let x = self.rest_x[index] + convergence * phase_cos * field * 48.0;
-            let y = self.rest_y[index] + phase_sin * convergence * field * 72.0;
-            let z = self.rest_z[index] + phase_cos * convergence * field * 45.0;
-            self.push_world(x, y, z, 610.0, width, height, index);
+            let span = self.param("world_x_span");
+            let convergence = ((self.rest_x[index] + span * 0.5) / span).clamp(0.0, 1.0);
+            let x = self.rest_x[index] + convergence * phase_cos * field * self.param("field_x");
+            let y = self.rest_y[index] + phase_sin * convergence * field * self.param("field_y");
+            let z = self.rest_z[index] + phase_cos * convergence * field * self.param("field_z");
+            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
         }
         let visible = self.points.len();
         for index in (0..visible).step_by(256) {
@@ -586,9 +589,10 @@ impl FormSceneRenderer {
     }
 
     fn project_cathedral(&mut self, seconds: f32, width: usize, height: usize) {
-        let count = FormSceneKind::TwistedMultiFormCathedral.count();
-        let twist = 0.18 + seconds * 0.035;
-        let pulse = 1.0 + (seconds * 1.3).sin() * 0.045;
+        let count = self.count();
+        let twist = self.param("twist_base") + seconds * self.param("twist_rate");
+        let pulse =
+            1.0 + (seconds * self.param("pulse_rate")).sin() * self.param("pulse_amplitude");
         for index in 0..count {
             if (index / 4) & 7 != 0 {
                 continue;
@@ -598,7 +602,7 @@ impl FormSceneRenderer {
             let x = self.rest_x[index].mul_add(cos, self.rest_z[index] * sin) * pulse;
             let z = (-self.rest_x[index]).mul_add(sin, self.rest_z[index] * cos);
             let y = self.rest_y[index] * pulse;
-            self.push_world(x, y, z, 660.0, width, height, index);
+            self.push_world(x, y, z, self.param("camera_z"), width, height, index);
         }
         let visible = self.points.len();
         for index in (0..visible.saturating_sub(16)).step_by(16) {
@@ -607,19 +611,23 @@ impl FormSceneRenderer {
     }
 
     fn project_morph(&mut self, seconds: f32, width: usize, height: usize) {
-        let count = FormSceneKind::PointCloudMorphPassage.count();
-        let morph = if seconds < 5.0 {
+        let count = self.count();
+        let morph_start = self.param("morph_start");
+        let morph_end = self.param("morph_end");
+        let return_start = self.param("return_start");
+        let return_end = self.param("return_end");
+        let morph = if seconds < morph_start {
             0.0
-        } else if seconds < 13.0 {
-            smootherstep((seconds - 5.0) / 8.0)
-        } else if seconds < 21.0 {
+        } else if seconds < morph_end {
+            smootherstep((seconds - morph_start) / (morph_end - morph_start))
+        } else if seconds < return_start {
             1.0
-        } else if seconds < 29.0 {
-            1.0 - smootherstep((seconds - 21.0) / 8.0)
+        } else if seconds < return_end {
+            1.0 - smootherstep((seconds - return_start) / (return_end - return_start))
         } else {
             0.0
         };
-        let breakup = (morph * PI).sin() * 42.0;
+        let breakup = (morph * PI).sin() * self.param("breakup");
         let angle = -0.28 + seconds * 0.025;
         let (sin, cos) = angle.sin_cos();
         for index in (0..count).step_by(2) {
@@ -639,7 +647,7 @@ impl FormSceneRenderer {
                 + self.aux_x[index] * breakup * 0.55;
             let rx = x.mul_add(cos, z * sin);
             let rz = (-x).mul_add(sin, z * cos);
-            self.push_world(rx, y, rz, 640.0, width, height, index);
+            self.push_world(rx, y, rz, self.param("camera_z"), width, height, index);
         }
         if (0.05..0.95).contains(&morph) {
             let visible = self.points.len();
