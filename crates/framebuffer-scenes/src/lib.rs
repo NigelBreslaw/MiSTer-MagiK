@@ -232,7 +232,8 @@ mod tests {
         assert!(SceneBufferId::new(2, 2).is_err());
         assert!(SceneBufferId::new(0, 0).is_err());
         assert!(SceneTarget::new(&mut [Rgb565Pixel(0); 5], geometry, id).is_err());
-        let target = SceneTarget::new(&mut [Rgb565Pixel(0); 6], geometry, id).unwrap();
+        let mut pixels = [Rgb565Pixel(0); 6];
+        let target = SceneTarget::new(&mut pixels, geometry, id).unwrap();
         assert_eq!(target.geometry(), geometry);
         assert_eq!(target.buffer_id(), id);
     }

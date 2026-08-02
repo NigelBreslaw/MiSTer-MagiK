@@ -265,6 +265,7 @@ impl CrtNavigationLayout {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn crt_navigation_geometry(
     frame_width: usize,
     frame_height: usize,
@@ -929,7 +930,7 @@ fn apply_crt_scanline_overlay(
     for y in (1..height).step_by(CRT_SCANLINE_PERIOD_ROWS) {
         let covered = if reversing {
             overlay_row_covered(frame.reverse_origin_q16, y, height)
-                && clear_y.map_or(true, |line_y| y as isize >= line_y)
+                && clear_y.is_none_or(|line_y| y as isize >= line_y)
         } else {
             overlay_row_covered(frame.progress_q16, y, height)
         };
@@ -1067,12 +1068,11 @@ fn render_super_scaler_shell(
     }
     if request.direction == NavigationTransitionDirection::Forward
         && frame.reveal_progress_q16 >= 62_000
+        && let Some(destination) = destination
     {
-        if let Some(destination) = destination {
-            working.copy_from_slice(destination);
-            stats.copied_pixels = destination.len() as u64;
-            return Ok(stats);
-        }
+        working.copy_from_slice(destination);
+        stats.copied_pixels = destination.len() as u64;
+        return Ok(stats);
     }
     if frame.reveal_progress_q16 == 0 && frame.cover_progress_q16 == PROGRESS_MAX {
         fill_super_scaler_covered_surface(working, width, height, full, shell, &mut stats);
@@ -1781,16 +1781,8 @@ fn super_scaler_card_rect(
     } else {
         settle_end
     };
-    let left_motion = if selected_left {
-        spring_ease_q16(window_q16(progress_q16, PRESS_END, left_end))
-    } else {
-        spring_ease_q16(window_q16(progress_q16, PRESS_END, left_end))
-    };
-    let right_motion = if selected_left {
-        spring_ease_q16(window_q16(progress_q16, PRESS_END, right_end))
-    } else {
-        spring_ease_q16(window_q16(progress_q16, PRESS_END, right_end))
-    };
+    let left_motion = spring_ease_q16(window_q16(progress_q16, PRESS_END, left_end));
+    let right_motion = spring_ease_q16(window_q16(progress_q16, PRESS_END, right_end));
     let left = lerp_u16(source.x, full.x, left_motion);
     let right = lerp_u16(source.right(), full.right(), right_motion);
     let top = lerp_u16(
@@ -1990,11 +1982,7 @@ fn draw_runway_selected_row_bridge(
     if !reverse && progress_q16 > 30_000 {
         return;
     }
-    let motion = if reverse {
-        spring_ease_q16(window_q16(progress_q16, 0, 18_000))
-    } else {
-        spring_ease_q16(window_q16(progress_q16, 0, 18_000))
-    };
+    let motion = spring_ease_q16(window_q16(progress_q16, 0, 18_000));
     let horizon = NavigationTransitionRect {
         x: 0,
         y: (height / 2).saturating_sub(1) as u16,
@@ -3378,6 +3366,7 @@ fn opaque_content_bounds(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blit_scaled_masked_565(
     destination: &mut [Rgb565Pixel],
     source: &[Rgb565Pixel],
