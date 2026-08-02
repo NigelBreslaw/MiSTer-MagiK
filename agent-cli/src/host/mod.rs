@@ -4,6 +4,7 @@
 use crate::transport::{AutomationAction, DeviceFailure, Layout};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
+use rusqlite::backup::Backup;
 use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -11881,25 +11882,86 @@ fn snapshot_catalog_database(
     if !is_catalog_database_path(remote_database) {
         return Err("catalog snapshot source is outside the active catalog".into());
     }
-    let remote_snapshot = format!(
-        "/tmp/mister-magik/catalog-query-{}-{}.sqlite3",
-        std::process::id(),
-        unix_ms_now()
-    );
-    let command = format!(
-        "set -eu; command -v sqlite3 >/dev/null; rm -f {snapshot}; sqlite3 {source} \".backup {snapshot}\"; test -s {snapshot}",
-        source = sh(remote_database),
-        snapshot = sh(&remote_snapshot),
-    );
-    exec_checked(session, "catalog database snapshot", &command)?;
-    let transfer = get(session, &remote_snapshot, local_database);
-    let cleanup = exec(session, &remove_files_command(&[&remote_snapshot]), false);
-    match (transfer, cleanup) {
-        (Ok(()), Ok(output)) if output.rc == 0 => Ok(()),
-        (Err(error), _) => Err(error),
-        (Ok(()), Ok(_)) => Err("cannot remove the temporary catalog snapshot".into()),
-        (Ok(()), Err(error)) => Err(error),
+    let live_database = local_database.with_file_name("live.sqlite3");
+    let remote_files = [
+        ("db", remote_database.to_owned(), live_database.clone()),
+        (
+            "wal",
+            format!("{remote_database}-wal"),
+            live_database.with_file_name("live.sqlite3-wal"),
+        ),
+        (
+            "shm",
+            format!("{remote_database}-shm"),
+            live_database.with_file_name("live.sqlite3-shm"),
+        ),
+    ];
+    let mut stable = false;
+    for _ in 0..3 {
+        let before = catalog_snapshot_identity(session, &remote_files)?;
+        for (role, remote, local) in &remote_files {
+            if before.get(*role).is_some_and(|hash| hash != "missing") {
+                get(session, remote, local)?;
+            } else {
+                let _ = fs::remove_file(local);
+            }
+        }
+        if before == catalog_snapshot_identity(session, &remote_files)? {
+            stable = true;
+            break;
+        }
     }
+    if !stable {
+        return Err("catalog database changed during the bounded snapshot transfer".into());
+    }
+    let source = Connection::open_with_flags(
+        &live_database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let mut destination = Connection::open(local_database)?;
+    Backup::new(&source, &mut destination)?.run_to_completion(
+        64,
+        Duration::from_millis(10),
+        None,
+    )?;
+    Ok(())
+}
+
+fn catalog_snapshot_identity(
+    session: &Session,
+    files: &[(&str, String, PathBuf); 3],
+) -> Result<BTreeMap<String, String>> {
+    let command = files
+        .iter()
+        .map(|(role, path, _)| {
+            format!(
+                "if test -f {path}; then printf '{role}\\t'; sha256sum {path} | cut -d' ' -f1; else printf '{role}\\tmissing\\n'; fi",
+                path = sh(path),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let output = exec(session, &command, false)?;
+    if let Some(message) = exec_failure_message("catalog snapshot identity", &output) {
+        return Err(message.into());
+    }
+    let mut identity = BTreeMap::new();
+    for line in output.stdout.lines() {
+        let (role, hash) = line
+            .split_once('\t')
+            .ok_or("catalog snapshot identity returned an invalid line")?;
+        if !matches!(role, "db" | "wal" | "shm")
+            || (hash != "missing"
+                && (hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit())))
+        {
+            return Err("catalog snapshot identity returned invalid data".into());
+        }
+        identity.insert(role.to_owned(), hash.to_owned());
+    }
+    if identity.len() != files.len() || identity.get("db").is_none_or(|hash| hash == "missing") {
+        return Err("catalog snapshot source is missing or incomplete".into());
+    }
+    Ok(identity)
 }
 
 fn is_catalog_database_path(path: &str) -> bool {
