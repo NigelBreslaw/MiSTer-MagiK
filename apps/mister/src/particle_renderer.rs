@@ -7,9 +7,11 @@ use crate::particle_engine::{
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_particles::cabinet::Rgb565Pixel as SharedRgb565Pixel;
+#[cfg(test)]
+use mister_magik_particles::commands::pack_visual_command;
 use mister_magik_particles::commands::{
     COMMAND_NEIGHBOR, COMMAND_OFFSET_BITS, COMMAND_OFFSET_MASK, COMMAND_PALETTE_SHIFT,
-    pack_visual_command, raster_packed_visual_commands_recording,
+    raster_packed_visual_commands_recording,
 };
 use mister_magik_particles::recipes::MagikRecipe;
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -19,6 +21,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const CAPACITY_COLOR: Rgb565Pixel = Rgb565Pixel(0xbdf7);
+#[cfg(test)]
 const VISUAL_PALETTE: [Rgb565Pixel; 4] = [
     Rgb565Pixel(0x2104),
     Rgb565Pixel(0x5aeb),
@@ -801,6 +804,7 @@ fn particle_command_order_requested() -> bool {
     )
 }
 
+#[cfg(test)]
 fn visual_particle_has_neighbor(
     phase: ParticlePhase,
     camera_depth: f32,
