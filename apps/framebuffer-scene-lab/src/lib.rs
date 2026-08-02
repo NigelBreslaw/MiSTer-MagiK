@@ -12,9 +12,7 @@ use mister_magik_framebuffer_scenes::{
 };
 use mister_magik_particles::cabinet::CabinetScene;
 use mister_magik_particles::engine::ParticlePreset;
-use mister_magik_particles::magik::{
-    MagikScene, MagikSceneOptions, MagikSceneStats, PreparationMode,
-};
+use mister_magik_particles::magik::{MagikScene, MagikSceneOptions, MagikSceneStats};
 use mister_magik_particles::recipes::{
     CABINET_RECIPE_SCHEMA_V1, CabinetRecipe, MAGIK_RECIPE_SCHEMA_V1, MagikRecipe,
     embedded_cabinet_recipe, embedded_magik_recipe, parse_cabinet_recipe, parse_magik_recipe,
@@ -327,23 +325,6 @@ enum PreparedEffect {
 
 impl FocusedParticleRenderer {
     pub fn new(width: usize, height: usize, recipe: EffectRecipe) -> Result<Self, String> {
-        Self::new_with_preparation(width, height, recipe, PreparationMode::Lookahead)
-    }
-
-    pub fn new_synchronous(
-        width: usize,
-        height: usize,
-        recipe: EffectRecipe,
-    ) -> Result<Self, String> {
-        Self::new_with_preparation(width, height, recipe, PreparationMode::Synchronous)
-    }
-
-    fn new_with_preparation(
-        width: usize,
-        height: usize,
-        recipe: EffectRecipe,
-        preparation: PreparationMode,
-    ) -> Result<Self, String> {
         let effect = match recipe {
             EffectRecipe::Magik(recipe) => {
                 PreparedEffect::Magik(Box::new(MagikScene::from_magik_recipe_with_options(
@@ -352,7 +333,6 @@ impl FocusedParticleRenderer {
                     ParticlePreset::Visual,
                     recipe,
                     MagikSceneOptions {
-                        preparation,
                         order_commands: false,
                         reusable_buffers: 2,
                         worker_start: None,
@@ -363,6 +343,31 @@ impl FocusedParticleRenderer {
                 PreparedEffect::Cabinet(Box::new(CabinetScene::new(width, height, recipe, 2)?))
             }
         };
+        Self::with_effect(width, height, effect)
+    }
+
+    pub fn new_synchronous(
+        width: usize,
+        height: usize,
+        recipe: EffectRecipe,
+    ) -> Result<Self, String> {
+        let effect = match recipe {
+            EffectRecipe::Magik(recipe) => PreparedEffect::Magik(Box::new(
+                MagikScene::from_magik_recipe_for_deterministic_capture(
+                    width,
+                    height,
+                    ParticlePreset::Visual,
+                    recipe,
+                )?,
+            )),
+            EffectRecipe::Cabinet(recipe) => {
+                PreparedEffect::Cabinet(Box::new(CabinetScene::new(width, height, recipe, 2)?))
+            }
+        };
+        Self::with_effect(width, height, effect)
+    }
+
+    fn with_effect(width: usize, height: usize, effect: PreparedEffect) -> Result<Self, String> {
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         Ok(Self { effect, geometry })

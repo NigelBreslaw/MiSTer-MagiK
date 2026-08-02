@@ -6,9 +6,7 @@
 use crate::particle_engine::{ParticleConfig, ParticlePhase, ParticlePreset};
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_framebuffer_scenes::{Rgb565Pixel as SharedRgb565Pixel, SceneBufferId};
-use mister_magik_particles::magik::{
-    MagikScene, MagikSceneOptions, MagikSceneStats, PreparationMode,
-};
+use mister_magik_particles::magik::{MagikScene, MagikSceneOptions, MagikSceneStats};
 use mister_magik_particles::recipes::MagikRecipe;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
@@ -133,14 +131,6 @@ impl ParticleRenderer {
 }
 
 fn production_options() -> MagikSceneOptions {
-    let preparation = if matches!(
-        std::env::var("MISTER_PARTICLE_PIPELINE").ok().as_deref(),
-        Some("0" | "off" | "false" | "no")
-    ) {
-        PreparationMode::Synchronous
-    } else {
-        PreparationMode::Lookahead
-    };
     let order_commands = matches!(
         std::env::var("MISTER_PARTICLE_COMMAND_ORDER")
             .ok()
@@ -148,7 +138,6 @@ fn production_options() -> MagikSceneOptions {
         Some("1" | "on" | "true" | "locality")
     );
     MagikSceneOptions {
-        preparation,
         order_commands,
         reusable_buffers: 2,
         worker_start: Some(start_particle_preparer),
@@ -493,5 +482,10 @@ mod tests {
         assert_eq!(hardware_slot_to_scene_buffer(2, 2).unwrap().get(), 1);
         assert!(hardware_slot_to_scene_buffer(0, 2).is_err());
         assert!(hardware_slot_to_scene_buffer(3, 2).is_err());
+    }
+
+    #[test]
+    fn production_configures_the_dedicated_preparation_worker() {
+        assert!(production_options().worker_start.is_some());
     }
 }

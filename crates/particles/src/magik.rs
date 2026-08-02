@@ -35,7 +35,7 @@ const COMMAND_BIN_COUNT: usize = (1 << (COMMAND_OFFSET_BITS - COMMAND_BIN_SHIFT)
 const COMMAND_INVISIBLE_BIN: usize = COMMAND_BIN_COUNT - 1;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PreparationMode {
+enum PreparationMode {
     Synchronous,
     #[default]
     Lookahead,
@@ -43,7 +43,6 @@ pub enum PreparationMode {
 
 #[derive(Clone, Copy, Debug)]
 pub struct MagikSceneOptions {
-    pub preparation: PreparationMode,
     pub order_commands: bool,
     pub reusable_buffers: u8,
     pub worker_start: Option<fn()>,
@@ -52,7 +51,6 @@ pub struct MagikSceneOptions {
 impl Default for MagikSceneOptions {
     fn default() -> Self {
         Self {
-            preparation: PreparationMode::Lookahead,
             order_commands: false,
             reusable_buffers: 2,
             worker_start: None,
@@ -170,7 +168,16 @@ impl MagikScene {
         mask: TargetMask,
         options: MagikSceneOptions,
     ) -> Result<Self, String> {
-        Self::from_engine(ParticleEngine::new(config, mask)?, options)
+        Self::new_with_preparation(config, mask, options, PreparationMode::Lookahead)
+    }
+
+    fn new_with_preparation(
+        config: ParticleConfig,
+        mask: TargetMask,
+        options: MagikSceneOptions,
+        preparation: PreparationMode,
+    ) -> Result<Self, String> {
+        Self::from_engine(ParticleEngine::new(config, mask)?, options, preparation)
     }
 
     pub fn from_magik_recipe(
@@ -199,10 +206,31 @@ impl MagikScene {
         Self::from_engine(
             ParticleEngine::from_recipe(width, height, preset, recipe, mask)?,
             options,
+            PreparationMode::Lookahead,
         )
     }
 
-    fn from_engine(engine: ParticleEngine, options: MagikSceneOptions) -> Result<Self, String> {
+    /// Constructs the synchronous reference renderer used only for deterministic
+    /// headless captures. Realtime hosts use the asynchronous constructors.
+    pub fn from_magik_recipe_for_deterministic_capture(
+        width: usize,
+        height: usize,
+        preset: ParticlePreset,
+        recipe: MagikRecipe,
+    ) -> Result<Self, String> {
+        let mask = magik_target_mask()?;
+        Self::from_engine(
+            ParticleEngine::from_recipe(width, height, preset, recipe, mask)?,
+            MagikSceneOptions::default(),
+            PreparationMode::Synchronous,
+        )
+    }
+
+    fn from_engine(
+        engine: ParticleEngine,
+        options: MagikSceneOptions,
+        preparation: PreparationMode,
+    ) -> Result<Self, String> {
         if options.reusable_buffers == 0 {
             return Err("MagiK scene requires at least one reusable buffer".into());
         }
@@ -224,7 +252,7 @@ impl MagikScene {
         let mut engine = Some(engine);
         let commands = Vec::with_capacity(config.count);
         let order_commands = options.order_commands;
-        let preparation_pipeline = if options.preparation == PreparationMode::Lookahead {
+        let preparation_pipeline = if preparation == PreparationMode::Lookahead {
             Some(ParticlePreparationPipeline::start(
                 engine
                     .take()
@@ -971,25 +999,21 @@ mod tests {
     }
 
     fn scene(preset: ParticlePreset) -> MagikScene {
-        MagikScene::new(
+        MagikScene::new_with_preparation(
             config(preset),
             mask(),
-            MagikSceneOptions {
-                preparation: PreparationMode::Synchronous,
-                ..MagikSceneOptions::default()
-            },
+            MagikSceneOptions::default(),
+            PreparationMode::Synchronous,
         )
         .unwrap()
     }
 
     fn lookahead_scene(preset: ParticlePreset) -> MagikScene {
-        MagikScene::new(
+        MagikScene::new_with_preparation(
             config(preset),
             mask(),
-            MagikSceneOptions {
-                preparation: PreparationMode::Lookahead,
-                ..MagikSceneOptions::default()
-            },
+            MagikSceneOptions::default(),
+            PreparationMode::Lookahead,
         )
         .unwrap()
     }
@@ -1220,6 +1244,14 @@ mod tests {
         assert_eq!(third.lookahead_mismatch_count, 0);
         assert_eq!(third.preparation_queue_depth, 1);
         assert_eq!(pipeline.in_flight.len(), 2);
+    }
+
+    #[test]
+    fn realtime_construction_always_starts_the_preparation_pipeline() {
+        let renderer = MagikScene::new(config(ParticlePreset::Visual), mask(), Default::default())
+            .unwrap();
+        assert!(renderer.preparation_pipeline.is_some());
+        assert!(renderer.engine.is_none());
     }
 
     #[test]
