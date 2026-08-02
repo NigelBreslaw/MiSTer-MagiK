@@ -6,6 +6,7 @@ use crate::particle_engine::{
     ParticlePreset, ParticleSimulationUpdate, TargetMask, magik_target_mask,
 };
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_particles::recipes::MagikRecipe;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -68,6 +69,9 @@ pub struct ParticleRenderStats {
 
 pub struct ParticleRenderer {
     config: ParticleConfig,
+    background: Rgb565Pixel,
+    visual_palette: [Rgb565Pixel; 4],
+    neighbor_palette_index: usize,
     engine: Option<ParticleEngine>,
     preparation_pipeline: Option<ParticlePreparationPipeline>,
     command_ordering_scratch: Option<Vec<u32>>,
@@ -137,6 +141,24 @@ impl ParticleRenderer {
     }
 
     fn new(config: ParticleConfig, mask: TargetMask) -> Result<Self, String> {
+        Self::from_engine(ParticleEngine::new(config, mask)?)
+    }
+
+    pub fn from_magik_recipe(
+        width: usize,
+        height: usize,
+        preset: ParticlePreset,
+        recipe: MagikRecipe,
+    ) -> Result<Self, String> {
+        let mask = magik_target_mask()?;
+        Self::from_engine(ParticleEngine::from_recipe(
+            width, height, preset, recipe, mask,
+        )?)
+    }
+
+    fn from_engine(engine: ParticleEngine) -> Result<Self, String> {
+        let config = engine.config();
+        let appearance = engine.recipe().appearance;
         let write_capacity = match config.preset {
             ParticlePreset::Capacity => config.count,
             ParticlePreset::Visual => config.count.saturating_mul(2),
@@ -148,7 +170,7 @@ impl ParticleRenderer {
             initialized: false,
             offsets: Vec::with_capacity(write_capacity),
         });
-        let mut engine = Some(ParticleEngine::new(config, mask)?);
+        let mut engine = Some(engine);
         let commands = Vec::with_capacity(config.count);
         let order_commands = particle_command_order_requested();
         let preparation_pipeline = if particle_pipeline_requested() {
@@ -182,6 +204,9 @@ impl ParticleRenderer {
             .saturating_mul(command_buffer_count);
         Ok(Self {
             config,
+            background: Rgb565Pixel(appearance.background.0),
+            visual_palette: appearance.palette.map(|color| Rgb565Pixel(color.0)),
+            neighbor_palette_index: usize::from(appearance.neighbor_palette_index),
             engine,
             preparation_pipeline,
             command_ordering_scratch,
@@ -293,11 +318,11 @@ impl ParticleRenderer {
     ) -> Vec<u32> {
         let slot = &mut self.dirty_slots[slot_offset];
         if !slot.initialized || slot.offsets.len() >= destination.len() / FULL_CLEAR_DIRTY_DIVISOR {
-            destination.fill(Rgb565Pixel(0));
+            destination.fill(self.background);
         } else {
             for &offset in &slot.offsets {
                 if offset != PARTICLE_NOT_VISIBLE_OFFSET {
-                    destination[offset as usize] = Rgb565Pixel(0);
+                    destination[offset as usize] = self.background;
                 }
             }
         }
@@ -324,7 +349,13 @@ impl ParticleRenderer {
     }
 
     fn raster_visual(&self, destination: &mut [Rgb565Pixel], dirty_offsets: &mut Vec<u32>) {
-        raster_packed_visual_commands(destination, &self.commands, dirty_offsets);
+        raster_packed_visual_commands_with_palette_and_neighbor(
+            destination,
+            &self.commands,
+            dirty_offsets,
+            self.visual_palette,
+            self.neighbor_palette_index,
+        );
     }
 }
 
@@ -648,46 +679,33 @@ fn prepare_particle_commands(
     commands: &mut Vec<u32>,
 ) -> Result<usize, String> {
     commands.clear();
-    if engine.uses_vector_projection() {
-        let count = engine.particle_count();
-        assert!(commands.capacity() >= count);
-        let visible = engine.project_packed_commands(
-            &mut commands.spare_capacity_mut()[..count],
-            engine.config().preset == ParticlePreset::Visual,
-        );
-        // SAFETY: `project_packed_commands` initialized exactly `count` entries.
-        unsafe {
-            commands.set_len(count);
-        }
-        if engine.validates_vector_projection() {
-            validate_sampled_packed_commands(engine, commands)?;
-        }
-        return Ok(visible);
+    let count = engine.particle_count();
+    assert!(commands.capacity() >= count);
+    let visible = engine.project_packed_commands(
+        &mut commands.spare_capacity_mut()[..count],
+        engine.config().preset == ParticlePreset::Visual,
+    );
+    // SAFETY: `project_packed_commands` initializes exactly `count` entries.
+    unsafe {
+        commands.set_len(count);
     }
-    match engine.config().preset {
-        ParticlePreset::Capacity => {
-            let width = engine.config().width;
-            for index in 0..engine.particle_count() {
-                if let Some(particle) = engine.project(index) {
-                    commands.push((particle.y as usize * width + particle.x as usize) as u32);
-                }
-            }
-            Ok(commands.len())
+    if engine.validates_vector_projection() {
+        validate_sampled_packed_commands(engine, commands)?;
+    }
+    Ok(visible)
+}
+
+fn recipe_particle_has_neighbor(
+    engine: &ParticleEngine,
+    camera_depth: f32,
+    palette_index: usize,
+) -> bool {
+    match engine.phase() {
+        ParticlePhase::Form | ParticlePhase::Hold => {
+            camera_depth < engine.recipe().appearance.formed_neighbor_when_depth_below
         }
-        ParticlePreset::Visual => {
-            let width = engine.config().width;
-            for index in 0..engine.particle_count() {
-                let Some(particle) = engine.project(index) else {
-                    continue;
-                };
-                let offset = (particle.y as usize * width + particle.x as usize) as u32;
-                let palette_index = (engine.flicker_key(index) >> 30) as usize;
-                let neighbor =
-                    visual_particle_has_neighbor(engine.phase(), particle.depth, palette_index)
-                        && particle.x + 1 < width as i32;
-                commands.push(pack_visual_command(offset, palette_index, neighbor));
-            }
-            Ok(commands.len())
+        ParticlePhase::Static | ParticlePhase::Disperse => {
+            palette_index == usize::from(engine.recipe().appearance.unformed_palette_index)
         }
     }
 }
@@ -739,7 +757,7 @@ fn validate_sampled_packed_commands(
                 ));
             }
             let expected_neighbor =
-                visual_particle_has_neighbor(engine.phase(), projected.depth, palette_index)
+                recipe_particle_has_neighbor(engine, projected.depth, palette_index)
                     && projected.x + 1 < width as i32;
             let actual_neighbor = command & COMMAND_NEIGHBOR != 0;
             if actual_neighbor != expected_neighbor
@@ -802,6 +820,22 @@ pub(crate) fn raster_packed_visual_commands_with_palette(
     dirty_offsets: &mut Vec<u32>,
     palette: [Rgb565Pixel; 4],
 ) -> usize {
+    raster_packed_visual_commands_with_palette_and_neighbor(
+        destination,
+        commands,
+        dirty_offsets,
+        palette,
+        2,
+    )
+}
+
+fn raster_packed_visual_commands_with_palette_and_neighbor(
+    destination: &mut [Rgb565Pixel],
+    commands: &[u32],
+    dirty_offsets: &mut Vec<u32>,
+    palette: [Rgb565Pixel; 4],
+    neighbor_palette_index: usize,
+) -> usize {
     let mut written = 0usize;
     for &command in commands {
         let Some((offset, palette_index, neighbor)) = unpack_visual_command(command) else {
@@ -817,7 +851,7 @@ pub(crate) fn raster_packed_visual_commands_with_palette(
             let Some(pixel) = destination.get_mut(offset.saturating_add(1)) else {
                 continue;
             };
-            *pixel = palette[2];
+            *pixel = palette[neighbor_palette_index];
             dirty_offsets.push(offset.saturating_add(1) as u32);
             written = written.saturating_add(1);
         }
