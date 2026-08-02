@@ -242,7 +242,7 @@ fn dispatch(
             agent_cli::build::execute_command(repository, *intent, reporter)?;
             return Ok(Outcome::Passed);
         }
-        CliCommand::Ci { command } => match command.as_ref() {
+        CliCommand::Ci { command } => match command {
             CiCommand::HostAssurance(scope) => {
                 return run_assurance(
                     evidence,

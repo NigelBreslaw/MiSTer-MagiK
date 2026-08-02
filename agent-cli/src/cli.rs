@@ -77,7 +77,7 @@ pub enum Command {
     #[command(hide = true)]
     Ci {
         #[command(subcommand)]
-        command: Box<CiCommand>,
+        command: CiCommand,
     },
 }
 
@@ -154,12 +154,6 @@ pub enum PlatformBundleCommand {
         release_version: u64,
         #[arg(long)]
         output: PathBuf,
-        #[arg(long)]
-        main_workflow: Option<String>,
-        #[arg(long)]
-        fpga_workflow: Option<String>,
-        #[arg(long)]
-        kernel_workflow: Option<String>,
     },
     Verify {
         archive: PathBuf,
@@ -339,7 +333,7 @@ pub enum PlatformManifestCommand {
         #[arg(long)]
         magik_revision: String,
         #[arg(long, default_value = "public")]
-        layout: Box<String>,
+        layout: String,
     },
     Verify {
         manifest: PathBuf,
@@ -438,7 +432,7 @@ mod tests {
         let Some(Command::Ci { command }) = cli.command else {
             panic!("expected ci command");
         };
-        let CiCommand::HostAssurance(scope) = *command else {
+        let CiCommand::HostAssurance(scope) = command else {
             panic!("expected host assurance");
         };
         assert_eq!(
@@ -674,9 +668,18 @@ mod tests {
             "--output",
             "bundle",
         ];
-        let cli = Cli::try_parse_from(create).unwrap();
+        let cli = Cli::try_parse_from(create.iter().copied()).unwrap();
         assert_eq!(cli.output_format, OutputFormat::Human);
         assert!(Cli::try_parse_from(["agent-cli", "--output-format", "ndjson", "plan"]).is_err());
+        assert!(
+            Cli::try_parse_from(
+                create
+                    .iter()
+                    .copied()
+                    .chain(["--main-workflow", "ignored.yml"]),
+            )
+            .is_err()
+        );
 
         assert!(
             Cli::try_parse_from([
