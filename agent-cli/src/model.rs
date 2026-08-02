@@ -113,13 +113,6 @@ pub enum AssuranceRequest {
     CiHostAssurance { scope: Scope },
 }
 
-impl AssuranceRequest {
-    #[must_use]
-    pub const fn risk(&self) -> Risk {
-        Risk::LocalWrite
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Operation {
     pub id: String,

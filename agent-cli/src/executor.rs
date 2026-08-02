@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::evidence::{Evidence, now_ms};
-use crate::model::{Operation, Outcome, Plan};
+use crate::model::{Operation, Outcome, Plan, WorkflowPhase};
 use crate::progress::{EventKind, Reporter};
-use crate::workflow::{Event, Machine, State};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -44,20 +43,19 @@ pub fn execute_with_changes(
         _ => "check",
     };
     let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
-    let mut machine = Machine::default();
+    let mut phase = None;
     let mut index = 0;
     while index < plan.operations.len() {
         let operation = &plan.operations[index];
-        crate::policy::authorize(operation, plan.request.risk()).map_err(|rejection| {
-            format!(
-                "policy_rejected: {}: {}",
-                rejection.operation_id, rejection.reason
-            )
-        })?;
-        let state = State::from(operation.workflow_phase());
-        if machine.state() != state {
-            machine.apply(Event::Advance(state))?;
-            reporter.emit(EventKind::Progress, command, state.label(), None)?;
+        let operation_phase = operation.workflow_phase();
+        if phase != Some(operation_phase) {
+            phase = Some(operation_phase);
+            reporter.emit(
+                EventKind::Progress,
+                command,
+                workflow_phase_label(operation_phase),
+                None,
+            )?;
         }
         if operation.builtin.is_some() && operation.risk == crate::model::Risk::ReadOnly {
             let start = index;
@@ -66,14 +64,6 @@ pub fn execute_with_changes(
                 && plan.operations[index].builtin.is_some()
                 && plan.operations[index].risk == crate::model::Risk::ReadOnly
             {
-                crate::policy::authorize(&plan.operations[index], plan.request.risk()).map_err(
-                    |rejection| {
-                        format!(
-                            "policy_rejected: {}: {}",
-                            rejection.operation_id, rejection.reason
-                        )
-                    },
-                )?;
                 index += 1;
             }
             if let Err(error) = run_builtin_batch(
@@ -85,7 +75,6 @@ pub fn execute_with_changes(
                 reporter,
                 command,
             ) {
-                machine.apply(Event::Fail)?;
                 return Err(error);
             }
             continue;
@@ -104,7 +93,6 @@ pub fn execute_with_changes(
                 operation.resource_class().as_str(),
             )?;
             if result == "failed" {
-                machine.apply(Event::Fail)?;
                 return Err(detail.unwrap_or_else(|| "cached validation failed".into()));
             }
             index += 1;
@@ -121,7 +109,6 @@ pub fn execute_with_changes(
             )?
         {
             if result == "failed" {
-                machine.apply(Event::Fail)?;
                 return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
             }
             index += 1;
@@ -149,7 +136,6 @@ pub fn execute_with_changes(
                 }
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
-            machine.apply(Event::Fail)?;
             return Err(error);
         }
         if operation.risk == crate::model::Risk::ReadOnly
@@ -160,9 +146,18 @@ pub fn execute_with_changes(
         }
         index += 1;
     }
-    machine.apply(Event::Finish)?;
     reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
     Ok(Outcome::Passed)
+}
+
+const fn workflow_phase_label(phase: WorkflowPhase) -> &'static str {
+    match phase {
+        WorkflowPhase::Cheap => "cheap checks",
+        WorkflowPhase::Host => "host validation",
+        WorkflowPhase::Expensive => "building",
+        WorkflowPhase::External => "waiting for external validation",
+        WorkflowPhase::Device => "device operation",
+    }
 }
 
 fn claim_or_wait(
