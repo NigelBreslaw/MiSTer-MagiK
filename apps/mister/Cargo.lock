@@ -2824,6 +2824,7 @@ dependencies = [
  "mister-magik-agent-protocol",
  "mister-magik-catalog",
  "mister-magik-core",
+ "mister-magik-framebuffer-scenes",
  "mister-magik-framebuffer-stream",
  "mister-magik-latch-contract",
  "mister-magik-media-contract",
