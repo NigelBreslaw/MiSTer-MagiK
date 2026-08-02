@@ -13,9 +13,8 @@ use super::{
     window_q16,
 };
 use crate::particle_engine::TargetMask;
-use crate::particle_renderer::{
-    pack_visual_command, raster_packed_visual_commands_with_palette, unpack_visual_command,
-};
+use crate::particle_renderer::raster_packed_visual_commands_with_palette;
+use mister_magik_particles::commands::{pack_visual_command, unpack_visual_command};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 const FULL_PARTICLE_COUNT: usize = 2_048;

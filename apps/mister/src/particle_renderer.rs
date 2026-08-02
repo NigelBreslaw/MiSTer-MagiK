@@ -371,6 +371,21 @@ fn shared_rgb565_pixels_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb5
     }
 }
 
+pub(crate) fn raster_packed_visual_commands_with_palette(
+    destination: &mut [Rgb565Pixel],
+    commands: &[u32],
+    dirty_offsets: &mut Vec<u32>,
+    palette: [Rgb565Pixel; 4],
+) -> usize {
+    raster_packed_visual_commands_recording(
+        shared_rgb565_pixels_mut(destination),
+        commands,
+        palette.map(|color| SharedRgb565Pixel(color.0)),
+        2,
+        dirty_offsets,
+    )
+}
+
 impl ParticlePreparationPipeline {
     fn start(
         engine: ParticleEngine,
