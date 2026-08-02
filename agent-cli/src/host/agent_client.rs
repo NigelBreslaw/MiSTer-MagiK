@@ -27,13 +27,6 @@ pub(crate) struct AgentResponse {
     pub(crate) elapsed_ms: u128,
 }
 
-#[derive(Debug)]
-pub(crate) struct AgentBinaryResponse {
-    pub(crate) response: Value,
-    pub(crate) payload: Vec<u8>,
-    pub(crate) elapsed_ms: u128,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentEndpoint {
     host: String,
@@ -763,55 +756,6 @@ fn telemetry_contains_particle_frame(
         })
 }
 
-pub(crate) fn agent_binary_request_bounded(
-    cmd: &str,
-    args: Value,
-    timeout: Duration,
-    max_payload_bytes: u64,
-) -> Result<AgentBinaryResponse> {
-    let endpoint = AgentEndpoint::from_environment()?;
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
-    let start = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-
-    let mut reader = BufReader::new(stream);
-    read_agent_binary_response(&mut reader, start, max_payload_bytes)
-}
-
-fn read_agent_binary_response<R: BufRead>(
-    reader: &mut R,
-    start: Instant,
-    max_payload_bytes: u64,
-) -> Result<AgentBinaryResponse> {
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    let response = parse_agent_response_line(line, start)?.response;
-    let payload_bytes = agent_binary_payload_len(&response)?;
-    if u64::try_from(payload_bytes)? > max_payload_bytes {
-        return Err(format!(
-            "agent binary payload too large: {payload_bytes} bytes (max {max_payload_bytes})"
-        )
-        .into());
-    }
-    let mut payload = Vec::new();
-    payload.try_reserve_exact(payload_bytes)?;
-    payload.resize(payload_bytes, 0);
-    reader.read_exact(&mut payload)?;
-    Ok(AgentBinaryResponse {
-        response,
-        payload,
-        elapsed_ms: start.elapsed().as_millis(),
-    })
-}
-
 #[cfg(test)]
 fn write_agent_stream_payload<T: Read + Write>(
     mut stream: T,
@@ -840,14 +784,6 @@ fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentRespon
         }),
         ResponseEnvelope::Error(error) => Err(error.into()),
     }
-}
-
-fn agent_binary_payload_len(response: &Value) -> Result<usize> {
-    agent_protocol::binary_payload_len(response).map_err(|error| {
-        error
-            .replace("missing payload", "missing result payload")
-            .into()
-    })
 }
 
 #[cfg(test)]
@@ -946,88 +882,6 @@ mod tests {
             "capacity",
             66_560
         ));
-    }
-
-    #[test]
-    fn agent_binary_payload_len_prefers_payload_bytes_and_allows_raw_fallback() {
-        assert_eq!(
-            agent_binary_payload_len(&json!({
-                "result": {
-                    "payload_bytes": 7,
-                    "raw_bytes": 99,
-                }
-            }))
-            .expect("payload len"),
-            7
-        );
-        assert_eq!(
-            agent_binary_payload_len(&json!({
-                "result": {
-                    "raw_bytes": 11,
-                }
-            }))
-            .expect("raw fallback len"),
-            11
-        );
-    }
-
-    #[test]
-    fn in_memory_binary_response_is_bounded_and_requires_exact_payload() {
-        let mut success =
-            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":4}}\nDATA".to_vec());
-        let response = read_agent_binary_response(&mut success, Instant::now(), 4).unwrap();
-        assert_eq!(response.payload, b"DATA");
-
-        let mut oversized =
-            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":5}}\nDATA!".to_vec());
-        assert!(
-            read_agent_binary_response(&mut oversized, Instant::now(), 4)
-                .unwrap_err()
-                .to_string()
-                .contains("too large")
-        );
-
-        let mut truncated =
-            Cursor::new(b"{\"ok\":true,\"result\":{\"payload_bytes\":5}}\nDATA".to_vec());
-        let error = read_agent_binary_response(&mut truncated, Instant::now(), 5).unwrap_err();
-        assert_eq!(
-            error
-                .downcast_ref::<std::io::Error>()
-                .map(std::io::Error::kind),
-            Some(ErrorKind::UnexpectedEof)
-        );
-    }
-
-    #[test]
-    fn in_memory_binary_response_surfaces_agent_error_before_payload_read() {
-        let mut reader = Cursor::new(b"{\"ok\":false,\"error\":\"denied\"}\nignored".to_vec());
-
-        assert_eq!(
-            read_agent_binary_response(&mut reader, Instant::now(), 10)
-                .unwrap_err()
-                .to_string(),
-            "denied"
-        );
-    }
-
-    #[test]
-    fn agent_binary_payload_len_rejects_missing_or_oversized_values() {
-        assert!(
-            agent_binary_payload_len(&json!({"result": {}}))
-                .expect_err("missing payload len should fail")
-                .to_string()
-                .contains("missing result payload byte count")
-        );
-        assert!(
-            agent_binary_payload_len(&json!({
-                "result": {
-                    "payload_bytes": agent_protocol::MAX_BINARY_PAYLOAD_BYTES + 1,
-                }
-            }))
-            .expect_err("oversized payload len should fail")
-            .to_string()
-            .contains("payload too large")
-        );
     }
 
     #[test]

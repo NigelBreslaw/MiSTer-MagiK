@@ -4,9 +4,9 @@
 use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
-use std::collections::BTreeMap;
 use std::env;
-use std::fs::{self, OpenOptions};
+#[cfg(test)]
+use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -23,8 +23,6 @@ const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST
 const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTPS_ORIGIN;
 const OFFICIAL_ASSET_HTTP_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTP_ORIGIN;
 const OFFICIAL_PACK_OBJECT_PREFIX: &str = "mister-magik/v1/packs/";
-const BENCH_TSV: &str = "history/toolchain-bench/results-screenshot-download.tsv";
-const BENCH_HEADER: &str = "type\tlabel\tsystem\tvariant\tencoded_bytes\tdecoded_bytes\tdownload_ms\tdecompress_ms\tsave_ms\tverify_ms\ttotal_ms\twire_mbps\tdecoded_mbps\tetag\tcontent_encoding\tcf_cache_status\tresult";
 
 fn remote_asset_dir() -> String {
     env::var("MISTER_MAGIK_ASSET_DIR").unwrap_or_else(|_| DEFAULT_REMOTE_ASSET_DIR.to_string())
@@ -84,10 +82,6 @@ struct MediaIndex {
 struct MediaArgs {
     manifest_url: String,
     system: String,
-    variant: String,
-    variants: Vec<String>,
-    label: String,
-    save_preference: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -144,11 +138,16 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
         }
         let mut pack_row = None;
         let mut index_row = None;
-        let variant = resolve_variant(sess, pack, &parsed.variant)?;
         let index_only_repair = status == "index-missing" || status.starts_with("index-stale:");
         if !index_only_repair {
-            let row =
-                run_remote_media_download(sess, &manifest, pack, &parsed.label, &variant, true)?;
+            let row = run_remote_media_download(
+                sess,
+                &manifest,
+                pack,
+                &default_label(),
+                "identity",
+                true,
+            )?;
             println!("{}", row.to_tsv());
             if row.result != "downloaded" {
                 return Err(
@@ -158,7 +157,7 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
             pack_row = Some(row);
         }
         if pack.index.is_some() {
-            let row = run_remote_index_download(sess, &manifest, pack, &parsed.label, true)?;
+            let row = run_remote_index_download(sess, &manifest, pack, &default_label(), true)?;
             println!("{}", row.to_tsv());
             if row.result != "downloaded" {
                 return Err(format!(
@@ -172,73 +171,11 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
         update_remote_state_after_download(
             sess,
             pack,
-            &variant,
+            "identity",
             pack_row.as_ref(),
             index_row.as_ref(),
         )?;
     }
-    Ok(())
-}
-
-pub(crate) fn media_bench_download(sess: &Session, args: &[String]) -> Result<()> {
-    let parsed = parse_media_args(args)?;
-    let manifest = load_manifest(&parsed.manifest_url)?;
-    let packs = selected_packs(&manifest, &parsed.system)?;
-    for pack in packs {
-        let variants = if parsed.variants.is_empty() {
-            vec![parsed.variant.clone()]
-        } else {
-            parsed.variants.clone()
-        };
-        let mut rows = Vec::new();
-        for requested in variants {
-            let variant = resolve_variant(sess, pack, &requested)?;
-            let row =
-                run_remote_media_download(sess, &manifest, pack, &parsed.label, &variant, false)?;
-            append_profile_row(BENCH_TSV, BENCH_HEADER, &row.to_tsv())?;
-            println!("{}", row.to_tsv());
-            rows.push(row);
-        }
-        if parsed.save_preference
-            && let Some(best) = rows
-                .iter()
-                .filter(|row| matches!(row.result.as_str(), "downloaded" | "bench-ok"))
-                .min_by_key(|row| row.total_ms)
-        {
-            update_remote_state(sess, pack, &best.variant, best)?;
-            println!(
-                "media_preference\t{}\t{}\ttotal_ms={}",
-                pack.system, best.variant, best.total_ms
-            );
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn media_cloudflare_check(args: &[String]) -> Result<()> {
-    if media_help_requested(args) {
-        media_usage();
-        return Ok(());
-    }
-    let parsed = parse_media_args(args)?;
-    let manifest = load_manifest(&parsed.manifest_url)?;
-    let pack = selected_packs(&manifest, &parsed.system)?
-        .into_iter()
-        .next()
-        .ok_or("manifest has no selected packs")?;
-    let url = manifest_url_for_pack(&manifest, pack);
-    println!("cloudflare_probe_url\t{url}");
-    for variant in ["identity", "gzip", "brotli"] {
-        let accept = accept_encoding_for_variant(variant);
-        let headers = curl_headers(&url, accept)?;
-        let content_encoding = header_value(&headers, "content-encoding").unwrap_or("identity");
-        let cache_status = header_value(&headers, "cf-cache-status").unwrap_or("");
-        let server = header_value(&headers, "server").unwrap_or("");
-        println!(
-            "cloudflare_header_probe\tvariant={variant}\taccept_encoding={accept}\tcontent_encoding={content_encoding}\tcf_cache_status={cache_status}\tserver={server}"
-        );
-    }
-    cloudflare_api_probe()?;
     Ok(())
 }
 
@@ -271,10 +208,6 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
         manifest_url: env::var("MISTER_MEDIA_MANIFEST_URL")
             .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string()),
         system: "all".to_string(),
-        variant: "identity".to_string(),
-        variants: Vec::new(),
-        label: default_label(),
-        save_preference: false,
     };
     let mut idx = 0;
     while idx < args.len() {
@@ -287,24 +220,6 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
                 idx += 1;
                 parsed.system = args.get(idx).ok_or("--system needs id|all")?.clone();
             }
-            "--variant" => {
-                idx += 1;
-                parsed.variant = normalize_variant(args.get(idx).ok_or("--variant needs name")?)?;
-            }
-            "--variants" => {
-                idx += 1;
-                parsed.variants = args
-                    .get(idx)
-                    .ok_or("--variants needs comma-list")?
-                    .split(',')
-                    .map(normalize_variant)
-                    .collect::<Result<Vec<_>>>()?;
-            }
-            "--label" => {
-                idx += 1;
-                parsed.label = args.get(idx).ok_or("--label needs value")?.clone();
-            }
-            "--save-preference" => parsed.save_preference = true,
             "-h" | "--help" => {
                 media_usage();
                 return Err("help requested".into());
@@ -312,13 +227,6 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
             other => return Err(format!("unknown media option: {other}").into()),
         }
         idx += 1;
-    }
-    if !parsed
-        .label
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-    {
-        return Err("--label must contain only letters, numbers, _, ., or -".into());
     }
     Ok(parsed)
 }
@@ -329,19 +237,7 @@ pub(crate) fn media_help_requested(args: &[String]) -> bool {
 }
 
 pub(crate) fn media_usage() {
-    println!(
-        "media options: --manifest-url URL --system id|all --variant identity|gzip|brotli|auto --variants identity,gzip,brotli --label LABEL --save-preference"
-    );
-}
-
-fn normalize_variant(raw: &str) -> Result<String> {
-    match raw {
-        "identity" | "none" | "plain" => Ok("identity".to_string()),
-        "gzip" | "gz" => Ok("gzip".to_string()),
-        "brotli" | "br" => Ok("brotli".to_string()),
-        "auto" => Ok("auto".to_string()),
-        other => Err(format!("unknown media variant: {other}").into()),
-    }
+    println!("media options: --manifest-url URL --system id|all");
 }
 
 fn load_manifest(url: &str) -> Result<MediaManifest> {
@@ -632,25 +528,6 @@ fn remote_pack_status(sess: &Session, pack: &MediaPack) -> Result<String> {
     Ok(exec_stdout(sess, &cmd)?.trim().to_string())
 }
 
-fn resolve_variant(sess: &Session, pack: &MediaPack, requested: &str) -> Result<String> {
-    if requested != "auto" {
-        return Ok(requested.to_string());
-    }
-    let cmd = format!(
-        "cat {} 2>/dev/null || true",
-        shell_quote(&remote_state_path())
-    );
-    let text = exec_stdout(sess, &cmd)?;
-    let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    Ok(value
-        .get("systems")
-        .and_then(|systems| systems.get(&pack.system))
-        .and_then(|system| system.get("preferred_variant"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| "identity".to_string()))
-}
-
 fn run_remote_media_download(
     sess: &Session,
     manifest: &MediaManifest,
@@ -663,7 +540,7 @@ fn run_remote_media_download(
     let remote_script = format!("/tmp/mister-magik-media-{}.sh", unix_ms_now());
     sftp_write(sess, &remote_script, script.as_bytes())?;
     let url = manifest_url_for_pack(manifest, pack);
-    let accept = accept_encoding_for_variant(variant);
+    let accept = "identity";
     let mode = if publish { "publish" } else { "bench" };
     let cmd = format!(
         "chmod +x {script}; {script} {mode} {label} {system} {variant} {accept} {url} {local} {sha} {bytes}; rc=$?; rm -f {script}; exit $rc",
@@ -769,15 +646,6 @@ fn parse_remote_row(line: &str) -> Result<RemoteBenchRow> {
         cf_cache_status: parts[15].to_string(),
         result: parts[16].to_string(),
     })
-}
-
-fn update_remote_state(
-    sess: &Session,
-    pack: &MediaPack,
-    variant: &str,
-    row: &RemoteBenchRow,
-) -> Result<()> {
-    update_remote_state_after_download(sess, pack, variant, Some(row), None)
 }
 
 fn update_remote_state_after_download(
@@ -996,93 +864,6 @@ fn manifest_url_for_object(manifest: &MediaManifest, object: &str) -> String {
 
 fn local_index_path_for_pack(pack: &MediaPack) -> String {
     format!("{}.idx", pack.local_path)
-}
-
-fn accept_encoding_for_variant(variant: &str) -> &'static str {
-    match variant {
-        "gzip" => "gzip",
-        "brotli" => "br",
-        "identity" | "auto" => "identity",
-        _ => "identity",
-    }
-}
-
-fn curl_headers(url: &str, accept_encoding: &str) -> Result<BTreeMap<String, String>> {
-    let out = Command::new("curl")
-        .args([
-            "-fsSI",
-            "-H",
-            &format!("Accept-Encoding: {accept_encoding}"),
-            url,
-        ])
-        .output()?;
-    if !out.status.success() {
-        return Err(format!(
-            "curl header probe failed for {url}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        )
-        .into());
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let mut headers = BTreeMap::new();
-    for line in text.lines() {
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
-    }
-    Ok(headers)
-}
-
-fn header_value<'a>(headers: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    headers.get(&name.to_ascii_lowercase()).map(String::as_str)
-}
-
-fn cloudflare_api_probe() -> Result<()> {
-    let (Ok(zone), Ok(token)) = (
-        env::var("CLOUDFLARE_ZONE_ID"),
-        env::var("CLOUDFLARE_API_TOKEN"),
-    ) else {
-        println!("cloudflare_api_probe\tskipped\tset CLOUDFLARE_ZONE_ID and CLOUDFLARE_API_TOKEN");
-        return Ok(());
-    };
-    let brotli = cloudflare_api_get(&zone, &token, "settings/brotli")?;
-    println!("cloudflare_api_brotli\t{}", one_line_json(&brotli));
-    match cloudflare_api_get(
-        &zone,
-        &token,
-        "rulesets/phases/http_response_compression/entrypoint",
-    ) {
-        Ok(ruleset) => println!(
-            "cloudflare_api_compression_rules\t{}",
-            one_line_json(&ruleset)
-        ),
-        Err(err) => println!("cloudflare_api_compression_rules\terror\t{err}"),
-    }
-    Ok(())
-}
-
-fn cloudflare_api_get(zone: &str, token: &str, path: &str) -> Result<Value> {
-    let url = format!("https://api.cloudflare.com/client/v4/zones/{zone}/{path}");
-    let out = Command::new("curl")
-        .args([
-            "-fsSL",
-            "-H",
-            &format!("Authorization: Bearer {token}"),
-            &url,
-        ])
-        .output()?;
-    if !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr)
-            .trim()
-            .to_string()
-            .into());
-    }
-    Ok(serde_json::from_slice(&out.stdout)?)
-}
-
-fn one_line_json(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn remote_script() -> String {
@@ -1334,20 +1115,6 @@ fn sftp_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
     let sftp = sess.sftp()?;
     let mut file = sftp.create(Path::new(remote))?;
     file.write_all(bytes)?;
-    Ok(())
-}
-
-fn append_profile_row(path: &str, header: &str, row: &str) -> Result<()> {
-    let path = Path::new(path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let needs_header = !path.exists() || path.metadata()?.len() == 0;
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if needs_header {
-        writeln!(file, "{header}")?;
-    }
-    writeln!(file, "{row}")?;
     Ok(())
 }
 
@@ -1700,44 +1467,23 @@ mod tests {
     }
 
     #[test]
-    fn media_args_normalize_variants_and_validate_labels() {
+    fn media_args_accept_only_manifest_and_system() {
         let args = vec![
             "--manifest-url".to_string(),
             "https://example.test/manifest.json".to_string(),
             "--system".to_string(),
             "nes".to_string(),
-            "--variant".to_string(),
-            "br".to_string(),
-            "--variants".to_string(),
-            "none,gz,brotli".to_string(),
-            "--label".to_string(),
-            "COV-20260624.1".to_string(),
-            "--save-preference".to_string(),
         ];
 
         let parsed = parse_media_args(&args).expect("parse media args");
 
         assert_eq!(parsed.manifest_url, "https://example.test/manifest.json");
         assert_eq!(parsed.system, "nes");
-        assert_eq!(parsed.variant, "brotli");
-        assert_eq!(
-            parsed.variants,
-            vec![
-                "identity".to_string(),
-                "gzip".to_string(),
-                "brotli".to_string()
-            ]
-        );
-        assert_eq!(parsed.label, "COV-20260624.1");
-        assert!(parsed.save_preference);
         assert!(media_help_requested(&["--help".to_string()]));
-        assert_eq!(accept_encoding_for_variant("gzip"), "gzip");
-        assert_eq!(accept_encoding_for_variant("brotli"), "br");
-        assert_eq!(accept_encoding_for_variant("unknown"), "identity");
     }
 
     #[test]
-    fn media_args_reject_missing_values_unknown_variants_and_bad_labels() {
+    fn media_args_reject_missing_values_and_unknown_options() {
         assert!(parse_media_args(&["--system".to_string()]).is_err());
         assert!(parse_media_args(&["--variant".to_string(), "zip".to_string()]).is_err());
         assert!(parse_media_args(&["--variants".to_string(), "gzip,zip".to_string()]).is_err());
@@ -1890,24 +1636,6 @@ mod tests {
     }
 
     #[test]
-    fn append_profile_row_writes_header_once() {
-        let dir = env::temp_dir().join(format!(
-            "mister-media-test-{}-{}",
-            std::process::id(),
-            unix_ms_now()
-        ));
-        let path = dir.join("bench.tsv");
-
-        append_profile_row(path.to_str().unwrap(), "col1\tcol2", "a\tb").unwrap();
-        append_profile_row(path.to_str().unwrap(), "col1\tcol2", "c\td").unwrap();
-
-        let text = fs::read_to_string(&path).unwrap();
-        assert_eq!(text, "col1\tcol2\na\tb\nc\td\n");
-
-        let _ = fs::remove_file(path);
-        let _ = fs::remove_dir(dir);
-    }
-
     #[test]
     fn manifest_parsing_rejects_incomplete_or_unsupported_packs() {
         let missing_schema = json!({ "packs": [] });

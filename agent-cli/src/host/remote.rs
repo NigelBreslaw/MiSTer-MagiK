@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::Result;
 
@@ -244,63 +244,6 @@ pub(crate) fn get(sess: &Session, remote: &str, local: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) struct TimedSession {
-    pub(crate) sess: Session,
-    pub(crate) resolve_ms: u128,
-    pub(crate) tcp_ms: u128,
-    pub(crate) handshake_ms: u128,
-    pub(crate) auth_ms: u128,
-}
-
-pub(crate) fn connect_timed(timeout_secs: u64) -> Result<TimedSession> {
-    connect_timed_with(&ConnectionConfig::from_environment(), timeout_secs)
-}
-
-pub(crate) fn connect_timed_with(
-    config: &ConnectionConfig,
-    timeout_secs: u64,
-) -> Result<TimedSession> {
-    let resolve_t = Instant::now();
-    let addr = format!("{}:22", config.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer host")?;
-    let resolve_ms = resolve_t.elapsed().as_millis();
-
-    let tcp_t = Instant::now();
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(timeout_secs))?;
-    let tcp_ms = tcp_t.elapsed().as_millis();
-    tcp.set_read_timeout(Some(Duration::from_secs(timeout_secs)))?;
-    tcp.set_write_timeout(Some(Duration::from_secs(timeout_secs)))?;
-
-    let mut sess = Session::new()?;
-    sess.set_tcp_stream(tcp);
-    let handshake_t = Instant::now();
-    sess.handshake()?;
-    let handshake_ms = handshake_t.elapsed().as_millis();
-    let auth_t = Instant::now();
-    sess.userauth_password(&config.user, &config.password)?;
-    let auth_ms = auth_t.elapsed().as_millis();
-    if !sess.authenticated() {
-        return Err("SSH password authentication failed".into());
-    }
-    Ok(TimedSession {
-        sess,
-        resolve_ms,
-        tcp_ms,
-        handshake_ms,
-        auth_ms,
-    })
-}
-
-pub(crate) fn sftp_write_profile(sess: &Session, remote: &str, bytes: &[u8]) -> Result<u128> {
-    let sftp = sess.sftp()?;
-    let t = Instant::now();
-    let mut dst = sftp.create(Path::new(remote))?;
-    dst.write_all(bytes)?;
-    Ok(t.elapsed().as_millis())
-}
-
 pub(crate) fn tcp_probe_label(timeout: Duration) -> String {
     tcp_probe_label_port(22, timeout)
 }
@@ -375,10 +318,6 @@ fn summarize_command_output(
         .find(|line| !line.is_empty())
         .unwrap_or("no matching output");
     format!("rc={} {}", code.unwrap_or(-1), text.replace('\t', " "))
-}
-
-pub(crate) fn port_open(timeout: Duration) -> bool {
-    port_open_with(&ConnectionConfig::from_environment(), timeout)
 }
 
 pub(crate) fn port_open_with(config: &ConnectionConfig, timeout: Duration) -> bool {

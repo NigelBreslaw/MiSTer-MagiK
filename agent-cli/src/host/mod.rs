@@ -29,19 +29,17 @@ mod platform_deploy;
 mod remote;
 
 use agent_client::{
-    AGENT_PORT, AgentEndpoint, agent_binary_request_bounded, agent_request, agent_request_at,
-    agent_request_with_liveness, agent_telemetry_for_duration,
-    agent_telemetry_for_particle_renderer_trial, agent_telemetry_for_particle_trial,
-    agent_telemetry_until_screensaver_profile_complete, agent_token, agent_token_for_device,
-    bootstrap_agent, bootstrap_agent_with,
+    AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
+    agent_telemetry_for_duration, agent_telemetry_for_particle_renderer_trial,
+    agent_telemetry_for_particle_trial, agent_telemetry_until_screensaver_profile_complete,
+    agent_token_for_device, bootstrap_agent, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
-    ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_timed,
-    connect_timed_with, connect_with, create_dir_command, exec, exec_failure_message, get, host,
-    host_wait_diagnostics_with, launcher_restart_command, port_open, port_open_with, put,
-    put_bytes, remote_subcommand, remove_files_command, sftp_write_profile, shell_quote as sh,
-    tcp_probe_label, tcp_probe_label_port,
+    ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_with,
+    create_dir_command, exec, exec_failure_message, get, host, host_wait_diagnostics_with,
+    launcher_restart_command, port_open_with, put, put_bytes, remote_subcommand,
+    remove_files_command, shell_quote as sh, tcp_probe_label, tcp_probe_label_port,
 };
 
 #[cfg(test)]
@@ -50,11 +48,7 @@ const DEFAULT_FB_W: usize = 1920;
 const DEFAULT_FB_H: usize = 1080;
 #[cfg(test)]
 const DEFAULT_FB_BPP: usize = 32;
-const MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES: usize = 16 * 1024 * 1024;
-const MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES: u64 = 17 * 1024 * 1024;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
-const DIRECT_RESET_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then exec 8>/tmp/mister-magik/command-operation.lock; flock 8; printf 'mister_magik_direct_reset\\n' > /dev/MiSTer_cmd; echo direct-reset; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
-const DIRECT_RESET_NO_SYNC_REMOTE_CMD: &str = "if [ -p /dev/MiSTer_cmd ] && { pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }; then exec 8>/tmp/mister-magik/command-operation.lock; flock 8; printf 'mister_magik_direct_reset_no_sync\\n' > /dev/MiSTer_cmd; echo direct-reset-no-sync; else echo 'direct reset unavailable: MagiK Main or /dev/MiSTer_cmd missing' >&2; exit 12; fi";
 #[cfg(test)]
 const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
 const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
@@ -75,43 +69,6 @@ fn configured_remote_path(name: &str, fallback: &str) -> String {
 enum RebootMode {
     Supervised,
     Raw,
-    DirectReset,
-    DirectResetNoSync,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SdListProtocol {
-    Auto,
-    V1,
-    V2,
-}
-
-impl SdListProtocol {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "v1" => Ok(Self::V1),
-            "v2" => Ok(Self::V2),
-            _ => Err(format!("unsupported SD list protocol: {value}").into()),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::V1 => "v1",
-            Self::V2 => "v2",
-        }
-    }
-}
-
-#[derive(Debug, Eq, PartialEq)]
-struct SdListOptions {
-    path: String,
-    protocol: SdListProtocol,
-    show_hidden: bool,
-    repeat: usize,
-    json: bool,
 }
 
 impl RebootMode {
@@ -119,13 +76,7 @@ impl RebootMode {
         match self {
             Self::Supervised => "supervised",
             Self::Raw => "raw",
-            Self::DirectReset => "direct-reset",
-            Self::DirectResetNoSync => "direct-reset-no-sync",
         }
-    }
-
-    fn is_direct_reset(self) -> bool {
-        matches!(self, Self::DirectReset | Self::DirectResetNoSync)
     }
 }
 
@@ -2389,127 +2340,14 @@ fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-struct LiveParticleCliOptions {
-    family: PathBuf,
-    demo: u8,
-}
-
-fn parse_live_particle_args(args: &[String]) -> Result<LiveParticleCliOptions> {
-    if args.first().map(String::as_str) != Some("particles") {
-        return Err("usage: mister live particles FAMILY.json --demo ID --attended".into());
-    }
-    let mut family = None;
-    let mut demo = None;
-    let mut attended = false;
-    let mut index = 1usize;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--demo" => {
-                if demo.is_some() {
-                    return Err("mister live particles accepts --demo once".into());
-                }
-                index += 1;
-                let value = args
-                    .get(index)
-                    .ok_or("mister live particles --demo needs an ID")?;
-                let parsed = value.parse::<u8>().map_err(|_| {
-                    format!("mister live particles demo must be in 1..=36: {value}")
-                })?;
-                if !(1..=36).contains(&parsed) {
-                    return Err(
-                        format!("mister live particles demo must be in 1..=36: {value}").into(),
-                    );
-                }
-                demo = Some(parsed);
-            }
-            "--attended" => {
-                if attended {
-                    return Err("mister live particles accepts --attended once".into());
-                }
-                attended = true;
-            }
-            option if option.starts_with('-') => {
-                return Err(format!("unknown mister live particles option: {option}").into());
-            }
-            path => {
-                if family.is_some() {
-                    return Err("mister live particles accepts one family file".into());
-                }
-                family = Some(PathBuf::from(path));
-            }
-        }
-        index += 1;
-    }
-    if !attended {
-        return Err("mister live particles requires --attended".into());
-    }
-    Ok(LiveParticleCliOptions {
-        family: family.ok_or("mister live particles needs FAMILY.json")?,
-        demo: demo.ok_or("mister live particles needs --demo ID")?,
-    })
-}
-
-fn device_failure_message(error: DeviceFailure) -> String {
-    let (kind, detail) = match error {
-        DeviceFailure::Busy(detail) => ("device busy", detail),
-        DeviceFailure::AccessDenied(detail) => ("device access denied", detail),
-        DeviceFailure::Unavailable(detail) => ("device unavailable", detail),
-        DeviceFailure::Authentication(detail) => ("authentication required", detail),
-        DeviceFailure::InvalidRequest(detail) => ("invalid device request", detail),
-        DeviceFailure::ArtifactMismatch(detail) => ("artifact mismatch", detail),
-        DeviceFailure::Unhealthy(detail) => ("device unhealthy", detail),
-        DeviceFailure::OperationFailed(detail) => ("device operation failed", detail),
-        DeviceFailure::RecoveryRequired(detail) => ("recovery required", detail),
-    };
-    format!("{kind}: {detail}")
-}
-
-fn live_cli(options: LiveParticleCliOptions) -> Result<()> {
-    let device_id = env::var("MISTER_DEVICE_ID")
-        .map_err(|_| "resolved MiSTer device identity is unavailable")?;
-    let explicit_token = env::var("MISTER_AGENT_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty());
-    let token = agent_token_for_device(&device_id, explicit_token.as_deref())?;
-    let mut device = NativeDevice {
-        config: Some(NativeDeviceConfig::new(
-            ConnectionConfig::from_environment(),
-            device_id,
-            token,
-        )),
-    };
-    let response = device
-        .execute(&DeviceRequest::WatchLiveParticles {
-            family: options.family,
-            demo: options.demo,
-        })
-        .map_err(device_failure_message)?;
-    println!("{}", response.detail);
-    Ok(())
-}
-
 pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
-    if args.is_empty() {
-        usage();
-        return Ok(());
-    }
-    let action = args.remove(0);
+    let Some(action) = args.first().cloned() else {
+        return Err("missing typed device operation".into());
+    };
+    args.remove(0);
     if action == "--capture-buffer" {
         validate_capture_buffer_args(&args)?;
     }
-    reject_retired_platform_command(&action)?;
-    let live_options = if action == "live" {
-        let options = parse_live_particle_args(&args)?;
-        if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
-            return Err(
-                "live particle editing is attended and requires an interactive terminal".into(),
-            );
-        }
-        Some(options)
-    } else {
-        None
-    };
     if action_uses_device(&action) {
         if env::var_os(RESOLVED_DEVICE_CHILD).is_none() {
             let device = discovery::resolve()?;
@@ -2530,34 +2368,11 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
         "display-mode" => display_mode_cli(&args)?,
         "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
-        "live" => live_cli(live_options.expect("live options validated before device setup"))?,
-        "connected" => println!("connected"),
-        "get" => {
-            if args.len() < 2 {
-                return Err("get needs <remote> <local>".into());
-            }
-            let sess = connect(10)?;
-            get(&sess, &args[0], Path::new(&args[1]))?;
-            println!("get {} -> {}", args[0], args[1]);
-        }
-        "db" | "library-db" => {
-            return Err(
-                "mister db was retired with Catalog V2; use mister catalog to validate Catalog V3"
-                    .into(),
-            );
-        }
         "catalog" => {
             let sess = connect(10)?;
             run_catalog_inspect(&sess, &args)?;
         }
         "catalog-query" => catalog_query(&args)?,
-        "wait" => {
-            let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
-            std::process::exit(wait_up(secs)?);
-        }
-        "connection-profile" => {
-            connection_profile(&args)?;
-        }
         "media-check" => {
             if media::media_help_requested(&args) {
                 media::media_usage();
@@ -2574,56 +2389,21 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
             let sess = connect(10)?;
             media::media_download(&sess, &args)?;
         }
-        "media-bench-download" => {
-            if media::media_help_requested(&args) {
-                media::media_usage();
-                return Ok(());
-            }
-            let sess = connect(10)?;
-            media::media_bench_download(&sess, &args)?;
-        }
-        "media-cloudflare-check" => {
-            media::media_cloudflare_check(&args)?;
-        }
         "launcher-restart" => {
-            if launcher_restart_help_requested(&args) {
-                launcher_restart_usage();
-                return Ok(());
+            if !args.is_empty() {
+                return Err("launcher restart accepts only --attended".into());
             }
-            let options = parse_launcher_restart_args(&args)?;
             let sess = connect(10)?;
-            launcher_restart(&sess, &options)?;
-        }
-        "boot-net-profile" => {
-            boot_net_profile(&args)?;
-        }
-        "boot-tcp-profile" => {
-            boot_tcp_profile(&args)?;
+            launcher_restart(
+                &sess,
+                &LauncherRestartOptions {
+                    clear_env: true,
+                    ..LauncherRestartOptions::default()
+                },
+            )?;
         }
         "agent" => {
             agent_cli(&args)?;
-        }
-        "watch-reboot" => {
-            watch_external_reboot(&args)?;
-        }
-        "reboot" | "reboot-wait" => {
-            let mode = take_reboot_mode_flag(&mut args)?;
-            let host = host();
-            {
-                let sess = connect(10)?;
-                let issued = issue_reboot(&sess, mode)?;
-                println!("reboot issued to {host} ({issued})");
-            }
-            if action == "reboot-wait" {
-                if !wait_down(40.0) {
-                    return Err(
-                        "reboot-wait did not observe the device go down; refusing to treat the existing SSH session as a reboot"
-                            .into(),
-                    );
-                }
-                let secs = args.first().and_then(|s| s.parse().ok()).unwrap_or(120.0);
-                std::process::exit(wait_up(secs)?);
-            }
         }
         "status" => {
             let json_out = args.iter().any(|a| a == "--json");
@@ -2634,100 +2414,6 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
             } else {
                 print_status_summary(&status);
             }
-        }
-        "delivery-health" => {
-            let layout = args.first().map(String::as_str).unwrap_or("dev");
-            let command = delivery_health_command(layout)?;
-            let sess = connect(10)?;
-            exec_checked(&sess, "delivery health", &command)?;
-            println!("healthy");
-        }
-        "doctor" => {
-            let json_out = args.iter().any(|a| a == "--json");
-            let sess = connect(10)?;
-            let status = collect_status(&sess)?;
-            let findings = doctor_findings(&status);
-            if json_out {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({"status": status, "findings": findings}))?
-                );
-            } else {
-                print_status_summary(&status);
-                println!("\nDoctor findings");
-                for (level, text) in findings {
-                    println!("  [{level}] {text}");
-                }
-            }
-        }
-        "boot-capture" => {
-            let keep_enabled = args.iter().any(|a| a == "--keep-enabled");
-            let deploy = args.iter().any(|a| a == "--deploy");
-            let settle = option_value(&args, "--settle")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(10);
-            boot_capture(deploy, keep_enabled, settle)?;
-        }
-        "display-read" => {
-            let unsafe_spi = args.iter().any(|a| a == "--unsafe-spi");
-            let json_out = args.iter().any(|a| a == "--json");
-            let sess = connect(10)?;
-            display_read(&sess, unsafe_spi, json_out)?;
-        }
-        "ini-repair-boot" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, IniEdit::MagikBoot, dry_run)?;
-        }
-        "ini-select-main" => {
-            let value = args
-                .first()
-                .ok_or("ini-select-main needs <MiSTer|MiSTer_MagiK|MiSTer_MagiKDev>")?;
-            if !matches!(
-                value.as_str(),
-                "MiSTer" | "MiSTer_MagiK" | "MiSTer_MagiKDev"
-            ) {
-                return Err("unsupported main selection".into());
-            }
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, IniEdit::SelectMain(value.clone()), dry_run)?;
-        }
-        "inittab-ensure-stock" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            ensure_stock_inittab(&sess, dry_run)?;
-        }
-        "ini-repair-arcade-video" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, IniEdit::ArcadeVideo, dry_run)?;
-        }
-        "ini-restore-stock" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, IniEdit::StockBoot, dry_run)?;
-        }
-        "ini-zaparoo-boot" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, IniEdit::ZaparooBoot, dry_run)?;
-        }
-        "ini-edit" => {
-            let dry_run = args.last().map(String::as_str) == Some("--dry-run");
-            if dry_run {
-                args.pop();
-            }
-            validate_ini_edit_args(&args)?;
-            let edit = parse_ini_edit_args(&args)?;
-            let sess = connect(10)?;
-            edit_remote_ini(&sess, edit, dry_run)?;
-        }
-        "profile-summary" => {
-            let path = args
-                .first()
-                .ok_or("profile-summary needs <frame-profile.tsv>")?;
-            profile_summary(Path::new(path))?;
         }
         "mame-metadata-build" => {
             mame_metadata_build(&args)?;
@@ -2743,20 +2429,6 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
                 arcade_database::import(Path::new(&sqlite), Path::new(&csv), &source_sha)?;
             println!("{}", serde_json::to_string(&summary)?);
         }
-        "recover" => {
-            let dry_run = args.iter().any(|a| a == "--dry-run");
-            if !dry_run {
-                return Err("recover currently supports --dry-run only".into());
-            }
-            let sess = connect(10)?;
-            let status = collect_status(&sess)?;
-            println!("Dry-run recovery suggestions");
-            for (_, text) in doctor_findings(&status) {
-                println!("  - {text}");
-            }
-            println!("  - Mutating recovery is intentionally not implemented yet.");
-        }
-        "-h" | "--help" => usage(),
         other => return Err(format!("unknown action: {other}").into()),
     }
     Ok(())
@@ -2771,14 +2443,6 @@ fn install_resolved_device_environment(device: &discovery::Device) {
         env::set_var("MISTER_DEVICE_ID", &device.id);
         env::set_var(RESOLVED_DEVICE_CHILD, "1");
     }
-}
-
-const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|live|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build|arcade-database-import> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       live particles FAMILY.json --demo ID --attended\n         ID: 1..=36; Ctrl-C restores the launcher and removes volatile live state\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       arcade-database-import --sqlite <mame.sqlite3> --csv <ArcadeDatabase.csv> --source-sha <commit>\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
-
-fn usage() {
-    println!("{CLI_USAGE}");
-    println!("       crt probe --attended --pattern PATTERN --seconds 20 --out DIRECTORY");
-    println!("       display-matrix optional evidence: --usb-video [--screensaver-wait SECONDS]");
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -11039,103 +10703,21 @@ fn percentile_99(values: &[u64]) -> u64 {
 }
 
 fn action_uses_device(action: &str) -> bool {
-    !matches!(
-        action,
-        "mame-metadata-build"
-            | "arcade-database-import"
-            | "profile-summary"
-            | "-h"
-            | "--help"
-            | "platform-deploy"
-            | "platform-deliver"
-            | "platform-rollback"
-            | "platform-commit"
-    )
+    !matches!(action, "mame-metadata-build" | "arcade-database-import")
 }
 
 fn action_requires_agent(action: &str) -> bool {
     matches!(action, "--capture-buffer" | "agent")
 }
 
-const RETIRED_PLATFORM_COMMAND_ERROR: &str =
-    "platform deployment is only available through scripts/agent deliver";
-
-fn reject_retired_platform_command(action: &str) -> Result<()> {
-    if is_retired_platform_command(action) {
-        Err(RETIRED_PLATFORM_COMMAND_ERROR.into())
-    } else {
-        Ok(())
-    }
-}
-
-fn is_retired_platform_command(action: &str) -> bool {
-    matches!(
-        action,
-        "platform-deploy" | "platform-deliver" | "platform-rollback" | "platform-commit"
-    )
-}
-
-fn take_reboot_mode_flag(args: &mut Vec<String>) -> Result<RebootMode> {
-    let mut flags = Vec::new();
-    for flag in [
-        "--supervised",
-        "--raw",
-        "--direct-reset",
-        "--direct-reset-no-sync",
-    ] {
-        if let Some(pos) = args.iter().position(|arg| arg == flag) {
-            args.remove(pos);
-            flags.push(flag);
-        }
-    }
-    reboot_mode_from_flags(&flags)
-}
-
-fn reboot_mode_from_args(args: &[String]) -> Result<RebootMode> {
-    let flags: Vec<_> = args
-        .iter()
-        .map(String::as_str)
-        .filter(|arg| {
-            matches!(
-                *arg,
-                "--supervised" | "--raw" | "--direct-reset" | "--direct-reset-no-sync"
-            )
-        })
-        .collect();
-    reboot_mode_from_flags(&flags)
-}
-
-fn reboot_mode_from_flags(flags: &[&str]) -> Result<RebootMode> {
-    if flags.len() > 1 {
-        return Err(
-            "use only one of --supervised, --raw, --direct-reset, or --direct-reset-no-sync".into(),
-        );
-    }
-    Ok(match flags.first().copied() {
-        None | Some("--supervised") => RebootMode::Supervised,
-        Some("--raw") => RebootMode::Raw,
-        Some("--direct-reset") => RebootMode::DirectReset,
-        Some("--direct-reset-no-sync") => RebootMode::DirectResetNoSync,
-        Some(other) => return Err(format!("unsupported reboot mode flag: {other}").into()),
-    })
-}
-
 fn reboot_remote_command(mode: RebootMode) -> String {
     match mode {
         RebootMode::Supervised => acknowledged_main_command("mister_magik_reboot"),
         RebootMode::Raw => RAW_REBOOT_REMOTE_CMD.to_string(),
-        RebootMode::DirectReset => DIRECT_RESET_REMOTE_CMD.to_string(),
-        RebootMode::DirectResetNoSync => DIRECT_RESET_NO_SYNC_REMOTE_CMD.to_string(),
     }
 }
 
 fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
-    if mode.is_direct_reset() {
-        eprintln!(
-            "WARNING: {} uses Main's direct reset-manager path; it can bypass normal Linux shutdown and previously reproduced Ethernet RX stalls.",
-            mode.label()
-        );
-    }
     let command = reboot_remote_command(mode);
     let out = exec(sess, &command, true)?;
     let mode = out.stdout.trim();
@@ -12293,20 +11875,6 @@ fn parse_wc_byte_count(text: &str) -> Option<u64> {
     text.split_whitespace().next()?.parse::<u64>().ok()
 }
 
-fn append_profile_row(path: &str, header: &str, row: &str) -> Result<()> {
-    let path = Path::new(path);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let needs_header = !path.exists() || path.metadata()?.len() == 0;
-    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-    if needs_header {
-        writeln!(file, "{header}")?;
-    }
-    writeln!(file, "{row}")?;
-    Ok(())
-}
-
 fn unix_ms_now() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -12314,136 +11882,9 @@ fn unix_ms_now() -> u128 {
         .as_millis()
 }
 
-fn bytes_for_profile(size: usize) -> Vec<u8> {
-    let mut x = 0x4d49_5354_4552_4d47u64;
-    let mut bytes = Vec::with_capacity(size);
-    while bytes.len() < size {
-        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
-        bytes.extend_from_slice(&x.to_le_bytes());
-    }
-    bytes.truncate(size);
-    bytes
-}
-
-fn parse_profile_count(args: &[String], default: usize) -> usize {
-    let mut skip_value = false;
-    for arg in args {
-        if skip_value {
-            skip_value = false;
-            continue;
-        }
-        if matches!(
-            arg.as_str(),
-            "--bytes" | "--timeout" | "--probe-timeout-ms" | "--sleep-ms"
-        ) {
-            skip_value = true;
-            continue;
-        }
-        if arg.starts_with('-') {
-            continue;
-        }
-        if let Ok(samples) = arg.parse::<usize>() {
-            return samples;
-        }
-    }
-    default
-}
-
-fn parse_profile_bytes(args: &[String], default: usize) -> usize {
-    option_value(args, "--bytes")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(default)
-}
-
-fn connection_profile(args: &[String]) -> Result<()> {
-    let samples = parse_profile_count(args, 5);
-    let bytes_len = parse_profile_bytes(args, 4 * 1024 * 1024);
-    let out_path = "history/toolchain-bench/results-connection-profile.tsv";
-    let header = "kind\tts_unix_ms\tsample\thost\tbytes\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tsftp_init_ms\tput_tmp_ms\tput_tmp_mib_s\tput_fat_ms\tput_fat_mib_s\tuptime\tnote";
-    println!("{header}");
-    let bytes = bytes_for_profile(bytes_len);
-    for sample in 1..=samples {
-        let ts = unix_ms_now();
-        match connect_timed(10) {
-            Ok(timed) => {
-                let exec_t = Instant::now();
-                let uptime_out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                let exec_ms = exec_t.elapsed().as_millis();
-                let uptime = uptime_out.stdout.split_whitespace().next().unwrap_or("");
-                let sftp_t = Instant::now();
-                let _ = timed.sess.sftp()?;
-                let sftp_init_ms = sftp_t.elapsed().as_millis();
-                let tag = format!("{}-{sample}-{ts}", std::process::id());
-                let tmp_remote = format!("/tmp/mister-magik-profile-{tag}.bin");
-                let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
-                let fat_remote = format!("{app}/profile-tmp-{tag}.bin");
-                let put_tmp_ms = sftp_write_profile(&timed.sess, &tmp_remote, &bytes)?;
-                let _ = exec(
-                    &timed.sess,
-                    &format!("mkdir -p {} >/dev/null 2>&1 || true", sh(&app)),
-                    true,
-                );
-                let put_fat_ms = sftp_write_profile(&timed.sess, &fat_remote, &bytes)?;
-                let _ = exec(
-                    &timed.sess,
-                    &format!("rm -f {} {}", sh(&tmp_remote), sh(&fat_remote)),
-                    true,
-                );
-                let mib = bytes_len as f64 / (1024.0 * 1024.0);
-                let tmp_mib_s = if put_tmp_ms > 0 {
-                    mib * 1000.0 / put_tmp_ms as f64
-                } else {
-                    0.0
-                };
-                let fat_mib_s = if put_fat_ms > 0 {
-                    mib * 1000.0 / put_fat_ms as f64
-                } else {
-                    0.0
-                };
-                let row = format!(
-                    "connection\t{ts}\t{sample}\t{}\t{bytes_len}\t{}\t{}\t{}\t{}\t{exec_ms}\t{sftp_init_ms}\t{put_tmp_ms}\t{tmp_mib_s:.2}\t{put_fat_ms}\t{fat_mib_s:.2}\t{uptime}\tok",
-                    host(),
-                    timed.resolve_ms,
-                    timed.tcp_ms,
-                    timed.handshake_ms,
-                    timed.auth_ms
-                );
-                println!("{row}");
-                append_profile_row(out_path, header, &row)?;
-            }
-            Err(err) => {
-                let row = format!(
-                    "connection\t{ts}\t{sample}\t{}\t{bytes_len}\t\t\t\t\t\t\t\t\t\t\t\tERROR: {err}",
-                    host()
-                );
-                println!("{row}");
-                append_profile_row(out_path, header, &row)?;
-            }
-        }
-        thread::sleep(Duration::from_millis(300));
-    }
-    eprintln!("connection-profile: appended {samples} row(s) to {out_path}");
-    Ok(())
-}
-
 fn agent_cli(args: &[String]) -> Result<()> {
     let subcommand = args.first().map(String::as_str).unwrap_or("status");
     match subcommand {
-        "ping" => {
-            let reply = agent_request("ping", json!({}), Duration::from_secs(2))?;
-            println!(
-                "agent pong after {}ms: {}",
-                reply.elapsed_ms,
-                serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
-            );
-        }
-        "status" => {
-            let reply = agent_request("status", json!({}), Duration::from_secs(2))?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(reply.response.get("result").unwrap_or(&Value::Null))?
-            );
-        }
         "logs" => {
             let json_out = args.iter().any(|arg| arg == "--json");
             let reply = agent_request("logs", json!({}), Duration::from_secs(2))?;
@@ -12487,20 +11928,8 @@ fn agent_cli(args: &[String]) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(result)?);
             }
         }
-        "sd-list" => {
-            agent_sd_list(&args[1..])?;
-        }
         "diagnostics" => {
             agent_diagnostics(&args[1..])?;
-        }
-        "framebuffer-capture" => {
-            agent_framebuffer_capture(&args[1..])?;
-        }
-        "framebuffer-capture-raw" => {
-            agent_framebuffer_capture_raw(&args[1..])?;
-        }
-        "framebuffer-capture-lz4" => {
-            agent_framebuffer_capture_lz4(&args[1..])?;
         }
         "magik" => {
             agent_magik(&args[1..])?;
@@ -12508,135 +11937,7 @@ fn agent_cli(args: &[String]) -> Result<()> {
         "reboot-wait" => {
             agent_reboot_wait(&args[1..])?;
         }
-        "boot-profile" => {
-            agent_boot_profile(&args[1..])?;
-        }
-        "-h" | "--help" => agent_usage(),
         other => return Err(format!("unknown agent subcommand: {other}").into()),
-    }
-    Ok(())
-}
-
-fn agent_usage() {
-    println!(
-        "usage: mister agent <ping|status|logs|timeline|sd-list|diagnostics|framebuffer-capture|framebuffer-capture-raw|framebuffer-capture-lz4|magik|reboot-wait|boot-profile>\n       logs [--json]\n       timeline [--json]\n       sd-list PATH [--protocol auto|v1|v2] [--show-hidden] [--repeat N] [--json]\n       diagnostics [--out DIR]\n       framebuffer-capture OUT.png [--json OUT.json]\n       framebuffer-capture-raw OUT.raw [--json OUT.json]\n       framebuffer-capture-lz4 OUT.raw [--json OUT.json]\n       magik <status|suspend|resume|restart-launcher>\n       reboot-wait [--timeout SECS] [--raw|--direct-reset|--direct-reset-no-sync]\n       boot-profile [samples] [--timeout SECS] [--probe-timeout-ms MS] [--sleep-ms MS] [--raw|--direct-reset|--direct-reset-no-sync] [--fail-on-timeout]"
-    );
-}
-
-fn parse_sd_list_options(args: &[String]) -> Result<SdListOptions> {
-    let mut path = None;
-    let mut protocol = SdListProtocol::Auto;
-    let mut show_hidden = false;
-    let mut repeat = 1_usize;
-    let mut json = false;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--protocol" => {
-                index += 1;
-                protocol = SdListProtocol::parse(
-                    args.get(index)
-                        .ok_or("agent sd-list --protocol needs auto, v1, or v2")?,
-                )?;
-            }
-            "--show-hidden" => show_hidden = true,
-            "--repeat" => {
-                index += 1;
-                repeat = args
-                    .get(index)
-                    .ok_or("agent sd-list --repeat needs a positive integer")?
-                    .parse::<usize>()?;
-                if repeat == 0 {
-                    return Err("agent sd-list --repeat must be positive".into());
-                }
-            }
-            "--json" => json = true,
-            option if option.starts_with('-') => {
-                return Err(format!("unknown agent sd-list option: {option}").into());
-            }
-            value => {
-                if path.replace(value.to_string()).is_some() {
-                    return Err("agent sd-list takes one PATH".into());
-                }
-            }
-        }
-        index += 1;
-    }
-    Ok(SdListOptions {
-        path: path.ok_or("agent sd-list needs PATH")?,
-        protocol,
-        show_hidden,
-        repeat,
-        json,
-    })
-}
-
-fn request_sd_list(
-    protocol: SdListProtocol,
-    path: &str,
-    show_hidden: bool,
-) -> Result<(SdListProtocol, agent_client::AgentResponse)> {
-    let args = json!({"path": path, "show_hidden": show_hidden});
-    match protocol {
-        SdListProtocol::V1 => Ok((
-            SdListProtocol::V1,
-            agent_request("sd_list_dir", args, Duration::from_secs(10))?,
-        )),
-        SdListProtocol::V2 => Ok((
-            SdListProtocol::V2,
-            agent_request("sd_list_dir_v2", args, Duration::from_secs(10))?,
-        )),
-        SdListProtocol::Auto => {
-            match agent_request("sd_list_dir_v2", args.clone(), Duration::from_secs(10)) {
-                Ok(reply) => Ok((SdListProtocol::V2, reply)),
-                Err(err) if err.to_string() == "unknown cmd" => Ok((
-                    SdListProtocol::V1,
-                    agent_request("sd_list_dir", args, Duration::from_secs(10))?,
-                )),
-                Err(err) => Err(err),
-            }
-        }
-    }
-}
-
-fn agent_sd_list(args: &[String]) -> Result<()> {
-    let options = parse_sd_list_options(args)?;
-    let mut measurements = Vec::with_capacity(options.repeat);
-    for run in 1..=options.repeat {
-        let (protocol, reply) =
-            request_sd_list(options.protocol, &options.path, options.show_hidden)?;
-        let result = reply.response.get("result").unwrap_or(&Value::Null);
-        let entries = result
-            .get("entries")
-            .and_then(Value::as_array)
-            .map(Vec::len)
-            .unwrap_or(0);
-        let agent_elapsed_ms = result
-            .get("elapsed_ms")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let measurement = json!({
-            "run": run,
-            "requested_protocol": options.protocol.label(),
-            "protocol": protocol.label(),
-            "path": options.path,
-            "show_hidden": options.show_hidden,
-            "entries": entries,
-            "agent_elapsed_ms": agent_elapsed_ms,
-            "round_trip_ms": reply.elapsed_ms,
-        });
-        if !options.json {
-            println!(
-                "sd_list\trun={run}\tprotocol={}\tpath={}\tentries={entries}\tagent_ms={agent_elapsed_ms}\tround_trip_ms={}",
-                protocol.label(),
-                options.path,
-                reply.elapsed_ms
-            );
-        }
-        measurements.push(measurement);
-    }
-    if options.json {
-        println!("{}", serde_json::to_string_pretty(&measurements)?);
     }
     Ok(())
 }
@@ -12966,244 +12267,6 @@ fn desktop_capture_path(desktop: &Path, timestamp: &str, suffix: u64) -> PathBuf
     desktop.join(format!("MiSTer Framebuffer {timestamp}{suffix}.png"))
 }
 
-fn agent_framebuffer_capture(args: &[String]) -> Result<()> {
-    let mut output = None;
-    let mut json_output = None;
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--json" => {
-                idx += 1;
-                let path = args
-                    .get(idx)
-                    .ok_or("agent framebuffer-capture --json needs OUT.json")?;
-                json_output = Some(PathBuf::from(path));
-            }
-            "-h" | "--help" => {
-                println!("usage: mister agent framebuffer-capture OUT.png [--json OUT.json]");
-                return Ok(());
-            }
-            other if other.starts_with('-') => {
-                return Err(format!("unknown framebuffer-capture option: {other}").into());
-            }
-            path => {
-                if output.is_some() {
-                    return Err("agent framebuffer-capture takes one OUT.png path".into());
-                }
-                output = Some(PathBuf::from(path));
-            }
-        }
-        idx += 1;
-    }
-    let output = output.ok_or("agent framebuffer-capture needs OUT.png")?;
-    if let Some(parent) = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let capture = request_framebuffer_png()?;
-    let result = &capture.result;
-    fs::write(&output, &capture.png)?;
-
-    let metadata = framebuffer_capture_metadata(result, capture.elapsed_ms, &output);
-    if let Some(path) = json_output {
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, serde_json::to_vec_pretty(&metadata)?)?;
-    }
-
-    let width = result.get("width").and_then(Value::as_u64).unwrap_or(0);
-    let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
-    let png_bytes = result
-        .get("png_bytes")
-        .and_then(Value::as_u64)
-        .unwrap_or(capture.png.len() as u64);
-    println!(
-        "framebuffer_capture: {} ({}x{}, source={}, {}, {}ms)",
-        output.display(),
-        width,
-        height,
-        capture_source_label(result)?,
-        format_bytes_nearest_kb(png_bytes),
-        capture.elapsed_ms
-    );
-    Ok(())
-}
-
-fn agent_framebuffer_capture_raw(args: &[String]) -> Result<()> {
-    agent_framebuffer_capture_binary(args, "raw")
-}
-
-fn agent_framebuffer_capture_lz4(args: &[String]) -> Result<()> {
-    agent_framebuffer_capture_binary(args, "lz4")
-}
-
-fn agent_framebuffer_capture_binary(args: &[String], encoding: &str) -> Result<()> {
-    let mut output = None;
-    let mut json_output = None;
-    let command_name = if encoding == "lz4" {
-        "framebuffer-capture-lz4"
-    } else {
-        "framebuffer-capture-raw"
-    };
-    let mut idx = 0;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--json" => {
-                idx += 1;
-                let path = args
-                    .get(idx)
-                    .ok_or_else(|| format!("agent {command_name} --json needs OUT.json"))?;
-                json_output = Some(PathBuf::from(path));
-            }
-            "-h" | "--help" => {
-                println!("usage: mister agent {command_name} OUT.raw [--json OUT.json]");
-                return Ok(());
-            }
-            other if other.starts_with('-') => {
-                return Err(format!("unknown {command_name} option: {other}").into());
-            }
-            path => {
-                if output.is_some() {
-                    return Err(format!("agent {command_name} takes one OUT.raw path").into());
-                }
-                output = Some(PathBuf::from(path));
-            }
-        }
-        idx += 1;
-    }
-    let output = output.ok_or_else(|| format!("agent {command_name} needs OUT.raw"))?;
-    if let Some(parent) = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-
-    let agent_command = if encoding == "lz4" {
-        "framebuffer_capture_lz4_stream"
-    } else {
-        "framebuffer_capture_raw_stream"
-    };
-    let reply = agent_binary_request_bounded(
-        agent_command,
-        json!({}),
-        Duration::from_secs(10),
-        MAX_FRAMEBUFFER_CAPTURE_PAYLOAD_BYTES,
-    )?;
-    let result = reply
-        .response
-        .get("result")
-        .ok_or("agent framebuffer binary response missing result")?;
-    validate_capture_contract_schema(result, "mister-magik-framebuffer-raw-stream-v2")?;
-    let expected_raw = result
-        .get("raw_bytes")
-        .and_then(Value::as_u64)
-        .map(usize::try_from)
-        .transpose()?
-        .ok_or("agent framebuffer response missing raw_bytes")?;
-    if expected_raw > MAX_FRAMEBUFFER_CAPTURE_RAW_BYTES {
-        return Err(
-            format!("framebuffer capture raw payload too large: {expected_raw} bytes").into(),
-        );
-    }
-    let raw = if encoding == "lz4" {
-        decompress_framebuffer_capture_lz4(&reply.payload, expected_raw)?
-    } else {
-        reply.payload.clone()
-    };
-    if raw.len() != expected_raw {
-        return Err(format!(
-            "decoded framebuffer size mismatch expected={expected_raw} actual={}",
-            raw.len()
-        )
-        .into());
-    }
-    fs::write(&output, &raw)?;
-    let metadata = framebuffer_capture_raw_metadata(result, reply.elapsed_ms, &output);
-    if let Some(path) = json_output {
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, serde_json::to_vec_pretty(&metadata)?)?;
-    }
-
-    let width = result.get("width").and_then(Value::as_u64).unwrap_or(0);
-    let height = result.get("height").and_then(Value::as_u64).unwrap_or(0);
-    let bpp = result.get("bpp").and_then(Value::as_u64).unwrap_or(0);
-    println!(
-        "framebuffer_capture_{encoding}: {} ({}x{} {}bpp, {} payload, {} raw, {}ms)",
-        output.display(),
-        width,
-        height,
-        bpp,
-        format_bytes_nearest_kb(reply.payload.len() as u64),
-        format_bytes_nearest_kb(raw.len() as u64),
-        reply.elapsed_ms
-    );
-    Ok(())
-}
-
-fn decompress_framebuffer_capture_lz4(payload: &[u8], expected_raw: usize) -> Result<Vec<u8>> {
-    let (prefixed_raw, compressed) = lz4_flex::block::uncompressed_size(payload)?;
-    if prefixed_raw != expected_raw {
-        return Err(format!(
-            "framebuffer capture LZ4 size prefix mismatch expected={expected_raw} actual={prefixed_raw}"
-        )
-        .into());
-    }
-    let mut raw = Vec::new();
-    raw.try_reserve_exact(expected_raw)?;
-    raw.resize(expected_raw, 0);
-    let actual = lz4_flex::block::decompress_into(compressed, &mut raw)?;
-    if actual != expected_raw {
-        return Err(format!(
-            "decoded framebuffer size mismatch expected={expected_raw} actual={actual}"
-        )
-        .into());
-    }
-    Ok(raw)
-}
-
-fn framebuffer_capture_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
-    let mut metadata = result.clone();
-    if let Value::Object(ref mut object) = metadata {
-        object.remove("png_hex");
-        object.insert("transport".to_string(), Value::String("agent".to_string()));
-        object.insert("request_ms".to_string(), Value::from(request_ms as u64));
-        object.insert(
-            "png_path".to_string(),
-            Value::String(output.display().to_string()),
-        );
-    }
-    metadata
-}
-
-fn framebuffer_capture_raw_metadata(result: &Value, request_ms: u128, output: &Path) -> Value {
-    let mut metadata = result.clone();
-    if let Value::Object(ref mut object) = metadata {
-        object.insert(
-            "transport".to_string(),
-            Value::String("agent-raw-stream".to_string()),
-        );
-        object.insert("request_ms".to_string(), Value::from(request_ms as u64));
-        object.insert(
-            "raw_path".to_string(),
-            Value::String(output.display().to_string()),
-        );
-    }
-    metadata
-}
-
 fn decode_hex(hex: &str) -> Result<Vec<u8>> {
     if !hex.len().is_multiple_of(2) {
         return Err("hex payload has odd length".into());
@@ -13237,14 +12300,6 @@ fn encode_hex(bytes: &[u8]) -> String {
         out.push(HEX[(byte & 0x0f) as usize] as char);
     }
     out
-}
-
-fn format_bytes_nearest_kb(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
-    } else {
-        format!("{} KB", (bytes + 512) / 1024)
-    }
 }
 
 fn agent_magik(args: &[String]) -> Result<()> {
@@ -13341,35 +12396,27 @@ fn format_agent_magik_summary(action: &str, request_ms: u128, result: &Value) ->
     )
 }
 
+fn opt_ms(value: Option<u128>) -> String {
+    value
+        .map(|milliseconds| milliseconds.to_string())
+        .unwrap_or_default()
+}
+
 fn agent_reboot_wait(args: &[String]) -> Result<()> {
-    let reboot_mode = reboot_mode_from_args(args)?;
-    let timeout_secs = option_value(args, "--timeout")
-        .and_then(|s| s.parse::<f64>().ok())
-        .or_else(|| {
-            args.iter()
-                .find(|arg| !arg.starts_with('-'))
-                .and_then(|arg| arg.parse::<f64>().ok())
-        })
-        .unwrap_or(40.0);
+    if !args.is_empty() {
+        return Err("device reboot accepts only --attended".into());
+    }
+    let reboot_mode = RebootMode::Supervised;
+    let timeout_secs = 120.0;
     let mode = reboot_mode.label();
     let issue_t = Instant::now();
-    if reboot_mode.is_direct_reset() {
-        let sess = connect(10)?;
-        let issued = issue_reboot(&sess, reboot_mode)?;
-        let issue_ms = issue_t.elapsed().as_millis();
-        println!(
-            "agent reboot issued to {} after {issue_ms}ms: {issued}",
-            host()
-        );
-    } else {
-        let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
-        let issue_ms = issue_t.elapsed().as_millis();
-        println!(
-            "agent reboot issued to {} after {issue_ms}ms: {}",
-            host(),
-            serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
-        );
-    }
+    let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
+    let issue_ms = issue_t.elapsed().as_millis();
+    println!(
+        "agent reboot issued to {} after {issue_ms}ms: {}",
+        host(),
+        serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
+    );
 
     let start = Instant::now();
     let mut down_ms = None;
@@ -13399,10 +12446,10 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
             }
         }
         if ssh_ready_ms.is_none() {
-            let ssh_probe = connect_timed(2);
+            let ssh_probe = connect(2);
             match ssh_probe {
-                Ok(timed) => {
-                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
+                Ok(session) => {
+                    let out = exec(&session, "cat /proc/uptime", true)?;
                     if out.rc == 0 {
                         ssh_ready_ms = Some(start.elapsed().as_millis());
                         let ssh_uptime = out.stdout.split_whitespace().next().unwrap_or("");
@@ -13503,80 +12550,6 @@ fn launcher_restart(sess: &Session, options: &LauncherRestartOptions) -> Result<
         ready.screen
     );
     Ok(())
-}
-
-fn launcher_restart_help_requested(args: &[String]) -> bool {
-    args.iter()
-        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
-}
-
-fn launcher_restart_usage() {
-    println!(
-        "usage: mister launcher-restart [--env KEY=VALUE]... [--clear-env] [--timeout SECS] [--remote-env PATH]"
-    );
-}
-
-fn parse_launcher_restart_args(args: &[String]) -> Result<LauncherRestartOptions> {
-    let mut options = LauncherRestartOptions::default();
-    let mut idx = 0usize;
-    while idx < args.len() {
-        match args[idx].as_str() {
-            "--env" => {
-                idx += 1;
-                let item = args
-                    .get(idx)
-                    .ok_or("launcher-restart --env needs KEY=VALUE")?;
-                let (key, value) = parse_launcher_env_pair(item)?;
-                options.env_vars.push((key, value));
-            }
-            "--clear-env" => {
-                options.clear_env = true;
-            }
-            "--timeout" => {
-                idx += 1;
-                let value = args
-                    .get(idx)
-                    .ok_or("launcher-restart --timeout needs seconds")?;
-                options.timeout_secs = value.parse::<u64>().map_err(|_| {
-                    format!("launcher-restart --timeout must be an integer: {value}")
-                })?;
-                if options.timeout_secs == 0 {
-                    return Err("launcher-restart --timeout must be positive".into());
-                }
-            }
-            "--remote-env" => {
-                idx += 1;
-                options.remote_env = args
-                    .get(idx)
-                    .ok_or("launcher-restart --remote-env needs a path")?
-                    .clone();
-            }
-            "-h" | "--help" => launcher_restart_usage(),
-            other => return Err(format!("unknown launcher-restart option: {other}").into()),
-        }
-        idx += 1;
-    }
-    if options.clear_env && !options.env_vars.is_empty() {
-        return Err("launcher-restart cannot combine --clear-env with --env".into());
-    }
-    let _ = remote_parent_dir(&options.remote_env)?;
-    Ok(options)
-}
-
-fn parse_launcher_env_pair(item: &str) -> Result<(String, String)> {
-    let (key, value) = item
-        .split_once('=')
-        .ok_or_else(|| format!("launcher env must be KEY=VALUE: {item}"))?;
-    if !is_launcher_env_key(key) {
-        return Err(format!("invalid launcher env key: {key}").into());
-    }
-    Ok((key.to_string(), value.to_string()))
-}
-
-fn is_launcher_env_key(key: &str) -> bool {
-    let mut chars = key.chars();
-    matches!(chars.next(), Some(ch) if ch == '_' || ch.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
 }
 
 fn launcher_env_text(vars: &[(String, String)]) -> String {
@@ -14101,720 +13074,6 @@ fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Re
     Ok(())
 }
 
-fn agent_probe_label(timeout: Duration) -> String {
-    match agent_request("ping", json!({}), timeout) {
-        Ok(_) => "ok".to_string(),
-        Err(err) => {
-            let text = err.to_string();
-            if text.contains("Connection refused") || text.contains("connection refused") {
-                "refused".to_string()
-            } else if text.contains("timed out") || text.contains("TimedOut") {
-                "timeout".to_string()
-            } else if text.contains("No route to host") {
-                "noroute".to_string()
-            } else if text.contains("Host is down") {
-                "hostdown".to_string()
-            } else {
-                text.replace('\t', " ").replace(' ', "_")
-            }
-        }
-    }
-}
-
-fn agent_boot_profile(args: &[String]) -> Result<()> {
-    let _ = agent_token()?;
-    let samples = parse_profile_count(args, 1);
-    let reboot_mode = reboot_mode_from_args(args)?;
-    let fail_on_timeout = args.iter().any(|arg| arg == "--fail-on-timeout");
-    let timeout_secs = option_value(args, "--timeout")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(40.0);
-    let probe_timeout_ms = option_value(args, "--probe-timeout-ms")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(100);
-    let sleep_ms = option_value(args, "--sleep-ms")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(50);
-    let mode = reboot_mode.label();
-    let out_path = "history/toolchain-bench/results-agent.tsv";
-    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tagent_ready_ms\tssh_exec_ready_ms\tagent_first_hostdown_ms\tagent_first_noroute_ms\tagent_first_timeout_ms\tagent_first_refused_ms\tagent_first_other_ms\tagent_ok_count\tagent_hostdown_count\tagent_noroute_count\tagent_timeout_count\tagent_refused_count\tagent_other_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tagent_uptime_ms\tssh_uptime\tagent_transitions\tnote";
-    println!("{header}");
-
-    let mut recovered = 0usize;
-    let mut worst_agent_ready_ms: Option<u128> = None;
-    let mut worst_ssh_ready_ms: Option<u128> = None;
-    let mut total_noroute = 0u64;
-    let mut total_timeout = 0u64;
-    let mut total_refused = 0u64;
-
-    for sample in 1..=samples {
-        let ts = unix_ms_now();
-        let issue_t = Instant::now();
-        let reboot_note = {
-            let sess = connect(10)?;
-            issue_reboot(&sess, reboot_mode)?
-        };
-        let reboot_issue_ms = issue_t.elapsed().as_millis();
-        let start = Instant::now();
-        let mut down_ms = None;
-        while start.elapsed().as_secs_f64() < 40.0 {
-            let ssh_label = tcp_probe_label(Duration::from_millis(100));
-            let agent_label = tcp_probe_label_port(AGENT_PORT, Duration::from_millis(100));
-            if ssh_label != "ok" && agent_label != "ok" {
-                down_ms = Some(start.elapsed().as_millis());
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        let mut agent_stats = TcpProbeStats::default();
-        let mut agent_ready_ms = None;
-        let mut agent_uptime_ms = String::new();
-        let mut ssh_ready_ms = None;
-        let mut resolve_ms = None;
-        let mut tcp_ms = None;
-        let mut handshake_ms = None;
-        let mut auth_ms = None;
-        let mut exec_ms = None;
-        let mut ssh_uptime = String::new();
-        let mut main_status_ms = None;
-        let mut launcher_state = String::new();
-        let mut note = reboot_note;
-        let mut first_agent_net = None;
-        let mut final_agent_net = None;
-
-        while start.elapsed().as_secs_f64() < timeout_secs {
-            let elapsed_ms = start.elapsed().as_millis();
-            if agent_ready_ms.is_none() {
-                let label = agent_probe_label(Duration::from_millis(probe_timeout_ms));
-                agent_stats.observe(&label, elapsed_ms);
-                if label == "ok" {
-                    agent_ready_ms = Some(elapsed_ms);
-                    let status = agent_request("status", json!({}), Duration::from_millis(500));
-                    if let Ok(reply) = status {
-                        first_agent_net = agent_net_snapshot(&reply.response);
-                        agent_uptime_ms = reply
-                            .response
-                            .pointer("/result/agent/uptime_ms")
-                            .and_then(Value::as_u64)
-                            .map(|n| n.to_string())
-                            .unwrap_or_default();
-                    }
-                }
-            }
-
-            if ssh_ready_ms.is_none() {
-                let ssh_probe = connect_timed(2);
-                match ssh_probe {
-                    Ok(timed) => {
-                        let exec_t = Instant::now();
-                        let out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                        let this_exec_ms = exec_t.elapsed().as_millis();
-                        if out.rc == 0 {
-                            ssh_ready_ms = Some(start.elapsed().as_millis());
-                            resolve_ms = Some(timed.resolve_ms);
-                            tcp_ms = Some(timed.tcp_ms);
-                            handshake_ms = Some(timed.handshake_ms);
-                            auth_ms = Some(timed.auth_ms);
-                            exec_ms = Some(this_exec_ms);
-                            ssh_uptime = out
-                                .stdout
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
-
-                            let status_deadline = Instant::now() + Duration::from_secs(20);
-                            while Instant::now() < status_deadline
-                                && start.elapsed().as_secs_f64() < timeout_secs
-                            {
-                                if let Some(text) =
-                                    remote_read(&timed.sess, "/tmp/mister-magik/main-status.json")
-                                    && let Ok(value) = serde_json::from_str::<Value>(&text)
-                                {
-                                    main_status_ms = Some(start.elapsed().as_millis());
-                                    launcher_state = value
-                                        .get("launcher_state")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or("")
-                                        .to_string();
-                                    if launcher_state == "LauncherActive" {
-                                        break;
-                                    }
-                                }
-                                thread::sleep(Duration::from_millis(250));
-                            }
-                        } else {
-                            note = format!("exec rc {}", out.rc);
-                        }
-                    }
-                    Err(err) => {
-                        note = err.to_string();
-                    }
-                }
-            }
-
-            if agent_ready_ms.is_some()
-                && ssh_ready_ms.is_some()
-                && launcher_state == "LauncherActive"
-            {
-                break;
-            }
-            thread::sleep(Duration::from_millis(sleep_ms));
-        }
-
-        if agent_ready_ms.is_some() {
-            let status = agent_request("status", json!({}), Duration::from_millis(500));
-            if let Ok(reply) = status {
-                final_agent_net = agent_net_snapshot(&reply.response);
-            }
-        }
-
-        let agent_rx_delta = first_agent_net
-            .as_ref()
-            .zip(final_agent_net.as_ref())
-            .map(|(first, final_)| final_.rx_packets.saturating_sub(first.rx_packets));
-        let agent_tx_delta = first_agent_net
-            .as_ref()
-            .zip(final_agent_net.as_ref())
-            .map(|(first, final_)| final_.tx_packets.saturating_sub(first.tx_packets));
-        let agent_carrier = final_agent_net
-            .as_ref()
-            .map(|snapshot| snapshot.carrier.as_str())
-            .unwrap_or("missing");
-        let agent_final_rx_packets = final_agent_net.as_ref().map(|snapshot| snapshot.rx_packets);
-        let agent_final_tx_packets = final_agent_net.as_ref().map(|snapshot| snapshot.tx_packets);
-        let agent_rx_increasing = agent_rx_delta.map(|delta| delta > 0).unwrap_or(false);
-        let agent_rx_nonzero = agent_final_rx_packets
-            .map(|packets| packets > 0)
-            .unwrap_or(false);
-        let transitions = agent_stats.transitions.join(",");
-        let note = format!(
-            "{} main_status_ms={} launcher_state={} agent_carrier={} agent_rx_packets={} agent_tx_packets={} agent_rx_delta={} agent_tx_delta={} agent_rx_increasing={} agent_rx_nonzero={}",
-            note,
-            opt_ms(main_status_ms),
-            if launcher_state.is_empty() {
-                "missing"
-            } else {
-                &launcher_state
-            },
-            agent_carrier,
-            agent_final_rx_packets
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "missing".to_string()),
-            agent_final_tx_packets
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "missing".to_string()),
-            agent_rx_delta
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "missing".to_string()),
-            agent_tx_delta
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "missing".to_string()),
-            u8::from(agent_rx_increasing),
-            u8::from(agent_rx_nonzero)
-        );
-        let row = format!(
-            "agent-boot\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{agent_uptime_ms}\t{ssh_uptime}\t{}\t{}",
-            host(),
-            opt_ms(down_ms),
-            opt_ms(agent_ready_ms),
-            opt_ms(ssh_ready_ms),
-            opt_ms(agent_stats.first_hostdown_ms),
-            opt_ms(agent_stats.first_noroute_ms),
-            opt_ms(agent_stats.first_timeout_ms),
-            opt_ms(agent_stats.first_refused_ms),
-            opt_ms(agent_stats.first_other_ms),
-            agent_stats.ok_count,
-            agent_stats.hostdown_count,
-            agent_stats.noroute_count,
-            agent_stats.timeout_count,
-            agent_stats.refused_count,
-            agent_stats.other_count,
-            opt_ms(resolve_ms),
-            opt_ms(tcp_ms),
-            opt_ms(handshake_ms),
-            opt_ms(auth_ms),
-            opt_ms(exec_ms),
-            transitions.replace('\t', " "),
-            note.replace('\t', " ")
-        );
-        println!("{row}");
-        append_profile_row(out_path, header, &row)?;
-
-        total_noroute += agent_stats.noroute_count;
-        total_timeout += agent_stats.timeout_count;
-        total_refused += agent_stats.refused_count;
-        if let Some(ms) = agent_ready_ms {
-            worst_agent_ready_ms = Some(worst_agent_ready_ms.map_or(ms, |old| old.max(ms)));
-        }
-        if let Some(ms) = ssh_ready_ms {
-            worst_ssh_ready_ms = Some(worst_ssh_ready_ms.map_or(ms, |old| old.max(ms)));
-        }
-
-        let sample_recovered = down_ms.is_some()
-            && agent_ready_ms.is_some()
-            && ssh_ready_ms.is_some()
-            && launcher_state == "LauncherActive"
-            && agent_rx_nonzero
-            && agent_rx_increasing;
-        if sample_recovered {
-            recovered += 1;
-        } else if fail_on_timeout {
-            return Err(format!(
-                "agent boot-profile sample {sample}/{samples} failed mode={mode}: down_ms={} agent_ready_ms={} ssh_exec_ready_ms={} main_status_ms={} launcher_state={} note={}",
-                opt_ms(down_ms),
-                opt_ms(agent_ready_ms),
-                opt_ms(ssh_ready_ms),
-                opt_ms(main_status_ms),
-                if launcher_state.is_empty() { "missing" } else { &launcher_state },
-                note
-            )
-            .into());
-        }
-        thread::sleep(Duration::from_secs(2));
-    }
-
-    eprintln!(
-        "agent boot-profile: {recovered}/{samples} {mode} reboots recovered; worst_agent_ready_ms={} worst_ssh_ready_ms={} noroute={} timeout={} refused={}",
-        opt_ms(worst_agent_ready_ms),
-        opt_ms(worst_ssh_ready_ms),
-        total_noroute,
-        total_timeout,
-        total_refused
-    );
-    eprintln!("agent boot-profile: appended {samples} row(s) to {out_path}");
-    Ok(())
-}
-
-fn boot_net_profile(args: &[String]) -> Result<()> {
-    let samples = parse_profile_count(args, 3);
-    let reboot_mode = reboot_mode_from_args(args)?;
-    let timeout_secs = option_value(args, "--timeout")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(120.0);
-    let mode = reboot_mode.label();
-    let out_path = "history/toolchain-bench/results-boot-net.tsv";
-    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\ttcp22_ms\tssh_exec_ready_ms\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tmain_status_ms\tslint_status_ms\tuptime\tlauncher_state\tslint_frames\tnote";
-    println!("{header}");
-    for sample in 1..=samples {
-        let ts = unix_ms_now();
-        let issue_t = Instant::now();
-        let reboot_note = {
-            let sess = connect(10)?;
-            issue_reboot(&sess, reboot_mode)?
-        };
-        let reboot_issue_ms = issue_t.elapsed().as_millis();
-        let start = Instant::now();
-        let mut down_ms = None;
-        while start.elapsed().as_secs_f64() < 40.0 {
-            if !port_open(Duration::from_millis(200)) {
-                down_ms = Some(start.elapsed().as_millis());
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        let recovery = measure_reboot_recovery(start, timeout_secs, reboot_note)?;
-
-        let row = format!(
-            "boot-net\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            host(),
-            opt_ms(down_ms),
-            opt_ms(recovery.tcp22_ms),
-            opt_ms(recovery.ssh_ready_ms),
-            opt_ms(recovery.resolve_ms),
-            opt_ms(recovery.tcp_ms),
-            opt_ms(recovery.handshake_ms),
-            opt_ms(recovery.auth_ms),
-            opt_ms(recovery.exec_ms),
-            opt_ms(recovery.main_status_ms),
-            opt_ms(recovery.slint_status_ms),
-            recovery.uptime,
-            recovery.launcher_state,
-            recovery.slint_frames,
-            recovery.note.replace('\t', " ")
-        );
-        println!("{row}");
-        append_profile_row(out_path, header, &row)?;
-        thread::sleep(Duration::from_secs(2));
-    }
-    eprintln!("boot-net-profile: appended {samples} row(s) to {out_path}");
-    Ok(())
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-struct RebootRecoveryMeasurement {
-    tcp22_ms: Option<u128>,
-    ssh_ready_ms: Option<u128>,
-    resolve_ms: Option<u128>,
-    tcp_ms: Option<u128>,
-    handshake_ms: Option<u128>,
-    auth_ms: Option<u128>,
-    exec_ms: Option<u128>,
-    main_status_ms: Option<u128>,
-    slint_status_ms: Option<u128>,
-    uptime: String,
-    launcher_state: String,
-    slint_frames: String,
-    note: String,
-}
-
-fn measure_reboot_recovery(
-    start: Instant,
-    timeout_secs: f64,
-    initial_note: String,
-) -> Result<RebootRecoveryMeasurement> {
-    let mut measurement = RebootRecoveryMeasurement {
-        note: initial_note,
-        ..Default::default()
-    };
-    while start.elapsed().as_secs_f64() < timeout_secs {
-        if measurement.tcp22_ms.is_none() && port_open(Duration::from_millis(150)) {
-            measurement.tcp22_ms = Some(start.elapsed().as_millis());
-        }
-        match connect_timed(2) {
-            Ok(timed) => {
-                let exec_t = Instant::now();
-                let out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                if out.rc != 0 {
-                    measurement.note = format!("exec rc {}", out.rc);
-                    thread::sleep(Duration::from_millis(250));
-                    continue;
-                }
-                measurement.ssh_ready_ms = Some(start.elapsed().as_millis());
-                measurement.resolve_ms = Some(timed.resolve_ms);
-                measurement.tcp_ms = Some(timed.tcp_ms);
-                measurement.handshake_ms = Some(timed.handshake_ms);
-                measurement.auth_ms = Some(timed.auth_ms);
-                measurement.exec_ms = Some(exec_t.elapsed().as_millis());
-                measurement.uptime = out
-                    .stdout
-                    .split_whitespace()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
-                let status_deadline = Instant::now() + Duration::from_secs(20);
-                while Instant::now() < status_deadline {
-                    update_reboot_status(&mut measurement, &timed.sess, start);
-                    if measurement.main_status_ms.is_some() && measurement.slint_status_ms.is_some()
-                    {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(250));
-                }
-                break;
-            }
-            Err(error) => measurement.note = error.to_string(),
-        }
-        thread::sleep(Duration::from_millis(250));
-    }
-    Ok(measurement)
-}
-
-fn update_reboot_status(
-    measurement: &mut RebootRecoveryMeasurement,
-    sess: &Session,
-    start: Instant,
-) {
-    let main = remote_read(sess, MAIN_STATUS_REMOTE)
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    let slint = remote_read(sess, SLINT_STATUS_REMOTE)
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    apply_reboot_status(
-        measurement,
-        main.as_ref(),
-        slint.as_ref(),
-        start.elapsed().as_millis(),
-    );
-}
-
-fn apply_reboot_status(
-    measurement: &mut RebootRecoveryMeasurement,
-    main: Option<&Value>,
-    slint: Option<&Value>,
-    elapsed_ms: u128,
-) {
-    if measurement.main_status_ms.is_none()
-        && let Some(value) = main
-    {
-        measurement.main_status_ms = Some(elapsed_ms);
-        measurement.launcher_state = value
-            .get("launcher_state")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-    }
-    if measurement.slint_status_ms.is_none()
-        && let Some(value) = slint
-    {
-        measurement.slint_status_ms = Some(elapsed_ms);
-        measurement.slint_frames = value
-            .get("frames")
-            .and_then(Value::as_u64)
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-    }
-}
-
-#[derive(Default)]
-struct TcpProbeStats {
-    ok_count: u64,
-    hostdown_count: u64,
-    noroute_count: u64,
-    timeout_count: u64,
-    refused_count: u64,
-    other_count: u64,
-    first_ok_ms: Option<u128>,
-    first_hostdown_ms: Option<u128>,
-    first_noroute_ms: Option<u128>,
-    first_timeout_ms: Option<u128>,
-    first_refused_ms: Option<u128>,
-    first_other_ms: Option<u128>,
-    last_label: String,
-    transitions: Vec<String>,
-}
-
-impl TcpProbeStats {
-    fn observe(&mut self, label: &str, elapsed_ms: u128) {
-        match label {
-            "ok" => {
-                self.ok_count += 1;
-                self.first_ok_ms.get_or_insert(elapsed_ms);
-            }
-            "hostdown" => {
-                self.hostdown_count += 1;
-                self.first_hostdown_ms.get_or_insert(elapsed_ms);
-            }
-            "noroute" => {
-                self.noroute_count += 1;
-                self.first_noroute_ms.get_or_insert(elapsed_ms);
-            }
-            "timeout" => {
-                self.timeout_count += 1;
-                self.first_timeout_ms.get_or_insert(elapsed_ms);
-            }
-            "refused" => {
-                self.refused_count += 1;
-                self.first_refused_ms.get_or_insert(elapsed_ms);
-            }
-            _ => {
-                self.other_count += 1;
-                self.first_other_ms.get_or_insert(elapsed_ms);
-            }
-        }
-
-        if self.last_label != label {
-            self.transitions.push(format!("{elapsed_ms}:{label}"));
-            self.last_label = label.to_string();
-        }
-    }
-}
-
-fn boot_tcp_profile(args: &[String]) -> Result<()> {
-    let samples = parse_profile_count(args, 1);
-    let reboot_mode = reboot_mode_from_args(args)?;
-    let timeout_secs = option_value(args, "--timeout")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(40.0);
-    let probe_timeout_ms = option_value(args, "--probe-timeout-ms")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(100);
-    let sleep_ms = option_value(args, "--sleep-ms")
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(50);
-    let mode = reboot_mode.label();
-    let out_path = "history/toolchain-bench/results-boot-tcp.tsv";
-    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\tfirst_ok_ms\tssh_exec_ready_ms\tfirst_hostdown_ms\tfirst_noroute_ms\tfirst_timeout_ms\tfirst_refused_ms\tfirst_other_ms\tok_count\thostdown_count\tnoroute_count\ttimeout_count\trefused_count\tother_count\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tuptime\ttransitions\tnote";
-    println!("{header}");
-
-    for sample in 1..=samples {
-        let ts = unix_ms_now();
-        let issue_t = Instant::now();
-        let reboot_note = {
-            let sess = connect(10)?;
-            issue_reboot(&sess, reboot_mode)?
-        };
-        let reboot_issue_ms = issue_t.elapsed().as_millis();
-        let start = Instant::now();
-        let mut down_ms = None;
-        while start.elapsed().as_secs_f64() < 40.0 {
-            if !port_open(Duration::from_millis(200)) {
-                down_ms = Some(start.elapsed().as_millis());
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-
-        let mut stats = TcpProbeStats::default();
-        let mut ssh_ready_ms = None;
-        let mut resolve_ms = None;
-        let mut tcp_ms = None;
-        let mut handshake_ms = None;
-        let mut auth_ms = None;
-        let mut exec_ms = None;
-        let mut uptime = String::new();
-        let mut note = reboot_note;
-
-        while start.elapsed().as_secs_f64() < timeout_secs {
-            let elapsed_ms = start.elapsed().as_millis();
-            let label = tcp_probe_label(Duration::from_millis(probe_timeout_ms));
-            stats.observe(&label, elapsed_ms);
-            if label == "ok" {
-                break;
-            }
-            thread::sleep(Duration::from_millis(sleep_ms));
-        }
-
-        let ssh_deadline = Instant::now() + Duration::from_secs(8);
-        while Instant::now() < ssh_deadline {
-            match connect_timed(2) {
-                Ok(timed) => {
-                    let exec_t = Instant::now();
-                    let out = exec(&timed.sess, "cat /proc/uptime", true)?;
-                    let this_exec_ms = exec_t.elapsed().as_millis();
-                    if out.rc == 0 {
-                        ssh_ready_ms = Some(start.elapsed().as_millis());
-                        resolve_ms = Some(timed.resolve_ms);
-                        tcp_ms = Some(timed.tcp_ms);
-                        handshake_ms = Some(timed.handshake_ms);
-                        auth_ms = Some(timed.auth_ms);
-                        exec_ms = Some(this_exec_ms);
-                        uptime = out
-                            .stdout
-                            .split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string();
-                        break;
-                    }
-                    note = format!("exec rc {}", out.rc);
-                }
-                Err(err) => {
-                    note = err.to_string();
-                }
-            }
-            thread::sleep(Duration::from_millis(150));
-        }
-
-        let transitions = stats.transitions.join(",");
-        let row = format!(
-            "boot-tcp\t{ts}\t{sample}\t{mode}\t{}\t{reboot_issue_ms}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{uptime}\t{}\t{}",
-            host(),
-            opt_ms(down_ms),
-            opt_ms(stats.first_ok_ms),
-            opt_ms(ssh_ready_ms),
-            opt_ms(stats.first_hostdown_ms),
-            opt_ms(stats.first_noroute_ms),
-            opt_ms(stats.first_timeout_ms),
-            opt_ms(stats.first_refused_ms),
-            opt_ms(stats.first_other_ms),
-            stats.ok_count,
-            stats.hostdown_count,
-            stats.noroute_count,
-            stats.timeout_count,
-            stats.refused_count,
-            stats.other_count,
-            opt_ms(resolve_ms),
-            opt_ms(tcp_ms),
-            opt_ms(handshake_ms),
-            opt_ms(auth_ms),
-            opt_ms(exec_ms),
-            transitions.replace('\t', " "),
-            note.replace('\t', " ")
-        );
-        println!("{row}");
-        append_profile_row(out_path, header, &row)?;
-        thread::sleep(Duration::from_secs(2));
-    }
-
-    eprintln!("boot-tcp-profile: appended {samples} row(s) to {out_path}");
-    Ok(())
-}
-
-fn watch_external_reboot(args: &[String]) -> Result<()> {
-    let timeout_secs = option_value(args, "--timeout")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(120.0);
-    let wait_down_secs = option_value(args, "--wait-down")
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(180.0);
-    let out_path = "history/toolchain-bench/results-boot-net.tsv";
-    let header = "kind\tts_unix_ms\tsample\tmode\thost\treboot_issue_ms\tdown_ms\ttcp22_ms\tssh_exec_ready_ms\tresolve_ms\ttcp_ms\thandshake_ms\tauth_ms\texec_ms\tmain_status_ms\tslint_status_ms\tuptime\tlauncher_state\tslint_frames\tnote";
-    println!("{header}");
-    eprintln!(
-        "watch-reboot: waiting up to {wait_down_secs:.0}s for {}:22 to go down...",
-        host()
-    );
-    let ts = unix_ms_now();
-    let wait_start = Instant::now();
-    while wait_start.elapsed().as_secs_f64() < wait_down_secs {
-        if !port_open(Duration::from_millis(200)) {
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    if wait_start.elapsed().as_secs_f64() >= wait_down_secs {
-        return Err(format!("device did not go down within {wait_down_secs:.0}s").into());
-    }
-    let start = Instant::now();
-    eprintln!("watch-reboot: device went down; timing reconnect...");
-
-    let recovery = measure_reboot_recovery(start, timeout_secs, String::from("external"))?;
-
-    let row = format!(
-        "boot-net\t{ts}\t1\texternal\t{}\t\t0\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-        host(),
-        opt_ms(recovery.tcp22_ms),
-        opt_ms(recovery.ssh_ready_ms),
-        opt_ms(recovery.resolve_ms),
-        opt_ms(recovery.tcp_ms),
-        opt_ms(recovery.handshake_ms),
-        opt_ms(recovery.auth_ms),
-        opt_ms(recovery.exec_ms),
-        opt_ms(recovery.main_status_ms),
-        opt_ms(recovery.slint_status_ms),
-        recovery.uptime,
-        recovery.launcher_state,
-        recovery.slint_frames,
-        recovery.note.replace('\t', " ")
-    );
-    println!("{row}");
-    append_profile_row(out_path, header, &row)?;
-    if recovery.ssh_ready_ms.is_some() {
-        Ok(())
-    } else {
-        Err(format!("device not ready after {timeout_secs:.0}s").into())
-    }
-}
-
-fn opt_ms(value: Option<u128>) -> String {
-    value.map(|v| v.to_string()).unwrap_or_default()
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct AgentNetSnapshot {
-    carrier: String,
-    rx_packets: u64,
-    tx_packets: u64,
-}
-
-fn agent_net_snapshot(value: &Value) -> Option<AgentNetSnapshot> {
-    let result = value.get("result").unwrap_or(value);
-    Some(AgentNetSnapshot {
-        carrier: result
-            .pointer("/network/carrier")
-            .and_then(Value::as_str)?
-            .to_string(),
-        rx_packets: result
-            .pointer("/network/stats/rx_packets")
-            .and_then(Value::as_u64)?,
-        tx_packets: result
-            .pointer("/network/stats/tx_packets")
-            .and_then(Value::as_u64)?,
-    })
-}
-
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
         return Err(
@@ -15015,8 +13274,8 @@ fn remote_write(sess: &Session, remote: &str, bytes: &[u8]) -> Result<()> {
 }
 
 fn userspace_ready_fast_with(connection: &ConnectionConfig) -> Option<String> {
-    let timed = connect_timed_with(connection, 2).ok()?;
-    let out = exec(&timed.sess, "pidof MiSTer || echo BOOTING", true).ok()?;
+    let session = connect_with(connection, 2).ok()?;
+    let out = exec(&session, "pidof MiSTer || echo BOOTING", true).ok()?;
     Some(out.stdout.trim().to_string())
 }
 
@@ -15089,22 +13348,14 @@ fn remote_trim(sess: &Session, path: &str) -> Option<String> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum IniEdit {
-    MagikBoot,
     MenuOutput(MenuOutputProfile),
     SelectMain(String),
     RestoreMain(Option<String>),
-    RestoreDevelopmentMenu,
-    ZaparooBoot,
-    ArcadeVideo,
     MenuMode(String),
-    StockBoot,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuOutputProfile {
-    Hdmi,
-    HdmiMode(&'static str),
-    Auto,
     Crt240p60,
     Crt288p50,
     Crt480p60,
@@ -15112,76 +13363,14 @@ enum MenuOutputProfile {
 }
 
 impl MenuOutputProfile {
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "hdmi" => Ok(Self::Hdmi),
-            "1280x720p60" => Ok(Self::HdmiMode("0")),
-            "1024x768p60" => Ok(Self::HdmiMode("1")),
-            "720x480p60" => Ok(Self::HdmiMode("2")),
-            "720x576p50" => Ok(Self::HdmiMode("3")),
-            "1280x1024p60" => Ok(Self::HdmiMode("4")),
-            "800x600p60" => Ok(Self::HdmiMode("5")),
-            "640x480p60" => Ok(Self::HdmiMode("6")),
-            "1280x720p50" => Ok(Self::HdmiMode("7")),
-            "1920x1080p60" => Ok(Self::HdmiMode("8")),
-            "1920x1080p50" => Ok(Self::HdmiMode("9")),
-            "1366x768p60" => Ok(Self::HdmiMode("10")),
-            "1024x600p60" => Ok(Self::HdmiMode("11")),
-            "1920x1440p60" => Ok(Self::HdmiMode("12")),
-            "2048x1536p60" => Ok(Self::HdmiMode("13")),
-            "2560x1440p60" => Err("Mister does not support 1440p".into()),
-            "auto" => Ok(Self::Auto),
-            "crt-240p60" => Ok(Self::Crt240p60),
-            "crt-288p50" => Ok(Self::Crt288p50),
-            "crt-480p60" => Ok(Self::Crt480p60),
-            "crt-576p50" => Ok(Self::Crt576p50),
-            other => Err(format!("unsupported Menu output profile: {other}").into()),
-        }
-    }
-
     fn settings(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            Self::Hdmi | Self::HdmiMode(_) => ("0", "0", "0"),
-            Self::Auto => ("2", "0", "0"),
             Self::Crt240p60 => ("1", "0", "0"),
             Self::Crt288p50 => ("1", "1", "0"),
             Self::Crt480p60 => ("1", "0", "1"),
             Self::Crt576p50 => ("1", "1", "1"),
         }
     }
-
-    fn video_mode(self) -> Option<&'static str> {
-        match self {
-            Self::HdmiMode(mode) => Some(mode),
-            _ => None,
-        }
-    }
-}
-
-fn parse_ini_edit_args(args: &[String]) -> Result<IniEdit> {
-    validate_ini_edit_args(args)?;
-    match args.first().map(String::as_str) {
-        Some("menu") => Ok(IniEdit::MenuOutput(MenuOutputProfile::parse(&args[1])?)),
-        Some("restore-development-menu") => Ok(IniEdit::RestoreDevelopmentMenu),
-        Some("stock-boot") => Ok(IniEdit::StockBoot),
-        _ => unreachable!("validated ini-edit arguments must parse"),
-    }
-}
-
-fn validate_ini_edit_args(args: &[String]) -> Result<()> {
-    match args.first().map(String::as_str) {
-        Some("menu") if args.len() == 2 => {
-            MenuOutputProfile::parse(&args[1])?;
-        }
-        Some("restore-development-menu") if args.len() == 1 => {}
-        Some("stock-boot") if args.len() == 1 => {}
-        Some("menu" | "restore-development-menu" | "stock-boot") => {
-            return Err("ini-edit received the wrong number of arguments".into());
-        }
-        Some(other) => return Err(format!("unsupported ini-edit operation: {other}").into()),
-        None => return Err("ini edit mode is required".into()),
-    }
-    Ok(())
 }
 
 fn edit_remote_ini(sess: &Session, edit: IniEdit, dry_run: bool) -> Result<()> {
@@ -15261,21 +13450,11 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
         .expect("host-provided MiSTer.ini must be valid");
 
     match edit {
-        IniEdit::MagikBoot => {
-            document.set("MiSTer", "forced_scandoubler", "0");
-            document.set("MiSTer", "menu_pal", "0");
-            document.set("MiSTer", "direct_video", "2");
-            document.set("MiSTer", "main", "MiSTer_MagiK");
-            document.set("Menu", "video_mode", "8");
-        }
         IniEdit::MenuOutput(profile) => {
             let (direct_video, menu_pal, forced_scandoubler) = profile.settings();
             document.set("Menu", "direct_video", direct_video);
             document.set("Menu", "menu_pal", menu_pal);
             document.set("Menu", "forced_scandoubler", forced_scandoubler);
-            if let Some(video_mode) = profile.video_mode() {
-                document.set("Menu", "video_mode", video_mode);
-            }
         }
         IniEdit::SelectMain(value) => {
             document.set("MiSTer", "main", &value);
@@ -15288,43 +13467,8 @@ fn edit_mister_ini(input: &str, edit: IniEdit) -> String {
                 "MiSTer MagiK alpha acceptance restored absent value",
             ),
         },
-        IniEdit::RestoreDevelopmentMenu => {
-            document.set("MiSTer", "main", "MiSTer_MagiKDev");
-            document.remove(
-                "Menu",
-                "video_mode",
-                "MiSTer MagiK benchmark override removed",
-            );
-            document.remove(
-                "Menu",
-                "direct_video",
-                "MiSTer MagiK benchmark override removed",
-            );
-        }
-        IniEdit::ZaparooBoot => {
-            document.set("MiSTer", "direct_video", "0");
-            document.set("MiSTer", "main", "zaparoo/MiSTer_Zaparoo");
-            document.set("Menu", "direct_video", "0");
-            document.set("Menu", "video_mode", "8");
-        }
-        IniEdit::ArcadeVideo => {
-            document.set("MiSTer", "direct_video", "0");
-            document.set("arcade", "direct_video", "1");
-            document.set("arcade_vertical", "direct_video", "0");
-            document.set("arcade_vertical", "video_mode", "8");
-            document.set("arcade_vertical", "vscale_mode", "1");
-            document.ensure_section_after("arcade", "arcade_vertical");
-        }
         IniEdit::MenuMode(mode) => {
             document.set("Menu", "video_mode", &mode);
-        }
-        IniEdit::StockBoot => {
-            document.comment_if_value(
-                "MiSTer",
-                "main",
-                &["MiSTer_MagiK", "MiSTer_MagiKDev", "mister-magik-fb"],
-                "MiSTer MagiK stock boot restore",
-            );
         }
     }
 
@@ -15792,311 +13936,6 @@ fn ini_value<'a>(status: &'a Value, section: &str, key: &str) -> Option<&'a str>
     status["boot"]["ini_keys"][section][key]["value"].as_str()
 }
 
-fn ini_line(status: &Value, section: &str, key: &str) -> Option<u64> {
-    status["boot"]["ini_keys"][section][key]["line"].as_u64()
-}
-
-fn doctor_findings(status: &Value) -> Vec<(String, String)> {
-    let mut findings = Vec::new();
-    let expected_main =
-        std::env::var("MISTER_MAGIK_MAIN_NAME").unwrap_or_else(|_| "MiSTer_MagiK".to_string());
-    if ini_value(status, "MiSTer", "main") != Some(expected_main.as_str()) {
-        findings.push((
-            "error".into(),
-            format!("[MiSTer] main is not {expected_main}"),
-        ));
-    }
-    if !matches!(
-        ini_value(status, "Menu", "direct_video"),
-        Some("0" | "1" | "2")
-    ) {
-        findings.push((
-            "warn".into(),
-            "[Menu] direct_video is not HDMI (0), CRT (1), or automatic (2)".into(),
-        ));
-    }
-    for key in ["menu_pal", "forced_scandoubler"] {
-        if !matches!(ini_value(status, "Menu", key), Some("0" | "1")) {
-            findings.push(("warn".into(), format!("[Menu] {key} is not 0 or 1")));
-        }
-    }
-    if ini_value(status, "arcade", "direct_video") != Some("1") {
-        findings.push((
-            "warn".into(),
-            "[arcade] direct_video is not 1; normal arcade games will use scaler output".into(),
-        ));
-    }
-    if ini_value(status, "arcade_vertical", "direct_video") != Some("0") {
-        findings.push((
-            "warn".into(),
-            "[arcade_vertical] direct_video is not 0; rotated games may bypass MiSTer rotation"
-                .into(),
-        ));
-    }
-    if ini_value(status, "arcade_vertical", "video_mode") != Some("8") {
-        findings.push((
-            "warn".into(),
-            "[arcade_vertical] video_mode is not 8; rotated games should use 1080p scaler mode"
-                .into(),
-        ));
-    }
-    if let (Some(arcade), Some(vertical)) = (
-        ini_line(status, "arcade", "direct_video"),
-        ini_line(status, "arcade_vertical", "direct_video"),
-    ) && arcade > vertical
-    {
-        findings.push((
-            "warn".into(),
-            "[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
-                .into(),
-        ));
-    }
-    for name in [expected_main.as_str(), "mister-magik-fb"] {
-        if status["processes"][name]
-            .as_array()
-            .map(Vec::is_empty)
-            .unwrap_or(true)
-        {
-            findings.push(("error".into(), format!("{name} is not running")));
-        }
-    }
-    if status["display"]["active_vt"].as_str() != Some("tty2") {
-        findings.push((
-            "warn".into(),
-            format!(
-                "active VT is {}, expected tty2 for launcher",
-                status["display"]["active_vt"].as_str().unwrap_or("?")
-            ),
-        ));
-    }
-    match status["display"]["fb0_visual"]["class"].as_str() {
-        Some("mostly_black") => {
-            findings.push(("error".into(), "/dev/fb0 samples as mostly_black".into()))
-        }
-        Some("not_sampled") => {}
-        Some("unknown") | None => {
-            findings.push(("warn".into(), "/dev/fb0 visual class is unknown".into()))
-        }
-        _ => {}
-    }
-    if let Some(owner) = status["runtime"]["main_status"]["visible_owner"].as_str()
-        && owner != "fb0"
-    {
-        findings.push((
-            "warn".into(),
-            format!("Main reports visible_owner={owner} rather than fb0"),
-        ));
-    }
-    let main = &status["runtime"]["main_status"];
-    if main["launcher_state"].as_str() == Some("LauncherStarting") {
-        findings.push((
-            "warn".into(),
-            format!(
-                "launcher readiness is still {} (attempt {}, {}ms remaining; last failure {})",
-                main["launcher_ready_phase"].as_str().unwrap_or("unknown"),
-                main["launcher_ready_attempt"].as_u64().unwrap_or(0),
-                main["launcher_ready_remaining_ms"].as_u64().unwrap_or(0),
-                main["launcher_ready_last_failure"]
-                    .as_str()
-                    .unwrap_or("none")
-            ),
-        ));
-    } else if main["launcher_state"].as_str() == Some("Unconfigured")
-        && main["launcher_ready_last_failure"]
-            .as_str()
-            .is_some_and(|failure| failure != "none")
-    {
-        findings.push((
-            "warn".into(),
-            format!(
-                "launcher readiness fallback restored stock Menu after {}",
-                main["launcher_ready_last_failure"]
-                    .as_str()
-                    .unwrap_or("unknown failure")
-            ),
-        ));
-    }
-    let fb_owned = status["owners"]["by_device"]["/dev/fb0"]
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .any(|o| o["process"].as_str() == Some("mister-magik-fb"))
-        })
-        .unwrap_or(false);
-    if !fb_owned {
-        findings.push((
-            "warn".into(),
-            "/dev/fb0 is not owned by mister-magik-fb".into(),
-        ));
-    }
-    let magik_fb0_owner_pids = magik_fb0_owner_pids(status);
-    if magik_fb0_owner_pids.len() > 1 {
-        findings.push((
-            "error".into(),
-            format!(
-                "multiple mister-magik-fb processes own /dev/fb0: {}",
-                format_pids(&magik_fb0_owner_pids)
-            ),
-        ));
-    }
-    if findings.is_empty() {
-        findings.push((
-            "ok".into(),
-            "No obvious launcher/display problems found".into(),
-        ));
-    }
-    findings
-}
-
-fn magik_fb0_owner_pids(status: &Value) -> Vec<u64> {
-    let mut pids = Vec::new();
-    if let Some(items) = status["owners"]["by_device"]["/dev/fb0"].as_array() {
-        for item in items {
-            if item["process"].as_str() == Some("mister-magik-fb")
-                && let Some(pid) = item["pid"].as_u64()
-                && !pids.contains(&pid)
-            {
-                pids.push(pid);
-            }
-        }
-    }
-    pids
-}
-
-fn boot_capture(deploy: bool, keep_enabled: bool, settle_secs: u64) -> Result<()> {
-    if deploy {
-        return Err("boot-capture --deploy is retired; commit the platform change and run scripts/agent deliver first".into());
-    }
-    {
-        let sess = connect(10)?;
-        let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
-        let command = format!(
-            "mkdir -p {0}; : > {0}/boot-analytics.enabled; sync",
-            sh(&app)
-        );
-        let _ = exec(&sess, &command, true)?;
-        let issued = issue_reboot(&sess, RebootMode::Supervised)?;
-        println!("reboot issued to {} ({issued})", host());
-    }
-    wait_down(40.0);
-    if wait_up(120.0)? != 0 {
-        return Err("device did not return after reboot".into());
-    }
-    thread::sleep(Duration::from_secs(settle_secs));
-    let sess = connect(10)?;
-    let dir = PathBuf::from("build/boot-analytics").join(timestamp());
-    fs::create_dir_all(&dir)?;
-    let status = collect_status(&sess)?;
-    fs::write(dir.join("status.json"), serde_json::to_vec_pretty(&status)?)?;
-    for (remote, local) in [
-        ("/tmp/mister-magik-boot-analytics.tsv", "boot-analytics.tsv"),
-        ("/tmp/mister-magik/events.jsonl", "events.jsonl"),
-        ("/tmp/mister-magik/status.json", "slint-status.json"),
-        ("/tmp/mister-magik/main-status.json", "main-status.json"),
-        ("/tmp/mister-magik-slint.log", "slint.log"),
-        ("/tmp/mister-magik-main.log", "main.log"),
-        (
-            "/tmp/mister-magik-launcher-frame-profile.tsv",
-            "launcher-frame-profile.tsv",
-        ),
-        ("/tmp/mister-magik-visual-samples.tsv", "visual-samples.tsv"),
-    ] {
-        if get(&sess, remote, &dir.join(local)).is_err() {
-            fs::write(dir.join(format!("{local}.missing")), remote)?;
-        }
-    }
-    if !keep_enabled {
-        let app = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
-        let _ = exec(
-            &sess,
-            &format!("rm -f {}/boot-analytics.enabled; sync", sh(&app)),
-            true,
-        );
-    }
-    println!("boot-capture: {}", dir.display());
-    Ok(())
-}
-
-fn display_read(sess: &Session, unsafe_spi: bool, json_out: bool) -> Result<()> {
-    let status = collect_status(sess)?;
-    if display_read_needs_unsafe_spi(&status) && !unsafe_spi {
-        return Err(
-            "display-read touches FPGA SPI; pass --unsafe-spi when Main/Slint may own /dev/mem"
-                .into(),
-        );
-    }
-    let binary = configured_remote_path(
-        "MISTER_MAGIK_BIN",
-        "/media/fat/mister-magik/mister-magik-fb",
-    );
-    let out = exec(sess, &format!("{} read", sh(&binary)), true)?;
-    if json_out {
-        println!("{}", json!({"rc": out.rc, "output": out.stdout}));
-    } else {
-        print!("{}", out.stdout);
-    }
-    std::process::exit(out.rc);
-}
-
-fn display_read_needs_unsafe_spi(status: &Value) -> bool {
-    ["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"]
-        .iter()
-        .any(|name| {
-            status["processes"][name]
-                .as_array()
-                .is_some_and(|a| !a.is_empty())
-        })
-}
-
-fn profile_summary(path: &Path) -> Result<()> {
-    print!("{}", profile_summary_text(path)?);
-    Ok(())
-}
-
-fn profile_summary_text(path: &Path) -> Result<String> {
-    let text = fs::read_to_string(path)?;
-    let mut lines = text.lines();
-    let header: Vec<_> = lines.next().ok_or("empty TSV")?.split('\t').collect();
-    let rows: Vec<Vec<_>> = lines.map(|l| l.split('\t').collect()).collect();
-    let mut out = String::new();
-    out.push_str(&format!(
-        "=== {} ({} frames) ===\n",
-        path.display(),
-        rows.len()
-    ));
-    for col in [
-        "wall_us",
-        "phases_us",
-        "anim_us",
-        "render_us",
-        "vsync_us",
-        "copy_us",
-    ] {
-        let Some(idx) = header.iter().position(|h| *h == col) else {
-            continue;
-        };
-        let mut vals: Vec<u64> = rows
-            .iter()
-            .filter_map(|r| r.get(idx).and_then(|v| v.parse().ok()))
-            .collect();
-        if vals.is_empty() {
-            continue;
-        }
-        vals.sort_unstable();
-        let avg = vals.iter().sum::<u64>() / vals.len() as u64;
-        let p50 = vals[vals.len() / 2];
-        let p95 = vals[((vals.len() - 1) as f64 * 0.95) as usize];
-        out.push_str(&format!(
-            "{col:10} min={:6} p50={p50:6} p95={p95:6} max={:6} avg={avg:6}",
-            vals[0],
-            vals[vals.len() - 1]
-        ));
-        out.push('\n');
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 fn rgb_from_raw(raw: &[u8], geometry: &FbGeometry, x: usize, y: usize) -> Option<(u32, u32, u32)> {
     match geometry.bpp {
@@ -16264,54 +14103,6 @@ mod tests {
         assert!(
             parse_display_mode_args(&args(&["hdmi-1280x720p60", "--attended", "--other",]))
                 .is_err()
-        );
-    }
-
-    #[test]
-    fn live_particle_args_require_one_family_demo_and_attendance() {
-        let args = |values: &[&str]| {
-            values
-                .iter()
-                .map(|value| (*value).to_string())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            parse_live_particle_args(&args(&[
-                "particles",
-                "family.json",
-                "--demo",
-                "12",
-                "--attended",
-            ]))
-            .unwrap(),
-            LiveParticleCliOptions {
-                family: "family.json".into(),
-                demo: 12,
-            }
-        );
-        assert!(
-            parse_live_particle_args(&args(&["particles", "family.json", "--demo", "12"])).is_err()
-        );
-        assert!(
-            parse_live_particle_args(&args(&[
-                "particles",
-                "family.json",
-                "--demo",
-                "0",
-                "--attended",
-            ]))
-            .is_err()
-        );
-        assert!(
-            parse_live_particle_args(&args(&[
-                "particles",
-                "one.json",
-                "two.json",
-                "--demo",
-                "1",
-                "--attended",
-            ]))
-            .is_err()
         );
     }
 
@@ -16616,42 +14407,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_sd_list_probe_options() {
-        let args = vec![
-            "/_Arcade".to_string(),
-            "--protocol".to_string(),
-            "v2".to_string(),
-            "--show-hidden".to_string(),
-            "--repeat".to_string(),
-            "5".to_string(),
-            "--json".to_string(),
-        ];
-        assert_eq!(
-            parse_sd_list_options(&args).unwrap(),
-            SdListOptions {
-                path: "/_Arcade".to_string(),
-                protocol: SdListProtocol::V2,
-                show_hidden: true,
-                repeat: 5,
-                json: true,
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_sd_list_probe_options() {
-        assert!(parse_sd_list_options(&[]).is_err());
-        assert!(
-            parse_sd_list_options(&["/".to_string(), "--repeat".to_string(), "0".to_string(),])
-                .is_err()
-        );
-        assert!(
-            parse_sd_list_options(&["/".to_string(), "--protocol".to_string(), "v3".to_string(),])
-                .is_err()
-        );
-    }
-
-    #[test]
     fn formats_compact_agent_magik_action_and_status_summaries() {
         let action = json!({
             "terminal_reason": "acknowledged",
@@ -16679,19 +14434,6 @@ mod tests {
             format_agent_magik_summary("status", 12, &status),
             "agent magik action=status outcome=ok elapsed_ms=12 state=LauncherSuspended pid=0 generation=0"
         );
-    }
-
-    #[test]
-    fn framebuffer_capture_lz4_decode_is_exact_and_bounded_by_metadata() {
-        let payload = lz4_flex::compress_prepend_size(b"pixels");
-        assert_eq!(
-            decompress_framebuffer_capture_lz4(&payload, 6).expect("decode capture"),
-            b"pixels"
-        );
-
-        let err = decompress_framebuffer_capture_lz4(&payload, 5)
-            .expect_err("mismatched prefix should fail before decode");
-        assert!(err.to_string().contains("size prefix mismatch"));
     }
 
     fn status_fixture() -> Value {
@@ -16825,21 +14567,6 @@ video_mode=14
     }
 
     #[test]
-    fn magik_boot_edit_sets_launcher_safe_video_without_touching_arcade_vertical() {
-        let ini = "[MiSTer]\r\n; keep original core output for external scaler\r\ndirect_video=1\r\nmain=mister-magik-fb ; old handoff\r\n\r\n[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1\r\n\r\n[Menu]\r\ndirect_video=0\r\nvideo_mode=4 ; menu probe\r\n";
-
-        let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
-
-        assert!(edited.contains("direct_video=2\r\nmain=MiSTer_MagiK ; old handoff"));
-        assert!(
-            edited
-                .contains("[arcade_vertical]\r\ndirect_video=0\r\nvideo_mode=14\r\nvscale_mode=1")
-        );
-        assert!(edited.contains("[Menu]\r\ndirect_video=0\r\nvideo_mode=8 ; menu probe"));
-        assert!(edited.contains("; keep original core output for external scaler"));
-    }
-
-    #[test]
     fn select_main_preserves_other_settings_and_deduplicates_active_main() {
         let ini = "[MiSTer]\nmain=MiSTer\nfoo=keep\nmain=MiSTer_MagiK\n\n[Menu]\nvideo_mode=6\n";
         let edited = edit_mister_ini(ini, IniEdit::SelectMain("MiSTer_MagiKDev".into()));
@@ -16885,188 +14612,10 @@ video_mode=14
     }
 
     #[test]
-    fn magik_boot_edit_defaults_to_auto_crt_with_hdmi_fallback() {
-        let ini = "[MiSTer]\ndirect_video=1\n";
-        let edited = edit_mister_ini(ini, IniEdit::MagikBoot);
-
-        assert!(edited.contains(
-            "[MiSTer]\ndirect_video=2\nforced_scandoubler=0\nmenu_pal=0\nmain=MiSTer_MagiK"
-        ));
-        assert!(edited.contains("[Menu]\nvideo_mode=8"));
-    }
-
-    #[test]
-    fn menu_output_profiles_change_only_the_three_owned_menu_values() {
-        let ini = "[MiSTer]\nmain=MiSTer_MagiKDev\ndirect_video=0\nmenu_pal=keep\nforced_scandoubler=keep\n\n[Menu]\nvideo_mode=6\ndirect_video=9 ; route note\nmenu_pal=9 ; region note\nforced_scandoubler=9 ; scan note\n\n[arcade]\ndirect_video=1\n";
-        for (profile, direct_video, menu_pal, forced_scandoubler) in [
-            (MenuOutputProfile::Hdmi, "0", "0", "0"),
-            (MenuOutputProfile::Auto, "2", "0", "0"),
-            (MenuOutputProfile::Crt240p60, "1", "0", "0"),
-            (MenuOutputProfile::Crt288p50, "1", "1", "0"),
-            (MenuOutputProfile::Crt480p60, "1", "0", "1"),
-            (MenuOutputProfile::Crt576p50, "1", "1", "1"),
-        ] {
-            let edited = edit_mister_ini(ini, IniEdit::MenuOutput(profile));
-            let expected = ini
-                .replace(
-                    "direct_video=9 ; route note",
-                    &format!("direct_video={direct_video} ; route note"),
-                )
-                .replace(
-                    "menu_pal=9 ; region note",
-                    &format!("menu_pal={menu_pal} ; region note"),
-                )
-                .replace(
-                    "forced_scandoubler=9 ; scan note",
-                    &format!("forced_scandoubler={forced_scandoubler} ; scan note"),
-                );
-            assert_eq!(edited, expected);
-        }
-    }
-
-    #[test]
-    fn hdmi_menu_profiles_set_the_selected_mode_only_in_menu() {
-        let ini = "[MiSTer]\nmain=MiSTer_MagiKDev\ndirect_video=7\nvideo_mode=4\n\n[Menu]\nvideo_mode=6 ; mode note\ndirect_video=9 ; route note\nmenu_pal=9 ; region note\nforced_scandoubler=9 ; scan note\n\n[arcade]\ndirect_video=1\nvideo_mode=5\n";
-        for (name, mode) in [
-            ("1280x720p60", "0"),
-            ("1024x768p60", "1"),
-            ("720x480p60", "2"),
-            ("720x576p50", "3"),
-            ("1280x1024p60", "4"),
-            ("800x600p60", "5"),
-            ("640x480p60", "6"),
-            ("1280x720p50", "7"),
-            ("1920x1080p60", "8"),
-            ("1920x1080p50", "9"),
-            ("1366x768p60", "10"),
-            ("1024x600p60", "11"),
-            ("1920x1440p60", "12"),
-            ("2048x1536p60", "13"),
-        ] {
-            let profile = MenuOutputProfile::parse(name).expect("supported HDMI profile");
-            assert_eq!(profile, MenuOutputProfile::HdmiMode(mode));
-            let edited = edit_mister_ini(ini, IniEdit::MenuOutput(profile));
-            let expected = ini
-                .replace(
-                    "video_mode=6 ; mode note",
-                    &format!("video_mode={mode} ; mode note"),
-                )
-                .replace("direct_video=9 ; route note", "direct_video=0 ; route note")
-                .replace("menu_pal=9 ; region note", "menu_pal=0 ; region note")
-                .replace(
-                    "forced_scandoubler=9 ; scan note",
-                    "forced_scandoubler=0 ; scan note",
-                );
-            assert_eq!(edited, expected, "HDMI profile {name}");
-        }
-    }
-
-    #[test]
     fn mode_14_returns_the_required_error_before_ini_editing() {
         let error = parse_ini_edit_args(&["menu".into(), "2560x1440p60".into()])
             .expect_err("mode 14 must be rejected");
         assert_eq!(error.to_string(), "Mister does not support 1440p");
-    }
-
-    #[test]
-    fn hdmi_menu_profile_preserves_crlf_and_creates_only_menu() {
-        let ini = "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\n";
-        let edited = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::HdmiMode("10")));
-        assert_eq!(
-            edited,
-            "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\n\r\n[Menu]\r\ndirect_video=0\r\nmenu_pal=0\r\nforced_scandoubler=0\r\nvideo_mode=10\r\n"
-        );
-    }
-
-    #[test]
-    fn menu_output_profile_preserves_crlf_and_appends_only_missing_owned_keys() {
-        let ini = "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\ndirect_video=0\r\n\r\n[Menu]\r\nvideo_mode=6 ; untouched\r\n";
-        let edited = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::Crt576p50));
-        assert_eq!(
-            edited,
-            "[MiSTer]\r\nmain=MiSTer_MagiKDev\r\ndirect_video=0\r\n\r\n[Menu]\r\nvideo_mode=6 ; untouched\r\ndirect_video=1\r\nmenu_pal=1\r\nforced_scandoubler=1\r\n"
-        );
-    }
-
-    #[test]
-    fn menu_output_profile_creates_only_a_missing_menu_section() {
-        let ini = "[MiSTer]\nmain=MiSTer_MagiKDev\n";
-        let edited = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::Crt240p60));
-        assert_eq!(
-            edited,
-            "[MiSTer]\nmain=MiSTer_MagiKDev\n\n[Menu]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n"
-        );
-    }
-
-    #[test]
-    fn zaparoo_boot_edit_selects_zaparoo_fork_and_launcher_safe_video() {
-        let ini = "[MiSTer]\r\nmain=MiSTer_MagiK ; current launcher\r\ndirect_video=1\r\n\r\n[Menu]\r\nvideo_mode=6\r\n";
-
-        let edited = edit_mister_ini(ini, IniEdit::ZaparooBoot);
-
-        assert!(edited.contains("main=zaparoo/MiSTer_Zaparoo ; current launcher\r\n"));
-        assert!(edited.contains("direct_video=0\r\n"));
-        assert!(edited.contains("[Menu]\r\nvideo_mode=8\r\n"));
-    }
-
-    #[test]
-    fn menu_output_profile_preserves_main_and_menu_video_mode() {
-        let ini = "[MiSTer]\nmain=MiSTer_MagiK\nforced_scandoubler=0\nmenu_pal=0\ndirect_video=1\n\n[Menu]\nvideo_mode=8\n";
-        let crt = edit_mister_ini(ini, IniEdit::MenuOutput(MenuOutputProfile::Crt576p50));
-        assert!(
-            crt.contains("[Menu]\nvideo_mode=8\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1")
-        );
-        assert!(crt.contains("main=MiSTer_MagiK"));
-        assert!(crt.contains("video_mode=8"));
-    }
-
-    #[test]
-    fn stock_boot_restore_comments_only_magik_main_with_crlf_and_inline_comment() {
-        let ini = "[MiSTer]\r\nmain=MiSTer_MagiK ; keep note\r\ndirect_video=1\r\n\r\n[Menu]\r\nvideo_mode=8\r\n";
-
-        let edited = edit_mister_ini(ini, IniEdit::StockBoot);
-
-        assert!(
-            edited.contains(";main=MiSTer_MagiK ; keep note ; MiSTer MagiK stock boot restore\r\n")
-        );
-        assert!(edited.contains("direct_video=1\r\n"));
-        assert!(edited.contains("[Menu]\r\nvideo_mode=8\r\n"));
-    }
-
-    #[test]
-    fn development_menu_restore_removes_benchmark_overrides_only() {
-        let ini = "[MiSTer]\nmain=MiSTer\nforced_scandoubler=0\n\n[Menu]\nvideo_mode=0\ndirect_video=0\nmenu_pal=0\n";
-
-        let edited = edit_mister_ini(ini, IniEdit::RestoreDevelopmentMenu);
-
-        assert!(edited.contains("main=MiSTer_MagiKDev"));
-        assert!(edited.contains(";video_mode=0 ; MiSTer MagiK benchmark override removed"));
-        assert!(edited.contains(";direct_video=0 ; MiSTer MagiK benchmark override removed"));
-        assert!(edited.contains("menu_pal=0"));
-        assert!(edited.contains("forced_scandoubler=0"));
-    }
-
-    #[test]
-    fn stock_boot_restore_leaves_missing_or_unrelated_main_alone() {
-        let missing = "[Menu]\nvideo_mode=8\n";
-        assert_eq!(edit_mister_ini(missing, IniEdit::StockBoot), missing);
-
-        let unrelated = "[MiSTer]\nmain=Some_Other_Menu\n";
-        assert_eq!(edit_mister_ini(unrelated, IniEdit::StockBoot), unrelated);
-    }
-
-    #[test]
-    fn stock_boot_restore_is_idempotent_for_commented_main() {
-        let ini = "[MiSTer]\n;main=MiSTer_MagiK ; already disabled\n";
-        assert_eq!(edit_mister_ini(ini, IniEdit::StockBoot), ini);
-    }
-
-    #[test]
-    fn stock_boot_restore_comments_legacy_direct_slint_handoff() {
-        let ini = "[MiSTer]\nmain=mister-magik-fb\n";
-        let edited = edit_mister_ini(ini, IniEdit::StockBoot);
-
-        assert!(edited.contains(";main=mister-magik-fb ; MiSTer MagiK stock boot restore"));
     }
 
     #[test]
@@ -17424,24 +14973,6 @@ video_mode=14
     }
 
     #[test]
-    fn reboot_remote_command_direct_reset_uses_explicit_unsafe_fifo_command() {
-        let cmd = reboot_remote_command(RebootMode::DirectReset);
-
-        assert!(cmd.contains("mister_magik_direct_reset"));
-        assert!(cmd.contains("/dev/MiSTer_cmd"));
-        assert!(!cmd.contains("/sbin/reboot"));
-    }
-
-    #[test]
-    fn reboot_remote_command_direct_reset_no_sync_uses_distinct_fifo_command() {
-        let cmd = reboot_remote_command(RebootMode::DirectResetNoSync);
-
-        assert!(cmd.contains("mister_magik_direct_reset_no_sync"));
-        assert!(cmd.contains("/dev/MiSTer_cmd"));
-        assert!(!cmd.contains("/sbin/reboot"));
-    }
-
-    #[test]
     fn reboot_defaults_to_supervised_and_mode_flag_is_removed_before_timeout_parse() {
         let mut args = vec!["--raw".to_string(), "180".to_string()];
 
@@ -17451,53 +14982,6 @@ video_mode=14
             take_reboot_mode_flag(&mut args).unwrap(),
             RebootMode::Supervised
         );
-    }
-
-    #[test]
-    fn reboot_mode_flags_conflict() {
-        let mut args = vec!["--raw".to_string(), "--supervised".to_string()];
-
-        assert!(take_reboot_mode_flag(&mut args).is_err());
-        assert!(
-            reboot_mode_from_args(&["--direct-reset".to_string(), "--raw".to_string()]).is_err()
-        );
-    }
-
-    #[test]
-    fn reboot_mode_from_args_accepts_direct_reset_modes() {
-        assert_eq!(
-            reboot_mode_from_args(&["--direct-reset".to_string()]).unwrap(),
-            RebootMode::DirectReset
-        );
-        assert_eq!(
-            reboot_mode_from_args(&["--direct-reset-no-sync".to_string()]).unwrap(),
-            RebootMode::DirectResetNoSync
-        );
-    }
-
-    #[test]
-    fn reboot_recovery_status_accepts_scripted_readiness_transitions_once() {
-        let mut measurement = RebootRecoveryMeasurement::default();
-        apply_reboot_status(&mut measurement, None, None, 10);
-        assert_eq!(measurement, RebootRecoveryMeasurement::default());
-
-        apply_reboot_status(
-            &mut measurement,
-            Some(&json!({"launcher_state": "LauncherStarting"})),
-            None,
-            25,
-        );
-        apply_reboot_status(
-            &mut measurement,
-            Some(&json!({"launcher_state": "LauncherActive"})),
-            Some(&json!({"frames": 3})),
-            40,
-        );
-
-        assert_eq!(measurement.main_status_ms, Some(25));
-        assert_eq!(measurement.slint_status_ms, Some(40));
-        assert_eq!(measurement.launcher_state, "LauncherStarting");
-        assert_eq!(measurement.slint_frames, "3");
     }
 
     #[test]
@@ -17538,67 +15022,6 @@ video_mode=14
             primary_process(&status, "mister-magik-fb").and_then(|process| process["pid"].as_u64()),
             Some(1528)
         );
-    }
-
-    #[test]
-    fn arcade_video_edit_sets_normal_direct_and_vertical_1080p() {
-        let ini = "[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK\n\n[arcade_vertical]\ndirect_video=0\nvideo_mode=14\nvscale_mode=1\n";
-
-        let edited = edit_mister_ini(ini, IniEdit::ArcadeVideo);
-
-        assert!(edited.contains("[MiSTer]\ndirect_video=0\nmain=MiSTer_MagiK"));
-        assert!(edited.contains("[arcade]\ndirect_video=1"));
-        assert!(edited.contains("[arcade_vertical]\ndirect_video=0\nvideo_mode=8\nvscale_mode=1"));
-        assert!(edited.find("[arcade]\n").unwrap() < edited.find("[arcade_vertical]\n").unwrap());
-    }
-
-    #[test]
-    fn ini_edit_accepts_only_menu_profiles_and_stock_boot() {
-        for profile in [
-            "hdmi",
-            "auto",
-            "crt-240p60",
-            "crt-288p50",
-            "crt-480p60",
-            "crt-576p50",
-            "1280x720p60",
-            "1024x768p60",
-            "720x480p60",
-            "720x576p50",
-            "1280x1024p60",
-            "800x600p60",
-            "640x480p60",
-            "1280x720p50",
-            "1920x1080p60",
-            "1920x1080p50",
-            "1366x768p60",
-            "1024x600p60",
-            "1920x1440p60",
-            "2048x1536p60",
-        ] {
-            assert!(parse_ini_edit_args(&["menu".into(), profile.into()]).is_ok());
-        }
-        assert_eq!(
-            parse_ini_edit_args(&["stock-boot".into()]).unwrap(),
-            IniEdit::StockBoot
-        );
-        assert_eq!(
-            parse_ini_edit_args(&["restore-development-menu".into()]).unwrap(),
-            IniEdit::RestoreDevelopmentMenu
-        );
-        for retired in [
-            vec!["magik-boot".into()],
-            vec!["magik-boot-hdmi".into()],
-            vec!["magik-boot-crt-240p60".into()],
-            vec!["crt".into(), "1".into(), "0".into(), "0".into()],
-            vec!["menu-mode".into(), "8".into()],
-            vec!["menu-auto".into()],
-            vec!["zaparoo-boot".into()],
-            vec!["arcade-video".into()],
-            vec!["comment-main".into()],
-        ] {
-            assert!(parse_ini_edit_args(&retired).is_err());
-        }
     }
 
     #[test]
@@ -17725,110 +15148,6 @@ H: Handlers=event3 js0"#
         assert_eq!(classify_fb(&raw, &geometry)["height"], 540);
         assert_eq!(classify_fb(&raw, &geometry)["stride"], 4096);
         assert_eq!(classify_fb(&raw, &geometry)["class"], "slint_like");
-    }
-
-    #[test]
-    fn doctor_reports_ok_for_nominal_launcher_state() {
-        let findings = doctor_findings(&status_fixture());
-        assert_eq!(
-            findings,
-            vec![(
-                "ok".to_string(),
-                "No obvious launcher/display problems found".to_string()
-            )]
-        );
-    }
-
-    #[test]
-    fn doctor_reports_actionable_failures() {
-        let mut status = status_fixture();
-        status["boot"]["ini_keys"]["MiSTer"]["main"]["value"] = json!("mister-magik-fb");
-        status["boot"]["ini_keys"]["arcade"]["direct_video"]["value"] = json!("0");
-        status["boot"]["ini_keys"]["Menu"]["direct_video"]["value"] = json!("9");
-        status["boot"]["ini_keys"]["Menu"]["menu_pal"]["value"] = json!("9");
-        status["boot"]["ini_keys"]["Menu"]["video_mode"]["value"] = json!("6");
-        status["processes"]["mister-magik-fb"] = json!([]);
-        status["display"]["active_vt"] = json!("tty1");
-        status["display"]["fb0_visual"]["class"] = json!("mostly_black");
-        status["runtime"]["main_status"]["visible_owner"] = json!("menu_bg");
-        status["owners"]["by_device"]["/dev/fb0"] = json!([]);
-
-        let findings = doctor_findings(&status);
-        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(texts.contains(&"[MiSTer] main is not MiSTer_MagiK"));
-        assert!(texts.contains(&"[Menu] direct_video is not HDMI (0), CRT (1), or automatic (2)"));
-        assert!(texts.contains(&"[Menu] menu_pal is not 0 or 1"));
-        assert!(texts.contains(
-            &"[arcade] direct_video is not 1; normal arcade games will use scaler output"
-        ));
-        assert!(texts.contains(&"mister-magik-fb is not running"));
-        assert!(texts.contains(&"/dev/fb0 samples as mostly_black"));
-        assert!(texts.contains(&"Main reports visible_owner=menu_bg rather than fb0"));
-        assert!(texts.contains(&"/dev/fb0 is not owned by mister-magik-fb"));
-    }
-
-    #[test]
-    fn doctor_reports_incomplete_launcher_readiness_and_stock_menu_fallback() {
-        let mut status = status_fixture();
-        status["runtime"]["main_status"]["launcher_state"] = json!("LauncherStarting");
-        status["runtime"]["main_status"]["launcher_ready_phase"] = json!("awaiting");
-        status["runtime"]["main_status"]["launcher_ready_attempt"] = json!(2);
-        status["runtime"]["main_status"]["launcher_ready_remaining_ms"] = json!(3210);
-        status["runtime"]["main_status"]["launcher_ready_last_failure"] = json!("ready-timeout");
-
-        let findings = doctor_findings(&status);
-        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(texts.contains(
-            &"launcher readiness is still awaiting (attempt 2, 3210ms remaining; last failure ready-timeout)"
-        ));
-
-        status["runtime"]["main_status"]["launcher_state"] = json!("Unconfigured");
-        let findings = doctor_findings(&status);
-        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(
-            texts.contains(&"launcher readiness fallback restored stock Menu after ready-timeout")
-        );
-    }
-
-    #[test]
-    fn doctor_reports_multiple_magik_framebuffer_owners() {
-        let mut status = status_fixture();
-        status["processes"]["mister-magik-fb"] = json!([
-            {"pid": 11, "cmdline": "/media/fat/mister-magik/mister-magik-fb"},
-            {"pid": 12, "cmdline": "/media/fat/mister-magik/mister-magik-fb ui launcher 0"}
-        ]);
-        status["owners"]["by_device"]["/dev/fb0"] = json!([
-            {"process": "mister-magik-fb", "pid": 11, "fd": 5},
-            {"process": "mister-magik-fb", "pid": 12, "fd": 5}
-        ]);
-
-        let findings = doctor_findings(&status);
-        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(texts.contains(&"multiple mister-magik-fb processes own /dev/fb0: 11,12"));
-    }
-
-    #[test]
-    fn doctor_reports_arcade_vertical_section_order_regression() {
-        let mut status = status_fixture();
-        status["boot"]["ini_keys"]["arcade"]["direct_video"]["line"] = json!(30);
-        status["boot"]["ini_keys"]["arcade_vertical"]["direct_video"]["line"] = json!(20);
-
-        let findings = doctor_findings(&status);
-        let texts: Vec<_> = findings.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(texts.contains(
-            &"[arcade] appears after [arcade_vertical]; vertical arcade settings will be overwritten"
-        ));
-    }
-
-    #[test]
-    fn display_read_requires_unsafe_spi_when_main_is_running() {
-        let status = status_fixture();
-        assert!(display_read_needs_unsafe_spi(&status));
-
-        let mut no_main = status;
-        no_main["processes"]["MiSTer_MagiK"] = json!([]);
-        no_main["processes"]["MiSTer"] = json!([]);
-        assert!(!display_read_needs_unsafe_spi(&no_main));
     }
 
     #[test]
@@ -18330,27 +15649,6 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn parse_profile_count_skips_option_values() {
-        assert_eq!(
-            parse_profile_count(&["--timeout".to_string(), "30".to_string()], 1),
-            1
-        );
-        assert_eq!(
-            parse_profile_count(
-                &[
-                    "--timeout".to_string(),
-                    "30".to_string(),
-                    "4".to_string(),
-                    "--bytes".to_string(),
-                    "1024".to_string(),
-                ],
-                1,
-            ),
-            4
-        );
-    }
-
-    #[test]
     fn deploy_size_parsing_reads_busybox_wc_prefix() {
         assert_eq!(
             parse_wc_byte_count("12345 /media/fat/mister-magik/mister-magik-fb\n"),
@@ -18537,24 +15835,6 @@ H: Handlers=event3 js0"#
             hashes[1].sha1.as_deref(),
             Some("0123456789abcdef0123456789abcdef01234567")
         );
-    }
-
-    #[test]
-    fn profile_summary_reports_frame_count_and_percentiles() {
-        let path = temp_path("profile.tsv");
-        fs::write(
-            &path,
-            "frame\twall_us\trender_us\tcopy_us\n0\t10\t100\t7\n1\t20\t200\t9\n2\t30\t300\t11\n",
-        )
-        .unwrap();
-        let text = profile_summary_text(&path).unwrap();
-        let _ = fs::remove_file(&path);
-        assert!(text.contains("(3 frames)"));
-        assert!(text.contains("wall_us"));
-        assert!(text.contains("min=    10"));
-        assert!(text.contains("p50=    20"));
-        assert!(text.contains("render_us"));
-        assert!(text.contains("copy_us"));
     }
 
     #[test]
