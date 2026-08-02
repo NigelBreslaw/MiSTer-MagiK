@@ -411,7 +411,6 @@ fn print_benchmark_capabilities() {
         "schema": "mister-magik-benchmark-capabilities-v1",
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
-        "particle-live-v1": cfg!(mister_experiments),
         "persisted-search-v1": true,
     });
     capabilities
@@ -493,7 +492,6 @@ fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
         crate::ui_logln!("experiments=1");
-        crate::ui_logln!("particle-showcase-v1=1");
         crate::ui_logln!(
             "commands=effects,camera-effects,sprite-effects,text-effects,raster-effects,transition-effects,effect-bench"
         );

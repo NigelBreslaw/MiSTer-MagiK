@@ -13,9 +13,6 @@ mod macos {
     use mister_magik_fb::arcade_catalog::{
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
-    use mister_magik_fb::experiments::particles::showcase::{
-        ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
-    };
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
@@ -127,8 +124,6 @@ mod macos {
             !options.no_scan,
             !options.no_download,
             options.display_profile,
-            options.particle_demo,
-            options.particle_family.clone(),
             options.navigation_transition_demo.is_some()
                 || options.navigation_transition_duration_ms.is_some(),
         )?;
@@ -361,10 +356,6 @@ mod macos {
         preview_transition_id: u64,
         preview_transition_duration: Duration,
         particle_renderer: Option<ParticleRenderer>,
-        particle_showcase_renderer: Option<ParticleShowcaseRenderer>,
-        particle_demo: ParticleDemoKind,
-        particle_family: Option<PathBuf>,
-        particle_live_status: String,
         production_screensaver: Option<LauncherScreensaver>,
         tile_pack_loader: Option<TilePackLoader>,
         tile_pack_fingerprint: Option<TilePackFingerprint>,
@@ -403,8 +394,6 @@ mod macos {
             scan_card: bool,
             download_media: bool,
             display_profile: DisplayProfile,
-            particle_demo: ParticleDemoKind,
-            particle_family: Option<PathBuf>,
             force_navigation_motion: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
@@ -487,10 +476,6 @@ mod macos {
                 preview_transition_id: 0,
                 preview_transition_duration: PREVIEW_TRANSITION_DURATION,
                 particle_renderer: None,
-                particle_showcase_renderer: None,
-                particle_demo,
-                particle_family,
-                particle_live_status: "recipes:embedded:0".into(),
                 production_screensaver: None,
                 tile_pack_loader: None,
                 tile_pack_fingerprint: None,
@@ -553,7 +538,7 @@ mod macos {
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
@@ -561,7 +546,6 @@ mod macos {
                 self.catalog_source,
                 self.display_profile.label(),
                 self.tile_pack_status,
-                self.particle_live_status,
             )
         }
 
@@ -589,11 +573,6 @@ mod macos {
             }
             if matches!(scenario, Scenario::ParticleScreensaver) {
                 self.magik_particle_renderer().invalidate_hidden_slot(1);
-                self.screensaver_elapsed = Duration::ZERO;
-            }
-            if matches!(scenario, Scenario::ParticleShowcase) {
-                self.particle_showcase_renderer = None;
-                self.particle_live_status = "recipes:embedded:0".into();
                 self.screensaver_elapsed = Duration::ZERO;
             }
             if matches!(scenario, Scenario::ScreenshotTiles) {
@@ -723,9 +702,7 @@ mod macos {
                 KeyCode::Space
                     if matches!(
                         self.scenario,
-                        Scenario::ParticleScreensaver
-                            | Scenario::ParticleShowcase
-                            | Scenario::ScreenshotTiles
+                        Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
                     ) =>
                 {
                     self.screensaver_paused = !self.screensaver_paused;
@@ -1253,34 +1230,6 @@ mod macos {
                         self.screensaver_elapsed,
                     )
                     .expect("render production particle screensaver");
-            } else if self.scenario == Scenario::ParticleShowcase {
-                if self.particle_showcase_renderer.is_none() {
-                    self.initialize_particle_showcase()
-                        .expect("create experimental particle showcase");
-                }
-                let hidden_slot = (self.headless_frame % 2 + 1) as u8;
-                let live_status = {
-                    let renderer = self
-                        .particle_showcase_renderer
-                        .as_mut()
-                        .expect("particle showcase initialized for selected scenario");
-                    renderer
-                        .render(
-                            self.frame_target.cached_565_mut(),
-                            hidden_slot,
-                            self.screensaver_elapsed,
-                        )
-                        .expect("render experimental particle showcase");
-                    renderer.live_reload_status_label()
-                };
-                if let Some(live_status) = live_status
-                    && live_status != self.particle_live_status
-                {
-                    self.particle_live_status = live_status;
-                    if let Some(window) = self.native_window.as_ref() {
-                        window.set_title(&self.window_title());
-                    }
-                }
             } else if self.scenario == Scenario::ScreenshotTiles {
                 if let Some(screensaver) = self.production_screensaver.as_mut() {
                     screensaver.render_at(
@@ -1295,9 +1244,7 @@ mod macos {
             }
             if matches!(
                 self.scenario,
-                Scenario::ParticleScreensaver
-                    | Scenario::ParticleShowcase
-                    | Scenario::ScreenshotTiles
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles
             ) && !self.screensaver_paused
             {
                 self.screensaver_elapsed += frame_delta;
@@ -1809,26 +1756,6 @@ mod macos {
             })
         }
 
-        fn initialize_particle_showcase(&mut self) -> Result<(), String> {
-            let config = ParticleShowcaseConfig {
-                width: self.frame_width,
-                height: self.frame_height,
-                seed: 0x4d61_6769_4b,
-                initial_demo: self.particle_demo,
-            }
-            .validate()?;
-            let mut renderer = ParticleShowcaseRenderer::new(config)?;
-            if let Some(path) = self.particle_family.clone() {
-                if self.headless {
-                    renderer.load_family_file(&path)?;
-                } else {
-                    renderer.enable_live_family(path)?;
-                }
-            }
-            self.particle_showcase_renderer = Some(renderer);
-            Ok(())
-        }
-
         fn frame_delta(&mut self) -> Duration {
             if self.headless {
                 let previous = elapsed_for_frame(self.headless_frame, self.refresh_hz);
@@ -2022,7 +1949,6 @@ mod macos {
         Loading,
         MediaProgress,
         ParticleScreensaver,
-        ParticleShowcase,
         ScreenshotTiles,
     }
 
@@ -2076,7 +2002,6 @@ mod macos {
                 "loading" => Some(Self::Loading),
                 "media-progress" => Some(Self::MediaProgress),
                 "particle" | "particle-screensaver" => Some(Self::ParticleScreensaver),
-                "particle-showcase" | "particle-demos" => Some(Self::ParticleShowcase),
                 "screenshot-screensaver" | "screenshot-tiles" | "tiles" => {
                     Some(Self::ScreenshotTiles)
                 }
@@ -2104,7 +2029,6 @@ mod macos {
                 Self::Loading => "Loading",
                 Self::MediaProgress => "Media Progress",
                 Self::ParticleScreensaver => "Particle Screensaver",
-                Self::ParticleShowcase => "Particle Showcase",
                 Self::ScreenshotTiles => "Production Screenshot Screensaver",
             }
         }
@@ -2128,7 +2052,6 @@ mod macos {
                 Self::Loading => "L",
                 Self::MediaProgress => "M",
                 Self::ParticleScreensaver => "P",
-                Self::ParticleShowcase => "headless",
                 Self::ScreenshotTiles => "T",
                 Self::ControllerSetup => "S",
             }
@@ -2302,8 +2225,6 @@ mod macos {
         navigation_transition_demo: Option<NavigationTransitionEdge>,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
-        particle_demo: ParticleDemoKind,
-        particle_family: Option<PathBuf>,
     }
 
     impl PreviewOptions {
@@ -2321,8 +2242,6 @@ mod macos {
             let mut navigation_transition_demo = None;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
-            let mut particle_demo = ParticleDemoKind::SolarChrysanthemum;
-            let mut particle_family = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2403,23 +2322,9 @@ mod macos {
                             )?;
                         display_profile = DisplayProfile::parse(&value)?;
                     }
-                    "--particle-demo" => {
-                        let value = arguments
-                            .next()
-                            .ok_or("--particle-demo requires a demo ID")?;
-                        particle_demo = ParticleDemoKind::parse(&value)
-                            .ok_or_else(|| format!("invalid particle demo {value:?}"))?;
-                    }
-                    "--particle-family" => {
-                        particle_family = Some(PathBuf::from(
-                            arguments
-                                .next()
-                                .ok_or("--particle-family requires a JSON path")?,
-                        ));
-                    }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--particle-demo ID] [--particle-family FILE.json] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2449,8 +2354,6 @@ mod macos {
                 navigation_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
-                particle_demo,
-                particle_family,
             })
         }
     }
@@ -2777,9 +2680,7 @@ mod macos {
                 Scenario::Licenses => "licenses",
                 Scenario::Info => "info",
                 Scenario::ScreensaverSettings => "screensaver-settings",
-                Scenario::ParticleScreensaver
-                | Scenario::ParticleShowcase
-                | Scenario::ScreenshotTiles => "screensaver",
+                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles => "screensaver",
                 _ => "home",
             }
             .into(),

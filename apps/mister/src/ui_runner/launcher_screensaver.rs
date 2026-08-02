@@ -9,10 +9,6 @@ use super::*;
 use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
-#[cfg(mister_experiments)]
-use mister_magik_fb::experiments::particles::showcase::{
-    ParticleDemoKind, ParticleShowcaseConfig, ParticleShowcaseRenderer,
-};
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
@@ -31,8 +27,6 @@ use super::particle_renderer::ParticleRenderer;
 use mister_magik_fb::visual_composition::{ScreenshotTileImage as SaverImage, ScreenshotTileWall};
 
 const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
-#[cfg(mister_experiments)]
-const PARTICLE_SHOWCASE_RENDERER_LABEL: &str = "particle-demos";
 const DEFAULT_PARTICLE_COUNT: usize = 16_384;
 const DEFAULT_PARTICLE_SEED: u64 = 0x4d61_6769_4b;
 
@@ -252,8 +246,6 @@ struct ScreensaverRenderState {
 pub struct LauncherScreensaver {
     parade: ParadeState,
     particle: Option<ParticleRenderer>,
-    #[cfg(mister_experiments)]
-    particle_showcase: Option<ParticleShowcaseRenderer>,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
     archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
@@ -343,8 +335,6 @@ impl LauncherScreensaver {
         Self {
             parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
             particle: None,
-            #[cfg(mister_experiments)]
-            particle_showcase: None,
             archive_rx: Some(archive_rx),
             archive_cancelled,
             startup_started_at,
@@ -359,27 +349,6 @@ impl LauncherScreensaver {
         Self {
             parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
             particle: Some(renderer),
-            #[cfg(mister_experiments)]
-            particle_showcase: None,
-            archive_rx: None,
-            archive_cancelled,
-            startup_started_at: None,
-            frame: 0,
-            motion_started_at: now,
-            motion_ticks_fp: 0,
-        }
-    }
-
-    #[cfg(mister_experiments)]
-    fn particle_showcase(
-        renderer: ParticleShowcaseRenderer,
-        archive_cancelled: Arc<AtomicBool>,
-    ) -> Self {
-        let now = Instant::now();
-        Self {
-            parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
-            particle: None,
-            particle_showcase: Some(renderer),
             archive_rx: None,
             archive_cancelled,
             startup_started_at: None,
@@ -441,46 +410,6 @@ impl LauncherScreensaver {
         elapsed: Duration,
         next_elapsed: Option<Duration>,
     ) -> ScreensaverFrameTrace {
-        #[cfg(mister_experiments)]
-        if let Some(showcase) = self.particle_showcase.as_mut() {
-            return match hidden_slot
-                .ok_or_else(|| "particle showcase requires a direct hidden slot".into())
-                .and_then(|hidden_slot| showcase.render(dst, hidden_slot, elapsed))
-            {
-                Ok(stats) => ScreensaverFrameTrace {
-                    renderer: PARTICLE_SHOWCASE_RENDERER_LABEL,
-                    sampling_profile: "particle-showcase",
-                    particle_preset: stats.demo.telemetry_label(),
-                    particle_phase: stats.beat,
-                    particle_simulation_backend: "arm-showcase-scalar",
-                    particle_projection_backend: "arm-showcase-perspective",
-                    particle_count: stats.count,
-                    particle_visible: stats.visible,
-                    particle_simulation_us: stats.simulation_us,
-                    particle_simulation_cpu_us: stats.simulation_cpu_us,
-                    particle_projection_us: stats.projection_us,
-                    particle_projection_cpu_us: stats.projection_cpu_us,
-                    particle_clear_us: stats.clear_us,
-                    particle_clear_cpu_us: stats.clear_cpu_us,
-                    particle_raster_us: stats.raster_us,
-                    particle_raster_cpu_us: stats.raster_cpu_us,
-                    particle_simulation_bytes: stats.simulation_bytes,
-                    particle_renderer_scratch_bytes: stats.renderer_scratch_bytes,
-                    ..ScreensaverFrameTrace::default()
-                },
-                Err(error) => {
-                    dst.fill(Rgb565Pixel(0));
-                    crate::ui_errln!("particle showcase failed: {error}");
-                    ScreensaverFrameTrace {
-                        renderer: "particle-demos-error",
-                        sampling_profile: "particle-showcase-error",
-                        particle_preset: showcase.demo().telemetry_label(),
-                        particle_count: showcase.particle_count(),
-                        ..ScreensaverFrameTrace::default()
-                    }
-                }
-            };
-        }
         if let Some(particle) = self.particle.as_mut() {
             return match hidden_slot
                 .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
@@ -564,10 +493,6 @@ impl LauncherScreensaver {
     }
 
     pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
-        #[cfg(mister_experiments)]
-        if let Some(showcase) = self.particle_showcase.as_mut() {
-            showcase.invalidate_hidden_slot(hidden_slot);
-        }
         if let Some(particle) = self.particle.as_mut() {
             particle.invalidate_hidden_slot(hidden_slot);
         }
@@ -611,27 +536,21 @@ impl LauncherScreensaver {
     }
 
     pub fn has_rendered_card(&self) -> bool {
-        if self.particle.is_some()
-            || cfg!(mister_experiments) && self.experiments_particle_showcase_is_some()
-        {
+        if self.particle.is_some() {
             return true;
         }
         self.parade.tiles.iter().any(|tile| tile.active)
     }
 
     pub fn is_loading_archive(&self) -> bool {
-        if self.particle.is_some()
-            || cfg!(mister_experiments) && self.experiments_particle_showcase_is_some()
-        {
+        if self.particle.is_some() {
             return false;
         }
         self.archive_rx.is_some()
     }
 
     pub fn active_card_count(&self) -> usize {
-        if self.particle.is_some()
-            || cfg!(mister_experiments) && self.experiments_particle_showcase_is_some()
-        {
+        if self.particle.is_some() {
             return 0;
         }
         self.parade.tiles.iter().filter(|tile| tile.active).count()
@@ -642,17 +561,7 @@ impl LauncherScreensaver {
     }
 
     pub fn requires_direct_hidden(&self) -> bool {
-        self.particle.is_some() || self.experiments_particle_showcase_is_some()
-    }
-
-    #[cfg(mister_experiments)]
-    fn experiments_particle_showcase_is_some(&self) -> bool {
-        self.particle_showcase.is_some()
-    }
-
-    #[cfg(not(mister_experiments))]
-    const fn experiments_particle_showcase_is_some(&self) -> bool {
-        false
+        self.particle.is_some()
     }
 }
 
@@ -679,8 +588,6 @@ impl LauncherScreensaver {
         Ok(Self {
             parade,
             particle: None,
-            #[cfg(mister_experiments)]
-            particle_showcase: None,
             archive_rx: None,
             archive_cancelled: Arc::new(AtomicBool::new(false)),
             startup_started_at: None,
@@ -712,43 +619,6 @@ impl LauncherScreensaverLoader {
         crt_output: bool,
     ) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        #[cfg(mister_experiments)]
-        if particle_showcase_renderer_requested() {
-            let archive_cancelled = Arc::new(AtomicBool::new(false));
-            match particle_showcase_renderer_from_env(w, h) {
-                Ok(mut renderer) => {
-                    let capture_time = std::env::var("MISTER_FIREWORK_TIME_MS")
-                        .ok()
-                        .map(|value| {
-                            value
-                                .parse::<u64>()
-                                .map(Duration::from_millis)
-                                .map_err(|error| {
-                                    format!("invalid MISTER_FIREWORK_TIME_MS={value:?}: {error}")
-                                })
-                        })
-                        .transpose();
-                    let hud_visible = std::env::var("MISTER_PARTICLE_HUD")
-                        .map_or(true, |value| !value.trim().eq_ignore_ascii_case("off"));
-                    let Ok(capture_time) = capture_time else {
-                        crate::ui_errln!(
-                            "particle showcase initialization failed: {}",
-                            capture_time.unwrap_err()
-                        );
-                        return Self { ready_rx };
-                    };
-                    renderer.configure_firework_capture(capture_time, hud_visible);
-                    let _ = ready_tx.send(LauncherScreensaver::particle_showcase(
-                        renderer,
-                        archive_cancelled,
-                    ));
-                }
-                Err(error) => {
-                    crate::ui_errln!("particle showcase initialization failed: {error}");
-                }
-            }
-            return Self { ready_rx };
-        }
         if magik_particle_renderer_requested() {
             let archive_cancelled = Arc::new(AtomicBool::new(false));
             match particle_config_from_env(w, h).and_then(ParticleRenderer::new_magik) {
@@ -812,7 +682,6 @@ impl LauncherScreensaverLoader {
 pub fn particle_renderer_requested() -> bool {
     let value = std::env::var("MISTER_SCREENSAVER_RENDERER").ok();
     particle_renderer_label_requested(value.as_deref())
-        || particle_showcase_renderer_label_requested(value.as_deref())
 }
 
 fn particle_renderer_label_requested(value: Option<&str>) -> bool {
@@ -821,71 +690,6 @@ fn particle_renderer_label_requested(value: Option<&str>) -> bool {
 
 fn magik_particle_renderer_requested() -> bool {
     particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
-}
-
-#[cfg(mister_experiments)]
-pub fn particle_showcase_renderer_requested() -> bool {
-    particle_showcase_renderer_label_requested(
-        std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref(),
-    )
-}
-
-#[cfg(mister_experiments)]
-fn particle_showcase_renderer_label_requested(value: Option<&str>) -> bool {
-    value.is_some_and(|value| {
-        value
-            .trim()
-            .eq_ignore_ascii_case(PARTICLE_SHOWCASE_RENDERER_LABEL)
-    })
-}
-
-#[cfg(not(mister_experiments))]
-const fn particle_showcase_renderer_label_requested(_value: Option<&str>) -> bool {
-    false
-}
-
-#[cfg(mister_experiments)]
-fn particle_showcase_renderer_from_env(
-    width: usize,
-    height: usize,
-) -> Result<ParticleShowcaseRenderer, String> {
-    let mut renderer =
-        ParticleShowcaseRenderer::new(particle_showcase_config_from_env(width, height)?)?;
-    if let Some(path) = std::env::var_os("MISTER_PARTICLE_LIVE_FAMILY") {
-        renderer.enable_live_family(PathBuf::from(path))?;
-    }
-    Ok(renderer)
-}
-
-#[cfg(mister_experiments)]
-fn particle_showcase_config_from_env(
-    width: usize,
-    height: usize,
-) -> Result<ParticleShowcaseConfig, String> {
-    let initial_demo = std::env::var("MISTER_PARTICLE_DEMO")
-        .ok()
-        .map(|value| {
-            ParticleDemoKind::parse(&value)
-                .ok_or_else(|| format!("invalid MISTER_PARTICLE_DEMO={value:?}"))
-        })
-        .transpose()?
-        .unwrap_or(ParticleDemoKind::SolarChrysanthemum);
-    let seed = std::env::var("MISTER_PARTICLE_SEED")
-        .ok()
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| format!("invalid MISTER_PARTICLE_SEED={value:?}: {error}"))
-        })
-        .transpose()?
-        .unwrap_or(DEFAULT_PARTICLE_SEED);
-    ParticleShowcaseConfig {
-        width,
-        height,
-        seed,
-        initial_demo,
-    }
-    .validate()
 }
 
 fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfig, String> {
@@ -5549,21 +5353,6 @@ mod tests {
         assert!(!particle_renderer_label_requested(None));
         assert!(!particle_renderer_label_requested(Some("")));
         assert!(!particle_renderer_label_requested(Some("parade")));
-    }
-
-    #[cfg(mister_experiments)]
-    #[test]
-    fn particle_showcase_is_selected_only_by_its_explicit_label() {
-        assert!(particle_showcase_renderer_label_requested(Some(
-            "particle-demos"
-        )));
-        assert!(particle_showcase_renderer_label_requested(Some(
-            " PARTICLE-DEMOS "
-        )));
-        assert!(!particle_showcase_renderer_label_requested(None));
-        assert!(!particle_showcase_renderer_label_requested(Some(
-            "particle-magik"
-        )));
     }
 
     #[test]

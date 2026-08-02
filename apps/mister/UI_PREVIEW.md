@@ -21,20 +21,6 @@ apps/mister/scripts/dev-ui-mac.sh --scenario screenshot-screensaver
 apps/mister/scripts/dev-ui-mac.sh --scenario particle
 ```
 
-Run the experimental particle showcase with live JSON reloading:
-
-```bash
-apps/mister/scripts/dev-ui-mac.sh \
-  --scenario particle-showcase \
-  --particle-family apps/mister/assets/experiments/particles/procedural.json \
-  --particle-demo 13
-```
-
-The selected demo is pinned. Each valid save replaces its complete family and
-restarts the effect at time zero; invalid or partial saves retain the last good
-frame recipe. See `assets/experiments/particles/README.md` for the family
-contracts and attended MiSTer workflow.
-
 Run a navigation transition directly, with an optional slowed debug duration:
 
 ```bash

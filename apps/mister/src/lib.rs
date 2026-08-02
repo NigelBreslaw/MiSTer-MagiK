@@ -77,8 +77,6 @@ pub mod visual_platform;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;
-    #[cfg(any(feature = "ui", feature = "ui-preview"))]
-    pub mod particles;
 }
 #[cfg(test)]
 mod video_i420;

@@ -31,11 +31,6 @@ name = "mister-magik-ui-preview"
 path = "src/bin/ui_preview.rs"
 required-features = ["ui-preview"]
 
-[[bin]]
-name = "mister-magik-particle-preview"
-path = "src/experiments/particles/bin/particle_technique_preview.rs"
-required-features = ["ui-preview", "experiments"]
-
 [dependencies]
 bytemuck = "1"
 crc32fast = "1"
@@ -104,15 +99,6 @@ lto = "fat"
 codegen-units = 2
 # Retain function symbols for dormant on-device pprof while dropping bulky
 # line-level debug sections.
-strip = "debuginfo"
-
-[profile.release-live]
-# Fast iteration profile for the explicitly installed experimental runtime.
-# Keep runtime optimization while favoring parallel local code generation over
-# whole-program optimization.
-inherits = "release"
-lto = false
-codegen-units = 16
 strip = "debuginfo"
 
 [profile.release-device-profile]
