@@ -5,7 +5,9 @@
 
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
 use mister_magik_fb::particle_renderer::ParticleRenderer;
-use mister_magik_fb::startup_particles::ArcadeCabinetFormation;
+use mister_magik_fb::startup_particles::{
+    ArcadeCabinetFormation, Rgb565Pixel as CabinetRgb565Pixel,
+};
 use mister_magik_particles::recipes::embedded_cabinet_recipe;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
@@ -14,9 +16,9 @@ const WIDTH: usize = 960;
 const HEIGHT: usize = 540;
 const MAGIK_SEED: u64 = 0x4d61_6769_4b;
 
-fn frame_signature(frame: &[Rgb565Pixel]) -> u64 {
-    frame.iter().fold(0xcbf2_9ce4_8422_2325, |hash, pixel| {
-        pixel.0.to_le_bytes().into_iter().fold(hash, |hash, byte| {
+fn frame_signature(words: impl IntoIterator<Item = u16>) -> u64 {
+    words.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, word| {
+        word.to_le_bytes().into_iter().fold(hash, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
         })
     })
@@ -43,7 +45,10 @@ fn production_magik_rgb565_frame_matches_the_pre_consolidation_golden() {
             .unwrap();
     }
 
-    assert_eq!(frame_signature(&frame), 0xbce2_cba6_cc4a_9199);
+    assert_eq!(
+        frame_signature(frame.iter().map(|pixel| pixel.0)),
+        0xbce2_cba6_cc4a_9199
+    );
 }
 
 #[test]
@@ -51,11 +56,14 @@ fn arcade_cabinet_rgb565_frame_matches_the_approved_showcase_golden() {
     let mut recipe = embedded_cabinet_recipe().unwrap();
     recipe.seed = 827_141_709_451;
     let renderer = ArcadeCabinetFormation::new(WIDTH, HEIGHT, recipe).unwrap();
-    let mut frame = vec![Rgb565Pixel(0); WIDTH * HEIGHT];
+    let mut frame = vec![CabinetRgb565Pixel(0); WIDTH * HEIGHT];
 
     renderer
         .render(&mut frame, Duration::from_secs(15))
         .unwrap();
 
-    assert_eq!(frame_signature(&frame), 0xac1d_5455_b6dc_5fad);
+    assert_eq!(
+        frame_signature(frame.iter().map(|pixel| pixel.0)),
+        0xac1d_5455_b6dc_5fad
+    );
 }
