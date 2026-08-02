@@ -250,7 +250,9 @@ pub(crate) fn validate_scanout_slots_geometry(
         )));
     }
     let min_stride_bytes = rgb565_stride_bytes(width);
-    if stride_bytes < min_stride_bytes || stride_bytes % std::mem::size_of::<Rgb565>() != 0 {
+    if stride_bytes < min_stride_bytes
+        || !stride_bytes.is_multiple_of(std::mem::size_of::<Rgb565>())
+    {
         return Err(HiddenScanoutError::InvalidGeometry(format!(
             "stride {stride_bytes} is not a whole-pixel stride of at least {min_stride_bytes}"
         )));
