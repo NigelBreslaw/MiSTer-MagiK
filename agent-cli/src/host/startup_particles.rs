@@ -27,6 +27,7 @@ const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
 const DEVELOPMENT_LAUNCHER_ENV: &str = "/media/fat/mister-magik-dev/launcher.env";
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
 const ACK_DEADLINE: Duration = Duration::from_secs(1);
+const LAUNCHER_START_DEADLINE: Duration = Duration::from_secs(45);
 
 pub(super) fn run(
     device: &mut NativeDevice,
@@ -145,10 +146,6 @@ fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<(
         "startup particle Dev launcher preflight",
         &dev_preflight_command(),
     )?;
-    if let Err(error) = publish_recipe(&session, recipe, REMOTE_MAGIK_RECIPE) {
-        let cleanup = remove_volatile_directory(&session);
-        return combine_results(Err(error), cleanup);
-    }
     let _signal_guard = AttendedOperationSignalGuard::install();
     let restart_result = restart_launcher_with_one_shot_env(
         &session,
@@ -171,7 +168,10 @@ fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<(
     );
 
     let run_result = restart_result.and_then(|()| {
-        let initial = wait_status_after(&session, 0, ACK_DEADLINE)?;
+        let embedded = wait_status_state(&session, "embedded", LAUNCHER_START_DEADLINE)?;
+        let embedded_generation = status_generation(&embedded)?;
+        publish_recipe(&session, recipe, REMOTE_MAGIK_RECIPE)?;
+        let initial = wait_status_after(&session, embedded_generation, ACK_DEADLINE)?;
         require_status(&initial, "applied")?;
         let mut publisher = RecipePublisher::with_generation(
             recipe,
@@ -193,6 +193,27 @@ fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<(
         (Err(run_error), Err(cleanup_error)) => {
             Err(format!("{run_error}; Dev launcher cleanup also failed: {cleanup_error}").into())
         }
+    }
+}
+
+fn wait_status_state(session: &Session, expected: &str, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(text) = remote_read(session, REMOTE_STATUS)
+            && let Ok(status) = serde_json::from_str::<Value>(text.trim())
+            && status.get("state").and_then(Value::as_str) == Some(expected)
+        {
+            status_generation(&status)?;
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "startup particle status did not reach {expected:?} within {} ms",
+                timeout.as_millis()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
