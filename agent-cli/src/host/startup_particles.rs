@@ -461,7 +461,7 @@ fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_
     let already_embedded = current_status
         .as_ref()
         .is_some_and(|status| status.get("state").and_then(Value::as_str) == Some("embedded"));
-    let removal = exec_checked_output(
+    let removal = super::exec_checked_output(
         session,
         "remove Dev launcher startup particle recipe",
         &format!(
