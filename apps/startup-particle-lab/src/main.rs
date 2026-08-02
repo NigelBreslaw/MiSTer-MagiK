@@ -615,6 +615,8 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_magik_particles::recipes::{embedded_cabinet_recipe, embedded_magik_recipe};
+    use mister_magik_startup_particle_lab::EffectRecipe;
 
     #[test]
     fn parses_interactive_capture_and_check_contracts() {
@@ -681,5 +683,27 @@ mod tests {
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0xf800)), [255, 0, 0]);
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0x07e0)), [0, 255, 0]);
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0x001f)), [0, 0, 255]);
+    }
+
+    #[test]
+    fn fixed_time_particle_frames_match_pre_scene_extraction_baselines() {
+        for (recipe, expected) in [
+            (
+                EffectRecipe::Magik(embedded_magik_recipe().unwrap()),
+                0xaa21_3d52_dc7e_eeef,
+            ),
+            (
+                EffectRecipe::Cabinet(embedded_cabinet_recipe().unwrap()),
+                0x0193_8d06_cd43_78ff,
+            ),
+        ] {
+            let mut renderer =
+                FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, recipe).unwrap();
+            let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+            renderer
+                .render(&mut pixels, Duration::from_millis(5_000))
+                .unwrap();
+            assert_eq!(frame_hash(&pixels), expected);
+        }
     }
 }
