@@ -40,7 +40,7 @@ fn run() -> Result<ExitCode, String> {
     };
     let output = cli.output_format;
     let command = match cli.command {
-        Some(CliCommand::Device { command }) => {
+        Some(CliCommand::Device { command }) if !command.requires_repository() => {
             return match agent_cli::commands::device::run(command) {
                 Ok(()) => Ok(ExitCode::SUCCESS),
                 Err(error) => {
@@ -123,6 +123,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Alpha { .. } => "alpha",
         CliCommand::Release { .. } => "release",
         CliCommand::CompileTime { .. } => "compile-time",
+        CliCommand::LiveParticles { .. } => "live-particles",
         CliCommand::Build { .. } => "build",
         CliCommand::Ci { .. } => "ci",
     }
@@ -241,6 +242,16 @@ fn dispatch(
         }
         CliCommand::CompileTime { command } => {
             agent_cli::compile_time::execute(repository, command, reporter)?;
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::LiveParticles { command } => {
+            agent_cli::live_particles::execute_preview(repository, command)?;
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Device {
+            command: agent_cli::commands::device::DeviceCommand::LiveParticles(args),
+        } => {
+            agent_cli::live_particles::execute_device(repository, args, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Build { intent } => {
@@ -705,7 +716,9 @@ fn dispatch(
                 println!("{}", serde_json::to_string_pretty(&detail).unwrap());
             }
         }
-        CliCommand::Device { .. } => unreachable!("device commands dispatch before RepoContext"),
+        CliCommand::Device { .. } => {
+            unreachable!("non-repository device commands dispatch before RepoContext")
+        }
     }
     Ok(Outcome::NoOp)
 }

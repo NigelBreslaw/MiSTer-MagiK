@@ -4,6 +4,7 @@
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
+use crate::live_particles::LiveParticlesCommand;
 use crate::model::{BenchmarkScenario, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -74,6 +75,10 @@ pub enum Command {
     CompileTime {
         #[command(subcommand)]
         command: CompileTimeCommand,
+    },
+    LiveParticles {
+        #[command(subcommand)]
+        command: LiveParticlesCommand,
     },
     #[command(hide = true)]
     Build {

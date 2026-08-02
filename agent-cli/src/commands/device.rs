@@ -3,7 +3,7 @@
 
 use crate::error::AgentResult;
 use clap::{Args, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceCommand {
@@ -247,7 +247,16 @@ pub fn run(command: DeviceCommand) -> AgentResult<()> {
     }
 }
 
+pub fn run_live_particles(args: &LiveParticlesArgs, binary: &Path) -> AgentResult<()> {
+    let mut device = crate::device::DeviceClient::default();
+    device.mutate(|device| device.run_live_particles(binary, &args.family, &args.demo))
+}
+
 impl DeviceCommand {
+    pub fn requires_repository(&self) -> bool {
+        matches!(self, Self::LiveParticles(_))
+    }
+
     pub(crate) fn is_mutation(&self) -> bool {
         match self {
             Self::Status(_)

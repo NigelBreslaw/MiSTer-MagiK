@@ -49,6 +49,7 @@ pub enum BuildCommand {
     ValidateRuntime,
     DeviceAgent,
     ManagerDevice,
+    FramebufferLabDevice,
     ReleaseBinaries,
 }
 
@@ -58,6 +59,7 @@ pub enum BuildTarget {
     Runtime,
     DeviceAgent,
     Manager,
+    FramebufferLab,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -151,6 +153,14 @@ impl BuildSpec {
                     "mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager",
                 ),
             ),
+            BuildCommand::FramebufferLabDevice => (
+                BuildTarget::FramebufferLab,
+                BuildMode::Build,
+                "release",
+                Vec::new(),
+                UiScope::All,
+                framebuffer_lab_artifact("release"),
+            ),
             BuildCommand::ReleaseBinaries => return None,
         };
         Some(Self::from_configuration(configuration))
@@ -212,6 +222,12 @@ impl BuildSpec {
             UiScope::Launcher,
             runtime_artifact("release-live"),
         ))
+    }
+
+    #[must_use]
+    pub fn framebuffer_lab_device() -> Self {
+        Self::for_command(BuildCommand::FramebufferLabDevice)
+            .expect("framebuffer lab device builds have a specification")
     }
 
     #[must_use]
@@ -645,6 +661,9 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             }
             BuildTarget::Manager => {
                 PathBuf::from("/private/tmp/mister-magik-manager-apple-container-target")
+            }
+            BuildTarget::FramebufferLab => {
+                PathBuf::from("/private/tmp/mister-magik-framebuffer-lab-apple-container-target")
             }
             _ => PathBuf::from("/private/tmp/mister-magik-apple-container-target"),
         };
@@ -1284,7 +1303,10 @@ fn cargo_args(spec: &BuildSpec, timings: bool) -> Vec<OsString> {
         args.extend(["--profile".into(), spec.profile.into()]);
     }
     match spec.target {
-        BuildTarget::Runtime | BuildTarget::DeviceAgent | BuildTarget::Manager => {}
+        BuildTarget::Runtime
+        | BuildTarget::DeviceAgent
+        | BuildTarget::Manager
+        | BuildTarget::FramebufferLab => {}
     }
     if spec.mode == BuildMode::CheckLibrary {
         args.extend(["--lib".into(), "--no-default-features".into()]);
@@ -1299,6 +1321,7 @@ fn host_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister",
         BuildTarget::DeviceAgent => "mister/tools/agent",
         BuildTarget::Manager => "mister/tools/manager",
+        BuildTarget::FramebufferLab => "apps/framebuffer-lab",
     }
 }
 
@@ -1307,6 +1330,7 @@ fn container_workdir(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "/project/apps/mister",
         BuildTarget::DeviceAgent => "/project/mister/tools/agent",
         BuildTarget::Manager => "/project/mister/tools/manager",
+        BuildTarget::FramebufferLab => "/project/apps/framebuffer-lab",
     }
 }
 
@@ -1315,12 +1339,19 @@ fn lockfile(target: BuildTarget) -> &'static str {
         BuildTarget::Runtime => "apps/mister/Cargo.lock",
         BuildTarget::DeviceAgent => "mister/tools/agent/Cargo.lock",
         BuildTarget::Manager => "mister/tools/manager/Cargo.lock",
+        BuildTarget::FramebufferLab => "apps/framebuffer-lab/Cargo.lock",
     }
 }
 
 fn runtime_artifact(profile: &str) -> PathBuf {
     PathBuf::from(format!(
         "apps/mister/target/{TARGET}/{profile}/mister-magik-fb"
+    ))
+}
+
+fn framebuffer_lab_artifact(profile: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "apps/framebuffer-lab/target/{TARGET}/{profile}/mister-magik-particle-lab"
     ))
 }
 

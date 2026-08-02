@@ -25,6 +25,8 @@ const PARTICLE_REBUILD_SAMPLES: usize = 5;
 pub enum CompileTimeTarget {
     BaselineArm,
     BaselineMacos,
+    FramebufferLabArm,
+    FramebufferLabMacos,
 }
 
 impl CompileTimeTarget {
@@ -32,6 +34,8 @@ impl CompileTimeTarget {
         match self {
             Self::BaselineArm => "baseline-arm",
             Self::BaselineMacos => "baseline-macos",
+            Self::FramebufferLabArm => "framebuffer-lab-arm",
+            Self::FramebufferLabMacos => "framebuffer-lab-macos",
         }
     }
 }
@@ -80,6 +84,18 @@ pub fn execute(
     command: &CompileTimeCommand,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
+    if matches!(
+        command,
+        CompileTimeCommand::Build {
+            target: CompileTimeTarget::FramebufferLabArm | CompileTimeTarget::FramebufferLabMacos,
+            ..
+        } | CompileTimeCommand::Measure {
+            target: CompileTimeTarget::FramebufferLabArm | CompileTimeTarget::FramebufferLabMacos,
+            ..
+        }
+    ) {
+        crate::live_particles::ensure_lockfile(repository)?;
+    }
     match command {
         CompileTimeCommand::Build { target, target_dir } => {
             validate_target_dir(repository, target_dir, false)?;
@@ -120,7 +136,7 @@ fn measure(
     if output.exists() {
         return Err(format!("compile-time output already exists: {}", output.display()).into());
     }
-    let source = repository.join("apps/mister/src/experiments/particles/showcase.rs");
+    let source = repository.join(target.source_path());
     require_clean_source(repository, &source)?;
     let mut source_guard = SourceStampGuard::new(&source)?;
     std::fs::create_dir_all(target_dir)
@@ -223,6 +239,25 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             target_dir,
         ),
         CompileTimeTarget::BaselineMacos => build_macos_preview(repository, target_dir),
+        CompileTimeTarget::FramebufferLabArm => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::framebuffer_lab_device(),
+            target_dir,
+        ),
+        CompileTimeTarget::FramebufferLabMacos => build_macos_lab(repository, target_dir),
+    }
+}
+
+impl CompileTimeTarget {
+    const fn source_path(self) -> &'static str {
+        match self {
+            Self::BaselineArm | Self::BaselineMacos => {
+                "apps/mister/src/experiments/particles/showcase.rs"
+            }
+            Self::FramebufferLabArm | Self::FramebufferLabMacos => {
+                "apps/framebuffer-lab/src/particles/showcase.rs"
+            }
+        }
     }
 }
 
@@ -252,6 +287,28 @@ fn build_macos_preview(repository: &Path, target_dir: &Path) -> AgentResult<()> 
     )?;
     if !status.success() {
         return Err(format!("macOS particle preview build exited with {status}").into());
+    }
+    Ok(())
+}
+
+fn build_macos_lab(repository: &Path, target_dir: &Path) -> AgentResult<()> {
+    let mut child = Command::new("cargo")
+        .current_dir(repository.join("apps/framebuffer-lab"))
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("RUSTC_WRAPPER", "")
+        .args(["build", "--release", "--locked"])
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start macOS framebuffer lab build: {error}"))?;
+    let status = process::wait(
+        &mut child,
+        Some(BUILD_DEADLINE),
+        "macOS framebuffer lab build",
+        None,
+        || Ok(()),
+    )?;
+    if !status.success() {
+        return Err(format!("macOS framebuffer lab build exited with {status}").into());
     }
     Ok(())
 }
