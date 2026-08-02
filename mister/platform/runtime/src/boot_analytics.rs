@@ -27,6 +27,7 @@ fn enabled_from_value(value: Option<&str>) -> bool {
 
 pub fn event(name: &str, detail: impl std::fmt::Display) {
     let detail = detail.to_string();
+    #[cfg(feature = "app-runtime")]
     crate::runtime_status::event(name, &detail);
 
     if !enabled() {
