@@ -135,11 +135,11 @@ fn run_lab(
             stop_required = true;
             break Ok(());
         }
-        if let Some(publisher) = publisher.as_mut() {
-            if let Err(error) = publisher.poll(&session) {
-                stop_required = true;
-                break Err(error);
-            }
+        if let Some(publisher) = publisher.as_mut()
+            && let Err(error) = publisher.poll(&session)
+        {
+            stop_required = true;
+            break Err(error);
         }
     };
     let stop_result = if stop_required {
