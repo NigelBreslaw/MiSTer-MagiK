@@ -9283,7 +9283,7 @@ mod tests {
     }
 
     #[test]
-    fn screensaver_show_benchmark_script_uses_production_navigation() {
+    fn screensaver_show_navigation_script_uses_production_settings() {
         let start = Instant::now();
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();

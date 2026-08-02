@@ -7852,12 +7852,8 @@ fn profile_installed_screensaver_run(
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
                 (
-                    "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                    "up,a,down,a,down,down,a".into(),
-                ),
-                (
-                    "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                    "60".into(),
+                    "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY".into(),
+                    "1".into(),
                 ),
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
