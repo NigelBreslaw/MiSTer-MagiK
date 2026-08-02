@@ -6,5 +6,6 @@
 pub mod cabinet;
 pub mod commands;
 pub mod engine;
+pub mod magik;
 pub mod recipes;
 pub mod reload;

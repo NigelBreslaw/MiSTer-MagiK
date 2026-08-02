@@ -658,6 +658,7 @@ name = "mister-magik-particles"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "libc",
  "mister-magik-framebuffer-scenes",
  "serde",
  "serde_json",
