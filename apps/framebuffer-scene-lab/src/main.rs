@@ -4,7 +4,8 @@
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_framebuffer_scene_lab::LiveParticleRenderer;
 use mister_magik_framebuffer_scene_lab::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, read_effect_recipe,
+    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, NavigationFixture,
+    NavigationFixtureScene, read_effect_recipe,
 };
 use mister_magik_particles::cabinet::Rgb565Pixel;
 use std::env;
@@ -18,7 +19,35 @@ const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
-    let selected = read_effect_recipe(&options.recipe)?;
+    if options.scene == EffectKind::NavigationTransition {
+        let fixture = options
+            .fixture
+            .expect("navigation option validation requires a fixture");
+        if options.check {
+            let _scene = NavigationFixtureScene::new(fixture);
+            println!(
+                "framebuffer-scene-lab check passed scene={} fixture={}",
+                options.scene.label(),
+                fixture.label()
+            );
+            return Ok(());
+        }
+        if let Some(output) = options.output.as_deref() {
+            return render_navigation_headless(
+                fixture,
+                options
+                    .time_ms
+                    .expect("option parser requires time with output"),
+                output,
+            );
+        }
+        return run_window(SceneSource::Navigation(fixture), options.destination);
+    }
+    let recipe_path = options
+        .recipe
+        .as_deref()
+        .expect("particle option validation requires a recipe");
+    let selected = read_effect_recipe(recipe_path)?;
     if selected.kind() != options.scene {
         return Err(format!(
             "--scene {} does not match the {} recipe",
@@ -36,14 +65,23 @@ fn main() -> Result<(), String> {
     }
     if let Some(output) = options.output.as_deref() {
         return render_headless(
-            &options.recipe,
+            recipe_path,
             options
                 .time_ms
                 .expect("option parser requires time with output"),
             output,
         );
     }
-    run_window(options.recipe, options.destination)
+    run_window(
+        SceneSource::Particle(recipe_path.to_path_buf()),
+        options.destination,
+    )
+}
+
+#[derive(Clone, Debug)]
+enum SceneSource {
+    Particle(PathBuf),
+    Navigation(NavigationFixture),
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
@@ -70,28 +108,109 @@ fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<()
     }
 }
 
+fn render_navigation_headless(
+    fixture: NavigationFixture,
+    time_ms: u64,
+    output: &Path,
+) -> Result<(), String> {
+    let mut renderer = NavigationFixtureScene::new(fixture);
+    let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+    let stats = renderer.render(&mut pixels, Duration::from_millis(time_ms))?;
+    write_ppm(output, &pixels)?;
+    println!(
+        "capture={} scene={} fixture={} time_ms={} hash={:016x}",
+        output.display(),
+        stats.effect.label(),
+        fixture.label(),
+        time_ms,
+        frame_hash(&pixels)
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
+enum LabScene {
+    Particle(LiveParticleRenderer),
+    Navigation(NavigationFixtureScene),
+}
+
+#[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
+impl LabScene {
+    fn start(source: SceneSource) -> Result<Self, String> {
+        match source {
+            SceneSource::Particle(recipe) => Ok(Self::Particle(LiveParticleRenderer::start(
+                DEFAULT_WIDTH,
+                DEFAULT_HEIGHT,
+                recipe.clone(),
+                status_path(&recipe),
+            )?)),
+            SceneSource::Navigation(fixture) => {
+                Ok(Self::Navigation(NavigationFixtureScene::new(fixture)))
+            }
+        }
+    }
+
+    fn render_buffer(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        buffer_id: u8,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> Result<mister_magik_framebuffer_scene_lab::FrameStats, String> {
+        match self {
+            Self::Particle(renderer) => {
+                renderer.render_buffer(destination, buffer_id, elapsed, next_elapsed)
+            }
+            Self::Navigation(renderer) => renderer.render(destination, elapsed),
+        }
+    }
+
+    fn effect(&self) -> EffectKind {
+        match self {
+            Self::Particle(renderer) => renderer.effect(),
+            Self::Navigation(_) => EffectKind::NavigationTransition,
+        }
+    }
+
+    fn generation(&self) -> u64 {
+        match self {
+            Self::Particle(renderer) => renderer.generation(),
+            Self::Navigation(_) => 0,
+        }
+    }
+
+    fn state_label(&self) -> String {
+        match self {
+            Self::Particle(renderer) => format!("{:?}", renderer.status_state()),
+            Self::Navigation(renderer) => format!("fixture:{}", renderer.fixture().label()),
+        }
+    }
+
+    fn last_error(&self) -> Option<&str> {
+        match self {
+            Self::Particle(renderer) => renderer.last_error(),
+            Self::Navigation(_) => None,
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
-fn run_window(recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-    let mut application = macos::ParticleLabApplication::new(recipe)?;
+    let mut application = macos::ParticleLabApplication::new(source)?;
     event_loop
         .run_app(&mut application)
         .map_err(|error| format!("run framebuffer-scene-lab window: {error}"))
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
     use std::time::Instant;
 
-    let mut renderer = LiveParticleRenderer::start(
-        DEFAULT_WIDTH,
-        DEFAULT_HEIGHT,
-        recipe.clone(),
-        status_path(&recipe),
-    )?;
+    let mut renderer = LabScene::start(source)?;
     let (destination_width, destination_height) = destination
         .ok_or("MiSTer startup particle preview requires an explicit scanout destination")?;
     let mut presenter = HiddenLatchPresenter::open_scaled(
@@ -183,10 +302,10 @@ fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), St
                 )
             };
             println!(
-                "framebuffer-scene-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
-                renderer.status_state(),
+                renderer.state_label(),
                 status_frames as f64 / seconds,
                 cpu_percent,
                 render_average_us,
@@ -257,13 +376,14 @@ fn process_cpu_time() -> Duration {
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
-fn run_window(_recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(_source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
 
 struct Options {
     scene: EffectKind,
-    recipe: PathBuf,
+    recipe: Option<PathBuf>,
+    fixture: Option<NavigationFixture>,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
@@ -273,6 +393,7 @@ struct Options {
 impl Options {
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut recipe = None;
+        let mut fixture = None;
         let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
@@ -287,11 +408,20 @@ impl Options {
                     scene = EffectKind::parse(&value);
                     if scene.is_none() {
                         return Err(format!(
-                            "invalid scene {value:?}; expected magik or cabinet"
+                            "invalid scene {value:?}; expected magik, cabinet, or navigation-transition"
                         ));
                     }
                 }
                 "--recipe" => recipe = arguments.next().map(PathBuf::from),
+                "--fixture" => {
+                    let value = arguments.next().ok_or("--fixture requires a name")?;
+                    fixture = NavigationFixture::parse(&value);
+                    if fixture.is_none() {
+                        return Err(format!(
+                            "invalid fixture {value:?}; expected home-arcade, home-consoles, or consoles-system"
+                        ));
+                    }
+                }
                 "--time-ms" => {
                     let value = arguments.next().ok_or("--time-ms requires milliseconds")?;
                     time_ms = Some(
@@ -321,7 +451,8 @@ impl Options {
         };
         let options = Self {
             scene: scene.ok_or("--scene is required")?,
-            recipe: recipe.ok_or("--recipe is required")?,
+            recipe,
+            fixture,
             time_ms,
             output,
             check,
@@ -341,6 +472,24 @@ impl Options {
         if self.destination.is_some() && (self.check || self.output.is_some()) {
             return Err("scanout destination is only valid for an interactive preview".into());
         }
+        match self.scene {
+            EffectKind::Magik | EffectKind::Cabinet => {
+                if self.recipe.is_none() {
+                    return Err("particle scenes require --recipe".into());
+                }
+                if self.fixture.is_some() {
+                    return Err("particle scenes do not accept --fixture".into());
+                }
+            }
+            EffectKind::NavigationTransition => {
+                if self.fixture.is_none() {
+                    return Err("navigation-transition requires --fixture".into());
+                }
+                if self.recipe.is_some() {
+                    return Err("navigation-transition does not accept --recipe".into());
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -355,7 +504,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -417,7 +566,7 @@ mod macos {
     use winit::window::{Window, WindowId};
 
     pub(super) struct ParticleLabApplication {
-        renderer: LiveParticleRenderer,
+        renderer: LabScene,
         window: Option<Arc<Window>>,
         surface: Option<Surface<Arc<Window>, Arc<Window>>>,
         pixels: Vec<Rgb565Pixel>,
@@ -432,13 +581,8 @@ mod macos {
     }
 
     impl ParticleLabApplication {
-        pub(super) fn new(recipe: PathBuf) -> Result<Self, String> {
-            let renderer = LiveParticleRenderer::start(
-                DEFAULT_WIDTH,
-                DEFAULT_HEIGHT,
-                recipe.clone(),
-                status_path(&recipe),
-            )?;
+        pub(super) fn new(source: SceneSource) -> Result<Self, String> {
+            let renderer = LabScene::start(source)?;
             let now = Instant::now();
             Ok(Self {
                 renderer,
@@ -487,10 +631,10 @@ mod macos {
                 .or_else(|| self.renderer.last_error())
                 .map_or_else(String::new, |error| format!(" — error: {error}"));
             format!(
-                "MiSTer MagiK Framebuffer Scenes — {} — generation {} {:?} — {:.1} fps{error}",
+                "MiSTer MagiK Framebuffer Scenes — {} — generation {} {} — {:.1} fps{error}",
                 self.renderer.effect().label(),
                 self.renderer.generation(),
-                self.renderer.status_state(),
+                self.renderer.state_label(),
                 self.fps,
             )
         }
@@ -653,8 +797,21 @@ mod tests {
         let interactive =
             Options::parse(["--scene", "magik", "--recipe", "magik.json"].map(String::from))
                 .unwrap();
-        assert_eq!(interactive.recipe, PathBuf::from("magik.json"));
+        assert_eq!(interactive.recipe, Some(PathBuf::from("magik.json")));
         assert!(interactive.output.is_none());
+
+        let navigation = Options::parse(
+            [
+                "--scene",
+                "navigation-transition",
+                "--fixture",
+                "home-arcade",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(navigation.fixture, Some(NavigationFixture::HomeArcade));
+        assert!(navigation.recipe.is_none());
 
         let device = Options::parse(
             [
@@ -712,6 +869,21 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "navigation-transition",
+                    "--fixture",
+                    "home-arcade",
+                    "--recipe",
+                    "magik.json",
+                ]
+                .map(String::from),
+            )
+            .is_err()
+        );
+        assert!(Options::parse(["--scene", "navigation-transition"].map(String::from)).is_err());
         assert!(
             Options::parse(
                 [

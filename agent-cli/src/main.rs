@@ -258,6 +258,12 @@ fn dispatch(
             agent_cli::startup_particles::execute_device(repository, args, reporter)?;
             return Ok(Outcome::Passed);
         }
+        CliCommand::Device {
+            command: agent_cli::commands::device::DeviceCommand::SceneLab(args),
+        } => {
+            agent_cli::startup_particles::execute_scene_device(repository, args, reporter)?;
+            return Ok(Outcome::Passed);
+        }
         CliCommand::Build { intent } => {
             agent_cli::build::execute_command(repository, *intent, reporter)?;
             return Ok(Outcome::Passed);

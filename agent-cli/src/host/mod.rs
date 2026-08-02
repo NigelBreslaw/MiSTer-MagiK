@@ -265,6 +265,16 @@ impl NativeDevice {
         startup_particles::run(self, binary, recipe, runtime)
     }
 
+    pub(crate) fn run_scene_lab(
+        &mut self,
+        binary: &Path,
+        scene: crate::commands::device::SceneLabScene,
+        recipe: Option<&Path>,
+        fixture: Option<&str>,
+    ) -> std::result::Result<(), DeviceFailure> {
+        startup_particles::run_scene_lab(self, binary, scene, recipe, fixture)
+    }
+
     pub(crate) fn run_operator(
         &mut self,
         command: &crate::commands::device::DeviceCommand,
@@ -309,7 +319,9 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
-                DeviceCommand::LiveParticles(_) | DeviceCommand::StartupParticles(_) => {
+                DeviceCommand::LiveParticles(_)
+                | DeviceCommand::StartupParticles(_)
+                | DeviceCommand::SceneLab(_) => {
                     unreachable!("particle sessions use the repository workflow")
                 }
                 DeviceCommand::Mode { command } => match command {

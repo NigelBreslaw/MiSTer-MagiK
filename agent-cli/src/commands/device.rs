@@ -32,6 +32,7 @@ pub enum DeviceCommand {
     Diagnostics(DiagnosticsArgs),
     LiveParticles(LiveParticlesArgs),
     StartupParticles(StartupParticlesArgs),
+    SceneLab(SceneLabArgs),
     Launcher {
         #[command(subcommand)]
         command: LauncherCommand,
@@ -209,6 +210,35 @@ pub enum StartupParticleRuntime {
     DevLauncher,
 }
 
+#[derive(Debug, Args)]
+pub struct SceneLabArgs {
+    #[arg(long, value_enum)]
+    pub(crate) scene: SceneLabScene,
+    #[arg(long)]
+    pub(crate) recipe: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) fixture: Option<String>,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SceneLabScene {
+    Magik,
+    Cabinet,
+    NavigationTransition,
+}
+
+impl SceneLabScene {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Magik => "magik",
+            Self::Cabinet => "cabinet",
+            Self::NavigationTransition => "navigation-transition",
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum LauncherCommand {
     Status,
@@ -279,9 +309,24 @@ pub fn run_startup_particles(
     device.mutate(|device| device.run_startup_particles(binary, &args.recipe, args.runtime))
 }
 
+pub fn run_scene_lab(args: &SceneLabArgs, binary: &Path) -> AgentResult<()> {
+    let mut device = crate::device::DeviceClient::default();
+    device.mutate(|device| {
+        device.run_scene_lab(
+            binary,
+            args.scene,
+            args.recipe.as_deref(),
+            args.fixture.as_deref(),
+        )
+    })
+}
+
 impl DeviceCommand {
     pub fn requires_repository(&self) -> bool {
-        matches!(self, Self::LiveParticles(_) | Self::StartupParticles(_))
+        matches!(
+            self,
+            Self::LiveParticles(_) | Self::StartupParticles(_) | Self::SceneLab(_)
+        )
     }
 
     pub(crate) fn is_mutation(&self) -> bool {
@@ -296,7 +341,8 @@ impl DeviceCommand {
             Self::Scene(_)
             | Self::Reboot(_)
             | Self::LiveParticles(_)
-            | Self::StartupParticles(_) => true,
+            | Self::StartupParticles(_)
+            | Self::SceneLab(_) => true,
             Self::Display { .. } | Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { .. } => false,

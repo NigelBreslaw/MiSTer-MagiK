@@ -3,6 +3,10 @@
 
 //! Focused, Slint-free host for portable RGB565 framebuffer scenes.
 
+use mister_magik_framebuffer_scenes::navigation::{
+    NavigationTransitionBuffers, NavigationTransitionDirection, NavigationTransitionEdge,
+    NavigationTransitionFrameInput, hdmi_navigation_geometry, render_navigation_transition_input,
+};
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
 };
@@ -29,6 +33,7 @@ use std::time::Duration;
 pub enum EffectKind {
     Magik,
     Cabinet,
+    NavigationTransition,
 }
 
 impl EffectKind {
@@ -37,6 +42,7 @@ impl EffectKind {
         match self {
             Self::Magik => "magik",
             Self::Cabinet => "cabinet",
+            Self::NavigationTransition => "navigation-transition",
         }
     }
 
@@ -45,16 +51,187 @@ impl EffectKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "magik" => Some(Self::Magik),
             "cabinet" => Some(Self::Cabinet),
+            "navigation-transition" => Some(Self::NavigationTransition),
             _ => None,
         }
     }
 
-    const fn status_recipe(self) -> StartupParticleRecipe {
+    fn status_recipe(self) -> StartupParticleRecipe {
         match self {
             Self::Magik => StartupParticleRecipe::Magik,
             Self::Cabinet => StartupParticleRecipe::Cabinet,
+            Self::NavigationTransition => {
+                unreachable!("navigation fixtures do not publish particle recipe status")
+            }
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NavigationFixture {
+    HomeArcade,
+    HomeConsoles,
+    ConsolesSystem,
+}
+
+impl NavigationFixture {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::HomeArcade => "home-arcade",
+            Self::HomeConsoles => "home-consoles",
+            Self::ConsolesSystem => "consoles-system",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "home-arcade" => Some(Self::HomeArcade),
+            "home-consoles" => Some(Self::HomeConsoles),
+            "consoles-system" => Some(Self::ConsolesSystem),
+            _ => None,
+        }
+    }
+
+    const fn edge(self) -> NavigationTransitionEdge {
+        match self {
+            Self::HomeArcade => NavigationTransitionEdge::HomeToArcade,
+            Self::HomeConsoles => NavigationTransitionEdge::HomeToConsoles,
+            Self::ConsolesSystem => NavigationTransitionEdge::ConsolesToSystem,
+        }
+    }
+
+    const fn seed(self) -> u16 {
+        match self {
+            Self::HomeArcade => 0x1234,
+            Self::HomeConsoles => 0x4567,
+            Self::ConsolesSystem => 0x789a,
+        }
+    }
+}
+
+pub struct NavigationFixtureScene {
+    fixture: NavigationFixture,
+    source: Vec<Rgb565Pixel>,
+    destination: Vec<Rgb565Pixel>,
+    buffers: NavigationTransitionBuffers,
+}
+
+impl NavigationFixtureScene {
+    pub fn new(fixture: NavigationFixture) -> Self {
+        let source = generated_navigation_snapshot(fixture, false);
+        let destination = generated_navigation_snapshot(fixture, true);
+        Self {
+            fixture,
+            source,
+            destination,
+            buffers: NavigationTransitionBuffers::new(DEFAULT_WIDTH, DEFAULT_HEIGHT),
+        }
+    }
+
+    #[must_use]
+    pub const fn fixture(&self) -> NavigationFixture {
+        self.fixture
+    }
+
+    pub fn render(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        elapsed: Duration,
+    ) -> Result<FrameStats, String> {
+        if destination.len() != DEFAULT_WIDTH * DEFAULT_HEIGHT {
+            return Err(format!(
+                "navigation target has {} pixels, expected {}",
+                destination.len(),
+                DEFAULT_WIDTH * DEFAULT_HEIGHT
+            ));
+        }
+        let edge = self.fixture.edge();
+        let duration_us = edge.duration_us().max(1);
+        let cycle_us = duration_us.saturating_mul(2);
+        let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64 % cycle_us;
+        let (direction, leg_us) = if elapsed_us < duration_us {
+            (NavigationTransitionDirection::Forward, elapsed_us)
+        } else {
+            (
+                NavigationTransitionDirection::Reverse,
+                elapsed_us - duration_us,
+            )
+        };
+        let forward_progress = leg_us
+            .saturating_mul(u64::from(u16::MAX))
+            .saturating_div(duration_us) as u16;
+        let progress_q16 = match direction {
+            NavigationTransitionDirection::Forward => forward_progress,
+            NavigationTransitionDirection::Reverse => u16::MAX - forward_progress,
+        };
+        let geometry = hdmi_navigation_geometry(
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+            1,
+            0,
+            true,
+            edge,
+            self.fixture.label(),
+        );
+        let stats = render_navigation_transition_input(
+            &mut self.buffers,
+            NavigationTransitionFrameInput {
+                progress_q16,
+                direction,
+                edge,
+                geometry,
+                width: DEFAULT_WIDTH,
+                height: DEFAULT_HEIGHT,
+                source: &self.source,
+                destination: &self.destination,
+            },
+        )
+        .map_err(|error| format!("render navigation fixture: {error:?}"))?;
+        destination.copy_from_slice(self.buffers.working());
+        Ok(FrameStats {
+            effect: EffectKind::NavigationTransition,
+            particles: 0,
+            visible: stats
+                .copied_pixels
+                .saturating_add(stats.filled_pixels)
+                .min(usize::MAX as u64) as usize,
+            simulation_backend: direction.label(),
+            projection_backend: self.fixture.label(),
+            magik_stages: None,
+        })
+    }
+}
+
+fn generated_navigation_snapshot(
+    fixture: NavigationFixture,
+    destination: bool,
+) -> Vec<Rgb565Pixel> {
+    let mut pixels = vec![
+        Rgb565Pixel(if destination { 0x0841 } else { 0x1082 });
+        DEFAULT_WIDTH * DEFAULT_HEIGHT
+    ];
+    let seed = fixture.seed().wrapping_add(u16::from(destination) * 0x1111);
+    for y in 0..DEFAULT_HEIGHT {
+        let band = ((y / 24) as u16).wrapping_mul(0x0021);
+        for x in 0..DEFAULT_WIDTH {
+            if (x / 96 + y / 72 + usize::from(destination)) % 7 == 0 {
+                pixels[y * DEFAULT_WIDTH + x] = Rgb565Pixel(seed.wrapping_add(band));
+            }
+        }
+    }
+    for card in 0..4 {
+        let x0 = 32 + card * 224;
+        let y0 = if destination { 96 + card * 8 } else { 80 };
+        let color = seed.wrapping_add((card as u16 + 1) * 0x0841);
+        for y in y0..(y0 + 320).min(DEFAULT_HEIGHT - 32) {
+            let start = y * DEFAULT_WIDTH + x0;
+            let end = y * DEFAULT_WIDTH + (x0 + 184).min(DEFAULT_WIDTH);
+            pixels[start..end].fill(Rgb565Pixel(color));
+        }
+    }
+    pixels
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,6 +253,9 @@ impl EffectRecipe {
         match kind {
             EffectKind::Magik => embedded_magik_recipe().map(Self::Magik),
             EffectKind::Cabinet => embedded_cabinet_recipe().map(Self::Cabinet),
+            EffectKind::NavigationTransition => {
+                Err("navigation fixtures do not have embedded particle recipes".into())
+            }
         }
     }
 }
@@ -466,5 +646,59 @@ mod tests {
             EffectRecipe::Cabinet(embedded_cabinet_recipe().unwrap()),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn navigation_fixtures_render_deterministic_forward_and_reverse_frames() {
+        for (fixture, forward_ms, reverse_ms, forward_hash, reverse_hash) in [
+            (
+                NavigationFixture::HomeArcade,
+                360,
+                1_080,
+                0x8794_49ba_b598_ce37,
+                0xfcb5_2e21_9a05_abc8,
+            ),
+            (
+                NavigationFixture::HomeConsoles,
+                300,
+                900,
+                0xda67_dc7e_5bf8_f369,
+                0xbaa6_b828_b360_780d,
+            ),
+            (
+                NavigationFixture::ConsolesSystem,
+                360,
+                1_080,
+                0x8794_49ba_b598_ce37,
+                0x8b55_e6f6_dbc4_2464,
+            ),
+        ] {
+            let mut scene = NavigationFixtureScene::new(fixture);
+            let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+            let forward = scene
+                .render(&mut pixels, Duration::from_millis(forward_ms))
+                .unwrap();
+            assert_eq!(forward.simulation_backend, "forward");
+            assert_eq!(rgb565_hash(&pixels), forward_hash);
+            let reverse = scene
+                .render(&mut pixels, Duration::from_millis(reverse_ms))
+                .unwrap();
+            assert_eq!(reverse.simulation_backend, "reverse");
+            assert_eq!(rgb565_hash(&pixels), reverse_hash);
+        }
+    }
+
+    #[test]
+    fn navigation_fixture_rejects_malformed_target() {
+        let mut scene = NavigationFixtureScene::new(NavigationFixture::HomeArcade);
+        assert!(scene.render(&mut [], Duration::ZERO).is_err());
+    }
+
+    fn rgb565_hash(pixels: &[Rgb565Pixel]) -> u64 {
+        pixels.iter().fold(0xcbf2_9ce4_8422_2325, |hash, pixel| {
+            pixel.0.to_le_bytes().into_iter().fold(hash, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+        })
     }
 }

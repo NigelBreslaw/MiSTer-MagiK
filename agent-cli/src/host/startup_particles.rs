@@ -10,7 +10,7 @@ use super::{
     device_failure, exec_checked, file_sha256, install_prepared_device_environment, remote_read,
     restart_launcher_with_one_shot_env, wait_launcher_ready,
 };
-use crate::commands::device::StartupParticleRuntime;
+use crate::commands::device::{SceneLabScene, StartupParticleRuntime};
 use serde_json::Value;
 use ssh2::{ExtendedData, Session};
 use std::io::{Read, Write};
@@ -45,41 +45,65 @@ pub(super) fn run(
     let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
     install_prepared_device_environment(&prepared.config);
     match runtime {
-        StartupParticleRuntime::Lab => run_lab(
-            &prepared,
-            binary.ok_or_else(|| {
-                DeviceFailure::InvalidRequest("lab runtime requires a built lab binary".into())
-            })?,
-            recipe,
-        ),
+        StartupParticleRuntime::Lab => {
+            let scene = local_recipe_scene(recipe).map_err(device_failure)?;
+            run_lab(
+                &prepared,
+                binary.ok_or_else(|| {
+                    DeviceFailure::InvalidRequest("lab runtime requires a built lab binary".into())
+                })?,
+                Some(recipe),
+                scene,
+                None,
+            )
+        }
         StartupParticleRuntime::DevLauncher => run_dev_launcher(&prepared, recipe),
     }
     .map_err(device_failure)
 }
 
-fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Result<()> {
-    let scene = local_recipe_scene(recipe)?;
+pub(super) fn run_scene_lab(
+    device: &mut NativeDevice,
+    binary: &Path,
+    scene: SceneLabScene,
+    recipe: Option<&Path>,
+    fixture: Option<&str>,
+) -> std::result::Result<(), DeviceFailure> {
+    validate_local_input(binary, "framebuffer scene lab binary").map_err(device_failure)?;
+    if let Some(recipe) = recipe {
+        validate_local_input(recipe, "framebuffer scene recipe").map_err(device_failure)?;
+    }
+    let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
+    install_prepared_device_environment(&prepared.config);
+    run_lab(&prepared, binary, recipe, scene.as_str(), fixture).map_err(device_failure)
+}
+
+fn run_lab(
+    prepared: &super::PreparedDevice,
+    binary: &Path,
+    recipe: Option<&Path>,
+    scene: &str,
+    fixture: Option<&str>,
+) -> Result<()> {
     let session = connect_with(&prepared.config.connection, 10)?;
     let destination = active_lab_destination(&session)?;
-    if let Err(error) = prepare_lab_files(&session, binary, recipe, scene) {
+    if let Err(error) = prepare_lab_files(&session, binary, recipe, scene, fixture) {
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
-    let mut publisher = match RecipePublisher::new(recipe, REMOTE_LAB_RECIPE) {
-        Ok(publisher) => publisher,
-        Err(error) => {
-            let cleanup = remove_volatile_directory(&session);
-            return combine_results(Err(error), cleanup);
-        }
-    };
+    let mut publisher = recipe
+        .map(|recipe| RecipePublisher::new(recipe, REMOTE_LAB_RECIPE))
+        .transpose()?;
     let _signal_guard = AttendedOperationSignalGuard::install();
     let run_config = prepared.config.connection.clone();
+    let scene = scene.to_owned();
+    let fixture = fixture.map(str::to_owned);
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = match thread::Builder::new()
         .name("framebuffer-scene-lab-device".into())
         .spawn(move || {
-            let result =
-                run_remote_lab(&run_config, destination, scene).map_err(|error| error.to_string());
+            let result = run_remote_lab(&run_config, destination, &scene, fixture.as_deref())
+                .map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
         }) {
         Ok(worker) => worker,
@@ -104,9 +128,11 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
             stop_required = true;
             break Ok(());
         }
-        if let Err(error) = publisher.poll(&session) {
-            stop_required = true;
-            break Err(error);
+        if let Some(publisher) = publisher.as_mut() {
+            if let Err(error) = publisher.poll(&session) {
+                stop_required = true;
+                break Err(error);
+            }
         }
     };
     let stop_result = if stop_required {
@@ -258,29 +284,38 @@ fn validate_local_input(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn prepare_lab_files(session: &Session, binary: &Path, recipe: &Path, scene: &str) -> Result<()> {
+fn prepare_lab_files(
+    session: &Session,
+    binary: &Path,
+    recipe: Option<&Path>,
+    scene: &str,
+    fixture: Option<&str>,
+) -> Result<()> {
     exec_checked(
         session,
         "startup particle lab preflight",
         &lab_preflight_command(),
     )?;
     put(session, binary, &format!("{REMOTE_BINARY}.upload"))?;
-    put(session, recipe, &format!("{REMOTE_LAB_RECIPE}.next"))?;
     let binary_hash = file_sha256(binary.to_path_buf())?;
-    let recipe_hash = file_sha256(recipe.to_path_buf())?;
+    let recipe_hash = if let Some(recipe) = recipe {
+        put(session, recipe, &format!("{REMOTE_LAB_RECIPE}.next"))?;
+        Some(file_sha256(recipe.to_path_buf())?)
+    } else {
+        None
+    };
     exec_checked(
         session,
         "publish startup particle lab",
-        &remote_publish_lab_command(&binary_hash, &recipe_hash),
+        &remote_publish_lab_command(&binary_hash, recipe_hash.as_deref()),
     )?;
     exec_checked(
         session,
         "validate startup particle lab",
         &format!(
-            "{} --check --scene {} --recipe {}",
+            "{} --check {}",
             sh(REMOTE_BINARY),
-            sh(scene),
-            sh(REMOTE_LAB_RECIPE)
+            remote_scene_arguments(scene, fixture)
         ),
     )
 }
@@ -517,9 +552,13 @@ fn run_remote_lab(
     config: &super::remote::ConnectionConfig,
     destination: (u16, u16),
     scene: &str,
+    fixture: Option<&str>,
 ) -> Result<()> {
     let session = connect_with(config, 10)?;
-    stream_exec(&session, &remote_run_lab_command(destination, scene))
+    stream_exec(
+        &session,
+        &remote_run_lab_command(destination, scene, fixture),
+    )
 }
 
 fn stream_exec(session: &Session, command: &str) -> Result<()> {
@@ -601,30 +640,42 @@ fn remove_volatile_directory(session: &Session) -> Result<()> {
     )
 }
 
-fn remote_publish_lab_command(binary_hash: &str, recipe_hash: &str) -> String {
+fn remote_publish_lab_command(binary_hash: &str, recipe_hash: Option<&str>) -> String {
+    let recipe_publish = recipe_hash.map_or_else(String::new, |recipe_hash| {
+        format!(
+            "; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; mv -f {} {}",
+            sh(&format!("{REMOTE_LAB_RECIPE}.next")),
+            sh(recipe_hash),
+            sh(&format!("{REMOTE_LAB_RECIPE}.next")),
+            sh(REMOTE_LAB_RECIPE)
+        )
+    });
     format!(
-        "set -eu; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; chmod 755 {}; mv -f {} {}; mv -f {} {}",
+        "set -eu; test \"$(sha256sum {} | awk '{{print $1}}')\" = {}; chmod 755 {}; mv -f {} {}{}",
         sh(&format!("{REMOTE_BINARY}.upload")),
         sh(binary_hash),
-        sh(&format!("{REMOTE_LAB_RECIPE}.next")),
-        sh(recipe_hash),
         sh(&format!("{REMOTE_BINARY}.upload")),
         sh(&format!("{REMOTE_BINARY}.upload")),
         sh(REMOTE_BINARY),
-        sh(&format!("{REMOTE_LAB_RECIPE}.next")),
-        sh(REMOTE_LAB_RECIPE)
+        recipe_publish,
     )
 }
 
-fn remote_run_lab_command(destination: (u16, u16), scene: &str) -> String {
+fn remote_scene_arguments(scene: &str, fixture: Option<&str>) -> String {
+    fixture.map_or_else(
+        || format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE)),
+        |fixture| format!("--scene {} --fixture {}", sh(scene), sh(fixture)),
+    )
+}
+
+fn remote_run_lab_command(destination: (u16, u16), scene: &str, fixture: Option<&str>) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} --scene {scene} --recipe {recipe} --destination-width {destination_width} --destination-height {destination_height}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
-        scene = sh(scene),
-        recipe = sh(REMOTE_LAB_RECIPE),
+        scene_arguments = remote_scene_arguments(scene, fixture),
         destination_width = destination.0,
         destination_height = destination.1,
     )
@@ -657,12 +708,22 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080), "magik");
+        let run = remote_run_lab_command((1920, 1080), "magik", None);
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
         assert!(!run.contains("/media/fat/mister-magik/mister-magik-fb"));
         assert!(run.contains("--destination-width 1920 --destination-height 1080"));
+    }
+
+    #[test]
+    fn navigation_fixture_lab_is_volatile_and_recipe_free() {
+        let run =
+            remote_run_lab_command((1920, 1080), "navigation-transition", Some("home-arcade"));
+        assert!(run.contains("--scene navigation-transition --fixture home-arcade"));
+        assert!(!run.contains("--recipe"));
+        assert!(run.contains("mister_magik_suspend"));
+        assert!(run.contains("mister_magik_resume"));
     }
 
     #[test]
@@ -692,7 +753,7 @@ mod tests {
 
     #[test]
     fn recipes_are_published_atomically() {
-        let command = remote_publish_lab_command("binary", "recipe");
+        let command = remote_publish_lab_command("binary", Some("recipe"));
         assert!(command.contains("recipe.json.next"));
         assert!(command.contains("mv -f"));
         assert!(command.contains("sha256sum"));

@@ -4,7 +4,10 @@
 //! Focused Magik/cabinet particle development workflows.
 
 use crate::build::{BuildSpec, execute};
-use crate::commands::device::{StartupParticleRuntime, StartupParticlesArgs};
+use crate::commands::device::{
+    SceneLabArgs, SceneLabScene as DeviceSceneLabScene, StartupParticleRuntime,
+    StartupParticlesArgs,
+};
 use crate::error::AgentResult;
 use crate::process;
 use crate::progress::Reporter;
@@ -89,6 +92,46 @@ pub fn execute_device(
     crate::commands::device::run_startup_particles(args, Some(&repository.join(spec.artifact())))
 }
 
+pub fn execute_scene_device(
+    repository: &Path,
+    args: &SceneLabArgs,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    require_attended_terminal()?;
+    match args.scene {
+        DeviceSceneLabScene::Magik | DeviceSceneLabScene::Cabinet => {
+            let recipe = args
+                .recipe
+                .as_deref()
+                .ok_or("particle scenes require --recipe")?;
+            if args.fixture.is_some() {
+                return Err("particle scenes do not accept --fixture".into());
+            }
+            let actual = recipe_scene(recipe)?;
+            if actual != args.scene.as_str() {
+                return Err(format!(
+                    "--scene {} does not match the {actual} recipe",
+                    args.scene.as_str()
+                )
+                .into());
+            }
+        }
+        DeviceSceneLabScene::NavigationTransition => {
+            if args.recipe.is_some() {
+                return Err("navigation-transition does not accept --recipe".into());
+            }
+            validate_navigation_fixture(
+                args.fixture
+                    .as_deref()
+                    .ok_or("navigation-transition requires --fixture")?,
+            )?;
+        }
+    }
+    let spec = BuildSpec::framebuffer_scene_lab_device();
+    execute(repository, &spec, reporter)?;
+    crate::commands::device::run_scene_lab(args, &repository.join(spec.artifact()))
+}
+
 fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     if !cfg!(target_os = "macos") {
         return Err("startup particle preview is available only on macOS".into());
@@ -118,8 +161,27 @@ fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> 
             run_preview(repository, actual, Some(recipe), None)
         }
         SceneLabScene::NavigationTransition => {
-            Err("navigation-transition fixtures are added by the navigation extraction".into())
+            if args.recipe.is_some() {
+                return Err("navigation-transition does not accept --recipe".into());
+            }
+            let fixture = args
+                .fixture
+                .as_deref()
+                .ok_or("navigation-transition requires --fixture")?;
+            validate_navigation_fixture(fixture)?;
+            run_preview(repository, args.scene.label(), None, Some(fixture))
         }
+    }
+}
+
+fn validate_navigation_fixture(fixture: &str) -> AgentResult<()> {
+    if matches!(fixture, "home-arcade" | "home-consoles" | "consoles-system") {
+        Ok(())
+    } else {
+        Err(format!(
+            "unsupported navigation fixture {fixture:?}; expected home-arcade, home-consoles, or consoles-system"
+        )
+        .into())
     }
 }
 
