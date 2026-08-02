@@ -256,6 +256,7 @@ class PreCommitTests(unittest.TestCase):
     def test_formatter_selection_matches_affected_packages(self) -> None:
         paths = [
             "agent-cli/src/main.rs",
+            "apps/framebuffer-lab/src/main.rs",
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
             "crates/catalog/src/lib.rs",
@@ -273,6 +274,7 @@ class PreCommitTests(unittest.TestCase):
                 ("agent-protocol.format", "crates/agent-protocol/Cargo.toml"),
                 ("app.format", "apps/mister/Cargo.toml"),
                 ("catalog.format", "crates/catalog/Cargo.toml"),
+                ("framebuffer-lab.format", "apps/framebuffer-lab/Cargo.toml"),
                 (
                     "latch-contract.format",
                     "mister/platform/contracts/latch/Cargo.toml",

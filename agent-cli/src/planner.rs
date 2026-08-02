@@ -425,6 +425,54 @@ fn add_path_operations(
             ));
         }
     }
+    if path.starts_with("apps/framebuffer-lab") {
+        add(diff_check());
+        add(with_inputs(
+            cargo_format(
+                "framebuffer-lab.format",
+                "Check framebuffer lab formatting",
+                &[
+                    "fmt",
+                    "--manifest-path",
+                    "apps/framebuffer-lab/Cargo.toml",
+                    "--check",
+                ],
+                "framebuffer lab source → formatter",
+            ),
+            &["apps/framebuffer-lab"],
+        ));
+        add(with_inputs(
+            cargo(
+                "framebuffer-lab.tests",
+                "Test framebuffer lab",
+                &[
+                    "test",
+                    "--manifest-path",
+                    "apps/framebuffer-lab/Cargo.toml",
+                    "--all-targets",
+                ],
+                "framebuffer lab source → tests",
+            ),
+            &["apps/framebuffer-lab"],
+        ));
+        add(with_inputs(
+            cargo(
+                "framebuffer-lab.clippy",
+                "Lint framebuffer lab",
+                &[
+                    "clippy",
+                    "--manifest-path",
+                    "apps/framebuffer-lab/Cargo.toml",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+                "framebuffer lab source → clippy",
+            ),
+            &["apps/framebuffer-lab"],
+        ));
+    }
     if matches!(
         path.to_str(),
         Some(
@@ -1154,6 +1202,37 @@ mod tests {
     use super::*;
     use crate::model::Scope;
     use std::process::Command;
+
+    #[test]
+    fn framebuffer_lab_changes_select_only_standalone_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/framebuffer-lab/src/main.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "repo.diff-check",
+                "framebuffer-lab.clippy",
+                "framebuffer-lab.format",
+                "framebuffer-lab.tests"
+            ]
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            !operation
+                .args
+                .iter()
+                .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
 
     #[test]
     fn catalog_plan_selects_builder_and_reader_without_duplicates() {

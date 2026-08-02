@@ -1,0 +1,859 @@
+{
+  "schema": "mister-magik-particle-procedural-family-v1",
+  "recipes": [
+    {
+      "id": "fire-embers",
+      "label": "FIRE + EMBERS",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": 10000,
+        "phases": [
+          {
+            "until_ms": 3500,
+            "label": "flame"
+          },
+          {
+            "until_ms": 7000,
+            "label": "gust"
+          },
+          {
+            "until_ms": 10000,
+            "label": "embers"
+          }
+        ]
+      },
+      "particle_count": 20480,
+      "palette": [
+        "#000000",
+        "#310000",
+        "#7B0000",
+        "#BD0000",
+        "#FF2800",
+        "#FF9600",
+        "#FFEB00",
+        "#FFFFFF"
+      ],
+      "params": {
+        "wind_rate_fast": 0.72,
+        "wind_amplitude_fast": 26.0,
+        "wind_rate_slow": 0.19,
+        "wind_amplitude_slow": 13.0,
+        "ember_life": 5.6,
+        "ember_x_span": 390.0,
+        "camera_z": 520.0
+      }
+    },
+    {
+      "id": "spiral-galaxy",
+      "label": "SPIRAL GALAXY",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 10000,
+            "label": "wide-orbit"
+          },
+          {
+            "until_ms": 20000,
+            "label": "arm-pass"
+          },
+          {
+            "until_ms": 30000,
+            "label": "core-pulse"
+          }
+        ]
+      },
+      "particle_count": 81920,
+      "palette": [
+        "#08007B",
+        "#2100FF",
+        "#4255FF",
+        "#8CAEFF",
+        "#C6CBFF",
+        "#FFB6AD",
+        "#FFEBCE",
+        "#FFFFFF"
+      ],
+      "params": {
+        "bulge_fraction": 0.15,
+        "bulge_radius": 94.0,
+        "arm_inner_radius": 32.0,
+        "arm_radial_span": 382.0,
+        "arm_winding": 1.48,
+        "tilt": 0.92,
+        "camera_z": 650.0,
+        "yaw_rate": 0.042,
+        "core_pulse_rate": 1.7
+      }
+    },
+    {
+      "id": "warp-speed",
+      "label": "WARP SPEED",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 7000,
+            "label": "calm"
+          },
+          {
+            "until_ms": 14000,
+            "label": "accelerate"
+          },
+          {
+            "until_ms": 23000,
+            "label": "warp"
+          },
+          {
+            "until_ms": 30000,
+            "label": "decelerate"
+          }
+        ]
+      },
+      "particle_count": 45056,
+      "palette": [
+        "#080031",
+        "#100063",
+        "#1800A5",
+        "#2120FF",
+        "#4A59FF",
+        "#8CAEFF",
+        "#DEFFFF",
+        "#FFFFFF"
+      ],
+      "params": {
+        "spawn_x_span": 580.0,
+        "spawn_y_span": 330.0,
+        "calm_end": 7.0,
+        "accelerate_end": 14.0,
+        "cruise_end": 23.0,
+        "min_speed": 0.03,
+        "max_speed": 0.9,
+        "projection_numerator": 0.22,
+        "projection_bias": 0.14
+      }
+    },
+    {
+      "id": "meteor-shower",
+      "label": "METEOR SHOWER",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "quiet"
+          },
+          {
+            "until_ms": 20000,
+            "label": "shower"
+          },
+          {
+            "until_ms": 30000,
+            "label": "peak"
+          }
+        ]
+      },
+      "particle_count": 20480,
+      "palette": [
+        "#080042",
+        "#100084",
+        "#2928FF",
+        "#6361FF",
+        "#A5A2A5",
+        "#FFB200",
+        "#FFF7AD",
+        "#FFFFFF"
+      ],
+      "params": {
+        "star_x_span": 760.0,
+        "star_y_span": 430.0,
+        "star_camera_z": 760.0,
+        "star_drift_rate": 0.018,
+        "track_cycle": 3.1,
+        "focal": 620.0,
+        "radiant_x": 186.0,
+        "radiant_y": -154.0,
+        "head_depth": 1900.0,
+        "depth_speed": 590.0
+      }
+    },
+    {
+      "id": "weather",
+      "label": "WEATHER",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 10000,
+            "label": "rain"
+          },
+          {
+            "until_ms": 20000,
+            "label": "snow"
+          },
+          {
+            "until_ms": 30000,
+            "label": "ash"
+          }
+        ]
+      },
+      "particle_count": 49152,
+      "palette": [
+        "#080052",
+        "#181894",
+        "#7B7D7B",
+        "#E7E3E7",
+        "#292829",
+        "#844142",
+        "#FFA600",
+        "#FFF7AD"
+      ],
+      "params": {
+        "rain_end": 10.0,
+        "snow_end": 20.0,
+        "spawn_x_span": 520.0,
+        "rain_wind": 34.0,
+        "rain_wind_amplitude": 24.0,
+        "snow_gust": 42.0,
+        "ash_wind": 55.0
+      }
+    },
+    {
+      "id": "particle-portal",
+      "label": "PARTICLE PORTAL",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "gather"
+          },
+          {
+            "until_ms": 20000,
+            "label": "vortex"
+          },
+          {
+            "until_ms": 26000,
+            "label": "pulse"
+          },
+          {
+            "until_ms": 30000,
+            "label": "surge"
+          }
+        ]
+      },
+      "particle_count": 65536,
+      "palette": [
+        "#100042",
+        "#290094",
+        "#5200FF",
+        "#8400FF",
+        "#4259FF",
+        "#00FFFF",
+        "#B5FFFF",
+        "#FFFFFF"
+      ],
+      "params": {
+        "major_radius": 160.0,
+        "minor_radius_min": 28.0,
+        "minor_radius_span": 34.0,
+        "forward_rate": 0.42,
+        "reverse_rate": -0.31,
+        "tilt": 0.42,
+        "pulse_rate": 1.9,
+        "camera_z": 570.0
+      }
+    },
+    {
+      "id": "electric-storm",
+      "label": "ELECTRIC STORM",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "charge"
+          },
+          {
+            "until_ms": 16000,
+            "label": "leader"
+          },
+          {
+            "until_ms": 22000,
+            "label": "return-stroke"
+          },
+          {
+            "until_ms": 30000,
+            "label": "branches"
+          }
+        ]
+      },
+      "particle_count": 16384,
+      "palette": [
+        "#080042",
+        "#18007B",
+        "#3100FF",
+        "#8400FF",
+        "#4259FF",
+        "#8CAEFF",
+        "#DEFFFF",
+        "#FFFFFF"
+      ],
+      "params": {
+        "cloud_x_span": 510.0,
+        "cloud_y_span": 300.0,
+        "charge_rate": 3.7,
+        "charge_power": 3.0,
+        "leader_start": 8.0,
+        "bright_start": 16.0,
+        "branch_start": 22.0,
+        "bolt_x_jitter": 18.0
+      }
+    },
+    {
+      "id": "fountain-waterfall",
+      "label": "FOUNTAIN / WATERFALL",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 9000,
+            "label": "fountain"
+          },
+          {
+            "until_ms": 13000,
+            "label": "morph"
+          },
+          {
+            "until_ms": 24000,
+            "label": "waterfall"
+          },
+          {
+            "until_ms": 30000,
+            "label": "impact"
+          }
+        ]
+      },
+      "particle_count": 32768,
+      "palette": [
+        "#08004A",
+        "#100094",
+        "#1838D6",
+        "#2969FF",
+        "#63BEFF",
+        "#9CDFFF",
+        "#D6FFFF",
+        "#FFFFFF"
+      ],
+      "params": {
+        "radial_speed_min": 58.0,
+        "radial_speed_span": 118.0,
+        "vertical_speed": -285.0,
+        "vertical_speed_span": 150.0,
+        "fountain_end": 9.0,
+        "morph_end": 13.0,
+        "camera_z": 610.0,
+        "gravity": 118.0
+      }
+    },
+    {
+      "id": "arcade-cabinet",
+      "label": "ARCADE CABINET",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 4000,
+            "label": "formation"
+          },
+          {
+            "until_ms": 24000,
+            "label": "fly-around"
+          },
+          {
+            "until_ms": 29000,
+            "label": "three-quarter"
+          },
+          {
+            "until_ms": 30000,
+            "label": "dispersal"
+          }
+        ]
+      },
+      "particle_count": 12288,
+      "palette": [
+        "#18189C",
+        "#3138BD",
+        "#00599C",
+        "#00B6FF",
+        "#BD0063",
+        "#FF5529",
+        "#FFDB42",
+        "#FFFFFF"
+      ],
+      "params": {
+        "source_x_span": 510.0,
+        "source_y_span": 300.0,
+        "source_z_span": 360.0,
+        "formation_end": 4.0,
+        "orbit_end": 24.0,
+        "return_end": 29.0,
+        "focal": 610.0,
+        "center_y_offset": 16.0
+      }
+    },
+    {
+      "id": "procedural-sprite-materials",
+      "label": "PROCEDURAL SPRITE MATERIALS",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 6000,
+            "label": "ignite"
+          },
+          {
+            "until_ms": 20000,
+            "label": "material-bloom"
+          },
+          {
+            "until_ms": 30000,
+            "label": "cooling"
+          }
+        ]
+      },
+      "particle_count": 16384,
+      "palette": [
+        "#100000",
+        "#390000",
+        "#7B0000",
+        "#BD2000",
+        "#FF5900",
+        "#FFC700",
+        "#FFEFAD",
+        "#FFFFFF"
+      ],
+      "colors": {
+        "highlight": "#00BEFF",
+        "star": "#FF00FF",
+        "smoke": "#63007B",
+        "shard": "#FFCF00"
+      },
+      "params": {
+        "spawn_x_span": 430.0,
+        "spawn_y_span": 230.0,
+        "phase_rate": 0.12,
+        "angle_span": 1.15,
+        "angle_rate": 0.17,
+        "speed_min": 90.0,
+        "speed_span": 360.0,
+        "gravity": 90.0
+      }
+    },
+    {
+      "id": "variable-width-ribbons",
+      "label": "VARIABLE-WIDTH RIBBONS",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 6000,
+            "label": "draw"
+          },
+          {
+            "until_ms": 22000,
+            "label": "crossover"
+          },
+          {
+            "until_ms": 30000,
+            "label": "breakup"
+          }
+        ]
+      },
+      "particle_count": 8192,
+      "palette": [
+        "#100042",
+        "#210094",
+        "#3900FF",
+        "#8400FF",
+        "#FF00FF",
+        "#00BEFF",
+        "#8CFFFF",
+        "#FFEFAD"
+      ],
+      "params": {
+        "ribbon_count": 24.0,
+        "ribbon_samples": 16.0,
+        "path_x": 350.0,
+        "path_y": 128.0,
+        "depth_x": 48.0,
+        "depth_y": 52.0,
+        "motion_rate": 0.11,
+        "streak_count": 192.0
+      }
+    },
+    {
+      "id": "curl-noise-flow-field",
+      "label": "CURL-NOISE FLOW FIELD",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "counter-current"
+          },
+          {
+            "until_ms": 22000,
+            "label": "curl-pair"
+          },
+          {
+            "until_ms": 30000,
+            "label": "eddy-shift"
+          }
+        ]
+      },
+      "particle_count": 32768,
+      "palette": [
+        "#080042",
+        "#100094",
+        "#2100FF",
+        "#007DFF",
+        "#63FFFF",
+        "#ADFF52",
+        "#FFF700",
+        "#FFFFFF"
+      ],
+      "params": {
+        "normal_x": 260.0,
+        "normal_y": 180.0,
+        "vortex_offset": 0.78,
+        "softening": 0.18,
+        "phase_rate": 0.19,
+        "velocity_scale": 58.0,
+        "integration_scale": 4.0,
+        "trail_scale": 0.12
+      }
+    },
+    {
+      "id": "density-bloom",
+      "label": "LOW-RES DENSITY + BLOOM",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "splat"
+          },
+          {
+            "until_ms": 22000,
+            "label": "crescent-ridge"
+          },
+          {
+            "until_ms": 30000,
+            "label": "cavity-pulse"
+          }
+        ]
+      },
+      "particle_count": 24576,
+      "palette": [
+        "#000000",
+        "#10005A",
+        "#3100AD",
+        "#6B00FF",
+        "#DE00FF",
+        "#FF51FF",
+        "#FFEBCE",
+        "#FFFFFF"
+      ],
+      "params": {
+        "pulse_rate": 0.7,
+        "pulse_base": 0.92,
+        "pulse_amplitude": 0.06,
+        "radius_min": 54.0,
+        "radius_span": 168.0,
+        "x_offset": 42.0,
+        "y_scale": 0.82,
+        "cavity_radius": 118.0
+      }
+    },
+    {
+      "id": "layered-child-systems",
+      "label": "LAYERED CHILD SYSTEMS",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 7000,
+            "label": "parents"
+          },
+          {
+            "until_ms": 18000,
+            "label": "event-rings"
+          },
+          {
+            "until_ms": 30000,
+            "label": "terminal-children"
+          }
+        ]
+      },
+      "particle_count": 4096,
+      "palette": [
+        "#180042",
+        "#42007B",
+        "#8400A5",
+        "#FF00FF",
+        "#0051FF",
+        "#00BEFF",
+        "#9CFFAD",
+        "#FFFFFF"
+      ],
+      "params": {
+        "cycle": 10.0,
+        "parent_spacing": 215.0,
+        "head_x_amplitude": 58.0,
+        "head_travel": 330.0,
+        "trail_length": 92.0,
+        "ring_radius": 22.0,
+        "ring_growth": 90.0,
+        "child_gravity": 72.0
+      }
+    },
+    {
+      "id": "spatial-field-stack",
+      "label": "SPATIAL FIELD STACK",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 9000,
+            "label": "attract-repel"
+          },
+          {
+            "until_ms": 22000,
+            "label": "capture-orbit"
+          },
+          {
+            "until_ms": 30000,
+            "label": "release"
+          }
+        ]
+      },
+      "particle_count": 24576,
+      "palette": [
+        "#080042",
+        "#1000A5",
+        "#3100FF",
+        "#8400FF",
+        "#00BEFF",
+        "#73FF52",
+        "#FFDB00",
+        "#FFFFFF"
+      ],
+      "params": {
+        "spawn_x_span": 148.0,
+        "spawn_y_span": 226.0,
+        "phase_rate": 0.08,
+        "left_center": 240.0,
+        "middle_center": 480.0,
+        "right_center": 720.0,
+        "cavity_min": 68.0,
+        "cavity_span": 145.0
+      }
+    },
+    {
+      "id": "depth-aware-material-lod",
+      "label": "DEPTH-AWARE MATERIAL LOD",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "far-field"
+          },
+          {
+            "until_ms": 22000,
+            "label": "focal-plane"
+          },
+          {
+            "until_ms": 30000,
+            "label": "near-pass"
+          }
+        ]
+      },
+      "particle_count": 40960,
+      "palette": [
+        "#080042",
+        "#100084",
+        "#1818A5",
+        "#2969FF",
+        "#63FFFF",
+        "#ADFFFF",
+        "#FFEBCE",
+        "#FFFFFF"
+      ],
+      "params": {
+        "spawn_x_span": 520.0,
+        "spawn_y_span": 310.0,
+        "depth_rate": 0.025,
+        "parallax_min": 0.35,
+        "parallax_span": 1.05,
+        "drift_min": 12.0,
+        "drift_span": 68.0,
+        "corridor_min": 34.0,
+        "corridor_span": 42.0
+      }
+    },
+    {
+      "id": "source-morph",
+      "label": "SOURCE-DRIVEN MORPH",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 6000,
+            "label": "joystick-hold"
+          },
+          {
+            "until_ms": 14000,
+            "label": "assignment-morph"
+          },
+          {
+            "until_ms": 23000,
+            "label": "controller-hold"
+          },
+          {
+            "until_ms": 30000,
+            "label": "return"
+          }
+        ]
+      },
+      "particle_count": 12288,
+      "palette": [
+        "#100084",
+        "#2100FF",
+        "#007DFF",
+        "#00FF00",
+        "#FF0000",
+        "#FFA600",
+        "#FFFBFF",
+        "#FFFFFF"
+      ],
+      "params": {
+        "source_body_x": 180.0,
+        "source_body_y": 72.0,
+        "target_radius": 118.0,
+        "target_radius_jitter": 46.0,
+        "morph_start": 6.0,
+        "morph_end": 14.0,
+        "return_start": 23.0,
+        "arc_min": 18.0,
+        "arc_span": 54.0
+      }
+    },
+    {
+      "id": "sdf-collision",
+      "label": "SDF COLLISION EVENTS",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "waterfall-impact"
+          },
+          {
+            "until_ms": 22000,
+            "label": "slide-bounce"
+          },
+          {
+            "until_ms": 30000,
+            "label": "splash-mist"
+          }
+        ]
+      },
+      "particle_count": 8192,
+      "palette": [
+        "#080042",
+        "#1000A5",
+        "#0051FF",
+        "#00BEFF",
+        "#7B0000",
+        "#FF3000",
+        "#FFEFAD",
+        "#FFFFFF"
+      ],
+      "params": {
+        "spawn_x_span": 96.0,
+        "spawn_y_span": 42.0,
+        "warm_rate": 0.18,
+        "sphere_x": 172.0,
+        "sphere_y": 4.0,
+        "sphere_radius": 88.0,
+        "cool_rate": 0.28,
+        "bowl_y": 116.0,
+        "bowl_curve": 0.0026
+      }
+    },
+    {
+      "id": "grid-flocking",
+      "label": "GRID-ACCELERATED FLOCKING",
+      "duration_ms": 30000,
+      "beats": {
+        "repeat_ms": null,
+        "phases": [
+          {
+            "until_ms": 8000,
+            "label": "wing-arcs"
+          },
+          {
+            "until_ms": 22000,
+            "label": "split-rejoin"
+          },
+          {
+            "until_ms": 30000,
+            "label": "chaser-pass"
+          }
+        ]
+      },
+      "particle_count": 12288,
+      "palette": [
+        "#080042",
+        "#1000A5",
+        "#2100FF",
+        "#5200FF",
+        "#00BEFF",
+        "#9CFFFF",
+        "#FFD300",
+        "#FFFFFF"
+      ],
+      "params": {
+        "spawn_inner": 70.0,
+        "spawn_span": 330.0,
+        "spawn_y_span": 185.0,
+        "alignment": 2.6,
+        "separation": 1.8,
+        "chaser_radius": 132.0,
+        "chaser_force": 94.0,
+        "cavity_radius": 118.0,
+        "cavity_force": 260.0,
+        "max_speed": 72.0
+      }
+    }
+  ]
+}

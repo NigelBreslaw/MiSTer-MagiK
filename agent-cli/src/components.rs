@@ -9,6 +9,7 @@ use std::path::Path;
 pub enum Component {
     Repository,
     AgentCli,
+    FramebufferLab,
     MisterApp,
     Desktop,
     Catalog,
@@ -94,6 +95,8 @@ pub fn classify(path: &Path) -> Option<Component> {
         Some(Component::PlatformContracts)
     } else if path.starts_with("agent-cli") || is_retired_host_package(path) {
         Some(Component::AgentCli)
+    } else if path.starts_with("apps/framebuffer-lab") {
+        Some(Component::FramebufferLab)
     } else if path.starts_with("apps/mister") {
         Some(Component::MisterApp)
     } else if path.starts_with("apps/desktop") {
@@ -169,6 +172,14 @@ mod tests {
             classify(Path::new("docs/device.md"))
                 .unwrap()
                 .deployment_impact(),
+            DeploymentImpact::None
+        );
+        assert_eq!(
+            classify(Path::new("apps/framebuffer-lab/src/main.rs")),
+            Some(Component::FramebufferLab)
+        );
+        assert_eq!(
+            Component::FramebufferLab.deployment_impact(),
             DeploymentImpact::None
         );
         assert!(classify(Path::new("unknown/new.tree")).is_none());

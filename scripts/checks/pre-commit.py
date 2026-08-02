@@ -38,6 +38,7 @@ CLASSIFIED_PREFIXES = (
     "LICENSES",
     "agent-cli",
     "apps/desktop",
+    "apps/framebuffer-lab",
     "apps/mister",
     "crates",
     "docs",
@@ -55,6 +56,11 @@ CLASSIFIED_PREFIXES = (
 )
 
 CRATE_FORMATTERS = (
+    (
+        "framebuffer-lab.format",
+        "apps/framebuffer-lab",
+        "apps/framebuffer-lab/Cargo.toml",
+    ),
     (
         "agent-protocol.format",
         "crates/agent-protocol",
