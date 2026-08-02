@@ -372,7 +372,7 @@ cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.t
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
-cp "$ROOT/apps/mister/assets/particles/arcade-cabinet.LICENSE.txt" \
+cp "$ROOT/crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt" \
   "$STAGE/mister-magik/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
 mkdir -p "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer"
 cp "$ARCADE_DATABASE_CSV" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/ArcadeDatabase.csv"

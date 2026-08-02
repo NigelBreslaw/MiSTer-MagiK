@@ -25,7 +25,7 @@ cp "$ROOT/LICENSE" "$OUT/LICENSE"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$OUT/licenses/"
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$OUT/licenses/"
-cp "$ROOT/apps/mister/assets/particles/arcade-cabinet.LICENSE.txt" \
+cp "$ROOT/crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt" \
   "$OUT/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
 cat > "$OUT/THIRD-PARTY-NOTICES.txt" <<'EOF'
 MiSTer MagiK alpha distribution notices

@@ -6,6 +6,7 @@
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
 use mister_magik_fb::particle_renderer::ParticleRenderer;
 use mister_magik_fb::startup_particles::ArcadeCabinetFormation;
+use mister_magik_particles::recipes::embedded_cabinet_recipe;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
 
@@ -47,7 +48,9 @@ fn production_magik_rgb565_frame_matches_the_pre_consolidation_golden() {
 
 #[test]
 fn arcade_cabinet_rgb565_frame_matches_the_approved_showcase_golden() {
-    let renderer = ArcadeCabinetFormation::new(WIDTH, HEIGHT, 827_141_709_451).unwrap();
+    let mut recipe = embedded_cabinet_recipe().unwrap();
+    recipe.seed = 827_141_709_451;
+    let renderer = ArcadeCabinetFormation::new(WIDTH, HEIGHT, recipe).unwrap();
     let mut frame = vec![Rgb565Pixel(0); WIDTH * HEIGHT];
 
     renderer

@@ -15,7 +15,8 @@ pub const LICENSE_TITLES: [&str; 5] = [
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
-const ARCADE_CABINET: &str = include_str!("../assets/particles/arcade-cabinet.LICENSE.txt");
+const ARCADE_CABINET: &str =
+    include_str!("../../../crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
 const LICENSE_VISIBLE_ROWS: usize = 40;
 

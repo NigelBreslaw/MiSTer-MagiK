@@ -14,8 +14,8 @@ to the attribution and non-commercial requirements of CC-BY-NC-4.0.
 Reproduce the checked-in particle cloud from the licensed source model with:
 
 scripts/particle-model compile \
-  apps/mister/assets/particles/arcade-cabinet.glb \
-  --output apps/mister/assets/particles/arcade-cabinet.pcloud \
+  crates/particles/assets/cabinet/arcade-cabinet.glb \
+  --output crates/particles/assets/cabinet/arcade-cabinet.pcloud \
   --points 12288
 
 Expected SHA-256:

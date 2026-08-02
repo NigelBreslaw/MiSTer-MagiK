@@ -62,6 +62,14 @@ SPDX-License-Identifier = "OFL-1.1"
 
 [[annotations]]
 path = [
+  "crates/particles/assets/cabinet/arcade-cabinet.glb",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "Lluc Guardiolaa"
+SPDX-License-Identifier = "CC-BY-NC-4.0"
+
+[[annotations]]
+path = [
   "apps/desktop/.mcp.json",
   "apps/desktop/Cargo.lock",
   "documentation/package.json",

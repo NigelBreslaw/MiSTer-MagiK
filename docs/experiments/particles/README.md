@@ -19,12 +19,12 @@ Two particle sequences remain production-owned for a future startup animation:
 
 - `apps/mister/src/particle_engine.rs` and `particle_renderer.rs` implement the
   CRT-noise-to-3D **MagiK** formation;
-- `apps/mister/src/startup_particles.rs` contains the extracted arcade-cabinet
-  cloud decoder, camera and point renderer.
+- `crates/particles/src/cabinet.rs` contains the extracted arcade-cabinet cloud
+  decoder, recipe-driven camera and point renderer.
 
-The licensed arcade source model and compiled particle cloud remain under
-`apps/mister/assets/particles/` because they belong to that retained startup
-sequence. No pre-rendered frames or videos are used.
+The licensed source model, runtime cloud and attribution notice live with their
+shared engine under `crates/particles/assets/cabinet/`. No pre-rendered frames
+or videos are used.
 
 Large concept PNGs are deliberately not version-controlled. Existing local
 copies were moved to the ignored `build/particle-experiments/` directory.
