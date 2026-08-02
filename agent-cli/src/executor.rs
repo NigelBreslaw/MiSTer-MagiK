@@ -8,7 +8,6 @@ use crate::workflow::{Event, Machine, State};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
@@ -382,22 +381,26 @@ fn operation_cache_key_with_schema(
     if !is_cacheable(operation) || operation.inputs.is_empty() {
         return Ok(None);
     }
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    schema.hash(&mut hasher);
-    operation.id.hash(&mut hasher);
-    operation.program.hash(&mut hasher);
-    operation.args.hash(&mut hasher);
-    operation.inputs.hash(&mut hasher);
-    fingerprints.toolchain.hash(&mut hasher);
-    fingerprints.environment.hash(&mut hasher);
-    for (path, fingerprint) in &fingerprints.files {
-        if !operation.inputs.iter().any(|input| path.starts_with(input)) {
-            continue;
-        }
-        path.hash(&mut hasher);
-        fingerprint.hash(&mut hasher);
-    }
-    Ok(Some(format!("{:016x}", hasher.finish())))
+    let files = fingerprints
+        .files
+        .iter()
+        .filter(|(path, _)| operation.inputs.iter().any(|input| path.starts_with(input)))
+        .collect::<Vec<_>>();
+    let canonical = serde_json::to_vec(&(
+        schema,
+        &operation.id,
+        &operation.program,
+        &operation.args,
+        &operation.inputs,
+        &fingerprints.toolchain,
+        &fingerprints.environment,
+        files,
+    ))
+    .map_err(|error| format!("cache_identity_failed: {error}"))?;
+    let digest = Sha256::digest(canonical);
+    Ok(Some(
+        digest.iter().map(|byte| format!("{byte:02x}")).collect(),
+    ))
 }
 
 fn deterministic_failure(error: &str) -> bool {
@@ -1242,6 +1245,8 @@ mod tests {
         let first_key = operation_cache_key(&plan, &operation, &first)
             .unwrap()
             .expect("explicit path checks are cacheable");
+        assert_eq!(first_key.len(), 64);
+        assert!(first_key.bytes().all(|byte| byte.is_ascii_hexdigit()));
         let old_schema_key =
             operation_cache_key_with_schema(&plan, &operation, &first, "planner-schema-2")
                 .unwrap()
