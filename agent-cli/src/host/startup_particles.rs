@@ -70,7 +70,8 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
         })?;
 
     let mut publisher = RecipePublisher::new(recipe, REMOTE_LAB_RECIPE)?;
-    let run_result = loop {
+    let mut stop_required = false;
+    let watch_result = loop {
         match finished_rx.recv_timeout(WATCH_INTERVAL) {
             Ok(result) => break result.map_err(Into::into),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -79,14 +80,45 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if attended_operation_interrupted() {
-            stop_remote_lab(&session)?;
-            continue;
+            stop_required = true;
+            break Ok(());
         }
-        publisher.poll(&session)?;
+        if let Err(error) = publisher.poll(&session) {
+            stop_required = true;
+            break Err(error);
+        }
     };
-    worker
-        .join()
-        .map_err(|_| "startup particle lab worker panicked")?;
+    let stop_result = if stop_required {
+        stop_remote_lab_connection(&prepared.config.connection)
+    } else {
+        Ok(())
+    };
+    let (worker_result, worker_completed) = if stop_required {
+        match finished_rx.recv_timeout(Duration::from_secs(45)) {
+            Ok(result) => (result.map_err(Into::into), true),
+            Err(mpsc::RecvTimeoutError::Timeout) => (
+                Err("startup particle lab did not stop within 45 seconds".into()),
+                false,
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => (
+                Err("startup particle lab worker disconnected during cleanup".into()),
+                true,
+            ),
+        }
+    } else {
+        (Ok(()), true)
+    };
+    let join_result = if worker_completed {
+        worker
+            .join()
+            .map_err(|_| "startup particle lab worker panicked".into())
+    } else {
+        Err("startup particle lab worker could not be joined after bounded cleanup".into())
+    };
+    let run_result = combine_results(
+        combine_results(watch_result, stop_result),
+        combine_results(worker_result, join_result),
+    );
     let launcher_result = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45));
     let safety_result = launcher_result.and_then(|_| verify_safety_clear(&session));
     combine_results(run_result, safety_result)
@@ -329,16 +361,18 @@ fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_
             status.get("state").and_then(Value::as_str) == Some("embedded")
                 && status_generation(&status).is_ok_and(|candidate| candidate >= generation)
         });
-    exec_checked(
+    let removal_result = exec_checked(
         session,
         "remove Dev launcher startup particle recipe",
         &format!("rm -f {}", sh(REMOTE_MAGIK_RECIPE)),
-    )?;
-    if !already_embedded {
-        let status = wait_status_after(session, generation, ACK_DEADLINE)?;
-        require_status(&status, "embedded")?;
-    }
-    exec_checked(
+    );
+    let acknowledgement_result = if removal_result.is_ok() && !already_embedded {
+        wait_status_after(session, generation, ACK_DEADLINE)
+            .and_then(|status| require_status(&status, "embedded"))
+    } else {
+        Ok(())
+    };
+    let volatile_result = exec_checked(
         session,
         "clean startup particle Dev files",
         &format!(
@@ -347,8 +381,12 @@ fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_
             sh(&format!("{REMOTE_MAGIK_RECIPE}.next")),
             sh(REMOTE_DIR)
         ),
-    )?;
-    verify_safety_clear(session)
+    );
+    let safety_result = verify_safety_clear(session);
+    combine_results(
+        combine_results(removal_result, acknowledgement_result),
+        combine_results(volatile_result, safety_result),
+    )
 }
 
 fn run_remote_lab(config: &super::remote::ConnectionConfig) -> Result<()> {
@@ -388,6 +426,11 @@ fn stop_remote_lab(session: &Session) -> Result<()> {
     )
 }
 
+fn stop_remote_lab_connection(config: &super::remote::ConnectionConfig) -> Result<()> {
+    let session = connect_with(config, 10)?;
+    stop_remote_lab(&session)
+}
+
 fn lab_preflight_command() -> String {
     format!(
         "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-startup-particle-lab >/dev/null 2>&1; {}; rm -rf {}; mkdir -p {}",
@@ -399,7 +442,7 @@ fn lab_preflight_command() -> String {
 
 fn dev_preflight_command() -> String {
     format!(
-        "set -eu; set -- $(pidof MiSTer_MagiKDev); test \"$#\" -eq 1; test \"$(readlink /proc/$1/exe)\" = /media/fat/MiSTer_MagiKDev; pidof mister-magik-fb >/dev/null; test -x /media/fat/mister-magik-dev/mister-magik-fb; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; {}; rm -rf {}; mkdir -p {}",
+        "set -eu; set -- $(pidof MiSTer_MagiKDev); test \"$#\" -eq 1; main_pid=$1; test \"$(readlink /proc/$main_pid/exe)\" = /media/fat/MiSTer_MagiKDev; set -- $(pidof mister-magik-fb); test \"$#\" -eq 1; launcher_pid=$1; test \"$(readlink /proc/$launcher_pid/exe)\" = /media/fat/mister-magik-dev/mister-magik-fb; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; {}; rm -rf {}; mkdir -p {}",
         safety_clear_checks(),
         sh(REMOTE_DIR),
         sh(REMOTE_DIR)
