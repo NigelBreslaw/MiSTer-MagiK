@@ -137,10 +137,43 @@ dependency needed by the attended latch presenter. Production depends on the
 same shared crate, so a validated default and its rendering behavior do not
 fork between development and shipping.
 
-The pre-extraction five-sample macOS full-application MagiK rebuild median was
-3.092 seconds. The historical ARM baseline workflow completed, but a comparable
-five-sample ARM median was not captured; it must not be invented or inferred.
-These timings are dated evidence, not CI gates. The canonical baseline and
-machine details are recorded in
-`history/toolchain-bench/startup-particles-before-20260802.md` and its adjacent
-JSON report.
+The macOS measurements used the same machine and five-sample method. Moving the
+edit boundary out of the full application made cold and no-op builds much
+faster; the shared-engine edit median is also below three seconds.
+
+| Path | Cold | No-op median | Particle edit median |
+| --- | ---: | ---: | ---: |
+| Full Slint application before extraction | 79.267 s | 3.171 s | 3.092 s |
+| Focused Slint-free lab after extraction | 14.194 s | 0.289 s | 2.878 s |
+
+The focused ARM lab completed a separate build in 10.46 seconds. That is a
+single build result, not a five-sample edit median, so it must not be presented
+as directly comparable evidence. These timings are dated evidence, not CI
+gates. The reports and individual samples live in `history/toolchain-bench/`.
+
+## Device qualification
+
+The consolidated lab preserves physical 60 Hz with no repeated presentations.
+The after-change timing includes simulation, projection, RGB565 rasterization,
+and latch presentation waiting.
+
+| Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MagiK before extraction, production launcher | 40,960 | 60.029 | 57.55% | 4.704 / 9.229 ms | 0 |
+| MagiK after extraction, focused lab | 40,960 | 60.0 | 50.0–58.5% | 10.774 / 10.774 ms | 0 |
+| Cabinet after extraction, focused lab | 12,288 | 60.0 | 49.1–53.3% | 9.465 / 9.465 ms | 0 |
+
+The pre-extraction renderer timing excluded asynchronous preparation, so its
+P99 must not be compared directly with the inclusive lab interval. Process CPU
+is the useful directional comparison. The focused MagiK result meets the 65%
+CPU, 12 ms inclusive-P99, 16.667 ms maximum, and zero-repeat targets without a
+projection cache or render-ahead queue.
+
+Attended lab qualification also covered valid apply, invalid-save rejection
+with last-good retention, and the two-poll deletion reset while frames
+continued. The implementation work in all 11 consolidation steps is complete.
+Dev-launcher hardware acknowledgement still needs one operational rerun after
+installing a coherent Dev application that contains the watcher; the installed
+revision used on 2026-08-02 predates that code. Detailed scope, timing caveats,
+and device observations are recorded in
+`history/toolchain-bench/startup-particles-after-20260802.md`.
