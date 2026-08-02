@@ -875,6 +875,7 @@ fn visual_particle_has_neighbor(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stats(
     frame: ParticleFrameStats,
     visible: usize,
@@ -1023,7 +1024,7 @@ mod tests {
     fn capacity_preset_draws_only_single_particle_pixels() {
         let mut renderer = scene(ParticlePreset::Capacity);
         let pixels = render_at_hold(&mut renderer);
-        assert!(pixels.iter().any(|pixel| *pixel == CAPACITY_COLOR));
+        assert!(pixels.contains(&CAPACITY_COLOR));
         assert!(pixels.iter().all(|pixel| matches!(pixel.0, 0 | 0xbdf7)));
     }
 
