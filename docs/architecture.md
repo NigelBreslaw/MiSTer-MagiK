@@ -23,6 +23,16 @@ filesystem, process, or hardware types. The MiSTer runtime implements those
 capabilities while keeping framebuffer ioctls, FPGA commands, and Main handoff
 details on the platform side of the seam.
 
+The production MagiK text and arcade-cabinet particle effects live in the
+Slint-free `crates/particles` engine. The focused
+`apps/startup-particle-lab` compiles that engine without the launcher, while
+production uses it through a thin adapter. Both effects use validated,
+versioned JSON defaults and RGB565 rendering; mutable recipe watching exists
+only in the focused lab and the structurally gated Dev launcher. See
+`docs/startup-particles.md` for the schemas, reload protocol, assets, and
+runtime boundaries. The separate 36-demo `apps/framebuffer-lab` showcase is
+unchanged experimental code, not another production-particle authority.
+
 ## Tooling Shape
 
 There is one supported host entrypoint and one device-side service:

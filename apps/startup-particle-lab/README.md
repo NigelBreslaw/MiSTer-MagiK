@@ -8,6 +8,26 @@ SPDX-License-Identifier: GPL-3.0-or-later
 This is the focused, Slint-free development app for the production-quality
 MagiK text and arcade-cabinet particle effects. The recipe schema selects the
 effect; there is deliberately no demo registry or recipe-family abstraction.
+The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
+dependency of this app.
+
+Use the supported host workflow for a macOS preview:
+
+```text
+scripts/agent startup-particles preview RECIPE
+```
+
+For attended MiSTer sessions, use one of:
+
+```text
+scripts/agent device startup-particles RECIPE --runtime lab --attended
+scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
+```
+
+The focused lab accepts the MagiK and cabinet schemas. The Dev launcher accepts
+only MagiK and watches the fixed volatile
+`/tmp/mister-magik/startup-particles/magik.json` path. The public launcher never
+watches an external recipe.
 
 Run a live macOS preview with a validated recipe:
 
@@ -17,8 +37,10 @@ mister-magik-startup-particle-lab --recipe path/to/magik.json
 
 Saving the recipe reloads the renderer. The last valid renderer stays visible
 after rejected or partial saves, and `status.json` is written beside the recipe.
+The watcher polls every 100 ms, accepts at most 1 MiB, retains only the newest
+generation, and restores the embedded recipe once after two missing polls.
 
-Create a deterministic RGB565-derived PPM capture without opening a window:
+Create a deterministic capture without opening a window:
 
 ```text
 mister-magik-startup-particle-lab \
@@ -26,3 +48,11 @@ mister-magik-startup-particle-lab \
   --time-ms 5000 \
   --output cabinet.ppm
 ```
+
+The engine, palettes, frame hashes, and MiSTer presentation remain RGB565. The
+macOS preview expands the completed RGB565 frame only for its XRGB8888 window
+surface, and PPM output expands it only because PPM stores three eight-bit color
+channels. Neither adapter is an RGB888 simulation or framebuffer path.
+
+The recipe schemas, status protocol, asset authority, and compile boundary are
+documented in `docs/startup-particles.md`.
