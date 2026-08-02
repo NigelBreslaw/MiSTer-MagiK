@@ -857,23 +857,6 @@ fn particle_showcase_renderer_from_env(
     Ok(renderer)
 }
 
-// This extension is a temporary compile-safe seam for the independently developed
-// live-family loader. Its inherent method takes precedence once that work lands.
-#[cfg(mister_experiments)]
-trait ParticleShowcaseLiveFamilySeam {
-    fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String>;
-}
-
-#[cfg(mister_experiments)]
-impl ParticleShowcaseLiveFamilySeam for ParticleShowcaseRenderer {
-    fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String> {
-        Err(format!(
-            "live particle family support is not linked for {}",
-            path.display()
-        ))
-    }
-}
-
 #[cfg(mister_experiments)]
 fn particle_showcase_config_from_env(
     width: usize,

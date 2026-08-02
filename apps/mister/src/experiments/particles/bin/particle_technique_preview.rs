@@ -26,6 +26,9 @@ fn main() -> Result<(), String> {
         seed: SEED,
         initial_demo: demo,
     })?;
+    if let Some(path) = options.family {
+        renderer.enable_live_family(path)?;
+    }
     renderer.configure_capture_hud(options.hud);
     let mut slots = [
         vec![Rgb565Pixel(0); WIDTH * HEIGHT],
@@ -59,6 +62,7 @@ struct Options {
     demo: String,
     time_ms: u64,
     hud: bool,
+    family: Option<PathBuf>,
     output: PathBuf,
 }
 
@@ -67,6 +71,7 @@ impl Options {
         let mut demo = None;
         let mut time_ms = None;
         let mut hud = false;
+        let mut family = None;
         let mut output = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
@@ -87,10 +92,11 @@ impl Options {
                         _ => return Err("--hud requires on or off".into()),
                     };
                 }
+                "--family" => family = arguments.next().map(PathBuf::from),
                 "--output" => output = arguments.next().map(PathBuf::from),
                 "--help" | "-h" => {
                     return Err(
-                        "usage: mister-magik-particle-preview --demo ID --time-ms N --hud on|off --output FILE.ppm"
+                        "usage: mister-magik-particle-preview --demo ID [--family FILE.json] --time-ms N --hud on|off --output FILE.ppm"
                             .into(),
                     );
                 }
@@ -101,6 +107,7 @@ impl Options {
             demo: demo.ok_or("--demo is required")?,
             time_ms: time_ms.ok_or("--time-ms is required")?,
             hud,
+            family,
             output: output.ok_or("--output is required")?,
         })
     }
@@ -151,6 +158,8 @@ mod tests {
                 "grid-flocking",
                 "--time-ms",
                 "15000",
+                "--family",
+                "procedural.json",
                 "--hud",
                 "off",
                 "--output",
@@ -161,6 +170,7 @@ mod tests {
         .unwrap();
         assert_eq!(options.demo, "grid-flocking");
         assert_eq!(options.time_ms, 15_000);
+        assert_eq!(options.family, Some(PathBuf::from("procedural.json")));
         assert!(!options.hud);
         assert_eq!(options.output, PathBuf::from("flock.ppm"));
     }

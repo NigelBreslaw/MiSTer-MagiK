@@ -6,6 +6,10 @@
 use super::fireworks::{FireworkRenderer, embedded_firework_json};
 use super::fireworks_v2::{FireworkV2Renderer, embedded_firework_v2_json};
 use super::form::{FormSceneKind, FormSceneRenderer};
+use super::live_reload::{
+    LIVE_PARTICLE_MAX_FILE_BYTES, LastGoodFile, LiveParticleStatus, LiveParticleStatusState,
+    publish_live_particle_status,
+};
 use super::material::{
     MaterialRasterStats, MaterialShape, MaterialStamp, MaterialStroke, raster_stamp,
     raster_tapered_segment,
@@ -17,6 +21,7 @@ use super::recipes::{
 use crate::bitmap_text::{ConsoleFont, ConsoleTypeface};
 use crate::framebuffer::mapped::Pixel;
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -303,6 +308,8 @@ const ARCADE_CLOUD: &[u8] = include_bytes!("../../../assets/particles/arcade-cab
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
+const DEVICE_LIVE_FAMILY_PATH: &str = "/tmp/mister-magik/live-particles/family.json";
+const DEVICE_LIVE_STATUS_PATH: &str = "/tmp/mister-magik/live-particles/status.json";
 static PARTICLE_DEMO_NAVIGATION: AtomicI32 = AtomicI32::new(0);
 
 #[cfg(target_arch = "arm")]
@@ -646,6 +653,7 @@ pub struct ParticleShowcaseRenderer {
     fireworks_family: Option<ParticleRecipeFamily>,
     procedural_family: Option<ParticleRecipeFamily>,
     form_family: Option<ParticleRecipeFamily>,
+    live_family: Option<LiveFamilyReload>,
     firework_capture_time: Option<Duration>,
     hud_visible: bool,
     pool: ParticleShowcasePool,
@@ -671,6 +679,12 @@ pub struct ParticleShowcaseRenderer {
     hud_font: ConsoleFont,
     hud_pixels: Vec<Pixel>,
     renderer_scratch_bytes: usize,
+}
+
+struct LiveFamilyReload {
+    watcher: LastGoodFile<ParticleRecipeFamily>,
+    status_path: Option<PathBuf>,
+    status: LiveParticleStatus,
 }
 
 enum ShowcaseFireworkRenderer {
@@ -873,6 +887,7 @@ impl ParticleShowcaseRenderer {
             fireworks_family: None,
             procedural_family: None,
             form_family: None,
+            live_family: None,
             firework_capture_time: None,
             hud_visible: true,
             pool,
@@ -923,8 +938,57 @@ impl ParticleShowcaseRenderer {
             ParticleRecipeCategory::Form => self.form_family = Some(family),
         }
         if restart_active {
+            self.transition_started_at = None;
+            self.transition.count = 0;
             self.reset_demo(self.demo, elapsed);
         }
+    }
+
+    /// Enables one attended, whole-family live-reload session.
+    ///
+    /// Device sessions publish their state through the fixed volatile status
+    /// path. macOS preview sessions parse the initial file synchronously so a
+    /// deterministic headless capture cannot race the watcher thread.
+    pub fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String> {
+        if self.live_family.is_some() {
+            return Err("particle showcase already has a live family".into());
+        }
+        let device_session = path == Path::new(DEVICE_LIVE_FAMILY_PATH);
+        if !device_session {
+            let family = read_live_family_now(&path)?;
+            if !family.contains(self.demo) {
+                return Err(format!(
+                    "live particle family {} does not contain demo {}",
+                    path.display(),
+                    self.demo.number()
+                ));
+            }
+            self.replace_family(family, Duration::ZERO);
+        }
+        let watcher = LastGoodFile::spawn(path, ParticleRecipeFamily::from_json)?;
+        let status = LiveParticleStatus::embedded(self.demo.number() as u8);
+        let status_path = device_session.then(|| PathBuf::from(DEVICE_LIVE_STATUS_PATH));
+        if let Some(path) = status_path.as_deref() {
+            publish_live_particle_status(path, &status)?;
+        }
+        self.live_family = Some(LiveFamilyReload {
+            watcher,
+            status_path,
+            status,
+        });
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn live_reload_status_label(&self) -> Option<String> {
+        self.live_family.as_ref().map(|live| {
+            let state = match live.status.state {
+                LiveParticleStatusState::Embedded => "embedded",
+                LiveParticleStatusState::Applied => "applied",
+                LiveParticleStatusState::Rejected => "rejected",
+            };
+            format!("recipes:{state}:{}", live.status.generation)
+        })
     }
 
     pub fn render(
@@ -940,6 +1004,7 @@ impl ParticleShowcaseRenderer {
                 destination.len()
             ));
         }
+        self.apply_live_family_reload(elapsed)?;
         let slot = hidden_slot_offset(hidden_slot)?;
         self.apply_navigation(elapsed);
 
@@ -1097,6 +1162,10 @@ impl ParticleShowcaseRenderer {
     }
 
     fn apply_navigation(&mut self, elapsed: Duration) {
+        if self.live_family.is_some() {
+            let _ = PARTICLE_DEMO_NAVIGATION.swap(0, Ordering::AcqRel);
+            return;
+        }
         let delta = PARTICLE_DEMO_NAVIGATION.swap(0, Ordering::AcqRel);
         if delta != 0 {
             self.begin_transition(elapsed);
@@ -1110,6 +1179,44 @@ impl ParticleShowcaseRenderer {
             self.begin_transition(elapsed);
             self.reset_demo(self.demo.offset_wrapped(advances), elapsed);
         }
+    }
+
+    fn apply_live_family_reload(&mut self, elapsed: Duration) -> Result<(), String> {
+        let attempt = self
+            .live_family
+            .as_ref()
+            .and_then(|live| live.watcher.take_latest());
+        let Some(attempt) = attempt else {
+            return Ok(());
+        };
+        let demo = self.demo.number() as u8;
+        let status = match attempt.result {
+            Ok(family) if family.contains(self.demo) => {
+                self.replace_family(family, elapsed);
+                LiveParticleStatus::applied(attempt.generation, demo)
+            }
+            Ok(_) => LiveParticleStatus::rejected(
+                attempt.generation,
+                demo,
+                &format!(
+                    "live particle family does not contain pinned demo {}",
+                    self.demo.number()
+                ),
+            ),
+            Err(error) => LiveParticleStatus::rejected(attempt.generation, demo, &error),
+        };
+        let status_path = self
+            .live_family
+            .as_ref()
+            .and_then(|live| live.status_path.clone());
+        self.live_family
+            .as_mut()
+            .expect("live family exists while applying its attempt")
+            .status = status.clone();
+        if let Some(path) = status_path {
+            publish_live_particle_status(&path, &status)?;
+        }
+        Ok(())
     }
 
     fn demo_duration(&self) -> Duration {
@@ -3731,6 +3838,28 @@ impl ParticleShowcaseRenderer {
             }
         }
     }
+}
+
+fn read_live_family_now(path: &Path) -> Result<ParticleRecipeFamily, String> {
+    let metadata = std::fs::metadata(path)
+        .map_err(|error| format!("inspect live particle family {}: {error}", path.display()))?;
+    if metadata.len() > LIVE_PARTICLE_MAX_FILE_BYTES as u64 {
+        return Err(format!(
+            "{} exceeds the {} byte live-particle limit",
+            path.display(),
+            LIVE_PARTICLE_MAX_FILE_BYTES
+        ));
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("read live particle family {}: {error}", path.display()))?;
+    if bytes.len() > LIVE_PARTICLE_MAX_FILE_BYTES {
+        return Err(format!(
+            "{} exceeds the {} byte live-particle limit",
+            path.display(),
+            LIVE_PARTICLE_MAX_FILE_BYTES
+        ));
+    }
+    ParticleRecipeFamily::from_json(&bytes)
 }
 
 impl ParticleShowcaseTransition {

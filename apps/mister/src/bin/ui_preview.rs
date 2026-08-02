@@ -323,21 +323,6 @@ mod macos {
         receiver: mpsc::Receiver<Result<LauncherScreensaver, String>>,
     }
 
-    // Compile-safe seam for the independently developed live-family loader. An
-    // inherent renderer method takes precedence after that implementation lands.
-    trait ParticleShowcaseLiveFamilySeam {
-        fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String>;
-    }
-
-    impl ParticleShowcaseLiveFamilySeam for ParticleShowcaseRenderer {
-        fn enable_live_family(&mut self, path: PathBuf) -> Result<(), String> {
-            Err(format!(
-                "live particle family support is not linked for {}",
-                path.display()
-            ))
-        }
-    }
-
     struct PreviewApplication {
         launcher: Launcher,
         slint_window: Rc<MisterSoftwareWindow>,
@@ -379,6 +364,7 @@ mod macos {
         particle_showcase_renderer: Option<ParticleShowcaseRenderer>,
         particle_demo: ParticleDemoKind,
         particle_family: Option<PathBuf>,
+        particle_live_status: String,
         production_screensaver: Option<LauncherScreensaver>,
         tile_pack_loader: Option<TilePackLoader>,
         tile_pack_fingerprint: Option<TilePackFingerprint>,
@@ -504,6 +490,7 @@ mod macos {
                 particle_showcase_renderer: None,
                 particle_demo,
                 particle_family,
+                particle_live_status: "recipes:embedded:0".into(),
                 production_screensaver: None,
                 tile_pack_loader: None,
                 tile_pack_fingerprint: None,
@@ -566,7 +553,7 @@ mod macos {
 
         fn window_title(&self) -> String {
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
@@ -574,6 +561,7 @@ mod macos {
                 self.catalog_source,
                 self.display_profile.label(),
                 self.tile_pack_status,
+                self.particle_live_status,
             )
         }
 
@@ -605,6 +593,7 @@ mod macos {
             }
             if matches!(scenario, Scenario::ParticleShowcase) {
                 self.particle_showcase_renderer = None;
+                self.particle_live_status = "recipes:embedded:0".into();
                 self.screensaver_elapsed = Duration::ZERO;
             }
             if matches!(scenario, Scenario::ScreenshotTiles) {
@@ -1270,15 +1259,28 @@ mod macos {
                         .expect("create experimental particle showcase");
                 }
                 let hidden_slot = (self.headless_frame % 2 + 1) as u8;
-                self.particle_showcase_renderer
-                    .as_mut()
-                    .expect("particle showcase initialized for selected scenario")
-                    .render(
-                        self.frame_target.cached_565_mut(),
-                        hidden_slot,
-                        self.screensaver_elapsed,
-                    )
-                    .expect("render experimental particle showcase");
+                let live_status = {
+                    let renderer = self
+                        .particle_showcase_renderer
+                        .as_mut()
+                        .expect("particle showcase initialized for selected scenario");
+                    renderer
+                        .render(
+                            self.frame_target.cached_565_mut(),
+                            hidden_slot,
+                            self.screensaver_elapsed,
+                        )
+                        .expect("render experimental particle showcase");
+                    renderer.live_reload_status_label()
+                };
+                if let Some(live_status) = live_status
+                    && live_status != self.particle_live_status
+                {
+                    self.particle_live_status = live_status;
+                    if let Some(window) = self.native_window.as_ref() {
+                        window.set_title(&self.window_title());
+                    }
+                }
             } else if self.scenario == Scenario::ScreenshotTiles {
                 if let Some(screensaver) = self.production_screensaver.as_mut() {
                     screensaver.render_at(
