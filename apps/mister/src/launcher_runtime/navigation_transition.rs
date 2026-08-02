@@ -982,70 +982,6 @@ mod tests {
         )
     }
 
-    fn system_request(direction: NavigationTransitionDirection) -> NavigationTransitionRequest {
-        NavigationTransitionRequest::new(
-            NavigationTransitionEdge::ConsolesToSystem,
-            direction,
-            NavigationTransitionGeometry {
-                source_card: NavigationTransitionRect {
-                    x: 2,
-                    y: 15,
-                    width: 20,
-                    height: 80,
-                },
-                source_label: NavigationTransitionRect {
-                    x: 4,
-                    y: 46,
-                    width: 16,
-                    height: 6,
-                },
-                source_detail: NavigationTransitionRect {
-                    x: 4,
-                    y: 53,
-                    width: 16,
-                    height: 4,
-                },
-                destination_title: NavigationTransitionRect {
-                    x: 2,
-                    y: 2,
-                    width: 30,
-                    height: 8,
-                },
-                destination_detail: NavigationTransitionRect {
-                    x: 2,
-                    y: 11,
-                    width: 30,
-                    height: 4,
-                },
-                destination_list: NavigationTransitionRect {
-                    x: 8,
-                    y: 18,
-                    width: 47,
-                    height: 76,
-                },
-                destination_selected_row: NavigationTransitionRect {
-                    x: 8,
-                    y: 46,
-                    width: 47,
-                    height: 6,
-                },
-                destination_preview: NavigationTransitionRect {
-                    x: 58,
-                    y: 18,
-                    width: 38,
-                    height: 76,
-                },
-                destination_footer: NavigationTransitionRect {
-                    x: 8,
-                    y: 95,
-                    width: 47,
-                    height: 5,
-                },
-                ..NavigationTransitionGeometry::default()
-            },
-        )
-    }
-
     #[test]
     fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
@@ -1115,10 +1051,8 @@ mod tests {
             NavigationTransitionDirection::Forward,
             geometry(),
         );
-        let reverse = NavigationTransitionRequest {
-            direction: NavigationTransitionDirection::Reverse,
-            ..forward
-        };
+        let mut reverse = forward;
+        reverse.direction = NavigationTransitionDirection::Reverse;
         assert_eq!(
             request_cover_progress_q16(forward),
             SUPER_SCALER_COVER_PROGRESS
@@ -1152,18 +1086,14 @@ mod tests {
             controller.tick(elapsed_us, true)
         };
         for duration_us in [500_000, 4_000_000] {
-            let forward = NavigationTransitionRequest {
-                duration_us,
-                ..NavigationTransitionRequest::new(
-                    NavigationTransitionEdge::HomeToArcade,
-                    NavigationTransitionDirection::Forward,
-                    geometry(),
-                )
-            };
-            let reverse = NavigationTransitionRequest {
-                direction: NavigationTransitionDirection::Reverse,
-                ..forward
-            };
+            let mut forward = NavigationTransitionRequest::new(
+                NavigationTransitionEdge::HomeToArcade,
+                NavigationTransitionDirection::Forward,
+                geometry(),
+            );
+            forward.duration_us = duration_us;
+            let mut reverse = forward;
+            reverse.direction = NavigationTransitionDirection::Reverse;
             let covered_us = duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
             for forward_us in [0, covered_us, duration_us / 2, duration_us] {
                 let forward_frame = frame_at(forward, forward_us);
@@ -1180,18 +1110,14 @@ mod tests {
     #[test]
     fn destination_prepared_on_the_cover_tick_does_not_add_a_quantization_hold() {
         let duration_us = 500_000;
-        let forward = NavigationTransitionRequest {
-            duration_us,
-            ..NavigationTransitionRequest::new(
-                NavigationTransitionEdge::HomeToArcade,
-                NavigationTransitionDirection::Forward,
-                geometry(),
-            )
-        };
-        let reverse = NavigationTransitionRequest {
-            direction: NavigationTransitionDirection::Reverse,
-            ..forward
-        };
+        let mut forward = NavigationTransitionRequest::new(
+            NavigationTransitionEdge::HomeToArcade,
+            NavigationTransitionDirection::Forward,
+            geometry(),
+        );
+        forward.duration_us = duration_us;
+        let mut reverse = forward;
+        reverse.direction = NavigationTransitionDirection::Reverse;
         let forward_cover_us =
             duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
         let mut forward_controller = NavigationTransitionController::default();

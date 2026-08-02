@@ -232,12 +232,6 @@ pub(crate) fn smooth_spring_q16(progress_q16: u16) -> u16 {
     (from + (to - from) * remainder / u16::MAX as u32) as u16
 }
 
-/// Warms the floating-point spring sampling outside the live render path.
-#[cfg(test)]
-pub(crate) fn warm_smooth_spring_curve() {
-    let _ = smooth_spring_curve_q16();
-}
-
 #[cfg(test)]
 fn smooth_spring_curve_q16() -> &'static [u16; SMOOTH_CURVE_INTERVALS + 1] {
     SMOOTH_CURVE_Q16.get_or_init(build_smooth_curve_q16)
