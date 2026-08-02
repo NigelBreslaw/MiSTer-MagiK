@@ -124,6 +124,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Release { .. } => "release",
         CliCommand::CompileTime { .. } => "compile-time",
         CliCommand::LiveParticles { .. } => "live-particles",
+        CliCommand::StartupParticles { .. } => "startup-particles",
         CliCommand::Build { .. } => "build",
         CliCommand::Ci { .. } => "ci",
     }
@@ -236,10 +237,20 @@ fn dispatch(
             agent_cli::live_particles::execute_preview(repository, command)?;
             return Ok(Outcome::Passed);
         }
+        CliCommand::StartupParticles { command } => {
+            agent_cli::startup_particles::execute_preview(repository, command)?;
+            return Ok(Outcome::Passed);
+        }
         CliCommand::Device {
             command: agent_cli::commands::device::DeviceCommand::LiveParticles(args),
         } => {
             agent_cli::live_particles::execute_device(repository, args, reporter)?;
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Device {
+            command: agent_cli::commands::device::DeviceCommand::StartupParticles(args),
+        } => {
+            agent_cli::startup_particles::execute_device(repository, args, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Build { intent } => {

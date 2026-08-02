@@ -31,6 +31,7 @@ pub enum DeviceCommand {
     Events,
     Diagnostics(DiagnosticsArgs),
     LiveParticles(LiveParticlesArgs),
+    StartupParticles(StartupParticlesArgs),
     Launcher {
         #[command(subcommand)]
         command: LauncherCommand,
@@ -193,6 +194,21 @@ pub struct LiveParticlesArgs {
     attended: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct StartupParticlesArgs {
+    pub(crate) recipe: PathBuf,
+    #[arg(long, value_enum)]
+    pub(crate) runtime: StartupParticleRuntime,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum StartupParticleRuntime {
+    Lab,
+    DevLauncher,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum LauncherCommand {
     Status,
@@ -255,9 +271,17 @@ pub fn run_live_particles(args: &LiveParticlesArgs, binary: &Path) -> AgentResul
     device.mutate(|device| device.run_live_particles(binary, &args.family, &args.demo))
 }
 
+pub fn run_startup_particles(
+    args: &StartupParticlesArgs,
+    binary: Option<&Path>,
+) -> AgentResult<()> {
+    let mut device = crate::device::DeviceClient::default();
+    device.mutate(|device| device.run_startup_particles(binary, &args.recipe, args.runtime))
+}
+
 impl DeviceCommand {
     pub fn requires_repository(&self) -> bool {
-        matches!(self, Self::LiveParticles(_))
+        matches!(self, Self::LiveParticles(_) | Self::StartupParticles(_))
     }
 
     pub(crate) fn is_mutation(&self) -> bool {
@@ -269,7 +293,10 @@ impl DeviceCommand {
             | Self::Diagnostics(_)
             | Self::Capture { .. } => false,
             Self::Mode { command } => matches!(command, ModeCommand::Set(_)),
-            Self::Scene(_) | Self::Reboot(_) | Self::LiveParticles(_) => true,
+            Self::Scene(_)
+            | Self::Reboot(_)
+            | Self::LiveParticles(_)
+            | Self::StartupParticles(_) => true,
             Self::Display { .. } | Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { .. } => false,

@@ -29,6 +29,7 @@ mod live_particles;
 mod media;
 mod platform_deploy;
 mod remote;
+mod startup_particles;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
@@ -255,6 +256,15 @@ impl NativeDevice {
         live_particles::run(self, binary, family, demo)
     }
 
+    pub(crate) fn run_startup_particles(
+        &mut self,
+        binary: Option<&Path>,
+        recipe: &Path,
+        runtime: crate::commands::device::StartupParticleRuntime,
+    ) -> std::result::Result<(), DeviceFailure> {
+        startup_particles::run(self, binary, recipe, runtime)
+    }
+
     pub(crate) fn run_operator(
         &mut self,
         command: &crate::commands::device::DeviceCommand,
@@ -299,8 +309,8 @@ impl NativeDevice {
                     Ok(())
                 }
                 DeviceCommand::ArmingStatus => arming_status(),
-                DeviceCommand::LiveParticles(_) => {
-                    unreachable!("live particle sessions use the repository workflow")
+                DeviceCommand::LiveParticles(_) | DeviceCommand::StartupParticles(_) => {
+                    unreachable!("particle sessions use the repository workflow")
                 }
                 DeviceCommand::Mode { command } => match command {
                     ModeCommand::Status => mode_cli(&device_strings(["status"])),
