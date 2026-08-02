@@ -55,7 +55,7 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     let mut build = Command::new("cargo");
     build
         .current_dir(&lab)
-        .args(["build", "--release", "--locked"])
+        .args(["build", "--locked"])
         .stdin(Stdio::null());
     let mut child = build
         .spawn()
@@ -70,7 +70,7 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     if !status.success() {
         return Err(format!("particle lab preview build exited with {status}").into());
     }
-    let binary = lab.join("target/release").join(LAB_BINARY);
+    let binary = lab.join("target/debug").join(LAB_BINARY);
     let status = Command::new(&binary)
         .args(["--demo", &args.demo, "--family"])
         .arg(&args.family)

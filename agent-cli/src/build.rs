@@ -156,10 +156,10 @@ impl BuildSpec {
             BuildCommand::FramebufferLabDevice => (
                 BuildTarget::FramebufferLab,
                 BuildMode::Build,
-                "release",
+                "release-live",
                 Vec::new(),
                 UiScope::All,
-                framebuffer_lab_artifact("release"),
+                framebuffer_lab_artifact("release-live"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };

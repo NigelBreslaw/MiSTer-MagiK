@@ -267,7 +267,7 @@ impl NativeDevice {
         if let DeviceCommand::LiveParticles(args) = command {
             return self.run_live_particles(
                 Path::new(
-                    "apps/framebuffer-lab/target/armv7-unknown-linux-gnueabihf/release/mister-magik-particle-lab",
+                    "apps/framebuffer-lab/target/armv7-unknown-linux-gnueabihf/release-live/mister-magik-particle-lab",
                 ),
                 &args.family,
                 &args.demo,
