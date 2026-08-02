@@ -91,9 +91,16 @@ fn run_lab(
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
-    let mut publisher = recipe
+    let mut publisher = match recipe
         .map(|recipe| RecipePublisher::new(recipe, REMOTE_LAB_RECIPE))
-        .transpose()?;
+        .transpose()
+    {
+        Ok(publisher) => publisher,
+        Err(error) => {
+            let cleanup = remove_volatile_directory(&session);
+            return combine_results(Err(error), cleanup);
+        }
+    };
     let _signal_guard = AttendedOperationSignalGuard::install();
     let run_config = prepared.config.connection.clone();
     let scene = scene.to_owned();

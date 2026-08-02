@@ -3651,3 +3651,11 @@ fn lerp_u16(from: u16, to: u16, progress_q16: u16) -> u16 {
     let delta = to as i64 - from;
     (from + delta * progress_q16 as i64 / PROGRESS_MAX as i64).clamp(0, u16::MAX as i64) as u16
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    include!("navigation_crt_tests.rs");
+    include!("navigation_tests.rs");
+}
