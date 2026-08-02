@@ -18,18 +18,6 @@ pub fn collect(
         Scope::Paths(explicit) => {
             paths.extend(explicit.iter().map(|path| normalize(repository, path)))
         }
-        Scope::Staged => paths.extend(run_git(
-            evidence,
-            request_id,
-            repository,
-            &[
-                "diff",
-                "--cached",
-                "--name-only",
-                "-z",
-                "--diff-filter=ACMRD",
-            ],
-        )?),
         Scope::WorkingTree => {
             paths.extend(run_git(
                 evidence,
@@ -169,10 +157,6 @@ mod tests {
         };
         evidence.begin_request(&request).unwrap();
 
-        assert_eq!(
-            collect(&evidence, &request.id, &root, &Scope::Staged).unwrap(),
-            [PathBuf::from("modified.txt")]
-        );
         assert_eq!(
             collect(&evidence, &request.id, &root, &Scope::WorkingTree).unwrap(),
             [

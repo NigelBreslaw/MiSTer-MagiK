@@ -39,7 +39,6 @@ pub fn execute_with_changes(
         return Ok(Outcome::NoOp);
     }
     let command = match plan.intent {
-        crate::model::Intent::Verify { .. } => "verify",
         crate::model::Intent::PrePush { .. } => "pre-push",
         crate::model::Intent::CiHostAssurance { .. } => "ci host-assurance",
         _ => "check",
@@ -362,17 +361,9 @@ fn operation_cache_key_with_schema(
     schema: &str,
 ) -> Result<Option<String>, String> {
     match &plan.intent {
-        crate::model::Intent::Check {
-            scope:
-                crate::model::Scope::WorkingTree
-                | crate::model::Scope::Staged
-                | crate::model::Scope::Paths(_),
-        }
-        | crate::model::Intent::Verify {
-            scope:
-                crate::model::Scope::WorkingTree
-                | crate::model::Scope::Staged
-                | crate::model::Scope::Paths(_),
+        crate::model::Intent::Plan {
+            scope: crate::model::Scope::WorkingTree | crate::model::Scope::Paths(_),
+            ..
         }
         | crate::model::Intent::CiHostAssurance { .. }
         | crate::model::Intent::PrePush { .. } => {}
@@ -995,7 +986,7 @@ mod tests {
         host_operation.id = "host.operation".into();
         host_operation.action = ActionKind::Script;
         let plan = Plan {
-            intent: Intent::Check {
+            intent: Intent::Plan {
                 scope: Scope::WorkingTree,
             },
             operations: vec![cheap, host_operation],
@@ -1184,7 +1175,7 @@ mod tests {
         let first =
             FingerprintContext::new(&root, std::slice::from_ref(&operation), &changes).unwrap();
         let plan = Plan {
-            intent: Intent::Check {
+            intent: Intent::Plan {
                 scope: Scope::WorkingTree,
             },
             operations: vec![operation.clone()],
@@ -1234,7 +1225,7 @@ mod tests {
         operation.inputs = vec!["apps/mister".into()];
         let changes = vec![PathBuf::from("apps/mister/ui/launcher.slint")];
         let plan = Plan {
-            intent: Intent::Check {
+            intent: Intent::Plan {
                 scope: Scope::Paths(changes.clone()),
             },
             operations: vec![operation.clone()],
@@ -1280,7 +1271,7 @@ mod tests {
         let mut operation = test_operation(&cargo);
         operation.risk = Risk::DeviceWrite;
         let plan = Plan {
-            intent: Intent::Check {
+            intent: Intent::Plan {
                 scope: Scope::Paths(vec!["fixture".into()]),
             },
             operations: vec![operation],

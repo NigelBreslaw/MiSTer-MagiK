@@ -101,7 +101,6 @@ pub enum WorkflowPhase {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
-    Staged,
     WorkingTree,
     Paths(Vec<PathBuf>),
 }
@@ -113,13 +112,6 @@ pub enum Intent {
         remote: String,
     },
     Plan {
-        scope: Scope,
-        verbose: bool,
-    },
-    Check {
-        scope: Scope,
-    },
-    Verify {
         scope: Scope,
     },
     ShowRun {
@@ -198,8 +190,7 @@ impl Intent {
     #[must_use]
     pub const fn risk(&self) -> Risk {
         match self {
-            Self::Verify { .. }
-            | Self::PrePush { .. }
+            Self::PrePush { .. }
             | Self::CiHostAssurance { .. }
             | Self::CaptureUsbVideo { .. }
             | Self::AlphaVerify { .. } => Risk::LocalWrite,

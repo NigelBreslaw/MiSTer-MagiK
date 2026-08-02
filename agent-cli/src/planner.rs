@@ -7,12 +7,6 @@ use crate::model::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Depth {
-    Check,
-    Verify,
-}
-
 const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
     "apps/mister",
     "crates/catalog",
@@ -36,11 +30,6 @@ pub fn affected_plan_at(
     intent: Intent,
     paths: Vec<PathBuf>,
 ) -> Result<Plan, String> {
-    let depth = if matches!(intent, Intent::Check { .. }) {
-        Depth::Check
-    } else {
-        Depth::Verify
-    };
     let paths: BTreeSet<_> = paths.into_iter().collect();
     let unclassified: Vec<_> = paths
         .iter()
@@ -57,13 +46,7 @@ pub fn affected_plan_at(
     let mut operation_conflicts = Vec::new();
     let mut external_requirements = Vec::new();
     for path in &paths {
-        add_path_operations(
-            repository,
-            path,
-            depth,
-            &mut operations,
-            &mut operation_conflicts,
-        );
+        add_path_operations(repository, path, &mut operations, &mut operation_conflicts);
         if path.starts_with("mister/platform/fpga") {
             external_requirements.push(rbf_external_requirement());
         }
@@ -217,7 +200,6 @@ fn rbf_external_requirement() -> ExternalRequirement {
 fn add_path_operations(
     repository: &Path,
     path: &Path,
-    depth: Depth,
     out: &mut BTreeMap<String, Operation>,
     conflicts: &mut Vec<String>,
 ) {
@@ -278,7 +260,7 @@ fn add_path_operations(
             ),
             &["agent-cli"],
         ));
-        if depth == Depth::Verify {
+        {
             add(with_inputs(
                 cargo(
                     "agent-cli.clippy",
@@ -364,7 +346,7 @@ fn add_path_operations(
             ),
             &["crates/catalog"],
         ));
-        if depth == Depth::Verify {
+        {
             add(with_inputs(
                 cargo(
                     "catalog.clippy",
@@ -486,7 +468,7 @@ fn add_path_operations(
             ),
             MISTER_APP_COMPILED_INPUTS,
         ));
-        if depth == Depth::Verify {
+        {
             add(with_inputs(
                 cargo(
                     "app.ui-preview-binary",
@@ -645,7 +627,7 @@ fn add_path_operations(
                 MISTER_APP_COMPILED_INPUTS,
             ));
         }
-        if depth == Depth::Verify {
+        {
             add(with_inputs(
                 cargo(
                     "app.clippy",
@@ -728,7 +710,7 @@ fn add_path_operations(
     }
     if path.starts_with("scripts") {
         if repository.join(path).exists() {
-            add_script_operations(repository, path, depth, &mut add);
+            add_script_operations(repository, path, &mut add);
         } else {
             add(diff_check());
         }
@@ -836,7 +818,7 @@ fn add_path_operations(
             &["test", "--manifest-path", "apps/desktop/Cargo.toml"],
             "desktop source → tests",
         ));
-        if depth == Depth::Verify {
+        {
             add(cargo(
                 "desktop.check",
                 "Check compiled desktop UI",
@@ -870,40 +852,26 @@ fn add_path_operations(
             &["crates/media-contract"],
         ));
     }
-    add_crate(path, "crates/magik-core", "magik-core", depth, out);
-    add_crate(
-        path,
-        "crates/framebuffer-stream",
-        "framebuffer-stream",
-        depth,
-        out,
-    );
-    add_crate(path, "crates/agent-protocol", "agent-protocol", depth, out);
-    add_crate(path, "crates/media-contract", "media-contract", depth, out);
-    add_crate(path, "crates/mister-ini", "mister-ini", depth, out);
-    add_crate(
-        path,
-        "mister/platform/runtime",
-        "mister-runtime",
-        depth,
-        out,
-    );
+    add_crate(path, "crates/magik-core", "magik-core", out);
+    add_crate(path, "crates/framebuffer-stream", "framebuffer-stream", out);
+    add_crate(path, "crates/agent-protocol", "agent-protocol", out);
+    add_crate(path, "crates/media-contract", "media-contract", out);
+    add_crate(path, "crates/mister-ini", "mister-ini", out);
+    add_crate(path, "mister/platform/runtime", "mister-runtime", out);
     add_crate(
         path,
         "mister/platform/contracts/latch",
         "latch-contract",
-        depth,
         out,
     );
     add_crate(
         path,
         "mister/platform/contracts/scanout",
         "scanout-contract",
-        depth,
         out,
     );
-    add_crate(path, "mister/tools/agent", "mister-agent", depth, out);
-    add_crate(path, "mister/tools/manager", "mister-manager", depth, out);
+    add_crate(path, "mister/tools/agent", "mister-agent", out);
+    add_crate(path, "mister/tools/manager", "mister-manager", out);
 }
 
 fn merge_operation(
@@ -940,12 +908,7 @@ fn merge_operation(
     }
 }
 
-fn add_script_operations(
-    repository: &Path,
-    path: &Path,
-    _depth: Depth,
-    add: &mut impl FnMut(Operation),
-) {
+fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Operation)) {
     let text = path.to_string_lossy();
     add(builtin(
         "scripts.licenses",
@@ -1025,13 +988,7 @@ fn add_script_operations(
     }
 }
 
-fn add_crate(
-    path: &Path,
-    root: &str,
-    id: &str,
-    depth: Depth,
-    out: &mut BTreeMap<String, Operation>,
-) {
+fn add_crate(path: &Path, root: &str, id: &str, out: &mut BTreeMap<String, Operation>) {
     if !path.starts_with(root) {
         return;
     }
@@ -1053,7 +1010,7 @@ fn add_crate(
         operation.inputs = vec![root.into()];
         out.entry(operation.id.clone()).or_insert(operation);
     }
-    if depth == Depth::Verify {
+    {
         let mut operation = cargo(
             &format!("{id}.clippy"),
             &format!("Lint {id}"),
@@ -1159,7 +1116,7 @@ mod tests {
     #[test]
     fn catalog_plan_selects_builder_and_reader_without_duplicates() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1187,7 +1144,7 @@ mod tests {
     #[test]
     fn pre_commit_contract_changes_select_python_fixtures_once() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1210,7 +1167,7 @@ mod tests {
     #[test]
     fn slint_changes_select_the_full_pixel_text_contract_once() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1250,7 +1207,7 @@ mod tests {
     #[test]
     fn launcher_session_plan_uses_binary_ui_tests() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_runner/launcher_catalog_session.rs".into()],
@@ -1279,7 +1236,7 @@ mod tests {
     #[test]
     fn ui_assurance_selects_explicit_supported_feature_matrices() {
         let production = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_display.rs".into()],
@@ -1300,7 +1257,7 @@ mod tests {
         assert!(!production_test.args.contains(&"ui,experiments".into()));
 
         let preview = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/preview_state.rs".into()],
@@ -1315,7 +1272,7 @@ mod tests {
         assert!(preview_test.args.contains(&"ui-preview".into()));
 
         let bench = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/command_args.rs".into()],
@@ -1329,7 +1286,7 @@ mod tests {
         assert!(bench_test.args.contains(&"ui,bench-scenes".into()));
 
         let experimental = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/experiments/particles/showcase.rs".into()],
@@ -1346,7 +1303,7 @@ mod tests {
     #[test]
     fn ui_preview_changes_select_profile_tests_and_capture_binary() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/bin/ui_preview.rs".into()],
@@ -1366,7 +1323,7 @@ mod tests {
     #[test]
     fn app_format_cache_covers_the_complete_formatted_crate() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/src/ui_runner/crt_trial_loop.rs".into()],
@@ -1382,32 +1339,11 @@ mod tests {
     }
 
     #[test]
-    fn check_is_narrower_than_verify() {
-        let paths = vec!["crates/catalog/src/lib.rs".into()];
-        let check = affected_plan(
-            Intent::Check {
-                scope: Scope::Paths(vec![]),
-            },
-            paths.clone(),
-        )
-        .unwrap();
-        let verify = affected_plan(
-            Intent::Verify {
-                scope: Scope::Paths(vec![]),
-            },
-            paths,
-        )
-        .unwrap();
-        assert!(check.operations.len() < verify.operations.len());
-    }
-
-    #[test]
     fn plan_pre_push_and_ci_assurance_share_the_full_plan() {
         let paths = vec!["crates/catalog/src/lib.rs".into()];
         let planned = affected_plan(
             Intent::Plan {
                 scope: Scope::Paths(paths.clone()),
-                verbose: false,
             },
             paths.clone(),
         )
@@ -1443,7 +1379,7 @@ mod tests {
             "agent-cli/src/host/agent_client.rs",
         ] {
             let plan = affected_plan(
-                Intent::Check {
+                Intent::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1460,7 +1396,7 @@ mod tests {
     #[test]
     fn cargo_dependency_policy_is_not_embedded_in_plans() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["agent-cli/src/executor.rs".into()],
@@ -1482,7 +1418,7 @@ mod tests {
     fn host_tooling_changes_select_doctor_contract() {
         for path in [".codex/config.toml", "apps/mister/rust-toolchain.toml"] {
             let plan = affected_plan(
-                Intent::Check {
+                Intent::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1500,7 +1436,7 @@ mod tests {
     #[test]
     fn repository_dot_config_changes_select_diff_check() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![".obsolete/config.toml".into()],
@@ -1522,7 +1458,7 @@ mod tests {
     fn workflow_dot_directories_keep_workflow_contract() {
         for path in [".github/workflows/check.yml", ".githooks/pre-commit"] {
             let plan = affected_plan(
-                Intent::Check {
+                Intent::Plan {
                     scope: Scope::Paths(vec![]),
                 },
                 vec![path.into()],
@@ -1544,7 +1480,7 @@ mod tests {
     #[test]
     fn deleted_script_does_not_select_a_syntax_check() {
         let plan = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["scripts/definitely-deleted-script.sh".into()],
@@ -1570,7 +1506,7 @@ mod tests {
     #[test]
     fn fpga_verification_requires_external_build_and_local_checks() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: crate::model::Scope::Paths(Vec::new()),
             },
             vec!["mister/platform/fpga/menu-vblank-latch/menu.sv".into()],
@@ -1588,7 +1524,7 @@ mod tests {
     #[test]
     fn fpga_change_requires_external_rbf_build() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["mister/platform/fpga/menu-vblank-latch/menu.sv".into()],
@@ -1605,7 +1541,7 @@ mod tests {
     #[test]
     fn unclassified_path_fails_closed() {
         let error = affected_plan(
-            Intent::Check {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["new-subsystem/source.xyz".into()],
@@ -1617,7 +1553,7 @@ mod tests {
     #[test]
     fn launcher_verify_selects_canonical_local_arm_check() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec!["apps/mister/ui/launcher.slint".into()],
@@ -1637,7 +1573,7 @@ mod tests {
     #[test]
     fn compiled_app_checks_fingerprint_all_local_dependency_roots() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1666,7 +1602,7 @@ mod tests {
     #[test]
     fn media_manifest_changes_test_default_and_signed_feature_modes() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
@@ -1706,7 +1642,7 @@ mod tests {
     #[test]
     fn mixed_runtime_changes_select_one_combined_arm_operation() {
         let plan = affected_plan(
-            Intent::Verify {
+            Intent::Plan {
                 scope: Scope::Paths(Vec::new()),
             },
             vec![
@@ -1814,7 +1750,7 @@ mod tests {
             .into_iter()
             .filter(|path| {
                 let plan = affected_plan(
-                    Intent::Check {
+                    Intent::Plan {
                         scope: Scope::Paths(vec![]),
                     },
                     vec![path.clone()],

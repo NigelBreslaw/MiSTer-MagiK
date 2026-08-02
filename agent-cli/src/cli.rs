@@ -422,7 +422,6 @@ impl Cli {
             None => unreachable!("clap requires a workflow command"),
             Some(Command::PrePush { remote }) => Intent::PrePush { remote },
             Some(Command::Plan(scope)) => Intent::Plan {
-                verbose: false,
                 scope: scope.into_scope(),
             },
             Some(Command::Run {
@@ -572,7 +571,6 @@ mod tests {
             cli.into_intent(),
             Intent::Plan {
                 scope: Scope::Paths(vec![PathBuf::from("a"), PathBuf::from("b")]),
-                verbose: false,
             }
         );
     }

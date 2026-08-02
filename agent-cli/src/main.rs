@@ -602,10 +602,7 @@ fn dispatch(
             }
             return Ok(Outcome::Passed);
         }
-        Intent::Plan {
-            scope: selected, ..
-        }
-        | Intent::CiHostAssurance { scope: selected } => {
+        Intent::Plan { scope: selected } | Intent::CiHostAssurance { scope: selected } => {
             let paths = scope::collect(evidence, request_id, repository, selected)?;
             let claimed_paths = paths.clone();
             let plan = planner::affected_plan_at(repository, intent.clone(), paths)?;
@@ -622,19 +619,6 @@ fn dispatch(
             };
             reporter.emit(EventKind::Progress, phase, &summary, Some(0))?;
             if matches!(intent, Intent::Plan { .. }) {
-                if output == OutputFormat::Human
-                    && matches!(intent, Intent::Plan { verbose: true, .. })
-                {
-                    for operation in &plan.operations {
-                        println!(
-                            "{}\t{} {}",
-                            operation.id,
-                            operation.program,
-                            operation.args.join(" ")
-                        );
-                        println!("  reason: {}", operation.reason);
-                    }
-                }
                 if !plan.external_requirements.is_empty() {
                     for requirement in &plan.external_requirements {
                         reporter.emit(
@@ -667,9 +651,6 @@ fn dispatch(
                 return Ok(Outcome::ExternalRequired);
             }
             return Ok(outcome);
-        }
-        Intent::Check { .. } | Intent::Verify { .. } => {
-            return Err("retired_validation_intent: use Rust analyzer, pre-push, or CI".into());
         }
         Intent::DatabaseReport => {
             let report = evidence.report()?;

@@ -1245,7 +1245,7 @@ mod tests {
         evidence
             .record_intent(
                 &request.id,
-                &Intent::Check {
+                &Intent::Plan {
                     scope: crate::model::Scope::WorkingTree,
                 },
             )
