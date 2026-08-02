@@ -1641,11 +1641,41 @@ impl EffectiveLauncherView {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScreensaverStartMode {
+    Inactive,
+    IdleWhenReady,
+    PreviewWhenReady,
+}
+
+fn screensaver_start_mode(
+    idle_when_ready: bool,
+    preview_when_ready: bool,
+    legacy_start_active: bool,
+) -> ScreensaverStartMode {
+    if preview_when_ready {
+        ScreensaverStartMode::PreviewWhenReady
+    } else if idle_when_ready {
+        ScreensaverStartMode::IdleWhenReady
+    } else if legacy_start_active {
+        ScreensaverStartMode::PreviewWhenReady
+    } else {
+        ScreensaverStartMode::Inactive
+    }
+}
+
+fn launcher_env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
 #[derive(Debug)]
 struct ScreensaverControl {
     last_activity: Instant,
     active: bool,
-    start_when_ready: bool,
+    start_mode: ScreensaverStartMode,
     preview_active: bool,
     waiting_for_input_release: bool,
     restore_full_frame: bool,
@@ -1654,11 +1684,11 @@ struct ScreensaverControl {
 }
 
 impl ScreensaverControl {
-    fn new(now: Instant, active: bool) -> Self {
+    fn new(now: Instant, start_mode: ScreensaverStartMode) -> Self {
         Self {
             last_activity: now,
             active: false,
-            start_when_ready: active,
+            start_mode,
             preview_active: false,
             waiting_for_input_release: false,
             restore_full_frame: false,
@@ -1667,27 +1697,47 @@ impl ScreensaverControl {
         }
     }
 
-    fn update(&mut self, now: Instant, enabled: bool, delay: Duration, catalog_busy: bool) {
-        if self.start_when_ready {
-            if catalog_busy {
-                self.last_activity = now;
-                self.active = false;
-            } else {
-                self.active = true;
-                self.start_when_ready = false;
-                self.waiting_for_input_release = false;
+    fn update(
+        &mut self,
+        now: Instant,
+        enabled: bool,
+        delay: Duration,
+        catalog_busy: bool,
+        preview_ready: bool,
+    ) {
+        match self.start_mode {
+            ScreensaverStartMode::PreviewWhenReady => {
+                if preview_ready {
+                    self.preview(now);
+                } else {
+                    self.last_activity = now;
+                    self.active = false;
+                }
             }
-        } else if catalog_busy && !self.preview_active {
-            self.restore_full_frame |= self.active;
-            self.last_activity = now;
-            self.active = false;
-            self.preview_fade_started = None;
-        } else if enabled
-            && !self.reactivation_suppressed
-            && now.saturating_duration_since(self.last_activity) >= delay
-        {
-            self.active = true;
-            self.waiting_for_input_release = false;
+            ScreensaverStartMode::IdleWhenReady => {
+                if catalog_busy {
+                    self.last_activity = now;
+                    self.active = false;
+                } else {
+                    self.active = true;
+                    self.start_mode = ScreensaverStartMode::Inactive;
+                    self.waiting_for_input_release = false;
+                }
+            }
+            ScreensaverStartMode::Inactive => {
+                if catalog_busy && !self.preview_active {
+                    self.restore_full_frame |= self.active;
+                    self.last_activity = now;
+                    self.active = false;
+                    self.preview_fade_started = None;
+                } else if enabled
+                    && !self.reactivation_suppressed
+                    && now.saturating_duration_since(self.last_activity) >= delay
+                {
+                    self.active = true;
+                    self.waiting_for_input_release = false;
+                }
+            }
         }
     }
 
@@ -1702,15 +1752,16 @@ impl ScreensaverControl {
         }
         if particles_requested {
             if !self.active {
-                self.start_when_ready = true;
+                self.start_mode = ScreensaverStartMode::IdleWhenReady;
             }
-        } else if self.active || self.start_when_ready {
+        } else if self.active || self.start_mode != ScreensaverStartMode::Inactive {
             self.cancel_for_exclusive_view(now);
         }
     }
 
     fn preview(&mut self, now: Instant) {
         self.active = true;
+        self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = true;
         self.waiting_for_input_release = true;
         self.last_activity = now;
@@ -1723,10 +1774,10 @@ impl ScreensaverControl {
     }
 
     fn cancel_for_exclusive_view(&mut self, now: Instant) -> bool {
-        let was_active = self.active || self.start_when_ready;
+        let was_active = self.active || self.start_mode != ScreensaverStartMode::Inactive;
         self.restore_full_frame |= self.active;
         self.active = false;
-        self.start_when_ready = false;
+        self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
         self.preview_fade_started = None;
@@ -1760,7 +1811,7 @@ impl ScreensaverControl {
     fn fail_current_activation(&mut self, now: Instant) {
         self.restore_full_frame |= self.active;
         self.active = false;
-        self.start_when_ready = false;
+        self.start_mode = ScreensaverStartMode::Inactive;
         self.preview_active = false;
         self.waiting_for_input_release = false;
         self.preview_fade_started = None;
@@ -1816,14 +1867,13 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
-    let screensaver_start_active = matches!(
-        std::env::var("MISTER_SCREENSAVER_START_ACTIVE")
-            .ok()
-            .as_deref(),
-        Some("1" | "on" | "true" | "yes")
+    let screensaver_start_mode = screensaver_start_mode(
+        launcher_env_flag("MISTER_SCREENSAVER_START_IDLE_WHEN_READY"),
+        launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY"),
+        launcher_env_flag("MISTER_SCREENSAVER_START_ACTIVE"),
     );
     let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
-    let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_active);
+    let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
     let mut screensaver_direct_pipeline: Option<ScreensaverDirectRenderAhead> = None;
@@ -3396,12 +3446,24 @@ pub(super) fn run_launcher_loop(
             latch_v4_qualification.stress_class() == LatchV4StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
+        let preview_was_active = screensaver.is_preview();
         screensaver.update(
             Instant::now(),
             nav.settings.screensaver_enabled,
             Duration::from_secs(u64::from(nav.settings.screensaver_delay_minutes) * 60),
             catalog_build_busy,
+            catalog_ready || particle_screensaver_requested,
         );
+        if !preview_was_active && screensaver.is_preview() {
+            let started = Instant::now();
+            screensaver_show_started = Some(started);
+            screensaver_first_render_logged = false;
+            screensaver_first_present_logged = false;
+            screensaver_first_card_present_logged = false;
+            crate::ui_logln!(
+                "screensaver_startup_timing milestone=show_pressed elapsed_us=0 source=start-preview"
+            );
+        }
         if !restore_before && screensaver.restore_full_frame {
             request_launcher_redraw!();
         }
@@ -4610,7 +4672,7 @@ pub(super) fn run_launcher_loop(
         if screensaver.active {
             full_frame_present = true;
             request_launcher_redraw!();
-        } else if screensaver.start_when_ready {
+        } else if screensaver.start_mode != ScreensaverStartMode::Inactive {
             request_launcher_redraw!();
         }
         for event in composition_decision.events.iter() {
@@ -9971,21 +10033,21 @@ mod tests {
     #[test]
     fn screensaver_idle_timer_resets_for_activity_and_catalog_work() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
         let delay = Duration::from_secs(300);
 
         assert!(!saver.handle_input(start + Duration::from_secs(250), false, true));
-        saver.update(start + Duration::from_secs(500), true, delay, false);
+        saver.update(start + Duration::from_secs(500), true, delay, false, true);
         assert!(!saver.active);
-        saver.update(start + Duration::from_secs(551), true, delay, false);
+        saver.update(start + Duration::from_secs(551), true, delay, false, true);
         assert!(saver.active);
 
-        saver.update(start + Duration::from_secs(552), true, delay, true);
+        saver.update(start + Duration::from_secs(552), true, delay, true, true);
         assert!(!saver.active);
         assert!(saver.take_restore_full_frame());
-        saver.update(start + Duration::from_secs(851), true, delay, false);
+        saver.update(start + Duration::from_secs(851), true, delay, false, true);
         assert!(!saver.active);
-        saver.update(start + Duration::from_secs(852), true, delay, false);
+        saver.update(start + Duration::from_secs(852), true, delay, false, true);
         assert!(saver.active);
     }
 
@@ -10034,19 +10096,56 @@ mod tests {
     }
 
     #[test]
-    fn screensaver_start_active_keeps_waiting_for_startup_catalog_work() {
+    fn screensaver_idle_start_keeps_waiting_for_startup_catalog_work() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, true);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::IdleWhenReady);
         let delay = Duration::from_secs(300);
 
-        saver.update(start, true, delay, true);
+        saver.update(start, true, delay, true, false);
         assert!(!saver.active);
-        assert!(saver.start_when_ready);
-        saver.update(start + Duration::from_secs(1), true, delay, true);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::IdleWhenReady);
+        saver.update(start + Duration::from_secs(1), true, delay, true, true);
         assert!(!saver.active);
-        saver.update(start + Duration::from_secs(2), true, delay, false);
+        saver.update(start + Duration::from_secs(2), true, delay, false, true);
         assert!(saver.active);
-        assert!(!saver.start_when_ready);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
+    }
+
+    #[test]
+    fn legacy_screensaver_start_active_uses_preview_semantics() {
+        assert_eq!(
+            screensaver_start_mode(false, false, true),
+            ScreensaverStartMode::PreviewWhenReady
+        );
+        assert_eq!(
+            screensaver_start_mode(true, false, true),
+            ScreensaverStartMode::IdleWhenReady
+        );
+        assert_eq!(
+            screensaver_start_mode(true, true, true),
+            ScreensaverStartMode::PreviewWhenReady
+        );
+    }
+
+    #[test]
+    fn screensaver_preview_start_waits_for_content_then_uses_preview_input_semantics() {
+        let start = Instant::now();
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::PreviewWhenReady);
+        let delay = Duration::from_secs(300);
+
+        saver.update(start, true, delay, true, false);
+        assert!(!saver.active);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::PreviewWhenReady);
+
+        let ready = start + Duration::from_millis(16);
+        saver.update(ready, true, delay, true, true);
+        assert!(saver.active);
+        assert!(saver.is_preview());
+        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
+        assert!(saver.handle_input(ready, true, true));
+        assert!(saver.active);
+        assert!(saver.handle_input(ready + Duration::from_millis(16), false, true));
+        assert!(saver.active);
     }
 
     #[test]
@@ -10060,11 +10159,11 @@ mod tests {
     fn disabled_qualification_preserves_preview_for_pipeline_start() {
         let start = Instant::now();
         let next_frame = start + Duration::from_millis(16);
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
 
         saver.preview(start);
         saver.set_qualification_particles(next_frame, false, true);
-        saver.update(next_frame, false, Duration::from_secs(300), true);
+        saver.update(next_frame, false, Duration::from_secs(300), true, true);
 
         assert!(saver.active);
         assert!(saver.preview_active);
@@ -10081,10 +10180,10 @@ mod tests {
     #[test]
     fn enabled_qualification_particles_start_and_stop_screensaver() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
 
         saver.set_qualification_particles(start, true, true);
-        assert!(saver.start_when_ready);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::IdleWhenReady);
         assert!(!saver.active);
 
         saver.update(
@@ -10092,23 +10191,24 @@ mod tests {
             false,
             Duration::from_secs(300),
             false,
+            true,
         );
         assert!(saver.active);
-        assert!(!saver.start_when_ready);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
 
         saver.set_qualification_particles(start + Duration::from_millis(32), true, false);
         assert!(!saver.active);
-        assert!(!saver.start_when_ready);
+        assert_eq!(saver.start_mode, ScreensaverStartMode::Inactive);
         assert!(saver.restore_full_frame);
     }
 
     #[test]
     fn screensaver_preview_ignores_launch_release_then_consumes_next_input() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
 
         saver.preview(start);
-        saver.update(start, true, Duration::from_secs(300), true);
+        saver.update(start, true, Duration::from_secs(300), true, true);
         assert!(saver.active);
         assert_eq!(saver.preview_fade_alpha(start), Some(0));
         assert_eq!(
@@ -10133,12 +10233,13 @@ mod tests {
     #[test]
     fn idle_screensaver_view_always_routes_activity_to_dismissal() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
         saver.update(
             start + Duration::from_secs(301),
             true,
             Duration::from_secs(300),
             false,
+            true,
         );
         let view = EffectiveLauncherView::resolve_state(
             &LauncherLifecycleState::Idle,
@@ -10156,8 +10257,8 @@ mod tests {
     #[test]
     fn genuine_launch_wins_over_screensaver_and_releases_its_resources() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, true);
-        saver.update(start, true, Duration::from_secs(300), false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::IdleWhenReady);
+        saver.update(start, true, Duration::from_secs(300), false, true);
         assert!(saver.active);
 
         let launch_state = LauncherLifecycleState::Launching {
@@ -10174,13 +10275,14 @@ mod tests {
     #[test]
     fn disabled_screensaver_never_activates_but_preview_still_can() {
         let start = Instant::now();
-        let mut saver = ScreensaverControl::new(start, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
 
         saver.update(
             start + Duration::from_secs(600),
             false,
             Duration::from_secs(60),
             false,
+            true,
         );
         assert!(!saver.active);
         saver.preview(start + Duration::from_secs(601));
@@ -10191,16 +10293,16 @@ mod tests {
     fn failed_screensaver_waits_for_fresh_activity_before_reactivation() {
         let start = Instant::now();
         let delay = Duration::from_secs(300);
-        let mut saver = ScreensaverControl::new(start, false);
-        saver.update(start + delay, true, delay, false);
+        let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
+        saver.update(start + delay, true, delay, false, true);
         assert!(saver.active);
 
         saver.fail_current_activation(start + delay);
-        saver.update(start + delay + delay, true, delay, false);
+        saver.update(start + delay + delay, true, delay, false, true);
         assert!(!saver.active);
 
         saver.handle_input(start + delay + delay, false, true);
-        saver.update(start + delay + delay + delay, true, delay, false);
+        saver.update(start + delay + delay + delay, true, delay, false, true);
         assert!(saver.active);
     }
 }

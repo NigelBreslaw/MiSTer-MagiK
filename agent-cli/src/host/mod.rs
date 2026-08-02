@@ -6362,7 +6362,10 @@ fn profile_particle_cpu_preset(
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_START_IDLE_WHEN_READY".into(),
+                    "1".into(),
+                ),
                 (
                     "MISTER_SCREENSAVER_RENDERER".into(),
                     "particle-magik".into(),
@@ -6578,7 +6581,10 @@ fn run_particle_trial(
     let session = connect_with(&config.connection, 10)?;
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+        (
+            "MISTER_SCREENSAVER_START_IDLE_WHEN_READY".into(),
+            "1".into(),
+        ),
         (
             "MISTER_SCREENSAVER_RENDERER".into(),
             "particle-magik".into(),
@@ -7077,7 +7083,10 @@ fn capture_particle_phases(
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                (
+                    "MISTER_SCREENSAVER_START_IDLE_WHEN_READY".into(),
+                    "1".into(),
+                ),
                 (
                     "MISTER_SCREENSAVER_RENDERER".into(),
                     "particle-magik".into(),
