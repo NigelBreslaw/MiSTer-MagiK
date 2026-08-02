@@ -474,7 +474,9 @@ fn add_path_operations(
             &["apps/framebuffer-lab"],
         ));
     }
-    if path.starts_with("apps/framebuffer-scene-lab") {
+    if path.starts_with("apps/framebuffer-scene-lab")
+        || path.starts_with("apps/startup-particle-lab")
+    {
         add(diff_check());
     }
     if matches!(
@@ -948,12 +950,21 @@ fn add_path_operations(
     }
     add_crate(path, "crates/magik-core", "magik-core", out);
     add_crate(path, "crates/particles", "particles", out);
-    add_crate(
-        path,
-        "apps/framebuffer-scene-lab",
-        "framebuffer-scene-lab",
-        out,
-    );
+    if path.starts_with("apps/startup-particle-lab") {
+        add_crate(
+            Path::new("apps/framebuffer-scene-lab"),
+            "apps/framebuffer-scene-lab",
+            "framebuffer-scene-lab",
+            out,
+        );
+    } else {
+        add_crate(
+            path,
+            "apps/framebuffer-scene-lab",
+            "framebuffer-scene-lab",
+            out,
+        );
+    }
     add_crate(path, "crates/framebuffer-stream", "framebuffer-stream", out);
     add_crate(path, "crates/agent-protocol", "agent-protocol", out);
     add_crate(path, "crates/media-contract", "media-contract", out);
@@ -1273,6 +1284,37 @@ mod tests {
                 .args
                 .iter()
                 .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
+
+    #[test]
+    fn retired_particle_lab_paths_select_the_canonical_scene_lab_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/startup-particle-lab/src/main.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "repo.diff-check",
+                "framebuffer-scene-lab.clippy",
+                "framebuffer-scene-lab.format",
+                "framebuffer-scene-lab.tests"
+            ]
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            !operation
+                .args
+                .iter()
+                .any(|argument| argument.contains("apps/startup-particle-lab"))
         }));
     }
 

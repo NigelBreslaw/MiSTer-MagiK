@@ -97,6 +97,7 @@ pub fn classify(path: &Path) -> Option<Component> {
         Some(Component::AgentCli)
     } else if path.starts_with("apps/framebuffer-lab")
         || path.starts_with("apps/framebuffer-scene-lab")
+        || path.starts_with("apps/startup-particle-lab")
     {
         Some(Component::FramebufferLab)
     } else if path.starts_with("apps/mister") {
@@ -182,6 +183,10 @@ mod tests {
         );
         assert_eq!(
             classify(Path::new("apps/framebuffer-scene-lab/src/main.rs")),
+            Some(Component::FramebufferLab)
+        );
+        assert_eq!(
+            classify(Path::new("apps/startup-particle-lab/src/main.rs")),
             Some(Component::FramebufferLab)
         );
         assert_eq!(
