@@ -3,31 +3,32 @@
 Measured on 2026-08-02 before extracting the experimental particle showcase
 from the full Slint application. Both measurements used new target directories,
 one cold build, five unchanged invocations, one particle rebuild warm-up, and
-five measured particle rebuilds. The harness temporarily advanced the mtime of
-`showcase.rs`; its SHA-256 was identical before and after each run and its
-original timestamps were restored.
+five measured particle rebuilds. The corrected v2 harness appended a unique
+generation comment to `showcase.rs` for every forced sample, then restored its
+exact original bytes and timestamps. Its SHA-256 was identical before and after
+each run.
 
 | Target | Cold | No-op median | Particle rebuild median |
 | --- | ---: | ---: | ---: |
-| macOS full UI preview | 69.940 s | 2.581 s | 2.918 s |
-| ARM full `release-live` app | 137.417 s | 26.625 s | 27.886 s |
+| macOS full UI preview | 75.328 s | 2.817 s | 2.680 s |
+| ARM full `release-live` app | 139.863 s | 26.056 s | 26.722 s |
 
-The macOS warm-up and first particle sample encountered concurrent Cargo
-package-cache locks; the complete samples are retained in the adjacent raw JSON
-files rather than discarded. The ARM no-op result is intentionally reported:
-the current build metadata causes the full application crate to compile and
-link on an unchanged invocation.
+The adjacent `*-v2-20260802.json` files are authoritative. The original v1 raw
+reports are retained but superseded because their future-mtime technique did
+not prove that Cargo rebuilt every forced sample. The ARM no-op result is
+intentionally reported: the current build metadata causes the full application
+crate to compile and link on an unchanged invocation.
 
 Commands:
 
 ```text
 scripts/agent compile-time measure baseline-macos \
-  --target-dir /private/tmp/mister-magik-compile-before-macos-20260802 \
-  --output /private/tmp/mister-magik-compile-before-macos-20260802.json
+  --target-dir /private/tmp/mister-magik-compile-before-macos-v2-20260802 \
+  --output /private/tmp/mister-magik-compile-before-macos-v2-20260802.json
 
 scripts/agent compile-time measure baseline-arm \
-  --target-dir /private/tmp/mister-magik-compile-before-arm-20260802 \
-  --output /private/tmp/mister-magik-compile-before-arm-20260802.json
+  --target-dir /private/tmp/mister-magik-compile-before-arm-v2-20260802 \
+  --output /private/tmp/mister-magik-compile-before-arm-v2-20260802.json
 ```
 
 Environment: Apple Silicon `arm64`, macOS 26.5.2, Rust 1.97.1, Cargo 1.97.1.

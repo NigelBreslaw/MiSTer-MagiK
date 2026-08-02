@@ -1,0 +1,29 @@
+{
+  "schema": "mister-magik-compile-time-v2",
+  "target": "baseline-macos",
+  "source_revision": "d60fd719375f3d97a90cf7b5a0020e8eca7a0ee4",
+  "source_path": "apps/mister/src/experiments/particles/showcase.rs",
+  "source_sha256_before": "fb923074e0b5d27c367027bbc72af3231b87ee7f4842440156fc176be5b95b69",
+  "source_sha256_after": "fb923074e0b5d27c367027bbc72af3231b87ee7f4842440156fc176be5b95b69",
+  "target_dir": "/private/tmp/mister-magik-compile-before-macos-v2-20260802",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "cold_ms": 75328,
+  "no_op_ms": [
+    3584,
+    2817,
+    2631,
+    2643,
+    2975
+  ],
+  "particle_warmup_ms": 2896,
+  "particle_rebuild_ms": [
+    2704,
+    2796,
+    2680,
+    2636,
+    2637
+  ]
+}
