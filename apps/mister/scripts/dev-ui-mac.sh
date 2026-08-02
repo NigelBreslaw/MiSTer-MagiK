@@ -20,7 +20,7 @@ if [ "$watch" = 1 ]; then
     echo "cargo-watch is required for --watch; run without --watch for a single preview session." >&2
     exit 2
   fi
-  command="run --manifest-path $MISTER_DIR/Cargo.toml --bin mister-magik-ui-preview --features ui-preview"
+  command="run --manifest-path $MISTER_DIR/Cargo.toml --bin mister-magik-ui-preview --features ui-preview,experiments"
   if [ "$#" -gt 0 ]; then
     printf -v arguments ' %q' "$@"
     command="$command --$arguments"
@@ -35,5 +35,5 @@ fi
 exec cargo run \
   --manifest-path "$MISTER_DIR/Cargo.toml" \
   --bin mister-magik-ui-preview \
-  --features ui-preview \
+  --features ui-preview,experiments \
   -- "$@"

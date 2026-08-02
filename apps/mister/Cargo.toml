@@ -29,7 +29,7 @@ required-features = ["ui"]
 [[bin]]
 name = "mister-magik-ui-preview"
 path = "src/bin/ui_preview.rs"
-required-features = ["ui-preview"]
+required-features = ["ui-preview", "experiments"]
 
 [[bin]]
 name = "mister-magik-particle-preview"
