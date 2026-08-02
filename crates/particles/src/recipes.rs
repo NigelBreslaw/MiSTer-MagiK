@@ -9,10 +9,8 @@ pub const MAGIK_RECIPE_SCHEMA_V1: &str = "mister-magik-particle-magik-v1";
 pub const CABINET_RECIPE_SCHEMA_V1: &str = "mister-magik-particle-cabinet-v1";
 pub const MAGIK_PARTICLE_COUNT_MAX: u32 = 524_288;
 pub const CABINET_PARTICLE_COUNT_MAX: u32 = 12_288;
-pub const EMBEDDED_MAGIK_RECIPE_JSON: &[u8] =
-    include_bytes!("../assets/recipes/magik-v1.json");
-pub const EMBEDDED_CABINET_RECIPE_JSON: &[u8] =
-    include_bytes!("../assets/recipes/cabinet-v1.json");
+pub const EMBEDDED_MAGIK_RECIPE_JSON: &[u8] = include_bytes!("../assets/recipes/magik-v1.json");
+pub const EMBEDDED_CABINET_RECIPE_JSON: &[u8] = include_bytes!("../assets/recipes/cabinet-v1.json");
 
 const JSON_SAFE_INTEGER_MAX: u64 = 9_007_199_254_740_991;
 const DURATION_FIELD_MAX_MS: u64 = 120_000;
@@ -532,12 +530,7 @@ fn validate_magik_timing(file: MagikTimingFileV1) -> Result<MagikTiming, String>
     validate_duration(file.hold_ms, "timing.hold_ms")?;
     validate_duration(file.disperse_ms, "timing.disperse_ms")?;
     let cycle_ms = duration_total(
-        &[
-            file.static_ms,
-            file.form_ms,
-            file.hold_ms,
-            file.disperse_ms,
-        ],
+        &[file.static_ms, file.form_ms, file.hold_ms, file.disperse_ms],
         100,
         "Magik",
     )?;
@@ -592,12 +585,7 @@ fn validate_magik_depth(file: MagikDepthFileV1) -> Result<MagikDepth, String> {
 }
 
 fn validate_magik_projection(file: MagikProjectionFileV1) -> Result<MagikProjection, String> {
-    finite_range(
-        file.focal_length,
-        32.0,
-        4_096.0,
-        "projection.focal_length",
-    )?;
+    finite_range(file.focal_length, 32.0, 4_096.0, "projection.focal_length")?;
     finite_range_exclusive_min(
         file.near_denominator,
         0.0,
@@ -671,9 +659,7 @@ fn validate_magik_attraction(
     })
 }
 
-fn validate_magik_disperse(
-    file: MagikDisperseMotionFileV1,
-) -> Result<MagikDisperseMotion, String> {
+fn validate_magik_disperse(file: MagikDisperseMotionFileV1) -> Result<MagikDisperseMotion, String> {
     finite_range(
         file.outward_acceleration,
         0.0,
@@ -829,11 +815,7 @@ fn validate_cabinet_camera(file: CabinetCameraFileV1) -> Result<CabinetCamera, S
 
 fn validate_cabinet_pose(file: CabinetPoseFileV1, name: &str) -> Result<CabinetPose, String> {
     finite_absolute(file.yaw_radians, 16.0, &format!("{name}.yaw_radians"))?;
-    finite_absolute(
-        file.pitch_radians,
-        16.0,
-        &format!("{name}.pitch_radians"),
-    )?;
+    finite_absolute(file.pitch_radians, 16.0, &format!("{name}.pitch_radians"))?;
     finite_range(file.dolly, 32.0, 4_096.0, &format!("{name}.dolly"))?;
     Ok(CabinetPose {
         yaw_radians: file.yaw_radians,
@@ -899,9 +881,7 @@ fn validate_cabinet_orbit(file: CabinetOrbitFileV1) -> Result<CabinetOrbit, Stri
     })
 }
 
-fn validate_cabinet_appearance(
-    file: CabinetAppearanceFileV1,
-) -> Result<CabinetAppearance, String> {
+fn validate_cabinet_appearance(file: CabinetAppearanceFileV1) -> Result<CabinetAppearance, String> {
     validate_feature_mask(file.priority_feature_mask, "priority_feature_mask")?;
     validate_feature_mask(file.accent_feature_mask, "accent_feature_mask")?;
     validate_feature_mask(file.neighbor_feature_mask, "neighbor_feature_mask")?;
@@ -930,24 +910,25 @@ fn validate_cabinet_appearance(
 
 fn validate_feature_mask(value: u8, name: &str) -> Result<(), String> {
     if value & !3 != 0 {
-        return Err(format!("appearance.{name} may only use feature bits 0 and 1"));
+        return Err(format!(
+            "appearance.{name} may only use feature bits 0 and 1"
+        ));
     }
     Ok(())
 }
 
 fn validate_palette_index(value: u8, length: u8, name: &str) -> Result<(), String> {
     if value >= length {
-        return Err(format!(
-            "appearance.{name} must be in 0..={}",
-            length - 1
-        ));
+        return Err(format!("appearance.{name} must be in 0..={}", length - 1));
     }
     Ok(())
 }
 
 fn finite_range(value: f32, minimum: f32, maximum: f32, name: &str) -> Result<(), String> {
     if !value.is_finite() || !(minimum..=maximum).contains(&value) {
-        return Err(format!("{name} must be finite and in {minimum}..={maximum}"));
+        return Err(format!(
+            "{name} must be finite and in {minimum}..={maximum}"
+        ));
     }
     Ok(())
 }

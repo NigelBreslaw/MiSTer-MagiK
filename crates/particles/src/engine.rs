@@ -166,7 +166,9 @@ pub fn magik_target_mask() -> Result<TargetMask, String> {
     }
     let version = u16::from_le_bytes([MAGIK_MASK[8], MAGIK_MASK[9]]);
     if version != MAGIK_MASK_VERSION {
-        return Err(format!("unsupported MagiK particle target version {version}"));
+        return Err(format!(
+            "unsupported MagiK particle target version {version}"
+        ));
     }
     let width = usize::from(u16::from_le_bytes([MAGIK_MASK[10], MAGIK_MASK[11]]));
     let height = usize::from(u16::from_le_bytes([MAGIK_MASK[12], MAGIK_MASK[13]]));
@@ -657,12 +659,12 @@ impl ParticleEngine {
                 signed_unit(mix32(seed ^ 0x7f4a_7c15)) * self.recipe.depth.particle_extent,
                 self.recipe.depth.particle_extent,
             );
-            self.vx[index] = signed_unit(mix32(seed ^ 0x94d0_49bb))
-                * self.recipe.initial.velocity_xy_max;
-            self.vy[index] = signed_unit(mix32(seed ^ 0x2c1b_3c6d))
-                * self.recipe.initial.velocity_xy_max;
-            self.vz[index] = signed_unit(mix32(seed ^ 0x297a_2d39))
-                * self.recipe.initial.velocity_z_max;
+            self.vx[index] =
+                signed_unit(mix32(seed ^ 0x94d0_49bb)) * self.recipe.initial.velocity_xy_max;
+            self.vy[index] =
+                signed_unit(mix32(seed ^ 0x2c1b_3c6d)) * self.recipe.initial.velocity_xy_max;
+            self.vz[index] =
+                signed_unit(mix32(seed ^ 0x297a_2d39)) * self.recipe.initial.velocity_z_max;
         }
     }
 
@@ -710,10 +712,10 @@ impl ParticleEngine {
             let noise = next_random(&mut self.random_states[index]);
             let jitter_x = signed_unit(noise);
             let jitter_y = signed_unit(noise.rotate_left(11));
-            let vx = (self.vx[index] + jitter_x * motion.acceleration_xy * delta)
-                * motion.damping_xy;
-            let vy = (self.vy[index] + jitter_y * motion.acceleration_xy * delta)
-                * motion.damping_xy;
+            let vx =
+                (self.vx[index] + jitter_x * motion.acceleration_xy * delta) * motion.damping_xy;
+            let vy =
+                (self.vy[index] + jitter_y * motion.acceleration_xy * delta) * motion.damping_xy;
             let vz = (self.vz[index]
                 + signed_unit(noise.rotate_left(21)) * motion.acceleration_z * delta)
                 * motion.damping_z;
@@ -759,8 +761,7 @@ impl ParticleEngine {
             let vy = (self.vy[index]
                 + (target_y + jitter_y * motion.jitter_px - y) * motion.stiffness * delta)
                 * motion.damping;
-            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta)
-                * motion.damping;
+            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta) * motion.damping;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
@@ -805,8 +806,7 @@ impl ParticleEngine {
             let vy = (self.vy[index]
                 + (target_y + jitter_y * motion.jitter_px - y) * motion.stiffness * delta)
                 * motion.damping;
-            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta)
-                * motion.damping;
+            let vz = (self.vz[index] + (target_z - z) * motion.stiffness * delta) * motion.damping;
             self.vx[index] = vx;
             self.vy[index] = vy;
             self.vz[index] = vz;
@@ -844,13 +844,11 @@ impl ParticleEngine {
             let y = self.y[index];
             let z = self.depth(index);
             let vx = (self.vx[index]
-                + ((x - target_x) * motion.outward_acceleration
-                    + jitter_x * motion.jitter_xy)
+                + ((x - target_x) * motion.outward_acceleration + jitter_x * motion.jitter_xy)
                     * delta)
                 * motion.damping;
             let vy = (self.vy[index]
-                + ((y - target_y) * motion.outward_acceleration
-                    + jitter_y * motion.jitter_xy)
+                + ((y - target_y) * motion.outward_acceleration + jitter_y * motion.jitter_xy)
                     * delta)
                 * motion.damping;
             let vz = (self.vz[index]
@@ -1388,7 +1386,10 @@ mod tests {
     #[test]
     fn phase_boundaries_follow_the_ten_second_cycle() {
         let timing = embedded_magik_recipe().unwrap().timing;
-        assert_eq!(ParticlePhase::at_timing_us(0, &timing), ParticlePhase::Static);
+        assert_eq!(
+            ParticlePhase::at_timing_us(0, &timing),
+            ParticlePhase::Static
+        );
         assert_eq!(
             ParticlePhase::at_timing_us(2_999_999, &timing),
             ParticlePhase::Static
@@ -1431,14 +1432,9 @@ mod tests {
         let mut recipe = embedded_magik_recipe().unwrap();
         recipe.particle_count = 32;
         recipe.seed = 42;
-        let engine = ParticleEngine::from_recipe(
-            32,
-            24,
-            ParticlePreset::Visual,
-            recipe.clone(),
-            mask(),
-        )
-        .unwrap();
+        let engine =
+            ParticleEngine::from_recipe(32, 24, ParticlePreset::Visual, recipe.clone(), mask())
+                .unwrap();
 
         assert_eq!(engine.config.count, recipe.particle_count);
         assert_eq!(engine.config.seed, recipe.seed);
@@ -1457,7 +1453,9 @@ mod tests {
             preset: ParticlePreset::Visual,
         };
 
-        assert!(ParticleEngine::new_with_recipe(config, magik_target_mask().unwrap(), recipe).is_err());
+        assert!(
+            ParticleEngine::new_with_recipe(config, magik_target_mask().unwrap(), recipe).is_err()
+        );
     }
 
     #[test]

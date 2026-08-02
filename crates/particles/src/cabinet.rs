@@ -173,8 +173,7 @@ impl ArcadeCabinetFormation {
                 && pixel_x + 1 < self.width
             {
                 let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
-                destination[offset + 1] =
-                    pixel(appearance.palette[usize::from(neighbor_style)]);
+                destination[offset + 1] = pixel(appearance.palette[usize::from(neighbor_style)]);
                 pixel_writes = pixel_writes.saturating_add(1);
             }
             visible = visible.saturating_add(1);
@@ -192,12 +191,12 @@ impl ArcadeCabinetFormation {
         for index in 0..self.recipe.particle_count {
             state = xorshift32(state);
             self.random[index] = state;
-            self.source_x[index] = unit_signed(state.rotate_left(3))
-                * self.recipe.source_scatter.x_half_extent;
-            self.source_y[index] = unit_signed(state.rotate_left(13))
-                * self.recipe.source_scatter.y_half_extent;
-            self.source_z[index] = unit_signed(state.rotate_left(23))
-                * self.recipe.source_scatter.z_half_extent;
+            self.source_x[index] =
+                unit_signed(state.rotate_left(3)) * self.recipe.source_scatter.x_half_extent;
+            self.source_y[index] =
+                unit_signed(state.rotate_left(13)) * self.recipe.source_scatter.y_half_extent;
+            self.source_z[index] =
+                unit_signed(state.rotate_left(23)) * self.recipe.source_scatter.z_half_extent;
         }
         decode_particle_cloud(
             ARCADE_CLOUD,
@@ -385,9 +384,8 @@ fn arcade_camera(recipe: &CabinetRecipe, elapsed: Duration) -> (f32, f32, f32, f
                     * orbit.yaw_amplitude_radians,
             triangle_wave(phase * orbit.pitch_triangle_rate) * orbit.pitch_amplitude_radians,
             orbit.dolly_center
-                + triangle_wave(
-                    phase * orbit.dolly_triangle_rate + orbit.dolly_triangle_phase,
-                ) * orbit.dolly_amplitude,
+                + triangle_wave(phase * orbit.dolly_triangle_rate + orbit.dolly_triangle_phase)
+                    * orbit.dolly_amplitude,
             0.0,
         );
     }

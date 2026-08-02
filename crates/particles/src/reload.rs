@@ -407,7 +407,11 @@ mod tests {
     #[test]
     fn invalid_content_is_bounded_deduplicated_and_recoverable() {
         let mut state = PollState::default();
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
 
         let invalid = "é".repeat(600);
         let rejected = state
@@ -419,9 +423,11 @@ mod tests {
         };
         assert!(error.len() <= MAX_RELOAD_ERROR_BYTES);
         assert!(std::str::from_utf8(error.as_bytes()).is_ok());
-        assert!(state
-            .observe(content(invalid.as_bytes()), &parse_number)
-            .is_none());
+        assert!(
+            state
+                .observe(content(invalid.as_bytes()), &parse_number)
+                .is_none()
+        );
 
         let recovered = state.observe(content(b"7"), &parse_number).unwrap();
         assert_eq!(recovered.generation, 2);
@@ -432,17 +438,34 @@ mod tests {
     fn two_missing_polls_reset_once_but_one_missing_poll_does_not() {
         let mut state = PollState::default();
         assert_eq!(
-            state.observe(content(b"4"), &parse_number).unwrap().generation,
+            state
+                .observe(content(b"4"), &parse_number)
+                .unwrap()
+                .generation,
             1
         );
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
         assert!(state.observe(content(b"4"), &parse_number).is_none());
 
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
-        let reset = state.observe(FileObservation::Missing, &parse_number).unwrap();
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
+        let reset = state
+            .observe(FileObservation::Missing, &parse_number)
+            .unwrap();
         assert_eq!(reset.generation, 2);
         assert!(matches!(reset.action, ReloadAction::ResetToEmbedded));
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
 
         let restored = state.observe(content(b"4"), &parse_number).unwrap();
         assert_eq!(restored.generation, 3);
@@ -459,18 +482,39 @@ mod tests {
         let first = state.observe(read_error(), &parse_number).unwrap();
         assert_eq!(first.generation, 1);
         assert!(matches!(first.action, ReloadAction::Reject(_)));
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
 
         assert_eq!(
-            state.observe(content(b"8"), &parse_number).unwrap().generation,
+            state
+                .observe(content(b"8"), &parse_number)
+                .unwrap()
+                .generation,
             2
         );
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
         let second_error = state.observe(read_error(), &parse_number).unwrap();
         assert_eq!(second_error.generation, 3);
-        assert!(state.observe(FileObservation::Missing, &parse_number).is_none());
-        let reset = state.observe(FileObservation::Missing, &parse_number).unwrap();
+        assert!(
+            state
+                .observe(FileObservation::Missing, &parse_number)
+                .is_none()
+        );
+        let reset = state
+            .observe(FileObservation::Missing, &parse_number)
+            .unwrap();
         assert_eq!(reset.generation, 4);
         assert!(matches!(reset.action, ReloadAction::ResetToEmbedded));
     }
@@ -554,11 +598,8 @@ mod tests {
         assert!(json.get("error").is_none());
         assert!(!path.with_extension("json.upload").exists());
 
-        let rejected = StartupParticleStatus::rejected(
-            8,
-            StartupParticleRecipe::Magik,
-            &"é".repeat(600),
-        );
+        let rejected =
+            StartupParticleStatus::rejected(8, StartupParticleRecipe::Magik, &"é".repeat(600));
         publish_startup_particle_status(&path, &rejected).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(json["state"], "rejected");
