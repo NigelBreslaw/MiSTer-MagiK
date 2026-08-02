@@ -64,7 +64,7 @@ an acknowledgement by itself.
 | Runtime | Mutable recipe behavior |
 | --- | --- |
 | macOS focused lab | Watches the selected MagiK or cabinet file and writes `status.json` beside it. |
-| Attended MiSTer focused lab | Watches the volatile recipe used for the session; accepts MagiK or cabinet. Uses the Dev framebuffer/latch lifecycle and restores the launcher on exit. |
+| Attended MiSTer focused lab | Watches the volatile recipe used for the session; accepts MagiK or cabinet. Uses the Dev framebuffer/latch lifecycle, scales its 960x540 RGB565 source to Main's confirmed fixed HDMI output rectangle in the FPGA, and restores the launcher on exit. CRT routing remains production-owned. |
 | `MiSTer_MagiKDev` launcher | Watches only `/tmp/mister-magik/startup-particles/magik.json`; acknowledges through `/tmp/mister-magik/startup-particles/status.json`. Only MagiK is accepted. |
 | Public `MiSTer_MagiK` launcher | Uses the validated embedded MagiK default. It does not construct a watcher and never opens or polls the Dev recipe path. |
 

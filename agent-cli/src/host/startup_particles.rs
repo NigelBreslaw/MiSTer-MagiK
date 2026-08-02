@@ -56,6 +56,7 @@ pub(super) fn run(
 
 fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Result<()> {
     let session = connect_with(&prepared.config.connection, 10)?;
+    let destination = active_lab_destination(&session)?;
     if let Err(error) = prepare_lab_files(&session, binary, recipe) {
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
@@ -73,7 +74,8 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
     let worker = match thread::Builder::new()
         .name("startup-particle-lab-device".into())
         .spawn(move || {
-            let result = run_remote_lab(&run_config).map_err(|error| error.to_string());
+            let result =
+                run_remote_lab(&run_config, destination).map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
         }) {
         Ok(worker) => worker,
@@ -137,6 +139,34 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
     let launcher_result = wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45));
     let safety_result = launcher_result.and_then(|_| verify_safety_clear(&session));
     combine_results(run_result, safety_result)
+}
+
+fn active_lab_destination(session: &Session) -> Result<(u16, u16)> {
+    let reply = super::exec_checked_output(
+        session,
+        "query startup particle display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    let reply = reply.stdout.trim();
+    if super::parse_display_reply_pending(reply)?.is_some() {
+        return Err("startup particle lab cannot run during a display transaction".into());
+    }
+    let active = super::parse_display_reply_active(reply)?;
+    lab_destination_for_mode(&active)
+}
+
+fn lab_destination_for_mode(active: &str) -> Result<(u16, u16)> {
+    if active.starts_with("crt-") {
+        return Err("startup particle lab currently requires a fixed HDMI display mode".into());
+    }
+    super::DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == active)
+        .and_then(|mode| mode.output)
+        .ok_or_else(|| {
+            format!("startup particle lab requires a known fixed display mode, found {active}")
+                .into()
+        })
 }
 
 fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<()> {
@@ -334,7 +364,7 @@ fn wait_status_after(session: &Session, generation: u64, timeout: Duration) -> R
     loop {
         if let Some(text) = remote_read(session, REMOTE_STATUS)
             && let Ok(status) = serde_json::from_str::<Value>(text.trim())
-            && status_generation(&status).is_ok_and(|candidate| candidate > generation)
+            && status_is_after(&status, generation, None)
         {
             return Ok(status);
         }
@@ -347,6 +377,37 @@ fn wait_status_after(session: &Session, generation: u64, timeout: Duration) -> R
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn wait_status_state_after(
+    session: &Session,
+    generation: u64,
+    expected: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(text) = remote_read(session, REMOTE_STATUS)
+            && let Ok(status) = serde_json::from_str::<Value>(text.trim())
+            && status_is_after(&status, generation, Some(expected))
+        {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "startup particle status did not reach {expected:?} after generation {generation} within {} ms",
+                timeout.as_millis()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn status_is_after(status: &Value, generation: u64, expected: Option<&str>) -> bool {
+    status_generation(status).is_ok_and(|candidate| candidate > generation)
+        && expected
+            .is_none_or(|expected| status.get("state").and_then(Value::as_str) == Some(expected))
 }
 
 fn status_generation(status: &Value) -> Result<u64> {
@@ -389,24 +450,35 @@ fn report_status(status: &Value) {
 }
 
 fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_>>) -> Result<()> {
-    let generation = publisher.map_or(0, |publisher| publisher.generation);
-    let already_embedded = remote_read(session, REMOTE_STATUS)
-        .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok())
-        .is_some_and(|status| {
-            status.get("state").and_then(Value::as_str) == Some("embedded")
-                && status_generation(&status).is_ok_and(|candidate| candidate >= generation)
-        });
-    let removal_result = exec_checked(
+    let publisher_generation = publisher.map_or(0, |publisher| publisher.generation);
+    let current_status = remote_read(session, REMOTE_STATUS)
+        .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok());
+    let generation = current_status
+        .as_ref()
+        .and_then(|status| status_generation(status).ok())
+        .unwrap_or_default()
+        .max(publisher_generation);
+    let already_embedded = current_status
+        .as_ref()
+        .is_some_and(|status| status.get("state").and_then(Value::as_str) == Some("embedded"));
+    let removal = exec_checked_output(
         session,
         "remove Dev launcher startup particle recipe",
-        &format!("rm -f {}", sh(REMOTE_MAGIK_RECIPE)),
-    );
-    let acknowledgement_result = if removal_result.is_ok() && !already_embedded {
-        wait_status_after(session, generation, ACK_DEADLINE)
-            .and_then(|status| require_status(&status, "embedded"))
+        &format!(
+            "if test -e {recipe}; then rm -f {recipe}; printf 'removed=1\\n'; else printf 'removed=0\\n'; fi",
+            recipe = sh(REMOTE_MAGIK_RECIPE),
+        ),
+    )
+    .and_then(|reply| parse_recipe_removal(&reply.stdout));
+    let acknowledgement_required = removal
+        .as_ref()
+        .is_ok_and(|removed| cleanup_requires_embedded_ack(*removed, already_embedded));
+    let acknowledgement_result = if acknowledgement_required {
+        wait_status_state_after(session, generation, "embedded", ACK_DEADLINE).map(|_| ())
     } else {
         Ok(())
     };
+    let removal_result = removal.map(|_| ());
     let volatile_result = exec_checked(
         session,
         "clean startup particle Dev files",
@@ -424,9 +496,21 @@ fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_
     )
 }
 
-fn run_remote_lab(config: &super::remote::ConnectionConfig) -> Result<()> {
+fn parse_recipe_removal(output: &str) -> Result<bool> {
+    match output.trim() {
+        "removed=1" => Ok(true),
+        "removed=0" => Ok(false),
+        other => Err(format!("invalid startup particle removal reply {other:?}").into()),
+    }
+}
+
+const fn cleanup_requires_embedded_ack(recipe_removed: bool, already_embedded: bool) -> bool {
+    recipe_removed || !already_embedded
+}
+
+fn run_remote_lab(config: &super::remote::ConnectionConfig, destination: (u16, u16)) -> Result<()> {
     let session = connect_with(config, 10)?;
-    stream_exec(&session, &remote_run_lab_command())
+    stream_exec(&session, &remote_run_lab_command(destination))
 }
 
 fn stream_exec(session: &Session, command: &str) -> Result<()> {
@@ -523,14 +607,16 @@ fn remote_publish_lab_command(binary_hash: &str, recipe_hash: &str) -> String {
     )
 }
 
-fn remote_run_lab_command() -> String {
+fn remote_run_lab_command(destination: (u16, u16)) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} --recipe {recipe}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} --recipe {recipe} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
         recipe = sh(REMOTE_LAB_RECIPE),
+        destination_width = destination.0,
+        destination_height = destination.1,
     )
 }
 
@@ -551,11 +637,12 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command();
+        let run = remote_run_lab_command((1920, 1080));
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
         assert!(!run.contains("/media/fat/mister-magik/mister-magik-fb"));
+        assert!(run.contains("--destination-width 1920 --destination-height 1080"));
     }
 
     #[test]
@@ -589,5 +676,40 @@ mod tests {
         assert!(command.contains("recipe.json.next"));
         assert!(command.contains("mv -f"));
         assert!(command.contains("sha256sum"));
+    }
+
+    #[test]
+    fn embedded_cleanup_acknowledgement_rejects_stale_and_wrong_states() {
+        let stale_embedded = serde_json::json!({"generation": 4, "state": "embedded"});
+        let newer_rejected = serde_json::json!({"generation": 6, "state": "rejected"});
+        let newer_embedded = serde_json::json!({"generation": 6, "state": "embedded"});
+
+        assert!(!status_is_after(&stale_embedded, 4, Some("embedded")));
+        assert!(!status_is_after(&newer_rejected, 4, Some("embedded")));
+        assert!(status_is_after(&newer_embedded, 4, Some("embedded")));
+    }
+
+    #[test]
+    fn focused_lab_accepts_fixed_hdmi_and_rejects_crt_routes() {
+        assert_eq!(
+            lab_destination_for_mode("hdmi-1920x1080p60").unwrap(),
+            (1920, 1080)
+        );
+        assert!(lab_destination_for_mode("crt-240p60").is_err());
+    }
+
+    #[test]
+    fn recipe_removal_reply_is_closed() {
+        assert!(parse_recipe_removal("removed=1\n").unwrap());
+        assert!(!parse_recipe_removal("removed=0\n").unwrap());
+        assert!(parse_recipe_removal("maybe").is_err());
+    }
+
+    #[test]
+    fn cleanup_waits_until_an_absent_recipe_is_confirmed_embedded() {
+        assert!(cleanup_requires_embedded_ack(true, false));
+        assert!(cleanup_requires_embedded_ack(true, true));
+        assert!(cleanup_requires_embedded_ack(false, false));
+        assert!(!cleanup_requires_embedded_ack(false, true));
     }
 }

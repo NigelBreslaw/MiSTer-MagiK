@@ -144,6 +144,20 @@ impl HiddenLatchPresenter {
         })
     }
 
+    /// Opens RGB565 source slots and stretches their destination rectangle to
+    /// an already verified progressive scanout, matching the production route.
+    pub fn open_scaled(
+        width: u16,
+        height: u16,
+        destination_width: u16,
+        destination_height: u16,
+    ) -> Result<Self, HiddenLatchError> {
+        let geometry = scaled_geometry(width, destination_width, destination_height)?;
+        let mut presenter = Self::open(width, height)?;
+        presenter.geometry = geometry;
+        Ok(presenter)
+    }
+
     #[must_use]
     pub const fn width(&self) -> usize {
         self.width as usize
@@ -152,6 +166,16 @@ impl HiddenLatchPresenter {
     #[must_use]
     pub const fn height(&self) -> usize {
         self.height as usize
+    }
+
+    #[must_use]
+    pub const fn destination_width(&self) -> usize {
+        self.geometry.right.saturating_sub(self.geometry.xoff) as usize + 1
+    }
+
+    #[must_use]
+    pub const fn destination_height(&self) -> usize {
+        self.geometry.bottom.saturating_sub(self.geometry.yoff) as usize + 1
     }
 
     #[must_use]
@@ -214,6 +238,23 @@ impl HiddenLatchPresenter {
             drop_count: after.drop_count,
         })
     }
+}
+
+fn scaled_geometry(
+    source_width: u16,
+    destination_width: u16,
+    destination_height: u16,
+) -> Result<LatchedFbufGeometry, HiddenLatchError> {
+    if destination_width == 0 || destination_height == 0 {
+        return Err(HiddenLatchError::Unsupported(format!(
+            "invalid destination geometry {destination_width}x{destination_height}"
+        )));
+    }
+    Ok(LatchedFbufGeometry::new(
+        source_width,
+        FramebufferRouteMode::framebuffer_sized(destination_width, destination_height),
+        0,
+    ))
 }
 
 fn wait_for_settled_status(
@@ -343,5 +384,14 @@ mod tests {
     fn sequence_never_uses_zero() {
         assert_eq!(next_sequence(1), 2);
         assert_eq!(next_sequence(u16::MAX), 1);
+    }
+
+    #[test]
+    fn scaled_geometry_keeps_source_stride_and_full_destination() {
+        let geometry = scaled_geometry(960, 1920, 1080).unwrap();
+
+        assert_eq!(geometry.stride_bytes, 1920);
+        assert_eq!((geometry.xoff, geometry.right), (0, 1919));
+        assert_eq!((geometry.yoff, geometry.bottom), (0, 1079));
     }
 }

@@ -5,7 +5,7 @@ use mister_magik_particles::cabinet::Rgb565Pixel;
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_startup_particle_lab::LiveParticleRenderer;
 use mister_magik_startup_particle_lab::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, FocusedParticleRenderer, read_effect_recipe,
+    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, read_effect_recipe,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -36,7 +36,7 @@ fn main() -> Result<(), String> {
             output,
         );
     }
-    run_window(options.recipe)
+    run_window(options.recipe, options.destination)
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
@@ -63,7 +63,7 @@ fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<()
 }
 
 #[cfg(target_os = "macos")]
-fn run_window(recipe: PathBuf) -> Result<(), String> {
+fn run_window(recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create startup-particle-lab event loop: {error}"))?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
@@ -74,7 +74,7 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_window(recipe: PathBuf) -> Result<(), String> {
+fn run_window(recipe: PathBuf, destination: Option<(u16, u16)>) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
     use std::time::Instant;
 
@@ -84,20 +84,38 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
         recipe.clone(),
         status_path(&recipe),
     )?;
-    let mut presenter = HiddenLatchPresenter::open(DEFAULT_WIDTH as u16, DEFAULT_HEIGHT as u16)
-        .map_err(|error| format!("open hidden RGB565 latch presenter: {error}"))?;
+    let (destination_width, destination_height) = destination
+        .ok_or("MiSTer startup particle preview requires an explicit scanout destination")?;
+    let mut presenter = HiddenLatchPresenter::open_scaled(
+        DEFAULT_WIDTH as u16,
+        DEFAULT_HEIGHT as u16,
+        destination_width,
+        destination_height,
+    )
+    .map_err(|error| format!("open scaled hidden RGB565 latch presenter: {error}"))?;
     if presenter.stride_pixels() != DEFAULT_WIDTH {
         return Err(format!(
             "startup particle lab requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
             presenter.stride_pixels()
         ));
     }
+    println!(
+        "startup-particle-lab source={}x{} destination={}x{} format=rgb565",
+        presenter.width(),
+        presenter.height(),
+        presenter.destination_width(),
+        presenter.destination_height(),
+    );
     let started = Instant::now();
     let mut next_frame = started;
     let mut status_started = started;
     let mut cpu_started = process_cpu_time();
     let mut status_frames = 0_u64;
     let mut render_samples_us = Vec::with_capacity(64);
+    let mut clear_samples_us = Vec::with_capacity(64);
+    let mut simulation_samples_us = Vec::with_capacity(64);
+    let mut projection_samples_us = Vec::with_capacity(64);
+    let mut raster_samples_us = Vec::with_capacity(64);
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     loop {
@@ -111,6 +129,17 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
         let render_started = Instant::now();
         let stats = renderer.render(pixels, elapsed)?;
         render_samples_us.push(render_started.elapsed().as_micros() as u64);
+        if let Some(stages) = stats.magik_stages {
+            clear_samples_us.push(stages.clear_us);
+            simulation_samples_us.push(stages.simulation_us);
+            projection_samples_us.push(stages.projection_us);
+            raster_samples_us.push(stages.raster_us);
+        } else {
+            clear_samples_us.clear();
+            simulation_samples_us.clear();
+            projection_samples_us.clear();
+            raster_samples_us.clear();
+        }
         let receipt = presenter
             .present()
             .map_err(|error| format!("present hidden RGB565 startup particle frame: {error}"))?;
@@ -123,26 +152,24 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
             let seconds = status_started.elapsed().as_secs_f64();
             let cpu_now = process_cpu_time();
             let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
-            render_samples_us.sort_unstable();
-            let render_p99_us = render_samples_us
-                .get(
-                    render_samples_us
-                        .len()
-                        .saturating_mul(99)
-                        .div_ceil(100)
-                        .saturating_sub(1),
-                )
-                .copied()
-                .unwrap_or_default();
-            let render_max_us = render_samples_us.last().copied().unwrap_or_default();
-            let render_average_us = if render_samples_us.is_empty() {
-                0
-            } else {
-                render_samples_us.iter().sum::<u64>() / render_samples_us.len() as u64
-            };
+            let (render_average_us, render_p99_us, render_max_us) =
+                sample_summary(&mut render_samples_us);
+            let (clear_average_us, clear_p99_us, _) = sample_summary(&mut clear_samples_us);
+            let (simulation_average_us, simulation_p99_us, _) =
+                sample_summary(&mut simulation_samples_us);
+            let (projection_average_us, projection_p99_us, _) =
+                sample_summary(&mut projection_samples_us);
+            let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
             let error = renderer.last_error().unwrap_or("none");
+            let magik_stages = if stats.effect != EffectKind::Magik || clear_samples_us.is_empty() {
+                "magik_stages=not_applicable".to_owned()
+            } else {
+                format!(
+                    "magik_clear_avg_us={clear_average_us} magik_clear_p99_us={clear_p99_us} magik_simulation_avg_us={simulation_average_us} magik_simulation_p99_us={simulation_p99_us} magik_projection_avg_us={projection_average_us} magik_projection_p99_us={projection_p99_us} magik_raster_avg_us={raster_average_us} magik_raster_p99_us={raster_p99_us}"
+                )
+            };
             println!(
-                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "startup-particle-lab effect={} generation={} state={:?} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.status_state(),
@@ -151,6 +178,7 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
                 render_average_us,
                 render_p99_us,
                 render_max_us,
+                magik_stages,
                 stats.visible,
                 stats.simulation_backend,
                 stats.projection_backend,
@@ -163,6 +191,10 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
             cpu_started = cpu_now;
             status_frames = 0;
             render_samples_us.clear();
+            clear_samples_us.clear();
+            simulation_samples_us.clear();
+            projection_samples_us.clear();
+            raster_samples_us.clear();
             repeated_presentations = 0;
         }
         next_frame += FRAME_DURATION;
@@ -172,6 +204,28 @@ fn run_window(recipe: PathBuf) -> Result<(), String> {
             next_frame = Instant::now();
         }
     }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn sample_summary(samples: &mut [u64]) -> (u64, u64, u64) {
+    samples.sort_unstable();
+    let average = if samples.is_empty() {
+        0
+    } else {
+        samples.iter().sum::<u64>() / samples.len() as u64
+    };
+    let p99 = samples
+        .get(
+            samples
+                .len()
+                .saturating_mul(99)
+                .div_ceil(100)
+                .saturating_sub(1),
+        )
+        .copied()
+        .unwrap_or_default();
+    let maximum = samples.last().copied().unwrap_or_default();
+    (average, p99, maximum)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -189,7 +243,7 @@ fn process_cpu_time() -> Duration {
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
-fn run_window(_recipe: PathBuf) -> Result<(), String> {
+fn run_window(_recipe: PathBuf, _destination: Option<(u16, u16)>) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
 
@@ -198,6 +252,7 @@ struct Options {
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
+    destination: Option<(u16, u16)>,
 }
 
 impl Options {
@@ -206,6 +261,8 @@ impl Options {
         let mut time_ms = None;
         let mut output = None;
         let mut check = false;
+        let mut destination_width = None;
+        let mut destination_height = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -220,15 +277,29 @@ impl Options {
                 }
                 "--output" => output = arguments.next().map(PathBuf::from),
                 "--check" | "--validate-only" => check = true,
+                "--destination-width" => {
+                    destination_width =
+                        Some(parse_dimension("--destination-width", arguments.next())?);
+                }
+                "--destination-height" => {
+                    destination_height =
+                        Some(parse_dimension("--destination-height", arguments.next())?);
+                }
                 "--help" | "-h" => return Err(usage().into()),
                 other => return Err(format!("unknown startup-particle-lab argument {other:?}")),
             }
         }
+        let destination = match (destination_width, destination_height) {
+            (Some(width), Some(height)) => Some((width, height)),
+            (None, None) => None,
+            _ => return Err("scanout destination requires both width and height".into()),
+        };
         let options = Self {
             recipe: recipe.ok_or("--recipe is required")?,
             time_ms,
             output,
             check,
+            destination,
         };
         options.validate()?;
         Ok(options)
@@ -241,12 +312,24 @@ impl Options {
         if self.output.is_some() != self.time_ms.is_some() {
             return Err("deterministic capture requires both --time-ms and --output".into());
         }
+        if self.destination.is_some() && (self.check || self.output.is_some()) {
+            return Err("scanout destination is only valid for an interactive preview".into());
+        }
         Ok(())
     }
 }
 
+fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
+    let value = value.ok_or_else(|| format!("{label} requires pixels"))?;
+    value
+        .parse::<u16>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| format!("invalid {label} value {value:?}"))
+}
+
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-startup-particle-lab --recipe FILE.json\n  mister-magik-startup-particle-lab --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-startup-particle-lab --recipe FILE.json --check"
+    "usage:\n  mister-magik-startup-particle-lab --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-startup-particle-lab --recipe FILE.json --time-ms N --output FILE.ppm\n  mister-magik-startup-particle-lab --recipe FILE.json --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -537,6 +620,20 @@ mod tests {
         assert_eq!(interactive.recipe, PathBuf::from("magik.json"));
         assert!(interactive.output.is_none());
 
+        let device = Options::parse(
+            [
+                "--recipe",
+                "magik.json",
+                "--destination-width",
+                "1920",
+                "--destination-height",
+                "1080",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(device.destination, Some((1920, 1080)));
+
         let capture = Options::parse(
             [
                 "--recipe",
@@ -562,6 +659,12 @@ mod tests {
         assert!(
             Options::parse(["--recipe", "magik.json", "--output", "x.ppm"].map(String::from))
                 .is_err()
+        );
+        assert!(
+            Options::parse(
+                ["--recipe", "magik.json", "--destination-width", "1920",].map(String::from)
+            )
+            .is_err()
         );
         assert!(
             Options::parse(

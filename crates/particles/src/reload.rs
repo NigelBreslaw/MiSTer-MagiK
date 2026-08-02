@@ -51,6 +51,28 @@ impl<T: Send + 'static> LastGoodRecipeFile<T> {
         path: PathBuf,
         parser: impl Fn(&[u8]) -> Result<T, String> + Send + 'static,
     ) -> Result<Self, String> {
+        Self::spawn_with_state(path, parser, PollState::default())
+    }
+
+    /// Starts after the host has already applied `initial_content` as
+    /// generation zero, so the first poll cannot re-emit the same bytes.
+    pub fn spawn_after_initial_content(
+        path: PathBuf,
+        initial_content: &[u8],
+        parser: impl Fn(&[u8]) -> Result<T, String> + Send + 'static,
+    ) -> Result<Self, String> {
+        Self::spawn_with_state(
+            path,
+            parser,
+            PollState::after_initial_content(initial_content),
+        )
+    }
+
+    fn spawn_with_state(
+        path: PathBuf,
+        parser: impl Fn(&[u8]) -> Result<T, String> + Send + 'static,
+        initial_state: PollState,
+    ) -> Result<Self, String> {
         let latest = Arc::new(Mutex::new(None));
         let stop = Arc::new(AtomicBool::new(false));
         let worker_latest = Arc::clone(&latest);
@@ -58,7 +80,7 @@ impl<T: Send + 'static> LastGoodRecipeFile<T> {
         let worker = thread::Builder::new()
             .name("startup-particle-reload".into())
             .spawn(move || {
-                let mut state = PollState::default();
+                let mut state = initial_state;
                 while !worker_stop.load(Ordering::Acquire) {
                     if let Some(attempt) = state.poll(&path, &parser) {
                         replace_latest(&worker_latest, attempt);
@@ -109,6 +131,14 @@ struct PollState {
 }
 
 impl PollState {
+    fn after_initial_content(content: &[u8]) -> Self {
+        Self {
+            last_content_digest: Some(content_digest(content)),
+            observed_content: true,
+            ..Self::default()
+        }
+    }
+
     fn poll<T>(
         &mut self,
         path: &Path,
@@ -475,6 +505,34 @@ mod tests {
         };
         assert_eq!(attempt.generation, 1);
         assert!(matches!(attempt.action, ReloadAction::Apply(6)));
+        drop(watcher);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn watcher_does_not_reemit_content_already_applied_as_generation_zero() {
+        let root = temp_path("initial-content");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("recipe.json");
+        fs::write(&path, b"6").unwrap();
+        let watcher =
+            LastGoodRecipeFile::spawn_after_initial_content(path.clone(), b"6", parse_number)
+                .unwrap();
+
+        thread::sleep(RECIPE_POLL_INTERVAL.saturating_mul(2));
+        assert!(watcher.take_latest().is_none());
+
+        fs::write(&path, b"7").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let attempt = loop {
+            if let Some(attempt) = watcher.take_latest() {
+                break attempt;
+            }
+            assert!(Instant::now() < deadline, "reload attempt timed out");
+            thread::yield_now();
+        };
+        assert_eq!(attempt.generation, 1);
+        assert!(matches!(attempt.action, ReloadAction::Apply(7)));
         drop(watcher);
         fs::remove_dir_all(root).unwrap();
     }

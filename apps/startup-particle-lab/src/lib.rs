@@ -20,7 +20,7 @@ use serde::Deserialize;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EffectKind {
@@ -87,6 +87,10 @@ pub fn parse_effect_recipe(bytes: &[u8]) -> Result<EffectRecipe, String> {
 }
 
 pub fn read_effect_recipe(path: &Path) -> Result<EffectRecipe, String> {
+    parse_effect_recipe(&read_effect_recipe_bytes(path)?)
+}
+
+fn read_effect_recipe_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let mut bytes = Vec::new();
     file.take((MAX_RECIPE_FILE_BYTES + 1) as u64)
@@ -98,7 +102,7 @@ pub fn read_effect_recipe(path: &Path) -> Result<EffectRecipe, String> {
             path.display()
         ));
     }
-    parse_effect_recipe(&bytes)
+    Ok(bytes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +112,15 @@ pub struct FrameStats {
     pub visible: usize,
     pub simulation_backend: &'static str,
     pub projection_backend: &'static str,
+    pub magik_stages: Option<MagikStageTimings>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MagikStageTimings {
+    pub clear_us: u64,
+    pub simulation_us: u64,
+    pub projection_us: u64,
+    pub raster_us: u64,
 }
 
 pub struct FocusedParticleRenderer {
@@ -155,6 +168,7 @@ impl FocusedParticleRenderer {
                     visible: stats.visible,
                     simulation_backend: "cabinet-scalar",
                     projection_backend: "cabinet-scalar",
+                    magik_stages: None,
                 })
             }
         }
@@ -200,9 +214,16 @@ impl MagikRenderer {
                 destination.len()
             ));
         }
+        let clear_started = Instant::now();
         destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
+        let clear_us = clear_started.elapsed().as_micros() as u64;
+        let simulation_started = Instant::now();
         let frame = self.engine.step(elapsed);
+        let simulation_us = simulation_started.elapsed().as_micros() as u64;
+        let projection_started = Instant::now();
         let visible = write_packed_visual_commands(&self.engine, &mut self.commands);
+        let projection_us = projection_started.elapsed().as_micros() as u64;
+        let raster_started = Instant::now();
         raster_packed_visual_commands(
             destination,
             &self.commands,
@@ -212,12 +233,19 @@ impl MagikRenderer {
                 .map(|color| Rgb565Pixel(color.0)),
             usize::from(self.recipe.appearance.neighbor_palette_index),
         );
+        let raster_us = raster_started.elapsed().as_micros() as u64;
         Ok(FrameStats {
             effect: EffectKind::Magik,
             particles: frame.count,
             visible,
             simulation_backend: frame.simulation_backend,
             projection_backend: frame.projection_backend,
+            magik_stages: Some(MagikStageTimings {
+                clear_us,
+                simulation_us,
+                projection_us,
+                raster_us,
+            }),
         })
     }
 }
@@ -260,15 +288,21 @@ impl LiveParticleRenderer {
         recipe_path: PathBuf,
         status_path: PathBuf,
     ) -> Result<Self, String> {
-        let initial = PreparedCandidate::prepare(width, height, read_effect_recipe(&recipe_path)?)?;
+        let initial_bytes = read_effect_recipe_bytes(&recipe_path)?;
+        let initial =
+            PreparedCandidate::prepare(width, height, parse_effect_recipe(&initial_bytes)?)?;
         publish_startup_particle_status(
             &status_path,
             &StartupParticleStatus::applied(0, initial.kind.status_recipe()),
         )?;
-        let watcher = LastGoodRecipeFile::spawn(recipe_path, move |bytes| {
-            let recipe = parse_effect_recipe(bytes)?;
-            PreparedCandidate::prepare(width, height, recipe)
-        })?;
+        let watcher = LastGoodRecipeFile::spawn_after_initial_content(
+            recipe_path,
+            &initial_bytes,
+            move |bytes| {
+                let recipe = parse_effect_recipe(bytes)?;
+                PreparedCandidate::prepare(width, height, recipe)
+            },
+        )?;
         Ok(Self {
             renderer: initial.renderer,
             embedded_reset: Some(initial.embedded),

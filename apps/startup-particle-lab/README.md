@@ -29,6 +29,13 @@ only MagiK and watches the fixed volatile
 `/tmp/mister-magik/startup-particles/magik.json` path. The public launcher never
 watches an external recipe.
 
+Before an attended lab suspends the launcher, the host reads Main's confirmed
+fixed HDMI mode and passes that exact destination to the standalone latch
+presenter. The RGB565 source remains 960x540; at 1080p the FPGA scales it to a
+1920x1080 destination. The lab never infers HDMI geometry from core-video
+registers after Main has been suspended. CRT routes remain with the production
+launcher because their direct-video porch offsets are route-specific.
+
 Run a live macOS preview with a validated recipe:
 
 ```text
