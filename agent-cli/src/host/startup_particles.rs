@@ -59,17 +59,31 @@ fn run_lab(prepared: &super::PreparedDevice, binary: &Path, recipe: &Path) -> Re
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
+    let mut publisher = match RecipePublisher::new(recipe, REMOTE_LAB_RECIPE) {
+        Ok(publisher) => publisher,
+        Err(error) => {
+            let cleanup = remove_volatile_directory(&session);
+            return combine_results(Err(error), cleanup);
+        }
+    };
     let _signal_guard = AttendedOperationSignalGuard::install();
     let run_config = prepared.config.connection.clone();
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
-    let worker = thread::Builder::new()
+    let worker = match thread::Builder::new()
         .name("startup-particle-lab-device".into())
         .spawn(move || {
             let result = run_remote_lab(&run_config).map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
-        })?;
-
-    let mut publisher = RecipePublisher::new(recipe, REMOTE_LAB_RECIPE)?;
+        }) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let cleanup = remove_volatile_directory(&session);
+            return combine_results(
+                Err(format!("start startup particle lab worker: {error}").into()),
+                cleanup,
+            );
+        }
+    };
     let mut stop_required = false;
     let watch_result = loop {
         match finished_rx.recv_timeout(WATCH_INTERVAL) {
