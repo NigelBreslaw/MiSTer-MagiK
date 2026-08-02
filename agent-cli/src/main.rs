@@ -122,6 +122,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::Capture { .. } => "capture",
         CliCommand::Alpha { .. } => "alpha",
         CliCommand::Release { .. } => "release",
+        CliCommand::CompileTime { .. } => "compile-time",
         CliCommand::Build { .. } => "build",
         CliCommand::Ci { .. } => "ci",
     }
@@ -237,6 +238,10 @@ fn dispatch(
         }
         CliCommand::Diagnose => {
             return agent_cli::diagnose::execute(repository, reporter);
+        }
+        CliCommand::CompileTime { command } => {
+            agent_cli::compile_time::execute(repository, command, reporter)?;
+            return Ok(Outcome::Passed);
         }
         CliCommand::Build { intent } => {
             agent_cli::build::execute_command(repository, *intent, reporter)?;

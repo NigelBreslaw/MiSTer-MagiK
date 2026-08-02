@@ -3,6 +3,7 @@
 
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
+use crate::compile_time::CompileTimeCommand;
 use crate::model::{BenchmarkScenario, Scope};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -69,6 +70,10 @@ pub enum Command {
     Release {
         #[command(subcommand)]
         command: ReleaseCommand,
+    },
+    CompileTime {
+        #[command(subcommand)]
+        command: CompileTimeCommand,
     },
     #[command(hide = true)]
     Build {
@@ -419,6 +424,56 @@ mod tests {
     #[test]
     fn bare_invocation_displays_help_instead_of_creating_an_intent() {
         assert!(Cli::try_parse_from(["agent-cli"]).is_err());
+    }
+
+    #[test]
+    fn compile_time_commands_require_closed_targets_and_explicit_paths() {
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "build",
+                "baseline-macos",
+                "--target-dir",
+                "/tmp/mac-target",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "measure",
+                "baseline-arm",
+                "--target-dir",
+                "/tmp/arm-target",
+                "--output",
+                "/tmp/arm.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "build",
+                "unknown",
+                "--target-dir",
+                "/tmp/target",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "measure",
+                "baseline-arm",
+                "--target-dir",
+                "/tmp/arm-target",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ pub mod checks;
 pub mod ci;
 pub mod cli;
 pub mod commands;
+pub mod compile_time;
 pub mod components;
 pub mod delivery;
 pub mod deploy;

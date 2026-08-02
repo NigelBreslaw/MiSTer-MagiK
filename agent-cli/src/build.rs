@@ -200,6 +200,20 @@ impl BuildSpec {
         spec
     }
 
+    /// Reproduces the retired live-particle full-application build without
+    /// installing or otherwise contacting a device.
+    #[must_use]
+    pub fn live_particles_baseline() -> Self {
+        Self::from_configuration((
+            BuildTarget::Runtime,
+            BuildMode::Build,
+            "release-live",
+            vec!["ui", "experiments"],
+            UiScope::Launcher,
+            runtime_artifact("release-live"),
+        ))
+    }
+
     #[must_use]
     pub fn artifact(&self) -> &Path {
         &self.artifact
@@ -385,6 +399,19 @@ fn execute_with_session(
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
     let mut session = BuildSession::new(repository)?;
     let mut actions = ProcessBuildActions::new(&mut session, spec);
+    run_state_machine(&mut actions, &mut |_, _| Ok(()))
+}
+
+/// Executes a build in an explicit Cargo target directory. This is reserved
+/// for reproducible compile-time measurements and retains the normal typed
+/// preflight, Apple-container, artifact, and receipt checks.
+pub fn execute_quiet_at_target_dir(
+    repository: &Path,
+    spec: &BuildSpec,
+    target_dir: &Path,
+) -> AgentResult<()> {
+    let mut session = BuildSession::new(repository)?;
+    let mut actions = ProcessBuildActions::new_at_target_dir(&mut session, spec, target_dir)?;
     run_state_machine(&mut actions, &mut |_, _| Ok(()))
 }
 
@@ -626,6 +653,24 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             spec,
             target_dir,
         }
+    }
+
+    fn new_at_target_dir(
+        session: &'session mut BuildSession<'repository>,
+        spec: &'spec BuildSpec,
+        target_dir: &Path,
+    ) -> AgentResult<Self> {
+        if !target_dir.is_absolute() {
+            return Err("compile-time target directory must be absolute".into());
+        }
+        if target_dir == Path::new("/") || target_dir == session.repository {
+            return Err("compile-time target directory is too broad".into());
+        }
+        Ok(Self {
+            session,
+            spec,
+            target_dir: target_dir.to_path_buf(),
+        })
     }
 
     fn compile(&self) -> AgentResult<()> {
@@ -1522,6 +1567,16 @@ mod tests {
             !runtime.features.contains(&"signed-media-manifests"),
             "signed manifests require a separately authorized rollout release"
         );
+    }
+
+    #[test]
+    fn live_particle_baseline_reproduces_the_retired_full_app_build() {
+        let spec = BuildSpec::live_particles_baseline();
+        assert_eq!(spec.target, BuildTarget::Runtime);
+        assert_eq!(spec.mode, BuildMode::Build);
+        assert_eq!(spec.profile, "release-live");
+        assert_eq!(spec.features, ["ui", "experiments"]);
+        assert_eq!(spec.ui_scope, UiScope::Launcher);
     }
 
     #[test]
