@@ -1,0 +1,39 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "mister-magik-startup-particle-lab"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Focused Slint-free MagiK and cabinet particle lab"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[[bin]]
+name = "mister-magik-startup-particle-lab"
+path = "src/main.rs"
+
+[dependencies]
+mister-magik-particles = { path = "../../crates/particles" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+softbuffer = "0.4.8"
+winit = "0.30.13"
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16
+strip = "debuginfo"
+
+[profile.release-live]
+inherits = "release"
+opt-level = 2

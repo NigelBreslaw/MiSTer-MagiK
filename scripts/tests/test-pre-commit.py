@@ -257,6 +257,7 @@ class PreCommitTests(unittest.TestCase):
         paths = [
             "agent-cli/src/main.rs",
             "apps/framebuffer-lab/src/main.rs",
+            "apps/startup-particle-lab/src/main.rs",
             "apps/mister/src/main.rs",
             "apps/mister/src/other.rs",
             "crates/catalog/src/lib.rs",
@@ -284,6 +285,10 @@ class PreCommitTests(unittest.TestCase):
                 (
                     "scanout-contract.format",
                     "mister/platform/contracts/scanout/Cargo.toml",
+                ),
+                (
+                    "startup-particle-lab.format",
+                    "apps/startup-particle-lab/Cargo.toml",
                 ),
             ],
         )

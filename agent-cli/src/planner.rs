@@ -943,6 +943,12 @@ fn add_path_operations(
         ));
     }
     add_crate(path, "crates/magik-core", "magik-core", out);
+    add_crate(
+        path,
+        "apps/startup-particle-lab",
+        "startup-particle-lab",
+        out,
+    );
     add_crate(path, "crates/framebuffer-stream", "framebuffer-stream", out);
     add_crate(path, "crates/agent-protocol", "agent-protocol", out);
     add_crate(path, "crates/media-contract", "media-contract", out);
@@ -1224,6 +1230,37 @@ mod tests {
                 "framebuffer-lab.clippy",
                 "framebuffer-lab.format",
                 "framebuffer-lab.tests"
+            ]
+        );
+        assert!(plan.operations.iter().all(|operation| {
+            !operation
+                .args
+                .iter()
+                .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
+
+    #[test]
+    fn startup_particle_lab_changes_select_only_focused_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["apps/startup-particle-lab/src/main.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "repo.diff-check",
+                "startup-particle-lab.clippy",
+                "startup-particle-lab.format",
+                "startup-particle-lab.tests"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {
