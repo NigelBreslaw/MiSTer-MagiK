@@ -44,12 +44,6 @@ class DownloaderDatabaseTests(unittest.TestCase):
 
             cases = (
                 ("rolling-alpha", "alpha", "alpha", False),
-                (
-                    "candidate-alpha",
-                    "alpha",
-                    "alpha-candidate-v0.2.42-012345abcdef",
-                    False,
-                ),
                 ("rolling-beta", "beta", "beta", True),
                 ("promoted-beta", "beta", "v0.2.42", True),
                 ("release", "release", "v0.2.42", True),

@@ -62,10 +62,7 @@ def generate(
     if channel not in {"alpha", "beta", "release"}:
         raise ValueError(f"unsupported release channel: {channel}")
     if channel == "alpha":
-        immutable_candidate = re.fullmatch(
-            rf"alpha-candidate-v{re.escape(version)}-[0-9a-f]{{12}}", tag
-        )
-        allowed_tags = {"alpha"} if immutable_candidate is None else {tag}
+        allowed_tags = {"alpha"}
     elif channel == "beta":
         allowed_tags = {"beta", f"v{version}"}
     else:
