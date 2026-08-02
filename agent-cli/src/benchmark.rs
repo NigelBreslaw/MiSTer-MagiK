@@ -1,13 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::device::BenchmarkDeviceClient;
+use crate::device::DeviceClient;
 use crate::error::AgentResult;
 use crate::model::{BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
-use crate::transport::{DeviceRequest, Layout as DeviceLayout};
+use crate::transport::{DeviceOperations, DeviceRequest, Layout as DeviceLayout};
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn execute(
@@ -16,6 +16,88 @@ pub fn execute(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     require_clean_installed_commit(repository, scenario, reporter)
+}
+
+trait BenchmarkDevice {
+    fn connect(&mut self) -> AgentResult<()>;
+    fn verify_development_platform(&mut self) -> AgentResult<()>;
+    fn verify_health(&mut self) -> AgentResult<()>;
+    fn read_development_manifest(&mut self) -> AgentResult<String>;
+    fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BenchmarkProfile {
+    Screensaver,
+    Particles,
+    ParticleCapacity,
+    ParticleDemo40k,
+    ParticleStep,
+    ParticleCpu,
+    Search,
+    SearchUi,
+    CatalogLifecycle,
+    LaunchReturn,
+    LaunchReturnFallback,
+    ColdBoot,
+    NavigationTransitions,
+}
+
+impl<D: DeviceOperations> BenchmarkDevice for DeviceClient<D> {
+    fn connect(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::Discover).map(|_| ())
+    }
+
+    fn verify_development_platform(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::VerifyDevelopmentPlatform)
+            .map(|_| ())
+    }
+
+    fn verify_health(&mut self) -> AgentResult<()> {
+        self.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))
+            .map(|_| ())
+    }
+
+    fn read_development_manifest(&mut self) -> AgentResult<String> {
+        self.execute(DeviceRequest::ReadDevelopmentManifest)
+    }
+
+    fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String> {
+        let request = match profile {
+            BenchmarkProfile::Screensaver => {
+                DeviceRequest::ProfileInstalledScreensaver { output_dir }
+            }
+            BenchmarkProfile::Particles => DeviceRequest::ProfileInstalledParticles { output_dir },
+            BenchmarkProfile::ParticleCapacity => {
+                DeviceRequest::ProfileInstalledParticleCapacity { output_dir }
+            }
+            BenchmarkProfile::ParticleDemo40k => {
+                DeviceRequest::ProfileInstalledParticleDemo40k { output_dir }
+            }
+            BenchmarkProfile::ParticleStep => {
+                DeviceRequest::ProfileInstalledParticleStep { output_dir }
+            }
+            BenchmarkProfile::ParticleCpu => {
+                DeviceRequest::ProfileInstalledParticleCpu { output_dir }
+            }
+            BenchmarkProfile::Search => DeviceRequest::ProfileInstalledSearch { output_dir },
+            BenchmarkProfile::SearchUi => DeviceRequest::VerifyInstalledSearchUi { output_dir },
+            BenchmarkProfile::CatalogLifecycle => {
+                DeviceRequest::ProfileInstalledCatalogLifecycle { output_dir }
+            }
+            BenchmarkProfile::LaunchReturn => {
+                DeviceRequest::ProfileInstalledLaunchReturn { output_dir }
+            }
+            BenchmarkProfile::LaunchReturnFallback => {
+                DeviceRequest::ProfileInstalledLaunchReturnFallback { output_dir }
+            }
+            BenchmarkProfile::ColdBoot => DeviceRequest::ProfileInstalledColdBoot { output_dir },
+            BenchmarkProfile::NavigationTransitions => {
+                DeviceRequest::ProfileInstalledNavigationTransitions { output_dir }
+            }
+        };
+        self.execute(request)
+    }
 }
 
 fn require_clean_installed_commit(
@@ -27,19 +109,19 @@ fn require_clean_installed_commit(
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
     }
-    let mut device = BenchmarkDeviceClient::default();
+    let mut device = DeviceClient::default();
     reporter.emit(
         EventKind::Progress,
         "preflight",
         &format!("benchmark {} installed-runtime preflight", scenario.label()),
         Some(10),
     )?;
-    device.execute(DeviceRequest::Discover)?;
-    device.execute(DeviceRequest::VerifyDevelopmentPlatform)?;
+    device.connect()?;
+    device.verify_development_platform()?;
     if benchmark_requires_initial_health(scenario) {
-        device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+        device.verify_health()?;
     }
-    let manifest = device.execute(DeviceRequest::ReadDevelopmentManifest)?;
+    let manifest = device.read_development_manifest()?;
     let reconciliation = crate::deploy::reconcile(repository, &manifest, &head);
     if reconciliation.decision != crate::deploy::DeliveryDecision::NoOp {
         return Err(format!(
@@ -96,7 +178,7 @@ fn require_clean_installed_commit(
 }
 
 fn execute_cold_boot(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -107,12 +189,10 @@ fn execute_cold_boot(
         "profiling one controlled Dev cold boot through the first real launcher frame",
         Some(35),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledColdBoot {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::ColdBoot, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     evaluate_cold_boot_summary(&summary)?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",
@@ -174,7 +254,7 @@ const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool 
 }
 
 fn execute_launch_return(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -195,19 +275,15 @@ fn execute_launch_return(
         },
         Some(35),
     )?;
-    let request = if force_capsule_miss {
-        DeviceRequest::ProfileInstalledLaunchReturnFallback {
-            output_dir: output_dir.clone(),
-        }
+    let profile = if force_capsule_miss {
+        BenchmarkProfile::LaunchReturnFallback
     } else {
-        DeviceRequest::ProfileInstalledLaunchReturn {
-            output_dir: output_dir.clone(),
-        }
+        BenchmarkProfile::LaunchReturn
     };
-    let detail = device.execute(request)?;
+    let detail = device.profile(profile, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     evaluate_launch_return_summary(&summary, scenario, force_capsule_miss)?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",
@@ -375,7 +451,7 @@ fn evaluate_launch_return_summary(
 }
 
 fn execute_navigation_transitions(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -386,11 +462,9 @@ fn execute_navigation_transitions(
         "profiling scripted launcher navigation transitions",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledNavigationTransitions {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::NavigationTransitions, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str)
         != Some("mister-magik-navigation-transition-profile-v2")
     {
@@ -411,7 +485,7 @@ fn execute_navigation_transitions(
 }
 
 fn execute_particle_profile(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -422,11 +496,9 @@ fn execute_particle_profile(
         "sampling installed particle renderer CPU stacks",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledParticleCpu {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::ParticleCpu, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v1")
     {
         return Err("particle CPU profile summary has the wrong schema".into());
@@ -456,7 +528,7 @@ fn execute_particle_profile(
 }
 
 fn execute_particles(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -467,11 +539,9 @@ fn execute_particles(
         "measuring installed particle capacity",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledParticles {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::Particles, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     evaluate_particle_summary(&summary)?;
     reporter.emit(
         EventKind::Progress,
@@ -488,7 +558,7 @@ fn execute_particles(
 }
 
 fn execute_particle_capacity(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -499,11 +569,9 @@ fn execute_particle_capacity(
         "measuring installed capacity-preset particle ceiling",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledParticleCapacity {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::ParticleCapacity, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str)
         != Some("mister-magik-particle-capacity-benchmark-v1")
         || summary
@@ -517,7 +585,7 @@ fn execute_particle_capacity(
 }
 
 fn execute_particle_demo_40k(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -528,11 +596,9 @@ fn execute_particle_demo_40k(
         "measuring fixed 40,960-particle visual trial",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledParticleDemo40k {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::ParticleDemo40k, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v1")
         || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
     {
@@ -542,7 +608,7 @@ fn execute_particle_demo_40k(
 }
 
 fn execute_particle_step(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -553,11 +619,9 @@ fn execute_particle_step(
         "measuring fixed 14,336-particle capacity trial",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledParticleStep {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::ParticleStep, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v1")
         || summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
     {
@@ -607,7 +671,7 @@ fn evaluate_particle_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn execute_screensaver(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -618,11 +682,9 @@ fn execute_screensaver(
         "profiling installed screensaver",
         Some(20),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledScreensaver {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::Screensaver, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     evaluate_summary(&summary)?;
     reporter.emit(
         EventKind::Progress,
@@ -639,7 +701,7 @@ fn execute_screensaver(
 }
 
 fn execute_search(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -650,9 +712,7 @@ fn execute_search(
         "profiling installed persisted search",
         Some(30),
     )?;
-    let timing_detail = device.execute(DeviceRequest::ProfileInstalledSearch {
-        output_dir: output_dir.join("timing"),
-    })?;
+    let timing_detail = device.profile(BenchmarkProfile::Search, output_dir.join("timing"))?;
     let timing: Value = serde_json::from_str(&timing_detail).map_err(|error| error.to_string())?;
     evaluate_search_summary(&timing)?;
     reporter.emit(
@@ -661,12 +721,10 @@ fn execute_search(
         "verifying persisted search through the launcher UI",
         Some(60),
     )?;
-    let ui_detail = device.execute(DeviceRequest::VerifyInstalledSearchUi {
-        output_dir: output_dir.join("ui"),
-    })?;
+    let ui_detail = device.profile(BenchmarkProfile::SearchUi, output_dir.join("ui"))?;
     let ui: Value = serde_json::from_str(&ui_detail).map_err(|error| error.to_string())?;
     evaluate_search_ui_summary(&ui)?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",
@@ -716,7 +774,7 @@ fn evaluate_search_ui_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn execute_catalog_lifecycle(
-    device: &mut BenchmarkDeviceClient,
+    device: &mut impl BenchmarkDevice,
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
@@ -727,11 +785,9 @@ fn execute_catalog_lifecycle(
         "profiling isolated catalog lifecycle",
         Some(35),
     )?;
-    let detail = device.execute(DeviceRequest::ProfileInstalledCatalogLifecycle {
-        output_dir: output_dir.clone(),
-    })?;
+    let detail = device.profile(BenchmarkProfile::CatalogLifecycle, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.execute(DeviceRequest::VerifyHealth(DeviceLayout::Development))?;
+    device.verify_health()?;
     evaluate_catalog_lifecycle_summary(&summary)?;
     reporter.emit(
         EventKind::Progress,
