@@ -8,6 +8,7 @@ use crate::framebuffer::rgb565::Rgb565;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 pub use mister_magik_scanout_contract::{ScanoutSlotLayout, ScanoutSlotsLayout};
 pub const SCANOUT_SLOTS_DEVICE: &str = mister_magik_scanout_contract::DEVICE;
@@ -21,6 +22,7 @@ pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 =
     mister_magik_scanout_contract::LAYOUT_WRITE_COMBINE;
 const SCANOUT_SLOTS_GET_LAYOUT: libc::c_ulong =
     mister_magik_scanout_contract::GET_LAYOUT as libc::c_ulong;
+static MAPPED_SLOTS: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HiddenRgb565BufferIndex(u8);
@@ -43,6 +45,7 @@ impl HiddenRgb565BufferIndex {
 pub enum HiddenScanoutError {
     Io(String),
     InvalidBufferIndex { index: u8 },
+    SlotAlreadyMapped { index: u8 },
     InvalidLayout(String),
     InvalidGeometry(String),
     SourceTooShort { needed: usize, actual: usize },
@@ -56,6 +59,9 @@ impl std::fmt::Display for HiddenScanoutError {
             Self::Io(error) => write!(f, "scanout slots I/O failed: {error}"),
             Self::InvalidBufferIndex { index } => {
                 write!(f, "scanout slot index must be 1 or 2, got {index}")
+            }
+            Self::SlotAlreadyMapped { index } => {
+                write!(f, "scanout slot {index} is already mapped in this process")
             }
             Self::InvalidLayout(message) => write!(f, "invalid scanout slots layout: {message}"),
             Self::InvalidGeometry(message) => {
@@ -98,6 +104,29 @@ pub struct HiddenScanoutFramebuffer {
     stride_pixels: usize,
     slot: ScanoutSlotLayout,
     _device: File,
+    _lease: HiddenSlotLease,
+}
+
+struct HiddenSlotLease {
+    bit: u8,
+}
+
+impl HiddenSlotLease {
+    fn acquire(index: HiddenRgb565BufferIndex) -> Result<Self, HiddenScanoutError> {
+        let bit = 1 << (index.get() - 1);
+        MAPPED_SLOTS
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |mapped| {
+                (mapped & bit == 0).then_some(mapped | bit)
+            })
+            .map_err(|_| HiddenScanoutError::SlotAlreadyMapped { index: index.get() })?;
+        Ok(Self { bit })
+    }
+}
+
+impl Drop for HiddenSlotLease {
+    fn drop(&mut self) {
+        MAPPED_SLOTS.fetch_and(!self.bit, Ordering::Release);
+    }
 }
 
 impl HiddenScanoutFramebuffer {
@@ -107,12 +136,13 @@ impl HiddenScanoutFramebuffer {
         height: usize,
         stride_bytes: usize,
     ) -> Result<Self, HiddenScanoutError> {
+        let lease = HiddenSlotLease::acquire(index)?;
         let device = OpenOptions::new()
             .read(true)
             .write(true)
             .open(SCANOUT_SLOTS_DEVICE)?;
         let layout = read_scanout_slots_layout(&device)?;
-        Self::open_with_layout(index, width, height, stride_bytes, device, &layout)
+        Self::open_with_layout(index, width, height, stride_bytes, device, &layout, lease)
     }
 
     fn open_with_layout(
@@ -122,6 +152,7 @@ impl HiddenScanoutFramebuffer {
         stride_bytes: usize,
         device: File,
         layout: &ScanoutSlotsLayout,
+        lease: HiddenSlotLease,
     ) -> Result<Self, HiddenScanoutError> {
         validate_scanout_slots_geometry_for_layout(layout, width, height, stride_bytes)?;
         let slot = layout.slots[index.get() as usize - 1];
@@ -157,6 +188,7 @@ impl HiddenScanoutFramebuffer {
             stride_pixels: stride_bytes / std::mem::size_of::<Rgb565>(),
             slot,
             _device: device,
+            _lease: lease,
         })
     }
 
@@ -329,5 +361,17 @@ mod tests {
             Ok(1_036_800)
         );
         assert!(validate_scanout_slots_geometry_for_layout(&layout(), 1367, 768, 2752).is_err());
+    }
+
+    #[test]
+    fn one_process_cannot_map_the_same_slot_twice() {
+        let index = HiddenRgb565BufferIndex::new(1).unwrap();
+        let first = HiddenSlotLease::acquire(index).unwrap();
+        assert!(matches!(
+            HiddenSlotLease::acquire(index),
+            Err(HiddenScanoutError::SlotAlreadyMapped { index: 1 })
+        ));
+        drop(first);
+        assert!(HiddenSlotLease::acquire(index).is_ok());
     }
 }
