@@ -296,6 +296,39 @@ impl DeviceRequest {
                 | Self::ReadLauncherAutomationSnapshot { .. }
         )
     }
+
+    #[must_use]
+    pub const fn requires_agent(&self) -> bool {
+        matches!(
+            self,
+            Self::DeliverRuntimeTransaction { .. }
+                | Self::DeliverPlatformTransaction { .. }
+                | Self::DeliverLocalMainTransaction { .. }
+                | Self::ProfileInstalledScreensaver { .. }
+                | Self::ProfileInstalledParticles { .. }
+                | Self::ProfileInstalledParticleCapacity { .. }
+                | Self::ProfileInstalledParticleDemo40k { .. }
+                | Self::ProfileInstalledParticleStep { .. }
+                | Self::ProfileInstalledParticleCpu { .. }
+                | Self::ProfileInstalledSearch { .. }
+                | Self::VerifyInstalledSearchUi { .. }
+                | Self::ProfileInstalledCatalogLifecycle { .. }
+                | Self::ProfileInstalledLaunchReturn { .. }
+                | Self::ProfileInstalledLaunchReturnFallback { .. }
+                | Self::ProfileInstalledColdBoot { .. }
+                | Self::ProfileInstalledNavigationTransitions { .. }
+                | Self::QualifyReleaseDisplay
+                | Self::InstallAlphaCandidate { .. }
+                | Self::EnsureInstalledAlphaLauncher { .. }
+                | Self::BeginLauncherAutomation { .. }
+                | Self::SendLauncherAutomationAction { .. }
+                | Self::AwaitLauncherAutomationPresented { .. }
+                | Self::ReadLauncherAutomationSnapshot { .. }
+                | Self::CaptureLauncherAutomationCheckpoint { .. }
+                | Self::ExerciseLauncherAutomationLaunchReturn { .. }
+                | Self::EndLauncherAutomation { .. }
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -440,6 +473,26 @@ mod tests {
             }
             .retryable_after_unavailable()
         );
+    }
+
+    #[test]
+    fn ssh_reads_do_not_request_agent_provisioning() {
+        for request in [
+            DeviceRequest::Discover,
+            DeviceRequest::Status,
+            DeviceRequest::ReadDevelopmentManifest,
+            DeviceRequest::VerifyDevelopmentPlatform,
+            DeviceRequest::CollectDiagnosticFacts,
+        ] {
+            assert!(!request.requires_agent(), "{}", request.label());
+        }
+        assert!(
+            DeviceRequest::ProfileInstalledScreensaver {
+                output_dir: "profile".into()
+            }
+            .requires_agent()
+        );
+        assert!(DeviceRequest::QualifyReleaseDisplay.requires_agent());
     }
 
     #[test]

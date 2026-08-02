@@ -31,8 +31,7 @@ mod remote;
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
     agent_telemetry_for_duration, agent_telemetry_for_particle_trial,
-    agent_telemetry_until_screensaver_profile_complete, agent_token_for_device, bootstrap_agent,
-    bootstrap_agent_with,
+    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -84,17 +83,22 @@ impl RebootMode {
 struct NativeDeviceConfig {
     connection: ConnectionConfig,
     device_id: String,
-    agent: AgentEndpoint,
+    agent: Option<AgentEndpoint>,
 }
 
 impl NativeDeviceConfig {
-    fn new(connection: ConnectionConfig, device_id: String, token: String) -> Self {
-        let agent = AgentEndpoint::new(connection.host(), token);
+    fn new(connection: ConnectionConfig, device_id: String) -> Self {
         Self {
             connection,
             device_id,
-            agent,
+            agent: None,
         }
+    }
+
+    fn agent(&self) -> Result<&AgentEndpoint> {
+        self.agent
+            .as_ref()
+            .ok_or_else(|| "device agent was not prepared for this operation".into())
     }
 }
 
@@ -161,34 +165,43 @@ impl Drop for DeviceProcessLock {
 impl NativeDevice {
     fn prepare(
         &mut self,
-        mutation: bool,
+        request: &DeviceRequest,
     ) -> std::result::Result<Option<DeviceProcessLock>, DeviceFailure> {
-        if let Some(config) = &self.config {
-            return if mutation {
-                DeviceProcessLock::acquire(&config.device_id).map(Some)
-            } else {
-                Ok(None)
-            };
+        if self.config.is_none() {
+            let device = discovery::resolve().map_err(device_failure)?;
+            let connection = ConnectionConfig::for_resolved_host(device.address.to_string());
+            self.config = Some(NativeDeviceConfig::new(connection, device.id));
         }
-        let device = discovery::resolve().map_err(device_failure)?;
-        let lock = DeviceProcessLock::acquire(&device.id)?;
-        let connection = ConnectionConfig::for_resolved_host(device.address.to_string());
-        let explicit_token = env::var("MISTER_AGENT_TOKEN")
-            .ok()
-            .filter(|token| !token.trim().is_empty());
-        let token = if std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none() {
-            bootstrap_agent_with(&connection, &device.id, explicit_token.as_deref())
-                .map_err(device_failure)?
+
+        let config = self.config.as_ref().ok_or_else(|| {
+            DeviceFailure::OperationFailed("device configuration is unavailable".into())
+        })?;
+        let needs_bootstrap = request.requires_agent() && config.agent.is_none();
+        let mut lock = if request.mutates_device() || needs_bootstrap {
+            Some(DeviceProcessLock::acquire(&config.device_id)?)
         } else {
-            agent_token_for_device(&device.id, explicit_token.as_deref()).map_err(device_failure)?
+            None
         };
-        self.config = Some(NativeDeviceConfig::new(connection, device.id, token));
-        if mutation {
-            Ok(Some(lock))
-        } else {
-            drop(lock);
-            Ok(None)
+        if needs_bootstrap {
+            let explicit_token = env::var("MISTER_AGENT_TOKEN")
+                .ok()
+                .filter(|token| !token.trim().is_empty());
+            let token = bootstrap_agent_with(
+                &config.connection,
+                &config.device_id,
+                explicit_token.as_deref(),
+            )
+            .map_err(device_failure)?;
+            let endpoint = AgentEndpoint::new(config.connection.host(), token);
+            self.config
+                .as_mut()
+                .expect("device configuration was just resolved")
+                .agent = Some(endpoint);
         }
+        if !request.mutates_device() {
+            lock.take();
+        }
+        Ok(lock)
     }
 }
 
@@ -197,7 +210,7 @@ impl DeviceOperations for NativeDevice {
         &mut self,
         request: &DeviceRequest,
     ) -> std::result::Result<DeviceResponse, DeviceFailure> {
-        let _lock = self.prepare(request.mutates_device())?;
+        let _lock = self.prepare(request)?;
         let config = self.config.clone().ok_or_else(|| {
             DeviceFailure::OperationFailed("device configuration is unavailable".into())
         })?;
@@ -349,10 +362,11 @@ impl DeviceOperations for NativeDevice {
                 .map_err(device_failure)?;
                 "input=ready handoff=ready return=ready".into()
             }
-            DeviceRequest::QualifyReleaseDisplay => {
-                qualify_release_display_matrix_with(&config.connection, &config.agent)
-                    .map_err(device_failure)?
-            }
+            DeviceRequest::QualifyReleaseDisplay => qualify_release_display_matrix_with(
+                &config.connection,
+                config.agent().map_err(device_failure)?,
+            )
+            .map_err(device_failure)?,
             DeviceRequest::QualifyReleaseLatchV4Stress => {
                 latch_v4_qualification::run(&config).map_err(device_failure)?
             }
@@ -455,7 +469,11 @@ impl DeviceOperations for NativeDevice {
                     }
                 }
                 if let Some(facts) = facts.as_object_mut() {
-                    match request_framebuffer_png_at(&config.agent) {
+                    let capture = match config.agent.as_ref() {
+                        Some(agent) => request_framebuffer_png_at(agent),
+                        None => Err("device agent was not prepared for diagnostic capture".into()),
+                    };
+                    match capture {
                         Ok(capture) => {
                             facts.insert(
                                 "capture_source".into(),
@@ -623,7 +641,7 @@ fn install_alpha_candidate(
         require_delivery_sha256(hash)?;
     }
     let reply = agent_request_at(
-        &config.agent,
+        config.agent().map_err(device_failure)?,
         "alpha_candidate_install",
         json!({
             "tag": tag,
@@ -966,7 +984,12 @@ fn wait_authenticated_agent_ready(
     let started = Instant::now();
     let mut last = String::from("agent did not answer");
     while started.elapsed() < timeout {
-        match agent_request_at(&config.agent, "ping", json!({}), Duration::from_millis(500)) {
+        match agent_request_at(
+            config.agent().map_err(device_failure)?,
+            "ping",
+            json!({}),
+            Duration::from_millis(500),
+        ) {
             Ok(_) => return Ok(()),
             Err(error) => last = error.to_string(),
         }
@@ -1006,7 +1029,7 @@ fn smoke_development_delivery(
                     &delivery_health_command("dev")?,
                 )?;
                 let capture = request_framebuffer_png_at_when_latched(
-                    &config.agent,
+                    config.agent()?,
                     Duration::from_secs(3),
                 )?;
                 delivery_smoke_capture_detail(&capture)
@@ -2201,9 +2224,7 @@ pub(crate) fn run_cli_args(mut args: Vec<String>) -> Result<()> {
             let device = discovery::resolve()?;
             install_resolved_device_environment(&device);
         }
-        if action_requires_agent(&action)
-            && std::env::var_os("MISTER_SKIP_AGENT_BOOTSTRAP").is_none()
-        {
+        if action_requires_agent(&action) {
             bootstrap_agent()?;
         }
     }
@@ -4194,7 +4215,7 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
     let main_status: Value = serde_json::from_str(&main_status_text)?;
     let launcher_status: Value = serde_json::from_str(&launcher_status_text)?;
     let agent_diagnostics = agent_request_at(
-        &config.agent,
+        config.agent()?,
         "diagnostics",
         json!({}),
         Duration::from_secs(10),
@@ -4264,7 +4285,7 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         return Err(format!("cold-boot timestamps are zero or unordered: {ordered:?}").into());
     }
 
-    let capture = request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
     validate_visible_launcher_capture(&capture)?;
     fs::write(output_dir.join("boot-rgb565.png"), &capture.png)?;
     fs::write(
@@ -4511,7 +4532,7 @@ fn profile_installed_launch_return(
 
             let host_poll_started = Instant::now();
             let return_action =
-                request_magik_benchmark_action(&config.agent, "return-to-launcher")?;
+                request_magik_benchmark_action(config.agent()?, "return-to-launcher")?;
             let status =
                 wait_launch_return_ready(&session, previous_launcher_pid, Duration::from_secs(8))?;
             let host_poll_elapsed_ms = host_poll_started.elapsed().as_millis() as u64;
@@ -4608,7 +4629,7 @@ fn profile_installed_launch_return(
                 && preview_verified
                 && visible_black_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
             let capture =
-                request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+                request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
             validate_visible_launcher_capture(&capture)?;
             let capture_file = format!("cycle-{cycle_number}-rgb565.png");
             let capture_metadata_file = format!("cycle-{cycle_number}-capture.json");
@@ -4886,7 +4907,7 @@ fn profile_installed_launch_return(
             }
         }
     }
-    let cleanup_result = restore_installed_launch_return(&config.agent, &session);
+    let cleanup_result = restore_installed_launch_return(config.agent()?, &session);
     let summary = match (run_result, cleanup_result) {
         (Ok(summary), Ok(())) => summary,
         (Err(error), Ok(())) => {
@@ -5241,7 +5262,7 @@ fn profile_installed_navigation_transition_run(
     )?;
     drop(session);
     let telemetry = agent_telemetry_until_screensaver_profile_complete(
-        &config.agent,
+        config.agent()?,
         Duration::from_secs(NAVIGATION_TRANSITION_PROFILE_SECS + 20),
     )?;
     let session = connect_with(&config.connection, 10)?;
@@ -6061,7 +6082,7 @@ fn profile_particle_cpu_preset(
     drop(session);
 
     let telemetry = agent_telemetry_until_screensaver_profile_complete(
-        &config.agent,
+        config.agent()?,
         Duration::from_secs(PARTICLE_CPU_PROFILE_DURATION_SECS + 20),
     )?;
     let telemetry_file = format!("{preset}-telemetry.jsonl");
@@ -6276,7 +6297,7 @@ fn run_particle_trial(
     )?;
     drop(session);
     let telemetry = agent_telemetry_for_particle_trial(
-        &config.agent,
+        config.agent()?,
         preset,
         count,
         Duration::from_secs(duration_secs),
@@ -6764,28 +6785,34 @@ fn capture_particle_phases(
         },
     )?;
     drop(session);
-    wait_for_particle_capture_state(&config.agent, count, "static", 0..=0, CAPTURE_STATE_TIMEOUT)?;
-    let static_capture = request_framebuffer_png_at(&config.agent)?;
+    wait_for_particle_capture_state(
+        config.agent()?,
+        count,
+        "static",
+        0..=0,
+        CAPTURE_STATE_TIMEOUT,
+    )?;
+    let static_capture = request_framebuffer_png_at(config.agent()?)?;
     let static_path = output_dir.join("particle-static.png");
     fs::write(&static_path, &static_capture.png)?;
     wait_for_particle_capture_state(
-        &config.agent,
+        config.agent()?,
         count,
         "hold",
         0..=15_000,
         CAPTURE_STATE_TIMEOUT,
     )?;
-    let formed_capture = request_framebuffer_png_at(&config.agent)?;
+    let formed_capture = request_framebuffer_png_at(config.agent()?)?;
     let formed_path = output_dir.join("particle-formed.png");
     fs::write(&formed_path, &formed_capture.png)?;
     wait_for_particle_capture_state(
-        &config.agent,
+        config.agent()?,
         count,
         "hold",
         30_000..=60_000,
         CAPTURE_STATE_TIMEOUT,
     )?;
-    let rotated_capture = request_framebuffer_png_at(&config.agent)?;
+    let rotated_capture = request_framebuffer_png_at(config.agent()?)?;
     let rotated_path = output_dir.join("particle-rotated.png");
     fs::write(&rotated_path, &rotated_capture.png)?;
     Ok(json!({
@@ -7531,7 +7558,7 @@ fn profile_installed_screensaver_run(
     drop(session);
 
     let telemetry = agent_telemetry_until_screensaver_profile_complete(
-        &config.agent,
+        config.agent()?,
         Duration::from_secs(SCREENSAVER_PROFILE_TIMEOUT_SECS),
     )?;
     let session = connect_with(&config.connection, 10)?;
@@ -12448,12 +12475,15 @@ mod tests {
     fn native_device_config_retains_resolved_identity_and_forwards_agent_state() {
         let connection =
             ConnectionConfig::from_values("192.0.2.5", Some("operator"), Some("credential"));
-        let config =
-            NativeDeviceConfig::new(connection.clone(), "device-id".into(), "token-value".into());
+        let mut config = NativeDeviceConfig::new(connection.clone(), "device-id".into());
+        config.agent = Some(AgentEndpoint::new("192.0.2.5", "token-value"));
 
         assert_eq!(config.connection, connection);
         assert_eq!(config.device_id, "device-id");
-        assert_eq!(config.agent, AgentEndpoint::new("192.0.2.5", "token-value"));
+        assert_eq!(
+            config.agent,
+            Some(AgentEndpoint::new("192.0.2.5", "token-value"))
+        );
     }
 
     #[test]

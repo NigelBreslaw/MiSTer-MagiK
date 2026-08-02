@@ -191,7 +191,7 @@ pub(super) fn capture_checkpoint(
     validate_checkpoint_label(label)?;
     let before = snapshot(config, nonce)?;
     require_presented_action(&before, action_sequence)?;
-    let capture = request_framebuffer_png_at_when_latched(&config.agent, Duration::from_secs(3))?;
+    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
     validate_visible_launcher_capture(&capture)?;
     let after = snapshot(config, nonce)?;
     require_stable_snapshot(&before, &after)?;
@@ -634,7 +634,7 @@ fn agent_result(
     args: Value,
     timeout: Duration,
 ) -> Result<Value> {
-    let reply = agent_request_at(&config.agent, command, args, timeout)?;
+    let reply = agent_request_at(config.agent()?, command, args, timeout)?;
     reply
         .response
         .get("result")
