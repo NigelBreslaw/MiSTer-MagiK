@@ -358,7 +358,8 @@ impl SourceStampGuard {
             times = times.set_accessed(accessed);
         }
         file.set_times(times)
-            .map_err(|error| format!("cannot restore {} times: {error}", self.path.display()))
+            .map_err(|error| format!("cannot restore {} times: {error}", self.path.display()))?;
+        Ok(())
     }
 }
 
@@ -373,7 +374,10 @@ impl Drop for SourceStampGuard {
 fn sha256(path: &Path) -> AgentResult<String> {
     let bytes =
         std::fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn command_output(repository: &Path, program: &str, arguments: &[&str]) -> AgentResult<String> {
