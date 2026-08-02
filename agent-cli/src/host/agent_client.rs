@@ -384,6 +384,7 @@ case "$1" in
   *) exit 2 ;;
 esac
 "#;
+    reconcile_interrupted_agent_transaction(session)?;
     exec(session, "mkdir -p /media/fat/mister-magik-dev", true)?;
     put(session, Path::new(&binary), &format!("{REMOTE_AGENT}.new"))?;
     let staged_init = "/media/fat/mister-magik-dev/S00magik-agent.new";
@@ -393,7 +394,6 @@ esac
         &format!("{REMOTE_TOKEN}.new"),
         format!("{token}\n").as_bytes(),
     )?;
-    cleanup_agent_backup(session)?;
     let command = format!(
         "set -eu; mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent} ]; then cp -p {agent} {agent}.prev; else : > {agent}.prev-missing; fi; if [ -f {init} ]; then cp -p {init} {init}.prev; else : > {init}.prev-missing; fi; if [ -f {token} ]; then cp -p {token} {token}.prev; else : > {token}.prev-missing; fi; mv {agent}.new {agent}; mv {staged_init} {init}; mv {token}.new {token}; chmod 755 {agent} {init}; chmod 600 {token}; {init} start; sync; mount -o remount,ro / || true",
         agent = REMOTE_AGENT,
@@ -407,6 +407,32 @@ esac
         return Err("MiSTer agent activation failed".into());
     }
     Ok(())
+}
+
+fn reconcile_interrupted_agent_transaction(session: &ssh2::Session) -> Result<()> {
+    let output = exec(session, &interrupted_agent_transaction_command(), false)?;
+    if output.rc != 0 {
+        return Err("cannot inspect the prior MiSTer agent transaction".into());
+    }
+    if output.stdout.trim() == "interrupted" {
+        rollback_agent(session)?;
+    }
+    Ok(())
+}
+
+fn interrupted_agent_transaction_command() -> String {
+    let artifacts = [REMOTE_AGENT, REMOTE_INIT, REMOTE_TOKEN]
+        .into_iter()
+        .flat_map(|path| [format!("{path}.prev"), format!("{path}.prev-missing")])
+        .collect::<Vec<_>>();
+    format!(
+        "if {}; then echo interrupted; else echo clean; fi",
+        artifacts
+            .iter()
+            .map(|path| format!("test -e {path}"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    )
 }
 
 fn rollback_agent(session: &ssh2::Session) -> Result<()> {
@@ -997,12 +1023,15 @@ mod tests {
     fn rollback_and_cleanup_commands_cover_every_transaction_artifact() {
         let rollback = rollback_agent_command();
         let cleanup = cleanup_agent_backup_command();
+        let interrupted = interrupted_agent_transaction_command();
         for path in [REMOTE_AGENT, REMOTE_INIT, REMOTE_TOKEN] {
             assert!(rollback.contains(path));
             assert!(rollback.contains(&format!("{path}.prev")));
             assert!(rollback.contains(&format!("{path}.prev-missing")));
             assert!(cleanup.contains(&format!("{path}.prev")));
             assert!(cleanup.contains(&format!("{path}.prev-missing")));
+            assert!(interrupted.contains(&format!("{path}.prev")));
+            assert!(interrupted.contains(&format!("{path}.prev-missing")));
         }
         assert!(rollback.contains("mount -o remount,ro /"));
         assert!(cleanup.contains("mount -o remount,ro /"));
