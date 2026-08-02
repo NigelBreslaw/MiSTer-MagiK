@@ -17,12 +17,12 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
-bytemuck = "1"
+bytemuck = { version = "1", optional = true }
 libc = "0.2"
-lz4_flex = "0.14.0"
-mister-magik-catalog = { path = "../../../crates/catalog", default-features = false }
+lz4_flex = { version = "0.14.0", optional = true }
+mister-magik-catalog = { path = "../../../crates/catalog", optional = true, default-features = false }
 mister-magik-core = { path = "../../../crates/magik-core" }
-mister-magik-framebuffer-stream = { path = "../../../crates/framebuffer-stream" }
+mister-magik-framebuffer-stream = { path = "../../../crates/framebuffer-stream", optional = true }
 mister-magik-latch-contract = { path = "../contracts/latch" }
 mister-magik-scanout-contract = { path = "../contracts/scanout" }
 serde = { version = "1", features = ["derive"] }
@@ -36,10 +36,18 @@ slint = { version = "=1.17.1", optional = true, default-features = false, featur
 
 [features]
 default = []
-ui = ["dep:slint"]
+app-runtime = ["dep:mister-magik-catalog"]
+ui = [
+    "app-runtime",
+    "dep:bytemuck",
+    "dep:cc",
+    "dep:lz4_flex",
+    "dep:mister-magik-framebuffer-stream",
+    "dep:slint",
+]
 diagnostics = []
 bench-tools = []
 bench-scenes = []
 
 [build-dependencies]
-cc = "1"
+cc = { version = "1", optional = true }

@@ -18,7 +18,9 @@ pub mod display_resolution;
 pub mod fpga;
 pub mod framebuffer;
 pub mod latch_readiness;
+#[cfg(feature = "app-runtime")]
 pub mod runtime_status;
+#[cfg(feature = "app-runtime")]
 pub mod settings;
 pub mod vt;
 

@@ -5,6 +5,7 @@ pub mod copy;
 #[cfg(feature = "ui")]
 pub mod downsample;
 pub mod format;
+pub mod hidden_scanout;
 #[cfg(feature = "ui")]
 pub mod mapped;
 #[cfg(feature = "ui")]
@@ -12,6 +13,7 @@ pub mod mode;
 pub mod ownership;
 #[cfg(feature = "ui")]
 pub mod present;
+pub mod rgb565;
 pub mod route;
 #[cfg(feature = "ui")]
 pub mod sample;

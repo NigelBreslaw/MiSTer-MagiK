@@ -7,99 +7,24 @@
 //! attributes. This module validates the reported regions before the launcher
 //! uses them as Main-flippable hidden RGB565 buffers.
 
-use crate::framebuffer::format::rgb565_stride_bytes;
+use crate::framebuffer::hidden_scanout::HiddenScanoutFramebuffer;
+pub use crate::framebuffer::hidden_scanout::{
+    HiddenRgb565BufferIndex, HiddenScanoutError as ScanoutSlotsError, SCANOUT_SLOT_CAPACITY_BYTES,
+    SCANOUT_SLOT_MAP_BYTES, SCANOUT_SLOTS_ABI_VERSION, SCANOUT_SLOTS_DEVICE,
+    SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE, SCANOUT_SLOTS_REGION_OFFSET_BYTES,
+    SCANOUT_SLOTS_SLOT_COUNT, ScanoutSlotLayout, ScanoutSlotsLayout, read_scanout_slots_layout,
+    validate_scanout_slots_layout,
+};
+#[cfg(test)]
+use crate::framebuffer::hidden_scanout::{
+    validate_scanout_slots_geometry, validate_scanout_slots_geometry_for_layout,
+};
 use crate::framebuffer::target::DirtyRect;
 use crate::framebuffer::vertical_scale::{Rgb565FrameView, VerticalRect, VerticalRgb565Transform};
 use slint::platform::software_renderer::Rgb565Pixel;
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::os::unix::io::AsRawFd;
-
-pub use mister_magik_scanout_contract::{ScanoutSlotLayout, ScanoutSlotsLayout};
-pub const SCANOUT_SLOTS_DEVICE: &str = mister_magik_scanout_contract::DEVICE;
-pub const SCANOUT_SLOTS_ABI_VERSION: u32 = mister_magik_scanout_contract::ABI_VERSION;
-pub const SCANOUT_SLOTS_SLOT_COUNT: usize = mister_magik_scanout_contract::SLOT_COUNT;
-pub const SCANOUT_SLOTS_REGION_OFFSET_BYTES: usize =
-    mister_magik_scanout_contract::REGION_OFFSET_BYTES;
-pub const SCANOUT_SLOT_CAPACITY_BYTES: usize = mister_magik_scanout_contract::SLOT_CAPACITY_BYTES;
-pub const SCANOUT_SLOT_MAP_BYTES: usize = mister_magik_scanout_contract::MAP_BYTES;
-pub const SCANOUT_SLOTS_LAYOUT_WRITE_COMBINE: u32 =
-    mister_magik_scanout_contract::LAYOUT_WRITE_COMBINE;
-const SCANOUT_SLOTS_GET_LAYOUT: libc::c_ulong =
-    mister_magik_scanout_contract::GET_LAYOUT as libc::c_ulong;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HiddenRgb565BufferIndex(u8);
-
-impl HiddenRgb565BufferIndex {
-    pub fn new(index: u8) -> Result<Self, ScanoutSlotsError> {
-        match index {
-            1 | 2 => Ok(Self(index)),
-            _ => Err(ScanoutSlotsError::InvalidBufferIndex { index }),
-        }
-    }
-
-    pub const fn get(self) -> u8 {
-        self.0
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ScanoutSlotsError {
-    Io(String),
-    InvalidBufferIndex { index: u8 },
-    InvalidLayout(String),
-    InvalidGeometry(String),
-    SourceTooShort { needed: usize, actual: usize },
-    MmapFailed(String),
-    MmapReturnedNull,
-}
-
-impl std::fmt::Display for ScanoutSlotsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "scanout slots I/O failed: {e}"),
-            Self::InvalidBufferIndex { index } => {
-                write!(f, "scanout slot index must be 1 or 2, got {index}")
-            }
-            Self::InvalidLayout(message) => write!(f, "invalid scanout slots layout: {message}"),
-            Self::InvalidGeometry(e) => write!(f, "invalid scanout-slot framebuffer geometry: {e}"),
-            Self::SourceTooShort { needed, actual } => {
-                write!(f, "scanout-slot source has {actual} pixels, need {needed}")
-            }
-            Self::MmapFailed(e) => write!(f, "scanout slots mmap failed: {e}"),
-            Self::MmapReturnedNull => write!(f, "scanout slots mmap returned a null address"),
-        }
-    }
-}
-
-impl std::error::Error for ScanoutSlotsError {}
-
-impl From<io::Error> for ScanoutSlotsError {
-    fn from(value: io::Error) -> Self {
-        Self::Io(value.to_string())
-    }
-}
-
-pub fn read_scanout_slots_layout(file: &File) -> Result<ScanoutSlotsLayout, ScanoutSlotsError> {
-    let mut layout = ScanoutSlotsLayout::default();
-    // SAFETY: layout is a writable fixed-layout C structure for the duration of ioctl.
-    let result = unsafe { libc::ioctl(file.as_raw_fd(), SCANOUT_SLOTS_GET_LAYOUT, &mut layout) };
-    if result != 0 {
-        return Err(io::Error::last_os_error().into());
-    }
-    validate_scanout_slots_layout(&layout)?;
-    Ok(layout)
-}
 
 pub struct ScanoutSlotsRgb565Framebuffer {
-    mem: *mut u8,
-    map_len: usize,
-    width: usize,
-    height: usize,
-    stride_pixels: usize,
-    slot: ScanoutSlotLayout,
-    _device: File,
+    inner: HiddenScanoutFramebuffer,
 }
 
 impl ScanoutSlotsRgb565Framebuffer {
@@ -109,54 +34,8 @@ impl ScanoutSlotsRgb565Framebuffer {
         height: usize,
         stride_bytes: usize,
     ) -> Result<Self, ScanoutSlotsError> {
-        let device = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(SCANOUT_SLOTS_DEVICE)?;
-        let layout = read_scanout_slots_layout(&device)?;
-        Self::open_with_layout(index, width, height, stride_bytes, device, &layout)
-    }
-
-    fn open_with_layout(
-        index: HiddenRgb565BufferIndex,
-        width: usize,
-        height: usize,
-        stride_bytes: usize,
-        device: File,
-        layout: &ScanoutSlotsLayout,
-    ) -> Result<Self, ScanoutSlotsError> {
-        validate_scanout_slots_geometry_for_layout(layout, width, height, stride_bytes)?;
-        let slot = layout.slots[index.get() as usize - 1];
-        let map_len = layout.map_bytes as usize;
-        let mem = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                map_len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                device.as_raw_fd(),
-                slot.mmap_offset_bytes as libc::off_t,
-            )
-        };
-        if mem == libc::MAP_FAILED {
-            return Err(ScanoutSlotsError::MmapFailed(
-                io::Error::last_os_error().to_string(),
-            ));
-        }
-        if mem.is_null() {
-            unsafe {
-                libc::munmap(mem, map_len);
-            }
-            return Err(ScanoutSlotsError::MmapReturnedNull);
-        }
         Ok(Self {
-            mem: mem.cast::<u8>(),
-            map_len,
-            width,
-            height,
-            stride_pixels: stride_bytes / std::mem::size_of::<Rgb565Pixel>(),
-            slot,
-            _device: device,
+            inner: HiddenScanoutFramebuffer::open(index, width, height, stride_bytes)?,
         })
     }
 
@@ -165,13 +44,13 @@ impl ScanoutSlotsRgb565Framebuffer {
         src: &[Rgb565Pixel],
         src_stride_pixels: usize,
     ) -> Result<usize, ScanoutSlotsError> {
-        if src_stride_pixels < self.width {
+        if src_stride_pixels < self.width() {
             return Err(ScanoutSlotsError::InvalidGeometry(format!(
                 "source stride {src_stride_pixels} is smaller than width {}",
-                self.width
+                self.width()
             )));
         }
-        let needed = src_stride_pixels.checked_mul(self.height).ok_or(
+        let needed = src_stride_pixels.checked_mul(self.height()).ok_or(
             ScanoutSlotsError::InvalidGeometry("source size overflow".to_string()),
         )?;
         if src.len() < needed {
@@ -180,22 +59,22 @@ impl ScanoutSlotsRgb565Framebuffer {
                 actual: src.len(),
             });
         }
-        let width = self.width;
-        let height = self.height;
-        let stride_pixels = self.stride_pixels;
+        let width = self.width();
+        let height = self.height();
+        let stride_pixels = self.stride_pixels();
         let dst = self.buffer_mut();
         copy_full_frame_pixels(dst, stride_pixels, src, src_stride_pixels, width, height);
         Ok(width * height * std::mem::size_of::<Rgb565Pixel>())
     }
 
     #[must_use]
-    pub const fn width(&self) -> usize {
-        self.width
+    pub fn width(&self) -> usize {
+        self.inner.width()
     }
 
     #[must_use]
-    pub const fn height(&self) -> usize {
-        self.height
+    pub fn height(&self) -> usize {
+        self.inner.height()
     }
 
     pub fn copy_rect(
@@ -204,19 +83,24 @@ impl ScanoutSlotsRgb565Framebuffer {
         src_stride_pixels: usize,
         rect: crate::framebuffer::target::DirtyRect,
     ) -> Result<usize, ScanoutSlotsError> {
-        if rect.x1 > self.width || rect.y1 > self.height {
+        if rect.x1 > self.width() || rect.y1 > self.height() {
             return Err(ScanoutSlotsError::InvalidGeometry(format!(
                 "rect x0={} y0={} x1={} y1={} exceeds {}x{}",
-                rect.x0, rect.y0, rect.x1, rect.y1, self.width, self.height
+                rect.x0,
+                rect.y0,
+                rect.x1,
+                rect.y1,
+                self.width(),
+                self.height()
             )));
         }
-        if src_stride_pixels < self.width {
+        if src_stride_pixels < self.width() {
             return Err(ScanoutSlotsError::InvalidGeometry(format!(
                 "source stride {src_stride_pixels} is smaller than width {}",
-                self.width
+                self.width()
             )));
         }
-        let needed = src_stride_pixels.checked_mul(self.height).ok_or(
+        let needed = src_stride_pixels.checked_mul(self.height()).ok_or(
             ScanoutSlotsError::InvalidGeometry("source size overflow".to_string()),
         )?;
         if src.len() < needed {
@@ -228,7 +112,7 @@ impl ScanoutSlotsRgb565Framebuffer {
         if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
             return Ok(0);
         }
-        let stride_pixels = self.stride_pixels;
+        let stride_pixels = self.stride_pixels();
         let dst = self.buffer_mut();
         copy_rect_pixels(dst, stride_pixels, src, src_stride_pixels, rect);
         Ok(rect.width() * (rect.y1 - rect.y0) * std::mem::size_of::<Rgb565Pixel>())
@@ -239,9 +123,9 @@ impl ScanoutSlotsRgb565Framebuffer {
         source: Rgb565FrameView<'_, Rgb565Pixel>,
         rect: DirtyRect,
     ) -> Result<usize, ScanoutSlotsError> {
-        let transform = VerticalRgb565Transform::new(self.width, source.height, self.height)
+        let transform = VerticalRgb565Transform::new(self.width(), source.height, self.height())
             .map_err(|error| ScanoutSlotsError::InvalidGeometry(error.to_string()))?;
-        let stride_pixels = self.stride_pixels;
+        let stride_pixels = self.stride_pixels();
         transform
             .copy_rect(
                 source,
@@ -261,7 +145,7 @@ impl ScanoutSlotsRgb565Framebuffer {
     /// Publishes every prior CPU write to the write-combined scanout mapping
     /// before the FPGA is told that this slot is ready to read.
     pub fn publish_writes(&mut self) {
-        publish_scanout_writes();
+        self.inner.publish_writes();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -285,10 +169,11 @@ impl ScanoutSlotsRgb565Framebuffer {
         let y1 = y
             .checked_add(h)
             .ok_or_else(|| ScanoutSlotsError::InvalidGeometry("target y overflow".to_string()))?;
-        if x1 > self.width || y1 > self.height {
+        if x1 > self.width() || y1 > self.height() {
             return Err(ScanoutSlotsError::InvalidGeometry(format!(
                 "target x={x} y={y} w={w} h={h} exceeds {}x{}",
-                self.width, self.height
+                self.width(),
+                self.height()
             )));
         }
         let src_x1 = src_x
@@ -314,7 +199,7 @@ impl ScanoutSlotsRgb565Framebuffer {
                 actual: src.len(),
             });
         }
-        let dst_stride_pixels = self.stride_pixels;
+        let dst_stride_pixels = self.stride_pixels();
         let dst = self.buffer_mut();
         copy_rect_565_strided_pixels(
             dst,
@@ -332,20 +217,26 @@ impl ScanoutSlotsRgb565Framebuffer {
     }
 
     pub fn slot(&self) -> &ScanoutSlotLayout {
-        &self.slot
+        self.inner.slot()
     }
 
     pub fn physical_addr(&self) -> Result<u32, ScanoutSlotsError> {
-        Ok(self.slot.physical_address)
+        Ok(self.inner.physical_addr())
     }
 
     pub fn pixels(&self) -> &[Rgb565Pixel] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self.mem.cast::<Rgb565Pixel>(),
-                self.stride_pixels * self.height,
-            )
-        }
+        let pixels = self.inner.pixels();
+        debug_assert_eq!(
+            std::mem::size_of::<Rgb565Pixel>(),
+            std::mem::size_of::<crate::framebuffer::rgb565::Rgb565>()
+        );
+        debug_assert_eq!(
+            std::mem::align_of::<Rgb565Pixel>(),
+            std::mem::align_of::<crate::framebuffer::rgb565::Rgb565>()
+        );
+        // SAFETY: both pixel types are transparent RGB565 u16 words with the
+        // same size/alignment; the returned slice cannot outlive the mapping.
+        unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565Pixel>(), pixels.len()) }
     }
 
     pub fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
@@ -353,32 +244,25 @@ impl ScanoutSlotsRgb565Framebuffer {
     }
 
     pub fn stride_pixels(&self) -> usize {
-        self.stride_pixels
+        self.inner.stride_pixels()
     }
 
     fn buffer_mut(&mut self) -> &mut [Rgb565Pixel] {
+        let pixels = self.inner.pixels_mut();
+        debug_assert_eq!(
+            std::mem::size_of::<Rgb565Pixel>(),
+            std::mem::size_of::<crate::framebuffer::rgb565::Rgb565>()
+        );
+        debug_assert_eq!(
+            std::mem::align_of::<Rgb565Pixel>(),
+            std::mem::align_of::<crate::framebuffer::rgb565::Rgb565>()
+        );
+        // SAFETY: both pixel types are transparent RGB565 u16 words with the
+        // same size/alignment, and self exclusively owns the mutable mapping.
         unsafe {
-            std::slice::from_raw_parts_mut(
-                self.mem.cast::<Rgb565Pixel>(),
-                self.stride_pixels * self.height,
-            )
+            std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<Rgb565Pixel>(), pixels.len())
         }
     }
-}
-
-#[inline]
-fn publish_scanout_writes() {
-    use std::sync::atomic::{Ordering, compiler_fence};
-
-    compiler_fence(Ordering::Release);
-    #[cfg(target_arch = "arm")]
-    // SAFETY: this instruction has no memory operands of its own. It drains
-    // prior stores through the ARM system domain before MMIO publishes the
-    // framebuffer address to the FPGA.
-    unsafe {
-        core::arch::asm!("dsb sy", options(nostack, preserves_flags));
-    }
-    compiler_fence(Ordering::SeqCst);
 }
 
 fn copy_full_frame_pixels(
@@ -434,68 +318,6 @@ fn copy_rect_565_strided_pixels(
         let dst_start = (y + row) * dst_stride_pixels + x;
         dst[dst_start..dst_start + w].copy_from_slice(&src[src_start..src_start + w]);
     }
-}
-
-impl Drop for ScanoutSlotsRgb565Framebuffer {
-    fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.mem.cast::<libc::c_void>(), self.map_len);
-        }
-    }
-}
-
-pub fn validate_scanout_slots_layout(layout: &ScanoutSlotsLayout) -> Result<(), ScanoutSlotsError> {
-    let expected = mister_magik_scanout_contract::EXPECTED_LAYOUT;
-    if *layout != expected {
-        return Err(ScanoutSlotsError::InvalidLayout(format!(
-            "expected {expected:?}, got {layout:?}"
-        )));
-    }
-    Ok(())
-}
-
-fn validate_scanout_slots_geometry(
-    width: usize,
-    height: usize,
-    stride_bytes: usize,
-) -> Result<usize, ScanoutSlotsError> {
-    if width == 0 || height == 0 {
-        return Err(ScanoutSlotsError::InvalidGeometry(format!(
-            "invalid dimensions {width}x{height}"
-        )));
-    }
-    let min_stride_bytes = rgb565_stride_bytes(width);
-    if stride_bytes < min_stride_bytes {
-        return Err(ScanoutSlotsError::InvalidGeometry(format!(
-            "stride {stride_bytes} is smaller than {min_stride_bytes}"
-        )));
-    }
-    stride_bytes
-        .checked_mul(height)
-        .ok_or_else(|| ScanoutSlotsError::InvalidGeometry("frame size overflow".to_string()))
-}
-
-fn validate_scanout_slots_geometry_for_layout(
-    layout: &ScanoutSlotsLayout,
-    width: usize,
-    height: usize,
-    stride_bytes: usize,
-) -> Result<usize, ScanoutSlotsError> {
-    let frame_len = validate_scanout_slots_geometry(width, height, stride_bytes)?;
-    if width > layout.max_width as usize
-        || height > layout.max_height as usize
-        || stride_bytes > layout.max_stride_bytes as usize
-        || frame_len > layout.slot_capacity_bytes as usize
-    {
-        return Err(ScanoutSlotsError::InvalidGeometry(format!(
-            "requested frame {width}x{height} stride={stride_bytes} bytes={frame_len} exceeds ABI maximum {}x{} stride={} capacity={}",
-            layout.max_width,
-            layout.max_height,
-            layout.max_stride_bytes,
-            layout.slot_capacity_bytes
-        )));
-    }
-    Ok(frame_len)
 }
 
 #[cfg(test)]
