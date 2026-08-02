@@ -372,9 +372,9 @@ impl DeviceOperations for NativeDevice {
                 capture_installed_particle_technique(&config, output_dir, *demo, label, *hero_secs)
                     .map_err(device_failure)?
             }
-            DeviceRequest::LaunchParticleShowcase => {
+            DeviceRequest::WatchLiveParticles { family, demo } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
-                launch_particle_showcase_interactive(&config).map_err(device_failure)?
+                watch_live_particles(&config, family, *demo).map_err(device_failure)?
             }
             DeviceRequest::ProfileInstalledSearch { output_dir } => {
                 let _lock = DeliveryProcessLock::acquire(&config.device_id)?;
@@ -2399,6 +2399,107 @@ fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct LiveParticleCliOptions {
+    family: PathBuf,
+    demo: u8,
+}
+
+fn parse_live_particle_args(args: &[String]) -> Result<LiveParticleCliOptions> {
+    if args.first().map(String::as_str) != Some("particles") {
+        return Err("usage: mister live particles FAMILY.json --demo ID --attended".into());
+    }
+    let mut family = None;
+    let mut demo = None;
+    let mut attended = false;
+    let mut index = 1usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--demo" => {
+                if demo.is_some() {
+                    return Err("mister live particles accepts --demo once".into());
+                }
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or("mister live particles --demo needs an ID")?;
+                let parsed = value.parse::<u8>().map_err(|_| {
+                    format!("mister live particles demo must be in 1..=36: {value}")
+                })?;
+                if !(1..=36).contains(&parsed) {
+                    return Err(
+                        format!("mister live particles demo must be in 1..=36: {value}").into(),
+                    );
+                }
+                demo = Some(parsed);
+            }
+            "--attended" => {
+                if attended {
+                    return Err("mister live particles accepts --attended once".into());
+                }
+                attended = true;
+            }
+            option if option.starts_with('-') => {
+                return Err(format!("unknown mister live particles option: {option}").into());
+            }
+            path => {
+                if family.is_some() {
+                    return Err("mister live particles accepts one family file".into());
+                }
+                family = Some(PathBuf::from(path));
+            }
+        }
+        index += 1;
+    }
+    if !attended {
+        return Err("mister live particles requires --attended".into());
+    }
+    Ok(LiveParticleCliOptions {
+        family: family.ok_or("mister live particles needs FAMILY.json")?,
+        demo: demo.ok_or("mister live particles needs --demo ID")?,
+    })
+}
+
+fn device_failure_message(error: DeviceFailure) -> String {
+    let (kind, detail) = match error {
+        DeviceFailure::Busy(detail) => ("device busy", detail),
+        DeviceFailure::AccessDenied(detail) => ("device access denied", detail),
+        DeviceFailure::Unavailable(detail) => ("device unavailable", detail),
+        DeviceFailure::Authentication(detail) => ("authentication required", detail),
+        DeviceFailure::InvalidRequest(detail) => ("invalid device request", detail),
+        DeviceFailure::ArtifactMismatch(detail) => ("artifact mismatch", detail),
+        DeviceFailure::Unhealthy(detail) => ("device unhealthy", detail),
+        DeviceFailure::OperationFailed(detail) => ("device operation failed", detail),
+        DeviceFailure::RecoveryRequired(detail) => ("recovery required", detail),
+    };
+    format!("{kind}: {detail}")
+}
+
+fn live_cli(args: &[String]) -> Result<()> {
+    let options = parse_live_particle_args(args)?;
+    let device_id = env::var("MISTER_DEVICE_ID")
+        .map_err(|_| "resolved MiSTer device identity is unavailable")?;
+    let explicit_token = env::var("MISTER_AGENT_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty());
+    let token = agent_token_for_device(&device_id, explicit_token.as_deref())?;
+    let mut device = NativeDevice {
+        config: Some(NativeDeviceConfig::new(
+            ConnectionConfig::from_environment(),
+            device_id,
+            token,
+        )),
+    };
+    let response = device
+        .execute(&DeviceRequest::WatchLiveParticles {
+            family: options.family,
+            demo: options.demo,
+        })
+        .map_err(device_failure_message)?;
+    println!("{}", response.detail);
+    Ok(())
+}
+
 pub fn run_cli() -> Result<()> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
@@ -2437,6 +2538,7 @@ pub fn run_cli() -> Result<()> {
         "display-mode" => display_mode_cli(&args)?,
         "display-matrix" => display_matrix_cli(&args)?,
         "crt" => crt_qualification::run(&args)?,
+        "live" => live_cli(&args)?,
         "connected" => println!("connected"),
         "get" => {
             if args.len() < 2 {
@@ -2667,7 +2769,7 @@ pub fn run_cli() -> Result<()> {
     Ok(())
 }
 
-const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build|arcade-database-import> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       arcade-database-import --sqlite <mame.sqlite3> --csv <ArcadeDatabase.csv> --source-sha <commit>\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
+const CLI_USAGE: &str = "usage: mister --capture-buffer\n       mister <status|arming-status|mode|scene|live|display-mode|display-matrix|crt|ini-edit|core-list|catalog|media-check|media-download|agent|reboot-wait|doctor|mame-metadata-build|arcade-database-import> ...\n       mode <status|dev|public|stock>\n       scene <launcher|controller_test|tear_pattern|video_playback|crt_trial> [seconds]\n       live particles FAMILY.json --demo ID --attended\n         ID: 1..=36; Ctrl-C restores the launcher and removes volatile live state\n       display-mode MODE --attended [--keep]\n         MODE: auto|hdmi-1280x720p60|hdmi-1366x768p60|hdmi-1920x1080p60\n               hdmi-1920x1200p60|hdmi-2048x1536p60|hdmi-2560x1440p60\n               crt-240p60|crt-288p50|crt-480p60|crt-576p50\n       display-matrix --attended --out DIRECTORY\n       crt qualify --attended [--out DIRECTORY]\n       crt qualify --restore\n       ini-edit menu <OUTPUT> [--dry-run]\n       OUTPUT: hdmi|auto|crt-240p60|crt-288p50|crt-480p60|crt-576p50\n               1280x720p60|1024x768p60|720x480p60|720x576p50|1280x1024p60\n               800x600p60|640x480p60|1280x720p50|1920x1080p60|1920x1080p50\n               1366x768p60|1024x600p60|1920x1440p60|2048x1536p60\n       2560x1440p60: Mister does not support 1440p\n       ini-edit stock-boot [--dry-run]\n       mame-metadata-build --out <sqlite> [--listxml <xml>|--mame <bin>|--machine-sqlite <sqlite>]\n       arcade-database-import --sqlite <mame.sqlite3> --csv <ArcadeDatabase.csv> --source-sha <commit>\n       operator commands are typed and bounded; direct-reset-no-sync remains experimental and requires a volatile session token";
 
 fn usage() {
     println!("{CLI_USAGE}");
@@ -4396,6 +4498,15 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 }
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
+const LIVE_PARTICLES_REMOTE_DIR: &str = "/tmp/mister-magik/live-particles";
+const LIVE_PARTICLES_REMOTE_FAMILY: &str = "/tmp/mister-magik/live-particles/family.json";
+const LIVE_PARTICLES_REMOTE_UPLOAD: &str = "/tmp/mister-magik/live-particles/family.json.upload";
+const LIVE_PARTICLES_REMOTE_STATUS: &str = "/tmp/mister-magik/live-particles/status.json";
+const LIVE_PARTICLES_STATUS_SCHEMA: &str = "mister-magik-live-particles-status-v1";
+const LIVE_PARTICLES_MAX_FAMILY_BYTES: usize = 1024 * 1024;
+const LIVE_PARTICLES_MAX_ERROR_BYTES: usize = 512;
+const LIVE_PARTICLES_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const LIVE_PARTICLES_STATUS_TIMEOUT: Duration = Duration::from_secs(3);
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
@@ -7362,28 +7473,411 @@ fn run_particle_showcase_trial(
     ))
 }
 
-fn launch_particle_showcase_interactive(config: &NativeDeviceConfig) -> Result<String> {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LiveParticleRecipe {
+    bytes: Vec<u8>,
+    digest: [u8; 32],
+    schema: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct LiveParticleFile {
+    bytes: Vec<u8>,
+    digest: [u8; 32],
+    schema: std::result::Result<String, String>,
+}
+
+impl LiveParticleFile {
+    fn recipe_for_demo(&self, demo: u8) -> std::result::Result<LiveParticleRecipe, String> {
+        let schema = self.schema.clone()?;
+        validate_live_particle_demo(&schema, demo)?;
+        Ok(LiveParticleRecipe {
+            bytes: self.bytes.clone(),
+            digest: self.digest,
+            schema,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveParticleStatusState {
+    Embedded,
+    Applied,
+    Rejected,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct LiveParticleStatus {
+    generation: u64,
+    state: LiveParticleStatusState,
+    demo: u8,
+    error: Option<String>,
+}
+
+fn inspect_live_particle_file(path: &Path) -> Result<LiveParticleFile> {
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "cannot read live particle family {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::new();
+    file.take((LIVE_PARTICLES_MAX_FAMILY_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    let digest = Sha256::digest(&bytes).into();
+    let schema = validate_live_particle_family_bytes(&bytes);
+    Ok(LiveParticleFile {
+        bytes,
+        digest,
+        schema,
+    })
+}
+
+fn validate_live_particle_family_bytes(bytes: &[u8]) -> std::result::Result<String, String> {
+    if bytes.len() > LIVE_PARTICLES_MAX_FAMILY_BYTES {
+        return Err(format!(
+            "live particle family exceeds the {} byte limit",
+            LIVE_PARTICLES_MAX_FAMILY_BYTES
+        ));
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("parse live particle family JSON: {error}"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "live particle family JSON must be an object".to_string())?;
+    let schema = object
+        .get("schema")
+        .and_then(Value::as_str)
+        .filter(|schema| !schema.trim().is_empty())
+        .ok_or_else(|| "live particle family JSON has no non-empty schema".to_string())?;
+    live_particle_demo_range(schema)
+        .ok_or_else(|| format!("unsupported live particle family schema {schema:?}"))?;
+    Ok(schema.to_string())
+}
+
+fn live_particle_demo_range(schema: &str) -> Option<std::ops::RangeInclusive<u8>> {
+    match schema {
+        "mister-magik-particle-fireworks-family-v1" => Some(1..=12),
+        "mister-magik-particle-procedural-family-v1" => Some(13..=31),
+        "mister-magik-particle-form-family-v1" => Some(32..=36),
+        _ => None,
+    }
+}
+
+fn validate_live_particle_demo(schema: &str, demo: u8) -> std::result::Result<(), String> {
+    let range = live_particle_demo_range(schema)
+        .ok_or_else(|| format!("unsupported live particle family schema {schema:?}"))?;
+    if range.contains(&demo) {
+        Ok(())
+    } else {
+        Err(format!(
+            "live particle family schema {schema:?} does not contain demo {demo}"
+        ))
+    }
+}
+
+fn parse_live_particle_status(text: &str) -> Result<LiveParticleStatus> {
+    let value: Value = serde_json::from_str(text)?;
+    if value.get("schema").and_then(Value::as_str) != Some(LIVE_PARTICLES_STATUS_SCHEMA) {
+        return Err("live particle status has an unsupported schema".into());
+    }
+    let generation = value
+        .get("generation")
+        .and_then(Value::as_u64)
+        .ok_or("live particle status has no generation")?;
+    let state = match value.get("state").and_then(Value::as_str) {
+        Some("embedded") => LiveParticleStatusState::Embedded,
+        Some("applied") => LiveParticleStatusState::Applied,
+        Some("rejected") => LiveParticleStatusState::Rejected,
+        _ => return Err("live particle status has an invalid state".into()),
+    };
+    let demo = value
+        .get("demo")
+        .and_then(Value::as_u64)
+        .and_then(|demo| u8::try_from(demo).ok())
+        .filter(|demo| (1..=36).contains(demo))
+        .ok_or("live particle status has an invalid demo")?;
+    let error = match value.get("error") {
+        Some(Value::Null) => None,
+        Some(Value::String(error)) => Some(error.clone()),
+        _ => return Err("live particle status has an invalid error".into()),
+    };
+    if error
+        .as_ref()
+        .is_some_and(|error| error.len() > LIVE_PARTICLES_MAX_ERROR_BYTES)
+    {
+        return Err("live particle status error exceeds its byte limit".into());
+    }
+    match (generation, state, error.as_deref()) {
+        (0, LiveParticleStatusState::Embedded, None)
+        | (1.., LiveParticleStatusState::Applied, None)
+        | (1.., LiveParticleStatusState::Rejected, Some(_)) => {}
+        _ => return Err("live particle status state is inconsistent".into()),
+    }
+    Ok(LiveParticleStatus {
+        generation,
+        state,
+        demo,
+        error,
+    })
+}
+
+fn read_live_particle_status(session: &Session) -> Result<Option<LiveParticleStatus>> {
+    let output = exec(
+        session,
+        &format!(
+            "if test -f {status}; then cat {status}; fi",
+            status = sh(LIVE_PARTICLES_REMOTE_STATUS)
+        ),
+        true,
+    )?;
+    if let Some(error) = exec_failure_message("read live particle status", &output) {
+        return Err(error.into());
+    }
+    if output.stdout.trim().is_empty() {
+        Ok(None)
+    } else {
+        parse_live_particle_status(output.stdout.trim()).map(Some)
+    }
+}
+
+fn wait_live_particle_status(
+    session: &Session,
+    previous_generation: u64,
+    demo: u8,
+) -> Result<LiveParticleStatus> {
+    let started = Instant::now();
+    while started.elapsed() < LIVE_PARTICLES_STATUS_TIMEOUT {
+        if attended_operation_interrupted() {
+            return Err("live particle watch interrupted".into());
+        }
+        if let Some(status) = read_live_particle_status(session)? {
+            if status.demo != demo {
+                return Err(format!(
+                    "live particle status reported demo {}, expected {demo}",
+                    status.demo
+                )
+                .into());
+            }
+            if status.generation > previous_generation {
+                let expected = previous_generation.saturating_add(1);
+                if status.generation != expected {
+                    return Err(format!(
+                        "live particle generation advanced from {previous_generation} to {}, expected {expected}",
+                        status.generation
+                    )
+                    .into());
+                }
+                return Ok(status);
+            }
+        }
+        thread::sleep(LIVE_PARTICLES_POLL_INTERVAL);
+    }
+    Err(format!(
+        "live particle runtime did not advance generation {previous_generation} within {}ms",
+        LIVE_PARTICLES_STATUS_TIMEOUT.as_millis()
+    )
+    .into())
+}
+
+fn require_live_particle_capability(session: &Session) -> Result<()> {
+    let output = exec_checked_output(
+        session,
+        "installed live particle capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&output.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability.get("particle-live-v1").and_then(Value::as_bool) != Some(true) {
+        return Err("installed development runtime does not support particle-live-v1".into());
+    }
+    Ok(())
+}
+
+fn live_particle_prepare_command() -> String {
+    format!(
+        "set -eu; rm -rf {directory}; mkdir -p {directory}",
+        directory = sh(LIVE_PARTICLES_REMOTE_DIR)
+    )
+}
+
+fn live_particle_publish_command() -> String {
+    format!(
+        "set -eu; mv -f {upload} {family}",
+        upload = sh(LIVE_PARTICLES_REMOTE_UPLOAD),
+        family = sh(LIVE_PARTICLES_REMOTE_FAMILY),
+    )
+}
+
+fn live_particle_cleanup_command() -> String {
+    format!(
+        "rm -rf {directory}; rm -f {environment}",
+        directory = sh(LIVE_PARTICLES_REMOTE_DIR),
+        environment = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+    )
+}
+
+fn live_particle_cleanup_verify_command() -> String {
+    format!(
+        "test ! -e {directory}; test ! -e {environment}",
+        directory = sh(LIVE_PARTICLES_REMOTE_DIR),
+        environment = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+    )
+}
+
+fn prepare_live_particle_remote(session: &Session) -> Result<()> {
+    exec_checked(
+        session,
+        "prepare live particle directory",
+        &live_particle_prepare_command(),
+    )
+}
+
+fn publish_live_particle_recipe(session: &Session, recipe: &LiveParticleRecipe) -> Result<()> {
+    put_bytes(session, LIVE_PARTICLES_REMOTE_UPLOAD, &recipe.bytes)?;
+    exec_checked(
+        session,
+        "publish live particle family",
+        &live_particle_publish_command(),
+    )
+}
+
+fn report_live_particle_status(status: &LiveParticleStatus, schema: &str) {
+    match status.state {
+        LiveParticleStatusState::Applied => println!(
+            "live particles applied generation={} demo={} schema={schema}",
+            status.generation, status.demo
+        ),
+        LiveParticleStatusState::Rejected => eprintln!(
+            "live particles rejected generation={} demo={}: {}",
+            status.generation,
+            status.demo,
+            status.error.as_deref().unwrap_or("unknown error")
+        ),
+        LiveParticleStatusState::Embedded => {}
+    }
+}
+
+fn cleanup_live_particle_watch(config: &NativeDeviceConfig) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
-    validate_particle_display_geometry(&session)?;
-    restart_launcher_with_one_shot_env(
+    let remove_result = exec_checked(
         &session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
-                (
-                    "MISTER_SCREENSAVER_RENDERER".into(),
-                    "particle-demos".into(),
-                ),
-                ("MISTER_PARTICLE_DEMO".into(), "1".into()),
-                ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
-            ],
-            timeout_secs: 45,
+        "remove live particle state",
+        &live_particle_cleanup_command(),
+    );
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
-    )?;
-    Ok("particle showcase is running; left/right changes demos and any other input exits".into())
+    );
+    let verify_result = exec_checked(
+        &session,
+        "verify live particle cleanup",
+        &live_particle_cleanup_verify_command(),
+    );
+    remove_result.and(restart_result).and(verify_result)
+}
+
+fn watch_live_particles(config: &NativeDeviceConfig, family: &Path, demo: u8) -> Result<String> {
+    let initial_file = inspect_live_particle_file(family)?;
+    let initial_recipe = initial_file
+        .recipe_for_demo(demo)
+        .map_err(|error| format!("invalid live particle family: {error}"))?;
+    let session = connect_with(&config.connection, 10)?;
+    require_live_particle_capability(&session)?;
+    validate_particle_display_geometry(&session)?;
+    drop(session);
+
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let run_result = (|| -> Result<()> {
+        let session = connect_with(&config.connection, 10)?;
+        prepare_live_particle_remote(&session)?;
+        publish_live_particle_recipe(&session, &initial_recipe)?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    ("MISTER_SCREENSAVER_START_ACTIVE".into(), "1".into()),
+                    (
+                        "MISTER_SCREENSAVER_RENDERER".into(),
+                        "particle-demos".into(),
+                    ),
+                    ("MISTER_PARTICLE_DEMO".into(), demo.to_string()),
+                    ("MISTER_PARTICLE_SEED".into(), "827141709451".into()),
+                    ("MISTER_PARTICLE_HUD".into(), "off".into()),
+                    (
+                        "MISTER_PARTICLE_LIVE_FAMILY".into(),
+                        LIVE_PARTICLES_REMOTE_FAMILY.into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        let mut status = wait_live_particle_status(&session, 0, demo)?;
+        report_live_particle_status(&status, &initial_recipe.schema);
+        drop(session);
+
+        println!(
+            "watching {} for demo {demo}; press Ctrl-C to restore the launcher",
+            family.display()
+        );
+        let mut last_observed_digest = initial_recipe.digest;
+        let mut last_published_digest = initial_recipe.digest;
+        let mut last_read_error = None;
+        while !attended_operation_interrupted() {
+            thread::sleep(LIVE_PARTICLES_POLL_INTERVAL);
+            let inspected = match inspect_live_particle_file(family) {
+                Ok(inspected) => {
+                    last_read_error = None;
+                    inspected
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    if last_read_error.as_deref() != Some(error.as_str()) {
+                        eprintln!("live particles not published: {error}");
+                        last_read_error = Some(error);
+                    }
+                    continue;
+                }
+            };
+            if inspected.digest == last_observed_digest {
+                continue;
+            }
+            last_observed_digest = inspected.digest;
+            let recipe = match inspected.recipe_for_demo(demo) {
+                Ok(recipe) => recipe,
+                Err(error) => {
+                    eprintln!("live particles not published: {error}");
+                    continue;
+                }
+            };
+            if recipe.digest == last_published_digest {
+                continue;
+            }
+            let session = connect_with(&config.connection, 10)?;
+            publish_live_particle_recipe(&session, &recipe)?;
+            status = wait_live_particle_status(&session, status.generation, demo)?;
+            last_published_digest = recipe.digest;
+            report_live_particle_status(&status, &recipe.schema);
+        }
+        Ok(())
+    })();
+    let cleanup_result = cleanup_live_particle_watch(config);
+    match (run_result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok("live particle watch stopped; launcher restored".into()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(format!("live particle watch cleanup failed: {error}").into()),
+        (Err(run_error), Err(cleanup_error)) => {
+            Err(format!("{run_error}; live particle watch cleanup failed: {cleanup_error}").into())
+        }
+    }
 }
 
 fn capture_particle_showcase_frame(
@@ -15617,6 +16111,156 @@ mod tests {
             parse_display_mode_args(&args(&["hdmi-1280x720p60", "--attended", "--other",]))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn live_particle_args_require_one_family_demo_and_attendance() {
+        let args = |values: &[&str]| {
+            values
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            parse_live_particle_args(&args(&[
+                "particles",
+                "family.json",
+                "--demo",
+                "12",
+                "--attended",
+            ]))
+            .unwrap(),
+            LiveParticleCliOptions {
+                family: "family.json".into(),
+                demo: 12,
+            }
+        );
+        assert!(
+            parse_live_particle_args(&args(&["particles", "family.json", "--demo", "12"])).is_err()
+        );
+        assert!(
+            parse_live_particle_args(&args(&[
+                "particles",
+                "family.json",
+                "--demo",
+                "0",
+                "--attended",
+            ]))
+            .is_err()
+        );
+        assert!(
+            parse_live_particle_args(&args(&[
+                "particles",
+                "one.json",
+                "two.json",
+                "--demo",
+                "1",
+                "--attended",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn live_particle_family_schema_owns_a_disjoint_demo_range() {
+        let cases = [
+            ("mister-magik-particle-fireworks-family-v1", 1, 12),
+            ("mister-magik-particle-procedural-family-v1", 13, 31),
+            ("mister-magik-particle-form-family-v1", 32, 36),
+        ];
+        for (schema, first, last) in cases {
+            let bytes = format!(r#"{{"schema":"{schema}"}}"#);
+            assert_eq!(
+                validate_live_particle_family_bytes(bytes.as_bytes()).unwrap(),
+                schema
+            );
+            assert!(validate_live_particle_demo(schema, first).is_ok());
+            assert!(validate_live_particle_demo(schema, last).is_ok());
+            if first > 1 {
+                assert!(validate_live_particle_demo(schema, first - 1).is_err());
+            }
+            if last < 36 {
+                assert!(validate_live_particle_demo(schema, last + 1).is_err());
+            }
+        }
+        assert!(validate_live_particle_family_bytes(b"[]").is_err());
+        assert!(validate_live_particle_family_bytes(br#"{"schema":"unknown"}"#).is_err());
+        assert!(
+            validate_live_particle_family_bytes(&vec![b' '; LIVE_PARTICLES_MAX_FAMILY_BYTES + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn live_particle_file_hash_changes_only_with_observed_bytes() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-live-particle-family-{}.json",
+            std::process::id()
+        ));
+        let first = br#"{"schema":"mister-magik-particle-fireworks-family-v1","value":1}"#;
+        let second = br#"{"schema":"mister-magik-particle-fireworks-family-v1","value":2}"#;
+        fs::write(&path, first).unwrap();
+        let initial = inspect_live_particle_file(&path).unwrap();
+        assert_eq!(initial, inspect_live_particle_file(&path).unwrap());
+        fs::write(&path, second).unwrap();
+        let changed = inspect_live_particle_file(&path).unwrap();
+        assert_ne!(initial.digest, changed.digest);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn live_particle_status_enforces_generation_state_and_error_contract() {
+        let embedded = parse_live_particle_status(
+            r#"{"schema":"mister-magik-live-particles-status-v1","generation":0,"state":"embedded","demo":1,"error":null}"#,
+        )
+        .unwrap();
+        assert_eq!(embedded.generation, 0);
+        assert_eq!(embedded.state, LiveParticleStatusState::Embedded);
+        let rejected = parse_live_particle_status(
+            r#"{"schema":"mister-magik-live-particles-status-v1","generation":2,"state":"rejected","demo":13,"error":"bad emitter"}"#,
+        )
+        .unwrap();
+        assert_eq!(rejected.generation, 2);
+        assert_eq!(rejected.error.as_deref(), Some("bad emitter"));
+        assert!(
+            parse_live_particle_status(
+                r#"{"schema":"mister-magik-live-particles-status-v1","generation":0,"state":"applied","demo":1,"error":null}"#,
+            )
+            .is_err()
+        );
+        let oversized_error = "x".repeat(LIVE_PARTICLES_MAX_ERROR_BYTES + 1);
+        assert!(
+            parse_live_particle_status(
+                &json!({
+                    "schema": LIVE_PARTICLES_STATUS_SCHEMA,
+                    "generation": 1,
+                    "state": "rejected",
+                    "demo": 1,
+                    "error": oversized_error,
+                })
+                .to_string()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn live_particle_commands_only_mutate_fixed_session_paths() {
+        let prepare = live_particle_prepare_command();
+        let publish = live_particle_publish_command();
+        let cleanup = live_particle_cleanup_command();
+        let verify = live_particle_cleanup_verify_command();
+        assert!(prepare.contains("'/tmp/mister-magik/live-particles'"));
+        assert!(publish.contains("'/tmp/mister-magik/live-particles/family.json.upload'"));
+        assert!(publish.contains("'/tmp/mister-magik/live-particles/family.json'"));
+        assert_eq!(publish.matches("mv -f").count(), 1);
+        assert!(cleanup.contains("'/tmp/mister-magik/live-particles'"));
+        assert!(cleanup.contains("'/media/fat/mister-magik-dev/launcher.env'"));
+        assert!(verify.contains("test ! -e '/tmp/mister-magik/live-particles'"));
+        for command in [prepare, publish, cleanup, verify] {
+            assert!(!command.contains("rebuild-on-next-boot"));
+            assert!(!command.contains("direct_reset"));
+        }
     }
 
     #[test]

@@ -124,7 +124,10 @@ pub enum DeviceRequest {
         label: String,
         hero_secs: u64,
     },
-    LaunchParticleShowcase,
+    WatchLiveParticles {
+        family: PathBuf,
+        demo: u8,
+    },
     ProfileInstalledSearch {
         output_dir: PathBuf,
     },
@@ -244,7 +247,7 @@ impl DeviceRequest {
             Self::CaptureInstalledParticleTechnique { .. } => {
                 "capture-installed-particle-technique"
             }
-            Self::LaunchParticleShowcase => "launch-particle-showcase",
+            Self::WatchLiveParticles { .. } => "watch-live-particles",
             Self::ProfileInstalledSearch { .. } => "profile-installed-search",
             Self::VerifyInstalledSearchUi { .. } => "verify-installed-search-ui",
             Self::ProfileInstalledCatalogLifecycle { .. } => "profile-installed-catalog-lifecycle",
@@ -517,6 +520,10 @@ mod tests {
                 label: "curl-noise-flow-field".into(),
                 hero_secs: 15,
             },
+            DeviceRequest::WatchLiveParticles {
+                family: "fireworks.json".into(),
+                demo: 1,
+            },
             DeviceRequest::ProfileInstalledSearch {
                 output_dir: "search-profile".into(),
             },
@@ -599,7 +606,7 @@ mod tests {
             },
         ];
         let labels: Vec<_> = requests.iter().map(DeviceRequest::label).collect();
-        assert_eq!(labels.len(), 52);
+        assert_eq!(labels.len(), 53);
         assert!(labels.iter().all(|label| !label.is_empty()));
         assert_eq!(
             labels
