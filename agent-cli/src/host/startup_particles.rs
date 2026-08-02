@@ -220,7 +220,7 @@ fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<(
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), "off".into()),
                 (
-                    "MISTER_SCREENSAVER_START_IDLE_WHEN_READY".into(),
+                    "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY".into(),
                     "1".into(),
                 ),
                 (

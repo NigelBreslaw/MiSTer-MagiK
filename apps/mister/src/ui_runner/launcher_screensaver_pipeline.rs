@@ -222,6 +222,7 @@ impl Drop for ScreensaverRenderAhead {
 pub(crate) struct ScreensaverDirectRenderAhead {
     grant_tx: SyncSender<HiddenSlotRenderGrant>,
     ready_rx: Receiver<RenderedDirectScreensaverFrame>,
+    returned_buffers_rx: Receiver<PluginLatchFrameBuffers>,
     period_us: Arc<AtomicU64>,
     presentation_tick: Arc<AtomicU64>,
     cancelled: Arc<AtomicBool>,
@@ -232,6 +233,7 @@ pub(crate) struct ScreensaverDirectRenderAhead {
 impl ScreensaverDirectRenderAhead {
     pub(crate) fn start(
         renderer: LauncherScreensaver,
+        mut buffers: PluginLatchFrameBuffers,
         width: usize,
         height: usize,
         period_us: u64,
@@ -240,6 +242,7 @@ impl ScreensaverDirectRenderAhead {
     ) -> Self {
         let (grant_tx, grant_rx) = sync_channel(1);
         let (ready_tx, ready_rx) = sync_channel(1);
+        let (returned_buffers_tx, returned_buffers_rx) = sync_channel(1);
         let (snapshot_allocated_tx, snapshot_allocated_rx) = sync_channel(1);
         let (snapshot_initialized_tx, snapshot_initialized_rx) = sync_channel(1);
         let snapshot_requested = launcher_snapshot_source.is_some();
@@ -258,30 +261,36 @@ impl ScreensaverDirectRenderAhead {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
-                let launcher_snapshot = if snapshot_requested {
-                    let snapshot = allocate_render_ahead_buffer(width, height);
-                    if snapshot_allocated_tx.send(snapshot).is_err() {
-                        return;
-                    }
-                    match snapshot_initialized_rx.recv() {
-                        Ok(snapshot) => Some(snapshot),
-                        Err(_) => return,
-                    }
-                } else {
-                    None
-                };
-                if let Err(error) = run_direct_render_ahead_worker(
-                    renderer,
-                    width,
-                    height,
-                    launcher_snapshot,
-                    fade_started,
-                    grant_rx,
-                    ready_tx,
-                    &worker_period_us,
-                    &worker_presentation_tick,
-                    &worker_cancelled,
-                ) {
+                let run_result = (|| {
+                    let launcher_snapshot = if snapshot_requested {
+                        let snapshot = allocate_render_ahead_buffer(width, height);
+                        snapshot_allocated_tx
+                            .send(snapshot)
+                            .map_err(|_| "direct preview snapshot receiver disconnected")?;
+                        Some(
+                            snapshot_initialized_rx
+                                .recv()
+                                .map_err(|_| "direct preview snapshot initialization failed")?,
+                        )
+                    } else {
+                        None
+                    };
+                    run_direct_render_ahead_worker(
+                        renderer,
+                        &mut buffers,
+                        width,
+                        height,
+                        launcher_snapshot,
+                        fade_started,
+                        grant_rx,
+                        ready_tx,
+                        &worker_period_us,
+                        &worker_presentation_tick,
+                        &worker_cancelled,
+                    )
+                })();
+                let _ = returned_buffers_tx.send(buffers);
+                if let Err(error) = run_result {
                     crate::ui_errln!("screensaver: direct hidden worker failed: {error}");
                 }
             })
@@ -309,6 +318,7 @@ impl ScreensaverDirectRenderAhead {
         Self {
             grant_tx,
             ready_rx,
+            returned_buffers_rx,
             period_us,
             presentation_tick,
             cancelled,
@@ -361,6 +371,10 @@ impl ScreensaverDirectRenderAhead {
         }
         true
     }
+
+    pub(crate) fn take_returned_buffers(&mut self) -> Option<PluginLatchFrameBuffers> {
+        self.returned_buffers_rx.try_recv().ok()
+    }
 }
 
 impl Drop for ScreensaverDirectRenderAhead {
@@ -377,6 +391,7 @@ impl Drop for ScreensaverDirectRenderAhead {
 #[allow(clippy::too_many_arguments)]
 fn run_direct_render_ahead_worker(
     mut renderer: LauncherScreensaver,
+    buffers: &mut PluginLatchFrameBuffers,
     width: usize,
     height: usize,
     launcher_snapshot: Option<Vec<Rgb565Pixel>>,
@@ -387,21 +402,6 @@ fn run_direct_render_ahead_worker(
     presentation_tick: &AtomicU64,
     cancelled: &AtomicBool,
 ) -> Result<(), String> {
-    let stride_bytes = rgb565_stride_bytes(width);
-    let mut slot1 = ScanoutSlotsRgb565Framebuffer::open(
-        HiddenRgb565BufferIndex::new(1).map_err(|error| error.to_string())?,
-        width,
-        height,
-        stride_bytes,
-    )
-    .map_err(|error| error.to_string())?;
-    let mut slot2 = ScanoutSlotsRgb565Framebuffer::open(
-        HiddenRgb565BufferIndex::new(2).map_err(|error| error.to_string())?,
-        width,
-        height,
-        stride_bytes,
-    )
-    .map_err(|error| error.to_string())?;
     let mut sequence = 0u64;
     let mut elapsed_us = 0u64;
     let mut motion_tick = 0u64;
@@ -438,11 +438,7 @@ fn run_direct_render_ahead_worker(
             elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1)),
         );
         sequence = sequence.wrapping_add(1);
-        let target = if grant.slot_index == 1 {
-            &mut slot1
-        } else {
-            &mut slot2
-        };
+        let target = buffers.buffer_mut(grant.slot_index);
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let trace = render_and_publish_direct_target(target, |pixels| {

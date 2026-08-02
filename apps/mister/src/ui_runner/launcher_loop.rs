@@ -5008,7 +5008,19 @@ pub(super) fn run_launcher_loop(
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
-        retiring_direct_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
+        let mut returned_direct_buffers = Vec::new();
+        retiring_direct_pipelines.retain_mut(|pipeline| {
+            if !pipeline.poll_stopped() {
+                return true;
+            }
+            returned_direct_buffers.push(pipeline.take_returned_buffers());
+            false
+        });
+        for returned in returned_direct_buffers {
+            if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
+                launcher_presenter.fail_latch_completion(failure);
+            }
+        }
         if direct_hidden_exit_pending && retiring_direct_pipelines.is_empty() {
             launcher_presenter.invalidate_external_hidden_mode();
             direct_hidden_exit_pending = false;
@@ -5088,14 +5100,25 @@ pub(super) fn run_launcher_loop(
                     let launcher_snapshot = screensaver
                         .is_preview()
                         .then(|| launcher_snapshot_view.pixels());
-                    screensaver_direct_pipeline = Some(ScreensaverDirectRenderAhead::start(
-                        ready,
-                        ui.render_w(),
-                        ui.render_h(),
-                        pacer.period_us(),
-                        launcher_snapshot,
-                        screensaver.preview_fade_started,
-                    ));
+                    match launcher_presenter.take_direct_hidden_frame_buffers() {
+                        Ok(buffers) => {
+                            screensaver_direct_pipeline =
+                                Some(ScreensaverDirectRenderAhead::start(
+                                    ready,
+                                    buffers,
+                                    ui.render_w(),
+                                    ui.render_h(),
+                                    pacer.period_us(),
+                                    launcher_snapshot,
+                                    screensaver.preview_fade_started,
+                                ));
+                        }
+                        Err(failure) => {
+                            launcher_presenter.fail_latch_completion(failure);
+                            screensaver.fail_current_activation(Instant::now());
+                            screensaver_frame_visible = false;
+                        }
+                    }
                 } else {
                     screensaver_pipeline = Some(ScreensaverRenderAhead::start(
                         ready,

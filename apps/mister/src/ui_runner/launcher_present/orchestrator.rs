@@ -232,6 +232,37 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    pub(in crate::ui_runner) fn take_direct_hidden_frame_buffers(
+        &mut self,
+    ) -> Result<PluginLatchFrameBuffers, LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => latch.take_direct_frame_buffers(),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => {
+                Err(LatchFailure::runtime(
+                    LatchFailureStage::BufferMap,
+                    LatchFailureReason::ScanoutMapFailed,
+                    "direct hidden mappings require an active latch presenter",
+                ))
+            }
+        }
+    }
+
+    pub(in crate::ui_runner) fn restore_direct_hidden_frame_buffers(
+        &mut self,
+        returned: Option<PluginLatchFrameBuffers>,
+    ) -> Result<(), LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => latch.restore_direct_frame_buffers(returned),
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => {
+                Err(LatchFailure::runtime(
+                    LatchFailureStage::BufferMap,
+                    LatchFailureReason::ScanoutMapFailed,
+                    "direct hidden mappings returned without an active latch presenter",
+                ))
+            }
+        }
+    }
+
     pub(in crate::ui_runner) fn invalidate_external_hidden_mode(&mut self) {
         if let LauncherPresenterState::Latch(latch) = &mut self.state {
             latch.invalidate_external_mode();
@@ -529,8 +560,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             let stats = latch.present_completed_hidden_frame(completed, hardware, self.display)?;
             if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale(
                 self.stream_motion_active,
-            ) {
-                let frame_view = latch.committed_frame_view(stats.buffer_index);
+            ) && let Some(frame_view) = latch.committed_frame_view_if_mapped(stats.buffer_index)
+            {
                 let _ =
                     mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
             }

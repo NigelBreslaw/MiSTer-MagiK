@@ -107,6 +107,11 @@ pub struct HiddenScanoutFramebuffer {
     _lease: HiddenSlotLease,
 }
 
+// SAFETY: the mapping and its in-process slot lease have a single owning
+// value. Moving that owner to another thread preserves exclusive mutable
+// access; the type deliberately does not implement Sync.
+unsafe impl Send for HiddenScanoutFramebuffer {}
+
 struct HiddenSlotLease {
     bit: u8,
 }
@@ -373,5 +378,11 @@ mod tests {
         ));
         drop(first);
         assert!(HiddenSlotLease::acquire(index).is_ok());
+    }
+
+    #[test]
+    fn an_exclusive_mapping_owner_can_move_to_a_render_thread() {
+        fn assert_send<T: Send>() {}
+        assert_send::<HiddenScanoutFramebuffer>();
     }
 }

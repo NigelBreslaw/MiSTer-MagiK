@@ -451,7 +451,9 @@ fn hidden_buffer_base(
 }
 
 pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFrameBuffers> {
-    buffers: B,
+    buffers: Option<B>,
+    base1: u32,
+    base2: u32,
     disabled: bool,
     sequence: u16,
     width: usize,
@@ -513,6 +515,51 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             ),
         ))
     }
+
+    pub(in crate::ui_runner) fn take_direct_frame_buffers(
+        &mut self,
+    ) -> Result<PluginLatchFrameBuffers, LatchFailure> {
+        if self.outstanding_direct_grant.is_some() {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::BufferMap,
+                LatchFailureReason::NoWritableHiddenBuffer,
+                "cannot transfer hidden mappings with an outstanding direct grant",
+            ));
+        }
+        self.buffers.take().ok_or_else(|| {
+            LatchFailure::runtime(
+                LatchFailureStage::BufferMap,
+                LatchFailureReason::ScanoutMapFailed,
+                "hidden mappings are already owned by a direct renderer",
+            )
+        })
+    }
+
+    pub(in crate::ui_runner) fn restore_direct_frame_buffers(
+        &mut self,
+        returned: Option<PluginLatchFrameBuffers>,
+    ) -> Result<(), LatchFailure> {
+        if self.buffers.is_some() {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::BufferMap,
+                LatchFailureReason::ScanoutMapFailed,
+                "hidden mappings returned while presenter mappings are still active",
+            ));
+        }
+        let buffers = match returned {
+            Some(buffers) => buffers,
+            None => PluginLatchFrameBuffers::open(self.width, self.height)?,
+        };
+        if buffers.base_addr(1) != self.base1 || buffers.base_addr(2) != self.base2 {
+            return Err(LatchFailure::runtime(
+                LatchFailureStage::ModuleLayout,
+                LatchFailureReason::ScanoutLayoutMismatch,
+                "returned hidden mappings do not match the presenter's physical slots",
+            ));
+        }
+        self.buffers = Some(buffers);
+        Ok(())
+    }
 }
 
 impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
@@ -524,8 +571,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         render_height: usize,
         latch_geometry: crate::fpga::LatchedFbufGeometry,
     ) -> Self {
+        let base1 = buffers.base_addr(1);
+        let base2 = buffers.base_addr(2);
         Self {
-            buffers,
+            buffers: Some(buffers),
+            base1,
+            base2,
             disabled: false,
             sequence: 1,
             width,
@@ -541,6 +592,20 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             direct_generation: 0,
             outstanding_direct_grant: None,
         }
+    }
+
+    fn base_addr(&self, slot_index: u8) -> u32 {
+        if slot_index == 1 {
+            self.base1
+        } else {
+            self.base2
+        }
+    }
+
+    fn buffers(&self) -> &B {
+        self.buffers
+            .as_ref()
+            .expect("hidden mappings must be restored before copied presentation")
     }
 
     pub(in crate::ui_runner) fn exact_identity_geometry(&self) -> bool {
@@ -640,7 +705,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let post = hardware
             .post_latched_rgb565(
                 sequence,
-                self.buffers.base_addr(grant.slot_index),
+                self.base_addr(grant.slot_index),
                 self.width as u16,
                 self.height as u16,
                 self.latch_geometry,
@@ -853,8 +918,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             .sum::<u32>();
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
-        let base_addr = self.buffers.base_addr(buffer_index);
-        let buffer = self.buffers.buffer_mut(buffer_index);
+        let base_addr = self.base_addr(buffer_index);
+        let buffer = self
+            .buffers
+            .as_mut()
+            .expect("hidden mappings must be restored before copied presentation")
+            .buffer_mut(buffer_index);
         let copy_start = Instant::now();
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
@@ -1037,16 +1106,27 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         &self,
         buffer_index: u8,
     ) -> Rgb565FrameView<'_> {
-        self.buffers
+        self.buffers()
             .frame_view(buffer_index, self.width, self.height)
     }
 
+    pub(in crate::ui_runner) fn committed_frame_view_if_mapped(
+        &self,
+        buffer_index: u8,
+    ) -> Option<Rgb565FrameView<'_>> {
+        self.buffers
+            .as_ref()
+            .map(|buffers| buffers.frame_view(buffer_index, self.width, self.height))
+    }
+
     pub(in crate::ui_runner) fn buffer_base_addr(&self, buffer_index: u8) -> u32 {
-        self.buffers.base_addr(buffer_index)
+        self.base_addr(buffer_index)
     }
 
     pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
-        if !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due() {
+        if self.buffers.is_none()
+            || !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due()
+        {
             return false;
         }
         let Some(buffer_index) = self.last_committed_buffer else {
@@ -1074,8 +1154,8 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     ) -> Result<LatchStatusSync, LatchStatusSyncError> {
         classify_latch_status(
             status,
-            self.buffers.base_addr(1),
-            self.buffers.base_addr(2),
+            self.base_addr(1),
+            self.base_addr(2),
             self.width,
             self.height,
             self.hidden_active_verified,
@@ -1989,7 +2069,7 @@ mod tests {
     }
 
     #[test]
-    fn external_hidden_grant_is_exclusive_and_posts_without_copying() {
+    fn external_hidden_grant_posts_while_mappings_are_owned_by_the_worker() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
             statuses: vec![
@@ -2001,6 +2081,7 @@ mod tests {
             ..FakeHardware::default()
         };
         let mut display = display_session();
+        let worker_buffers = presenter.buffers.take().expect("loan mappings to worker");
 
         let grant = presenter
             .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
@@ -2033,6 +2114,7 @@ mod tests {
                 )
                 .is_err()
         );
+        presenter.buffers = Some(worker_buffers);
     }
 
     #[test]
@@ -2121,8 +2203,9 @@ mod tests {
             .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
             .unwrap()
             .expect("inactive slot grant");
-        presenter.buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
-        FakeBuffers::publish_writes(presenter.buffers.buffer_mut(grant.slot_index));
+        let buffers = presenter.buffers.as_mut().expect("presenter owns buffers");
+        buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
+        FakeBuffers::publish_writes(buffers.buffer_mut(grant.slot_index));
 
         let stats = presenter
             .present_completed_hidden_frame(
