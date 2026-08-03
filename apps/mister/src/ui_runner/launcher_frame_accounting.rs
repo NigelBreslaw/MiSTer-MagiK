@@ -30,6 +30,8 @@ const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
 
 pub(super) struct LauncherFrameAccounting {
     output_route: &'static str,
+    framebuffer_width: usize,
+    framebuffer_height: usize,
     fps_window_start: Instant,
     fps_frames: u64,
     prepare_us: u128,
@@ -1049,9 +1051,16 @@ impl std::fmt::Display for ArcadeUpdateTrace {
 }
 
 impl LauncherFrameAccounting {
-    pub(super) fn new(run_start: Instant, output_route: &'static str) -> Self {
+    pub(super) fn new(
+        run_start: Instant,
+        output_route: &'static str,
+        framebuffer_width: usize,
+        framebuffer_height: usize,
+    ) -> Self {
         Self {
             output_route,
+            framebuffer_width,
+            framebuffer_height,
             fps_window_start: run_start,
             fps_frames: 0,
             prepare_us: 0,
@@ -2434,6 +2443,8 @@ impl LauncherFrameAccounting {
             preview_asset_key: selected_game.map_or("", |game| game.preview_asset_key.as_ref()),
             catalog_generation: &self.catalog_generation,
             output_route: self.output_route,
+            framebuffer_width: self.framebuffer_width,
+            framebuffer_height: self.framebuffer_height,
             frames,
             idle,
             idle_loops,
@@ -3319,7 +3330,7 @@ mod tests {
     #[test]
     fn completed_latch_frames_preserve_pacing_and_maintenance_evidence() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "hdmi");
+        let mut accounting = LauncherFrameAccounting::new(start, "hdmi", 960, 540);
         accounting.frame_analytics_mode = FrameAnalyticsMode::Process;
         let mut frame = presented_frame(49, start, 16_667);
         frame.screensaver_active = true;
@@ -3416,7 +3427,7 @@ mod tests {
     #[test]
     fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576);
         for frame in 0..40 {
             accounting.accumulate_frame_budget(
                 &presented_frame(frame, start + Duration::from_micros(frame * 25_000), 22_000),
@@ -3453,7 +3464,7 @@ mod tests {
     #[test]
     fn cadence_warning_samples_are_retained_before_budget_overrun() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576);
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_CADENCE_WARNING_US), 0);
 
         let status = accounting.current_frame_budget_status();

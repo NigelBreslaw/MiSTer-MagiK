@@ -2787,7 +2787,8 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
-    let mut frame_accounting = LauncherFrameAccounting::new(run_start, ui.output_route().label());
+    let mut frame_accounting =
+        LauncherFrameAccounting::new(run_start, ui.output_route().label(), ui.fb_w(), ui.fb_h());
     if let Some(failure) = launcher_presenter.latch_failure() {
         frame_accounting.record_latch_failure(failure);
     }
@@ -3597,8 +3598,12 @@ pub(super) fn run_launcher_loop(
             {
                 run_start = Instant::now();
                 frame_accounting.close_preview_scroll_trace_for_restart();
-                frame_accounting =
-                    LauncherFrameAccounting::new(run_start, ui.output_route().label());
+                frame_accounting = LauncherFrameAccounting::new(
+                    run_start,
+                    ui.output_route().label(),
+                    ui.fb_w(),
+                    ui.fb_h(),
+                );
                 launcher_bench_active = true;
                 launcher_bench_waiting_for_initial_preview = false;
                 launcher_bench_next_step = run_start;

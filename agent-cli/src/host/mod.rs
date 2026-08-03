@@ -6083,15 +6083,56 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
 }
 
 fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
-    const EXPECTED_INTRO_FRAMES: usize = 1_201;
+    const INTRO_DURATION_US: u64 = 20_000_000;
 
+    let eligible_samples = telemetry
+        .iter()
+        .filter(|sample| {
+            sample
+                .pointer("/launcher/catalog_refresh_policy")
+                .and_then(Value::as_str)
+                == Some("force")
+        })
+        .collect::<Vec<_>>();
+    let routes = eligible_samples
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/launcher/output_route")
+                .and_then(Value::as_str)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if routes.len() != 1 {
+        return Err(
+            format!("startup intro telemetry has inconsistent output routes: {routes:?}").into(),
+        );
+    }
+    let output_route = routes.into_iter().next().expect("one route");
+    let framebuffer_geometries = eligible_samples
+        .iter()
+        .filter_map(|sample| {
+            Some((
+                sample
+                    .pointer("/launcher/framebuffer_width")
+                    .and_then(Value::as_u64)?,
+                sample
+                    .pointer("/launcher/framebuffer_height")
+                    .and_then(Value::as_u64)?,
+            ))
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if framebuffer_geometries.len() != 1 {
+        return Err(format!(
+            "startup intro telemetry has inconsistent framebuffer geometry: {framebuffer_geometries:?}"
+        )
+        .into());
+    }
+    let (framebuffer_width, framebuffer_height) = framebuffer_geometries
+        .into_iter()
+        .next()
+        .expect("one framebuffer geometry");
     let mut frames = BTreeMap::<u64, Value>::new();
-    for sample in telemetry.iter().filter(|sample| {
-        sample
-            .pointer("/launcher/catalog_refresh_policy")
-            .and_then(Value::as_str)
-            == Some("force")
-    }) {
+    for sample in eligible_samples {
         let Some(recent) = sample
             .pointer("/launcher/frame_budget/recent_frames")
             .and_then(Value::as_array)
@@ -6118,6 +6159,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
     refresh_periods.sort_unstable();
     let refresh_period_us = median_u64(&refresh_periods)
         .ok_or("startup intro telemetry has no physical refresh period")?;
+    let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
     let physical_refresh = physical_refresh_summary(0, &selected, refresh_period_us)?;
     let skipped_refreshes = physical_refresh
         .get("repeated_refreshes")
@@ -6173,8 +6215,8 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
         .get("refresh_hz")
         .and_then(Value::as_f64)
         .unwrap_or(f64::INFINITY);
-    let cabinet_wait_frames = selected.len().saturating_sub(EXPECTED_INTRO_FRAMES);
-    let cadence_qualified = selected.len() >= EXPECTED_INTRO_FRAMES
+    let cabinet_wait_frames = selected.len().saturating_sub(expected_intro_frames);
+    let cadence_qualified = selected.len() >= expected_intro_frames
         && skipped_refreshes == 0
         && long_completion_intervals == 0
         && frame_id_gaps == 0
@@ -6184,8 +6226,20 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
         latch_drop_delta == 0 && latch_completion_failures == 0 && sequence_gaps == 0;
 
     Ok(json!({
-        "schema": "mister-magik-startup-intro-qualification-v1",
-        "expected_frames": EXPECTED_INTRO_FRAMES,
+        "schema": "mister-magik-startup-intro-qualification-v2",
+        "route": output_route,
+        "framebuffer": {
+            "width": framebuffer_width,
+            "height": framebuffer_height,
+        },
+        "particles": if output_route.starts_with("crt-") {
+            json!({"density": "half", "initial": 51_200, "steady": 20_480})
+        } else {
+            json!({"density": "full", "initial": 102_400, "steady": 40_960})
+        },
+        "logical_elapsed_ms": INTRO_DURATION_US / 1_000,
+        "refresh_period_us": refresh_period_us,
+        "expected_frames": expected_intro_frames,
         "captured_frames": selected.len(),
         "cabinet_wait_frames": cabinet_wait_frames,
         "cadence": {
@@ -6232,6 +6286,34 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .pointer("/startup_intro/cabinet_wait_frames")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let intro_route = summary
+        .pointer("/startup_intro/route")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let framebuffer_width = summary
+        .pointer("/startup_intro/framebuffer/width")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let framebuffer_height = summary
+        .pointer("/startup_intro/framebuffer/height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let particle_density = summary
+        .pointer("/startup_intro/particles/density")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let intro_elapsed_ms = summary
+        .pointer("/startup_intro/logical_elapsed_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let expected_frames = summary
+        .pointer("/startup_intro/expected_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let captured_frames = summary
+        .pointer("/startup_intro/captured_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let unique_fps = summary
         .pointer("/startup_intro/cadence/physical_refresh/unique_fps")
         .and_then(Value::as_f64)
@@ -6250,7 +6332,7 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         "failed"
     };
     let mut report = format!(
-        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Cabinet wait frames: {cabinet_wait_frames}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
+        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Route: {intro_route}\n- Framebuffer: {framebuffer_width}x{framebuffer_height}\n- Particle density: {particle_density}\n- Logical elapsed: {intro_elapsed_ms} ms\n- Expected/captured frames: {expected_frames}/{captured_frames}\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Cabinet wait frames: {cabinet_wait_frames}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
         systems.len()
     );
     for system in systems {
@@ -16160,48 +16242,110 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn startup_intro_cadence_fails_independently_of_a_healthy_latch() {
-        let intro_frames = |skip_at: Option<u64>| {
-            (0_u64..1_201)
-                .map(|frame| {
-                    let skipped_us = u64::from(skip_at.is_some_and(|at| frame >= at)) * 16_667;
-                    json!({
+    fn startup_intro_cadence_and_latch_gates_cover_50_and_60_hz_routes() {
+        let intro_frames =
+            |period_us: u64, frame_count: u64, skip_at: Option<u64>, failure: Option<&str>| {
+                (0_u64..frame_count)
+                    .map(|frame| {
+                        let skipped_us =
+                            u64::from(skip_at.is_some_and(|at| frame >= at)) * period_us;
+                        let failed = failure
+                            .is_some_and(|kind| frame == frame_count / 2 && kind == "confirmation");
+                        json!({
                         "frame": frame,
-                        "completion_monotonic_us": 1_000_000 + frame * 16_667 + skipped_us,
+                        "completion_monotonic_us": 1_000_000 + frame * period_us + skipped_us,
                         "main_present_copy_path": "external-direct",
-                        "main_present_status": "ok",
+                        "main_present_status": if failed { "unsupported" } else { "ok" },
                         "main_present_sequence": (frame as u16).wrapping_add(1),
-                        "main_present_active_sequence": (frame as u16).wrapping_add(1),
+                        "main_present_active_sequence": if failed {
+                            frame as u16
+                        } else {
+                            (frame as u16).wrapping_add(1)
+                        },
                         "main_present_pending": false,
                         "main_present_flip_count": (frame as u16).wrapping_add(1),
-                        "main_present_drop_count": 0,
+                        "main_present_drop_count": u64::from(
+                            failure == Some("drop") && frame + 1 == frame_count
+                        ),
                         "main_present_completion_poll_count": 1,
-                        "vsync_source": "vsync",
-                        "vsync_miss_streak": 0,
-                        "vsync_period_us": 16_667,
+                        "vsync_source": if failure == Some("pacing") && frame == frame_count / 2 {
+                            "fallback"
+                        } else {
+                            "vsync"
+                        },
+                        "vsync_miss_streak": u64::from(
+                            failure == Some("pacing") && frame == frame_count / 2
+                        ),
+                        "vsync_period_us": period_us,
+                        })
                     })
-                })
-                .collect::<Vec<_>>()
-        };
-        let telemetry = |frames| {
+                    .collect::<Vec<_>>()
+            };
+        let telemetry = |route: &str, width: u64, height: u64, frames| {
             vec![json!({
                 "launcher": {
                     "catalog_refresh_policy": "force",
+                    "output_route": route,
+                    "framebuffer_width": width,
+                    "framebuffer_height": height,
                     "frame_budget": {"recent_frames": frames}
                 }
             })]
         };
 
-        let passing = summarize_startup_intro_telemetry(&telemetry(intro_frames(None))).unwrap();
-        assert_eq!(passing["cadence"]["qualified"], true);
-        assert_eq!(passing["latch_protocol"]["qualified"], true);
+        let passing_60 = summarize_startup_intro_telemetry(&telemetry(
+            "crt-480p60",
+            640,
+            480,
+            intro_frames(16_667, 1_200, None, None),
+        ))
+        .unwrap();
+        assert_eq!(passing_60["expected_frames"], 1_200);
+        assert_eq!(passing_60["cadence"]["qualified"], true);
+        assert_eq!(passing_60["latch_protocol"]["qualified"], true);
+        assert_eq!(passing_60["particles"]["density"], "half");
 
-        let skipped =
-            summarize_startup_intro_telemetry(&telemetry(intro_frames(Some(600)))).unwrap();
+        let passing_50 = summarize_startup_intro_telemetry(&telemetry(
+            "crt-576p50",
+            640,
+            576,
+            intro_frames(20_000, 1_000, None, None),
+        ))
+        .unwrap();
+        assert_eq!(passing_50["expected_frames"], 1_000);
+        assert_eq!(passing_50["captured_frames"], 1_000);
+        assert_eq!(passing_50["logical_elapsed_ms"], 20_000);
+        assert_eq!(passing_50["cadence"]["qualified"], true);
+        assert_eq!(passing_50["latch_protocol"]["qualified"], true);
+
+        let skipped = summarize_startup_intro_telemetry(&telemetry(
+            "crt-288p50",
+            640,
+            288,
+            intro_frames(20_000, 1_000, Some(500), None),
+        ))
+        .unwrap();
         assert_eq!(skipped["cadence"]["qualified"], false);
         assert_eq!(skipped["cadence"]["skipped_refreshes"], 1);
         assert_eq!(skipped["latch_protocol"]["qualified"], true);
         assert_eq!(skipped["latch_protocol"]["drop_delta"], 0);
+
+        for failure in ["pacing", "confirmation", "drop"] {
+            let failed = summarize_startup_intro_telemetry(&telemetry(
+                "crt-240p60",
+                640,
+                240,
+                intro_frames(16_667, 1_200, None, Some(failure)),
+            ))
+            .unwrap();
+            if failure == "pacing" {
+                assert_eq!(failed["cadence"]["qualified"], false);
+                assert_eq!(failed["latch_protocol"]["qualified"], true);
+            } else {
+                assert_eq!(failed["cadence"]["qualified"], true);
+                assert_eq!(failed["latch_protocol"]["qualified"], false);
+            }
+        }
     }
 
     #[test]

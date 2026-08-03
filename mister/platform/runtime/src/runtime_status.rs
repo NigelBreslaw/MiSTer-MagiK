@@ -54,6 +54,8 @@ launcher_status_types! {
         action_sequence: u64,
         presented_action_sequence: u64,
         fps_estimate: f64,
+        framebuffer_width: usize,
+        framebuffer_height: usize,
         rolling_fps: f64,
         rolling_prepare_us: u64,
         rolling_render_us: u64,
@@ -1637,6 +1639,8 @@ mod tests {
                 action_sequence: 4,
                 presented_action_sequence: 4,
                 fps_estimate: 59.94,
+                framebuffer_width: 640,
+                framebuffer_height: 576,
                 rolling_fps: 60.0,
                 rolling_prepare_us: 1,
                 rolling_render_us: 2,
@@ -1998,6 +2002,8 @@ mod tests {
         assert_eq!(value["scene"], "launcher");
         assert_eq!(value["screen"], "home");
         assert_eq!(value["output_route"], "crt-576p50");
+        assert_eq!(value["framebuffer_width"], 640);
+        assert_eq!(value["framebuffer_height"], 576);
         assert_eq!(value["vsync_period_us"], 19_829);
         assert_eq!(value["present_backend"], "fpga-vblank-latch-hidden");
         assert_eq!(value["latch_failure_state"], "runtime-fault");
@@ -2122,6 +2128,8 @@ mod tests {
             action_sequence: status_sequence,
             presented_action_sequence: status_sequence,
             fps_estimate: 60.04,
+            framebuffer_width: 640,
+            framebuffer_height: 288,
             rolling_fps: 59.9,
             rolling_prepare_us: 11,
             rolling_render_us: 22,
