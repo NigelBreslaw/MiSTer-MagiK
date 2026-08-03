@@ -345,7 +345,7 @@ impl IntroScene {
             &mut self.positions,
             &mut self.commands,
             text_palette_mix,
-            text_palette_mix.is_some(),
+            false,
             frame,
         )
     }
@@ -927,7 +927,7 @@ fn decode_target(
         let position = match scale {
             TargetScale::Text => [
                 f32::from(x) * (480.0 / 32_767.0),
-                f32::from(y) * (220.0 / 32_767.0) - 110.0,
+                f32::from(y) * (220.0 / 32_767.0),
                 f32::from(z) * (96.0 / 32_767.0),
             ],
             TargetScale::Cabinet => [
@@ -1195,6 +1195,26 @@ mod tests {
         assert!(scene.mister.groups.iter().all(|span| span.start % 4 == 0));
         assert!(scene.mister.groups.iter().all(|span| span.count % 4 == 0));
         assert_eq!(scene.mister.groups, scene.magik.groups);
+    }
+
+    #[test]
+    fn text_targets_are_centered_in_projected_screen_space() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let scene = IntroScene::new(960, 540, recipe.clone()).unwrap();
+        let geometry = SceneGeometry::new(960, 540, 960).unwrap();
+        for target in [&scene.mister, &scene.magik] {
+            let mut min = [f32::INFINITY; 2];
+            let mut max = [f32::NEG_INFINITY; 2];
+            for position in &target.positions {
+                let screen = project(*position, 0.0, 0.0, &recipe, geometry);
+                for axis in 0..2 {
+                    min[axis] = min[axis].min(screen[axis]);
+                    max[axis] = max[axis].max(screen[axis]);
+                }
+            }
+            assert!(((min[0] + max[0]) * 0.5 - 480.0).abs() < 2.0);
+            assert!(((min[1] + max[1]) * 0.5 - 270.0).abs() < 2.0);
+        }
     }
 
     #[test]
