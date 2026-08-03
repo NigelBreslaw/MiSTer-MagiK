@@ -6008,7 +6008,6 @@ pub(super) fn run_launcher_loop(
             }
             launcher_presenter.invalidate_external_hidden_mode();
             startup_intro = None;
-            full_frame_present = true;
             window.request_redraw();
             print_startup_event(
                 start,
