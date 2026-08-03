@@ -147,6 +147,7 @@ pub struct ArcadeCabinetFormation {
     positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     commands: Vec<CabinetDrawCommand>,
+    previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
     full_clear: [bool; 2],
     tile_order: Vec<u32>,
@@ -351,6 +352,7 @@ impl ArcadeCabinetFormation {
             positions,
             attributes,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
+            previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
                 Vec::with_capacity(capacity * 2),
                 Vec::with_capacity(capacity * 2),
@@ -390,6 +392,8 @@ impl ArcadeCabinetFormation {
             self.options = options;
             self.full_clear = [true; 2];
             self.commands_initialized = false;
+            self.previous_commands
+                .fill(CabinetDrawCommand(INVALID_PARTICLE_OFFSET));
         }
         Ok(())
     }
@@ -420,6 +424,11 @@ impl ArcadeCabinetFormation {
             )
             .saturating_add(
                 self.commands
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CabinetDrawCommand>()),
+            )
+            .saturating_add(
+                self.previous_commands
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetDrawCommand>()),
             )
@@ -471,6 +480,10 @@ impl ArcadeCabinetFormation {
             self.options.creative_mode,
             CabinetCreativeMode::Satellites | CabinetCreativeMode::All
         );
+        let history_mode = matches!(
+            self.options.creative_mode,
+            CabinetCreativeMode::HistoryEcho | CabinetCreativeMode::All
+        ) && (formation < 1.0 || dispersal > 0.0);
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
@@ -516,6 +529,17 @@ impl ArcadeCabinetFormation {
                 let recipe_neighbor = feature & appearance.neighbor_feature_mask != 0
                     && index % usize::from(appearance.neighbor_every) == 0
                     && pixel_x + 1 < self.width;
+                if history_mode {
+                    let history_offset = self.previous_commands[index].0;
+                    if history_offset != INVALID_PARTICLE_OFFSET {
+                        let history_offset = history_offset as usize;
+                        let history_style = style.saturating_sub(2);
+                        destination[history_offset] =
+                            pixel(appearance.palette[usize::from(history_style)]);
+                        dirty_offsets.push(history_offset as u32);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                    }
+                }
                 if satellite_mode && recipe_neighbor {
                     let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
                     destination[offset + 1] =
@@ -583,6 +607,17 @@ impl ArcadeCabinetFormation {
                     || (($index / PARTICLE_LANES) % usize::from(projection_cohorts)
                         == projection_cohort)
             };
+        }
+
+        if history_mode && self.commands_initialized {
+            for index in 0..self.options.active_count {
+                if selected_for_projection!(index) {
+                    self.previous_commands[index] = self.commands[index];
+                }
+            }
+        } else if history_mode {
+            self.previous_commands[..self.options.active_count]
+                .fill(CabinetDrawCommand(INVALID_PARTICLE_OFFSET));
         }
 
         if dispersal > 0.0 {
@@ -1153,6 +1188,36 @@ mod tests {
         assert_eq!(satellite_stats.visible, baseline_stats.visible);
         assert!(satellite_stats.pixel_writes > baseline_stats.pixel_writes);
         assert_ne!(satellite_pixels, baseline_pixels);
+    }
+
+    #[test]
+    fn history_echo_is_limited_to_formation_and_dispersal() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut history = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut baseline = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        history
+            .set_render_options(CabinetRenderOptions {
+                active_count: 48_128,
+                creative_mode: CabinetCreativeMode::HistoryEcho,
+            })
+            .unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        history
+            .render(&mut pixels, Duration::from_millis(900), 0)
+            .unwrap();
+        let formation = history
+            .render(&mut pixels, Duration::from_millis(916), 1)
+            .unwrap();
+        let orbit = history
+            .render(&mut pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let baseline_orbit = baseline
+            .render(&mut baseline_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        assert!(formation.pixel_writes > formation.visible);
+        assert_eq!(orbit.pixel_writes, baseline_orbit.pixel_writes);
+        assert_eq!(pixels, baseline_pixels);
     }
 
     #[test]
