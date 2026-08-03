@@ -2705,6 +2705,21 @@ pub(super) fn run_launcher_loop(
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
         && screensaver_start_mode == ScreensaverStartMode::Inactive;
+    if startup_intro_eligible {
+        // Prime Slint's reused software-renderer buffer before the measured
+        // particle cadence begins. The later authoritative Arcade sync then
+        // repaints only changed launcher regions instead of paying the first
+        // full-tree raster cost beside a visible intro frame.
+        let prewarm_started = Instant::now();
+        window.draw_if_needed(|renderer| {
+            let _ = target.render(renderer, frame_target_geometry(ui));
+        });
+        print_startup_event(
+            start,
+            "startup_intro_launcher_renderer_prewarmed",
+            format!("elapsed_us={}", prewarm_started.elapsed().as_micros()),
+        );
+    }
     let mut startup_intro = if startup_intro_eligible
         && launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
     {

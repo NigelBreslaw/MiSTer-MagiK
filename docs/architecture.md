@@ -620,8 +620,10 @@ matching index restores the exact local Arcade projection; a missing, corrupt,
 oversized, or stale index starts the 20-second first-run particle intro and a
 CPU0-confined first-visible Arcade scan. The interactive Slint launcher is
 not rendered continuously behind the intro: timer dispatch and bridge sync are
-suppressed while catalog changes accumulate in Rust. Once the first usable
-Arcade projection exists, one full bridge sync and one off-screen Slint render
+suppressed while catalog changes accumulate in Rust. Before measured intro
+cadence begins, one unpresented render primes Slint's reused software buffer.
+Once the first usable Arcade projection exists, one full bridge sync and one
+incremental off-screen Slint render
 produce the live RGB565 target. The host immediately retains that frame and a
 low-priority CPU0 worker derives its particle formation, leaving CPU1 to render
 the intro. Transient build-progress shell and taxonomy mutations are not

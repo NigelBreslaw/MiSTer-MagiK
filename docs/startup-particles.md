@@ -56,8 +56,10 @@ either axis is nonzero.
 
 The final handoff is derived only from the production launcher's live frame:
 
-1. When the first usable Arcade projection arrives, the host performs one full
-   bridge synchronization and one off-screen Slint render. It immediately
+1. Before measured particle cadence starts, the host primes Slint's reused
+   software buffer with one unpresented render. When the first usable Arcade
+   projection arrives, it performs one full bridge synchronization and one
+   incremental off-screen Slint render. It immediately
    snapshots that exact cache, then a low-priority CPU0 worker derives all
    40,960 launcher particle positions and colors without blocking CPU1. No
    design-time launcher image or point cloud is embedded.
