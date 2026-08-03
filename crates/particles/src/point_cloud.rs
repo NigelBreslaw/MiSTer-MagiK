@@ -37,8 +37,7 @@ impl PointCloudDrawCommand {
     }
 
     pub(crate) fn offset(self) -> Option<usize> {
-        (self.0 != INVALID_PARTICLE_OFFSET)
-            .then_some((self.0 & COMMAND_OFFSET_MASK) as usize)
+        (self.0 != INVALID_PARTICLE_OFFSET).then_some((self.0 & COMMAND_OFFSET_MASK) as usize)
     }
 
     pub(crate) fn depth_band(self) -> u8 {

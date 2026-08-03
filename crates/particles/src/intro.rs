@@ -86,7 +86,8 @@ pub struct IntroScene {
 
 impl IntroScene {
     pub fn new(width: usize, height: usize, recipe: IntroRecipe) -> Result<Self, String> {
-        let geometry = SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        let geometry =
+            SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         let mister = decode_target(MISTER_CLOUD, Some((MISTER_GROUPS, 6)), TargetScale::Text)?;
         let magik = decode_target(MAGIK_CLOUD, Some((MAGIK_GROUPS, 6)), TargetScale::Text)?;
         if mister.positions.len() != recipe.steady_particle_count {
@@ -96,9 +97,7 @@ impl IntroScene {
                 recipe.steady_particle_count
             ));
         }
-        if magik.positions.len() != recipe.steady_particle_count
-            || magik.groups != mister.groups
-        {
+        if magik.positions.len() != recipe.steady_particle_count || magik.groups != mister.groups {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
         let mister_pivots = std::array::from_fn(|group| {
@@ -208,17 +207,14 @@ impl IntroScene {
                 unit01(random.rotate_left(13)) * height as f32,
             ]);
             formation_screen.push(mister_screen[target_index]);
-            formation_random.push(
-                (mix32((index as u32).wrapping_add(recipe.seed as u32)) & 0xffff) as u16,
-            );
+            formation_random
+                .push((mix32((index as u32).wrapping_add(recipe.seed as u32)) & 0xffff) as u16);
             formation_styles.push(mister.palette[target_index]);
         }
         let positions = vec![empty_block(); recipe.steady_particle_count.div_ceil(PARTICLE_LANES)];
         let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
-        let commands = vec![
-            PointCloudDrawCommand(INVALID_PARTICLE_OFFSET);
-            recipe.steady_particle_count
-        ];
+        let commands =
+            vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); recipe.steady_particle_count];
         Ok(Self {
             geometry,
             recipe,
@@ -257,11 +253,7 @@ impl IntroScene {
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
     }
 
-    fn render_crt(
-        &self,
-        destination: &mut [Rgb565Pixel],
-        frame: u64,
-    ) -> (usize, usize) {
+    fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> (usize, usize) {
         let palette = self.recipe.appearance.crt_palette;
         let mut visible = 0;
         for (index, source) in self.static_xy.iter().enumerate() {
@@ -309,11 +301,7 @@ impl IntroScene {
                     let fade = ((1.0 - progress) * 3.0) as usize;
                     crt_palette[fade.min(3)]
                 } else {
-                    let flicker = text_flicker_index(
-                        self.formation_styles[index],
-                        index,
-                        frame,
-                    );
+                    let flicker = text_flicker_index(self.formation_styles[index], index, frame);
                     text_palette[flicker]
                 };
                 destination[offset] = Rgb565Pixel(color.0);
@@ -362,7 +350,9 @@ impl IntroScene {
         frame: u64,
         update_all: bool,
     ) -> (usize, usize, &'static str) {
-        let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(5)).max(1);
+        let local_duration = duration_ms
+            .saturating_sub(stagger_ms.saturating_mul(5))
+            .max(1);
         for (group_index, span) in self.mister.groups.iter().enumerate() {
             let start_ms = stagger_ms.saturating_mul(group_index as u64);
             let progress = cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32;
@@ -404,10 +394,10 @@ impl IntroScene {
                     (progress * std::f32::consts::PI).sin() * 58.0
                 };
                 self.dynamic_positions[index] = [
-                    center[0] + local[0].mul_add(cos, local[2] * sin)
-                        + scatter_vector[0] * scatter,
+                    center[0] + local[0].mul_add(cos, local[2] * sin) + scatter_vector[0] * scatter,
                     center[1] + local[1] + scatter_vector[1] * scatter,
-                    center[2] + (-local[0]).mul_add(sin, local[2] * cos)
+                    center[2]
+                        + (-local[0]).mul_add(sin, local[2] * cos)
                         + scatter_vector[2] * scatter,
                 ];
             }
@@ -442,11 +432,15 @@ impl IntroScene {
         frame: u64,
         update_all: bool,
     ) -> (usize, usize, &'static str) {
-        let cue_progress =
-            ease(cue_elapsed_ms as f32 / duration_ms.max(1) as f32, RecipeEasing::Linear);
+        let cue_progress = ease(
+            cue_elapsed_ms as f32 / duration_ms.max(1) as f32,
+            RecipeEasing::Linear,
+        );
         let global_yaw = cue_progress * turns * std::f32::consts::TAU;
         let (global_sin, global_cos) = global_yaw.sin_cos();
-        let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(4)).max(1);
+        let local_duration = duration_ms
+            .saturating_sub(stagger_ms.saturating_mul(4))
+            .max(1);
         for (group_index, span) in self.magik.groups.iter().enumerate() {
             let start_ms = letter_stagger_start_ms(group_index, stagger_ms);
             let progress = ease(
@@ -630,80 +624,74 @@ fn render_point_cloud(
     text_neighbors: bool,
     frame: u64,
 ) -> (usize, usize, &'static str) {
-        let transform_started = Instant::now();
-        copy_target_to_blocks(target_positions, positions);
-        let _transform_us = elapsed_us(transform_started.elapsed());
-        let projection_started = Instant::now();
-        commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
-        let vector_end = project_stable_neon(
-            target_positions.len(),
-            positions,
-            0,
-            1,
-            0.0,
-            1.0,
-            0.0,
-            1.0,
-            recipe.camera.dolly,
-            recipe.camera.near_depth,
-            recipe.camera.focal_length,
-            geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
-            geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
-            geometry.width(),
-            geometry.height(),
-            commands,
-        );
-        for index in vector_end..target_positions.len() {
+    let transform_started = Instant::now();
+    copy_target_to_blocks(target_positions, positions);
+    let _transform_us = elapsed_us(transform_started.elapsed());
+    let projection_started = Instant::now();
+    commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
+    let vector_end = project_stable_neon(
+        target_positions.len(),
+        positions,
+        0,
+        1,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        recipe.camera.dolly,
+        recipe.camera.near_depth,
+        recipe.camera.focal_length,
+        geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
+        geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
+        geometry.width(),
+        geometry.height(),
+        commands,
+    );
+    for index in vector_end..target_positions.len() {
+        commands[index] = project_command(target_positions[index], recipe, geometry);
+    }
+    let backend = if vector_end > 0 {
+        "point-cloud-neon"
+    } else {
+        for index in 0..target_positions.len() {
             commands[index] = project_command(target_positions[index], recipe, geometry);
         }
-        let backend = if vector_end > 0 {
-            "point-cloud-neon"
-        } else {
-            for index in 0..target_positions.len() {
-                commands[index] = project_command(target_positions[index], recipe, geometry);
-            }
-            "point-cloud-scalar"
+        "point-cloud-scalar"
+    };
+    let _projection_us = elapsed_us(projection_started.elapsed());
+    let mut visible = 0;
+    let mut writes = 0;
+    for (index, command) in commands.iter().copied().enumerate() {
+        let Some(offset) = command.offset() else {
+            continue;
         };
-        let _projection_us = elapsed_us(projection_started.elapsed());
-        let mut visible = 0;
-        let mut writes = 0;
-        for (index, command) in commands.iter().copied().enumerate() {
-            let Some(offset) = command.offset() else {
-                continue;
-            };
-            let target_color = match text_palette_mix {
-                None => true,
-                Some(mix) if mix <= 0.0 => false,
-                Some(mix) if mix >= 1.0 => true,
-                Some(mix) => {
-                    let threshold = (mix * 65_536.0) as u32;
-                    mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff
-                        < threshold
-                }
-            };
-            let color = if !target_color {
-                recipe.appearance.text_palette[text_flicker_index(
-                    target_palette[index],
-                    index,
-                    frame,
-                )]
-            } else {
-                recipe.appearance.palette[usize::from(target_palette[index])]
-            };
-            destination[offset] = Rgb565Pixel(color.0);
-            visible += 1;
-            writes += 1;
-            if !target_color
-                && text_neighbors
-                && target_positions[index][2] < 0.0
-                && offset % geometry.width() + 1 < geometry.width()
-            {
-                destination[offset + 1] =
-                    Rgb565Pixel(recipe.appearance.text_palette[2].0);
-                writes += 1;
+        let target_color = match text_palette_mix {
+            None => true,
+            Some(mix) if mix <= 0.0 => false,
+            Some(mix) if mix >= 1.0 => true,
+            Some(mix) => {
+                let threshold = (mix * 65_536.0) as u32;
+                mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff < threshold
             }
+        };
+        let color = if !target_color {
+            recipe.appearance.text_palette[text_flicker_index(target_palette[index], index, frame)]
+        } else {
+            recipe.appearance.palette[usize::from(target_palette[index])]
+        };
+        destination[offset] = Rgb565Pixel(color.0);
+        visible += 1;
+        writes += 1;
+        if !target_color
+            && text_neighbors
+            && target_positions[index][2] < 0.0
+            && offset % geometry.width() + 1 < geometry.width()
+        {
+            destination[offset + 1] = Rgb565Pixel(recipe.appearance.text_palette[2].0);
+            writes += 1;
         }
-        (visible, writes, backend)
+    }
+    (visible, writes, backend)
 }
 
 #[inline(always)]
@@ -814,7 +802,9 @@ impl FramebufferScene for IntroScene {
                 clock.frame,
             ),
             IntroCue::MorphTarget {
-                duration_ms, easing, ..
+                duration_ms,
+                easing,
+                ..
             } if cue_index == 7 => self.render_launcher_morph(
                 target.pixels_mut(),
                 cue_elapsed_ms,
@@ -823,7 +813,9 @@ impl FramebufferScene for IntroScene {
                 clock.frame,
             ),
             IntroCue::MockCrossfade {
-                duration_ms, easing, ..
+                duration_ms,
+                easing,
+                ..
             } => self.render_mock_crossfade(
                 target.pixels_mut(),
                 cue_elapsed_ms,
@@ -833,11 +825,7 @@ impl FramebufferScene for IntroScene {
             ),
             IntroCue::HoldTarget { .. } if cue_index == 9 => {
                 target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
-                (
-                    0,
-                    self.launcher_snapshot.len(),
-                    "launcher-mock-rgb565",
-                )
+                (0, self.launcher_snapshot.len(), "launcher-mock-rgb565")
             }
             _ => {
                 let point_target = match cue_index {
@@ -857,7 +845,10 @@ impl FramebufferScene for IntroScene {
         Ok(IntroFrameStats {
             particles,
             projected_particles: particles,
-            projection_cohorts: u8::from(matches!(cue, IntroCue::LetterMorph { .. } | IntroCue::Cloud { .. })) + 1,
+            projection_cohorts: u8::from(matches!(
+                cue,
+                IntroCue::LetterMorph { .. } | IntroCue::Cloud { .. }
+            )) + 1,
             visible,
             pixel_writes,
             cue_index,
@@ -947,7 +938,9 @@ fn decode_target(
         palette.push(style);
     }
     let groups = if let Some((bytes, count)) = group_bytes {
-        decode_particle_groups(bytes, positions.len(), count)?.spans().to_vec()
+        decode_particle_groups(bytes, positions.len(), count)?
+            .spans()
+            .to_vec()
     } else {
         vec![ParticleGroupSpan {
             id: 0,
@@ -1054,7 +1047,11 @@ fn pivot(points: &[[f32; 3]]) -> [f32; 3] {
         sum[2] += point[2];
     }
     let reciprocal = 1.0 / points.len() as f32;
-    [sum[0] * reciprocal, sum[1] * reciprocal, sum[2] * reciprocal]
+    [
+        sum[0] * reciprocal,
+        sum[1] * reciprocal,
+        sum[2] * reciprocal,
+    ]
 }
 
 fn letter_cloud_target(
@@ -1096,8 +1093,7 @@ fn letter_cloud_target(
 }
 
 fn cabinet_yaw(elapsed_ms: u64, duration_ms: u64, start_turns: f32, turns: f32) -> f32 {
-    (start_turns
-        + (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0) * turns)
+    (start_turns + (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0) * turns)
         * std::f32::consts::TAU
 }
 

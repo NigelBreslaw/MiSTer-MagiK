@@ -7,12 +7,12 @@
 //! This module preserves the matching arcade-cabinet formation without pulling
 //! the archived particle showcase into the production application.
 
-use crate::recipes::{
-    CabinetModel, CabinetRecipe, RecipeEasing, RecipeRgb565, embedded_cabinet_recipe,
-};
 use crate::point_cloud::{
     INVALID_PARTICLE_OFFSET, PARTICLE_LANES, PointCloudDrawCommand as CabinetDrawCommand,
     PointCloudPositionBlock as CabinetPositionBlock, project_stable_neon,
+};
+use crate::recipes::{
+    CabinetModel, CabinetRecipe, RecipeEasing, RecipeRgb565, embedded_cabinet_recipe,
 };
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, SceneBufferId, SceneClock, SceneError, SceneGeometry, SceneTarget,

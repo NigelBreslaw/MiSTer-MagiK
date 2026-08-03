@@ -196,8 +196,8 @@ pub fn embedded_intro_recipe() -> Result<IntroRecipe, String> {
 }
 
 pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
-    let file: IntroRecipeFileV1 = serde_json::from_slice(bytes)
-        .map_err(|error| format!("parse intro recipe: {error}"))?;
+    let file: IntroRecipeFileV1 =
+        serde_json::from_slice(bytes).map_err(|error| format!("parse intro recipe: {error}"))?;
     if file.schema != INTRO_RECIPE_SCHEMA_V1 {
         return Err(format!("unsupported intro recipe schema {:?}", file.schema));
     }
@@ -210,11 +210,26 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
     {
         return Err("intro particle counts are invalid or not four-lane aligned".into());
     }
-    validate_finite(file.camera.focal_length, 32.0, 4_096.0, "camera.focal_length")?;
+    validate_finite(
+        file.camera.focal_length,
+        32.0,
+        4_096.0,
+        "camera.focal_length",
+    )?;
     validate_finite(file.camera.near_depth, 0.01, 4_096.0, "camera.near_depth")?;
     validate_finite(file.camera.dolly, 1.0, 8_192.0, "camera.dolly")?;
-    validate_finite(file.camera.center_offset_x, -4_096.0, 4_096.0, "camera.center_offset_x")?;
-    validate_finite(file.camera.center_offset_y, -4_096.0, 4_096.0, "camera.center_offset_y")?;
+    validate_finite(
+        file.camera.center_offset_x,
+        -4_096.0,
+        4_096.0,
+        "camera.center_offset_x",
+    )?;
+    validate_finite(
+        file.camera.center_offset_y,
+        -4_096.0,
+        4_096.0,
+        "camera.center_offset_y",
+    )?;
     validate_tracks(&file.tracks)?;
     if file.cues.is_empty() {
         return Err("intro recipe must contain at least one cue".into());
@@ -284,8 +299,12 @@ fn validate_tracks(tracks: &[IntroTrack]) -> Result<(), String> {
     ];
     if tracks.len() != expected.len()
         || tracks.iter().zip(expected).any(|(track, expected)| {
-            (track.id.as_str(), track.source.as_str(), track.destination.as_str(), track.preserve)
-                != expected
+            (
+                track.id.as_str(),
+                track.source.as_str(),
+                track.destination.as_str(),
+                track.preserve,
+            ) != expected
         })
     {
         return Err("intro letter tracks do not match the supported six-track mapping".into());
@@ -380,7 +399,9 @@ fn validate_percent(value: f32, name: &str) -> Result<(), String> {
 
 fn validate_finite(value: f32, minimum: f32, maximum: f32, name: &str) -> Result<(), String> {
     if !value.is_finite() || !(minimum..=maximum).contains(&value) {
-        return Err(format!("{name} must be finite and in {minimum}..={maximum}"));
+        return Err(format!(
+            "{name} must be finite and in {minimum}..={maximum}"
+        ));
     }
     Ok(())
 }
@@ -397,9 +418,7 @@ fn parse_rgb565(value: &str) -> Result<RecipeRgb565, String> {
     let blue = u8::from_str_radix(&digits[4..6], 16)
         .map_err(|_| format!("invalid RGB color {value:?}"))?;
     Ok(RecipeRgb565(
-        (u16::from(red) >> 3) << 11
-            | (u16::from(green) >> 2) << 5
-            | (u16::from(blue) >> 3),
+        (u16::from(red) >> 3) << 11 | (u16::from(green) >> 2) << 5 | (u16::from(blue) >> 3),
     ))
 }
 

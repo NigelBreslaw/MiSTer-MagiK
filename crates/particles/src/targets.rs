@@ -91,7 +91,10 @@ pub fn decode_particle_groups(
         start = end;
     }
     if spans.len() != usize::from(group_count)
-        || spans.iter().enumerate().any(|(index, span)| usize::from(span.id) != index)
+        || spans
+            .iter()
+            .enumerate()
+            .any(|(index, span)| usize::from(span.id) != index)
     {
         return Err("particle groups must contain each id once in ascending order".into());
     }
@@ -134,12 +137,7 @@ mod tests {
 
         assert!(decode_particle_groups(&encoded(&[0, 0, 1, 1]), 4, 2).is_err());
         assert!(
-            decode_particle_groups(
-                &encoded(&[0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0]),
-                12,
-                2
-            )
-            .is_err()
+            decode_particle_groups(&encoded(&[0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0]), 12, 2).is_err()
         );
         assert!(decode_particle_groups(&encoded(&[0; 4]), 4, 2).is_err());
     }
