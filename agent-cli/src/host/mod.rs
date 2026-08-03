@@ -6585,6 +6585,7 @@ fn profile_particle_preset(
     }))
 }
 
+#[cfg(test)]
 fn particle_refinement_count(last_pass: u64, first_fail: u64) -> Option<u64> {
     let distance = first_fail.saturating_sub(last_pass);
     if distance <= PARTICLE_COUNT_STEP {
