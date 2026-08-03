@@ -4368,6 +4368,11 @@ fn profile_installed_catalog_lifecycle(
             "catalog": catalog,
             "manifest": parse_manifest_evidence(&manifest),
             "boot_id": boot_id,
+            "display": {
+                "route": final_status.get("output_route").cloned().unwrap_or(Value::Null),
+                "framebuffer_width": final_status.get("framebuffer_width").cloned().unwrap_or(Value::Null),
+                "framebuffer_height": final_status.get("framebuffer_height").cloned().unwrap_or(Value::Null),
+            },
             "isolation": {
                 "remote_root": CATALOG_LIFECYCLE_REMOTE_DIR,
                 "production_paths_redirected": true,
@@ -4393,7 +4398,12 @@ fn profile_installed_catalog_lifecycle(
                     .join("\n")
             ),
         )?;
-        summarize_startup_intro_telemetry(&telemetry)
+        let display = run_result
+            .as_ref()
+            .ok()
+            .and_then(|summary| summary.get("display"))
+            .ok_or("catalog lifecycle result has no display profile")?;
+        summarize_startup_intro_telemetry(&telemetry, display)
     })();
     let run_result = match (run_result, intro_evidence_result) {
         (Ok(mut summary), Ok(intro)) => {
@@ -6082,7 +6092,7 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
     }))
 }
 
-fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
+fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Result<Value> {
     const INTRO_DURATION_US: u64 = 20_000_000;
 
     let eligible_samples = telemetry
@@ -6094,43 +6104,18 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
                 == Some("force")
         })
         .collect::<Vec<_>>();
-    let routes = eligible_samples
-        .iter()
-        .filter_map(|sample| {
-            sample
-                .pointer("/launcher/output_route")
-                .and_then(Value::as_str)
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    if routes.len() != 1 {
-        return Err(
-            format!("startup intro telemetry has inconsistent output routes: {routes:?}").into(),
-        );
-    }
-    let output_route = routes.into_iter().next().expect("one route");
-    let framebuffer_geometries = eligible_samples
-        .iter()
-        .filter_map(|sample| {
-            Some((
-                sample
-                    .pointer("/launcher/framebuffer_width")
-                    .and_then(Value::as_u64)?,
-                sample
-                    .pointer("/launcher/framebuffer_height")
-                    .and_then(Value::as_u64)?,
-            ))
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    if framebuffer_geometries.len() != 1 {
-        return Err(format!(
-            "startup intro telemetry has inconsistent framebuffer geometry: {framebuffer_geometries:?}"
-        )
-        .into());
-    }
-    let (framebuffer_width, framebuffer_height) = framebuffer_geometries
-        .into_iter()
-        .next()
-        .expect("one framebuffer geometry");
+    let output_route = display
+        .get("route")
+        .and_then(Value::as_str)
+        .ok_or("startup intro display profile has no output route")?;
+    let framebuffer_width = display
+        .get("framebuffer_width")
+        .and_then(Value::as_u64)
+        .ok_or("startup intro display profile has no framebuffer width")?;
+    let framebuffer_height = display
+        .get("framebuffer_height")
+        .and_then(Value::as_u64)
+        .ok_or("startup intro display profile has no framebuffer height")?;
     let mut frames = BTreeMap::<u64, Value>::new();
     for sample in eligible_samples {
         let Some(recent) = sample
@@ -16292,25 +16277,38 @@ H: Handlers=event3 js0"#
                 }
             })]
         };
+        let display = |route: &str, width: u64, height: u64| {
+            json!({
+                "route": route,
+                "framebuffer_width": width,
+                "framebuffer_height": height,
+            })
+        };
 
-        let passing_60 = summarize_startup_intro_telemetry(&telemetry(
-            "crt-480p60",
-            640,
-            480,
-            intro_frames(16_667, 1_200, None, None),
-        ))
+        let passing_60 = summarize_startup_intro_telemetry(
+            &telemetry(
+                "crt-480p60",
+                640,
+                480,
+                intro_frames(16_667, 1_200, None, None),
+            ),
+            &display("crt-480p60", 640, 480),
+        )
         .unwrap();
         assert_eq!(passing_60["expected_frames"], 1_200);
         assert_eq!(passing_60["cadence"]["qualified"], true);
         assert_eq!(passing_60["latch_protocol"]["qualified"], true);
         assert_eq!(passing_60["particles"]["density"], "half");
 
-        let passing_50 = summarize_startup_intro_telemetry(&telemetry(
-            "crt-576p50",
-            640,
-            576,
-            intro_frames(20_000, 1_000, None, None),
-        ))
+        let passing_50 = summarize_startup_intro_telemetry(
+            &telemetry(
+                "crt-576p50",
+                640,
+                576,
+                intro_frames(20_000, 1_000, None, None),
+            ),
+            &display("crt-576p50", 640, 576),
+        )
         .unwrap();
         assert_eq!(passing_50["expected_frames"], 1_000);
         assert_eq!(passing_50["captured_frames"], 1_000);
@@ -16318,12 +16316,15 @@ H: Handlers=event3 js0"#
         assert_eq!(passing_50["cadence"]["qualified"], true);
         assert_eq!(passing_50["latch_protocol"]["qualified"], true);
 
-        let skipped = summarize_startup_intro_telemetry(&telemetry(
-            "crt-288p50",
-            640,
-            288,
-            intro_frames(20_000, 1_000, Some(500), None),
-        ))
+        let skipped = summarize_startup_intro_telemetry(
+            &telemetry(
+                "crt-288p50",
+                640,
+                288,
+                intro_frames(20_000, 1_000, Some(500), None),
+            ),
+            &display("crt-288p50", 640, 288),
+        )
         .unwrap();
         assert_eq!(skipped["cadence"]["qualified"], false);
         assert_eq!(skipped["cadence"]["skipped_refreshes"], 1);
@@ -16331,12 +16332,15 @@ H: Handlers=event3 js0"#
         assert_eq!(skipped["latch_protocol"]["drop_delta"], 0);
 
         for failure in ["pacing", "confirmation", "drop"] {
-            let failed = summarize_startup_intro_telemetry(&telemetry(
-                "crt-240p60",
-                640,
-                240,
-                intro_frames(16_667, 1_200, None, Some(failure)),
-            ))
+            let failed = summarize_startup_intro_telemetry(
+                &telemetry(
+                    "crt-240p60",
+                    640,
+                    240,
+                    intro_frames(16_667, 1_200, None, Some(failure)),
+                ),
+                &display("crt-240p60", 640, 240),
+            )
             .unwrap();
             if failure == "pacing" {
                 assert_eq!(failed["cadence"]["qualified"], false);
