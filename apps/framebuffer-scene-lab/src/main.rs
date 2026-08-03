@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#[cfg(any(target_os = "linux", test))]
 use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_framebuffer_scene_lab::LiveParticleRenderer;
@@ -546,6 +547,7 @@ impl CabinetDemoMode {
 struct CabinetLabControls {
     mode: CabinetDemoMode,
     particles: usize,
+    #[cfg(any(target_os = "linux", test))]
     previous_direction: DirectionalState,
     hud: CabinetHud,
 }
@@ -557,6 +559,7 @@ impl CabinetLabControls {
         Self {
             mode,
             particles,
+            #[cfg(any(target_os = "linux", test))]
             previous_direction: DirectionalState::default(),
             hud: CabinetHud::new(mode, particles),
         }
@@ -566,6 +569,7 @@ impl CabinetLabControls {
         self.mode.render_options(self.particles)
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn poll_direction(&mut self, direction: DirectionalState) {
         let edges = DirectionalEdges::rising(direction, self.previous_direction);
         self.previous_direction = direction;
@@ -1417,12 +1421,12 @@ mod macos {
                 return;
             };
             let elapsed = self.epoch.elapsed();
-            if let Some(controls) = self.controls.as_ref() {
-                if let Err(error) = self.renderer.set_cabinet_controls(controls) {
-                    self.render_error = Some(error);
-                    self.update_title();
-                    return;
-                }
+            if let Some(controls) = self.controls.as_ref()
+                && let Err(error) = self.renderer.set_cabinet_controls(controls)
+            {
+                self.render_error = Some(error);
+                self.update_title();
+                return;
             }
             if let Err(error) = self.renderer.render_buffer(
                 &mut self.pixels,
@@ -1789,8 +1793,8 @@ mod tests {
         let mut pixels = vec![Rgb565Pixel(0x1234); DEFAULT_WIDTH * DEFAULT_HEIGHT];
         hud.draw(&mut pixels);
         assert_eq!(pixels[HUD_Y * DEFAULT_WIDTH + HUD_X], Rgb565Pixel(0));
-        assert!(pixels.iter().any(|pixel| *pixel == Rgb565Pixel(0xffa0)));
-        assert!(pixels.iter().any(|pixel| *pixel == Rgb565Pixel(0x07ff)));
+        assert!(pixels.contains(&Rgb565Pixel(0xffa0)));
+        assert!(pixels.contains(&Rgb565Pixel(0x07ff)));
     }
 
     #[test]
