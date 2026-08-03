@@ -828,23 +828,15 @@ fn render_point_cloud(
         commands,
     );
     for index in vector_end..target_positions.len() {
-        commands[index] = project_yaw_command(
-            target_positions[index],
-            yaw_sin_cos,
-            recipe,
-            geometry,
-        );
+        commands[index] =
+            project_yaw_command(target_positions[index], yaw_sin_cos, recipe, geometry);
     }
     let backend = if vector_end > 0 {
         "point-cloud-neon"
     } else {
         for index in 0..target_positions.len() {
-            commands[index] = project_yaw_command(
-                target_positions[index],
-                yaw_sin_cos,
-                recipe,
-                geometry,
-            );
+            commands[index] =
+                project_yaw_command(target_positions[index], yaw_sin_cos, recipe, geometry);
         }
         "point-cloud-scalar"
     };
