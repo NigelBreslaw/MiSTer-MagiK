@@ -417,15 +417,17 @@ fn run_with_backend_policy<B: BuilderBackend>(
         backend.set_post_reveal_background(background_build);
     }
     if background_build && !background_from_start {
-        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
         emit(CatalogBuilderEvent::Timing {
             protocol,
             name: "builder_execution_mode".into(),
             detail: "mode=background_continuous affinity=cpu0 nice=5 boundary=post-first-visible"
                 .into(),
         });
-    } else {
-        apply_runtime_thread_policy(build_role);
+    }
+    if let Some(role) =
+        post_bootstrap_thread_role(background_build, background_from_start, build_role)
+    {
+        apply_runtime_thread_policy(role);
     }
     // First-visible serialization and publication are foreground. Only after
     // CatalogReady has been emitted and the retained index has been published
@@ -604,6 +606,23 @@ fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
         RuntimeThreadRole::CatalogWorker
     } else {
         RuntimeThreadRole::CatalogForeground
+    }
+}
+
+fn post_bootstrap_thread_role(
+    background_build: bool,
+    background_from_start: bool,
+    build_role: RuntimeThreadRole,
+) -> Option<RuntimeThreadRole> {
+    if background_from_start {
+        // The continuous policy was installed before bootstrap. Reapplying the
+        // initial build role here would silently release CPU0 and compete with
+        // the 60 Hz launcher renderer on CPU1.
+        None
+    } else if background_build {
+        Some(RuntimeThreadRole::CatalogWorker)
+    } else {
+        Some(build_role)
     }
 }
 
@@ -2159,6 +2178,22 @@ mod tests {
                         && detail.contains("boundary=builder-start")
             )
         }));
+    }
+
+    #[test]
+    fn continuous_background_policy_does_not_release_cpu0_after_bootstrap() {
+        assert_eq!(
+            post_bootstrap_thread_role(true, true, RuntimeThreadRole::CatalogForeground,),
+            None
+        );
+        assert_eq!(
+            post_bootstrap_thread_role(true, false, RuntimeThreadRole::CatalogForeground,),
+            Some(RuntimeThreadRole::CatalogWorker)
+        );
+        assert_eq!(
+            post_bootstrap_thread_role(false, false, RuntimeThreadRole::CatalogForeground,),
+            Some(RuntimeThreadRole::CatalogForeground)
+        );
     }
 
     #[test]
