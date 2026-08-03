@@ -228,7 +228,8 @@ pub struct ArcadeCabinetFormation {
     creative_palette: [[u64; 4]; 8],
     screen_prism: Vec<Rgb565Pixel>,
     aurora_ribbon: Vec<Rgb565Pixel>,
-    vortex_field: Vec<Rgb565Pixel>,
+    vortex_field: Vec<u8>,
+    vortex_palette: Vec<Rgb565Pixel>,
     vortex_ready: bool,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
@@ -605,7 +606,8 @@ impl ArcadeCabinetFormation {
             &PRISM_STOPS,
         );
         let aurora_ribbon = horizontal_gradient(2_048, &AURORA_STOPS);
-        let vortex_field = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+        let vortex_field = vec![0; width.saturating_mul(height)];
+        let vortex_palette = build_vortex_palette();
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -693,6 +695,7 @@ impl ArcadeCabinetFormation {
             screen_prism,
             aurora_ribbon,
             vortex_field,
+            vortex_palette,
             vortex_ready: false,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
@@ -782,6 +785,11 @@ impl ArcadeCabinetFormation {
             )
             .saturating_add(
                 self.vortex_field
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u8>()),
+            )
+            .saturating_add(
+                self.vortex_palette
                     .capacity()
                     .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
             )
@@ -1149,7 +1157,9 @@ impl ArcadeCabinetFormation {
                         self.aurora_ribbon
                             [((pixel_x + pixel_y * 2) * 2 + aurora_phase) & 2_047]
                     }
-                    CabinetColorMode::VortexSpectrum => self.vortex_field[offset],
+                    CabinetColorMode::VortexSpectrum => {
+                        self.vortex_palette[usize::from(self.vortex_field[offset])]
+                    }
                     CabinetColorMode::Origin => unreachable!(),
                 };
                 destination[offset] = primary;
@@ -1448,8 +1458,16 @@ const VORTEX_STOPS: [Rgb565Pixel; 7] = [
     Rgb565Pixel(0xf986),
 ];
 
-fn fill_vortex_field(field: &mut [Rgb565Pixel], width: usize, height: usize) {
-    let palette = horizontal_gradient(256, &VORTEX_STOPS);
+fn build_vortex_palette() -> Vec<Rgb565Pixel> {
+    let mut palette = horizontal_gradient(128, &VORTEX_STOPS);
+    palette.extend_from_within(..);
+    for color in &mut palette[128..] {
+        *color = darken_rgb565(*color);
+    }
+    palette
+}
+
+fn fill_vortex_field(field: &mut [u8], width: usize, height: usize) {
     let center_x = (width / 2) as isize;
     let center_y = (height / 2) as isize;
     let dim_radius = width.min(height) as isize / 2;
@@ -1457,11 +1475,9 @@ fn fill_vortex_field(field: &mut [Rgb565Pixel], width: usize, height: usize) {
         for x in 0..width {
             let dx = x as isize - center_x;
             let dy = y as isize - center_y;
-            let mut color = palette[usize::from(polar_index(dx, dy))];
-            if dx.abs().max(dy.abs()) > dim_radius {
-                color = darken_rgb565(color);
-            }
-            field[y * width + x] = color;
+            let color = polar_index(dx, dy) >> 1;
+            let dim = u8::from(dx.abs().max(dy.abs()) > dim_radius) << 7;
+            field[y * width + x] = color | dim;
         }
     }
 }
