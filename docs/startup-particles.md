@@ -34,11 +34,20 @@ run repeats the intro unless it reached the first-visible publication barrier.
 
 The intro owns the production direct hidden-slot latch for 1,201 logical frames
 (timestamps 0 through 1,200) at 60 Hz. Logical time is the rational value
-`frame * 1s / 60`; it advances only after the latch confirms an external-direct
-post. A missing grant or failed post cannot skip animation time. The catalog
-builder starts with the intro and reserves CPU1 for rendering: its coordinator,
-Arcade bootstrap, walker, audit, projection, snapshot, and persistence work all
-use the continuous CPU0 background policy.
+`frame * 1s / 60`; it advances only after the posted sequence becomes the
+active scanout sequence at a confirmed physical vblank. Acceptance or pending
+status is insufficient. A missing grant, failed post, or incomplete latch
+confirmation retries the same logical timestamp. The catalog builder starts
+with the intro and reserves CPU1 for rendering: its coordinator, Arcade
+bootstrap, walker, audit, projection, snapshot, and persistence work all use
+the continuous CPU0 background policy.
+
+Cadence and latch health are independent. `latch_drop_count=0` proves only that
+the FPGA latch did not reject or supersede a post. Skipless animation requires
+completion timestamps and flip deltas to prove that every physical refresh
+received one new confirmed frame. Runtime and benchmark evidence therefore
+reports `skipped_refreshes` separately from latch protocol drops and fails if
+either axis is nonzero.
 
 The final two seconds are a strict handoff protocol:
 

@@ -96,7 +96,9 @@ The attended release gate qualifies whichever MagiK layout is currently active.
 Its display phase reboots through the fixed boundary matrix: presets 10, 13,
 14, 8, and 0, followed by custom `1920,1200,60`. Every case requires the ABI
 v3 1366x768 latch contract, its expected launcher framebuffer, zero FPGA drops,
-and a captured framebuffer. The final restoration puts back the original INI
+and a captured framebuffer. Zero FPGA drops qualifies protocol integrity only;
+motion qualification separately requires physical-refresh cadence evidence.
+The final restoration puts back the original INI
 and performs a supervised reboot even when a qualification step fails.
 
 ## Display evidence

@@ -105,11 +105,26 @@ evidence must begin with both Catalog V3 and the retained Arcade bootstrap
 absent, use the production direct hidden-slot route, and retain the complete
 launcher frame trace. A pass requires 1,201 ordered external-direct posts for
 logical frames 0 through 1,200, 60 Hz physical refresh within the ordinary
-tolerance, zero repeat/drop/presentation-miss counters, catalog coordinator and
-walker affinity on CPU0, a snapshot milestone at logical 18 seconds, and a
-pixel-identical 20-second frame/cache handoff. A second launcher start must use
-either the retained Arcade projection or completed registry and must emit no
-intro-start event.
+tolerance, zero repeated refreshes, zero pacing failures, and independently
+zero latch-protocol drops or completion failures. Catalog coordinator and walker
+affinity must remain on CPU0. The run also requires a snapshot milestone before
+the launcher morph begins and a pixel-identical 20-second frame/cache handoff.
+A second launcher start must use either the retained Arcade projection or
+completed registry and must emit no intro-start event.
+
+Terminology is normative throughout this repository:
+
+- `latch_drop_count` measures rejected or superseded latch protocol posts. It
+  says nothing about whether rendering supplied a new frame for every refresh.
+- `skipped_refreshes` or `repeated_refreshes` measures physical refresh
+  intervals that reused the previous visible frame. This is the authoritative
+  frame-skip signal.
+- `cadence-warning` and `cadence-overrun` describe frame wall-time budget
+  observations. They are not latch drops.
+
+Never report zero latch drops as zero frame skips. First-run qualification must
+show the cadence and latch-protocol sections as separate gates even when both
+pass.
 
 This is runtime/platform qualification, so it requires a clean committed Dev
 delivery before measurement. Host tests cover recipe duration, exact rational

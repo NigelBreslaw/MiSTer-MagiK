@@ -237,11 +237,14 @@ conversion:
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
   For `/dev/fb0`, userspace wall/loop cadence is the visual proof because the
-  copy happens after vblank. For the latch path, TV-visible proof comes from
-  posts completing before deadline, alternating hidden buffers, consistent
-  sampled flip counters, valid status CRC, and passive
-  `drop_count=0`/unchanged `reject_count`; Linux wake jitter after the
-  vblank wait is reported separately as scheduler timing.
+  copy happens after vblank. On the latch path, protocol proof comes from posts
+  completing before deadline, alternating hidden buffers, consistent sampled
+  flip counters, valid status CRC, and passive `drop_count=0` with unchanged
+  `reject_count`. Motion cadence is a separate TV-visible gate derived from
+  confirmed completion timestamps and flip progression: every physical refresh
+  must receive a newly confirmed frame. A zero latch drop count never proves
+  zero skipped refreshes. Linux wake jitter after the vblank wait is reported
+  separately as scheduler timing.
   A protocol-v4 rejection also snapshots passive
   `0x5a` receiver context:
   reject count/reason, expected and observed word indices, observed command,
@@ -496,9 +499,9 @@ stateDiagram-v2
     ClassifyEntry --> WarmCatalog: valid catalog
     ClassifyEntry --> ReturnFromGame: Main return flag + launch return state
 
-    ColdNoCatalog --> SplashVisible: start catalog build immediately
-    SplashVisible --> CatalogProgressVisible: after 2000ms
-    CatalogProgressVisible --> RevealLauncher: catalog ready + first launcher frame ready
+    ColdNoCatalog --> IntroVisible: start catalog build immediately on CPU0
+    IntroVisible --> CaptureLauncher: live launcher cache ready before morph cue
+    CaptureLauncher --> RevealLauncher: 20s confirmed-refresh endpoint
 
     WarmCatalog --> HoldBlack: keep framebuffer black
     HoldBlack --> RevealLauncher: catalog loaded + bridge synced + first frame ready
@@ -520,10 +523,11 @@ stateDiagram-v2
     InputEnabled --> [*]
 ```
 
-Only cold boot without a valid catalog shows the `MiSTer MagiK` splash, and it
-stays visible for at least two seconds while catalog work starts in the
-background. Warm boot and return-from-game keep HDMI black until the first
-intended launcher frame is ready. Warm registry startup opens only Arcade's
+Only cold boot without a valid catalog or retained Arcade projection shows the
+20-second first-run particle intro while catalog work runs on CPU0. Its logical
+clock advances only after the posted sequence is active at a confirmed physical
+refresh. Warm boot and return-from-game keep HDMI black until the first intended
+launcher frame is ready. Warm registry startup opens only Arcade's
 mini-nav before reveal; other systems remain lazy. Return-from-game consumes a
 bounded catalog capsule when possible. If that capsule is unavailable, only the
 registry and selected system mini-nav are foreground reveal work. Return-from-game
