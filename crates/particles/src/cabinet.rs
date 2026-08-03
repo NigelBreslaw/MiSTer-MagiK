@@ -111,6 +111,7 @@ pub enum CabinetColorMode {
     ScreenPrism,
     DiagonalAurora,
     VortexSpectrum,
+    StudioLights,
 }
 
 impl CabinetColorMode {
@@ -121,6 +122,7 @@ impl CabinetColorMode {
             Self::ScreenPrism => "SCREEN PRISM",
             Self::DiagonalAurora => "DIAGONAL AURORA",
             Self::VortexSpectrum => "VORTEX SPECTRUM",
+            Self::StudioLights => "STUDIO LIGHTS",
         }
     }
 }
@@ -230,6 +232,7 @@ pub struct ArcadeCabinetFormation {
     aurora_ribbon: Vec<Rgb565Pixel>,
     vortex_field: Vec<Rgb565Pixel>,
     vortex_ready: bool,
+    studio_lights: Vec<[Rgb565Pixel; 4]>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -606,6 +609,7 @@ impl ArcadeCabinetFormation {
         );
         let aurora_ribbon = horizontal_gradient(2_048, &AURORA_STOPS);
         let vortex_field = vec![Rgb565Pixel(0); width.saturating_mul(height)];
+        let studio_lights = build_studio_lights(width);
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -694,6 +698,7 @@ impl ArcadeCabinetFormation {
             aurora_ribbon,
             vortex_field,
             vortex_ready: false,
+            studio_lights,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -784,6 +789,11 @@ impl ArcadeCabinetFormation {
                 self.vortex_field
                     .capacity()
                     .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
+            )
+            .saturating_add(
+                self.studio_lights
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
             )
             .saturating_add(
                 self.commands
@@ -1150,6 +1160,12 @@ impl ArcadeCabinetFormation {
                             [((pixel_x + pixel_y * 2) * 2 + aurora_phase) & 2_047]
                     }
                     CabinetColorMode::VortexSpectrum => self.vortex_field[offset],
+                    CabinetColorMode::StudioLights => {
+                        let band = usize::from(pixel_y >= self.height / 4)
+                            + usize::from(pixel_y >= self.height / 2)
+                            + usize::from(pixel_y >= self.height * 3 / 4);
+                        self.studio_lights[pixel_x][band]
+                    }
                     CabinetColorMode::Origin => unreachable!(),
                 };
                 destination[offset] = primary;
@@ -1484,6 +1500,21 @@ fn polar_index(dx: isize, dy: isize) -> u8 {
         (true, false, true) => 256 - fraction(ay, ax),
     };
     index as u8
+}
+
+fn build_studio_lights(width: usize) -> Vec<[Rgb565Pixel; 4]> {
+    let horizontal = horizontal_gradient(width, &[Rgb565Pixel(0xfd20), Rgb565Pixel(0x05ff)]);
+    horizontal
+        .into_iter()
+        .map(|base| {
+            [
+                mix_rgb565(base, Rgb565Pixel(0x981f), 128),
+                mix_rgb565(base, Rgb565Pixel(0x981f), 80),
+                mix_rgb565(base, Rgb565Pixel(0x981f), 32),
+                base,
+            ]
+        })
+        .collect()
 }
 
 fn horizontal_gradient(width: usize, stops: &[Rgb565Pixel]) -> Vec<Rgb565Pixel> {
