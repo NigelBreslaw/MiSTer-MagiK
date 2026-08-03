@@ -28,6 +28,8 @@ typedef struct {
 size_t mister_magik_cabinet_neon_project_stable(
     size_t count,
     const cabinet_position_block *restrict blocks,
+    size_t first_block,
+    size_t block_step,
     float sin_yaw,
     float cos_yaw,
     float sin_pitch,
@@ -42,6 +44,7 @@ size_t mister_magik_cabinet_neon_project_stable(
     uint32_t *restrict offsets
 ) {
     const size_t vector_end = count & ~(size_t)3;
+    const size_t block_end = vector_end / 4;
     const float32x4_t sin_yaw_v = vdupq_n_f32(sin_yaw);
     const float32x4_t cos_yaw_v = vdupq_n_f32(cos_yaw);
     const float32x4_t sin_pitch_v = vdupq_n_f32(sin_pitch);
@@ -56,8 +59,9 @@ size_t mister_magik_cabinet_neon_project_stable(
     const float32x4_t height_f = vdupq_n_f32((float)height);
     const uint32x4_t width_u = vdupq_n_u32(width);
     const uint32x4_t invalid = vdupq_n_u32(UINT32_MAX);
-    for (size_t index = 0; index < vector_end; index += 4) {
-        const cabinet_position_block *block = blocks + index / 4;
+    for (size_t block_index = first_block; block_index < block_end; block_index += block_step) {
+        const size_t index = block_index * 4;
+        const cabinet_position_block *block = blocks + block_index;
         const float32x4_t world_x = vld1q_f32(block->target_x);
         const float32x4_t world_y = vld1q_f32(block->target_y);
         const float32x4_t world_z = vld1q_f32(block->target_z);

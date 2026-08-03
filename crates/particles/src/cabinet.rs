@@ -21,12 +21,15 @@ const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
 const ARCADE_DEMO_NUMBER: u64 = 21;
+const FULL_RATE_PARTICLE_LIMIT: usize = 48_128;
 
 pub use mister_magik_framebuffer_scenes::Rgb565Pixel;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ArcadeCabinetFrameStats {
     pub particles: usize,
+    pub projected_particles: usize,
+    pub projection_cohorts: u8,
     pub visible: usize,
     pub pixel_writes: usize,
     pub projection_backend: &'static str,
@@ -117,6 +120,8 @@ unsafe extern "C" {
     fn mister_magik_cabinet_neon_project_stable(
         count: usize,
         blocks: *const CabinetPositionBlock,
+        first_block: usize,
+        block_step: usize,
         sin_yaw: f32,
         cos_yaw: f32,
         sin_pitch: f32,
@@ -146,6 +151,8 @@ pub struct ArcadeCabinetFormation {
     tile_order: Vec<u32>,
     tile_counts: Vec<usize>,
     tile_cursors: Vec<usize>,
+    projection_frame: u64,
+    commands_initialized: bool,
     options: CabinetRenderOptions,
 }
 
@@ -351,6 +358,8 @@ impl ArcadeCabinetFormation {
             tile_order: vec![0; capacity],
             tile_counts: vec![0; tile_count],
             tile_cursors: vec![0; tile_count],
+            projection_frame: 0,
+            commands_initialized: false,
             options: CabinetRenderOptions {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
@@ -379,6 +388,7 @@ impl ArcadeCabinetFormation {
         if self.options != options {
             self.options = options;
             self.full_clear = [true; 2];
+            self.commands_initialized = false;
         }
         Ok(())
     }
@@ -459,7 +469,23 @@ impl ArcadeCabinetFormation {
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
-        let mut visible = 0usize;
+        let projection_cohorts = if self.options.active_count > FULL_RATE_PARTICLE_LIMIT {
+            2_u8
+        } else {
+            1_u8
+        };
+        let project_all = !self.commands_initialized || projection_cohorts == 1;
+        let projection_cohort = (self.projection_frame % u64::from(projection_cohorts)) as usize;
+        let projected_particles = if project_all {
+            self.options.active_count
+        } else {
+            cohort_particle_count(
+                self.options.active_count,
+                usize::from(projection_cohorts),
+                projection_cohort,
+            )
+        };
+        let visible;
         let mut pixel_writes = 0usize;
         let mut projection_backend = "cabinet-scalar";
 
@@ -516,14 +542,24 @@ impl ArcadeCabinetFormation {
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
                         self.commands[index] = CabinetDrawCommand(offset as u32);
-                        visible = visible.saturating_add(1);
                     }
                 }
             }};
         }
 
+        macro_rules! selected_for_projection {
+            ($index:expr) => {
+                project_all
+                    || (($index / PARTICLE_LANES) % usize::from(projection_cohorts)
+                        == projection_cohort)
+            };
+        }
+
         if dispersal > 0.0 {
             for index in 0..self.options.active_count {
+                if !selected_for_projection!(index) {
+                    continue;
+                }
                 let position = &self.positions[index / PARTICLE_LANES];
                 let attribute = &self.attributes[index / PARTICLE_LANES];
                 let lane = index % PARTICLE_LANES;
@@ -543,6 +579,9 @@ impl ArcadeCabinetFormation {
             }
         } else if formation < 1.0 {
             for index in 0..self.options.active_count {
+                if !selected_for_projection!(index) {
+                    continue;
+                }
                 let position = &self.positions[index / PARTICLE_LANES];
                 let lane = index % PARTICLE_LANES;
                 project_and_draw!(
@@ -559,6 +598,12 @@ impl ArcadeCabinetFormation {
             let vector_end = project_stable_neon(
                 self.options.active_count,
                 &self.positions,
+                if project_all { 0 } else { projection_cohort },
+                if project_all {
+                    1
+                } else {
+                    usize::from(projection_cohorts)
+                },
                 sin_yaw,
                 cos_yaw,
                 sin_pitch,
@@ -573,16 +618,16 @@ impl ArcadeCabinetFormation {
                 &mut self.commands,
             );
             if vector_end > 0 {
-                projection_backend = "cabinet-neon";
-                for index in 0..vector_end {
-                    let offset = self.commands[index].0;
-                    if offset == INVALID_PARTICLE_OFFSET {
-                        continue;
-                    }
-                    visible = visible.saturating_add(1);
-                }
+                projection_backend = if project_all {
+                    "cabinet-neon"
+                } else {
+                    "cabinet-neon-cohort-2"
+                };
             }
             for index in vector_end..self.options.active_count {
+                if !selected_for_projection!(index) {
+                    continue;
+                }
                 let position = &self.positions[index / PARTICLE_LANES];
                 let lane = index % PARTICLE_LANES;
                 project_and_draw!(
@@ -593,6 +638,8 @@ impl ArcadeCabinetFormation {
                 );
             }
         }
+        self.commands_initialized = true;
+        self.projection_frame = self.projection_frame.wrapping_add(1);
 
         let projection_us = elapsed_us(projection_started.elapsed());
         let ordering_started = Instant::now();
@@ -611,6 +658,7 @@ impl ArcadeCabinetFormation {
             *start = cursor;
             cursor += *count;
         }
+        visible = cursor;
         for (index, command) in self.commands[..self.options.active_count]
             .iter()
             .enumerate()
@@ -646,6 +694,8 @@ impl ArcadeCabinetFormation {
 
         Ok(ArcadeCabinetFrameStats {
             particles: self.options.active_count,
+            projected_particles,
+            projection_cohorts,
             visible,
             pixel_writes,
             projection_backend,
@@ -663,6 +713,8 @@ impl ArcadeCabinetFormation {
 fn project_stable_neon(
     count: usize,
     positions: &[CabinetPositionBlock],
+    first_block: usize,
+    block_step: usize,
     sin_yaw: f32,
     cos_yaw: f32,
     sin_pitch: f32,
@@ -679,6 +731,7 @@ fn project_stable_neon(
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
         if count < PARTICLE_LANES
+            || block_step == 0
             || positions.len() * PARTICLE_LANES < count
             || offsets.len() < count
         {
@@ -696,6 +749,8 @@ fn project_stable_neon(
             mister_magik_cabinet_neon_project_stable(
                 count,
                 positions.as_ptr(),
+                first_block,
+                block_step,
                 sin_yaw,
                 cos_yaw,
                 sin_pitch,
@@ -716,6 +771,8 @@ fn project_stable_neon(
         let _ = (
             count,
             positions,
+            first_block,
+            block_step,
             sin_yaw,
             cos_yaw,
             sin_pitch,
@@ -735,6 +792,18 @@ fn project_stable_neon(
 
 fn elapsed_us(duration: Duration) -> u64 {
     duration.as_micros().min(u128::from(u64::MAX)) as u64
+}
+
+fn cohort_particle_count(count: usize, cohorts: usize, cohort: usize) -> usize {
+    let full_blocks = count / PARTICLE_LANES;
+    let complete = full_blocks / cohorts;
+    let extra_block = usize::from(cohort < full_blocks % cohorts);
+    let tail = if full_blocks % cohorts == cohort {
+        count % PARTICLE_LANES
+    } else {
+        0
+    };
+    (complete + extra_block) * PARTICLE_LANES + tail
 }
 
 const fn pixel(color: RecipeRgb565) -> Rgb565Pixel {
@@ -999,6 +1068,16 @@ mod tests {
                 })
                 .collect::<HashSet<_>>();
             assert_eq!(unique.len(), count);
+        }
+    }
+
+    #[test]
+    fn projection_cohorts_cover_every_particle_once() {
+        for count in [48_129, 72_192, 72_704, 72_703] {
+            let covered = (0..2)
+                .map(|cohort| cohort_particle_count(count, 2, cohort))
+                .sum::<usize>();
+            assert_eq!(covered, count);
         }
     }
 
