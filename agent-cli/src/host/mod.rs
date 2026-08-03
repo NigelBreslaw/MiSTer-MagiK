@@ -4071,8 +4071,9 @@ const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
 const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
-const PARTICLE_SEARCH_COARSE_STEP: u64 = 16 * PARTICLE_COUNT_STEP;
-const PARTICLE_COUNT_SEED: u64 = 122_880;
+// This is the last count that passed a complete confirmation on the installed
+// runtime. Start there and spend trials only on the +1,024 boundary counts.
+const PARTICLE_COUNT_SEED: u64 = 141_312;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
 
@@ -6229,7 +6230,7 @@ fn profile_installed_particles(
             "restored": true,
         },
         "search": {
-            "start_count": PARTICLE_COUNT_STEP,
+            "start_count": PARTICLE_COUNT_SEED,
             "maximum_count": PARTICLE_COUNT_MAX,
             "refinement_step": PARTICLE_COUNT_STEP,
             "trial_seconds": PARTICLE_SEARCH_TRIAL_SECS,
@@ -6504,53 +6505,8 @@ fn profile_particle_preset(
     preset: &str,
 ) -> Result<Value> {
     let mut trials = Vec::new();
-    let mut last_pass = 0u64;
+    let mut last_pass = PARTICLE_COUNT_SEED;
     let mut first_fail = None;
-    let mut count = PARTICLE_COUNT_SEED;
-    while count <= PARTICLE_COUNT_MAX {
-        let trial = run_particle_trial(
-            config,
-            output_dir,
-            preset,
-            count,
-            PARTICLE_SEARCH_TRIAL_SECS,
-            "probe",
-        )?;
-        let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
-        trials.push(trial);
-        if qualified {
-            last_pass = count;
-            if count == PARTICLE_COUNT_MAX {
-                break;
-            }
-            count = count
-                .saturating_add(PARTICLE_SEARCH_COARSE_STEP)
-                .min(PARTICLE_COUNT_MAX);
-        } else {
-            first_fail = Some(count);
-            break;
-        }
-    }
-    if let Some(mut upper) = first_fail {
-        while let Some(middle) = particle_refinement_count(last_pass, upper) {
-            let trial = run_particle_trial(
-                config,
-                output_dir,
-                preset,
-                middle,
-                PARTICLE_SEARCH_TRIAL_SECS,
-                "probe",
-            )?;
-            let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
-            trials.push(trial);
-            if qualified {
-                last_pass = middle;
-            } else {
-                upper = middle;
-                first_fail = Some(middle);
-            }
-        }
-    }
     let mut increment_failures = 0u64;
     while last_pass > 0 && increment_failures < 3 && last_pass < PARTICLE_COUNT_MAX {
         let next_count = last_pass.saturating_add(PARTICLE_COUNT_STEP);
@@ -15933,11 +15889,11 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn particle_search_refines_to_1024_particle_precision() {
-        assert_eq!(PARTICLE_COUNT_SEED, 120 * PARTICLE_COUNT_STEP);
+        assert_eq!(PARTICLE_COUNT_SEED, 138 * PARTICLE_COUNT_STEP);
         assert_eq!(particle_refinement_count(0, 524_288), Some(262_144));
         assert_eq!(
             particle_refinement_count(0, PARTICLE_COUNT_SEED),
-            Some(61_440)
+            Some(70_656)
         );
         assert_eq!(particle_refinement_count(131_072, 262_144), Some(196_608));
         assert_eq!(particle_refinement_count(196_608, 197_632), None);

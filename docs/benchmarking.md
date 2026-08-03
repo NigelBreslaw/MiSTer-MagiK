@@ -116,14 +116,12 @@ The `particles` scenario is the fixed capacity search for the experimental
 requires the direct FPGA vblank-latch hidden-slot backend. The original display
 mode and exact `MiSTer.ini` contents are restored even when profiling fails.
 
-For each of the `capacity` and `visual` presets, the search starts at the known
-operating region of 122,880 particles. It brackets the limit in coarse
-16,384-particle steps, then probes the bracket at 1,024-particle precision.
-These probes last two seconds and intentionally do not require seeing every
-animation phase. After refinement, the search probes successive +1,024 counts
-and stops after three consecutive failures. Only the highest passing count is
-accepted, and it must still pass a separate 30-second confirmation covering
-the complete deterministic ten-second cycle.
+For each of the `capacity` and `visual` presets, the search starts at the last
+complete-confirmation pass (141,312 particles). It probes only successive
++1,024 counts and stops after three consecutive failures. These probes last
+two seconds and intentionally do not require seeing every animation phase.
+Only the highest passing count is accepted, and it must still pass a separate
+30-second confirmation covering the complete deterministic ten-second cycle.
 
 A count passes only when unique physical latch flips match refresh within
 0.1 FPS, P99 render wall time is below the refresh period minus 750
