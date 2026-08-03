@@ -5359,7 +5359,7 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(
                         start,
                         "startup_intro_launcher_snapshot",
-                        format!("pixels={} at_ms=18000", launcher_pixels.len()),
+                        format!("pixels={} at_ms=15000", launcher_pixels.len()),
                     );
                 }
             }

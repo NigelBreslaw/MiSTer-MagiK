@@ -20,8 +20,8 @@ pub enum IntroTarget {
     Magik,
     Cloud,
     Cabinet,
-    LauncherMock,
-    LauncherMockRgb565,
+    LauncherLive,
+    LauncherLiveRgb565,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -83,7 +83,7 @@ pub enum IntroCue {
         turns: f32,
         formation_percent: f32,
     },
-    MockCrossfade {
+    LauncherCrossfade {
         id: String,
         duration_ms: u64,
         from: IntroTarget,
@@ -102,7 +102,7 @@ impl IntroCue {
             | Self::LetterMorph { id, .. }
             | Self::Cloud { id, .. }
             | Self::TargetOrbit { id, .. }
-            | Self::MockCrossfade { id, .. } => id,
+            | Self::LauncherCrossfade { id, .. } => id,
         }
     }
 
@@ -115,7 +115,7 @@ impl IntroCue {
             | Self::LetterMorph { duration_ms, .. }
             | Self::Cloud { duration_ms, .. }
             | Self::TargetOrbit { duration_ms, .. }
-            | Self::MockCrossfade { duration_ms, .. } => *duration_ms,
+            | Self::LauncherCrossfade { duration_ms, .. } => *duration_ms,
         }
     }
 }
@@ -322,7 +322,7 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
             IntroCue::LetterMorph { .. } => "letter_morph",
             IntroCue::Cloud { .. } => "cloud",
             IntroCue::TargetOrbit { .. } => "target_orbit",
-            IntroCue::MockCrossfade { .. } => "mock_crossfade",
+            IntroCue::LauncherCrossfade { .. } => "launcher_crossfade",
         })
         .collect::<Vec<_>>();
     let expected = [
@@ -335,7 +335,7 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
         "target_orbit",
         "morph_target",
         "hold_target",
-        "mock_crossfade",
+        "launcher_crossfade",
     ];
     if kinds != expected {
         return Err("intro cues do not follow the supported v1 storyboard".into());

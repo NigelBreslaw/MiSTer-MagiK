@@ -12,7 +12,9 @@ use mister_magik_particles::intro::IntroScene;
 use mister_magik_particles::intro_recipe::embedded_intro_recipe;
 
 const INTRO_FPS: u64 = 60;
-const SNAPSHOT_FRAME: u64 = 18 * INTRO_FPS;
+// Capture one second before the 16-second launcher morph cue so the live
+// target is fully prepared without touching the morph/crossfade hot path.
+const SNAPSHOT_FRAME: u64 = 15 * INTRO_FPS;
 const FINAL_FRAME: u64 = 20 * INTRO_FPS;
 
 pub(super) struct PreparedStartupIntro {
@@ -276,7 +278,7 @@ mod tests {
 
     #[test]
     fn rational_clock_hits_exact_storyboard_boundaries() {
-        assert_eq!(intro_frame_elapsed(SNAPSHOT_FRAME), Duration::from_secs(18));
+        assert_eq!(intro_frame_elapsed(SNAPSHOT_FRAME), Duration::from_secs(15));
         assert_eq!(intro_frame_elapsed(FINAL_FRAME), Duration::from_secs(20));
     }
 

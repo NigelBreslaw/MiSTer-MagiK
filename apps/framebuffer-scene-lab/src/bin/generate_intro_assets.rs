@@ -1,38 +1,20 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Deterministic Press Start 2P and launcher-mock particle asset compiler.
+//! Deterministic Press Start 2P intro particle asset compiler.
 
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::Format;
 
 const FONT: &[u8] = include_bytes!("../../../mister/ui/fonts/PressStart2P-Regular.ttf");
 const FONT_SHA256: &str = "8d0248e41694fdd875dbcde859ee1bae5982ecfdc6c7e5e451b48950d29ba95a";
-const LAUNCHER_SOURCE: &[u8] =
-    include_bytes!("../../../../crates/particles/assets/intro/launcher-mock-source.png");
-const LAUNCHER_SOURCE_SHA256: &str =
-    "3e55d491495ec9158f1126a7cf545c7155be4ae0b4476feb543650eac1c47c48";
 const POINT_COUNT: usize = 40_960;
 const LAYERS: usize = 9;
 const PCLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PGROUP_MAGIC: &[u8; 8] = b"PGROUP1\0";
-const MOCK_MAGIC: &[u8; 8] = b"RGB565M1";
-const WIDTH: usize = 960;
-const HEIGHT: usize = 540;
 const TRACK_COUNTS: [usize; 6] = [8_192, 4_096, 8_192, 4_096, 8_192, 8_192];
-const LAUNCHER_PALETTE: [[u8; 3]; 8] = [
-    [8, 12, 16],
-    [16, 24, 40],
-    [24, 24, 40],
-    [88, 72, 112],
-    [160, 144, 184],
-    [0, 240, 200],
-    [240, 240, 240],
-    [255, 200, 0],
-];
 
 #[derive(Clone, Copy)]
 struct Point {
@@ -232,126 +214,6 @@ fn encode_groups(points: &[Point]) -> Vec<u8> {
     bytes
 }
 
-fn rgb565(red: u8, green: u8, blue: u8) -> u16 {
-    (u16::from(red) >> 3) << 11 | (u16::from(green) >> 2) << 5 | (u16::from(blue) >> 3)
-}
-
-fn decode_launcher_source() -> Result<Vec<[u8; 4]>, String> {
-    let decoder = png::Decoder::new(Cursor::new(LAUNCHER_SOURCE));
-    let mut reader = decoder
-        .read_info()
-        .map_err(|error| format!("decode launcher source header: {error}"))?;
-    let size = reader
-        .output_buffer_size()
-        .ok_or("launcher source output buffer is too large")?;
-    let mut bytes = vec![0; size];
-    let info = reader
-        .next_frame(&mut bytes)
-        .map_err(|error| format!("decode launcher source pixels: {error}"))?;
-    if info.width as usize != WIDTH || info.height as usize != HEIGHT {
-        return Err(format!(
-            "launcher source is {}x{}, expected {WIDTH}x{HEIGHT}",
-            info.width, info.height
-        ));
-    }
-    let bytes = &bytes[..info.buffer_size()];
-    match info.color_type {
-        png::ColorType::Rgba => Ok(bytes
-            .chunks_exact(4)
-            .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
-            .collect()),
-        png::ColorType::Rgb => Ok(bytes
-            .chunks_exact(3)
-            .map(|pixel| [pixel[0], pixel[1], pixel[2], 255])
-            .collect()),
-        color => Err(format!(
-            "launcher source uses unsupported PNG color type {color:?}"
-        )),
-    }
-}
-
-fn color_distance(left: [u8; 3], right: [u8; 3]) -> u32 {
-    left.into_iter().zip(right).fold(0, |total, (left, right)| {
-        total + u32::from(left.abs_diff(right)).pow(2)
-    })
-}
-
-fn nearest_launcher_palette(color: [u8; 3]) -> u8 {
-    LAUNCHER_PALETTE
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, candidate)| color_distance(color, **candidate))
-        .map_or(0, |(index, _)| index as u8)
-}
-
-fn launcher_mock() -> Result<(Vec<Point>, Vec<u8>), String> {
-    let source = decode_launcher_source()?;
-    let rgb = source
-        .iter()
-        .map(|pixel| [pixel[0], pixel[1], pixel[2]])
-        .collect::<Vec<_>>();
-    let background = rgb[0];
-    let mut structural = Vec::new();
-    let mut fill = Vec::new();
-    for (offset, color) in rgb.iter().copied().enumerate() {
-        if color_distance(color, background) < 12 * 12 {
-            continue;
-        }
-        let x = offset % WIDTH;
-        let y = offset / WIDTH;
-        let right = rgb[y * WIDTH + (x + 1).min(WIDTH - 1)];
-        let down = rgb[(y + 1).min(HEIGHT - 1) * WIDTH + x];
-        let bright = u32::from(color[0]) + u32::from(color[1]) + u32::from(color[2]);
-        let edge = color_distance(color, right).max(color_distance(color, down));
-        let entry = (
-            u64::from(mix32(
-                (x as u32) ^ (y as u32).wrapping_mul(0x9e37_79b9) ^ 0x85eb_ca6b,
-            )),
-            Point {
-                x: quantize(x as f32 - 480.0, 480.0),
-                y: quantize(y as f32, 540.0),
-                z: 0,
-                palette: nearest_launcher_palette(color),
-                group: 0,
-            },
-        );
-        if edge > 18 * 18 || bright > 360 {
-            structural.push(entry);
-        } else {
-            fill.push(entry);
-        }
-    }
-    structural.sort_unstable_by_key(|entry| entry.0);
-    fill.sort_unstable_by_key(|entry| entry.0);
-    let structural_count = structural.len().min(POINT_COUNT / 2);
-    let mut points = structural
-        .into_iter()
-        .take(structural_count)
-        .map(|entry| entry.1)
-        .collect::<Vec<_>>();
-    points.extend(
-        fill.into_iter()
-            .take(POINT_COUNT.saturating_sub(points.len()))
-            .map(|entry| entry.1),
-    );
-    if points.len() < POINT_COUNT {
-        return Err(format!(
-            "launcher source produced only {} useful particle samples",
-            points.len()
-        ));
-    }
-
-    let mut snapshot = Vec::with_capacity(16 + source.len() * 2);
-    snapshot.extend_from_slice(MOCK_MAGIC);
-    snapshot.extend_from_slice(&(WIDTH as u16).to_le_bytes());
-    snapshot.extend_from_slice(&(HEIGHT as u16).to_le_bytes());
-    snapshot.extend_from_slice(&(source.len() as u32).to_le_bytes());
-    for pixel in source {
-        snapshot.extend_from_slice(&rgb565(pixel[0], pixel[1], pixel[2]).to_le_bytes());
-    }
-    Ok((points, snapshot))
-}
-
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
@@ -369,14 +231,12 @@ fn run(output: &Path) -> Result<(), String> {
     let font = swash::FontRef::from_index(FONT, 0).ok_or("invalid embedded Press Start 2P")?;
     let mister = text_target(font, "MiSTer")?;
     let magik = text_target(font, "MagiK")?;
-    let (launcher, snapshot) = launcher_mock()?;
-    if mister.len() != POINT_COUNT || magik.len() != POINT_COUNT || launcher.len() != POINT_COUNT {
+    if mister.len() != POINT_COUNT || magik.len() != POINT_COUNT {
         return Err("intro target does not contain exactly 40960 particles".into());
     }
     let mut provenance = vec![
         "MiSTer MagiK intro particle assets".to_owned(),
         format!("font_sha256={FONT_SHA256}"),
-        format!("launcher_source_sha256={LAUNCHER_SOURCE_SHA256}"),
         format!("particles={POINT_COUNT}"),
         format!("distributed_depth_layers={LAYERS}"),
         "text_style=original-magik-phosphor".to_owned(),
@@ -388,9 +248,6 @@ fn run(output: &Path) -> Result<(), String> {
         ("mister.pgroup", encode_groups(&mister)),
         ("magik.pcloud", encode_cloud(&magik)),
         ("magik.pgroup", encode_groups(&magik)),
-        ("launcher-mock.pcloud", encode_cloud(&launcher)),
-        ("launcher-mock.pgroup", encode_groups(&launcher)),
-        ("launcher-mock.rgb565", snapshot),
     ] {
         provenance.push(write_asset(output, name, &bytes)?);
     }

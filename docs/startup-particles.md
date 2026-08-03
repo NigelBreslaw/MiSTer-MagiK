@@ -49,15 +49,18 @@ received one new confirmed frame. Runtime and benchmark evidence therefore
 reports `skipped_refreshes` separately from latch protocol drops and fails if
 either axis is nonzero.
 
-The final two seconds are a strict handoff protocol:
+The final handoff is derived only from the production launcher's live frame:
 
-1. At 18 seconds both hidden slots settle on the static launcher-shaped
-   particle target. Repeated frames then perform no pixel writes.
-2. The normal launcher continues to process catalog events and render into its
-   cached RGB565 frame off screen. The host copies that exact cache into
-   preallocated intro storage at the 18-second barrier.
+1. The normal launcher continues to process catalog events and render into its
+   cached RGB565 frame off screen. At 15 seconds the host snapshots that exact
+   cache and derives all 40,960 launcher particle positions and colors from it.
+   No design-time launcher image or point cloud is embedded.
+2. From 16 to 18 seconds the cabinet particles morph into that live launcher
+   formation. At 18 seconds both hidden slots settle on the static target;
+   repeated hold frames perform no pixel writes.
 3. From 19 to 20 seconds the particle scene uses incremental Bayer buckets to
-   crossfade into that live frame without allocation or a full-frame rewrite.
+   crossfade into the same retained live frame without allocation or a
+   full-frame rewrite.
 4. The frame at exactly 20 seconds is pixel-identical to the cached launcher.
    The host restores the same pixels to the interactive cache, returns the
    hidden mappings, leaves external-direct mode, and only then enables startup

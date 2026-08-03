@@ -619,9 +619,10 @@ A build without a valid registry first probes the retained Arcade mini-nav. A
 matching index restores the exact local Arcade projection; a missing, corrupt,
 oversized, or stale index starts the 20-second first-run particle intro and a
 CPU0-confined first-visible Arcade scan. The interactive Slint launcher is
-maintained in its cached RGB565 target behind the intro. At 18 seconds that
-exact target becomes the crossfade destination; the 20-second endpoint and
-first interactive frame are therefore pixel-identical. After the projection is
+maintained in its cached RGB565 target behind the intro. At 15 seconds that live
+frame is sampled into the particle formation and retained as the exact
+crossfade destination before the morph begins at 16 seconds. The 20-second
+endpoint and first interactive frame are therefore pixel-identical. After the projection is
 acknowledged, the complete authoritative scan continues. It audits the retained projection and
 atomically refreshes the bootstrap index. Background walkers, classification
 batches, archive inspection, prepared-payload indexing, and projection work all

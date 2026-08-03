@@ -22,11 +22,6 @@ const MISTER_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
 const MAGIK_CLOUD: &[u8] = include_bytes!("../assets/intro/magik.pcloud");
 const MAGIK_GROUPS: &[u8] = include_bytes!("../assets/intro/magik.pgroup");
 const CABINET_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
-const LAUNCHER_CLOUD: &[u8] = include_bytes!("../assets/intro/launcher-mock.pcloud");
-const LAUNCHER_GROUPS: &[u8] = include_bytes!("../assets/intro/launcher-mock.pgroup");
-const LAUNCHER_SNAPSHOT: &[u8] = include_bytes!("../assets/intro/launcher-mock.rgb565");
-const LAUNCHER_DESIGN_WIDTH: usize = 960;
-const LAUNCHER_DESIGN_HEIGHT: usize = 540;
 const PCLOUD_HEADER_BYTES: usize = 28;
 const PCLOUD_RECORD_BYTES: usize = 8;
 
@@ -135,6 +130,7 @@ pub struct IntroScene {
     launcher: PointTarget,
     launcher_q5: QuantizedPointCloud,
     launcher_snapshot: Vec<Rgb565Pixel>,
+    launcher_ready: bool,
     launcher_commands: Vec<PointCloudDrawCommand>,
     launcher_thresholds: Vec<u8>,
     launcher_mix_thresholds: Vec<u16>,
@@ -253,27 +249,25 @@ impl IntroScene {
             })
             .collect::<Vec<_>>();
         let launcher_source_q5 = QuantizedPointCloud::from_positions(&launcher_source);
-        let mut launcher = decode_target(
-            LAUNCHER_CLOUD,
-            Some((LAUNCHER_GROUPS, 1)),
-            TargetScale::Launcher,
-        )?;
-        let launcher_projection_compensation = launcher_projection_compensation(&recipe);
-        for position in &mut launcher.positions {
-            position[0] *= launcher_projection_compensation
-                * width as f32
-                / LAUNCHER_DESIGN_WIDTH as f32;
-            position[1] *= launcher_projection_compensation
-                * height as f32
-                / LAUNCHER_DESIGN_HEIGHT as f32;
-        }
+        // The production launcher target is installed from its live off-screen
+        // RGB565 frame before the morph cue. Until then these same-sized
+        // placeholders keep all render storage allocated without embedding a
+        // design-time launcher image.
+        let launcher = PointTarget {
+            positions: launcher_source.clone(),
+            palette: vec![0; recipe.steady_particle_count],
+            groups: vec![ParticleGroupSpan {
+                id: 0,
+                start: 0,
+                count: recipe.steady_particle_count,
+            }],
+        };
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_snapshot = decode_launcher_snapshot(LAUNCHER_SNAPSHOT, width, height)?;
-        let launcher_commands = launcher
-            .positions
-            .iter()
-            .map(|position| project_command(*position, &recipe, geometry))
-            .collect::<Vec<_>>();
+        let launcher_snapshot = vec![
+            Rgb565Pixel(recipe.appearance.background.0);
+            width.saturating_mul(height)
+        ];
+        let launcher_commands = prepare_target_commands(&launcher.positions, &recipe, geometry);
         let launcher_thresholds: Vec<u8> = launcher_commands
             .iter()
             .map(|command| {
@@ -358,6 +352,7 @@ impl IntroScene {
             launcher,
             launcher_q5,
             launcher_snapshot,
+            launcher_ready: false,
             launcher_commands,
             launcher_thresholds,
             launcher_mix_thresholds,
@@ -386,9 +381,10 @@ impl IntroScene {
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
     }
 
-    /// Replaces the design-time launcher mock with the exact RGB565 frame
-    /// produced by the live launcher renderer. Storage is retained and copied
-    /// in place so the crossfade hot path performs no allocation.
+    /// Builds both the particle formation and exact handoff frame from the
+    /// production launcher's live off-screen RGB565 render. All allocation and
+    /// target preparation happens before the morph cue; the crossfade hot path
+    /// only consumes the prepared storage.
     pub fn replace_launcher_snapshot(
         &mut self,
         pixels: &[Rgb565Pixel],
@@ -400,7 +396,46 @@ impl IntroScene {
                 self.geometry.len()
             ));
         }
+        let launcher = live_launcher_target_from_snapshot(
+            pixels,
+            self.recipe.steady_particle_count,
+            &self.recipe,
+            self.geometry,
+        )?;
+        let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
+        let launcher_commands = prepare_target_commands(
+            &launcher.positions,
+            &self.recipe,
+            self.geometry,
+        );
+        let launcher_thresholds = launcher_commands
+            .iter()
+            .map(|command| {
+                command.offset().map_or(64, |offset| {
+                    bayer8(
+                        offset % self.geometry.width(),
+                        offset / self.geometry.width(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let crossfade_visible_counts = std::array::from_fn(|threshold| {
+            launcher_commands
+                .iter()
+                .zip(&launcher_thresholds)
+                .filter(|(command, particle_threshold)| {
+                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
+                })
+                .count()
+        });
+
         self.launcher_snapshot.copy_from_slice(pixels);
+        self.launcher = launcher;
+        self.launcher_q5 = launcher_q5;
+        self.launcher_commands = launcher_commands;
+        self.launcher_thresholds = launcher_thresholds;
+        self.crossfade_visible_counts = crossfade_visible_counts;
+        self.launcher_ready = true;
         self.slot_states = [IntroSlotState::Uninitialized; 2];
         Ok(())
     }
@@ -793,7 +828,7 @@ impl IntroScene {
         .with_outer_transform(transform_us)
     }
 
-    fn render_mock_crossfade(
+    fn render_launcher_crossfade(
         &mut self,
         destination: &mut [Rgb565Pixel],
         buffer_id: usize,
@@ -1057,7 +1092,13 @@ impl FramebufferScene for IntroScene {
             .map(IntroCue::duration_ms)
             .sum();
         let buffer_id = usize::from(target.buffer_id().get());
-        let incremental_frame = matches!(&cue, IntroCue::MockCrossfade { .. }) || cue_index == 8;
+        if cue_index >= 7 && !self.launcher_ready {
+            return Err(SceneError::Render(
+                "live launcher snapshot was not installed before the morph cue".into(),
+            ));
+        }
+        let incremental_frame =
+            matches!(&cue, IntroCue::LauncherCrossfade { .. }) || cue_index == 8;
         let clear_us = if incremental_frame {
             0
         } else {
@@ -1161,11 +1202,11 @@ impl FramebufferScene for IntroScene {
                     result
                 }
             }
-            IntroCue::MockCrossfade {
+            IntroCue::LauncherCrossfade {
                 duration_ms,
                 easing,
                 ..
-            } => self.render_mock_crossfade(
+            } => self.render_launcher_crossfade(
                 target.pixels_mut(),
                 buffer_id,
                 cue_elapsed_ms,
@@ -1221,7 +1262,6 @@ impl FramebufferScene for IntroScene {
 enum TargetScale {
     Text,
     Cabinet,
-    Launcher,
 }
 
 #[derive(Clone, Copy)]
@@ -1259,7 +1299,7 @@ fn decode_target(
         let flags = bytes[offset + 7];
         let flags_valid = match scale {
             TargetScale::Cabinet => flags & !3 == 0,
-            TargetScale::Text | TargetScale::Launcher => flags == 0,
+            TargetScale::Text => flags == 0,
         };
         if style > 7 || !flags_valid {
             return Err(format!("intro point-cloud record {index} is invalid"));
@@ -1274,11 +1314,6 @@ fn decode_target(
                 f32::from(x) * (390.0 / 32_767.0),
                 220.0 - f32::from(y) * (440.0 / 32_767.0),
                 f32::from(z) * (390.0 / 32_767.0),
-            ],
-            TargetScale::Launcher => [
-                f32::from(x) * (480.0 / 32_767.0),
-                f32::from(y) * (540.0 / 32_767.0) - 270.0,
-                f32::from(z) * (96.0 / 32_767.0),
             ],
         };
         positions.push(position);
@@ -1457,6 +1492,166 @@ fn launcher_projection_compensation(recipe: &IntroRecipe) -> f32 {
     recipe.camera.dolly / recipe.camera.focal_length
 }
 
+fn live_launcher_target_from_snapshot(
+    pixels: &[Rgb565Pixel],
+    count: usize,
+    recipe: &IntroRecipe,
+    geometry: SceneGeometry,
+) -> Result<PointTarget, String> {
+    if pixels.len() != geometry.len() || pixels.len() < count {
+        return Err(format!(
+            "live launcher snapshot has {} pixels, expected at least {count} for {}x{}",
+            pixels.len(),
+            geometry.width(),
+            geometry.height()
+        ));
+    }
+    let background = dominant_snapshot_color(pixels);
+    let mut histogram = [0_usize; 256];
+    for offset in 0..pixels.len() {
+        histogram[usize::from(launcher_pixel_salience(
+            pixels,
+            offset,
+            geometry.width(),
+            background,
+        ))] += 1;
+    }
+    if histogram[1..].iter().sum::<usize>() == 0 {
+        return Err("live launcher snapshot contains no visible UI detail".into());
+    }
+
+    let mut above = 0_usize;
+    let mut threshold = 0_u8;
+    for score in (0_u8..=u8::MAX).rev() {
+        let bucket = histogram[usize::from(score)];
+        if above.saturating_add(bucket) >= count {
+            threshold = score;
+            break;
+        }
+        above = above.saturating_add(bucket);
+    }
+    let ties_needed = count.saturating_sub(above);
+    let tie_total = histogram[usize::from(threshold)].max(1);
+    let compensation = launcher_projection_compensation(recipe);
+    let center_x = geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x;
+    let center_y = geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y;
+    let mut tie_accumulator = 0_usize;
+    let mut positions = Vec::with_capacity(count);
+    let mut palette = Vec::with_capacity(count);
+    for (offset, pixel) in pixels.iter().copied().enumerate() {
+        let score = launcher_pixel_salience(pixels, offset, geometry.width(), background);
+        let selected = if score > threshold {
+            true
+        } else if score == threshold && ties_needed > 0 {
+            tie_accumulator = tie_accumulator.saturating_add(ties_needed);
+            if tie_accumulator >= tie_total {
+                tie_accumulator -= tie_total;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !selected {
+            continue;
+        }
+        let x = (offset % geometry.width()) as f32 + 0.5;
+        let y = (offset / geometry.width()) as f32 + 0.5;
+        positions.push([
+            (x - center_x) * compensation,
+            (y - center_y) * compensation,
+            0.0,
+        ]);
+        palette.push(nearest_launcher_palette(pixel, &recipe.appearance.palette));
+        if positions.len() == count {
+            break;
+        }
+    }
+    if positions.len() != count {
+        return Err(format!(
+            "live launcher snapshot produced {} particle targets, expected {count}",
+            positions.len()
+        ));
+    }
+    Ok(PointTarget {
+        positions,
+        palette,
+        groups: vec![ParticleGroupSpan {
+            id: 0,
+            start: 0,
+            count,
+        }],
+    })
+}
+
+fn dominant_snapshot_color(pixels: &[Rgb565Pixel]) -> Rgb565Pixel {
+    let mut counts = vec![0_u32; usize::from(u16::MAX) + 1];
+    let step = pixels.len().div_ceil(32_768).max(1);
+    for pixel in pixels.iter().step_by(step) {
+        counts[usize::from(pixel.0)] = counts[usize::from(pixel.0)].saturating_add(1);
+    }
+    let color = counts
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, count)| *count)
+        .map_or(0, |(color, _)| color as u16);
+    Rgb565Pixel(color)
+}
+
+fn launcher_pixel_salience(
+    pixels: &[Rgb565Pixel],
+    offset: usize,
+    width: usize,
+    background: Rgb565Pixel,
+) -> u8 {
+    let pixel = pixels[offset];
+    let background_distance = rgb565_distance(pixel, background);
+    let horizontal = (offset % width + 1 < width)
+        .then(|| rgb565_distance(pixel, pixels[offset + 1]))
+        .unwrap_or(0);
+    let vertical = (offset + width < pixels.len())
+        .then(|| rgb565_distance(pixel, pixels[offset + width]))
+        .unwrap_or(0);
+    background_distance
+        .saturating_mul(3)
+        .saturating_add(horizontal.max(vertical).saturating_mul(5))
+        .min(u16::from(u8::MAX)) as u8
+}
+
+fn rgb565_distance(left: Rgb565Pixel, right: Rgb565Pixel) -> u16 {
+    let [left_r, left_g, left_b] = rgb565_channels(left);
+    let [right_r, right_g, right_b] = rgb565_channels(right);
+    left_r.abs_diff(right_r) + left_g.abs_diff(right_g) + left_b.abs_diff(right_b)
+}
+
+fn rgb565_channels(pixel: Rgb565Pixel) -> [u16; 3] {
+    [
+        ((pixel.0 >> 11) & 0x1f) << 1,
+        (pixel.0 >> 5) & 0x3f,
+        (pixel.0 & 0x1f) << 1,
+    ]
+}
+
+fn nearest_launcher_palette(
+    pixel: Rgb565Pixel,
+    palette: &[crate::recipes::RecipeRgb565; 8],
+) -> u8 {
+    let [red, green, blue] = rgb565_channels(pixel);
+    palette
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, candidate)| {
+            let [candidate_red, candidate_green, candidate_blue] =
+                rgb565_channels(Rgb565Pixel(candidate.0));
+            let red = i32::from(red) - i32::from(candidate_red);
+            let green = i32::from(green) - i32::from(candidate_green);
+            let blue = i32::from(blue) - i32::from(candidate_blue);
+            red * red + green * green + blue * blue
+        })
+        .map_or(0, |(index, _)| index as u8)
+}
+
 #[inline(always)]
 fn wrap_small_jitter(origin: u16, jitter: u16, extent: usize) -> usize {
     let coordinate = usize::from(origin + jitter);
@@ -1557,40 +1752,6 @@ fn updates_transform_cohort(index: usize, frame: u64) -> bool {
     ((index / PARTICLE_LANES) & 1) == ((frame as usize) & 1)
 }
 
-fn decode_launcher_snapshot(
-    bytes: &[u8],
-    expected_width: usize,
-    expected_height: usize,
-) -> Result<Vec<Rgb565Pixel>, String> {
-    if bytes.len() < 16 || &bytes[..8] != b"RGB565M1" {
-        return Err("launcher mock snapshot header is invalid".into());
-    }
-    let width = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
-    let height = usize::from(u16::from_le_bytes([bytes[10], bytes[11]]));
-    let count = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-    if count != width.saturating_mul(height)
-        || bytes.len() != 16 + count * 2
-    {
-        return Err("launcher mock snapshot geometry is invalid".into());
-    }
-    let source = bytes[16..]
-        .chunks_exact(2)
-        .map(|pixel| Rgb565Pixel(u16::from_le_bytes([pixel[0], pixel[1]])))
-        .collect::<Vec<_>>();
-    if width == expected_width && height == expected_height {
-        return Ok(source);
-    }
-    let mut scaled = vec![Rgb565Pixel(0); expected_width.saturating_mul(expected_height)];
-    for y in 0..expected_height {
-        let source_y = y.saturating_mul(height) / expected_height;
-        for x in 0..expected_width {
-            let source_x = x.saturating_mul(width) / expected_width;
-            scaled[y * expected_width + x] = source[source_y * width + source_x];
-        }
-    }
-    Ok(scaled)
-}
-
 fn bayer8(x: usize, y: usize) -> u8 {
     const MATRIX: [[u8; 8]; 8] = [
         [0, 32, 8, 40, 2, 34, 10, 42],
@@ -1637,6 +1798,21 @@ const fn cue_label(index: usize) -> &'static str {
 mod tests {
     use super::*;
     use crate::intro_recipe::embedded_intro_recipe;
+
+    fn live_test_snapshot(geometry: SceneGeometry) -> Vec<Rgb565Pixel> {
+        let mut pixels = vec![Rgb565Pixel(0x0841); geometry.len()];
+        let live_width = geometry.width() * 3 / 4;
+        for y in 0..geometry.height() {
+            for x in 0..live_width {
+                pixels[y * geometry.width() + x] = if (x / 16 + y / 16) & 1 == 0 {
+                    Rgb565Pixel(0x07d9)
+                } else {
+                    Rgb565Pixel(0xf7de)
+                };
+            }
+        }
+        pixels
+    }
 
     #[test]
     fn formation_retires_the_excess_population_at_four_seconds() {
@@ -1811,6 +1987,9 @@ mod tests {
         let geometry = SceneGeometry::new(960, 540, 960).unwrap();
         let mut live = IntroScene::new(960, 540, recipe.clone()).unwrap();
         let mut reference = IntroScene::new(960, 540, recipe).unwrap();
+        let launcher = live_test_snapshot(geometry);
+        live.replace_launcher_snapshot(&launcher).unwrap();
+        reference.replace_launcher_snapshot(&launcher).unwrap();
         let mut slots = [
             vec![Rgb565Pixel(0); geometry.len()],
             vec![Rgb565Pixel(0); geometry.len()],
@@ -1872,6 +2051,9 @@ mod tests {
         let recipe = embedded_intro_recipe().unwrap();
         let geometry = SceneGeometry::new(320, 180, 320).unwrap();
         let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        scene
+            .replace_launcher_snapshot(&live_test_snapshot(geometry))
+            .unwrap();
         let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
         let buffer = SceneBufferId::new(0, 2).unwrap();
         let first = scene
@@ -1897,5 +2079,45 @@ mod tests {
 
         assert!(first.pixel_writes > 0);
         assert_eq!(second.pixel_writes, 0);
+    }
+
+    #[test]
+    fn launcher_particles_are_derived_from_the_live_snapshot() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
+        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        scene
+            .replace_launcher_snapshot(&live_test_snapshot(geometry))
+            .unwrap();
+
+        assert!(scene.launcher_ready);
+        assert_eq!(scene.launcher.positions.len(), scene.recipe.steady_particle_count);
+        assert!(scene.launcher_commands.iter().all(|command| {
+            command
+                .offset()
+                .is_some_and(|offset| offset % geometry.width() < geometry.width() * 3 / 4)
+        }));
+    }
+
+    #[test]
+    fn launcher_morph_rejects_a_missing_live_snapshot() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
+        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+        let buffer = SceneBufferId::new(0, 2).unwrap();
+
+        let error = scene
+            .render(
+                SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                SceneClock {
+                    frame: 960,
+                    elapsed: Duration::from_secs(16),
+                    next_elapsed: Some(Duration::from_micros(16_016_667)),
+                },
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("live launcher snapshot"));
     }
 }
