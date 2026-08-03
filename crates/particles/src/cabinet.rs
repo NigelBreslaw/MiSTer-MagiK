@@ -719,7 +719,7 @@ impl ArcadeCabinetFormation {
                 projection_cohort,
             )
         };
-        let visible;
+        let visible: usize;
         let mut pixel_writes = 0usize;
         let mut projection_backend = "cabinet-scalar";
 
