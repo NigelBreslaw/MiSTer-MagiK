@@ -615,10 +615,29 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant<H: LatchHardware>(
         &mut self,
         hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)
+    }
+
+    pub(in crate::ui_runner) fn try_issue_startup_intro_hidden_slot_render_grant<
+        H: LatchHardware,
+    >(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        self.try_issue_external_hidden_slot_render_grant(hardware, display_session, false)
+    }
+
+    fn try_issue_external_hidden_slot_render_grant<H: LatchHardware>(
+        &mut self,
+        hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
+        require_identity_geometry: bool,
     ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
         if self.disabled
-            || !self.exact_identity_geometry()
+            || (require_identity_geometry && !self.exact_identity_geometry())
             || self.outstanding_direct_grant.is_some()
         {
             return Ok(None);
@@ -2115,6 +2134,31 @@ mod tests {
                 .is_err()
         );
         presenter.buffers = Some(worker_buffers);
+    }
+
+    #[test]
+    fn startup_intro_grant_uses_native_slot_geometry_for_transformed_composition() {
+        let mut presenter = presenter();
+        presenter.render_height = HEIGHT * 2;
+        let mut hardware = FakeHardware {
+            statuses: vec![Ok(status(BASE1, 0x0001))],
+            ..FakeHardware::default()
+        };
+        let mut display = display_session();
+
+        assert!(
+            presenter
+                .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+                .unwrap()
+                .is_none()
+        );
+        let grant = presenter
+            .try_issue_startup_intro_hidden_slot_render_grant(&mut hardware, &mut display)
+            .unwrap()
+            .expect("startup intro native slot grant");
+
+        assert_eq!((grant.width, grant.height), (WIDTH, HEIGHT));
+        assert_eq!(grant.stride_pixels, WIDTH);
     }
 
     #[test]

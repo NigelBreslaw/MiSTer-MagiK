@@ -2706,15 +2706,15 @@ pub(super) fn run_launcher_loop(
         && launcher_bench_scenario.is_none()
         && screensaver_start_mode == ScreensaverStartMode::Inactive;
     let mut startup_intro = if startup_intro_eligible
-        && launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
+        && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
-        match PreparedStartupIntro::new(ui.render_w(), ui.render_h()) {
+        match PreparedStartupIntro::new(ui) {
             Ok(prepared) => match launcher_presenter.take_direct_hidden_frame_buffers() {
                 Ok(buffers) => {
                     print_startup_event(
                         start,
                         "startup_intro_started",
-                        format!("width={} height={} fps=60", ui.render_w(), ui.render_h()),
+                        format!("width={} height={} fps=60", ui.fb_w(), ui.fb_h()),
                     );
                     Some(prepared.attach(buffers))
                 }
@@ -5463,7 +5463,9 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if startup_intro_failure.is_none() {
-                match launcher_presenter.try_issue_hidden_slot_render_grant(f, display_session) {
+                match launcher_presenter
+                    .try_issue_startup_intro_hidden_slot_render_grant(f, display_session)
+                {
                     Ok(Some(grant)) => match intro.render_grant(grant) {
                         Ok(completed) => {
                             completed_hidden_frame_for_present = Some(completed);

@@ -20,6 +20,26 @@ fn direct_hidden_framebuffer_geometry_available(ui: &UiDisplay) -> bool {
     ui.render_w() == ui.fb_w() && ui.render_h() == ui.fb_h() && !ui.output_route().is_crt()
 }
 
+fn startup_intro_native_hidden_geometry_available(ui: &UiDisplay) -> bool {
+    match ui.output_route() {
+        crate::ui_display::ResolvedOutputRoute::Hdmi => {
+            ui.render_w() == ui.fb_w() && ui.render_h() == ui.fb_h()
+        }
+        crate::ui_display::ResolvedOutputRoute::Crt240p60 => {
+            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 240, 640, 480)
+        }
+        crate::ui_display::ResolvedOutputRoute::Crt288p50 => {
+            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 288, 640, 288)
+        }
+        crate::ui_display::ResolvedOutputRoute::Crt480p60 => {
+            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 480, 640, 480)
+        }
+        crate::ui_display::ResolvedOutputRoute::Crt576p50 => {
+            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 576, 640, 576)
+        }
+    }
+}
+
 fn direct_hidden_scan_geometry_available(ui: &UiDisplay) -> bool {
     direct_hidden_framebuffer_geometry_available(ui)
         && ui.render_w() == usize::from(ui.scan_w())
@@ -219,6 +239,14 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         )
     }
 
+    pub(in crate::ui_runner) fn startup_intro_native_hidden_slots_available(
+        &self,
+        ui: &UiDisplay,
+    ) -> bool {
+        matches!(&self.state, LauncherPresenterState::Latch(_))
+            && startup_intro_native_hidden_geometry_available(ui)
+    }
+
     pub(in crate::ui_runner) fn try_issue_hidden_slot_render_grant(
         &mut self,
         hardware: &mut Fpga,
@@ -227,6 +255,19 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         match &mut self.state {
             LauncherPresenterState::Latch(latch) => {
                 latch.try_issue_hidden_slot_render_grant(hardware, display)
+            }
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
+        }
+    }
+
+    pub(in crate::ui_runner) fn try_issue_startup_intro_hidden_slot_render_grant(
+        &mut self,
+        hardware: &mut Fpga,
+        display: &mut LauncherDisplaySession,
+    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => {
+                latch.try_issue_startup_intro_hidden_slot_render_grant(hardware, display)
             }
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
         }
@@ -855,6 +896,50 @@ mod tests {
         );
         assert!(direct_hidden_framebuffer_geometry_available(&ui));
         assert!(!direct_hidden_scan_geometry_available(&ui));
+    }
+
+    #[test]
+    fn startup_intro_accepts_every_native_crt_route_without_enabling_screensavers() {
+        let runtime = RuntimeDisplayGeometry {
+            output_w: 1920,
+            output_h: 1080,
+            scan_w: 1920,
+            scan_h: 1080,
+        };
+        for route in ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"] {
+            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+                Some(runtime),
+                "[Menu]\nvideo_mode=8\n",
+                Some(&format!("schema=1&output={route}")),
+                None,
+            )
+            .expect("supported CRT route");
+            let ui = UiDisplay::for_plan(plan);
+
+            assert!(
+                startup_intro_native_hidden_geometry_available(&ui),
+                "{route}"
+            );
+            assert!(
+                !direct_hidden_framebuffer_geometry_available(&ui),
+                "{route}"
+            );
+        }
+    }
+
+    #[test]
+    fn startup_intro_rejects_a_mismatched_native_crt_geometry() {
+        let mut plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            None,
+            "[Menu]\nvideo_mode=8\n",
+            Some("schema=1&output=crt-240p60"),
+            None,
+        )
+        .expect("supported CRT route");
+        plan.fb_h = 241;
+        let ui = UiDisplay::for_plan(plan);
+
+        assert!(!startup_intro_native_hidden_geometry_available(&ui));
     }
 
     #[derive(Debug)]

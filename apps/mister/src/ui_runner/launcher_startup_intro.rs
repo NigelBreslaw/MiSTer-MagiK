@@ -5,11 +5,17 @@
 
 use super::*;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_fb::framebuffer::vertical_scale::{
+    Rgb565FrameView, VerticalRect, VerticalRgb565Transform,
+};
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel as SceneRgb565Pixel, SceneBufferId, SceneClock, SceneGeometry,
     SceneTarget,
 };
-use mister_magik_particles::intro::{IntroScene, IntroSceneOptions, PreparedLauncherSnapshot};
+use mister_magik_particles::intro::{
+    IntroParticleDensity, IntroProjectionScale, IntroScene, IntroSceneOptions,
+    PreparedLauncherSnapshot,
+};
 use mister_magik_particles::intro_recipe::embedded_intro_recipe;
 
 const INTRO_FPS: u64 = 60;
@@ -19,15 +25,27 @@ const FINAL_FRAME: u64 = 20 * INTRO_FPS;
 pub(super) struct PreparedStartupIntro {
     scene: IntroScene,
     handoff_snapshot: Vec<Rgb565Pixel>,
+    composition_width: usize,
+    composition_height: usize,
 }
 
 impl PreparedStartupIntro {
-    pub(super) fn new(width: usize, height: usize) -> Result<Self, String> {
+    pub(super) fn new(ui: &UiDisplay) -> Result<Self, String> {
         let recipe = embedded_intro_recipe()?;
-        let scene = IntroScene::new(width, height, recipe)?;
+        let options = if ui.output_route().is_crt() {
+            IntroSceneOptions {
+                particle_density: IntroParticleDensity::Half,
+                projection_scale: IntroProjectionScale::crt(ui.fb_h()),
+            }
+        } else {
+            IntroSceneOptions::default()
+        };
+        let scene = IntroScene::new_with_options(ui.fb_w(), ui.fb_h(), recipe, options)?;
         Ok(Self {
             scene,
-            handoff_snapshot: vec![Rgb565Pixel(0); width.saturating_mul(height)],
+            handoff_snapshot: vec![Rgb565Pixel(0); ui.render_w().saturating_mul(ui.render_h())],
+            composition_width: ui.render_w(),
+            composition_height: ui.render_h(),
         })
     }
 
@@ -36,6 +54,8 @@ impl PreparedStartupIntro {
             scene: self.scene,
             buffers: Some(buffers),
             handoff_snapshot: self.handoff_snapshot,
+            composition_width: self.composition_width,
+            composition_height: self.composition_height,
             snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
             snapshot_ready: false,
@@ -56,6 +76,8 @@ pub(super) struct StartupIntroSession {
     scene: IntroScene,
     buffers: Option<PluginLatchFrameBuffers>,
     handoff_snapshot: Vec<Rgb565Pixel>,
+    composition_width: usize,
+    composition_height: usize,
     snapshot_preparation: LauncherSnapshotPreparation,
     frame: u64,
     snapshot_ready: bool,
@@ -113,25 +135,28 @@ impl StartupIntroSession {
             ));
         }
         self.handoff_snapshot.copy_from_slice(launcher_pixels);
-        let pixels = launcher_pixels
+        let native_pixels = native_launcher_snapshot(
+            launcher_pixels,
+            self.composition_width,
+            self.composition_height,
+            self.scene.geometry().width(),
+            self.scene.geometry().height(),
+        )?;
+        let pixels = native_pixels
             .iter()
             .map(|pixel| SceneRgb565Pixel(pixel.0))
             .collect::<Vec<_>>();
         let width = self.scene.geometry().width();
         let height = self.scene.geometry().height();
         let recipe = self.scene.recipe().clone();
+        let options = self.scene.options();
         let (tx, rx) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("intro-snapshot".to_string())
             .spawn(move || {
                 apply_runtime_thread_policy(RuntimeThreadRole::StartupIntroSnapshot);
-                let prepared = IntroScene::prepare_launcher_snapshot(
-                    width,
-                    height,
-                    recipe,
-                    IntroSceneOptions::default(),
-                    pixels,
-                );
+                let prepared =
+                    IntroScene::prepare_launcher_snapshot(width, height, recipe, options, pixels);
                 let _ = tx.send(prepared);
             })
             .map_err(|error| format!("failed to start launcher snapshot preparation: {error}"))?;
@@ -278,6 +303,51 @@ impl StartupIntroSession {
     }
 }
 
+fn native_launcher_snapshot(
+    pixels: &[Rgb565Pixel],
+    composition_width: usize,
+    composition_height: usize,
+    native_width: usize,
+    native_height: usize,
+) -> Result<Vec<Rgb565Pixel>, String> {
+    if pixels.len() != composition_width.saturating_mul(composition_height) {
+        return Err("launcher snapshot does not match the composition geometry".into());
+    }
+    if composition_width != native_width {
+        return Err(format!(
+            "launcher snapshot width {composition_width} does not match native width {native_width}"
+        ));
+    }
+    if composition_height == native_height {
+        return Ok(pixels.to_vec());
+    }
+    let transform = VerticalRgb565Transform::new(native_width, composition_height, native_height)
+        .map_err(str::to_string)?;
+    let mut native = vec![Rgb565Pixel(0); native_width.saturating_mul(native_height)];
+    let copied = transform
+        .copy_rect(
+            Rgb565FrameView {
+                pixels,
+                width: composition_width,
+                height: composition_height,
+                stride_pixels: composition_width,
+            },
+            VerticalRect {
+                x0: 0,
+                y0: 0,
+                x1: composition_width,
+                y1: composition_height,
+            },
+            &mut native,
+            native_width,
+        )
+        .map_err(str::to_string)?;
+    if copied.is_none() {
+        return Err("launcher snapshot transform produced no native rows".into());
+    }
+    Ok(native)
+}
+
 fn scene_pixels_mut(buffer: &mut ScanoutSlotsRgb565Framebuffer) -> &mut [SceneRgb565Pixel] {
     let pixels = buffer.pixels_mut();
     debug_assert_eq!(
@@ -317,11 +387,14 @@ mod tests {
     use super::*;
 
     fn test_session() -> StartupIntroSession {
-        let prepared = PreparedStartupIntro::new(320, 180).unwrap();
+        let ui = UiDisplay::for_framebuffer(320, 180);
+        let prepared = PreparedStartupIntro::new(&ui).unwrap();
         StartupIntroSession {
             scene: prepared.scene,
             buffers: None,
             handoff_snapshot: prepared.handoff_snapshot,
+            composition_width: prepared.composition_width,
+            composition_height: prepared.composition_height,
             snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
             snapshot_ready: false,
@@ -335,6 +408,97 @@ mod tests {
             waiting_frames: 0,
             last_render_waiting: false,
         }
+    }
+
+    fn crt_display(route: &str) -> UiDisplay {
+        let settings = format!("schema=1&output={route}");
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            None,
+            "[Menu]\nvideo_mode=8\n",
+            Some(&settings),
+            None,
+        )
+        .expect("supported CRT route");
+        UiDisplay::for_plan(plan)
+    }
+
+    #[test]
+    fn crt_intro_profiles_use_native_geometry_and_half_density() {
+        for (route, height) in [
+            ("crt-240p60", 240),
+            ("crt-288p50", 288),
+            ("crt-480p60", 480),
+            ("crt-576p50", 576),
+        ] {
+            let ui = crt_display(route);
+            let prepared = PreparedStartupIntro::new(&ui).unwrap();
+
+            assert_eq!(
+                (
+                    prepared.scene.geometry().width(),
+                    prepared.scene.geometry().height()
+                ),
+                (640, height),
+                "{route}"
+            );
+            assert_eq!(
+                prepared.scene.options().particle_density,
+                IntroParticleDensity::Half,
+                "{route}"
+            );
+            assert_eq!(
+                prepared.scene.options().projection_scale,
+                IntroProjectionScale::crt(height),
+                "{route}"
+            );
+        }
+    }
+
+    #[test]
+    fn crt_240_launcher_snapshot_uses_the_centered_vertical_transform() {
+        let pixels = (0..480)
+            .flat_map(|row| std::iter::repeat_n(Rgb565Pixel(row as u16), 640))
+            .collect::<Vec<_>>();
+        let native = native_launcher_snapshot(&pixels, 640, 480, 640, 240).unwrap();
+
+        for row in [0, 1, 2, 239] {
+            let expected_source_row = row * 2 + 1;
+            assert!(
+                native[row * 640..(row + 1) * 640]
+                    .iter()
+                    .all(|pixel| *pixel == Rgb565Pixel(expected_source_row as u16))
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_failure_leaves_the_original_composition_cache_intact() {
+        let mut session = test_session();
+        let original = session.handoff_snapshot.clone();
+
+        assert!(
+            session
+                .begin_launcher_snapshot_preparation(&[Rgb565Pixel(7)])
+                .is_err()
+        );
+        assert_eq!(session.handoff_snapshot, original);
+        assert!(session.snapshot_capture_needed());
+    }
+
+    #[test]
+    fn handoff_restores_the_original_composition_cache() {
+        let ui = UiDisplay::for_framebuffer(320, 180);
+        let mut session = test_session();
+        for (index, pixel) in session.handoff_snapshot.iter_mut().enumerate() {
+            *pixel = Rgb565Pixel(index as u16);
+        }
+        let expected = session.handoff_snapshot.clone();
+        let mut target = UiFrameTarget::cached(frame_target_geometry(&ui));
+        target.cached_565_mut().fill(Rgb565Pixel(0xffff));
+        let mut layer = LayerTarget::new(&mut target, &ui);
+
+        assert!(session.restore_handoff_snapshot(&mut layer));
+        assert_eq!(layer.cached_frame_view().pixels(), expected);
     }
 
     #[test]
