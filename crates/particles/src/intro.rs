@@ -65,6 +65,15 @@ struct RetiringFormationPoint {
     threshold: u16,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum IntroSlotState {
+    #[default]
+    Uninitialized,
+    Dynamic,
+    Crossfade(u8),
+    Snapshot,
+}
+
 #[derive(Clone, Copy)]
 struct IntroRenderResult {
     visible: usize,
@@ -114,7 +123,9 @@ pub struct IntroScene {
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
     launcher_thresholds: Vec<u8>,
+    crossfade_visible_counts: [usize; 65],
     crossfade_buckets: Vec<Vec<u32>>,
+    slot_states: [IntroSlotState; 2],
     static_xy: Vec<[f32; 2]>,
     static_origins: Vec<[u16; 2]>,
     formation_screen: Vec<[f32; 2]>,
@@ -231,6 +242,15 @@ impl IntroScene {
                 })
             })
             .collect();
+        let crossfade_visible_counts = std::array::from_fn(|threshold| {
+            launcher_commands
+                .iter()
+                .zip(&launcher_thresholds)
+                .filter(|(command, particle_threshold)| {
+                    command.offset().is_some() && usize::from(**particle_threshold) >= threshold
+                })
+                .count()
+        });
         let mut crossfade_buckets = vec![Vec::new(); 64];
         for offset in 0..width.saturating_mul(height) {
             crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
@@ -287,7 +307,9 @@ impl IntroScene {
             launcher_snapshot,
             launcher_commands,
             launcher_thresholds,
+            crossfade_visible_counts,
             crossfade_buckets,
+            slot_states: [IntroSlotState::Uninitialized; 2],
             static_xy,
             static_origins,
             formation_screen,
@@ -656,6 +678,7 @@ impl IntroScene {
     fn render_mock_crossfade(
         &mut self,
         destination: &mut [Rgb565Pixel],
+        buffer_id: usize,
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
@@ -663,18 +686,43 @@ impl IntroScene {
     ) -> IntroRenderResult {
         let raster_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
-        let threshold = (progress * 64.0).round() as u8;
-        if threshold >= 64 {
-            destination.copy_from_slice(&self.launcher_snapshot);
+        let threshold = ((progress * 64.0).round() as u8).min(64);
+        let previous = self.slot_states[buffer_id];
+        if previous == IntroSlotState::Snapshot && threshold == 64 {
             return IntroRenderResult::raster_only(
                 0,
-                destination.len(),
+                0,
                 "launcher-static-crossfade",
                 elapsed_us(raster_started.elapsed()),
             );
         }
-        let mut visible = 0;
-        let mut writes = 0;
+        if let IntroSlotState::Crossfade(previous_threshold) = previous
+            && previous_threshold <= threshold
+        {
+            let mut writes = 0;
+            for bucket in
+                &self.crossfade_buckets[usize::from(previous_threshold)..usize::from(threshold)]
+            {
+                for &offset in bucket {
+                    destination[offset as usize] = self.launcher_snapshot[offset as usize];
+                    writes += 1;
+                }
+            }
+            self.slot_states[buffer_id] = if threshold == 64 {
+                IntroSlotState::Snapshot
+            } else {
+                IntroSlotState::Crossfade(threshold)
+            };
+            return IntroRenderResult::raster_only(
+                self.crossfade_visible_counts[usize::from(threshold)],
+                writes,
+                "launcher-static-crossfade",
+                elapsed_us(raster_started.elapsed()),
+            );
+        }
+
+        destination.fill(Rgb565Pixel(self.recipe.appearance.background.0));
+        let mut writes = destination.len();
         for (index, command) in self.launcher_commands.iter().copied().enumerate() {
             let Some(offset) = command.offset() else {
                 continue;
@@ -683,7 +731,6 @@ impl IntroScene {
                 destination[offset] = Rgb565Pixel(
                     self.recipe.appearance.palette[usize::from(self.launcher.palette[index])].0,
                 );
-                visible += 1;
                 writes += 1;
             }
         }
@@ -693,8 +740,13 @@ impl IntroScene {
                 writes += 1;
             }
         }
+        self.slot_states[buffer_id] = if threshold == 64 {
+            IntroSlotState::Snapshot
+        } else {
+            IntroSlotState::Crossfade(threshold)
+        };
         IntroRenderResult::raster_only(
-            visible,
+            self.crossfade_visible_counts[usize::from(threshold)],
             writes,
             "launcher-static-crossfade",
             elapsed_us(raster_started.elapsed()),
@@ -827,11 +879,18 @@ impl FramebufferScene for IntroScene {
             .iter()
             .map(IntroCue::duration_ms)
             .sum();
-        let clear_started = Instant::now();
-        target
-            .pixels_mut()
-            .fill(Rgb565Pixel(self.recipe.appearance.background.0));
-        let clear_us = elapsed_us(clear_started.elapsed());
+        let buffer_id = usize::from(target.buffer_id().get());
+        let incremental_frame = matches!(&cue, IntroCue::MockCrossfade { .. }) || cue_index == 9;
+        let clear_us = if incremental_frame {
+            0
+        } else {
+            let clear_started = Instant::now();
+            target
+                .pixels_mut()
+                .fill(Rgb565Pixel(self.recipe.appearance.background.0));
+            self.slot_states[buffer_id] = IntroSlotState::Dynamic;
+            elapsed_us(clear_started.elapsed())
+        };
         let update_all_transforms = clock.next_elapsed.is_none() || cue_elapsed_ms < 34;
         let rendered = match &cue {
             IntroCue::CrtStatic { .. } => self.render_crt(target.pixels_mut(), clock.frame),
@@ -911,6 +970,7 @@ impl FramebufferScene for IntroScene {
                 ..
             } => self.render_mock_crossfade(
                 target.pixels_mut(),
+                buffer_id,
                 cue_elapsed_ms,
                 *duration_ms,
                 *easing,
@@ -918,10 +978,16 @@ impl FramebufferScene for IntroScene {
             ),
             IntroCue::HoldTarget { .. } if cue_index == 9 => {
                 let raster_started = Instant::now();
-                target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
+                let writes = if self.slot_states[buffer_id] == IntroSlotState::Snapshot {
+                    0
+                } else {
+                    target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
+                    self.slot_states[buffer_id] = IntroSlotState::Snapshot;
+                    self.launcher_snapshot.len()
+                };
                 IntroRenderResult::raster_only(
                     0,
-                    self.launcher_snapshot.len(),
+                    writes,
                     "launcher-mock-rgb565",
                     elapsed_us(raster_started.elapsed()),
                 )
@@ -965,7 +1031,9 @@ impl FramebufferScene for IntroScene {
         })
     }
 
-    fn invalidate_buffer(&mut self, _buffer: SceneBufferId) {}
+    fn invalidate_buffer(&mut self, buffer: SceneBufferId) {
+        self.slot_states[usize::from(buffer.get())] = IntroSlotState::Uninitialized;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1430,5 +1498,41 @@ mod tests {
         assert!((top_left[1] - 0.0).abs() < 0.001);
         assert!((bottom_right[0] - 959.0).abs() < 0.001);
         assert!((bottom_right[1] - 539.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn incremental_crossfade_matches_fresh_absolute_timestamp_frames() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(960, 540, 960).unwrap();
+        let mut live = IntroScene::new(960, 540, recipe.clone()).unwrap();
+        let mut reference = IntroScene::new(960, 540, recipe).unwrap();
+        let mut slots = [
+            vec![Rgb565Pixel(0); geometry.len()],
+            vec![Rgb565Pixel(0); geometry.len()],
+        ];
+        for (frame, time_ms) in (18_000..=19_000).step_by(125).enumerate() {
+            let slot = frame & 1;
+            let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
+            let clock = SceneClock {
+                frame: frame as u64,
+                elapsed: Duration::from_millis(time_ms),
+                next_elapsed: Some(Duration::from_millis(time_ms + 16)),
+            };
+            live.render(
+                SceneTarget::new(&mut slots[slot], geometry, buffer).unwrap(),
+                clock,
+            )
+            .unwrap();
+
+            let mut expected = vec![Rgb565Pixel(0); geometry.len()];
+            reference.invalidate_buffer(buffer);
+            reference
+                .render(
+                    SceneTarget::new(&mut expected, geometry, buffer).unwrap(),
+                    clock,
+                )
+                .unwrap();
+            assert_eq!(slots[slot], expected, "time_ms={time_ms} slot={slot}");
+        }
     }
 }
