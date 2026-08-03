@@ -506,6 +506,11 @@ impl ArcadeCabinetFormation {
             self.options.creative_mode,
             CabinetCreativeMode::DepthPalette | CabinetCreativeMode::All
         );
+        let micro_jitter_mode = matches!(
+            self.options.creative_mode,
+            CabinetCreativeMode::MicroJitter | CabinetCreativeMode::All
+        );
+        let jitter_phase = (self.projection_frame & 3) as u8;
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
@@ -534,11 +539,20 @@ impl ArcadeCabinetFormation {
         macro_rules! draw_offset {
             ($index:expr, $offset:expr, $pixel_x:expr, $attribute:expr, $lane:expr) => {{
                 let index = $index;
-                let offset = $offset;
-                let pixel_x = $pixel_x;
+                let mut offset = $offset;
                 let attribute = $attribute;
                 let lane = $lane;
                 let feature = attribute.flags[lane];
+                if micro_jitter_mode && feature == 0 && attribute.random[lane] & 1 == 0 {
+                    offset = jittered_offset(
+                        offset,
+                        self.width,
+                        destination.len(),
+                        attribute.random[lane],
+                        jitter_phase,
+                    );
+                }
+                let pixel_x = offset % self.width;
                 let base_style = if feature & appearance.priority_feature_mask != 0 {
                     appearance.priority_palette_index
                 } else if feature & appearance.accent_feature_mask != 0 {
@@ -563,7 +577,16 @@ impl ArcadeCabinetFormation {
                     && index % usize::from(appearance.neighbor_every) == 0
                     && pixel_x + 1 < self.width;
                 if history_mode {
-                    if let Some(history_offset) = self.previous_commands[index].offset() {
+                    if let Some(mut history_offset) = self.previous_commands[index].offset() {
+                        if micro_jitter_mode && feature == 0 && attribute.random[lane] & 1 == 0 {
+                            history_offset = jittered_offset(
+                                history_offset,
+                                self.width,
+                                destination.len(),
+                                attribute.random[lane],
+                                jitter_phase.wrapping_sub(1),
+                            );
+                        }
                         let history_style = style.saturating_sub(2);
                         destination[history_offset] =
                             pixel(appearance.palette[usize::from(history_style)]);
@@ -894,6 +917,20 @@ fn cohort_particle_count(count: usize, cohorts: usize, cohort: usize) -> usize {
     (complete + extra_block) * PARTICLE_LANES + tail
 }
 
+fn jittered_offset(offset: usize, width: usize, frame_len: usize, random: u32, phase: u8) -> usize {
+    let x = offset % width;
+    let y = offset / width;
+    if x == 0 || x + 1 >= width || y == 0 || offset + width >= frame_len {
+        return offset;
+    }
+    match (u32::from(phase) + ((random >> 3) & 3)) & 3 {
+        0 => offset - 1,
+        1 => offset - width,
+        2 => offset + 1,
+        _ => offset + width,
+    }
+}
+
 const fn pixel(color: RecipeRgb565) -> Rgb565Pixel {
     Rgb565Pixel(color.0)
 }
@@ -1172,6 +1209,20 @@ mod tests {
     }
 
     #[test]
+    fn micro_jitter_sequence_is_bounded_and_keeps_edges_fixed() {
+        let center = 10 * 32 + 10;
+        let offsets = (0..4)
+            .map(|phase| jittered_offset(center, 32, 32 * 24, 0, phase))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(offsets.len(), 4);
+        assert!(offsets.iter().all(|offset| {
+            let delta = offset.abs_diff(center);
+            delta == 1 || delta == 32
+        }));
+        assert_eq!(jittered_offset(0, 32, 32 * 24, 0, 2), 0);
+    }
+
+    #[test]
     fn arcade_formation_is_deterministic() {
         let recipe = embedded_cabinet_recipe().unwrap();
         let mut first = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
@@ -1264,6 +1315,31 @@ mod tests {
         assert_eq!(depth_stats.pixel_writes, baseline_stats.pixel_writes);
         assert_eq!(depth_stats.visible, baseline_stats.visible);
         assert_ne!(depth_pixels, baseline_pixels);
+    }
+
+    #[test]
+    fn micro_jitter_is_deterministic_without_adding_writes() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut first = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut second = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        for renderer in [&mut first, &mut second] {
+            renderer
+                .set_render_options(CabinetRenderOptions {
+                    active_count: 48_128,
+                    creative_mode: CabinetCreativeMode::MicroJitter,
+                })
+                .unwrap();
+        }
+        let mut first_pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let mut second_pixels = first_pixels.clone();
+        let first_stats = first
+            .render(&mut first_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        let second_stats = second
+            .render(&mut second_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        assert_eq!(first_stats.pixel_writes, second_stats.pixel_writes);
+        assert_eq!(first_pixels, second_pixels);
     }
 
     #[test]
