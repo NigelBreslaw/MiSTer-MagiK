@@ -148,10 +148,10 @@ fn merge_directions(pads: &[Pad]) -> DirectionalState {
 }
 
 fn discover() -> Vec<String> {
-    let mut paths = Vec::new();
     let Ok(entries) = std::fs::read_dir("/dev/input") else {
-        return paths;
+        return Vec::new();
     };
+    let mut paths: Vec<(u32, String)> = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(index) = name
