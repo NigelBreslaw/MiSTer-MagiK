@@ -1098,12 +1098,14 @@ fn screensaver_pipeline_start_allowed(
     direct_pipeline_active: bool,
     direct_hidden_exit_pending: bool,
     retiring_direct_pipeline_count: usize,
+    activation_handoff_complete: bool,
 ) -> bool {
     screensaver_active
         && !ram_pipeline_active
         && !direct_pipeline_active
         && !direct_hidden_exit_pending
         && retiring_direct_pipeline_count == 0
+        && activation_handoff_complete
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1648,6 +1650,48 @@ enum ScreensaverStartMode {
     PreviewWhenReady,
 }
 
+#[derive(Debug)]
+struct DirectParticleActivationHandoff {
+    black_posts_remaining: u8,
+}
+
+impl DirectParticleActivationHandoff {
+    const REQUIRED_BLACK_POSTS: u8 = 2;
+
+    fn new(particle_requested: bool, start_mode: ScreensaverStartMode) -> Self {
+        Self {
+            black_posts_remaining: if particle_requested
+                && start_mode == ScreensaverStartMode::IdleWhenReady
+            {
+                Self::REQUIRED_BLACK_POSTS
+            } else {
+                0
+            },
+        }
+    }
+
+    fn holding_black(&self, screensaver_active: bool, screensaver_frame_visible: bool) -> bool {
+        screensaver_active && !screensaver_frame_visible && self.black_posts_remaining != 0
+    }
+
+    fn renderer_start_allowed(&self) -> bool {
+        self.black_posts_remaining == 0
+    }
+
+    fn observe_present(
+        &mut self,
+        accepted_and_active_confirmed: bool,
+        screensaver_active: bool,
+        screensaver_frame_visible: bool,
+    ) {
+        if accepted_and_active_confirmed
+            && self.holding_black(screensaver_active, screensaver_frame_visible)
+        {
+            self.black_posts_remaining -= 1;
+        }
+    }
+}
+
 fn screensaver_start_mode(
     idle_when_ready: bool,
     preview_when_ready: bool,
@@ -1884,6 +1928,10 @@ pub(super) fn run_launcher_loop(
         launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS");
     let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
+    let mut particle_activation_handoff = DirectParticleActivationHandoff::new(
+        particle_screensaver_requested,
+        screensaver_start_mode,
+    );
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
     let mut screensaver_direct_pipeline: Option<ScreensaverDirectRenderAhead> = None;
@@ -5060,6 +5108,7 @@ pub(super) fn run_launcher_loop(
             screensaver_direct_pipeline.is_some(),
             direct_hidden_exit_pending,
             retiring_direct_pipelines.len(),
+            particle_activation_handoff.renderer_start_allowed(),
         ) {
             if screensaver_loader.is_none() {
                 if let Some(started) = screensaver_show_started {
@@ -5352,6 +5401,10 @@ pub(super) fn run_launcher_loop(
                     y1: ui.render_h(),
                 })
             }
+        } else if particle_activation_handoff
+            .holding_black(screensaver.active, screensaver_frame_visible)
+        {
+            Some(layer_target.render_black())
         } else if screensaver.active {
             None
         } else if navigation_snapshot_locked_before_render {
@@ -6109,6 +6162,11 @@ pub(super) fn run_launcher_loop(
         latch_v4_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
+        );
+        particle_activation_handoff.observe_present(
+            accepted_and_active_confirmed,
+            screensaver.active,
+            screensaver_frame_visible,
         );
         latch_v4_qualification.write_state_if_due(Instant::now());
         frames += 1;
@@ -9573,19 +9631,22 @@ mod tests {
     #[test]
     pub(super) fn direct_hidden_worker_retirement_blocks_screensaver_reentry() {
         assert!(screensaver_pipeline_start_allowed(
-            true, false, false, false, 0
+            true, false, false, false, 0, true
         ));
         assert!(!screensaver_pipeline_start_allowed(
-            true, false, false, true, 1
+            true, false, false, true, 1, true
         ));
         assert!(!screensaver_pipeline_start_allowed(
-            true, false, false, false, 1
+            true, false, false, false, 1, true
         ));
         assert!(!screensaver_pipeline_start_allowed(
-            true, false, true, false, 0
+            true, false, true, false, 0, true
         ));
         assert!(!screensaver_pipeline_start_allowed(
-            false, false, false, false, 0
+            false, false, false, false, 0, true
+        ));
+        assert!(!screensaver_pipeline_start_allowed(
+            true, false, false, false, 0, false
         ));
     }
 
@@ -10235,7 +10296,36 @@ mod tests {
             false,
             false,
             0,
+            true,
         ));
+    }
+
+    #[test]
+    fn direct_particle_activation_posts_black_to_both_slots_before_renderer_start() {
+        let mut handoff =
+            DirectParticleActivationHandoff::new(true, ScreensaverStartMode::IdleWhenReady);
+
+        assert!(handoff.holding_black(true, false));
+        assert!(!handoff.renderer_start_allowed());
+        handoff.observe_present(false, true, false);
+        assert!(!handoff.renderer_start_allowed());
+        handoff.observe_present(true, true, false);
+        assert!(handoff.holding_black(true, false));
+        assert!(!handoff.renderer_start_allowed());
+        handoff.observe_present(true, true, false);
+        assert!(!handoff.holding_black(true, false));
+        assert!(handoff.renderer_start_allowed());
+    }
+
+    #[test]
+    fn particle_preview_and_normal_launcher_do_not_arm_black_handoff() {
+        for handoff in [
+            DirectParticleActivationHandoff::new(true, ScreensaverStartMode::PreviewWhenReady),
+            DirectParticleActivationHandoff::new(false, ScreensaverStartMode::IdleWhenReady),
+        ] {
+            assert!(!handoff.holding_black(true, false));
+            assert!(handoff.renderer_start_allowed());
+        }
     }
 
     #[test]

@@ -63,6 +63,16 @@ impl<'a> LayerTarget<'a> {
         slint_dirty
     }
 
+    pub(super) fn render_black(&mut self) -> DirtyRect {
+        self.target.cached_565_mut().fill(Rgb565Pixel(0));
+        DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.ui.render_w(),
+            y1: self.ui.render_h(),
+        }
+    }
+
     pub(super) fn render_screensaver(
         &mut self,
         saver: &mut LauncherScreensaver,
@@ -305,5 +315,30 @@ mod tests {
 
         assert!(restore_cached_565(&mut target, &snapshot));
         assert_eq!(target.cached_565(), launcher_frame);
+    }
+
+    #[test]
+    fn activation_black_overwrites_the_complete_cached_frame() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        target.cached_565_mut().fill(Rgb565Pixel(0xffff));
+
+        let dirty = LayerTarget::new(&mut target, &ui).render_black();
+
+        assert_eq!(
+            dirty,
+            DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 4,
+                y1: 3,
+            }
+        );
+        assert!(
+            target
+                .cached_565()
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0))
+        );
     }
 }
