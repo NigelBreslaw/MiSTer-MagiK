@@ -105,8 +105,10 @@ evidence must begin with both Catalog V3 and the retained Arcade bootstrap
 absent, use the production direct hidden-slot route, and retain the complete
 launcher frame trace. The qualification run injects no launcher input; UI
 responsiveness under navigation load is measured separately so it cannot alter
-startup cadence or catalog completion time. A pass requires 1,201 ordered external-direct posts for
-logical frames 0 through 1,200, 60 Hz physical refresh within the ordinary
+startup cadence or catalog completion time. A pass requires at least 1,201
+ordered external-direct posts for logical frames 0 through 1,200, plus any
+reported spinning-cabinet wait frames before the live launcher is ready. All
+must sustain 60 Hz physical refresh within the ordinary
 tolerance, zero repeated refreshes, zero pacing failures, and independently
 zero latch-protocol drops or completion failures. Catalog coordinator and walker
 affinity must remain on CPU0. The run also requires a snapshot milestone before

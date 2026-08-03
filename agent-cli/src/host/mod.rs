@@ -4272,8 +4272,11 @@ fn profile_installed_catalog_lifecycle(
         )?;
         let endpoint = config.agent()?.clone();
         intro_telemetry_handle = Some(thread::spawn(move || {
-            agent_telemetry_for_duration(&endpoint, Duration::from_secs(25))
-                .map_err(|error| error.to_string())
+            agent_telemetry_for_duration(
+                &endpoint,
+                Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS + 25),
+            )
+            .map_err(|error| error.to_string())
         }));
         let started = Instant::now();
         restart_launcher_with_one_shot_env(
@@ -6170,7 +6173,8 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
         .get("refresh_hz")
         .and_then(Value::as_f64)
         .unwrap_or(f64::INFINITY);
-    let cadence_qualified = selected.len() == EXPECTED_INTRO_FRAMES
+    let cabinet_wait_frames = selected.len().saturating_sub(EXPECTED_INTRO_FRAMES);
+    let cadence_qualified = selected.len() >= EXPECTED_INTRO_FRAMES
         && skipped_refreshes == 0
         && long_completion_intervals == 0
         && frame_id_gaps == 0
@@ -6183,6 +6187,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
         "schema": "mister-magik-startup-intro-qualification-v1",
         "expected_frames": EXPECTED_INTRO_FRAMES,
         "captured_frames": selected.len(),
+        "cabinet_wait_frames": cabinet_wait_frames,
         "cadence": {
             "qualified": cadence_qualified,
             "skipped_refreshes": skipped_refreshes,
@@ -6223,6 +6228,10 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .pointer("/startup_intro/cadence/skipped_refreshes")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
+    let cabinet_wait_frames = summary
+        .pointer("/startup_intro/cabinet_wait_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let unique_fps = summary
         .pointer("/startup_intro/cadence/physical_refresh/unique_fps")
         .and_then(Value::as_f64)
@@ -6241,7 +6250,7 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         "failed"
     };
     let mut report = format!(
-        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
+        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Cabinet wait frames: {cabinet_wait_frames}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
         systems.len()
     );
     for system in systems {
