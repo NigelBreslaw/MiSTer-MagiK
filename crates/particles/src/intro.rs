@@ -109,7 +109,7 @@ impl IntroScene {
             let span = magik.groups[group];
             pivot(&magik.positions[span.start..span.start + span.count])
         });
-        let mister_screen = mister
+        let mister_screen: Vec<[f32; 2]> = mister
             .positions
             .iter()
             .map(|position| project(*position, 0.0, 0.0, &recipe, geometry))
