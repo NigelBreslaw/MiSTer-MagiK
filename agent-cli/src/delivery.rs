@@ -430,17 +430,10 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
             Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
                 let installed_manifest = self.device.read_development_manifest()?;
-                let desired_main_revision = &self
-                    .deployment
-                    .platform_candidate
-                    .as_ref()
-                    .ok_or("platform candidate was not resolved before reconciliation")?
-                    .main_revision;
-                let reconciliation = crate::deploy::reconcile_with_platform(
+                let reconciliation = crate::deploy::reconcile(
                     self.repository,
                     &installed_manifest,
                     self.expected_commit,
-                    desired_main_revision,
                 );
                 let platform_candidate = self.deployment.platform_candidate.take();
                 self.deployment =
