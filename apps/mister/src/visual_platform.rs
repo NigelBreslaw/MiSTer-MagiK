@@ -38,6 +38,21 @@ impl MisterSoftwareWindow {
         }
     }
 
+    pub fn draw_full_frame_if_needed(
+        &self,
+        render_callback: impl FnOnce(&SoftwareRenderer),
+    ) -> bool {
+        if !self.redraw_pending.replace(false) {
+            return false;
+        }
+        let previous = self.renderer.repaint_buffer_type();
+        self.renderer
+            .set_repaint_buffer_type(RepaintBufferType::NewBuffer);
+        render_callback(&self.renderer);
+        self.renderer.set_repaint_buffer_type(previous);
+        true
+    }
+
     pub fn set_size(&self, size: impl Into<slint::WindowSize>) {
         self.window.set_size(size);
     }

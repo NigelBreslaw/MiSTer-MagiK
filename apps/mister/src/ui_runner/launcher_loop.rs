@@ -2705,21 +2705,6 @@ pub(super) fn run_launcher_loop(
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
         && screensaver_start_mode == ScreensaverStartMode::Inactive;
-    if startup_intro_eligible {
-        // Prime Slint's reused software-renderer buffer before the measured
-        // particle cadence begins. The later authoritative Arcade sync then
-        // repaints only changed launcher regions instead of paying the first
-        // full-tree raster cost beside a visible intro frame.
-        let prewarm_started = Instant::now();
-        window.draw_if_needed(|renderer| {
-            let _ = target.render(renderer, frame_target_geometry(ui));
-        });
-        print_startup_event(
-            start,
-            "startup_intro_launcher_renderer_prewarmed",
-            format!("elapsed_us={}", prewarm_started.elapsed().as_micros()),
-        );
-    }
     let mut startup_intro = if startup_intro_eligible
         && launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
     {
@@ -2834,7 +2819,13 @@ pub(super) fn run_launcher_loop(
         let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
-            arcade_navigation_ready(catalog_ready, &catalog),
+            startup_intro_launcher_ready(
+                catalog_session.launcher_snapshot_catalog_ready(),
+                catalog_ready,
+                &catalog,
+                &nav,
+                arcade_screen_pending,
+            ),
             startup_intro_launcher_frame_ready,
         ) == StartupIntroLauncherUiPlan::PrepareLiveFrame;
         if !navigation_snapshot_locked_at_loop_start
@@ -4590,7 +4581,13 @@ pub(super) fn run_launcher_loop(
 
         let startup_intro_launcher_ui_plan = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
-            arcade_navigation_ready(catalog_ready, &catalog),
+            startup_intro_launcher_ready(
+                catalog_session.launcher_snapshot_catalog_ready(),
+                catalog_ready,
+                &catalog,
+                &nav,
+                arcade_screen_pending,
+            ),
             startup_intro_launcher_frame_ready,
         );
         let startup_intro_prepare_live_launcher =
@@ -4609,10 +4606,12 @@ pub(super) fn run_launcher_loop(
             }
             if startup_intro_prepare_live_launcher {
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                 let clock_text = launcher_clock_text();
                 bridge.set_clock_text(clock_text.clone().into());
                 last_clock_text = clock_text;
                 last_clock_update = Instant::now();
+                window.request_redraw();
             }
             sync_settings_bridge(&app, &nav, &lifecycle);
         }
@@ -5706,6 +5705,8 @@ pub(super) fn run_launcher_loop(
             None
         } else if navigation_snapshot_locked_before_render {
             None
+        } else if startup_intro_prepare_live_launcher {
+            layer_target.render_slint_full(&window)
         } else {
             expand_home_pan_dirty_rect(
                 layer_target.render_slint_base(&window),
@@ -7894,6 +7895,20 @@ fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool
     catalog_ready && arcade_catalog_rows_ready(catalog)
 }
 
+fn startup_intro_launcher_ready(
+    publication_ready: bool,
+    catalog_ready: bool,
+    catalog: &ArcadeCatalog,
+    nav: &LauncherNav,
+    arcade_screen_pending: bool,
+) -> bool {
+    publication_ready
+        && !arcade_screen_pending
+        && arcade_navigation_ready(catalog_ready, catalog)
+        && nav.screen == Screen::Arcade
+        && !active_system_game_view(catalog, nav).is_empty()
+}
+
 fn should_draw_arcade_overlay(
     nav: &LauncherNav,
     launching: bool,
@@ -9415,6 +9430,23 @@ mod tests {
             effective_lock_screen(Some(Screen::Arcade), true, &catalog),
             Some(Screen::Arcade)
         );
+    }
+
+    #[test]
+    pub(super) fn startup_snapshot_waits_for_publication_navigation_and_rows() {
+        let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_default_arcade(&catalog));
+
+        assert!(!startup_intro_launcher_ready(
+            false, true, &catalog, &nav, false
+        ));
+        assert!(!startup_intro_launcher_ready(
+            true, true, &catalog, &nav, true
+        ));
+        assert!(startup_intro_launcher_ready(
+            true, true, &catalog, &nav, false
+        ));
     }
 
     #[test]

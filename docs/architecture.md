@@ -620,10 +620,11 @@ matching index restores the exact local Arcade projection; a missing, corrupt,
 oversized, or stale index starts the 20-second first-run particle intro and a
 CPU0-confined first-visible Arcade scan. The interactive Slint launcher is
 not rendered continuously behind the intro: timer dispatch and bridge sync are
-suppressed while catalog changes accumulate in Rust. Before measured intro
-cadence begins, one unpresented render primes Slint's reused software buffer.
-Once the first usable Arcade projection exists, one full bridge sync and one
-incremental off-screen Slint render
+suppressed while catalog changes accumulate in Rust. A non-empty catalog alone
+does not open the capture gate. The explicit first-visible publication must be
+applied, Arcade navigation must be committed with resident rows, and the scan
+overlay must be cleared. Only then does one full bridge sync and one forced-full
+off-screen Slint render
 produce the live RGB565 target. The host immediately retains that frame and a
 low-priority CPU0 worker derives its particle formation, leaving CPU1 to render
 the intro. Transient build-progress shell and taxonomy mutations are not
@@ -631,7 +632,9 @@ projected through the dormant launcher; the final publication installs their
 authoritative state. If the prepared target is not ready by 16 seconds, the
 cabinet continues spinning and storyboard time pauses. The 20-second logical
 endpoint and first interactive frame are therefore pixel-identical. After the projection is
-acknowledged, the complete authoritative scan continues. It audits the retained projection and
+acknowledged, ordinary non-failure catalog progress no longer produces launcher
+bridge updates or scan UI. The complete authoritative scan continues in the
+background. It audits the retained projection and
 atomically refreshes the bootstrap index. Background walkers, classification
 batches, archive inspection, prepared-payload indexing, and projection work all
 remain in the continuous CPU0 background scope through UI-independent
