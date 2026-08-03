@@ -1918,8 +1918,7 @@ mod tests {
         let ui_colors = [0x07d9, 0xf7de, 0x5aeb, 0xffff];
         for y in 0..geometry.height() {
             for x in 0..live_width {
-                pixels[y * geometry.width() + x] =
-                    Rgb565Pixel(ui_colors[(x / 16 + y / 16) & 3]);
+                pixels[y * geometry.width() + x] = Rgb565Pixel(ui_colors[(x / 16 + y / 16) & 3]);
             }
         }
         pixels
