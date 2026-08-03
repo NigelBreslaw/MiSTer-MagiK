@@ -54,6 +54,7 @@ pub struct PreviewArgs {
 pub enum SceneLabCommand {
     Preview(ScenePreviewArgs),
     AnalyzeCabinetCodegen,
+    UpdateProfileLock,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -97,7 +98,51 @@ pub fn execute_scene_preview(
     match command {
         SceneLabCommand::Preview(args) => scene_preview(repository, args),
         SceneLabCommand::AnalyzeCabinetCodegen => analyze_cabinet_codegen(repository, reporter),
+        SceneLabCommand::UpdateProfileLock => update_profile_lock(repository),
     }
+}
+
+fn update_profile_lock(repository: &Path) -> AgentResult<()> {
+    let clean = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("inspect repository before profile lock update: {error}"))?;
+    if !clean.status.success() || !clean.stdout.is_empty() {
+        return Err("profile lock update requires a clean tracked working tree".into());
+    }
+    let image = std::env::var("MISTER_APPLE_CONTAINER_IMAGE")
+        .unwrap_or_else(|_| "mister-magik-cross-armv7:ubuntu20-arm64".into());
+    let status = Command::new("container")
+        .args(["run", "--arch", "arm64", "--rm", "--volume"])
+        .arg(format!("{}:/project", repository.display()))
+        .args([
+            "--workdir",
+            "/project/apps/framebuffer-scene-lab",
+            &image,
+            "bash",
+            "-lc",
+            "cargo generate-lockfile --offline",
+        ])
+        .status()
+        .map_err(|error| format!("start offline profile lock update: {error}"))?;
+    if !status.success() {
+        return Err(format!("offline profile lock update exited with {status}").into());
+    }
+    let changed = Command::new("git")
+        .args(["diff", "--name-only"])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("inspect profile lock update: {error}"))?;
+    let changed = String::from_utf8_lossy(&changed.stdout);
+    if changed.trim() != "apps/framebuffer-scene-lab/Cargo.lock" {
+        return Err(format!(
+            "profile lock update changed unexpected paths: {:?}",
+            changed.lines().collect::<Vec<_>>()
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn analyze_cabinet_codegen(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<()> {
