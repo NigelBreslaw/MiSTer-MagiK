@@ -50,7 +50,7 @@ pub struct RetainedArcadeStartupSeed {
 
 #[derive(Debug)]
 pub enum RetainedArcadeStartupProbe {
-    Ready(RetainedArcadeStartupSeed),
+    Ready(Box<RetainedArcadeStartupSeed>),
     Unavailable { reason: String, probe_us: u64 },
 }
 
@@ -60,13 +60,13 @@ pub enum RetainedArcadeStartupProbe {
 pub fn probe_retained_arcade_startup_seed(root: &Path) -> RetainedArcadeStartupProbe {
     match crate::arcade_bootstrap_index::probe(root) {
         crate::arcade_bootstrap_index::ProbeResult::Hit(loaded) => {
-            RetainedArcadeStartupProbe::Ready(RetainedArcadeStartupSeed {
+            RetainedArcadeStartupProbe::Ready(Box::new(RetainedArcadeStartupSeed {
                 catalog: loaded.catalog,
                 stamp_fingerprint: loaded.stamp.fingerprint_hex(),
                 probe_us: loaded.probe_us,
                 decode_us: loaded.decode_us,
                 bytes: loaded.bytes,
-            })
+            }))
         }
         crate::arcade_bootstrap_index::ProbeResult::Miss { reason, probe_us } => {
             RetainedArcadeStartupProbe::Unavailable { reason, probe_us }
