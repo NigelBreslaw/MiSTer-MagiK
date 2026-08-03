@@ -334,8 +334,8 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
         "cloud",
         "target_orbit",
         "morph_target",
-        "mock_crossfade",
         "hold_target",
+        "mock_crossfade",
     ];
     if kinds != expected {
         return Err("intro cues do not follow the supported v1 storyboard".into());

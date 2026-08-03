@@ -25,6 +25,8 @@ const CABINET_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pc
 const LAUNCHER_CLOUD: &[u8] = include_bytes!("../assets/intro/launcher-mock.pcloud");
 const LAUNCHER_GROUPS: &[u8] = include_bytes!("../assets/intro/launcher-mock.pgroup");
 const LAUNCHER_SNAPSHOT: &[u8] = include_bytes!("../assets/intro/launcher-mock.rgb565");
+const LAUNCHER_DESIGN_WIDTH: usize = 960;
+const LAUNCHER_DESIGN_HEIGHT: usize = 540;
 const PCLOUD_HEADER_BYTES: usize = 28;
 const PCLOUD_RECORD_BYTES: usize = 8;
 
@@ -71,6 +73,7 @@ enum IntroSlotState {
     #[default]
     Uninitialized,
     Dynamic,
+    LauncherPoints,
     Crossfade(u8),
     Snapshot,
 }
@@ -257,8 +260,12 @@ impl IntroScene {
         )?;
         let launcher_projection_compensation = launcher_projection_compensation(&recipe);
         for position in &mut launcher.positions {
-            position[0] *= launcher_projection_compensation;
-            position[1] *= launcher_projection_compensation;
+            position[0] *= launcher_projection_compensation
+                * width as f32
+                / LAUNCHER_DESIGN_WIDTH as f32;
+            position[1] *= launcher_projection_compensation
+                * height as f32
+                / LAUNCHER_DESIGN_HEIGHT as f32;
         }
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
         let launcher_snapshot = decode_launcher_snapshot(LAUNCHER_SNAPSHOT, width, height)?;
@@ -377,6 +384,25 @@ impl IntroScene {
     pub fn cue_at(&self, elapsed: Duration) -> (usize, u64) {
         let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
+    }
+
+    /// Replaces the design-time launcher mock with the exact RGB565 frame
+    /// produced by the live launcher renderer. Storage is retained and copied
+    /// in place so the crossfade hot path performs no allocation.
+    pub fn replace_launcher_snapshot(
+        &mut self,
+        pixels: &[Rgb565Pixel],
+    ) -> Result<(), String> {
+        if pixels.len() != self.geometry.len() {
+            return Err(format!(
+                "launcher snapshot has {} pixels, expected {}",
+                pixels.len(),
+                self.geometry.len()
+            ));
+        }
+        self.launcher_snapshot.copy_from_slice(pixels);
+        self.slot_states = [IntroSlotState::Uninitialized; 2];
+        Ok(())
     }
 
     fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> IntroRenderResult {
@@ -788,7 +814,12 @@ impl IntroScene {
                 elapsed_us(raster_started.elapsed()),
             );
         }
-        if let IntroSlotState::Crossfade(previous_threshold) = previous
+        let previous_threshold = match previous {
+            IntroSlotState::LauncherPoints => Some(0),
+            IntroSlotState::Crossfade(threshold) => Some(threshold),
+            _ => None,
+        };
+        if let Some(previous_threshold) = previous_threshold
             && previous_threshold <= threshold
         {
             let mut writes = 0;
@@ -1026,7 +1057,7 @@ impl FramebufferScene for IntroScene {
             .map(IntroCue::duration_ms)
             .sum();
         let buffer_id = usize::from(target.buffer_id().get());
-        let incremental_frame = matches!(&cue, IntroCue::MockCrossfade { .. }) || cue_index == 9;
+        let incremental_frame = matches!(&cue, IntroCue::MockCrossfade { .. }) || cue_index == 8;
         let clear_us = if incremental_frame {
             0
         } else {
@@ -1110,6 +1141,26 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
             ),
+            IntroCue::HoldTarget { .. } if cue_index == 8 => {
+                if self.slot_states[buffer_id] == IntroSlotState::LauncherPoints {
+                    IntroRenderResult::raster_only(0, 0, "launcher-static-particles", 0)
+                } else {
+                    let raster_started = Instant::now();
+                    target
+                        .pixels_mut()
+                        .fill(Rgb565Pixel(self.recipe.appearance.background.0));
+                    let mut result = self.render_point_target(
+                        target.pixels_mut(),
+                        ScenePointTarget::Launcher,
+                        clock.frame,
+                    );
+                    result.pixel_writes = result.pixel_writes.saturating_add(self.geometry.len());
+                    result.raster_us = elapsed_us(raster_started.elapsed());
+                    result.projection_backend = "launcher-static-particles";
+                    self.slot_states[buffer_id] = IntroSlotState::LauncherPoints;
+                    result
+                }
+            }
             IntroCue::MockCrossfade {
                 duration_ms,
                 easing,
@@ -1122,22 +1173,6 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
             ),
-            IntroCue::HoldTarget { .. } if cue_index == 9 => {
-                let raster_started = Instant::now();
-                let writes = if self.slot_states[buffer_id] == IntroSlotState::Snapshot {
-                    0
-                } else {
-                    target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
-                    self.slot_states[buffer_id] = IntroSlotState::Snapshot;
-                    self.launcher_snapshot.len()
-                };
-                IntroRenderResult::raster_only(
-                    0,
-                    writes,
-                    "launcher-mock-rgb565",
-                    elapsed_us(raster_started.elapsed()),
-                )
-            }
             _ => {
                 let point_target = match cue_index {
                     0..=3 => ScenePointTarget::Mister,
@@ -1533,17 +1568,27 @@ fn decode_launcher_snapshot(
     let width = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
     let height = usize::from(u16::from_le_bytes([bytes[10], bytes[11]]));
     let count = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-    if width != expected_width
-        || height != expected_height
-        || count != width.saturating_mul(height)
+    if count != width.saturating_mul(height)
         || bytes.len() != 16 + count * 2
     {
         return Err("launcher mock snapshot geometry is invalid".into());
     }
-    Ok(bytes[16..]
+    let source = bytes[16..]
         .chunks_exact(2)
         .map(|pixel| Rgb565Pixel(u16::from_le_bytes([pixel[0], pixel[1]])))
-        .collect())
+        .collect::<Vec<_>>();
+    if width == expected_width && height == expected_height {
+        return Ok(source);
+    }
+    let mut scaled = vec![Rgb565Pixel(0); expected_width.saturating_mul(expected_height)];
+    for y in 0..expected_height {
+        let source_y = y.saturating_mul(height) / expected_height;
+        for x in 0..expected_width {
+            let source_x = x.saturating_mul(width) / expected_width;
+            scaled[y * expected_width + x] = source[source_y * width + source_x];
+        }
+    }
+    Ok(scaled)
 }
 
 fn bayer8(x: usize, y: usize) -> u8 {
@@ -1583,8 +1628,8 @@ const fn cue_label(index: usize) -> &'static str {
         5 => "letters-to-cabinet",
         6 => "cabinet-orbit",
         7 => "form-launcher",
-        8 => "crossfade",
-        _ => "hold-launcher",
+        8 => "hold-launcher-particles",
+        _ => "crossfade-launcher",
     }
 }
 
@@ -1770,7 +1815,7 @@ mod tests {
             vec![Rgb565Pixel(0); geometry.len()],
             vec![Rgb565Pixel(0); geometry.len()],
         ];
-        for (frame, time_ms) in (18_000..=19_000).step_by(125).enumerate() {
+        for (frame, time_ms) in (19_000..=20_000).step_by(125).enumerate() {
             let slot = frame & 1;
             let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
             let clock = SceneClock {
@@ -1794,5 +1839,63 @@ mod tests {
                 .unwrap();
             assert_eq!(slots[slot], expected, "time_ms={time_ms} slot={slot}");
         }
+    }
+
+    #[test]
+    fn live_launcher_snapshot_is_pixel_exact_at_handoff() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
+        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        let expected = (0..geometry.len())
+            .map(|offset| Rgb565Pixel((offset as u16).rotate_left(3)))
+            .collect::<Vec<_>>();
+        scene.replace_launcher_snapshot(&expected).unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+        let buffer = SceneBufferId::new(0, 2).unwrap();
+
+        scene
+            .render(
+                SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                SceneClock {
+                    frame: 1_200,
+                    elapsed: Duration::from_millis(20_000),
+                    next_elapsed: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(pixels, expected);
+    }
+
+    #[test]
+    fn particle_launcher_hold_becomes_zero_write_per_slot() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
+        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+        let buffer = SceneBufferId::new(0, 2).unwrap();
+        let first = scene
+            .render(
+                SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                SceneClock {
+                    frame: 1_080,
+                    elapsed: Duration::from_millis(18_000),
+                    next_elapsed: Some(Duration::from_millis(18_016)),
+                },
+            )
+            .unwrap();
+        let second = scene
+            .render(
+                SceneTarget::new(&mut pixels, geometry, buffer).unwrap(),
+                SceneClock {
+                    frame: 1_081,
+                    elapsed: Duration::from_millis(18_016),
+                    next_elapsed: Some(Duration::from_millis(18_032)),
+                },
+            )
+            .unwrap();
+
+        assert!(first.pixel_writes > 0);
+        assert_eq!(second.pixel_writes, 0);
     }
 }
