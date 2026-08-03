@@ -30,6 +30,7 @@ mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-particles = { path = "../../crates/particles" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+png = { version = "0.18.1", optional = true }
 swash = { version = "0.2.7", features = ["scale", "render"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -43,7 +44,7 @@ pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itim
 
 [features]
 default = []
-asset-tools = ["dep:swash"]
+asset-tools = ["dep:png", "dep:swash"]
 profile = ["dep:pprof"]
 
 [profile.release]

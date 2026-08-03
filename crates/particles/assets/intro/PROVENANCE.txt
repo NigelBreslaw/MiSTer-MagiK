@@ -1,13 +1,16 @@
 MiSTer MagiK intro particle assets
 font_sha256=8d0248e41694fdd875dbcde859ee1bae5982ecfdc6c7e5e451b48950d29ba95a
+launcher_source_sha256=3e55d491495ec9158f1126a7cf545c7155be4ae0b4476feb543650eac1c47c48
 particles=40960
 distributed_depth_layers=9
 text_style=original-magik-phosphor
-mister.pcloud fnv1a64=a6f3b194fa7693ae
+text_layout=whole-string-original-mask-advances
+text_alignment=independent-whole-word-center
+mister.pcloud fnv1a64=4797af0cea0f161f
 mister.pgroup fnv1a64=d5c9cf4cc6f276f7
-magik.pcloud fnv1a64=63f46e2955c656c2
+magik.pcloud fnv1a64=9d94517c20d2cb73
 magik.pgroup fnv1a64=d5c9cf4cc6f276f7
-launcher-mock.pcloud fnv1a64=7005f44c9e1b038c
+launcher-mock.pcloud fnv1a64=7cbaf9ca70631676
 launcher-mock.pgroup fnv1a64=bb5b2786134cb6f7
-launcher-mock.rgb565 fnv1a64=ee1c4ddfcec1400b
+launcher-mock.rgb565 fnv1a64=57045d2590b45b37
 generator=generate-intro-assets
