@@ -4068,6 +4068,7 @@ const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
 const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
+const PARTICLE_COUNT_SEED: u64 = 122_880;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
 
@@ -6501,7 +6502,7 @@ fn profile_particle_preset(
     let mut trials = Vec::new();
     let mut last_pass = 0u64;
     let mut first_fail = None;
-    let mut count = PARTICLE_COUNT_STEP;
+    let mut count = PARTICLE_COUNT_SEED;
     while count <= PARTICLE_COUNT_MAX {
         let trial = run_particle_trial(
             config,
@@ -15894,7 +15895,12 @@ H: Handlers=event3 js0"#
 
     #[test]
     fn particle_search_refines_to_1024_particle_precision() {
+        assert_eq!(PARTICLE_COUNT_SEED, 120 * PARTICLE_COUNT_STEP);
         assert_eq!(particle_refinement_count(0, 524_288), Some(262_144));
+        assert_eq!(
+            particle_refinement_count(0, PARTICLE_COUNT_SEED),
+            Some(61_440)
+        );
         assert_eq!(particle_refinement_count(131_072, 262_144), Some(196_608));
         assert_eq!(particle_refinement_count(196_608, 197_632), None);
     }
