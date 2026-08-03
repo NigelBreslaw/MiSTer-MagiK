@@ -870,6 +870,31 @@ mod tests {
     }
 
     #[test]
+    fn runtime_delivery_skips_platform_resolution_and_reboot() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let actions = scenario_actions(
+            crate::deploy::DeploymentKind::Runtime,
+            RequestRecorder(Rc::clone(&requests)),
+        );
+        for phase in [
+            Phase::GithubResolution,
+            Phase::ManagerQualification,
+            Phase::DatabasePreparation,
+            Phase::RebootIfNeeded,
+            Phase::Activate,
+            Phase::Smoke,
+        ] {
+            assert!(
+                !actions.should_run(phase),
+                "runtime delivery unexpectedly runs {phase:?}"
+            );
+        }
+        assert!(actions.should_run(Phase::RuntimeBuild));
+        assert!(actions.should_run(Phase::LocalStaging));
+        assert!(actions.should_run(Phase::RemoteInventoryUpload));
+    }
+
+    #[test]
     fn deterministic_platform_uses_one_transaction_request() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(

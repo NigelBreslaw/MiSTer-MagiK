@@ -13,19 +13,23 @@ slint/
 scanout kernel module, and the FPGA latch come from the same latest qualified
 GitHub platform release; the tag-addressed verified archive is reused while
 that release remains latest. The platform manifest binds those components to
-the app. Current policy promotes every app revision change to a canonical
-Platform delivery, even when the component archive is unchanged. It reuses the
-verified tag-addressed platform cache, but activation still replaces the
-canonical component set and reboots. Runtime-only activation remains
-implemented below the policy boundary but is deliberately not selected by
-`scripts/agent deliver`.
+the app. Reconciliation keeps app-only changes in the `Runtime` lane when the
+installed Main/platform identity is compatible. That lane builds the runtime
+artifact, regenerates the v3 manifest as an inseparable binary/manifest pair,
+and activates it through the supervised Dev transaction without rebooting
+Linux. Platform identity changes, invalid or incomplete manifests, and Main,
+kernel, FPGA, or manager changes remain `Platform` delivery and use the full
+manifest-bound transaction with its supervised reboot.
 
 There is deliberately no binary-only runtime deployment interface. The app and
 manifest are one activation unit even when Main, the scanout module, and the
 RBF are unchanged. Main's acknowledgement of `mister_magik_resume` means only
 that it accepted the request; successful preflight, child start, latch-backed
 ready reporting, and delivery smoke are required before the old unit may be
-discarded.
+discarded. For rapid particle iteration, use the canonical attended
+`scripts/agent device scene-lab --scene magik --recipe RECIPE --attended` lane:
+it builds only `apps/framebuffer-scene-lab`, runs from volatile `/tmp` state,
+and restores Main on exit without a Linux reboot.
 
 The fork is not a submodule. It has its own history, CI, build wrapper, and
 patch ledger.
@@ -232,9 +236,9 @@ noncanonical manifests select `Platform`.
 
 - `NoOp` returns after reconciliation when the revisions already match or all
   accumulated app changes are non-deploying.
-- `Runtime` is an internal reconciliation result. Current delivery policy
-  promotes it to `Platform`; there is no user- or agent-facing runtime-only
-  activation path.
+- `Runtime` builds and activates the Dev runtime/manifest pair through the
+  no-reboot coherent transaction. It skips GitHub platform resolution, manager
+  qualification, database preparation, and the reboot phase.
 - `Platform` qualifies and activates the complete Main, app, kernel, FPGA,
   manager, database-support, and manifest set with reboot and rollback
   protection inside one typed host transaction.
