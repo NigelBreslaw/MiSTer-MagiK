@@ -400,10 +400,12 @@ impl ArcadeCabinetFormation {
         let mut projection_backend = "cabinet-scalar";
 
         macro_rules! draw_offset {
-            ($index:expr, $offset:expr, $pixel_x:expr) => {{
+            ($index:expr, $offset:expr, $pixel_x:expr, $attribute:expr, $lane:expr) => {{
                 let index = $index;
                 let offset = $offset;
                 let pixel_x = $pixel_x;
+                let attribute = $attribute;
+                let lane = $lane;
                 let feature = attribute.flags[lane];
                 let style = if feature & appearance.priority_feature_mask != 0 {
                     appearance.priority_palette_index
@@ -430,7 +432,7 @@ impl ArcadeCabinetFormation {
         }
 
         macro_rules! project_and_draw {
-            ($index:expr, $world_x:expr, $world_y:expr, $world_z:expr) => {{
+            ($index:expr, $attribute:expr, $lane:expr, $world_x:expr, $world_y:expr, $world_z:expr) => {{
                 let index = $index;
                 let world_x = $world_x;
                 let world_y = $world_y;
@@ -447,7 +449,7 @@ impl ArcadeCabinetFormation {
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
-                        draw_offset!(index, offset, pixel_x);
+                        draw_offset!(index, offset, pixel_x, $attribute, $lane);
                     }
                 }
             }};
@@ -464,6 +466,8 @@ impl ArcadeCabinetFormation {
                             + attribute.life[lane] * self.recipe.dispersal.radial_life_gain);
                 project_and_draw!(
                     index,
+                    attribute,
+                    lane,
                     position.target_x[lane] * scale,
                     position.target_y[lane] * scale
                         + dispersal
@@ -479,6 +483,8 @@ impl ArcadeCabinetFormation {
                 let lane = index % PARTICLE_LANES;
                 project_and_draw!(
                     index,
+                    attribute,
+                    lane,
                     position.source_x[lane]
                         + (position.target_x[lane] - position.source_x[lane]) * formation,
                     position.source_y[lane]
@@ -513,7 +519,13 @@ impl ArcadeCabinetFormation {
                     }
                     let attribute = &self.attributes[index / PARTICLE_LANES];
                     let lane = index % PARTICLE_LANES;
-                    draw_offset!(index, offset as usize, offset as usize % self.width);
+                    draw_offset!(
+                        index,
+                        offset as usize,
+                        offset as usize % self.width,
+                        attribute,
+                        lane
+                    );
                 }
             }
             for index in vector_end..self.options.active_count {
@@ -522,6 +534,8 @@ impl ArcadeCabinetFormation {
                 let lane = index % PARTICLE_LANES;
                 project_and_draw!(
                     index,
+                    attribute,
+                    lane,
                     position.target_x[lane],
                     position.target_y[lane],
                     position.target_z[lane]
