@@ -116,6 +116,7 @@ scripts/agent deliver local-main
 scripts/agent benchmark
 scripts/agent capture usb-video
 scripts/agent diagnose
+scripts/agent dependencies sync path/to/Cargo.toml
 scripts/agent release qualify
 git add -- path/to/file
 git commit -m "Describe the completed change"
@@ -125,6 +126,12 @@ For Rust or Cargo work, use the repo-scoped `$magik-rust-lsp` skill for
 semantic navigation and package-scoped Clippy diagnostics. Refresh diagnostics
 after a coherent edit batch, not after every small patch. Do not construct
 Cargo, test, lint, host-assurance, or Apple-container commands directly.
+For dependency changes, edit the owning `Cargo.toml`, run
+`scripts/agent dependencies sync path/to/Cargo.toml` (optionally with
+`--package NAME` for a focused update), review the manifest and adjacent
+`Cargo.lock`, then stage and commit those exact files together. The sync command
+uses standard `cargo update` and verifies the resulting all-features graph with
+`cargo metadata --locked`.
 `scripts/agent plan` previews the full assurance selected for working-tree or
 explicit paths without executing it. The pre-commit hook is the index-only fast
 gate, the pre-push hook is the full affected local assurance interface, and

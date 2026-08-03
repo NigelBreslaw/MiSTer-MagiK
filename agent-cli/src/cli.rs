@@ -4,6 +4,7 @@
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
+use crate::dependencies::DependenciesCommand;
 use crate::live_particles::LiveParticlesCommand;
 use crate::model::{BenchmarkScenario, Scope};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
@@ -88,6 +89,10 @@ pub enum Command {
     SceneLab {
         #[command(subcommand)]
         command: SceneLabCommand,
+    },
+    Dependencies {
+        #[command(subcommand)]
+        command: DependenciesCommand,
     },
     #[command(hide = true)]
     Build {

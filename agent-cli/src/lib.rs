@@ -15,6 +15,7 @@ pub mod commands;
 pub mod compile_time;
 pub mod components;
 pub mod delivery;
+pub mod dependencies;
 pub mod deploy;
 pub mod device;
 pub mod diagnose;
