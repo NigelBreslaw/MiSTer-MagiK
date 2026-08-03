@@ -122,7 +122,7 @@ fn update_profile_lock(repository: &Path) -> AgentResult<()> {
             &image,
             "bash",
             "-lc",
-            "cargo generate-lockfile --offline",
+            "PATH=/rust/bin:$PATH cargo generate-lockfile --offline",
         ])
         .status()
         .map_err(|error| format!("start offline profile lock update: {error}"))?;
