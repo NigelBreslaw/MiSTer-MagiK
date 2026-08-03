@@ -976,16 +976,18 @@ impl ArcadeCabinetFormation {
                 destination[offset] = pixel(appearance.palette[usize::from(style)]);
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
-                let pixel_x = offset % self.width;
                 if feature & appearance.neighbor_feature_mask != 0
                     && index % usize::from(appearance.neighbor_every) == 0
-                    && pixel_x + 1 < self.width
                 {
-                    let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
-                    destination[offset + 1] =
-                        pixel(appearance.palette[usize::from(neighbor_style)]);
-                    dirty_offsets.push((offset + 1) as u32);
-                    pixel_writes = pixel_writes.saturating_add(1);
+                    let pixel_x = offset % self.width;
+                    if pixel_x + 1 < self.width {
+                        let neighbor_style =
+                            style.saturating_sub(appearance.neighbor_palette_subtract);
+                        destination[offset + 1] =
+                            pixel(appearance.palette[usize::from(neighbor_style)]);
+                        dirty_offsets.push((offset + 1) as u32);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                    }
                 }
             }
         } else {
