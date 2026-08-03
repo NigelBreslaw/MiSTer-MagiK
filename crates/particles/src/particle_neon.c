@@ -14,6 +14,7 @@ static const float TARGET_DEPTH_Q2_RECIP = 1.0f / 4.0f;
 static const float RANDOM_UNIT_RECIP = 1.0f / 16777215.0f;
 static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
 static const uint32_t COMMAND_PALETTE_SHIFT = 20;
+static const uint32_t COMMAND_X_SHIFT = 22;
 static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
 
 typedef struct {
@@ -110,8 +111,11 @@ size_t mister_magik_cabinet_neon_project_stable(
             vshrq_n_u32(vcgeq_f32(depth, depth_band_3), 31)
         );
         const uint32x4_t command = vorrq_u32(
-            offset,
-            vshlq_n_u32(depth_band, COMMAND_PALETTE_SHIFT)
+            vorrq_u32(
+                offset,
+                vshlq_n_u32(depth_band, COMMAND_PALETTE_SHIFT)
+            ),
+            vshlq_n_u32(pixel_x, COMMAND_X_SHIFT)
         );
         vst1q_u32(offsets + index, vbslq_u32(valid, command, invalid));
     }

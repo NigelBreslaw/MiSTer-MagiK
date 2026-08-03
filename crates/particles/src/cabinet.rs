@@ -134,6 +134,8 @@ struct CabinetAttributeBlock {
 const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
 const COMMAND_OFFSET_MASK: u32 = (1 << 20) - 1;
 const COMMAND_DEPTH_SHIFT: u32 = 20;
+const COMMAND_X_SHIFT: u32 = 22;
+const COMMAND_X_MASK: u32 = (1 << 10) - 1;
 const BASELINE_NEIGHBOR_PRESENT: u64 = 1 << 32;
 
 #[repr(transparent)]
@@ -141,10 +143,14 @@ const BASELINE_NEIGHBOR_PRESENT: u64 = 1 << 32;
 struct CabinetDrawCommand(u32);
 
 impl CabinetDrawCommand {
-    fn visible(offset: usize, depth: f32) -> Self {
+    fn visible(offset: usize, depth: f32, pixel_x: usize) -> Self {
         let depth_band =
             u32::from(depth >= 480.0) + u32::from(depth >= 640.0) + u32::from(depth >= 800.0);
-        Self((offset as u32) | (depth_band << COMMAND_DEPTH_SHIFT))
+        Self(
+            (offset as u32)
+                | (depth_band << COMMAND_DEPTH_SHIFT)
+                | ((pixel_x as u32) << COMMAND_X_SHIFT),
+        )
     }
 
     fn offset(self) -> Option<usize> {
@@ -153,6 +159,10 @@ impl CabinetDrawCommand {
 
     fn depth_band(self) -> u8 {
         ((self.0 >> COMMAND_DEPTH_SHIFT) & 3) as u8
+    }
+
+    fn pixel_x(self) -> usize {
+        ((self.0 >> COMMAND_X_SHIFT) & COMMAND_X_MASK) as usize
     }
 }
 
@@ -772,6 +782,7 @@ impl ArcadeCabinetFormation {
             ($index:expr, $offset:expr, $pixel_x:expr, $attribute:expr, $lane:expr) => {{
                 let index = $index;
                 let mut offset = $offset;
+                let mut pixel_x = $pixel_x;
                 let attribute = $attribute;
                 let lane = $lane;
                 let feature = attribute.flags[lane];
@@ -779,15 +790,15 @@ impl ArcadeCabinetFormation {
                 // position, choose depth color, draw history, draw satellites,
                 // and finally overwrite the center with the current primary.
                 if micro_jitter_mode && feature == 0 && attribute.random[lane] & 1 == 0 {
-                    offset = jittered_offset(
+                    (offset, pixel_x) = jittered_offset_with_x(
                         offset,
+                        pixel_x,
                         self.width,
                         destination.len(),
                         attribute.random[lane],
                         jitter_phase,
                     );
                 }
-                let pixel_x = offset % self.width;
                 let base_style = if feature & appearance.priority_feature_mask != 0 {
                     appearance.priority_palette_index
                 } else if feature & appearance.accent_feature_mask != 0 {
@@ -812,10 +823,12 @@ impl ArcadeCabinetFormation {
                     && index % usize::from(appearance.neighbor_every) == 0
                     && pixel_x + 1 < self.width;
                 if history_mode {
-                    if let Some(mut history_offset) = self.previous_commands[index].offset() {
+                    let previous = self.previous_commands[index];
+                    if let Some(mut history_offset) = previous.offset() {
                         if micro_jitter_mode && feature == 0 && attribute.random[lane] & 1 == 0 {
-                            history_offset = jittered_offset(
+                            (history_offset, _) = jittered_offset_with_x(
                                 history_offset,
+                                previous.pixel_x(),
                                 self.width,
                                 destination.len(),
                                 attribute.random[lane],
@@ -884,7 +897,8 @@ impl ArcadeCabinetFormation {
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
-                        self.commands[index] = CabinetDrawCommand::visible(offset, depth);
+                        self.commands[index] =
+                            CabinetDrawCommand::visible(offset, depth, pixel_x);
                     }
                 }
             }};
@@ -1014,7 +1028,7 @@ impl ArcadeCabinetFormation {
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
                 if baseline & BASELINE_NEIGHBOR_PRESENT != 0 {
-                    let pixel_x = offset % self.width;
+                    let pixel_x = self.commands[index].pixel_x();
                     if pixel_x + 1 < self.width {
                         destination[offset + 1] = Rgb565Pixel((baseline >> 16) as u16);
                         dirty_offsets.push((offset + 1) as u32);
@@ -1030,7 +1044,13 @@ impl ArcadeCabinetFormation {
                 visible = visible.saturating_add(1);
                 let attribute = &self.attributes[index / PARTICLE_LANES];
                 let lane = index % PARTICLE_LANES;
-                draw_offset!(index, offset, offset % self.width, attribute, lane);
+                draw_offset!(
+                    index,
+                    offset,
+                    self.commands[index].pixel_x(),
+                    attribute,
+                    lane
+                );
             }
         }
         let raster_us = elapsed_us(raster_started.elapsed());
@@ -1152,16 +1172,29 @@ fn cohort_particle_count(count: usize, cohorts: usize, cohort: usize) -> usize {
 }
 
 fn jittered_offset(offset: usize, width: usize, frame_len: usize, random: u32, phase: u8) -> usize {
-    let x = offset % width;
-    let y = offset / width;
-    if x == 0 || x + 1 >= width || y == 0 || offset + width >= frame_len {
-        return offset;
+    jittered_offset_with_x(offset, offset % width, width, frame_len, random, phase).0
+}
+
+fn jittered_offset_with_x(
+    offset: usize,
+    pixel_x: usize,
+    width: usize,
+    frame_len: usize,
+    random: u32,
+    phase: u8,
+) -> (usize, usize) {
+    if pixel_x == 0
+        || pixel_x + 1 >= width
+        || offset < width
+        || offset + width >= frame_len
+    {
+        return (offset, pixel_x);
     }
     match (u32::from(phase) + ((random >> 3) & 3)) & 3 {
-        0 => offset - 1,
-        1 => offset - width,
-        2 => offset + 1,
-        _ => offset + width,
+        0 => (offset - 1, pixel_x - 1),
+        1 => (offset - width, pixel_x),
+        2 => (offset + 1, pixel_x + 1),
+        _ => (offset + width, pixel_x),
     }
 }
 
@@ -1438,6 +1471,37 @@ mod tests {
                     .map(|cohort| cohort_particle_count(count, cohorts, cohort))
                     .sum::<usize>();
                 assert_eq!(covered, count);
+            }
+        }
+    }
+
+    #[test]
+    fn draw_commands_pack_offset_depth_and_screen_x() {
+        let command = CabinetDrawCommand::visible(518_399, 700.0, 959);
+        assert_eq!(command.offset(), Some(518_399));
+        assert_eq!(command.depth_band(), 2);
+        assert_eq!(command.pixel_x(), 959);
+    }
+
+    #[test]
+    fn packed_x_jitter_matches_the_reference_offset_path() {
+        let width = 32;
+        let frame_len = width * 24;
+        for offset in [0, width + 1, 10 * width + 10, frame_len - width - 2] {
+            for random in [0, 0x1234_5678, u32::MAX] {
+                for phase in 0..4 {
+                    let reference = jittered_offset(offset, width, frame_len, random, phase);
+                    let packed = jittered_offset_with_x(
+                        offset,
+                        offset % width,
+                        width,
+                        frame_len,
+                        random,
+                        phase,
+                    )
+                    .0;
+                    assert_eq!(packed, reference);
+                }
             }
         }
     }
