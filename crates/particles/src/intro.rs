@@ -234,7 +234,7 @@ impl IntroScene {
             .iter()
             .map(|position| project_command(*position, &recipe, geometry))
             .collect::<Vec<_>>();
-        let launcher_thresholds = launcher_commands
+        let launcher_thresholds: Vec<u8> = launcher_commands
             .iter()
             .map(|command| {
                 command.offset().map_or(64, |offset| {
