@@ -22,6 +22,7 @@ const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
 const ARCADE_DEMO_NUMBER: u64 = 21;
 const FULL_RATE_PARTICLE_LIMIT: usize = 48_128;
+const TWO_WAY_PARTICLE_LIMIT: usize = 72_192;
 
 pub use mister_magik_framebuffer_scenes::Rgb565Pixel;
 
@@ -469,7 +470,9 @@ impl ArcadeCabinetFormation {
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
-        let projection_cohorts = if self.options.active_count > FULL_RATE_PARTICLE_LIMIT {
+        let projection_cohorts = if self.options.active_count > TWO_WAY_PARTICLE_LIMIT {
+            3_u8
+        } else if self.options.active_count > FULL_RATE_PARTICLE_LIMIT {
             2_u8
         } else {
             1_u8
@@ -618,10 +621,11 @@ impl ArcadeCabinetFormation {
                 &mut self.commands,
             );
             if vector_end > 0 {
-                projection_backend = if project_all {
-                    "cabinet-neon"
-                } else {
-                    "cabinet-neon-cohort-2"
+                projection_backend = match (project_all, projection_cohorts) {
+                    (true, _) => "cabinet-neon",
+                    (false, 2) => "cabinet-neon-cohort-2",
+                    (false, 3) => "cabinet-neon-cohort-3",
+                    (false, _) => "cabinet-neon-cohort",
                 };
             }
             for index in vector_end..self.options.active_count {
@@ -1073,11 +1077,13 @@ mod tests {
 
     #[test]
     fn projection_cohorts_cover_every_particle_once() {
-        for count in [48_129, 72_192, 72_704, 72_703] {
-            let covered = (0..2)
-                .map(|cohort| cohort_particle_count(count, 2, cohort))
-                .sum::<usize>();
-            assert_eq!(covered, count);
+        for cohorts in [2, 3] {
+            for count in [48_129, 72_192, 72_704, 72_703] {
+                let covered = (0..cohorts)
+                    .map(|cohort| cohort_particle_count(count, cohorts, cohort))
+                    .sum::<usize>();
+                assert_eq!(covered, count);
+            }
         }
     }
 
