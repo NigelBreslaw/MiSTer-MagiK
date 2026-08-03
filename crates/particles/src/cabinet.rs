@@ -113,6 +113,7 @@ pub enum CabinetColorMode {
     VortexSpectrum,
     StudioLights,
     DepthPrism,
+    MotionHeat,
 }
 
 impl CabinetColorMode {
@@ -125,7 +126,12 @@ impl CabinetColorMode {
             Self::VortexSpectrum => "VORTEX SPECTRUM",
             Self::StudioLights => "STUDIO LIGHTS",
             Self::DepthPrism => "DEPTH PRISM",
+            Self::MotionHeat => "MOTION HEAT",
         }
+    }
+
+    const fn uses_command_history(self) -> bool {
+        matches!(self, Self::MotionHeat)
     }
 }
 
@@ -878,6 +884,7 @@ impl ArcadeCabinetFormation {
         let satellite_mode = creative_mode.uses_satellites();
         let history_mode =
             creative_mode.uses_history_echo() && (formation < 1.0 || dispersal > 0.0);
+        let track_previous = history_mode || color_mode.uses_command_history();
         let depth_palette_mode = creative_mode.uses_depth_palette();
         let micro_jitter_mode = creative_mode.uses_micro_jitter();
         let jitter_phase = (self.projection_frame & 3) as u8;
@@ -1048,13 +1055,13 @@ impl ArcadeCabinetFormation {
             };
         }
 
-        if history_mode && self.commands_initialized {
+        if track_previous && self.commands_initialized {
             for index in 0..self.options.active_count {
                 if selected_for_projection!(index) {
                     self.previous_commands[index] = self.commands[index];
                 }
             }
-        } else if history_mode {
+        } else if track_previous {
             self.previous_commands[..self.options.active_count]
                 .fill(CabinetDrawCommand(INVALID_PARTICLE_OFFSET));
         }
@@ -1190,6 +1197,20 @@ impl ArcadeCabinetFormation {
                     CabinetColorMode::DepthPrism => {
                         self.depth_prism[pixel_x + pixel_y * 3]
                             [usize::from(command.depth_band())]
+                    }
+                    CabinetColorMode::MotionHeat => {
+                        let previous = self.previous_commands[index];
+                        if let Some(previous_offset) = previous.offset() {
+                            let previous_x = previous.pixel_x();
+                            let previous_y =
+                                projected_pixel_y(previous_offset, previous_x, self.width);
+                            let speed = pixel_x.abs_diff(previous_x) + pixel_y.abs_diff(previous_y);
+                            MOTION_HEAT_COLORS[usize::from(speed >= 2)
+                                + usize::from(speed >= 5)
+                                + usize::from(speed >= 10)]
+                        } else {
+                            MOTION_HEAT_COLORS[0]
+                        }
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
@@ -1487,6 +1508,13 @@ const VORTEX_STOPS: [Rgb565Pixel; 7] = [
     Rgb565Pixel(0x435f),
     Rgb565Pixel(0x981f),
     Rgb565Pixel(0xf986),
+];
+
+const MOTION_HEAT_COLORS: [Rgb565Pixel; 4] = [
+    Rgb565Pixel(0x435f),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0xffc0),
+    Rgb565Pixel(0xfd20),
 ];
 
 fn fill_vortex_field(field: &mut [Rgb565Pixel], width: usize, height: usize) {
