@@ -6,7 +6,8 @@
 use crate::intro_recipe::{IntroCue, IntroRecipe};
 use crate::point_cloud::{
     INVALID_PARTICLE_OFFSET, PARTICLE_LANES, PointCloudDrawCommand, PointCloudPositionBlock,
-    project_stable_neon,
+    QuantizedPointCloud, project_stable_neon, quantize_q5, quantize_unit_q15,
+    transform_cloud_q5_neon, transform_lerp_q5_neon, transform_letter_q5_neon,
 };
 use crate::recipes::RecipeEasing;
 use crate::targets::{ParticleGroupSpan, decode_particle_groups};
@@ -111,18 +112,25 @@ pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
     mister: PointTarget,
+    mister_q5: QuantizedPointCloud,
     mister_commands: Vec<PointCloudDrawCommand>,
     mister_pivots: [[f32; 3]; 6],
     magik: PointTarget,
+    magik_q5: QuantizedPointCloud,
     magik_commands: Vec<PointCloudDrawCommand>,
     magik_pivots: [[f32; 3]; 6],
     scatter_vectors: Vec<[f32; 3]>,
+    scatter_q15: QuantizedPointCloud,
     cloud: PointTarget,
+    cloud_q5: QuantizedPointCloud,
     cabinet_formed: Vec<[f32; 3]>,
+    cabinet_q5: QuantizedPointCloud,
     cabinet_blocks: Vec<PointCloudPositionBlock>,
     cabinet_formation: f32,
     launcher_source: Vec<[f32; 3]>,
+    launcher_source_q5: QuantizedPointCloud,
     launcher: PointTarget,
+    launcher_q5: QuantizedPointCloud,
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
     launcher_thresholds: Vec<u8>,
@@ -180,7 +188,10 @@ impl IntroScene {
                     signed_unit(random.rotate_left(21)),
                 ]
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let mister_q5 = QuantizedPointCloud::from_positions(&mister.positions);
+        let magik_q5 = QuantizedPointCloud::from_positions(&magik.positions);
+        let scatter_q15 = QuantizedPointCloud::from_unit_vectors(&scatter_vectors);
         let cloud_radius = match recipe.cues.get(5) {
             Some(IntroCue::Cloud { radius, .. }) => *radius,
             _ => return Err("intro cloud cue is missing".into()),
@@ -192,6 +203,7 @@ impl IntroScene {
             &magik.groups,
             &magik_pivots,
         );
+        let cloud_q5 = QuantizedPointCloud::from_positions(&cloud.positions);
         let mut cabinet = decode_target(CABINET_CLOUD, None, TargetScale::Cabinet)?;
         cabinet.positions.truncate(recipe.steady_particle_count);
         cabinet.palette.truncate(recipe.steady_particle_count);
@@ -225,6 +237,7 @@ impl IntroScene {
             })
             .collect();
         let cabinet_blocks = prepare_position_blocks(&cabinet_formed);
+        let cabinet_q5 = QuantizedPointCloud::from_positions(&cabinet_formed);
         let (cabinet_final_sin, cabinet_final_cos) = cabinet_final_yaw.sin_cos();
         let launcher_source = cabinet_formed
             .iter()
@@ -235,7 +248,8 @@ impl IntroScene {
                     (-formed[0]).mul_add(cabinet_final_sin, formed[2] * cabinet_final_cos),
                 ]
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let launcher_source_q5 = QuantizedPointCloud::from_positions(&launcher_source);
         let mut launcher = decode_target(
             LAUNCHER_CLOUD,
             Some((LAUNCHER_GROUPS, 1)),
@@ -246,6 +260,7 @@ impl IntroScene {
             position[0] *= launcher_projection_compensation;
             position[1] *= launcher_projection_compensation;
         }
+        let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
         let launcher_snapshot = decode_launcher_snapshot(LAUNCHER_SNAPSHOT, width, height)?;
         let launcher_commands = launcher
             .positions
@@ -316,18 +331,25 @@ impl IntroScene {
             geometry,
             recipe,
             mister,
+            mister_q5,
             mister_commands,
             mister_pivots,
             magik,
+            magik_q5,
             magik_commands,
             magik_pivots,
             scatter_vectors,
+            scatter_q15,
             cloud,
+            cloud_q5,
             cabinet_formed,
+            cabinet_q5,
             cabinet_blocks,
             cabinet_formation,
             launcher_source,
+            launcher_source_q5,
             launcher,
+            launcher_q5,
             launcher_snapshot,
             launcher_commands,
             launcher_thresholds,
@@ -472,6 +494,7 @@ impl IntroScene {
         let local_duration = duration_ms
             .saturating_sub(stagger_ms.saturating_mul(5))
             .max(1);
+        let mut positions_prepared = true;
         for (group_index, span) in self.mister.groups.iter().enumerate() {
             let start_ms = stagger_ms.saturating_mul(group_index as u64);
             let progress = cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32;
@@ -480,45 +503,64 @@ impl IntroScene {
             let destination_pivot = self.magik_pivots[group_index];
             let angle = progress * turns * std::f32::consts::TAU;
             let (sin, cos) = angle.sin_cos();
-            for index in span.start..span.start + span.count {
-                if !update_all && !updates_transform_cohort(index, frame) {
-                    continue;
+            let scatter = if group_index == 0 {
+                0.0
+            } else {
+                (progress * std::f32::consts::PI).sin() * 58.0
+            };
+            let group_prepared = transform_letter_q5_neon(
+                span.start,
+                span.count,
+                &self.mister_q5,
+                &self.magik_q5,
+                &self.scatter_q15,
+                quantized_point(source_pivot),
+                quantized_point(destination_pivot),
+                quantize_unit_q15(progress),
+                quantize_unit_q15(sin),
+                quantize_unit_q15(cos),
+                quantize_q5(scatter),
+                &mut self.positions,
+            );
+            positions_prepared &= group_prepared;
+            if !group_prepared {
+                for index in span.start..span.start + span.count {
+                    if !update_all && !updates_transform_cohort(index, frame) {
+                        continue;
+                    }
+                    let source = self.mister.positions[index];
+                    let destination_point = self.magik.positions[index];
+                    let source_local = [
+                        source[0] - source_pivot[0],
+                        source[1] - source_pivot[1],
+                        source[2] - source_pivot[2],
+                    ];
+                    let destination_local = [
+                        destination_point[0] - destination_pivot[0],
+                        destination_point[1] - destination_pivot[1],
+                        destination_point[2] - destination_pivot[2],
+                    ];
+                    let local = [
+                        source_local[0] + (destination_local[0] - source_local[0]) * progress,
+                        source_local[1] + (destination_local[1] - source_local[1]) * progress,
+                        source_local[2] + (destination_local[2] - source_local[2]) * progress,
+                    ];
+                    let center = [
+                        source_pivot[0] + (destination_pivot[0] - source_pivot[0]) * progress,
+                        source_pivot[1] + (destination_pivot[1] - source_pivot[1]) * progress,
+                        source_pivot[2] + (destination_pivot[2] - source_pivot[2]) * progress,
+                    ];
+                    let scatter_vector = self.scatter_vectors[index];
+                    self.dynamic_positions[index] = [
+                        center[0]
+                            + local[0].mul_add(cos, local[2] * sin)
+                            + scatter_vector[0] * scatter,
+                        center[1] + local[1] + scatter_vector[1] * scatter,
+                        center[2]
+                            + (-local[0]).mul_add(sin, local[2] * cos)
+                            + scatter_vector[2] * scatter,
+                    ];
                 }
-                let source = self.mister.positions[index];
-                let destination_point = self.magik.positions[index];
-                let source_local = [
-                    source[0] - source_pivot[0],
-                    source[1] - source_pivot[1],
-                    source[2] - source_pivot[2],
-                ];
-                let destination_local = [
-                    destination_point[0] - destination_pivot[0],
-                    destination_point[1] - destination_pivot[1],
-                    destination_point[2] - destination_pivot[2],
-                ];
-                let local = [
-                    source_local[0] + (destination_local[0] - source_local[0]) * progress,
-                    source_local[1] + (destination_local[1] - source_local[1]) * progress,
-                    source_local[2] + (destination_local[2] - source_local[2]) * progress,
-                ];
-                let center = [
-                    source_pivot[0] + (destination_pivot[0] - source_pivot[0]) * progress,
-                    source_pivot[1] + (destination_pivot[1] - source_pivot[1]) * progress,
-                    source_pivot[2] + (destination_pivot[2] - source_pivot[2]) * progress,
-                ];
-                let scatter_vector = self.scatter_vectors[index];
-                let scatter = if group_index == 0 {
-                    0.0
-                } else {
-                    (progress * std::f32::consts::PI).sin() * 58.0
-                };
-                self.dynamic_positions[index] = [
-                    center[0] + local[0].mul_add(cos, local[2] * sin) + scatter_vector[0] * scatter,
-                    center[1] + local[1] + scatter_vector[1] * scatter,
-                    center[2]
-                        + (-local[0]).mul_add(sin, local[2] * cos)
-                        + scatter_vector[2] * scatter,
-                ];
             }
         }
         let transform_us = elapsed_us(transform_started.elapsed());
@@ -537,6 +579,7 @@ impl IntroScene {
             (!update_all).then_some((frame as usize) & 1),
             None,
             [0.0, 1.0],
+            positions_prepared,
         )
         .with_outer_transform(transform_us)
     }
@@ -567,6 +610,7 @@ impl IntroScene {
         let local_duration = duration_ms
             .saturating_sub(stagger_ms.saturating_mul(4))
             .max(1);
+        let mut positions_prepared = true;
         for (group_index, span) in self.magik.groups.iter().enumerate() {
             let start_ms = letter_stagger_start_ms(group_index, stagger_ms);
             let progress = ease(
@@ -579,31 +623,46 @@ impl IntroScene {
                 + (formation_end_percent - formation_start_percent) * progress;
             let formation = formation_percent / 100.0;
             let pivot = self.magik_pivots[group_index];
-            for index in span.start..span.start + span.count {
-                if !update_all && !updates_transform_cohort(index, frame) {
-                    continue;
+            let group_prepared = transform_cloud_q5_neon(
+                span.start,
+                span.count,
+                &self.magik_q5,
+                &self.cloud_q5,
+                &self.cabinet_q5,
+                quantized_point(pivot),
+                quantize_unit_q15(progress),
+                quantize_unit_q15(formation / self.cabinet_formation),
+                quantize_unit_q15(local_sin),
+                quantize_unit_q15(local_cos),
+                &mut self.positions,
+            );
+            positions_prepared &= group_prepared;
+            if !group_prepared {
+                for index in span.start..span.start + span.count {
+                    if !update_all && !updates_transform_cohort(index, frame) {
+                        continue;
+                    }
+                    let source = self.magik.positions[index];
+                    let local_x = source[0] - pivot[0];
+                    let local_z = source[2] - pivot[2];
+                    let spun = [
+                        pivot[0] + local_x.mul_add(local_cos, local_z * local_sin),
+                        source[1],
+                        pivot[2] + (-local_x).mul_add(local_sin, local_z * local_cos),
+                    ];
+                    let cloud = self.cloud.positions[index];
+                    let cabinet = self.cabinet_formed[index];
+                    let formed = [
+                        cloud[0] + (cabinet[0] - cloud[0]) * (formation / self.cabinet_formation),
+                        cloud[1] + (cabinet[1] - cloud[1]) * (formation / self.cabinet_formation),
+                        cloud[2] + (cabinet[2] - cloud[2]) * (formation / self.cabinet_formation),
+                    ];
+                    self.dynamic_positions[index] = [
+                        spun[0] + (formed[0] - spun[0]) * progress,
+                        spun[1] + (formed[1] - spun[1]) * progress,
+                        spun[2] + (formed[2] - spun[2]) * progress,
+                    ];
                 }
-                let source = self.magik.positions[index];
-                let local_x = source[0] - pivot[0];
-                let local_z = source[2] - pivot[2];
-                let spun = [
-                    pivot[0] + local_x.mul_add(local_cos, local_z * local_sin),
-                    source[1],
-                    pivot[2] + (-local_x).mul_add(local_sin, local_z * local_cos),
-                ];
-                let cloud = self.cloud.positions[index];
-                let cabinet = self.cabinet_formed[index];
-                let formed = [
-                    cloud[0] + (cabinet[0] - cloud[0]) * (formation / self.cabinet_formation),
-                    cloud[1] + (cabinet[1] - cloud[1]) * (formation / self.cabinet_formation),
-                    cloud[2] + (cabinet[2] - cloud[2]) * (formation / self.cabinet_formation),
-                ];
-                let point = [
-                    spun[0] + (formed[0] - spun[0]) * progress,
-                    spun[1] + (formed[1] - spun[1]) * progress,
-                    spun[2] + (formed[2] - spun[2]) * progress,
-                ];
-                self.dynamic_positions[index] = point;
             }
         }
         let transform_us = elapsed_us(transform_started.elapsed());
@@ -622,6 +681,7 @@ impl IntroScene {
             (!update_all).then_some((frame as usize) & 1),
             None,
             [global_sin, global_cos],
+            positions_prepared,
         )
         .with_outer_transform(transform_us)
     }
@@ -655,6 +715,7 @@ impl IntroScene {
             None,
             None,
             [sin, cos],
+            false,
         )
     }
 
@@ -668,14 +729,22 @@ impl IntroScene {
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
-        for index in 0..self.recipe.steady_particle_count {
-            let from = self.launcher_source[index];
-            let to = self.launcher.positions[index];
-            self.dynamic_positions[index] = [
-                from[0] + (to[0] - from[0]) * progress,
-                from[1] + (to[1] - from[1]) * progress,
-                from[2] + (to[2] - from[2]) * progress,
-            ];
+        let positions_prepared = transform_lerp_q5_neon(
+            &self.launcher_source_q5,
+            &self.launcher_q5,
+            quantize_unit_q15(progress),
+            &mut self.positions,
+        );
+        if !positions_prepared {
+            for index in 0..self.recipe.steady_particle_count {
+                let from = self.launcher_source[index];
+                let to = self.launcher.positions[index];
+                self.dynamic_positions[index] = [
+                    from[0] + (to[0] - from[0]) * progress,
+                    from[1] + (to[1] - from[1]) * progress,
+                    from[2] + (to[2] - from[2]) * progress,
+                ];
+            }
         }
         let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
@@ -693,6 +762,7 @@ impl IntroScene {
             None,
             Some(&self.launcher_mix_thresholds),
             [0.0, 1.0],
+            positions_prepared,
         )
         .with_outer_transform(transform_us)
     }
@@ -792,9 +862,10 @@ fn render_point_cloud(
     projection_cohort: Option<usize>,
     palette_thresholds: Option<&[u16]>,
     yaw_sin_cos: [f32; 2],
+    positions_prepared: bool,
 ) -> IntroRenderResult {
     let transform_started = Instant::now();
-    if packed_target_positions.is_none() {
+    if packed_target_positions.is_none() && !positions_prepared {
         if let Some(first_block) = projection_cohort {
             copy_target_cohort_to_blocks(target_positions, positions, first_block, 2);
         } else {
@@ -1389,6 +1460,14 @@ fn pivot(points: &[[f32; 3]]) -> [f32; 3] {
         sum[0] * reciprocal,
         sum[1] * reciprocal,
         sum[2] * reciprocal,
+    ]
+}
+
+fn quantized_point(point: [f32; 3]) -> [i16; 3] {
+    [
+        quantize_q5(point[0]),
+        quantize_q5(point[1]),
+        quantize_q5(point[2]),
     ]
 }
 

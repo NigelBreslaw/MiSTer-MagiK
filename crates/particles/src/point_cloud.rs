@@ -5,6 +5,7 @@
 
 pub(crate) const PARTICLE_LANES: usize = 4;
 pub(crate) const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
+pub(crate) const POSITION_Q5_SCALE: f32 = 32.0;
 const COMMAND_OFFSET_MASK: u32 = (1 << 20) - 1;
 const COMMAND_DEPTH_SHIFT: u32 = 20;
 const COMMAND_X_SHIFT: u32 = 22;
@@ -19,6 +20,51 @@ pub(crate) struct PointCloudPositionBlock {
     pub(crate) source_x: [f32; PARTICLE_LANES],
     pub(crate) source_y: [f32; PARTICLE_LANES],
     pub(crate) source_z: [f32; PARTICLE_LANES],
+}
+
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
+pub(crate) struct QuantizedPointCloud {
+    pub(crate) x_q5: Vec<i16>,
+    pub(crate) y_q5: Vec<i16>,
+    pub(crate) z_q5: Vec<i16>,
+}
+
+impl QuantizedPointCloud {
+    pub(crate) fn from_positions(positions: &[[f32; 3]]) -> Self {
+        let mut x_q5 = Vec::with_capacity(positions.len());
+        let mut y_q5 = Vec::with_capacity(positions.len());
+        let mut z_q5 = Vec::with_capacity(positions.len());
+        for position in positions {
+            x_q5.push(quantize_q5(position[0]));
+            y_q5.push(quantize_q5(position[1]));
+            z_q5.push(quantize_q5(position[2]));
+        }
+        Self { x_q5, y_q5, z_q5 }
+    }
+
+    pub(crate) fn from_unit_vectors(vectors: &[[f32; 3]]) -> Self {
+        let mut x_q5 = Vec::with_capacity(vectors.len());
+        let mut y_q5 = Vec::with_capacity(vectors.len());
+        let mut z_q5 = Vec::with_capacity(vectors.len());
+        for vector in vectors {
+            x_q5.push(quantize_unit_q15(vector[0]));
+            y_q5.push(quantize_unit_q15(vector[1]));
+            z_q5.push(quantize_unit_q15(vector[2]));
+        }
+        Self { x_q5, y_q5, z_q5 }
+    }
+}
+
+pub(crate) fn quantize_q5(value: f32) -> i16 {
+    (value * POSITION_Q5_SCALE)
+        .round()
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
+}
+
+pub(crate) fn quantize_unit_q15(value: f32) -> i16 {
+    (value * f32::from(i16::MAX))
+        .round()
+        .clamp(f32::from(i16::MIN), f32::from(i16::MAX)) as i16
 }
 
 #[repr(transparent)]
@@ -69,6 +115,202 @@ unsafe extern "C" {
         height: u32,
         offsets: *mut u32,
     ) -> usize;
+
+    fn mister_magik_intro_neon_letter_q5(
+        start: usize,
+        count: usize,
+        source_x: *const i16,
+        source_y: *const i16,
+        source_z: *const i16,
+        destination_x: *const i16,
+        destination_y: *const i16,
+        destination_z: *const i16,
+        scatter_x: *const i16,
+        scatter_y: *const i16,
+        scatter_z: *const i16,
+        source_pivot: *const i16,
+        destination_pivot: *const i16,
+        progress_q15: i16,
+        sin_q15: i16,
+        cos_q15: i16,
+        scatter_radius_q5: i16,
+        output: *mut PointCloudPositionBlock,
+    );
+
+    fn mister_magik_intro_neon_cloud_q5(
+        start: usize,
+        count: usize,
+        source_x: *const i16,
+        source_y: *const i16,
+        source_z: *const i16,
+        cloud_x: *const i16,
+        cloud_y: *const i16,
+        cloud_z: *const i16,
+        cabinet_x: *const i16,
+        cabinet_y: *const i16,
+        cabinet_z: *const i16,
+        pivot: *const i16,
+        progress_q15: i16,
+        formation_q15: i16,
+        sin_q15: i16,
+        cos_q15: i16,
+        output: *mut PointCloudPositionBlock,
+    );
+
+    fn mister_magik_intro_neon_lerp_q5(
+        count: usize,
+        source_x: *const i16,
+        source_y: *const i16,
+        source_z: *const i16,
+        destination_x: *const i16,
+        destination_y: *const i16,
+        destination_z: *const i16,
+        progress_q15: i16,
+        output: *mut PointCloudPositionBlock,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transform_letter_q5_neon(
+    start: usize,
+    count: usize,
+    source: &QuantizedPointCloud,
+    destination: &QuantizedPointCloud,
+    scatter: &QuantizedPointCloud,
+    source_pivot: [i16; 3],
+    destination_pivot: [i16; 3],
+    progress_q15: i16,
+    sin_q15: i16,
+    cos_q15: i16,
+    scatter_radius_q5: i16,
+    output: &mut [PointCloudPositionBlock],
+) -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    unsafe {
+        mister_magik_intro_neon_letter_q5(
+            start,
+            count,
+            source.x_q5.as_ptr(),
+            source.y_q5.as_ptr(),
+            source.z_q5.as_ptr(),
+            destination.x_q5.as_ptr(),
+            destination.y_q5.as_ptr(),
+            destination.z_q5.as_ptr(),
+            scatter.x_q5.as_ptr(),
+            scatter.y_q5.as_ptr(),
+            scatter.z_q5.as_ptr(),
+            source_pivot.as_ptr(),
+            destination_pivot.as_ptr(),
+            progress_q15,
+            sin_q15,
+            cos_q15,
+            scatter_radius_q5,
+            output.as_mut_ptr(),
+        );
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (
+            start,
+            count,
+            source,
+            destination,
+            scatter,
+            source_pivot,
+            destination_pivot,
+            progress_q15,
+            sin_q15,
+            cos_q15,
+            scatter_radius_q5,
+            output,
+        );
+        false
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transform_cloud_q5_neon(
+    start: usize,
+    count: usize,
+    source: &QuantizedPointCloud,
+    cloud: &QuantizedPointCloud,
+    cabinet: &QuantizedPointCloud,
+    pivot: [i16; 3],
+    progress_q15: i16,
+    formation_q15: i16,
+    sin_q15: i16,
+    cos_q15: i16,
+    output: &mut [PointCloudPositionBlock],
+) -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    unsafe {
+        mister_magik_intro_neon_cloud_q5(
+            start,
+            count,
+            source.x_q5.as_ptr(),
+            source.y_q5.as_ptr(),
+            source.z_q5.as_ptr(),
+            cloud.x_q5.as_ptr(),
+            cloud.y_q5.as_ptr(),
+            cloud.z_q5.as_ptr(),
+            cabinet.x_q5.as_ptr(),
+            cabinet.y_q5.as_ptr(),
+            cabinet.z_q5.as_ptr(),
+            pivot.as_ptr(),
+            progress_q15,
+            formation_q15,
+            sin_q15,
+            cos_q15,
+            output.as_mut_ptr(),
+        );
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (
+            start,
+            count,
+            source,
+            cloud,
+            cabinet,
+            pivot,
+            progress_q15,
+            formation_q15,
+            sin_q15,
+            cos_q15,
+            output,
+        );
+        false
+    }
+}
+
+pub(crate) fn transform_lerp_q5_neon(
+    source: &QuantizedPointCloud,
+    destination: &QuantizedPointCloud,
+    progress_q15: i16,
+    output: &mut [PointCloudPositionBlock],
+) -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    unsafe {
+        mister_magik_intro_neon_lerp_q5(
+            source.x_q5.len(),
+            source.x_q5.as_ptr(),
+            source.y_q5.as_ptr(),
+            source.z_q5.as_ptr(),
+            destination.x_q5.as_ptr(),
+            destination.y_q5.as_ptr(),
+            destination.z_q5.as_ptr(),
+            progress_q15,
+            output.as_mut_ptr(),
+        );
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (source, destination, progress_q15, output);
+        false
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

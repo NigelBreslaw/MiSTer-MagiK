@@ -26,6 +26,291 @@ typedef struct {
     float source_z[4];
 } cabinet_position_block;
 
+static inline int16x8_t lerp_q15_s16(
+    int16x8_t source,
+    int16x8_t destination,
+    int16x8_t progress
+) {
+    return vqaddq_s16(
+        source,
+        vqrdmulhq_s16(vsubq_s16(destination, source), progress)
+    );
+}
+
+static inline int16x8_t rotate_x_q5(
+    int16x8_t x,
+    int16x8_t z,
+    int16x8_t sin_angle,
+    int16x8_t cos_angle
+) {
+    return vqaddq_s16(
+        vqrdmulhq_s16(x, cos_angle),
+        vqrdmulhq_s16(z, sin_angle)
+    );
+}
+
+static inline int16x8_t rotate_z_q5(
+    int16x8_t x,
+    int16x8_t z,
+    int16x8_t sin_angle,
+    int16x8_t cos_angle
+) {
+    return vqsubq_s16(
+        vqrdmulhq_s16(z, cos_angle),
+        vqrdmulhq_s16(x, sin_angle)
+    );
+}
+
+static inline float32x4_t q5_to_float(int16x4_t value) {
+    return vmulq_n_f32(
+        vcvtq_f32_s32(vmovl_s16(value)),
+        1.0f / 32.0f
+    );
+}
+
+static inline void store_q5_four(
+    cabinet_position_block *output,
+    size_t index,
+    int16x4_t x,
+    int16x4_t y,
+    int16x4_t z
+) {
+    cabinet_position_block *block = output + index / 4;
+    vst1q_f32(block->target_x, q5_to_float(x));
+    vst1q_f32(block->target_y, q5_to_float(y));
+    vst1q_f32(block->target_z, q5_to_float(z));
+}
+
+static inline void store_q5_eight(
+    cabinet_position_block *output,
+    size_t index,
+    int16x8_t x,
+    int16x8_t y,
+    int16x8_t z
+) {
+    store_q5_four(
+        output,
+        index,
+        vget_low_s16(x),
+        vget_low_s16(y),
+        vget_low_s16(z)
+    );
+    store_q5_four(
+        output,
+        index + 4,
+        vget_high_s16(x),
+        vget_high_s16(y),
+        vget_high_s16(z)
+    );
+}
+
+void mister_magik_intro_neon_letter_q5(
+    size_t start,
+    size_t count,
+    const int16_t *restrict source_x,
+    const int16_t *restrict source_y,
+    const int16_t *restrict source_z,
+    const int16_t *restrict destination_x,
+    const int16_t *restrict destination_y,
+    const int16_t *restrict destination_z,
+    const int16_t *restrict scatter_x,
+    const int16_t *restrict scatter_y,
+    const int16_t *restrict scatter_z,
+    const int16_t source_pivot[3],
+    const int16_t destination_pivot[3],
+    int16_t progress_q15,
+    int16_t sin_q15,
+    int16_t cos_q15,
+    int16_t scatter_radius_q5,
+    cabinet_position_block *restrict output
+) {
+    const size_t end = start + count;
+    const size_t vector_end = start + (count & ~(size_t)7);
+    const int16x8_t progress = vdupq_n_s16(progress_q15);
+    const int16x8_t sin_angle = vdupq_n_s16(sin_q15);
+    const int16x8_t cos_angle = vdupq_n_s16(cos_q15);
+    const int16x8_t scatter_radius = vdupq_n_s16(scatter_radius_q5);
+    const int16x8_t source_pivot_x = vdupq_n_s16(source_pivot[0]);
+    const int16x8_t source_pivot_y = vdupq_n_s16(source_pivot[1]);
+    const int16x8_t source_pivot_z = vdupq_n_s16(source_pivot[2]);
+    const int16x8_t destination_pivot_x = vdupq_n_s16(destination_pivot[0]);
+    const int16x8_t destination_pivot_y = vdupq_n_s16(destination_pivot[1]);
+    const int16x8_t destination_pivot_z = vdupq_n_s16(destination_pivot[2]);
+    const int16x8_t center_x = lerp_q15_s16(source_pivot_x, destination_pivot_x, progress);
+    const int16x8_t center_y = lerp_q15_s16(source_pivot_y, destination_pivot_y, progress);
+    const int16x8_t center_z = lerp_q15_s16(source_pivot_z, destination_pivot_z, progress);
+    size_t index = start;
+    for (; index < vector_end; index += 8) {
+        const int16x8_t source_local_x = vsubq_s16(vld1q_s16(source_x + index), source_pivot_x);
+        const int16x8_t source_local_y = vsubq_s16(vld1q_s16(source_y + index), source_pivot_y);
+        const int16x8_t source_local_z = vsubq_s16(vld1q_s16(source_z + index), source_pivot_z);
+        const int16x8_t destination_local_x = vsubq_s16(vld1q_s16(destination_x + index), destination_pivot_x);
+        const int16x8_t destination_local_y = vsubq_s16(vld1q_s16(destination_y + index), destination_pivot_y);
+        const int16x8_t destination_local_z = vsubq_s16(vld1q_s16(destination_z + index), destination_pivot_z);
+        const int16x8_t local_x = lerp_q15_s16(source_local_x, destination_local_x, progress);
+        const int16x8_t local_y = lerp_q15_s16(source_local_y, destination_local_y, progress);
+        const int16x8_t local_z = lerp_q15_s16(source_local_z, destination_local_z, progress);
+        const int16x8_t x = vqaddq_s16(
+            vqaddq_s16(center_x, rotate_x_q5(local_x, local_z, sin_angle, cos_angle)),
+            vqrdmulhq_s16(vld1q_s16(scatter_x + index), scatter_radius)
+        );
+        const int16x8_t y = vqaddq_s16(
+            vqaddq_s16(center_y, local_y),
+            vqrdmulhq_s16(vld1q_s16(scatter_y + index), scatter_radius)
+        );
+        const int16x8_t z = vqaddq_s16(
+            vqaddq_s16(center_z, rotate_z_q5(local_x, local_z, sin_angle, cos_angle)),
+            vqrdmulhq_s16(vld1q_s16(scatter_z + index), scatter_radius)
+        );
+        store_q5_eight(output, index, x, y, z);
+    }
+    if (index < end) {
+        int16_t x[8] = {0};
+        int16_t y[8] = {0};
+        int16_t z[8] = {0};
+        for (size_t lane = 0; index + lane < end; lane++) {
+            const size_t point = index + lane;
+            const int32_t p = progress_q15;
+            const int32_t local_x = (source_x[point] - source_pivot[0]) +
+                (((destination_x[point] - destination_pivot[0]) -
+                    (source_x[point] - source_pivot[0])) * p + 16384) / 32768;
+            const int32_t local_y = (source_y[point] - source_pivot[1]) +
+                (((destination_y[point] - destination_pivot[1]) -
+                    (source_y[point] - source_pivot[1])) * p + 16384) / 32768;
+            const int32_t local_z = (source_z[point] - source_pivot[2]) +
+                (((destination_z[point] - destination_pivot[2]) -
+                    (source_z[point] - source_pivot[2])) * p + 16384) / 32768;
+            const int32_t cx = source_pivot[0] +
+                ((destination_pivot[0] - source_pivot[0]) * p + 16384) / 32768;
+            const int32_t cy = source_pivot[1] +
+                ((destination_pivot[1] - source_pivot[1]) * p + 16384) / 32768;
+            const int32_t cz = source_pivot[2] +
+                ((destination_pivot[2] - source_pivot[2]) * p + 16384) / 32768;
+            x[lane] = (int16_t)(cx + (local_x * cos_q15 + local_z * sin_q15 + 16384) / 32768 +
+                (scatter_x[point] * scatter_radius_q5 + 16384) / 32768);
+            y[lane] = (int16_t)(cy + local_y +
+                (scatter_y[point] * scatter_radius_q5 + 16384) / 32768);
+            z[lane] = (int16_t)(cz + (local_z * cos_q15 - local_x * sin_q15 + 16384) / 32768 +
+                (scatter_z[point] * scatter_radius_q5 + 16384) / 32768);
+        }
+        store_q5_four(output, index, vld1_s16(x), vld1_s16(y), vld1_s16(z));
+    }
+}
+
+void mister_magik_intro_neon_cloud_q5(
+    size_t start,
+    size_t count,
+    const int16_t *restrict source_x,
+    const int16_t *restrict source_y,
+    const int16_t *restrict source_z,
+    const int16_t *restrict cloud_x,
+    const int16_t *restrict cloud_y,
+    const int16_t *restrict cloud_z,
+    const int16_t *restrict cabinet_x,
+    const int16_t *restrict cabinet_y,
+    const int16_t *restrict cabinet_z,
+    const int16_t pivot[3],
+    int16_t progress_q15,
+    int16_t formation_q15,
+    int16_t sin_q15,
+    int16_t cos_q15,
+    cabinet_position_block *restrict output
+) {
+    const size_t end = start + count;
+    const size_t vector_end = start + (count & ~(size_t)7);
+    const int16x8_t progress = vdupq_n_s16(progress_q15);
+    const int16x8_t formation = vdupq_n_s16(formation_q15);
+    const int16x8_t sin_angle = vdupq_n_s16(sin_q15);
+    const int16x8_t cos_angle = vdupq_n_s16(cos_q15);
+    const int16x8_t pivot_x = vdupq_n_s16(pivot[0]);
+    const int16x8_t pivot_z = vdupq_n_s16(pivot[2]);
+    size_t index = start;
+    for (; index < vector_end; index += 8) {
+        const int16x8_t local_x = vsubq_s16(vld1q_s16(source_x + index), pivot_x);
+        const int16x8_t local_z = vsubq_s16(vld1q_s16(source_z + index), pivot_z);
+        const int16x8_t spun_x = vqaddq_s16(
+            pivot_x,
+            rotate_x_q5(local_x, local_z, sin_angle, cos_angle)
+        );
+        const int16x8_t spun_y = vld1q_s16(source_y + index);
+        const int16x8_t spun_z = vqaddq_s16(
+            pivot_z,
+            rotate_z_q5(local_x, local_z, sin_angle, cos_angle)
+        );
+        const int16x8_t formed_x = lerp_q15_s16(vld1q_s16(cloud_x + index), vld1q_s16(cabinet_x + index), formation);
+        const int16x8_t formed_y = lerp_q15_s16(vld1q_s16(cloud_y + index), vld1q_s16(cabinet_y + index), formation);
+        const int16x8_t formed_z = lerp_q15_s16(vld1q_s16(cloud_z + index), vld1q_s16(cabinet_z + index), formation);
+        store_q5_eight(
+            output,
+            index,
+            lerp_q15_s16(spun_x, formed_x, progress),
+            lerp_q15_s16(spun_y, formed_y, progress),
+            lerp_q15_s16(spun_z, formed_z, progress)
+        );
+    }
+    if (index < end) {
+        // Group spans are four-lane aligned, so the only tail is one full block.
+        const int16x4_t p = vdup_n_s16(progress_q15);
+        const int16x4_t f = vdup_n_s16(formation_q15);
+        const int16x4_t px = vdup_n_s16(pivot[0]);
+        const int16x4_t pz = vdup_n_s16(pivot[2]);
+        const int16x4_t sx = vsub_s16(vld1_s16(source_x + index), px);
+        const int16x4_t sz = vsub_s16(vld1_s16(source_z + index), pz);
+        const int16x4_t sin4 = vdup_n_s16(sin_q15);
+        const int16x4_t cos4 = vdup_n_s16(cos_q15);
+        const int16x4_t spun_x = vqadd_s16(px, vqadd_s16(vqrdmulh_s16(sx, cos4), vqrdmulh_s16(sz, sin4)));
+        const int16x4_t spun_y = vld1_s16(source_y + index);
+        const int16x4_t spun_z = vqadd_s16(pz, vqsub_s16(vqrdmulh_s16(sz, cos4), vqrdmulh_s16(sx, sin4)));
+        const int16x4_t formed_x = vqadd_s16(vld1_s16(cloud_x + index), vqrdmulh_s16(vsub_s16(vld1_s16(cabinet_x + index), vld1_s16(cloud_x + index)), f));
+        const int16x4_t formed_y = vqadd_s16(vld1_s16(cloud_y + index), vqrdmulh_s16(vsub_s16(vld1_s16(cabinet_y + index), vld1_s16(cloud_y + index)), f));
+        const int16x4_t formed_z = vqadd_s16(vld1_s16(cloud_z + index), vqrdmulh_s16(vsub_s16(vld1_s16(cabinet_z + index), vld1_s16(cloud_z + index)), f));
+        store_q5_four(
+            output,
+            index,
+            vqadd_s16(spun_x, vqrdmulh_s16(vsub_s16(formed_x, spun_x), p)),
+            vqadd_s16(spun_y, vqrdmulh_s16(vsub_s16(formed_y, spun_y), p)),
+            vqadd_s16(spun_z, vqrdmulh_s16(vsub_s16(formed_z, spun_z), p))
+        );
+    }
+}
+
+void mister_magik_intro_neon_lerp_q5(
+    size_t count,
+    const int16_t *restrict source_x,
+    const int16_t *restrict source_y,
+    const int16_t *restrict source_z,
+    const int16_t *restrict destination_x,
+    const int16_t *restrict destination_y,
+    const int16_t *restrict destination_z,
+    int16_t progress_q15,
+    cabinet_position_block *restrict output
+) {
+    const int16x8_t progress = vdupq_n_s16(progress_q15);
+    size_t index = 0;
+    for (; index + 8 <= count; index += 8) {
+        store_q5_eight(
+            output,
+            index,
+            lerp_q15_s16(vld1q_s16(source_x + index), vld1q_s16(destination_x + index), progress),
+            lerp_q15_s16(vld1q_s16(source_y + index), vld1q_s16(destination_y + index), progress),
+            lerp_q15_s16(vld1q_s16(source_z + index), vld1q_s16(destination_z + index), progress)
+        );
+    }
+    if (index < count) {
+        const int16x4_t p = vdup_n_s16(progress_q15);
+        const int16x4_t sx = vld1_s16(source_x + index);
+        const int16x4_t sy = vld1_s16(source_y + index);
+        const int16x4_t sz = vld1_s16(source_z + index);
+        store_q5_four(
+            output,
+            index,
+            vqadd_s16(sx, vqrdmulh_s16(vsub_s16(vld1_s16(destination_x + index), sx), p)),
+            vqadd_s16(sy, vqrdmulh_s16(vsub_s16(vld1_s16(destination_y + index), sy), p)),
+            vqadd_s16(sz, vqrdmulh_s16(vsub_s16(vld1_s16(destination_z + index), sz), p))
+        );
+    }
+}
+
 size_t mister_magik_cabinet_neon_project_stable(
     size_t count,
     const cabinet_position_block *restrict blocks,
