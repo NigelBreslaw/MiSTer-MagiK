@@ -111,10 +111,28 @@ struct CabinetAttributeBlock {
 }
 
 const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
+const COMMAND_OFFSET_MASK: u32 = (1 << 20) - 1;
+const COMMAND_DEPTH_SHIFT: u32 = 20;
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 struct CabinetDrawCommand(u32);
+
+impl CabinetDrawCommand {
+    fn visible(offset: usize, depth: f32) -> Self {
+        let depth_band =
+            u32::from(depth >= 480.0) + u32::from(depth >= 640.0) + u32::from(depth >= 800.0);
+        Self((offset as u32) | (depth_band << COMMAND_DEPTH_SHIFT))
+    }
+
+    fn offset(self) -> Option<usize> {
+        (self.0 != INVALID_PARTICLE_OFFSET).then_some((self.0 & COMMAND_OFFSET_MASK) as usize)
+    }
+
+    fn depth_band(self) -> u8 {
+        ((self.0 >> COMMAND_DEPTH_SHIFT) & 3) as u8
+    }
+}
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 unsafe extern "C" {
@@ -484,6 +502,10 @@ impl ArcadeCabinetFormation {
             self.options.creative_mode,
             CabinetCreativeMode::HistoryEcho | CabinetCreativeMode::All
         ) && (formation < 1.0 || dispersal > 0.0);
+        let depth_palette_mode = matches!(
+            self.options.creative_mode,
+            CabinetCreativeMode::DepthPalette | CabinetCreativeMode::All
+        );
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
@@ -517,7 +539,7 @@ impl ArcadeCabinetFormation {
                 let attribute = $attribute;
                 let lane = $lane;
                 let feature = attribute.flags[lane];
-                let style = if feature & appearance.priority_feature_mask != 0 {
+                let base_style = if feature & appearance.priority_feature_mask != 0 {
                     appearance.priority_palette_index
                 } else if feature & appearance.accent_feature_mask != 0 {
                     attribute.style[lane]
@@ -526,13 +548,22 @@ impl ArcadeCabinetFormation {
                 } else {
                     attribute.style[lane]
                 };
+                let style = if depth_palette_mode {
+                    let adjustment = match self.commands[index].depth_band() {
+                        0 => 2_i16,
+                        1 => 1_i16,
+                        2 => 0_i16,
+                        _ => -1_i16,
+                    };
+                    (i16::from(base_style) + adjustment).clamp(0, 7) as u8
+                } else {
+                    base_style
+                };
                 let recipe_neighbor = feature & appearance.neighbor_feature_mask != 0
                     && index % usize::from(appearance.neighbor_every) == 0
                     && pixel_x + 1 < self.width;
                 if history_mode {
-                    let history_offset = self.previous_commands[index].0;
-                    if history_offset != INVALID_PARTICLE_OFFSET {
-                        let history_offset = history_offset as usize;
+                    if let Some(history_offset) = self.previous_commands[index].offset() {
                         let history_style = style.saturating_sub(2);
                         destination[history_offset] =
                             pixel(appearance.palette[usize::from(history_style)]);
@@ -595,7 +626,7 @@ impl ArcadeCabinetFormation {
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
-                        self.commands[index] = CabinetDrawCommand(offset as u32);
+                        self.commands[index] = CabinetDrawCommand::visible(offset, depth);
                     }
                 }
             }};
@@ -712,10 +743,9 @@ impl ArcadeCabinetFormation {
         self.tile_counts.fill(0);
         let tiles_x = self.width.div_ceil(32);
         for command in &self.commands[..self.options.active_count] {
-            if command.0 == INVALID_PARTICLE_OFFSET {
+            let Some(offset) = command.offset() else {
                 continue;
-            }
-            let offset = command.0 as usize;
+            };
             let tile = (offset % self.width) / 32 + (offset / self.width) / 32 * tiles_x;
             self.tile_counts[tile] += 1;
         }
@@ -729,10 +759,9 @@ impl ArcadeCabinetFormation {
             .iter()
             .enumerate()
         {
-            if command.0 == INVALID_PARTICLE_OFFSET {
+            let Some(offset) = command.offset() else {
                 continue;
-            }
-            let offset = command.0 as usize;
+            };
             let tile = (offset % self.width) / 32 + (offset / self.width) / 32 * tiles_x;
             let output = self.tile_cursors[tile];
             self.tile_order[output] = index as u32;
@@ -742,19 +771,12 @@ impl ArcadeCabinetFormation {
         let raster_started = Instant::now();
         for ordered in 0..visible {
             let index = self.tile_order[ordered] as usize;
-            let offset = self.commands[index].0;
-            if offset == INVALID_PARTICLE_OFFSET {
+            let Some(offset) = self.commands[index].offset() else {
                 continue;
-            }
+            };
             let attribute = &self.attributes[index / PARTICLE_LANES];
             let lane = index % PARTICLE_LANES;
-            draw_offset!(
-                index,
-                offset as usize,
-                offset as usize % self.width,
-                attribute,
-                lane
-            );
+            draw_offset!(index, offset, offset % self.width, attribute, lane);
         }
         let raster_us = elapsed_us(raster_started.elapsed());
 
@@ -1218,6 +1240,30 @@ mod tests {
         assert!(formation.pixel_writes > formation.visible);
         assert_eq!(orbit.pixel_writes, baseline_orbit.pixel_writes);
         assert_eq!(pixels, baseline_pixels);
+    }
+
+    #[test]
+    fn depth_palette_changes_color_without_adding_writes() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut baseline = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut depth = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        depth
+            .set_render_options(CabinetRenderOptions {
+                active_count: 48_128,
+                creative_mode: CabinetCreativeMode::DepthPalette,
+            })
+            .unwrap();
+        let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let mut depth_pixels = baseline_pixels.clone();
+        let baseline_stats = baseline
+            .render(&mut baseline_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        let depth_stats = depth
+            .render(&mut depth_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        assert_eq!(depth_stats.pixel_writes, baseline_stats.pixel_writes);
+        assert_eq!(depth_stats.visible, baseline_stats.visible);
+        assert_ne!(depth_pixels, baseline_pixels);
     }
 
     #[test]

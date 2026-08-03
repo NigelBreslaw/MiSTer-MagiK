@@ -59,6 +59,9 @@ size_t mister_magik_cabinet_neon_project_stable(
     const float32x4_t height_f = vdupq_n_f32((float)height);
     const uint32x4_t width_u = vdupq_n_u32(width);
     const uint32x4_t invalid = vdupq_n_u32(UINT32_MAX);
+    const float32x4_t depth_band_1 = vdupq_n_f32(480.0f);
+    const float32x4_t depth_band_2 = vdupq_n_f32(640.0f);
+    const float32x4_t depth_band_3 = vdupq_n_f32(800.0f);
     for (size_t block_index = first_block; block_index < block_end; block_index += block_step) {
         const size_t index = block_index * 4;
         const cabinet_position_block *block = blocks + block_index;
@@ -97,7 +100,20 @@ size_t mister_magik_cabinet_neon_project_stable(
         const uint32x4_t pixel_x = vcvtq_u32_f32(x);
         const uint32x4_t pixel_y = vcvtq_u32_f32(y);
         const uint32x4_t offset = vmlaq_u32(pixel_x, pixel_y, width_u);
-        vst1q_u32(offsets + index, vbslq_u32(valid, offset, invalid));
+        uint32x4_t depth_band = vshrq_n_u32(vcgeq_f32(depth, depth_band_1), 31);
+        depth_band = vaddq_u32(
+            depth_band,
+            vshrq_n_u32(vcgeq_f32(depth, depth_band_2), 31)
+        );
+        depth_band = vaddq_u32(
+            depth_band,
+            vshrq_n_u32(vcgeq_f32(depth, depth_band_3), 31)
+        );
+        const uint32x4_t command = vorrq_u32(
+            offset,
+            vshlq_n_u32(depth_band, COMMAND_PALETTE_SHIFT)
+        );
+        vst1q_u32(offsets + index, vbslq_u32(valid, command, invalid));
     }
     return vector_end;
 }
