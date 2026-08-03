@@ -547,192 +547,6 @@ def _weighted_choice(rng: random.Random, weights: list[float], total: float) -> 
     return len(weights) - 1
 
 
-def _progressive_key(point: Point) -> tuple[int, int, int, int]:
-    coordinates = tuple(
-        max(0, min(1023, round((value + 1.0) * 511.5))) for value in point.xyz
-    )
-    morton = 0
-    for bit in range(10):
-        for axis, value in enumerate(coordinates):
-            morton |= ((value >> bit) & 1) << (bit * 3 + axis)
-    reversed_morton = int(f"{morton:030b}"[::-1], 2)
-    return (reversed_morton, morton, point.palette, point.flags)
-
-
-def _triangle_point(
-    triangle: Triangle,
-    barycentric: tuple[float, float, float],
-    vertices: list[tuple[float, float, float]],
-    colors: dict[str, tuple[float, float, float]],
-    texture_coordinates: list[tuple[float, float] | None] | None,
-    textures: list[TextureImage | None] | None,
-) -> Point:
-    first, second, third = (vertices[index] for index in triangle.vertices)
-    u, v, w = barycentric
-    xyz = _add(_add(_mul(first, u), _mul(second, v)), _mul(third, w))
-    material_color = tuple(
-        value * 255.0 for value in colors.get(triangle.material, (0.55, 0.65, 0.8))
-    )
-    if texture_coordinates is not None and textures is not None and triangle.texture is not None:
-        triangle_uvs = [texture_coordinates[index] for index in triangle.vertices]
-        texture = textures[triangle.texture]
-        if texture is not None and all(uv is not None for uv in triangle_uvs):
-            first_uv, second_uv, third_uv = triangle_uvs
-            assert first_uv is not None and second_uv is not None and third_uv is not None
-            sampled = sample_texture(
-                texture,
-                (
-                    first_uv[0] * u + second_uv[0] * v + third_uv[0] * w,
-                    first_uv[1] * u + second_uv[1] * v + third_uv[1] * w,
-                ),
-            )
-            material_color = tuple(
-                sampled[channel] * triangle.texture_factor[channel] for channel in range(3)
-            )
-    return Point(
-        xyz,
-        palette_class(triangle.material, colors),
-        0,
-        rgb565(material_color),
-        glow_rgb565(material_color),
-    )
-
-
-def sample_slice_points(
-    vertices: list[tuple[float, float, float]],
-    triangles: list[Triangle],
-    colors: dict[str, tuple[float, float, float]],
-    count: int,
-    seed: int,
-    spacing: float,
-    texture_coordinates: list[tuple[float, float] | None] | None = None,
-    textures: list[TextureImage | None] | None = None,
-) -> list[Point]:
-    if spacing <= 0.0:
-        raise ValueError("slice spacing must be positive")
-    feature_count = min(count, round(count * 0.20))
-    surface_count = count - feature_count
-    features, _ = edge_sets(vertices, triangles)
-    if not features:
-        raise ValueError("slice layout requires feature edges")
-    rng = random.Random(seed)
-    seen_xyz: set[tuple[int, int, int]] = set()
-    feature_points: list[Point] = []
-    feature_lengths = [
-        _length(_sub(vertices[edge.vertices[1]], vertices[edge.vertices[0]]))
-        for edge in features
-    ]
-    feature_total = sum(feature_lengths)
-    attempts = 0
-    while len(feature_points) < feature_count:
-        edge = features[_weighted_choice(rng, feature_lengths, feature_total)]
-        value = rng.random()
-        first, second = edge.vertices
-        barycentric = [0.0, 0.0, 0.0]
-        triangle_indices = edge.triangle.vertices
-        barycentric[triangle_indices.index(first)] = 1.0 - value
-        barycentric[triangle_indices.index(second)] = value
-        sampled = _triangle_point(
-            edge.triangle,
-            tuple(barycentric),
-            vertices,
-            colors,
-            texture_coordinates,
-            textures,
-        )
-        point = Point(
-            sampled.xyz,
-            7,
-            1,
-            sampled.texture_exact,
-            sampled.texture_glow,
-        )
-        quantized = tuple(round(axis * 32767.0) for axis in point.xyz)
-        attempts += 1
-        if quantized in seen_xyz:
-            if attempts >= feature_count * 100:
-                raise ValueError("cannot produce enough unique slice feature particles")
-            continue
-        seen_xyz.add(quantized)
-        feature_points.append(point)
-
-    surface_points: list[Point] = []
-    for triangle in triangles:
-        triangle_vertices = [vertices[index] for index in triangle.vertices]
-        minimum_z = min(vertex[2] for vertex in triangle_vertices)
-        maximum_z = max(vertex[2] for vertex in triangle_vertices)
-        first_plane = math.ceil(minimum_z / spacing)
-        last_plane = math.floor(maximum_z / spacing)
-        for plane_index in range(first_plane, last_plane + 1):
-            plane_z = plane_index * spacing
-            intersections: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
-            for first_index, second_index in ((0, 1), (1, 2), (2, 0)):
-                first = triangle_vertices[first_index]
-                second = triangle_vertices[second_index]
-                delta_z = second[2] - first[2]
-                if abs(delta_z) < 1.0e-12:
-                    continue
-                value = (plane_z - first[2]) / delta_z
-                if value < 0.0 or value >= 1.0:
-                    continue
-                barycentric = [0.0, 0.0, 0.0]
-                barycentric[first_index] = 1.0 - value
-                barycentric[second_index] = value
-                xyz = _add(_mul(first, 1.0 - value), _mul(second, value))
-                if not any(_length(_sub(xyz, other[0])) < 1.0e-9 for other in intersections):
-                    intersections.append((xyz, tuple(barycentric)))
-            if len(intersections) != 2:
-                continue
-            start, start_barycentric = intersections[0]
-            end, end_barycentric = intersections[1]
-            length = _length(_sub(end, start))
-            samples = max(1, math.floor(length / spacing) + 1)
-            margin = (length - (samples - 1) * spacing) * 0.5
-            for sample_index in range(samples):
-                distance = margin + sample_index * spacing
-                value = 0.5 if length < 1.0e-12 else distance / length
-                barycentric = tuple(
-                    start_barycentric[index] * (1.0 - value)
-                    + end_barycentric[index] * value
-                    for index in range(3)
-                )
-                point = _triangle_point(
-                    triangle,
-                    barycentric,
-                    vertices,
-                    colors,
-                    texture_coordinates,
-                    textures,
-                )
-                quantized = tuple(round(axis * 32767.0) for axis in point.xyz)
-                if quantized in seen_xyz:
-                    continue
-                seen_xyz.add(quantized)
-                surface_points.append(point)
-    if len(surface_points) < surface_count:
-        raise ValueError(
-            f"slice spacing {spacing} produced {len(surface_points)} surface points; "
-            f"need {surface_count}"
-        )
-    feature_points.sort(key=_progressive_key)
-    surface_points.sort(key=_progressive_key)
-    surface_points = surface_points[:surface_count]
-
-    points: list[Point] = []
-    emitted = [0, 0]
-    totals = [len(feature_points), len(surface_points)]
-    groups = [feature_points, surface_points]
-    for output_index in range(count):
-        available = [index for index, group in enumerate(groups) if emitted[index] < len(group)]
-        selected = max(
-            available,
-            key=lambda index: totals[index] * (output_index + 1) / count - emitted[index],
-        )
-        points.append(groups[selected][emitted[selected]])
-        emitted[selected] += 1
-    return points
-
-
 def sample_points(
     vertices: list[tuple[float, float, float]],
     triangles: list[Triangle],
@@ -845,8 +659,19 @@ def sample_points(
     # Reversed Morton significance visits coarse spatial cells before refining
     # them. Interleaving the separately ordered feature/seam/surface streams
     # makes every prefix a representative, deterministic nested cloud.
+    def progressive_key(point: Point) -> tuple[int, int, int, int]:
+        coordinates = tuple(
+            max(0, min(1023, round((value + 1.0) * 511.5))) for value in point.xyz
+        )
+        morton = 0
+        for bit in range(10):
+            for axis, value in enumerate(coordinates):
+                morton |= ((value >> bit) & 1) << (bit * 3 + axis)
+        reversed_morton = int(f"{morton:030b}"[::-1], 2)
+        return (reversed_morton, morton, point.palette, point.flags)
+
     for group in groups:
-        group.sort(key=_progressive_key)
+        group.sort(key=progressive_key)
 
     points: list[Point] = []
     emitted = [0, 0, 0]
@@ -897,27 +722,15 @@ def compile_model(args: argparse.Namespace) -> int:
         texture_coordinates = None
         textures = None
     vertices = transform_and_normalize(vertices, args.up_axis, args.front_axis)
-    if args.layout == "slices":
-        points = sample_slice_points(
-            vertices,
-            triangles,
-            colors,
-            args.points,
-            args.seed,
-            args.slice_spacing,
-            texture_coordinates,
-            textures,
-        )
-    else:
-        points = sample_points(
-            vertices,
-            triangles,
-            colors,
-            args.points,
-            args.seed,
-            texture_coordinates,
-            textures,
-        )
+    points = sample_points(
+        vertices,
+        triangles,
+        colors,
+        args.points,
+        args.seed,
+        texture_coordinates,
+        textures,
+    )
     payload = encode(points)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(payload)
@@ -929,7 +742,7 @@ def compile_model(args: argparse.Namespace) -> int:
         color_bytes = len(color_payload)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     print(
-        f"particle-model layout={args.layout} points={len(points)} triangles={len(triangles)} "
+        f"particle-model points={len(points)} triangles={len(triangles)} "
         f"bytes={len(payload)} color_bytes={color_bytes} elapsed_ms={elapsed_ms:.2f} "
         f"output={args.output}"
     )
@@ -943,8 +756,6 @@ def parser() -> argparse.ArgumentParser:
     compile_parser.add_argument("model", type=Path, help="Wavefront OBJ or binary glTF GLB")
     compile_parser.add_argument("--output", type=Path, required=True)
     compile_parser.add_argument("--colors-output", type=Path)
-    compile_parser.add_argument("--layout", choices=("surface", "slices"), default="surface")
-    compile_parser.add_argument("--slice-spacing", type=float, default=0.0049)
     compile_parser.add_argument("--points", type=int, default=65_536)
     compile_parser.add_argument("--seed", type=int, default=0x1983)
     compile_parser.add_argument("--up-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="y")
