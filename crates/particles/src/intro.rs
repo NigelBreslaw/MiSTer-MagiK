@@ -19,6 +19,7 @@ const MISTER_CLOUD: &[u8] = include_bytes!("../assets/intro/mister.pcloud");
 const MISTER_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
 const MAGIK_CLOUD: &[u8] = include_bytes!("../assets/intro/magik.pcloud");
 const MAGIK_GROUPS: &[u8] = include_bytes!("../assets/intro/magik.pgroup");
+const CABINET_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
 const PCLOUD_HEADER_BYTES: usize = 28;
 const PCLOUD_RECORD_BYTES: usize = 8;
 
@@ -55,6 +56,8 @@ pub struct IntroScene {
     recipe: IntroRecipe,
     mister: PointTarget,
     magik: PointTarget,
+    cloud: PointTarget,
+    cabinet: PointTarget,
     static_xy: Vec<[f32; 2]>,
     dynamic_positions: Vec<[f32; 3]>,
     positions: Vec<PointCloudPositionBlock>,
@@ -78,6 +81,19 @@ impl IntroScene {
         {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
+        let cloud_radius = match recipe.cues.get(5) {
+            Some(IntroCue::Cloud { radius, .. }) => *radius,
+            _ => return Err("intro cloud cue is missing".into()),
+        };
+        let cloud = cloud_target(recipe.steady_particle_count, recipe.seed, cloud_radius);
+        let mut cabinet = decode_target(CABINET_CLOUD, None, TargetScale::Cabinet)?;
+        cabinet.positions.truncate(recipe.steady_particle_count);
+        cabinet.palette.truncate(recipe.steady_particle_count);
+        cabinet.groups = vec![ParticleGroupSpan {
+            id: 0,
+            start: 0,
+            count: recipe.steady_particle_count,
+        }];
         let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
         for index in 0..recipe.initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
@@ -97,6 +113,8 @@ impl IntroScene {
             recipe,
             mister,
             magik,
+            cloud,
+            cabinet,
             static_xy,
             dynamic_positions,
             positions,
@@ -184,9 +202,13 @@ impl IntroScene {
     fn render_point_target(
         &mut self,
         destination: &mut [Rgb565Pixel],
-        magik: bool,
+        target: ScenePointTarget,
     ) -> (usize, usize, &'static str) {
-        let target = if magik { &self.magik } else { &self.mister };
+        let target = match target {
+            ScenePointTarget::Mister => &self.mister,
+            ScenePointTarget::Magik => &self.magik,
+            ScenePointTarget::Cabinet => &self.cabinet,
+        };
         render_point_cloud(
             destination,
             &self.recipe,
@@ -250,6 +272,79 @@ impl IntroScene {
             self.geometry,
             &self.dynamic_positions,
             &self.magik.palette,
+            &mut self.positions,
+            &mut self.commands,
+        )
+    }
+
+    fn render_cloud_transition(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        cue_index: usize,
+        cue_elapsed_ms: u64,
+        duration_ms: u64,
+        turns: f32,
+        easing: RecipeEasing,
+    ) -> (usize, usize, &'static str) {
+        let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
+        let (source, target, palette) = if cue_index == 5 {
+            (&self.magik, &self.cloud, &self.magik.palette)
+        } else {
+            (&self.cloud, &self.cabinet, &self.cabinet.palette)
+        };
+        let angle = progress * turns * std::f32::consts::TAU;
+        let (sin, cos) = angle.sin_cos();
+        for index in 0..self.recipe.steady_particle_count {
+            let from = source.positions[index];
+            let rotated = [
+                from[0].mul_add(cos, from[2] * sin),
+                from[1],
+                (-from[0]).mul_add(sin, from[2] * cos),
+            ];
+            let to = target.positions[index];
+            self.dynamic_positions[index] = [
+                rotated[0] + (to[0] - rotated[0]) * progress,
+                rotated[1] + (to[1] - rotated[1]) * progress,
+                rotated[2] + (to[2] - rotated[2]) * progress,
+            ];
+        }
+        render_point_cloud(
+            destination,
+            &self.recipe,
+            self.geometry,
+            &self.dynamic_positions,
+            palette,
+            &mut self.positions,
+            &mut self.commands,
+        )
+    }
+
+    fn render_cabinet_orbit(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        cue_elapsed_ms: u64,
+        duration_ms: u64,
+        turns: f32,
+    ) -> (usize, usize, &'static str) {
+        let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, turns);
+        let (sin, cos) = yaw.sin_cos();
+        for (dynamic, point) in self
+            .dynamic_positions
+            .iter_mut()
+            .zip(&self.cabinet.positions)
+        {
+            *dynamic = [
+                point[0].mul_add(cos, point[2] * sin),
+                point[1],
+                (-point[0]).mul_add(sin, point[2] * cos),
+            ];
+        }
+        render_point_cloud(
+            destination,
+            &self.recipe,
+            self.geometry,
+            &self.dynamic_positions,
+            &self.cabinet.palette,
             &mut self.positions,
             &mut self.commands,
         )
@@ -365,7 +460,35 @@ impl FramebufferScene for IntroScene {
                 *stagger_ms,
                 *easing,
             ),
-            _ => self.render_point_target(target.pixels_mut(), cue_index >= 4),
+            IntroCue::Cloud {
+                duration_ms,
+                turns,
+                easing,
+                ..
+            } => self.render_cloud_transition(
+                target.pixels_mut(),
+                cue_index,
+                cue_elapsed_ms,
+                *duration_ms,
+                *turns,
+                *easing,
+            ),
+            IntroCue::TargetOrbit {
+                duration_ms, turns, ..
+            } => self.render_cabinet_orbit(
+                target.pixels_mut(),
+                cue_elapsed_ms,
+                *duration_ms,
+                *turns,
+            ),
+            _ => {
+                let point_target = match cue_index {
+                    0..=3 => ScenePointTarget::Mister,
+                    4..=7 => ScenePointTarget::Magik,
+                    _ => ScenePointTarget::Cabinet,
+                };
+                self.render_point_target(target.pixels_mut(), point_target)
+            }
         };
         let raster_us = elapsed_us(render_started.elapsed());
         let particles = if cue_index < 2 {
@@ -398,6 +521,14 @@ impl FramebufferScene for IntroScene {
 #[derive(Clone, Copy)]
 enum TargetScale {
     Text,
+    Cabinet,
+}
+
+#[derive(Clone, Copy)]
+enum ScenePointTarget {
+    Mister,
+    Magik,
+    Cabinet,
 }
 
 fn decode_target(
@@ -433,6 +564,11 @@ fn decode_target(
                 f32::from(x) * (480.0 / 32_767.0),
                 f32::from(y) * (220.0 / 32_767.0) - 110.0,
                 f32::from(z) * (96.0 / 32_767.0),
+            ],
+            TargetScale::Cabinet => [
+                f32::from(x) * (390.0 / 32_767.0),
+                220.0 - f32::from(y) * (440.0 / 32_767.0),
+                f32::from(z) * (390.0 / 32_767.0),
             ],
         };
         positions.push(position);
@@ -545,6 +681,40 @@ fn pivot(points: &[[f32; 3]]) -> [f32; 3] {
     [sum[0] * reciprocal, sum[1] * reciprocal, sum[2] * reciprocal]
 }
 
+fn cloud_target(count: usize, seed: u64, radius: f32) -> PointTarget {
+    let mut positions = Vec::with_capacity(count);
+    let mut palette = Vec::with_capacity(count);
+    let golden_angle = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    for index in 0..count {
+        let unit = (index as f32 + 0.5) / count as f32;
+        let y = 1.0 - unit * 2.0;
+        let radial = (1.0 - y * y).sqrt();
+        let angle = index as f32 * golden_angle;
+        let jitter = 0.82 + unit01(mix32(index as u32 ^ seed as u32)) * 0.18;
+        positions.push([
+            angle.cos() * radial * radius * jitter,
+            y * radius * 0.62,
+            angle.sin() * radial * radius * jitter,
+        ]);
+        palette.push((index & 7) as u8);
+    }
+    PointTarget {
+        positions,
+        palette,
+        groups: vec![ParticleGroupSpan {
+            id: 0,
+            start: 0,
+            count,
+        }],
+    }
+}
+
+fn cabinet_yaw(elapsed_ms: u64, duration_ms: u64, turns: f32) -> f32 {
+    (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0)
+        * turns
+        * std::f32::consts::TAU
+}
+
 fn ease(value: f32, easing: RecipeEasing) -> f32 {
     let value = value.clamp(0.0, 1.0);
     match easing {
@@ -616,5 +786,11 @@ mod tests {
         for axis in 0..3 {
             assert!((source_pivot[axis] - dynamic_pivot[axis]).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn cabinet_orbit_accumulates_exactly_two_turns() {
+        let yaw = cabinet_yaw(4_000, 4_000, 2.0);
+        assert!((yaw - 4.0 * std::f32::consts::PI).abs() < f32::EPSILON * 8.0);
     }
 }
