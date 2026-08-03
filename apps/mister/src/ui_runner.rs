@@ -106,6 +106,7 @@ mod launcher_readiness;
 mod launcher_scheduler;
 mod launcher_screensaver;
 mod launcher_screensaver_pipeline;
+mod launcher_startup_intro;
 mod launcher_worker_intents;
 mod particle_renderer;
 mod raw565_preview_renderer;
@@ -147,6 +148,7 @@ use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use launcher_screensaver_pipeline::{
     DirectRenderAheadPoll, RenderAheadPoll, ScreensaverDirectRenderAhead, ScreensaverRenderAhead,
 };
+use launcher_startup_intro::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
 use tear_pattern_loop::*;

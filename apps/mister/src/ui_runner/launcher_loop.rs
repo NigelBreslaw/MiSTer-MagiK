@@ -2671,6 +2671,63 @@ pub(super) fn run_launcher_loop(
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     window.request_redraw();
+    let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
+        && launcher_bench_scenario.is_none()
+        && screensaver_start_mode == ScreensaverStartMode::Inactive;
+    let mut startup_intro =
+        if startup_intro_eligible && launcher_presenter.direct_hidden_slots_available(ui) {
+            match PreparedStartupIntro::new(ui.render_w(), ui.render_h()) {
+                Ok(prepared) => match launcher_presenter.take_direct_hidden_frame_buffers() {
+                    Ok(buffers) => {
+                        print_startup_event(
+                            start,
+                            "startup_intro_started",
+                            format!("width={} height={} fps=60", ui.render_w(), ui.render_h()),
+                        );
+                        Some(prepared.attach(buffers))
+                    }
+                    Err(failure) => {
+                        launcher_presenter.fail_latch_completion(failure);
+                        None
+                    }
+                },
+                Err(error) => {
+                    crate::ui_errln!("startup intro preparation failed: {error}");
+                    None
+                }
+            }
+        } else {
+            if startup_intro_eligible {
+                print_startup_event(
+                    start,
+                    "startup_intro_skipped",
+                    "reason=direct-hidden-route-unavailable",
+                );
+            }
+            None
+        };
+    if startup_intro.is_some()
+        && let Some(worker) = catalog_session.maybe_start_deferred_worker(
+            scheduler.catalog_worker_running(),
+            true,
+            catalog_publication_test.catalog_worker_allowed(),
+            Instant::now(),
+            Duration::ZERO,
+            catalog_builder_lock_available,
+        )
+    {
+        print_startup_event(start, "catalog_worker_start", &worker.root);
+        let lifecycle_input =
+            deferred_catalog_worker_lifecycle_input(worker.execution_mode, worker.request);
+        lifecycle.handle(lifecycle_input, &mut lifecycle_effects);
+        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+        scheduler.start_catalog_worker(
+            worker.root,
+            worker.request,
+            worker.initial_cache,
+            worker.execution_mode,
+        );
+    }
     macro_rules! request_launcher_redraw {
         () => {{
             window.request_redraw();
@@ -5280,7 +5337,53 @@ pub(super) fn run_launcher_loop(
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
         let mut completed_hidden_frame_for_present = None;
-        if screensaver.active && screensaver_direct_pipeline.is_some() {
+        let mut accepted_startup_intro_frame = false;
+        let mut startup_intro_failure = None;
+        if let Some(intro) = startup_intro.as_mut() {
+            if intro.snapshot_due() {
+                let launcher_pixels = layer_target.cached_frame_view().pixels();
+                if let Err(error) = intro.install_launcher_snapshot(launcher_pixels) {
+                    startup_intro_failure = Some(error);
+                } else {
+                    print_startup_event(
+                        start,
+                        "startup_intro_launcher_snapshot",
+                        format!("pixels={} at_ms=18000", launcher_pixels.len()),
+                    );
+                }
+            }
+            if startup_intro_failure.is_none() {
+                match launcher_presenter.try_issue_hidden_slot_render_grant(f, display_session) {
+                    Ok(Some(grant)) => match intro.render_grant(grant) {
+                        Ok(completed) => {
+                            completed_hidden_frame_for_present = Some(completed);
+                            accepted_startup_intro_frame = true;
+                        }
+                        Err(error) => startup_intro_failure = Some(error),
+                    },
+                    Ok(None) => {}
+                    Err(failure) => {
+                        launcher_presenter.fail_latch_completion(failure);
+                        startup_intro_failure = Some("hidden-slot grant failed".into());
+                    }
+                }
+            }
+        }
+        if let Some(error) = startup_intro_failure.take() {
+            crate::ui_errln!("startup intro stopped: {error}");
+            if let Some(mut intro) = startup_intro.take() {
+                let returned = intro.take_buffers();
+                if let Err(failure) =
+                    launcher_presenter.restore_direct_hidden_frame_buffers(returned)
+                {
+                    launcher_presenter.fail_latch_completion(failure);
+                }
+            }
+            launcher_presenter.invalidate_external_hidden_mode();
+            full_frame_present = true;
+            window.request_redraw();
+        }
+        if startup_intro.is_none() && screensaver.active && screensaver_direct_pipeline.is_some() {
             let grant_result =
                 launcher_presenter.try_issue_hidden_slot_render_grant(f, display_session);
             match grant_result {
@@ -5353,7 +5456,7 @@ pub(super) fn run_launcher_loop(
                     window.request_redraw();
                 }
             }
-        } else if screensaver.active {
+        } else if startup_intro.is_none() && screensaver.active {
             let render_ahead_poll = screensaver_pipeline
                 .as_ref()
                 .map(ScreensaverRenderAhead::try_next)
@@ -5781,8 +5884,9 @@ pub(super) fn run_launcher_loop(
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
             || navigation_transition_composition_active;
-        let direct_hidden_present_mode =
-            screensaver_direct_pipeline.is_some() || direct_hidden_exit_pending;
+        let direct_hidden_present_mode = startup_intro.is_some()
+            || screensaver_direct_pipeline.is_some()
+            || direct_hidden_exit_pending;
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -5882,10 +5986,36 @@ pub(super) fn run_launcher_loop(
         }
         let visible_frame_presented = visible_frame_was_presented(
             presentation.copied_rows,
-            accepted_screensaver_frame,
+            accepted_screensaver_frame || accepted_startup_intro_frame,
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
+        let startup_intro_was_active = startup_intro.is_some();
+        let mut startup_intro_completed = false;
+        if visible_frame_presented
+            && accepted_startup_intro_frame
+            && let Some(intro) = startup_intro.as_mut()
+            && intro.note_presented()
+        {
+            startup_intro_completed = true;
+            let restored = intro.restore_handoff_snapshot(&mut layer_target);
+            let returned = intro.take_buffers();
+            if !restored {
+                crate::ui_errln!("startup intro handoff cache geometry mismatch");
+            }
+            if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
+                launcher_presenter.fail_latch_completion(failure);
+            }
+            launcher_presenter.invalidate_external_hidden_mode();
+            startup_intro = None;
+            full_frame_present = true;
+            window.request_redraw();
+            print_startup_event(
+                start,
+                "startup_intro_completed",
+                "frames=1201 elapsed_ms=20000",
+            );
+        }
         if navigation_transition_frame_active && visible_frame_presented {
             screensaver_cpu_profile.begin_navigation_transition(frames.saturating_add(1));
         }
@@ -5912,7 +6042,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
-        if visible_frame_presented {
+        if visible_frame_presented && (!startup_intro_was_active || startup_intro_completed) {
             if !first_launcher_frame_logged
                 && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
             {
@@ -6239,6 +6369,13 @@ pub(super) fn run_launcher_loop(
         );
         latch_v4_qualification.write_state_if_due(Instant::now());
         frames += 1;
+    }
+    if let Some(mut intro) = startup_intro.take() {
+        let returned = intro.take_buffers();
+        if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
+            launcher_presenter.fail_latch_completion(failure);
+        }
+        launcher_presenter.invalidate_external_hidden_mode();
     }
     // Preserve the continuous background permission for a later launcher run
     // in the same process (notably host tests and diagnostic runners).
