@@ -157,11 +157,40 @@ fn update_profile_lock(repository: &Path) -> AgentResult<()> {
     let rust_toolchain = home.join(".rustup/toolchains/stable-aarch64-unknown-linux-gnu");
     let image = std::env::var("MISTER_APPLE_CONTAINER_IMAGE")
         .unwrap_or_else(|_| "mister-magik-cross-armv7:ubuntu20-arm64".into());
-    let status = profile_lock_container_command(&snapshot, &cargo_home, &rust_toolchain, &image)
-        .status()
-        .map_err(|error| format!("start offline profile lock update: {error}"))?;
+    let validation = profile_lock_container_command(
+        &snapshot,
+        &cargo_home,
+        &rust_toolchain,
+        &image,
+        &[
+            "metadata",
+            "--locked",
+            "--offline",
+            "--no-deps",
+            "--format-version",
+            "1",
+        ],
+    )
+    .output()
+    .map_err(|error| format!("start offline profile lock validation: {error}"))?;
+    if validation.status.success() {
+        return Ok(());
+    }
+    let status = profile_lock_container_command(
+        &snapshot,
+        &cargo_home,
+        &rust_toolchain,
+        &image,
+        &["generate-lockfile", "--offline"],
+    )
+    .status()
+    .map_err(|error| format!("start offline profile lock update: {error}"))?;
     if !status.success() {
-        return Err(format!("offline profile lock update exited with {status}").into());
+        return Err(format!(
+            "offline profile lock update exited with {status}; locked validation failed first: {}",
+            String::from_utf8_lossy(&validation.stderr).trim()
+        )
+        .into());
     }
 
     let generated = std::fs::read(snapshot.join(PROFILE_LOCK))
@@ -180,6 +209,7 @@ fn profile_lock_container_command(
     cargo_home: &Path,
     rust_toolchain: &Path,
     image: &str,
+    cargo_arguments: &[&str],
 ) -> Command {
     let mut command = Command::new("container");
     command
@@ -206,9 +236,8 @@ fn profile_lock_container_command(
             "/project/apps/framebuffer-scene-lab",
             image,
             "cargo",
-            "generate-lockfile",
-            "--offline",
-        ]);
+        ])
+        .args(cargo_arguments);
     command
 }
 
@@ -510,6 +539,7 @@ mod tests {
             Path::new("/tmp/cargo"),
             Path::new("/tmp/rust"),
             "test-image",
+            &["generate-lockfile", "--offline"],
         );
         let arguments = command
             .get_args()
