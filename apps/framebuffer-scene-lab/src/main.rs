@@ -567,6 +567,11 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
             simulation_samples_us.push(stages.simulation_us);
             projection_samples_us.push(stages.projection_us);
             raster_samples_us.push(stages.raster_us);
+        } else if let Some(stages) = stats.cabinet_stages {
+            clear_samples_us.push(stages.clear_us);
+            simulation_samples_us.push(0);
+            projection_samples_us.push(stages.projection_us);
+            raster_samples_us.push(stages.raster_us);
         } else {
             clear_samples_us.clear();
             simulation_samples_us.clear();
@@ -594,11 +599,11 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
                 sample_summary(&mut projection_samples_us);
             let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
             let error = renderer.last_error().unwrap_or("none");
-            let magik_stages = if stats.effect != EffectKind::Magik || clear_samples_us.is_empty() {
-                "magik_stages=not_applicable".to_owned()
+            let stage_metrics = if clear_samples_us.is_empty() {
+                "scene_stages=not_applicable".to_owned()
             } else {
                 format!(
-                    "magik_clear_avg_us={clear_average_us} magik_clear_p99_us={clear_p99_us} magik_simulation_avg_us={simulation_average_us} magik_simulation_p99_us={simulation_p99_us} magik_projection_avg_us={projection_average_us} magik_projection_p99_us={projection_p99_us} magik_raster_avg_us={raster_average_us} magik_raster_p99_us={raster_p99_us}"
+                    "scene_clear_avg_us={clear_average_us} scene_clear_p99_us={clear_p99_us} scene_simulation_avg_us={simulation_average_us} scene_simulation_p99_us={simulation_p99_us} scene_projection_avg_us={projection_average_us} scene_projection_p99_us={projection_p99_us} scene_raster_avg_us={raster_average_us} scene_raster_p99_us={raster_p99_us}"
                 )
             };
             println!(
@@ -611,7 +616,7 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
                 render_average_us,
                 render_p99_us,
                 render_max_us,
-                magik_stages,
+                stage_metrics,
                 stats.visible,
                 stats.simulation_backend,
                 stats.projection_backend,

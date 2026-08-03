@@ -10,7 +10,7 @@ use mister_magik_framebuffer_scenes::navigation::{
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
 };
-use mister_magik_particles::cabinet::{CabinetRenderOptions, CabinetScene};
+use mister_magik_particles::cabinet::{CabinetRenderOptions, CabinetScene, CabinetStageTimings};
 use mister_magik_particles::engine::ParticlePreset;
 use mister_magik_particles::magik::{MagikScene, MagikSceneOptions, MagikSceneStats};
 use mister_magik_particles::recipes::{
@@ -198,6 +198,7 @@ impl NavigationFixtureScene {
             simulation_backend: direction.label(),
             projection_backend: self.fixture.label(),
             magik_stages: None,
+            cabinet_stages: None,
         })
     }
 }
@@ -303,6 +304,7 @@ pub struct FrameStats {
     pub simulation_backend: &'static str,
     pub projection_backend: &'static str,
     pub magik_stages: Option<MagikStageTimings>,
+    pub cabinet_stages: Option<CabinetStageTimings>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -438,6 +440,7 @@ impl FocusedParticleRenderer {
                     simulation_backend: "cabinet-scalar",
                     projection_backend: stats.projection_backend,
                     magik_stages: None,
+                    cabinet_stages: Some(stats.stages),
                 })
             }
         }
@@ -467,6 +470,7 @@ fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
             projection_us: stats.projection_us.min(u128::from(u64::MAX)) as u64,
             raster_us: stats.raster_us.min(u128::from(u64::MAX)) as u64,
         }),
+        cabinet_stages: None,
     }
 }
 
