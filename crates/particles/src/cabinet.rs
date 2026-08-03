@@ -134,6 +134,7 @@ struct CabinetAttributeBlock {
 const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
 const COMMAND_OFFSET_MASK: u32 = (1 << 20) - 1;
 const COMMAND_DEPTH_SHIFT: u32 = 20;
+const BASELINE_NEIGHBOR_PRESENT: u64 = 1 << 32;
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -186,6 +187,7 @@ pub struct ArcadeCabinetFormation {
     positions: Vec<CabinetPositionBlock>,
     dynamic_positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
+    baseline_raster: Vec<u64>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -536,6 +538,34 @@ impl ArcadeCabinetFormation {
             &mut style,
             &mut flags,
         )?;
+        let appearance = recipe.appearance;
+        let mut baseline_raster = Vec::with_capacity(capacity);
+        for index in 0..capacity {
+            let feature = flags[index];
+            let style = if feature & appearance.priority_feature_mask != 0 {
+                appearance.priority_palette_index
+            } else if feature & appearance.accent_feature_mask != 0 {
+                style[index]
+                    .saturating_add(appearance.accent_palette_add)
+                    .min(7)
+            } else {
+                style[index]
+            };
+            let primary = u64::from(pixel(appearance.palette[usize::from(style)]).0);
+            let neighbor_present = feature & appearance.neighbor_feature_mask != 0
+                && index % usize::from(appearance.neighbor_every) == 0;
+            let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
+            let neighbor = u64::from(pixel(appearance.palette[usize::from(neighbor_style)]).0);
+            baseline_raster.push(
+                primary
+                    | (neighbor << 16)
+                    | if neighbor_present {
+                        BASELINE_NEIGHBOR_PRESENT
+                    } else {
+                        0
+                    },
+            );
+        }
         let block_count = capacity.div_ceil(PARTICLE_LANES);
         let mut positions = Vec::with_capacity(block_count);
         let mut attributes = Vec::with_capacity(block_count);
@@ -582,6 +612,7 @@ impl ArcadeCabinetFormation {
             positions,
             dynamic_positions,
             attributes,
+            baseline_raster,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -645,6 +676,11 @@ impl ArcadeCabinetFormation {
                 self.attributes
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetAttributeBlock>()),
+            )
+            .saturating_add(
+                self.baseline_raster
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u64>()),
             )
             .saturating_add(
                 self.commands
@@ -973,30 +1009,14 @@ impl ArcadeCabinetFormation {
                     continue;
                 };
                 visible = visible.saturating_add(1);
-                let attribute = &self.attributes[index / PARTICLE_LANES];
-                let lane = index % PARTICLE_LANES;
-                let feature = attribute.flags[lane];
-                let style = if feature & appearance.priority_feature_mask != 0 {
-                    appearance.priority_palette_index
-                } else if feature & appearance.accent_feature_mask != 0 {
-                    attribute.style[lane]
-                        .saturating_add(appearance.accent_palette_add)
-                        .min(7)
-                } else {
-                    attribute.style[lane]
-                };
-                destination[offset] = pixel(appearance.palette[usize::from(style)]);
+                let baseline = self.baseline_raster[index];
+                destination[offset] = Rgb565Pixel(baseline as u16);
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
-                if feature & appearance.neighbor_feature_mask != 0
-                    && index % usize::from(appearance.neighbor_every) == 0
-                {
+                if baseline & BASELINE_NEIGHBOR_PRESENT != 0 {
                     let pixel_x = offset % self.width;
                     if pixel_x + 1 < self.width {
-                        let neighbor_style =
-                            style.saturating_sub(appearance.neighbor_palette_subtract);
-                        destination[offset + 1] =
-                            pixel(appearance.palette[usize::from(neighbor_style)]);
+                        destination[offset + 1] = Rgb565Pixel((baseline >> 16) as u16);
                         dirty_offsets.push((offset + 1) as u32);
                         pixel_writes = pixel_writes.saturating_add(1);
                     }
