@@ -69,6 +69,27 @@ pub struct PreparedLauncherSnapshot {
     crossfade_visible_counts: [usize; 65],
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IntroParticleDensity {
+    #[default]
+    Full,
+    Half,
+}
+
+impl IntroParticleDensity {
+    const fn divisor(self) -> usize {
+        match self {
+            Self::Full => 1,
+            Self::Half => 2,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct IntroSceneOptions {
+    pub particle_density: IntroParticleDensity,
+}
+
 #[derive(Clone, Copy)]
 struct RetiringFormationPoint {
     source: [f32; 2],
@@ -122,6 +143,9 @@ impl IntroRenderResult {
 pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
+    options: IntroSceneOptions,
+    initial_particle_count: usize,
+    steady_particle_count: usize,
     mister: PointTarget,
     mister_q5: QuantizedPointCloud,
     mister_commands: Vec<PointCloudDrawCommand>,
@@ -162,18 +186,36 @@ pub struct IntroScene {
 
 impl IntroScene {
     pub fn new(width: usize, height: usize, recipe: IntroRecipe) -> Result<Self, String> {
+        Self::new_with_options(width, height, recipe, IntroSceneOptions::default())
+    }
+
+    pub fn new_with_options(
+        width: usize,
+        height: usize,
+        recipe: IntroRecipe,
+        options: IntroSceneOptions,
+    ) -> Result<Self, String> {
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
-        let mister = decode_target(MISTER_CLOUD, Some((MISTER_GROUPS, 6)), TargetScale::Text)?;
-        let magik = decode_target(MAGIK_CLOUD, Some((MAGIK_GROUPS, 6)), TargetScale::Text)?;
-        if mister.positions.len() != recipe.steady_particle_count {
+        let divisor = options.particle_density.divisor();
+        let initial_particle_count = recipe.initial_particle_count / divisor;
+        let steady_particle_count = recipe.steady_particle_count / divisor;
+        let mister = thin_grouped_target(
+            decode_target(MISTER_CLOUD, Some((MISTER_GROUPS, 6)), TargetScale::Text)?,
+            divisor,
+        )?;
+        let magik = thin_grouped_target(
+            decode_target(MAGIK_CLOUD, Some((MAGIK_GROUPS, 6)), TargetScale::Text)?,
+            divisor,
+        )?;
+        if mister.positions.len() != steady_particle_count {
             return Err(format!(
                 "MiSTer target has {} particles, expected {}",
                 mister.positions.len(),
-                recipe.steady_particle_count
+                steady_particle_count
             ));
         }
-        if magik.positions.len() != recipe.steady_particle_count || magik.groups != mister.groups {
+        if magik.positions.len() != steady_particle_count || magik.groups != mister.groups {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
         let mister_commands = prepare_target_commands(&mister.positions, &recipe, geometry);
@@ -191,7 +233,7 @@ impl IntroScene {
             .iter()
             .map(|position| project(*position, 0.0, 0.0, &recipe, geometry))
             .collect();
-        let scatter_vectors = (0..recipe.steady_particle_count)
+        let scatter_vectors = (0..steady_particle_count)
             .map(|index| {
                 let random = mix32(index as u32 ^ recipe.seed as u32);
                 [
@@ -209,7 +251,7 @@ impl IntroScene {
             _ => return Err("intro cloud cue is missing".into()),
         };
         let cloud = letter_cloud_target(
-            recipe.steady_particle_count,
+            steady_particle_count,
             recipe.seed,
             cloud_radius,
             &magik.groups,
@@ -217,12 +259,12 @@ impl IntroScene {
         );
         let cloud_q5 = QuantizedPointCloud::from_positions(&cloud.positions);
         let mut cabinet = decode_target(CABINET_CLOUD, None, TargetScale::Cabinet)?;
-        cabinet.positions.truncate(recipe.steady_particle_count);
-        cabinet.palette.truncate(recipe.steady_particle_count);
+        cabinet.positions.truncate(steady_particle_count);
+        cabinet.palette.truncate(steady_particle_count);
         cabinet.groups = vec![ParticleGroupSpan {
             id: 0,
             start: 0,
-            count: recipe.steady_particle_count,
+            count: steady_particle_count,
         }];
         let (cabinet_formation, cabinet_final_yaw) = match recipe.cues.get(6) {
             Some(IntroCue::TargetOrbit {
@@ -268,11 +310,11 @@ impl IntroScene {
         // design-time launcher image.
         let launcher = PointTarget {
             positions: launcher_source.clone(),
-            palette: vec![0; recipe.steady_particle_count],
+            palette: vec![0; steady_particle_count],
             groups: vec![ParticleGroupSpan {
                 id: 0,
                 start: 0,
-                count: recipe.steady_particle_count,
+                count: steady_particle_count,
             }],
         };
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
@@ -296,7 +338,7 @@ impl IntroScene {
                 })
                 .count()
         });
-        let launcher_mix_thresholds = (0..recipe.steady_particle_count)
+        let launcher_mix_thresholds = (0..steady_particle_count)
             .map(|index| (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16)
             .collect();
         let mut crossfade_buckets = vec![Vec::new(); 64];
@@ -304,25 +346,23 @@ impl IntroScene {
             crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
                 .push(offset as u32);
         }
-        let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
-        let mut static_origins = Vec::with_capacity(recipe.initial_particle_count);
-        let mut formation_screen = Vec::with_capacity(recipe.steady_particle_count);
-        let mut formation_styles = Vec::with_capacity(recipe.steady_particle_count);
+        let mut static_xy = Vec::with_capacity(initial_particle_count);
+        let mut static_origins = Vec::with_capacity(initial_particle_count);
+        let mut formation_screen = Vec::with_capacity(steady_particle_count);
+        let mut formation_styles = Vec::with_capacity(steady_particle_count);
         let mut retiring_formation = Vec::with_capacity(
-            recipe
-                .initial_particle_count
-                .saturating_sub(recipe.steady_particle_count),
+            initial_particle_count.saturating_sub(steady_particle_count),
         );
-        for index in 0..recipe.initial_particle_count {
+        for index in 0..initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
-            let target_index = index % recipe.steady_particle_count;
+            let target_index = index % steady_particle_count;
             let source = [
                 unit01(random) * width as f32,
                 unit01(random.rotate_left(13)) * height as f32,
             ];
             static_origins.push([source[0] as u16, source[1] as u16]);
             static_xy.push(source);
-            if index < recipe.steady_particle_count {
+            if index < steady_particle_count {
                 formation_screen.push(mister_screen[target_index]);
                 formation_styles.push(mister.palette[target_index]);
             } else {
@@ -335,13 +375,16 @@ impl IntroScene {
             }
         }
         retiring_formation.sort_by_key(|point| point.threshold);
-        let positions = vec![empty_block(); recipe.steady_particle_count.div_ceil(PARTICLE_LANES)];
-        let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
+        let positions = vec![empty_block(); steady_particle_count.div_ceil(PARTICLE_LANES)];
+        let dynamic_positions = vec![[0.0; 3]; steady_particle_count];
         let commands =
-            vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); recipe.steady_particle_count];
+            vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); steady_particle_count];
         Ok(Self {
             geometry,
             recipe,
+            options,
+            initial_particle_count,
+            steady_particle_count,
             mister,
             mister_q5,
             mister_commands,
@@ -387,6 +430,11 @@ impl IntroScene {
     }
 
     #[must_use]
+    pub const fn options(&self) -> IntroSceneOptions {
+        self.options
+    }
+
+    #[must_use]
     pub fn cue_at(&self, elapsed: Duration) -> (usize, u64) {
         let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
@@ -401,6 +449,7 @@ impl IntroScene {
             self.geometry.width(),
             self.geometry.height(),
             self.recipe.clone(),
+            self.options,
             pixels.to_vec(),
         )?;
         self.install_launcher_snapshot(prepared)
@@ -412,6 +461,7 @@ impl IntroScene {
         width: usize,
         height: usize,
         recipe: IntroRecipe,
+        options: IntroSceneOptions,
         pixels: Vec<Rgb565Pixel>,
     ) -> Result<PreparedLauncherSnapshot, String> {
         let geometry =
@@ -425,7 +475,7 @@ impl IntroScene {
         }
         let launcher = live_launcher_target_from_snapshot(
             &pixels,
-            recipe.steady_particle_count,
+            recipe.steady_particle_count / options.particle_density.divisor(),
             &recipe,
             geometry,
         )?;
@@ -451,7 +501,7 @@ impl IntroScene {
 
         Ok(PreparedLauncherSnapshot {
             geometry,
-            particle_count: recipe.steady_particle_count,
+            particle_count: recipe.steady_particle_count / options.particle_density.divisor(),
             launcher,
             launcher_q5,
             launcher_snapshot: pixels,
@@ -468,7 +518,7 @@ impl IntroScene {
         prepared: PreparedLauncherSnapshot,
     ) -> Result<(), String> {
         if prepared.geometry != self.geometry
-            || prepared.particle_count != self.recipe.steady_particle_count
+            || prepared.particle_count != self.steady_particle_count
         {
             return Err("prepared launcher snapshot does not match the intro scene".into());
         }
@@ -531,8 +581,8 @@ impl IntroScene {
             wait_loop_frame,
         );
         Ok(IntroFrameStats {
-            particles: self.recipe.steady_particle_count,
-            projected_particles: self.recipe.steady_particle_count,
+            particles: self.steady_particle_count,
+            projected_particles: self.steady_particle_count,
             projection_cohorts: 1,
             visible: rendered.visible,
             pixel_writes: rendered.pixel_writes,
@@ -598,7 +648,7 @@ impl IntroScene {
                 visible += 1;
             }
         };
-        for index in 0..self.recipe.steady_particle_count {
+        for index in 0..self.steady_particle_count {
             let target = self.formation_screen[index];
             let source = self.static_xy[index];
             let flicker = text_flicker_index(self.formation_styles[index], index, frame);
@@ -909,7 +959,7 @@ impl IntroScene {
             &mut self.positions,
         );
         if !positions_prepared {
-            for index in 0..self.recipe.steady_particle_count {
+            for index in 0..self.steady_particle_count {
                 let from = self.launcher_source[index];
                 let to = self.launcher.positions[index];
                 self.dynamic_positions[index] = [
@@ -1336,9 +1386,9 @@ impl FramebufferScene for IntroScene {
             }
         };
         let particles = if cue_index < 2 {
-            self.recipe.initial_particle_count
+            self.initial_particle_count
         } else {
-            self.recipe.steady_particle_count
+            self.steady_particle_count
         };
         Ok(IntroFrameStats {
             particles,
@@ -1442,6 +1492,41 @@ fn decode_target(
             count: positions.len(),
         }]
     };
+    Ok(PointTarget {
+        positions,
+        palette,
+        groups,
+    })
+}
+
+fn thin_grouped_target(target: PointTarget, divisor: usize) -> Result<PointTarget, String> {
+    if divisor == 1 {
+        return Ok(target);
+    }
+    if divisor == 0 {
+        return Err("intro target thinning divisor must be non-zero".into());
+    }
+    let mut positions = Vec::with_capacity(target.positions.len() / divisor);
+    let mut palette = Vec::with_capacity(target.palette.len() / divisor);
+    let mut groups = Vec::with_capacity(target.groups.len());
+    for group in target.groups {
+        if !group.count.is_multiple_of(divisor) {
+            return Err(format!(
+                "intro target group {} count {} is not divisible by {divisor}",
+                group.id, group.count
+            ));
+        }
+        let start = positions.len();
+        for index in (group.start..group.start + group.count).step_by(divisor) {
+            positions.push(target.positions[index]);
+            palette.push(target.palette[index]);
+        }
+        groups.push(ParticleGroupSpan {
+            id: group.id,
+            start,
+            count: group.count / divisor,
+        });
+    }
     Ok(PointTarget {
         positions,
         palette,
@@ -1941,6 +2026,40 @@ mod tests {
                 .all(|pair| pair[0].threshold <= pair[1].threshold)
         );
         assert_eq!(scene.mister.positions.len(), 40_960);
+    }
+
+    #[test]
+    fn half_density_preserves_paired_aligned_text_tracks() {
+        let scene = IntroScene::new_with_options(
+            640,
+            480,
+            embedded_intro_recipe().unwrap(),
+            IntroSceneOptions {
+                particle_density: IntroParticleDensity::Half,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(scene.initial_particle_count, 51_200);
+        assert_eq!(scene.steady_particle_count, 20_480);
+        assert_eq!(scene.mister.positions.len(), 20_480);
+        assert_eq!(scene.magik.positions.len(), 20_480);
+        assert_eq!(scene.mister.groups, scene.magik.groups);
+        assert_eq!(
+            scene
+                .mister
+                .groups
+                .iter()
+                .map(|group| group.count)
+                .collect::<Vec<_>>(),
+            [4_096, 2_048, 4_096, 2_048, 4_096, 4_096]
+        );
+        assert!(scene.mister.groups.iter().all(|group| {
+            group.start.is_multiple_of(PARTICLE_LANES)
+                && group.count.is_multiple_of(PARTICLE_LANES)
+        }));
+        assert_eq!(scene.cabinet_formed.len(), 20_480);
+        assert_eq!(scene.launcher.positions.len(), 20_480);
     }
 
     #[test]

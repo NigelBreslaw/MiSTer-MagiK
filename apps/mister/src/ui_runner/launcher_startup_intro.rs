@@ -9,7 +9,7 @@ use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel as SceneRgb565Pixel, SceneBufferId, SceneClock, SceneGeometry,
     SceneTarget,
 };
-use mister_magik_particles::intro::{IntroScene, PreparedLauncherSnapshot};
+use mister_magik_particles::intro::{IntroScene, IntroSceneOptions, PreparedLauncherSnapshot};
 use mister_magik_particles::intro_recipe::embedded_intro_recipe;
 
 const INTRO_FPS: u64 = 60;
@@ -125,7 +125,13 @@ impl StartupIntroSession {
             .name("intro-snapshot".to_string())
             .spawn(move || {
                 apply_runtime_thread_policy(RuntimeThreadRole::StartupIntroSnapshot);
-                let prepared = IntroScene::prepare_launcher_snapshot(width, height, recipe, pixels);
+                let prepared = IntroScene::prepare_launcher_snapshot(
+                    width,
+                    height,
+                    recipe,
+                    IntroSceneOptions::default(),
+                    pixels,
+                );
                 let _ = tx.send(prepared);
             })
             .map_err(|error| format!("failed to start launcher snapshot preparation: {error}"))?;
