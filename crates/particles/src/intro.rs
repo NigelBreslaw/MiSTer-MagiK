@@ -59,6 +59,13 @@ struct PointTarget {
 }
 
 #[derive(Clone, Copy)]
+struct RetiringFormationPoint {
+    source: [f32; 2],
+    target: [f32; 2],
+    threshold: u16,
+}
+
+#[derive(Clone, Copy)]
 struct IntroRenderResult {
     visible: usize,
     pixel_writes: usize,
@@ -109,9 +116,10 @@ pub struct IntroScene {
     launcher_thresholds: Vec<u8>,
     crossfade_buckets: Vec<Vec<u32>>,
     static_xy: Vec<[f32; 2]>,
+    static_origins: Vec<[u16; 2]>,
     formation_screen: Vec<[f32; 2]>,
-    formation_random: Vec<u16>,
     formation_styles: Vec<u8>,
+    retiring_formation: Vec<RetiringFormationPoint>,
     dynamic_positions: Vec<[f32; 3]>,
     positions: Vec<PointCloudPositionBlock>,
     commands: Vec<PointCloudDrawCommand>,
@@ -229,21 +237,36 @@ impl IntroScene {
                 .push(offset as u32);
         }
         let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
-        let mut formation_screen = Vec::with_capacity(recipe.initial_particle_count);
-        let mut formation_random = Vec::with_capacity(recipe.initial_particle_count);
-        let mut formation_styles = Vec::with_capacity(recipe.initial_particle_count);
+        let mut static_origins = Vec::with_capacity(recipe.initial_particle_count);
+        let mut formation_screen = Vec::with_capacity(recipe.steady_particle_count);
+        let mut formation_styles = Vec::with_capacity(recipe.steady_particle_count);
+        let mut retiring_formation = Vec::with_capacity(
+            recipe
+                .initial_particle_count
+                .saturating_sub(recipe.steady_particle_count),
+        );
         for index in 0..recipe.initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
             let target_index = index % recipe.steady_particle_count;
-            static_xy.push([
+            let source = [
                 unit01(random) * width as f32,
                 unit01(random.rotate_left(13)) * height as f32,
-            ]);
-            formation_screen.push(mister_screen[target_index]);
-            formation_random
-                .push((mix32((index as u32).wrapping_add(recipe.seed as u32)) & 0xffff) as u16);
-            formation_styles.push(mister.palette[target_index]);
+            ];
+            static_origins.push([source[0] as u16, source[1] as u16]);
+            static_xy.push(source);
+            if index < recipe.steady_particle_count {
+                formation_screen.push(mister_screen[target_index]);
+                formation_styles.push(mister.palette[target_index]);
+            } else {
+                retiring_formation.push(RetiringFormationPoint {
+                    source,
+                    target: mister_screen[target_index],
+                    threshold: (mix32((index as u32).wrapping_add(recipe.seed as u32)) & 0xffff)
+                        as u16,
+                });
+            }
         }
+        retiring_formation.sort_by_key(|point| point.threshold);
         let positions = vec![empty_block(); recipe.steady_particle_count.div_ceil(PARTICLE_LANES)];
         let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
         let commands =
@@ -266,9 +289,10 @@ impl IntroScene {
             launcher_thresholds,
             crossfade_buckets,
             static_xy,
+            static_origins,
             formation_screen,
-            formation_random,
             formation_styles,
+            retiring_formation,
             dynamic_positions,
             positions,
             commands,
@@ -290,14 +314,13 @@ impl IntroScene {
         let raster_started = Instant::now();
         let palette = self.recipe.appearance.crt_palette;
         let mut visible = 0;
-        for (index, source) in self.static_xy.iter().enumerate() {
+        for (index, source) in self.static_origins.iter().enumerate() {
             let noise = mix32((index as u32) ^ (frame as u32).wrapping_mul(0x9e37_79b9));
             if noise & 7 == 0 {
                 continue;
             }
-            let x = (source[0] as usize + usize::from((noise & 3) as u8)) % self.geometry.width();
-            let y = (source[1] as usize + usize::from(((noise >> 2) & 3) as u8))
-                % self.geometry.height();
+            let x = wrap_small_jitter(source[0], (noise & 3) as u16, self.geometry.width());
+            let y = wrap_small_jitter(source[1], ((noise >> 2) & 3) as u16, self.geometry.height());
             destination[y * self.geometry.width() + x] =
                 Rgb565Pixel(palette[((noise >> 30) & 3) as usize].0);
             visible += 1;
@@ -321,32 +344,32 @@ impl IntroScene {
         let crt_palette = self.recipe.appearance.crt_palette;
         let text_palette = self.recipe.appearance.text_palette;
         let mut visible = 0;
-        for index in 0..self.recipe.initial_particle_count {
-            let target = self.formation_screen[index];
-            let source = self.static_xy[index];
+        let mut draw = |source: [f32; 2], target: [f32; 2], color: Rgb565Pixel| {
             let x = source[0] + (target[0] - source[0]) * progress;
             let y = source[1] + (target[1] - source[1]) * progress;
-            let retire = index >= self.recipe.steady_particle_count;
-            let keep_threshold = ((1.0 - progress) * 65_535.0) as u32;
-            if retire && u32::from(self.formation_random[index]) > keep_threshold {
-                continue;
-            }
             if x >= 0.0
                 && y >= 0.0
                 && x < self.geometry.width() as f32
                 && y < self.geometry.height() as f32
             {
-                let offset = y as usize * self.geometry.width() + x as usize;
-                let color = if retire {
-                    let fade = ((1.0 - progress) * 3.0) as usize;
-                    crt_palette[fade.min(3)]
-                } else {
-                    let flicker = text_flicker_index(self.formation_styles[index], index, frame);
-                    text_palette[flicker]
-                };
-                destination[offset] = Rgb565Pixel(color.0);
+                destination[y as usize * self.geometry.width() + x as usize] = color;
                 visible += 1;
             }
+        };
+        for index in 0..self.recipe.steady_particle_count {
+            let target = self.formation_screen[index];
+            let source = self.static_xy[index];
+            let flicker = text_flicker_index(self.formation_styles[index], index, frame);
+            draw(source, target, Rgb565Pixel(text_palette[flicker].0));
+        }
+        let keep_threshold = ((1.0 - progress) * 65_535.0) as u16;
+        let retire_count = self
+            .retiring_formation
+            .partition_point(|point| point.threshold <= keep_threshold);
+        let fade = ((1.0 - progress) * 3.0) as usize;
+        let retire_color = Rgb565Pixel(crt_palette[fade.min(3)].0);
+        for point in &self.retiring_formation[..retire_count] {
+            draw(point.source, point.target, retire_color);
         }
         IntroRenderResult::raster_only(
             visible,
@@ -1098,6 +1121,16 @@ fn launcher_projection_compensation(recipe: &IntroRecipe) -> f32 {
     recipe.camera.dolly / recipe.camera.focal_length
 }
 
+#[inline(always)]
+fn wrap_small_jitter(origin: u16, jitter: u16, extent: usize) -> usize {
+    let coordinate = usize::from(origin + jitter);
+    if coordinate >= extent {
+        coordinate - extent
+    } else {
+        coordinate
+    }
+}
+
 fn mix32(mut value: u32) -> u32 {
     value ^= value >> 16;
     value = value.wrapping_mul(0x7feb_352d);
@@ -1258,7 +1291,30 @@ mod tests {
         assert_eq!(scene.cue_at(Duration::from_millis(3_999)), (1, 1_499));
         assert_eq!(scene.cue_at(Duration::from_millis(4_000)), (2, 0));
         assert_eq!(scene.static_xy.len(), 102_400);
+        assert_eq!(scene.static_origins.len(), 102_400);
+        assert_eq!(scene.formation_screen.len(), 40_960);
+        assert_eq!(scene.retiring_formation.len(), 61_440);
+        assert!(
+            scene
+                .retiring_formation
+                .windows(2)
+                .all(|pair| pair[0].threshold <= pair[1].threshold)
+        );
         assert_eq!(scene.mister.positions.len(), 40_960);
+    }
+
+    #[test]
+    fn cached_crt_coordinate_wrap_matches_modulo() {
+        for extent in [540, 960] {
+            for origin in 0..extent as u16 {
+                for jitter in 0..=3 {
+                    assert_eq!(
+                        wrap_small_jitter(origin, jitter, extent),
+                        (usize::from(origin) + usize::from(jitter)) % extent
+                    );
+                }
+            }
+        }
     }
 
     #[test]
