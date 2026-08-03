@@ -639,12 +639,11 @@ impl<'a> BuildSession<'a> {
 
     fn ensure_source_identity(&self) -> AgentResult<()> {
         let source_revision = git_output(self.repository, &["rev-parse", "HEAD"])?;
-        let source_dirty = !git_output(
+        let source_status = git_output(
             self.repository,
             &["status", "--porcelain", "--untracked-files=all"],
-        )?
-        .is_empty();
-        validate_source_identity(&self.metadata, &source_revision, source_dirty)
+        )?;
+        validate_source_identity(&self.metadata, &source_revision, &source_status)
     }
 
     fn reusable_clean_receipt(&self, spec: &BuildSpec) -> AgentResult<BuildReceipt> {
@@ -662,10 +661,26 @@ impl<'a> BuildSession<'a> {
 fn validate_source_identity(
     metadata: &BuildMetadata,
     source_revision: &str,
-    source_dirty: bool,
+    source_status: &str,
 ) -> AgentResult<()> {
+    let source_dirty = !source_status.is_empty();
     if source_revision != metadata.source_revision || source_dirty != metadata.source_dirty {
-        return Err("source identity changed during the build".into());
+        let changed_paths = source_status
+            .lines()
+            .take(20)
+            .collect::<Vec<_>>()
+            .join(" | ");
+        return Err(format!(
+            "source identity changed during the build: expected_revision={} actual_revision={source_revision} expected_dirty={} actual_dirty={source_dirty} changes={}",
+            metadata.source_revision,
+            metadata.source_dirty,
+            if changed_paths.is_empty() {
+                "none"
+            } else {
+                &changed_paths
+            }
+        )
+        .into());
     }
     Ok(())
 }
@@ -1968,8 +1983,11 @@ mod tests {
     #[test]
     fn source_identity_guard_rejects_head_and_dirty_state_changes() {
         let metadata = fixed_metadata(false);
-        assert!(validate_source_identity(&metadata, "deadbeef", false).is_ok());
-        assert!(validate_source_identity(&metadata, "changed", false).is_err());
-        assert!(validate_source_identity(&metadata, "deadbeef", true).is_err());
+        assert!(validate_source_identity(&metadata, "deadbeef", "").is_ok());
+        assert!(validate_source_identity(&metadata, "changed", "").is_err());
+        let error = validate_source_identity(&metadata, "deadbeef", " M generated.rs")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("changes= M generated.rs"));
     }
 }
