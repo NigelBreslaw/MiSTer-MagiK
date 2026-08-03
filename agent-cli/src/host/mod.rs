@@ -272,8 +272,9 @@ impl NativeDevice {
         recipe: Option<&Path>,
         fixture: Option<&str>,
         case: Option<&str>,
+        profile: bool,
     ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run_scene_lab(self, binary, scene, recipe, fixture, case)
+        startup_particles::run_scene_lab(self, binary, scene, recipe, fixture, case, profile)
     }
 
     pub(crate) fn run_operator(

@@ -56,6 +56,7 @@ pub(super) fn run(
                 scene,
                 None,
                 None,
+                false,
             )
         }
         StartupParticleRuntime::DevLauncher => run_dev_launcher(&prepared, recipe),
@@ -70,6 +71,7 @@ pub(super) fn run_scene_lab(
     recipe: Option<&Path>,
     fixture: Option<&str>,
     case: Option<&str>,
+    profile: bool,
 ) -> std::result::Result<(), DeviceFailure> {
     validate_local_input(binary, "framebuffer scene lab binary").map_err(device_failure)?;
     if let Some(recipe) = recipe {
@@ -77,7 +79,16 @@ pub(super) fn run_scene_lab(
     }
     let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
     install_prepared_device_environment(&prepared.config);
-    run_lab(&prepared, binary, recipe, scene.as_str(), fixture, case).map_err(device_failure)
+    run_lab(
+        &prepared,
+        binary,
+        recipe,
+        scene.as_str(),
+        fixture,
+        case,
+        profile,
+    )
+    .map_err(device_failure)
 }
 
 fn run_lab(
@@ -87,6 +98,7 @@ fn run_lab(
     scene: &str,
     fixture: Option<&str>,
     case: Option<&str>,
+    profile: bool,
 ) -> Result<()> {
     let session = connect_with(&prepared.config.connection, 10)?;
     let destination = active_lab_destination(&session)?;
@@ -120,6 +132,7 @@ fn run_lab(
                 &scene,
                 fixture.as_deref(),
                 case.as_deref(),
+                profile,
             )
             .map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
@@ -572,11 +585,12 @@ fn run_remote_lab(
     scene: &str,
     fixture: Option<&str>,
     case: Option<&str>,
+    profile: bool,
 ) -> Result<()> {
     let session = connect_with(config, 10)?;
     stream_exec(
         &session,
-        &remote_run_lab_command(destination, scene, fixture, case),
+        &remote_run_lab_command(destination, scene, fixture, case, profile),
     )
 }
 
@@ -692,15 +706,17 @@ fn remote_run_lab_command(
     scene: &str,
     fixture: Option<&str>,
     case: Option<&str>,
+    profile: bool,
 ) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} {case_argument} --destination-width {destination_width} --destination-height {destination_height}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} {case_argument} {profile_argument} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
         scene_arguments = remote_scene_arguments(scene, fixture),
         case_argument = case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
+        profile_argument = if profile { "--profile" } else { "" },
         destination_width = destination.0,
         destination_height = destination.1,
     )
@@ -733,7 +749,7 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080), "magik", None, None);
+        let run = remote_run_lab_command((1920, 1080), "magik", None, None, false);
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -748,6 +764,7 @@ mod tests {
             "navigation-transition",
             Some("home-arcade"),
             None,
+            false,
         );
         assert!(run.contains(&format!(
             "--scene {} --fixture {}",

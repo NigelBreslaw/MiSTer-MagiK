@@ -176,7 +176,14 @@ pub fn execute_scene_device(
             return Err(format!("unknown closed cabinet case {case:?}").into());
         }
     }
-    let spec = BuildSpec::framebuffer_scene_lab_device();
+    if args.profile && args.case.is_none() {
+        return Err("scene-lab --profile requires a closed cabinet --case".into());
+    }
+    let spec = if args.profile {
+        BuildSpec::framebuffer_scene_lab_analysis()
+    } else {
+        BuildSpec::framebuffer_scene_lab_device()
+    };
     execute(repository, &spec, reporter)?;
     crate::commands::device::run_scene_lab(args, &repository.join(spec.artifact()))
 }

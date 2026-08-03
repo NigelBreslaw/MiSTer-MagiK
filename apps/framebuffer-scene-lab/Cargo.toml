@@ -33,6 +33,11 @@ winit = "0.30.13"
 [target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
 libc = "0.2"
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["framebuffer-lab"] }
+pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false }
+
+[features]
+default = []
+profile = ["dep:pprof"]
 
 [profile.release]
 opt-level = 3

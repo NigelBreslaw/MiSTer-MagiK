@@ -15,6 +15,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(all(feature = "profile", target_os = "linux", target_arch = "arm"))]
+mod cpu_profile;
+
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
 const CABINET_DEFAULT_PARTICLES: usize = 48_128;
@@ -45,7 +48,12 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(SceneSource::Navigation(fixture), options.destination, None);
+        return run_window(
+            SceneSource::Navigation(fixture),
+            options.destination,
+            None,
+            false,
+        );
     }
     let recipe_path = options
         .recipe
@@ -80,6 +88,7 @@ fn main() -> Result<(), String> {
         SceneSource::Particle(recipe_path.to_path_buf()),
         options.destination,
         options.case,
+        options.profile,
     )
 }
 
@@ -601,6 +610,7 @@ fn run_window(
     source: SceneSource,
     _destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
+    _profile: bool,
 ) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
@@ -616,6 +626,7 @@ fn run_window(
     source: SceneSource,
     destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
+    profile: bool,
 ) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
@@ -662,6 +673,12 @@ fn run_window(
     let mut prepared_age_samples_us = Vec::with_capacity(64);
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
+    #[cfg(feature = "profile")]
+    let profiler = profile.then(cpu_profile::start).transpose()?;
+    #[cfg(not(feature = "profile"))]
+    if profile {
+        return Err("cabinet profiling requires a release-device-profile build".into());
+    }
     loop {
         let wall_elapsed = Instant::now().saturating_duration_since(started);
         let elapsed = if case.is_some() {
@@ -727,6 +744,10 @@ fn run_window(
         if let Some(case) = case
             && started.elapsed() >= Duration::from_secs(60)
         {
+            #[cfg(feature = "profile")]
+            if let Some(profiler) = profiler {
+                cpu_profile::finish(profiler)?;
+            }
             let seconds = started.elapsed().as_secs_f64();
             let cpu_now = process_cpu_time();
             let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
@@ -877,6 +898,7 @@ fn run_window(
     _source: SceneSource,
     _destination: Option<(u16, u16)>,
     _case: Option<CabinetCase>,
+    _profile: bool,
 ) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
@@ -890,6 +912,7 @@ struct Options {
     check: bool,
     destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
+    profile: bool,
 }
 
 impl Options {
@@ -903,6 +926,7 @@ impl Options {
         let mut destination_width = None;
         let mut destination_height = None;
         let mut case = None;
+        let mut profile = false;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -951,6 +975,7 @@ impl Options {
                         )
                     })?);
                 }
+                "--profile" => profile = true,
                 "--help" | "-h" => return Err(usage().into()),
                 other => return Err(format!("unknown framebuffer-scene-lab argument {other:?}")),
             }
@@ -969,6 +994,7 @@ impl Options {
             check,
             destination,
             case,
+            profile,
         };
         options.validate()?;
         Ok(options)
@@ -994,6 +1020,9 @@ impl Options {
                 "--case requires an interactive cabinet device run with a scanout destination"
                     .into(),
             );
+        }
+        if self.profile && self.case.is_none() {
+            return Err("--profile requires a closed --case".into());
         }
         match self.scene {
             EffectKind::Magik | EffectKind::Cabinet => {
@@ -1027,7 +1056,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {

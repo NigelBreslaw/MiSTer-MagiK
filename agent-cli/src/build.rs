@@ -176,7 +176,7 @@ impl BuildSpec {
                 BuildTarget::FramebufferSceneLab,
                 BuildMode::Build,
                 "release-device-profile",
-                Vec::new(),
+                vec!["profile"],
                 UiScope::All,
                 framebuffer_scene_lab_artifact("release-device-profile"),
             ),
@@ -1660,7 +1660,7 @@ mod tests {
         let analysis = BuildSpec::framebuffer_scene_lab_analysis();
         assert_eq!(analysis.target, BuildTarget::FramebufferSceneLab);
         assert_eq!(analysis.profile, "release-device-profile");
-        assert!(analysis.features.is_empty());
+        assert_eq!(analysis.features, ["profile"]);
     }
 
     #[test]
