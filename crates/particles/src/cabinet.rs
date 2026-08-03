@@ -1379,7 +1379,8 @@ fn jittered_offset_with_x(
 fn projected_pixel_y(offset: usize, pixel_x: usize, width: usize) -> usize {
     let row_offset = offset - pixel_x;
     if width == 960 {
-        row_offset / 960
+        let units_of_64 = row_offset >> 6;
+        ((units_of_64 as u64 * 0x8888_8889) >> 35) as usize
     } else {
         row_offset / width
     }
@@ -1802,6 +1803,10 @@ mod tests {
         let gradient = horizontal_gradient(960, &PRISM_STOPS);
         assert_eq!(gradient.first(), PRISM_STOPS.first());
         assert_eq!(gradient.last(), PRISM_STOPS.last());
+        for offset in 0..960 * 540 {
+            let pixel_x = offset % 960;
+            assert_eq!(projected_pixel_y(offset, pixel_x, 960), offset / 960);
+        }
 
         let recipe = embedded_cabinet_recipe().unwrap();
         let mut origin = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
