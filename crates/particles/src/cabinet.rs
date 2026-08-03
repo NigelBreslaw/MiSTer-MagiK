@@ -720,7 +720,7 @@ impl ArcadeCabinetFormation {
         let clear_started = Instant::now();
         let background = pixel(self.recipe.appearance.background);
         let dirty_offsets = &mut self.dirty_offsets[buffer_id];
-        if self.full_clear[buffer_id] {
+        if self.full_clear[buffer_id] || dirty_offsets.len() >= expected.div_ceil(8) {
             destination.fill(background);
             self.full_clear[buffer_id] = false;
         } else {
