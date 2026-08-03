@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 const MISTER_CLOUD: &[u8] = include_bytes!("../assets/intro/mister.pcloud");
 const MISTER_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
+const MAGIK_CLOUD: &[u8] = include_bytes!("../assets/intro/magik.pcloud");
+const MAGIK_GROUPS: &[u8] = include_bytes!("../assets/intro/magik.pgroup");
 const PCLOUD_HEADER_BYTES: usize = 28;
 const PCLOUD_RECORD_BYTES: usize = 8;
 
@@ -52,7 +54,9 @@ pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
     mister: PointTarget,
+    magik: PointTarget,
     static_xy: Vec<[f32; 2]>,
+    dynamic_positions: Vec<[f32; 3]>,
     positions: Vec<PointCloudPositionBlock>,
     commands: Vec<PointCloudDrawCommand>,
 }
@@ -61,12 +65,18 @@ impl IntroScene {
     pub fn new(width: usize, height: usize, recipe: IntroRecipe) -> Result<Self, String> {
         let geometry = SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         let mister = decode_target(MISTER_CLOUD, Some((MISTER_GROUPS, 6)), TargetScale::Text)?;
+        let magik = decode_target(MAGIK_CLOUD, Some((MAGIK_GROUPS, 6)), TargetScale::Text)?;
         if mister.positions.len() != recipe.steady_particle_count {
             return Err(format!(
                 "MiSTer target has {} particles, expected {}",
                 mister.positions.len(),
                 recipe.steady_particle_count
             ));
+        }
+        if magik.positions.len() != recipe.steady_particle_count
+            || magik.groups != mister.groups
+        {
+            return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
         let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
         for index in 0..recipe.initial_particle_count {
@@ -77,6 +87,7 @@ impl IntroScene {
             ]);
         }
         let positions = vec![empty_block(); recipe.steady_particle_count.div_ceil(PARTICLE_LANES)];
+        let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
         let commands = vec![
             PointCloudDrawCommand(INVALID_PARTICLE_OFFSET);
             recipe.steady_particle_count
@@ -85,7 +96,9 @@ impl IntroScene {
             geometry,
             recipe,
             mister,
+            magik,
             static_xy,
+            dynamic_positions,
             positions,
             commands,
         })
@@ -168,66 +181,136 @@ impl IntroScene {
         (visible, visible)
     }
 
-    fn render_target(
+    fn render_point_target(
         &mut self,
         destination: &mut [Rgb565Pixel],
+        magik: bool,
     ) -> (usize, usize, &'static str) {
+        let target = if magik { &self.magik } else { &self.mister };
+        render_point_cloud(
+            destination,
+            &self.recipe,
+            self.geometry,
+            &target.positions,
+            &target.palette,
+            &mut self.positions,
+            &mut self.commands,
+        )
+    }
+
+    fn render_letter_morph(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        cue_elapsed_ms: u64,
+        duration_ms: u64,
+        turns: f32,
+        stagger_ms: u64,
+        easing: RecipeEasing,
+    ) -> (usize, usize, &'static str) {
+        let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(5)).max(1);
+        for (group_index, span) in self.mister.groups.iter().enumerate() {
+            let start_ms = stagger_ms.saturating_mul(group_index as u64);
+            let progress = cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32;
+            let progress = ease(progress, easing);
+            let source_pivot = pivot(&self.mister.positions[span.start..span.start + span.count]);
+            let angle = progress * turns * std::f32::consts::TAU;
+            let (sin, cos) = angle.sin_cos();
+            for index in span.start..span.start + span.count {
+                let source = self.mister.positions[index];
+                let local_x = source[0] - source_pivot[0];
+                let local_z = source[2] - source_pivot[2];
+                let spun = [
+                    source_pivot[0] + local_x.mul_add(cos, local_z * sin),
+                    source[1],
+                    source_pivot[2] + (-local_x).mul_add(sin, local_z * cos),
+                ];
+                if group_index == 0 {
+                    self.dynamic_positions[index] = spun;
+                    continue;
+                }
+                let destination_point = self.magik.positions[index];
+                let random = mix32(index as u32 ^ self.recipe.seed as u32);
+                let scatter = (progress * std::f32::consts::PI).sin() * 72.0;
+                self.dynamic_positions[index] = [
+                    spun[0]
+                        + (destination_point[0] - spun[0]) * progress
+                        + signed_unit(random) * scatter,
+                    spun[1]
+                        + (destination_point[1] - spun[1]) * progress
+                        + signed_unit(random.rotate_left(11)) * scatter,
+                    spun[2]
+                        + (destination_point[2] - spun[2]) * progress
+                        + signed_unit(random.rotate_left(21)) * scatter,
+                ];
+            }
+        }
+        render_point_cloud(
+            destination,
+            &self.recipe,
+            self.geometry,
+            &self.dynamic_positions,
+            &self.magik.palette,
+            &mut self.positions,
+            &mut self.commands,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_point_cloud(
+    destination: &mut [Rgb565Pixel],
+    recipe: &IntroRecipe,
+    geometry: SceneGeometry,
+    target_positions: &[[f32; 3]],
+    target_palette: &[u8],
+    positions: &mut [PointCloudPositionBlock],
+    commands: &mut [PointCloudDrawCommand],
+) -> (usize, usize, &'static str) {
         let transform_started = Instant::now();
-        copy_target_to_blocks(&self.mister.positions, &mut self.positions);
+        copy_target_to_blocks(target_positions, positions);
         let _transform_us = elapsed_us(transform_started.elapsed());
         let projection_started = Instant::now();
-        self.commands
-            .fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
+        commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
         let vector_end = project_stable_neon(
-            self.recipe.steady_particle_count,
-            &self.positions,
+            target_positions.len(),
+            positions,
             0,
             1,
             0.0,
             1.0,
             0.0,
             1.0,
-            self.recipe.camera.dolly,
-            self.recipe.camera.near_depth,
-            self.recipe.camera.focal_length,
-            self.geometry.width() as f32 * 0.5 + self.recipe.camera.center_offset_x,
-            self.geometry.height() as f32 * 0.5 + self.recipe.camera.center_offset_y,
-            self.geometry.width(),
-            self.geometry.height(),
-            &mut self.commands,
+            recipe.camera.dolly,
+            recipe.camera.near_depth,
+            recipe.camera.focal_length,
+            geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
+            geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
+            geometry.width(),
+            geometry.height(),
+            commands,
         );
-        for index in vector_end..self.recipe.steady_particle_count {
-            self.commands[index] = project_command(
-                self.mister.positions[index],
-                &self.recipe,
-                self.geometry,
-            );
+        for index in vector_end..target_positions.len() {
+            commands[index] = project_command(target_positions[index], recipe, geometry);
         }
         let backend = if vector_end > 0 {
             "point-cloud-neon"
         } else {
-            for index in 0..self.recipe.steady_particle_count {
-                self.commands[index] = project_command(
-                    self.mister.positions[index],
-                    &self.recipe,
-                    self.geometry,
-                );
+            for index in 0..target_positions.len() {
+                commands[index] = project_command(target_positions[index], recipe, geometry);
             }
             "point-cloud-scalar"
         };
         let _projection_us = elapsed_us(projection_started.elapsed());
         let mut visible = 0;
-        for (index, command) in self.commands.iter().copied().enumerate() {
+        for (index, command) in commands.iter().copied().enumerate() {
             let Some(offset) = command.offset() else {
                 continue;
             };
-            destination[offset] = Rgb565Pixel(
-                self.recipe.appearance.palette[usize::from(self.mister.palette[index])].0,
-            );
+            destination[offset] =
+                Rgb565Pixel(recipe.appearance.palette[usize::from(target_palette[index])].0);
             visible += 1;
         }
         (visible, visible, backend)
-    }
 }
 
 impl FramebufferScene for IntroScene {
@@ -268,7 +351,21 @@ impl FramebufferScene for IntroScene {
                     self.render_mister_formation(target.pixels_mut(), progress);
                 (visible, writes, "crt-to-point-cloud")
             }
-            _ => self.render_target(target.pixels_mut()),
+            IntroCue::LetterMorph {
+                duration_ms,
+                turns,
+                stagger_ms,
+                easing,
+                ..
+            } => self.render_letter_morph(
+                target.pixels_mut(),
+                cue_elapsed_ms,
+                *duration_ms,
+                *turns,
+                *stagger_ms,
+                *easing,
+            ),
+            _ => self.render_point_target(target.pixels_mut(), cue_index >= 4),
         };
         let raster_us = elapsed_us(render_started.elapsed());
         let particles = if cue_index < 2 {
@@ -433,6 +530,21 @@ fn unit01(value: u32) -> f32 {
     (value >> 8) as f32 * (1.0 / 16_777_215.0)
 }
 
+fn signed_unit(value: u32) -> f32 {
+    unit01(value) * 2.0 - 1.0
+}
+
+fn pivot(points: &[[f32; 3]]) -> [f32; 3] {
+    let mut sum = [0.0; 3];
+    for point in points {
+        sum[0] += point[0];
+        sum[1] += point[1];
+        sum[2] += point[2];
+    }
+    let reciprocal = 1.0 / points.len() as f32;
+    [sum[0] * reciprocal, sum[1] * reciprocal, sum[2] * reciprocal]
+}
+
 fn ease(value: f32, easing: RecipeEasing) -> f32 {
     let value = value.clamp(0.0, 1.0);
     match easing {
@@ -483,5 +595,26 @@ mod tests {
         assert_eq!(scene.mister.groups.len(), 6);
         assert!(scene.mister.groups.iter().all(|span| span.start % 4 == 0));
         assert!(scene.mister.groups.iter().all(|span| span.count % 4 == 0));
+        assert_eq!(scene.mister.groups, scene.magik.groups);
+    }
+
+    #[test]
+    fn common_m_remains_cohesive_at_the_middle_of_the_letter_morph() {
+        let mut scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        scene.render_letter_morph(
+            &mut pixels,
+            1_750,
+            3_500,
+            1.0,
+            150,
+            RecipeEasing::Smoothstep,
+        );
+        let m = scene.mister.groups[0];
+        let source_pivot = pivot(&scene.mister.positions[m.start..m.start + m.count]);
+        let dynamic_pivot = pivot(&scene.dynamic_positions[m.start..m.start + m.count]);
+        for axis in 0..3 {
+            assert!((source_pivot[axis] - dynamic_pivot[axis]).abs() < 0.01);
+        }
     }
 }
