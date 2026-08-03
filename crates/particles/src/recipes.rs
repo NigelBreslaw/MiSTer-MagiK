@@ -8,7 +8,7 @@ use serde::Deserialize;
 pub const MAGIK_RECIPE_SCHEMA_V1: &str = "mister-magik-particle-magik-v1";
 pub const CABINET_RECIPE_SCHEMA_V1: &str = "mister-magik-particle-cabinet-v1";
 pub const MAGIK_PARTICLE_COUNT_MAX: u32 = 524_288;
-pub const CABINET_PARTICLE_COUNT_MAX: u32 = 12_288;
+pub const CABINET_PARTICLE_COUNT_MAX: u32 = 524_288;
 pub const EMBEDDED_MAGIK_RECIPE_JSON: &[u8] = include_bytes!("../assets/recipes/magik-v1.json");
 pub const EMBEDDED_CABINET_RECIPE_JSON: &[u8] = include_bytes!("../assets/recipes/cabinet-v1.json");
 
