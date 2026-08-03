@@ -90,7 +90,9 @@ size_t mister_magik_cabinet_neon_project_stable(
         const float32x4_t safe_depth = vmaxq_f32(depth, near_v);
         float32x4_t reciprocal = vrecpeq_f32(safe_depth);
         reciprocal = vmulq_f32(reciprocal, vrecpsq_f32(safe_depth, reciprocal));
-        reciprocal = vmulq_f32(reciprocal, vrecpsq_f32(safe_depth, reciprocal));
+        // One Newton step supplies substantially more precision than survives
+        // conversion to the integer RGB565 pixel command. This matches the
+        // qualified original MagiK particle projector.
         const float32x4_t scale = vmulq_f32(focal_v, reciprocal);
         const float32x4_t x = vaddq_f32(center_x_v, vmulq_f32(rotated_x, scale));
         const float32x4_t y = vaddq_f32(center_y_v, vmulq_f32(rotated_y, scale));
