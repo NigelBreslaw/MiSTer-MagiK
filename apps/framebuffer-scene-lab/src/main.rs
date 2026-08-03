@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 23] = [
+const CABINET_CASES: [CabinetCase; 24] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -240,6 +240,12 @@ const CABINET_CASES: [CabinetCase; 23] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::PhaseStory,
+    },
+    CabinetCase {
+        name: "interference-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::InterferenceBands,
     },
 ];
 
@@ -420,10 +426,11 @@ enum CabinetDemoMode {
     MotionHeat,
     DirectionalMotion,
     PhaseStory,
+    InterferenceBands,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 15] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -438,6 +445,7 @@ impl CabinetDemoMode {
         Self::MotionHeat,
         Self::DirectionalMotion,
         Self::PhaseStory,
+        Self::InterferenceBands,
     ];
 
     const fn index(self) -> usize {
@@ -460,6 +468,7 @@ impl CabinetDemoMode {
             Self::MotionHeat => "MOTION HEAT",
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
             Self::PhaseStory => "PHASE STORY",
+            Self::InterferenceBands => "INTERFERENCE BANDS",
         }
     }
 
@@ -478,7 +487,8 @@ impl CabinetDemoMode {
             | Self::DepthPrism
             | Self::MotionHeat
             | Self::DirectionalMotion
-            | Self::PhaseStory => CabinetCreativeMode::Baseline,
+            | Self::PhaseStory
+            | Self::InterferenceBands => CabinetCreativeMode::Baseline,
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
@@ -489,6 +499,7 @@ impl CabinetDemoMode {
             Self::MotionHeat => CabinetColorMode::MotionHeat,
             Self::DirectionalMotion => CabinetColorMode::DirectionalMotion,
             Self::PhaseStory => CabinetColorMode::PhaseStory,
+            Self::InterferenceBands => CabinetColorMode::InterferenceBands,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -1720,7 +1731,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::PhaseStory);
+        assert_eq!(controls.mode, CabinetDemoMode::InterferenceBands);
     }
 
     #[test]

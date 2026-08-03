@@ -116,6 +116,7 @@ pub enum CabinetColorMode {
     MotionHeat,
     DirectionalMotion,
     PhaseStory,
+    InterferenceBands,
 }
 
 impl CabinetColorMode {
@@ -131,6 +132,7 @@ impl CabinetColorMode {
             Self::MotionHeat => "MOTION HEAT",
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
             Self::PhaseStory => "PHASE STORY",
+            Self::InterferenceBands => "INTERFERENCE BANDS",
         }
     }
 
@@ -247,6 +249,7 @@ pub struct ArcadeCabinetFormation {
     studio_lights: Vec<[Rgb565Pixel; 4]>,
     depth_prism: Vec<[Rgb565Pixel; 4]>,
     phase_story: Vec<[Rgb565Pixel; 4]>,
+    interference_wave: Vec<u16>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -637,6 +640,7 @@ impl ArcadeCabinetFormation {
             })
             .collect();
         let phase_story = build_phase_story(width);
+        let interference_wave = build_interference_wave();
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -728,6 +732,7 @@ impl ArcadeCabinetFormation {
             studio_lights,
             depth_prism,
             phase_story,
+            interference_wave,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -833,6 +838,11 @@ impl ArcadeCabinetFormation {
                 self.phase_story
                     .capacity()
                     .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
+            )
+            .saturating_add(
+                self.interference_wave
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u16>()),
             )
             .saturating_add(
                 self.commands
@@ -1184,6 +1194,7 @@ impl ArcadeCabinetFormation {
         };
         if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin {
             let aurora_phase = (elapsed.as_millis() as usize / 20) & 2_047;
+            let interference_phase = (elapsed.as_millis() as usize / 12) & 2_047;
             let cycle_ms = elapsed.as_millis() as u64 % self.recipe.timing.cycle_ms;
             let orbit_end = self.recipe.timing.formation_ms + self.recipe.timing.orbit_ms;
             let return_end = orbit_end + self.recipe.timing.return_ms;
@@ -1263,6 +1274,16 @@ impl ArcadeCabinetFormation {
                     }
                     CabinetColorMode::PhaseStory => {
                         self.phase_story[pixel_x][phase_story_band]
+                    }
+                    CabinetColorMode::InterferenceBands => {
+                        let first = usize::from(
+                            self.interference_wave[(pixel_x * 5 + interference_phase) & 2_047],
+                        );
+                        let second = usize::from(
+                            self.interference_wave
+                                [(pixel_y * 9 + 2_048 - interference_phase) & 2_047],
+                        );
+                        self.aurora_ribbon[(first + second) & 2_047]
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
@@ -1641,6 +1662,15 @@ fn build_phase_story(width: usize) -> Vec<[Rgb565Pixel; 4]> {
     );
     (0..width)
         .map(|x| [formation[x], orbit[x], returning[x], dispersal[x]])
+        .collect()
+}
+
+fn build_interference_wave() -> Vec<u16> {
+    (0..2_048)
+        .map(|index| {
+            let phase = index as f32 * std::f32::consts::TAU / 2_048.0;
+            ((phase.sin() + 1.0) * 511.5) as u16
+        })
         .collect()
 }
 
