@@ -111,8 +111,10 @@ pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
     mister: PointTarget,
+    mister_commands: Vec<PointCloudDrawCommand>,
     mister_pivots: [[f32; 3]; 6],
     magik: PointTarget,
+    magik_commands: Vec<PointCloudDrawCommand>,
     magik_pivots: [[f32; 3]; 6],
     scatter_vectors: Vec<[f32; 3]>,
     cloud: PointTarget,
@@ -123,6 +125,7 @@ pub struct IntroScene {
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
     launcher_thresholds: Vec<u8>,
+    launcher_mix_thresholds: Vec<u16>,
     crossfade_visible_counts: [usize; 65],
     crossfade_buckets: Vec<Vec<u32>>,
     slot_states: [IntroSlotState; 2],
@@ -152,6 +155,8 @@ impl IntroScene {
         if magik.positions.len() != recipe.steady_particle_count || magik.groups != mister.groups {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
+        let mister_commands = prepare_target_commands(&mister.positions, &recipe, geometry);
+        let magik_commands = prepare_target_commands(&magik.positions, &recipe, geometry);
         let mister_pivots = std::array::from_fn(|group| {
             let span = mister.groups[group];
             pivot(&mister.positions[span.start..span.start + span.count])
@@ -251,6 +256,9 @@ impl IntroScene {
                 })
                 .count()
         });
+        let launcher_mix_thresholds = (0..recipe.steady_particle_count)
+            .map(|index| (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16)
+            .collect();
         let mut crossfade_buckets = vec![Vec::new(); 64];
         for offset in 0..width.saturating_mul(height) {
             crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
@@ -295,8 +303,10 @@ impl IntroScene {
             geometry,
             recipe,
             mister,
+            mister_commands,
             mister_pivots,
             magik,
+            magik_commands,
             magik_pivots,
             scatter_vectors,
             cloud,
@@ -307,6 +317,7 @@ impl IntroScene {
             launcher_snapshot,
             launcher_commands,
             launcher_thresholds,
+            launcher_mix_thresholds,
             crossfade_visible_counts,
             crossfade_buckets,
             slot_states: [IntroSlotState::Uninitialized; 2],
@@ -409,22 +420,25 @@ impl IntroScene {
     ) -> IntroRenderResult {
         let text_palette_mix =
             matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
-        let target = match target {
-            ScenePointTarget::Mister => &self.mister,
-            ScenePointTarget::Magik => &self.magik,
-            ScenePointTarget::Launcher => &self.launcher,
+        let (target, commands) = match target {
+            ScenePointTarget::Mister => (&self.mister, &self.mister_commands),
+            ScenePointTarget::Magik => (&self.magik, &self.magik_commands),
+            ScenePointTarget::Launcher => (&self.launcher, &self.launcher_commands),
         };
-        render_point_cloud(
+        raster_point_commands(
             destination,
             &self.recipe,
             self.geometry,
             &target.positions,
             &target.palette,
-            &mut self.positions,
-            &mut self.commands,
+            commands,
             text_palette_mix,
             false,
             frame,
+            None,
+            point_cloud_backend_label(),
+            0,
+            0,
         )
     }
 
@@ -505,6 +519,8 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
+            (!update_all).then_some((frame as usize) & 1),
+            None,
         )
         .with_outer_transform(transform_us)
     }
@@ -590,6 +606,8 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
+            (!update_all).then_some((frame as usize) & 1),
+            None,
         )
         .with_outer_transform(transform_us)
     }
@@ -630,6 +648,8 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
+            None,
+            None,
         )
         .with_outer_transform(transform_us)
     }
@@ -671,6 +691,8 @@ impl IntroScene {
             Some(progress),
             false,
             frame,
+            None,
+            Some(&self.launcher_mix_thresholds),
         )
         .with_outer_transform(transform_us)
     }
@@ -766,17 +788,27 @@ fn render_point_cloud(
     text_palette_mix: Option<f32>,
     text_neighbors: bool,
     frame: u64,
+    projection_cohort: Option<usize>,
+    palette_thresholds: Option<&[u16]>,
 ) -> IntroRenderResult {
     let transform_started = Instant::now();
-    copy_target_to_blocks(target_positions, positions);
+    if let Some(first_block) = projection_cohort {
+        copy_target_cohort_to_blocks(target_positions, positions, first_block, 2);
+    } else {
+        copy_target_to_blocks(target_positions, positions);
+    }
     let transform_us = elapsed_us(transform_started.elapsed());
     let projection_started = Instant::now();
-    commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
+    if projection_cohort.is_none() {
+        commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
+    }
+    let first_block = projection_cohort.unwrap_or(0);
+    let block_step = projection_cohort.map_or(1, |_| 2);
     let vector_end = project_stable_neon(
         target_positions.len(),
         positions,
-        0,
-        1,
+        first_block,
+        block_step,
         0.0,
         1.0,
         0.0,
@@ -802,6 +834,39 @@ fn render_point_cloud(
         "point-cloud-scalar"
     };
     let projection_us = elapsed_us(projection_started.elapsed());
+    raster_point_commands(
+        destination,
+        recipe,
+        geometry,
+        target_positions,
+        target_palette,
+        commands,
+        text_palette_mix,
+        text_neighbors,
+        frame,
+        palette_thresholds,
+        backend,
+        transform_us,
+        projection_us,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn raster_point_commands(
+    destination: &mut [Rgb565Pixel],
+    recipe: &IntroRecipe,
+    geometry: SceneGeometry,
+    target_positions: &[[f32; 3]],
+    target_palette: &[u8],
+    commands: &[PointCloudDrawCommand],
+    text_palette_mix: Option<f32>,
+    text_neighbors: bool,
+    frame: u64,
+    palette_thresholds: Option<&[u16]>,
+    backend: &'static str,
+    transform_us: u64,
+    projection_us: u64,
+) -> IntroRenderResult {
     let raster_started = Instant::now();
     let mut visible = 0;
     let mut writes = 0;
@@ -815,7 +880,10 @@ fn render_point_cloud(
             Some(mix) if mix >= 1.0 => true,
             Some(mix) => {
                 let threshold = (mix * 65_536.0) as u32;
-                mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff < threshold
+                u32::from(palette_thresholds.map_or_else(
+                    || (mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16,
+                    |thresholds| thresholds[index],
+                )) < threshold
             }
         };
         let color = if !target_color {
@@ -1142,6 +1210,69 @@ fn copy_target_to_blocks(source: &[[f32; 3]], blocks: &mut [PointCloudPositionBl
     }
 }
 
+fn copy_target_cohort_to_blocks(
+    source: &[[f32; 3]],
+    blocks: &mut [PointCloudPositionBlock],
+    first_block: usize,
+    block_step: usize,
+) {
+    for block_index in (first_block..blocks.len()).step_by(block_step) {
+        let block = &mut blocks[block_index];
+        let start = block_index * PARTICLE_LANES;
+        for lane in 0..PARTICLE_LANES {
+            let point = source[start + lane];
+            block.target_x[lane] = point[0];
+            block.target_y[lane] = point[1];
+            block.target_z[lane] = point[2];
+        }
+    }
+}
+
+fn prepare_target_commands(
+    target_positions: &[[f32; 3]],
+    recipe: &IntroRecipe,
+    geometry: SceneGeometry,
+) -> Vec<PointCloudDrawCommand> {
+    let mut positions = vec![empty_block(); target_positions.len().div_ceil(PARTICLE_LANES)];
+    copy_target_to_blocks(target_positions, &mut positions);
+    let mut commands = vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); target_positions.len()];
+    let vector_end = project_stable_neon(
+        target_positions.len(),
+        &positions,
+        0,
+        1,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        recipe.camera.dolly,
+        recipe.camera.near_depth,
+        recipe.camera.focal_length,
+        geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
+        geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
+        geometry.width(),
+        geometry.height(),
+        &mut commands,
+    );
+    for index in vector_end..target_positions.len() {
+        commands[index] = project_command(target_positions[index], recipe, geometry);
+    }
+    if vector_end == 0 {
+        for index in 0..target_positions.len() {
+            commands[index] = project_command(target_positions[index], recipe, geometry);
+        }
+    }
+    commands
+}
+
+const fn point_cloud_backend_label() -> &'static str {
+    if cfg!(all(target_os = "linux", target_arch = "arm")) {
+        "point-cloud-neon"
+    } else {
+        "point-cloud-scalar"
+    }
+}
+
 fn project_command(
     position: [f32; 3],
     recipe: &IntroRecipe,
@@ -1392,6 +1523,25 @@ mod tests {
         assert!(scene.mister.groups.iter().all(|span| span.start % 4 == 0));
         assert!(scene.mister.groups.iter().all(|span| span.count % 4 == 0));
         assert_eq!(scene.mister.groups, scene.magik.groups);
+        assert_eq!(scene.mister_commands.len(), scene.mister.positions.len());
+        assert_eq!(scene.magik_commands.len(), scene.magik.positions.len());
+        assert_eq!(
+            scene.launcher_mix_thresholds[123],
+            (mix32(123 ^ scene.recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff) as u16
+        );
+    }
+
+    #[test]
+    fn packed_cohort_copy_leaves_the_other_blocks_untouched() {
+        let source = (0..12)
+            .map(|index| [index as f32, index as f32 + 0.25, index as f32 + 0.5])
+            .collect::<Vec<_>>();
+        let mut blocks = vec![empty_block(); 3];
+        copy_target_cohort_to_blocks(&source, &mut blocks, 1, 2);
+        assert_eq!(blocks[0].target_x, [0.0; 4]);
+        assert_eq!(blocks[1].target_x, [4.0, 5.0, 6.0, 7.0]);
+        assert_eq!(blocks[1].target_y, [4.25, 5.25, 6.25, 7.25]);
+        assert_eq!(blocks[2].target_x, [0.0; 4]);
     }
 
     #[test]
