@@ -2551,7 +2551,9 @@ mod tests {
             .render_waiting_for_launcher(
                 SceneTarget::new(&mut looped, geometry, SceneBufferId::new(1, 2).unwrap()).unwrap(),
                 SceneClock {
-                    frame: 600,
+                    // Keep the independent physical-frame flicker phase aligned
+                    // while proving that storyboard elapsed time loops the orbit.
+                    frame: 640,
                     elapsed: Duration::from_secs(10),
                     next_elapsed: Some(Duration::from_millis(10_020)),
                 },
