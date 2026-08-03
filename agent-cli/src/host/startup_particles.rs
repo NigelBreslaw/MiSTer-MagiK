@@ -55,6 +55,7 @@ pub(super) fn run(
                 Some(recipe),
                 scene,
                 None,
+                None,
             )
         }
         StartupParticleRuntime::DevLauncher => run_dev_launcher(&prepared, recipe),
@@ -68,6 +69,7 @@ pub(super) fn run_scene_lab(
     scene: SceneLabScene,
     recipe: Option<&Path>,
     fixture: Option<&str>,
+    case: Option<&str>,
 ) -> std::result::Result<(), DeviceFailure> {
     validate_local_input(binary, "framebuffer scene lab binary").map_err(device_failure)?;
     if let Some(recipe) = recipe {
@@ -75,7 +77,7 @@ pub(super) fn run_scene_lab(
     }
     let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
     install_prepared_device_environment(&prepared.config);
-    run_lab(&prepared, binary, recipe, scene.as_str(), fixture).map_err(device_failure)
+    run_lab(&prepared, binary, recipe, scene.as_str(), fixture, case).map_err(device_failure)
 }
 
 fn run_lab(
@@ -84,6 +86,7 @@ fn run_lab(
     recipe: Option<&Path>,
     scene: &str,
     fixture: Option<&str>,
+    case: Option<&str>,
 ) -> Result<()> {
     let session = connect_with(&prepared.config.connection, 10)?;
     let destination = active_lab_destination(&session)?;
@@ -92,6 +95,7 @@ fn run_lab(
         return combine_results(Err(error), cleanup);
     }
     let mut publisher = match recipe
+        .filter(|_| case.is_none())
         .map(|recipe| RecipePublisher::new(recipe, REMOTE_LAB_RECIPE))
         .transpose()
     {
@@ -105,12 +109,19 @@ fn run_lab(
     let run_config = prepared.config.connection.clone();
     let scene = scene.to_owned();
     let fixture = fixture.map(str::to_owned);
+    let case = case.map(str::to_owned);
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = match thread::Builder::new()
         .name("framebuffer-scene-lab-device".into())
         .spawn(move || {
-            let result = run_remote_lab(&run_config, destination, &scene, fixture.as_deref())
-                .map_err(|error| error.to_string());
+            let result = run_remote_lab(
+                &run_config,
+                destination,
+                &scene,
+                fixture.as_deref(),
+                case.as_deref(),
+            )
+            .map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
         }) {
         Ok(worker) => worker,
@@ -560,11 +571,12 @@ fn run_remote_lab(
     destination: (u16, u16),
     scene: &str,
     fixture: Option<&str>,
+    case: Option<&str>,
 ) -> Result<()> {
     let session = connect_with(config, 10)?;
     stream_exec(
         &session,
-        &remote_run_lab_command(destination, scene, fixture),
+        &remote_run_lab_command(destination, scene, fixture, case),
     )
 }
 
@@ -675,14 +687,20 @@ fn remote_scene_arguments(scene: &str, fixture: Option<&str>) -> String {
     )
 }
 
-fn remote_run_lab_command(destination: (u16, u16), scene: &str, fixture: Option<&str>) -> String {
+fn remote_run_lab_command(
+    destination: (u16, u16),
+    scene: &str,
+    fixture: Option<&str>,
+    case: Option<&str>,
+) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} --destination-width {destination_width} --destination-height {destination_height}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} {case_argument} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
         scene_arguments = remote_scene_arguments(scene, fixture),
+        case_argument = case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
         destination_width = destination.0,
         destination_height = destination.1,
     )
@@ -715,7 +733,7 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080), "magik", None);
+        let run = remote_run_lab_command((1920, 1080), "magik", None, None);
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -725,8 +743,12 @@ mod tests {
 
     #[test]
     fn navigation_fixture_lab_is_volatile_and_recipe_free() {
-        let run =
-            remote_run_lab_command((1920, 1080), "navigation-transition", Some("home-arcade"));
+        let run = remote_run_lab_command(
+            (1920, 1080),
+            "navigation-transition",
+            Some("home-arcade"),
+            None,
+        );
         assert!(run.contains(&format!(
             "--scene {} --fixture {}",
             sh("navigation-transition"),

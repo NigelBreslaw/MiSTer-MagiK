@@ -218,6 +218,8 @@ pub struct SceneLabArgs {
     pub(crate) recipe: Option<PathBuf>,
     #[arg(long)]
     pub(crate) fixture: Option<String>,
+    #[arg(long)]
+    pub(crate) case: Option<String>,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -317,6 +319,7 @@ pub fn run_scene_lab(args: &SceneLabArgs, binary: &Path) -> AgentResult<()> {
             args.scene,
             args.recipe.as_deref(),
             args.fixture.as_deref(),
+            args.case.as_deref(),
         )
     })
 }

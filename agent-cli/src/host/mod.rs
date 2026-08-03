@@ -271,8 +271,9 @@ impl NativeDevice {
         scene: crate::commands::device::SceneLabScene,
         recipe: Option<&Path>,
         fixture: Option<&str>,
+        case: Option<&str>,
     ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run_scene_lab(self, binary, scene, recipe, fixture)
+        startup_particles::run_scene_lab(self, binary, scene, recipe, fixture, case)
     }
 
     pub(crate) fn run_operator(

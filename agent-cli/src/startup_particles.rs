@@ -23,6 +23,23 @@ const LAB_BINARY: &str = "mister-magik-framebuffer-scene-lab";
 const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 const MAX_RECIPE_BYTES: u64 = 1024 * 1024;
+const CABINET_CASES: [&str; 15] = [
+    "baseline-24064",
+    "baseline-36096",
+    "baseline-48128",
+    "baseline-60160",
+    "baseline-72192",
+    "satellites-48128",
+    "satellites-72192",
+    "history-48128",
+    "history-72192",
+    "depth-48128",
+    "depth-72192",
+    "jitter-48128",
+    "jitter-72192",
+    "all-48128",
+    "all-72192",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum StartupParticlesCommand {
@@ -147,6 +164,14 @@ pub fn execute_scene_device(
                     .as_deref()
                     .ok_or("navigation-transition requires --fixture")?,
             )?;
+        }
+    }
+    if let Some(case) = args.case.as_deref() {
+        if args.scene != DeviceSceneLabScene::Cabinet {
+            return Err("scene-lab --case is valid only for the cabinet scene".into());
+        }
+        if !CABINET_CASES.contains(&case) {
+            return Err(format!("unknown closed cabinet case {case:?}").into());
         }
     }
     let spec = BuildSpec::framebuffer_scene_lab_device();
