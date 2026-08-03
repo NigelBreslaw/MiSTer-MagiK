@@ -3,11 +3,12 @@
 
 //! Standalone twenty-second startup intro scene.
 
-use crate::intro_recipe::{IntroCue, IntroRecipe, RecipeEasing};
+use crate::intro_recipe::{IntroCue, IntroRecipe};
 use crate::point_cloud::{
     INVALID_PARTICLE_OFFSET, PARTICLE_LANES, PointCloudDrawCommand, PointCloudPositionBlock,
     project_stable_neon,
 };
+use crate::recipes::RecipeEasing;
 use crate::targets::{ParticleGroupSpan, decode_particle_groups};
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneError, SceneGeometry,
@@ -61,7 +62,11 @@ pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
     mister: PointTarget,
+    mister_screen: Vec<[f32; 2]>,
+    mister_pivots: [[f32; 3]; 6],
     magik: PointTarget,
+    magik_pivots: [[f32; 3]; 6],
+    scatter_vectors: Vec<[f32; 3]>,
     cloud: PointTarget,
     cabinet: PointTarget,
     launcher: PointTarget,
@@ -89,6 +94,29 @@ impl IntroScene {
         {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
+        let mister_pivots = std::array::from_fn(|group| {
+            let span = mister.groups[group];
+            pivot(&mister.positions[span.start..span.start + span.count])
+        });
+        let magik_pivots = std::array::from_fn(|group| {
+            let span = magik.groups[group];
+            pivot(&magik.positions[span.start..span.start + span.count])
+        });
+        let mister_screen = mister
+            .positions
+            .iter()
+            .map(|position| project(*position, 0.0, 0.0, &recipe, geometry))
+            .collect();
+        let scatter_vectors = (0..recipe.steady_particle_count)
+            .map(|index| {
+                let random = mix32(index as u32 ^ recipe.seed as u32);
+                [
+                    signed_unit(random),
+                    signed_unit(random.rotate_left(11)),
+                    signed_unit(random.rotate_left(21)),
+                ]
+            })
+            .collect();
         let cloud_radius = match recipe.cues.get(5) {
             Some(IntroCue::Cloud { radius, .. }) => *radius,
             _ => return Err("intro cloud cue is missing".into()),
@@ -126,7 +154,11 @@ impl IntroScene {
             geometry,
             recipe,
             mister,
+            mister_screen,
+            mister_pivots,
             magik,
+            magik_pivots,
+            scatter_vectors,
             cloud,
             cabinet,
             launcher,
@@ -154,7 +186,7 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         frame: u64,
     ) -> (usize, usize) {
-        let palette = self.recipe.appearance.palette;
+        let palette = self.recipe.appearance.crt_palette;
         let mut visible = 0;
         for (index, source) in self.static_xy.iter().enumerate() {
             let noise = mix32((index as u32) ^ (frame as u32).wrapping_mul(0x9e37_79b9));
@@ -165,7 +197,7 @@ impl IntroScene {
             let y = (source[1] as usize + usize::from(((noise >> 2) & 3) as u8))
                 % self.geometry.height();
             destination[y * self.geometry.width() + x] =
-                Rgb565Pixel(palette[((noise >> 29) & 7) as usize].0);
+                Rgb565Pixel(palette[((noise >> 30) & 3) as usize].0);
             visible += 1;
         }
         (visible, visible)
@@ -175,19 +207,15 @@ impl IntroScene {
         &self,
         destination: &mut [Rgb565Pixel],
         progress: f32,
+        frame: u64,
     ) -> (usize, usize) {
         let progress = ease(progress, RecipeEasing::EaseOutCubic);
-        let palette = self.recipe.appearance.palette;
+        let crt_palette = self.recipe.appearance.crt_palette;
+        let text_palette = self.recipe.appearance.text_palette;
         let mut visible = 0;
         for index in 0..self.recipe.initial_particle_count {
             let target_index = index % self.recipe.steady_particle_count;
-            let target = project(
-                self.mister.positions[target_index],
-                0.0,
-                0.0,
-                &self.recipe,
-                self.geometry,
-            );
+            let target = self.mister_screen[target_index];
             let source = self.static_xy[index];
             let x = source[0] + (target[0] - source[0]) * progress;
             let y = source[1] + (target[1] - source[1]) * progress;
@@ -203,12 +231,18 @@ impl IntroScene {
                 && y < self.geometry.height() as f32
             {
                 let offset = y as usize * self.geometry.width() + x as usize;
-                let fade = if retire {
-                    ((1.0 - progress) * 7.0) as usize
+                let color = if retire {
+                    let fade = ((1.0 - progress) * 3.0) as usize;
+                    crt_palette[fade.min(3)]
                 } else {
-                    usize::from(self.mister.palette[target_index])
+                    let flicker = text_flicker_index(
+                        self.mister.palette[target_index],
+                        target_index,
+                        frame,
+                    );
+                    text_palette[flicker]
                 };
-                destination[offset] = Rgb565Pixel(palette[fade.min(7)].0);
+                destination[offset] = Rgb565Pixel(color.0);
                 visible += 1;
             }
         }
@@ -219,7 +253,10 @@ impl IntroScene {
         &mut self,
         destination: &mut [Rgb565Pixel],
         target: ScenePointTarget,
+        frame: u64,
     ) -> (usize, usize, &'static str) {
+        let text_palette_mix =
+            matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
         let target = match target {
             ScenePointTarget::Mister => &self.mister,
             ScenePointTarget::Magik => &self.magik,
@@ -234,6 +271,8 @@ impl IntroScene {
             &target.palette,
             &mut self.positions,
             &mut self.commands,
+            text_palette_mix,
+            frame,
         )
     }
 
@@ -245,41 +284,52 @@ impl IntroScene {
         turns: f32,
         stagger_ms: u64,
         easing: RecipeEasing,
+        frame: u64,
     ) -> (usize, usize, &'static str) {
         let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(5)).max(1);
         for (group_index, span) in self.mister.groups.iter().enumerate() {
             let start_ms = stagger_ms.saturating_mul(group_index as u64);
             let progress = cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32;
             let progress = ease(progress, easing);
-            let source_pivot = pivot(&self.mister.positions[span.start..span.start + span.count]);
+            let source_pivot = self.mister_pivots[group_index];
+            let destination_pivot = self.magik_pivots[group_index];
             let angle = progress * turns * std::f32::consts::TAU;
             let (sin, cos) = angle.sin_cos();
             for index in span.start..span.start + span.count {
                 let source = self.mister.positions[index];
-                let local_x = source[0] - source_pivot[0];
-                let local_z = source[2] - source_pivot[2];
-                let spun = [
-                    source_pivot[0] + local_x.mul_add(cos, local_z * sin),
-                    source[1],
-                    source_pivot[2] + (-local_x).mul_add(sin, local_z * cos),
-                ];
-                if group_index == 0 {
-                    self.dynamic_positions[index] = spun;
-                    continue;
-                }
                 let destination_point = self.magik.positions[index];
-                let random = mix32(index as u32 ^ self.recipe.seed as u32);
-                let scatter = (progress * std::f32::consts::PI).sin() * 72.0;
+                let source_local = [
+                    source[0] - source_pivot[0],
+                    source[1] - source_pivot[1],
+                    source[2] - source_pivot[2],
+                ];
+                let destination_local = [
+                    destination_point[0] - destination_pivot[0],
+                    destination_point[1] - destination_pivot[1],
+                    destination_point[2] - destination_pivot[2],
+                ];
+                let local = [
+                    source_local[0] + (destination_local[0] - source_local[0]) * progress,
+                    source_local[1] + (destination_local[1] - source_local[1]) * progress,
+                    source_local[2] + (destination_local[2] - source_local[2]) * progress,
+                ];
+                let center = [
+                    source_pivot[0] + (destination_pivot[0] - source_pivot[0]) * progress,
+                    source_pivot[1] + (destination_pivot[1] - source_pivot[1]) * progress,
+                    source_pivot[2] + (destination_pivot[2] - source_pivot[2]) * progress,
+                ];
+                let scatter_vector = self.scatter_vectors[index];
+                let scatter = if group_index == 0 {
+                    0.0
+                } else {
+                    (progress * std::f32::consts::PI).sin() * 58.0
+                };
                 self.dynamic_positions[index] = [
-                    spun[0]
-                        + (destination_point[0] - spun[0]) * progress
-                        + signed_unit(random) * scatter,
-                    spun[1]
-                        + (destination_point[1] - spun[1]) * progress
-                        + signed_unit(random.rotate_left(11)) * scatter,
-                    spun[2]
-                        + (destination_point[2] - spun[2]) * progress
-                        + signed_unit(random.rotate_left(21)) * scatter,
+                    center[0] + local[0].mul_add(cos, local[2] * sin)
+                        + scatter_vector[0] * scatter,
+                    center[1] + local[1] + scatter_vector[1] * scatter,
+                    center[2] + (-local[0]).mul_add(sin, local[2] * cos)
+                        + scatter_vector[2] * scatter,
                 ];
             }
         }
@@ -291,6 +341,8 @@ impl IntroScene {
             &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
+            Some(0.0),
+            frame,
         )
     }
 
@@ -333,6 +385,8 @@ impl IntroScene {
             palette,
             &mut self.positions,
             &mut self.commands,
+            (cue_index == 5).then_some(progress),
+            0,
         )
     }
 
@@ -364,6 +418,8 @@ impl IntroScene {
             &self.cabinet.palette,
             &mut self.positions,
             &mut self.commands,
+            None,
+            0,
         )
     }
 
@@ -392,6 +448,8 @@ impl IntroScene {
             &self.launcher.palette,
             &mut self.positions,
             &mut self.commands,
+            None,
+            0,
         )
     }
 
@@ -401,9 +459,10 @@ impl IntroScene {
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
+        frame: u64,
     ) -> (usize, usize, &'static str) {
         let (visible, mut writes, backend) =
-            self.render_point_target(destination, ScenePointTarget::Launcher);
+            self.render_point_target(destination, ScenePointTarget::Launcher, frame);
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
         let threshold = (progress * 64.0).round() as u8;
         for (offset, (destination, source)) in destination
@@ -431,6 +490,8 @@ fn render_point_cloud(
     target_palette: &[u8],
     positions: &mut [PointCloudPositionBlock],
     commands: &mut [PointCloudDrawCommand],
+    text_palette_mix: Option<f32>,
+    frame: u64,
 ) -> (usize, usize, &'static str) {
         let transform_started = Instant::now();
         copy_target_to_blocks(target_positions, positions);
@@ -468,15 +529,48 @@ fn render_point_cloud(
         };
         let _projection_us = elapsed_us(projection_started.elapsed());
         let mut visible = 0;
+        let mut writes = 0;
         for (index, command) in commands.iter().copied().enumerate() {
             let Some(offset) = command.offset() else {
                 continue;
             };
-            destination[offset] =
-                Rgb565Pixel(recipe.appearance.palette[usize::from(target_palette[index])].0);
+            let target_color = match text_palette_mix {
+                None => true,
+                Some(mix) if mix <= 0.0 => false,
+                Some(mix) if mix >= 1.0 => true,
+                Some(mix) => {
+                    let threshold = (mix * 65_536.0) as u32;
+                    mix32(index as u32 ^ recipe.seed as u32 ^ 0xa5a5_5a5a) & 0xffff
+                        < threshold
+                }
+            };
+            let color = if !target_color {
+                recipe.appearance.text_palette[text_flicker_index(
+                    target_palette[index],
+                    index,
+                    frame,
+                )]
+            } else {
+                recipe.appearance.palette[usize::from(target_palette[index])]
+            };
+            destination[offset] = Rgb565Pixel(color.0);
             visible += 1;
+            writes += 1;
+            if !target_color
+                && target_positions[index][2] < 0.0
+                && offset % geometry.width() + 1 < geometry.width()
+            {
+                destination[offset + 1] =
+                    Rgb565Pixel(recipe.appearance.text_palette[2].0);
+                writes += 1;
+            }
         }
-        (visible, visible, backend)
+        (visible, writes, backend)
+}
+
+#[inline(always)]
+fn text_flicker_index(style: u8, index: usize, frame: u64) -> usize {
+    (usize::from(style) ^ ((index.wrapping_mul(13) + (frame as usize >> 1)) >> 3)) & 3
 }
 
 impl FramebufferScene for IntroScene {
@@ -499,7 +593,7 @@ impl FramebufferScene for IntroScene {
             .as_millis()
             .min(u128::from(self.recipe.total_ms)) as u64;
         let (cue_index, cue_elapsed_ms) = self.recipe.cue_at(elapsed_ms);
-        let cue = &self.recipe.cues[cue_index];
+        let cue = self.recipe.cues[cue_index].clone();
         let cue_start_ms = self.recipe.cues[..cue_index]
             .iter()
             .map(IntroCue::duration_ms)
@@ -514,7 +608,7 @@ impl FramebufferScene for IntroScene {
             .fill(Rgb565Pixel(self.recipe.appearance.background.0));
         let clear_us = elapsed_us(clear_started.elapsed());
         let render_started = Instant::now();
-        let (visible, pixel_writes, projection_backend) = match cue {
+        let (visible, pixel_writes, projection_backend) = match &cue {
             IntroCue::CrtStatic { .. } => {
                 let (visible, writes) = self.render_crt(target.pixels_mut(), clock.frame);
                 (visible, writes, "crt-packed")
@@ -522,7 +616,7 @@ impl FramebufferScene for IntroScene {
             IntroCue::MorphTarget { duration_ms, .. } if cue_index == 1 => {
                 let progress = cue_elapsed_ms as f32 / *duration_ms as f32;
                 let (visible, writes) =
-                    self.render_mister_formation(target.pixels_mut(), progress);
+                    self.render_mister_formation(target.pixels_mut(), progress, clock.frame);
                 (visible, writes, "crt-to-point-cloud")
             }
             IntroCue::LetterMorph {
@@ -538,6 +632,7 @@ impl FramebufferScene for IntroScene {
                 *turns,
                 *stagger_ms,
                 *easing,
+                clock.frame,
             ),
             IntroCue::Cloud {
                 duration_ms,
@@ -575,6 +670,7 @@ impl FramebufferScene for IntroScene {
                 cue_elapsed_ms,
                 *duration_ms,
                 *easing,
+                clock.frame,
             ),
             IntroCue::HoldTarget { .. } if cue_index == 10 => {
                 target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
@@ -591,7 +687,7 @@ impl FramebufferScene for IntroScene {
                     8 => ScenePointTarget::Cabinet,
                     _ => ScenePointTarget::Launcher,
                 };
-                self.render_point_target(target.pixels_mut(), point_target)
+                self.render_point_target(target.pixels_mut(), point_target, clock.frame)
             }
         };
         let raster_us = elapsed_us(render_started.elapsed());
@@ -665,7 +761,12 @@ fn decode_target(
         let y = i16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]);
         let z = i16::from_le_bytes([bytes[offset + 4], bytes[offset + 5]]);
         let style = bytes[offset + 6];
-        if style > 7 || bytes[offset + 7] != 0 {
+        let flags = bytes[offset + 7];
+        let flags_valid = match scale {
+            TargetScale::Cabinet => flags & !3 == 0,
+            TargetScale::Text | TargetScale::Launcher => flags == 0,
+        };
+        if style > 7 || !flags_valid {
             return Err(format!("intro point-cloud record {index} is invalid"));
         }
         let position = match scale {
@@ -931,12 +1032,33 @@ mod tests {
             1.0,
             150,
             RecipeEasing::Smoothstep,
+            105,
         );
         let m = scene.mister.groups[0];
         let source_pivot = pivot(&scene.mister.positions[m.start..m.start + m.count]);
         let dynamic_pivot = pivot(&scene.dynamic_positions[m.start..m.start + m.count]);
         for axis in 0..3 {
             assert!((source_pivot[axis] - dynamic_pivot[axis]).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn each_letter_finishes_its_spin_on_the_exact_destination() {
+        let mut scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        scene.render_letter_morph(
+            &mut pixels,
+            3_500,
+            3_500,
+            1.0,
+            150,
+            RecipeEasing::Smoothstep,
+            210,
+        );
+        for (actual, expected) in scene.dynamic_positions.iter().zip(&scene.magik.positions) {
+            for axis in 0..3 {
+                assert!((actual[axis] - expected[axis]).abs() < 0.001);
+            }
         }
     }
 

@@ -12,6 +12,8 @@
   },
   "appearance": {
     "background": "#000000",
+    "crt_palette": ["#303030", "#686868", "#B8B8B8", "#FFFFFF"],
+    "text_palette": ["#202020", "#585C58", "#B8BCB8", "#FFFFFF"],
     "palette": ["#182030", "#283858", "#305880", "#3878A8", "#5098C8", "#78B8E0", "#B0DCF0", "#FFFFFF"]
   },
   "tracks": [

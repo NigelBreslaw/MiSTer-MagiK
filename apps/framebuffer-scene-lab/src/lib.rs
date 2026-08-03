@@ -442,6 +442,14 @@ impl FocusedParticleRenderer {
         }
     }
 
+    #[must_use]
+    pub fn intro_total_ms(&self) -> Option<u64> {
+        match &self.effect {
+            PreparedEffect::Intro(renderer) => Some(renderer.recipe().total_ms),
+            _ => None,
+        }
+    }
+
     pub fn render(
         &mut self,
         destination: &mut [Rgb565Pixel],
@@ -725,8 +733,8 @@ impl LiveParticleRenderer {
         if let Some(options) = self.cabinet_options {
             self.renderer.set_cabinet_render_options(options)?;
         }
-        let logical_elapsed = elapsed.saturating_sub(self.logical_origin);
-        let logical_next = next_elapsed.map(|next| next.saturating_sub(self.logical_origin));
+        let logical_elapsed = self.timeline_elapsed(elapsed);
+        let logical_next = next_elapsed.map(|next| self.timeline_elapsed(next));
         self.renderer
             .render_buffer(destination, buffer_id, logical_elapsed, logical_next)
     }
@@ -745,7 +753,7 @@ impl LiveParticleRenderer {
             return Ok(());
         };
         self.generation = attempt.generation;
-        let logical_elapsed = elapsed.saturating_sub(self.logical_origin);
+        let logical_elapsed = self.timeline_elapsed(elapsed);
         let resume_cue = self
             .renderer
             .intro_cue_id_at(logical_elapsed)
@@ -798,6 +806,15 @@ impl LiveParticleRenderer {
             }
         }
         Ok(())
+    }
+
+    fn timeline_elapsed(&self, elapsed: Duration) -> Duration {
+        let logical = elapsed.saturating_sub(self.logical_origin);
+        let Some(total_ms) = self.renderer.intro_total_ms() else {
+            return logical;
+        };
+        let total = Duration::from_millis(total_ms);
+        Duration::from_nanos((logical.as_nanos() % total.as_nanos()) as u64)
     }
 
     fn reject(&mut self, generation: u64, kind: EffectKind, error: &str) -> Result<(), String> {

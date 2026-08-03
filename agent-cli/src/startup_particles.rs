@@ -66,12 +66,25 @@ pub struct PreviewArgs {
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum SceneLabCommand {
     Preview(ScenePreviewArgs),
+    Capture(SceneCaptureArgs),
     AnalyzeCabinetCodegen,
     GenerateIntroAssets(GenerateIntroAssetsArgs),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Args)]
 pub struct GenerateIntroAssetsArgs {
+    #[arg(long)]
+    output: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Args)]
+pub struct SceneCaptureArgs {
+    #[arg(long, value_enum)]
+    scene: SceneLabScene,
+    #[arg(long)]
+    recipe: PathBuf,
+    #[arg(long)]
+    time_ms: u64,
     #[arg(long)]
     output: PathBuf,
 }
@@ -118,8 +131,60 @@ pub fn execute_scene_preview(
 ) -> AgentResult<()> {
     match command {
         SceneLabCommand::Preview(args) => scene_preview(repository, args),
+        SceneLabCommand::Capture(args) => scene_capture(repository, args),
         SceneLabCommand::AnalyzeCabinetCodegen => analyze_cabinet_codegen(repository, reporter),
         SceneLabCommand::GenerateIntroAssets(args) => generate_intro_assets(repository, args),
+    }
+}
+
+fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> {
+    if args.scene == SceneLabScene::NavigationTransition {
+        return Err("scene-lab capture currently accepts particle recipes only".into());
+    }
+    let actual = recipe_scene(&args.recipe)?;
+    if actual != args.scene.label() {
+        return Err(format!(
+            "--scene {} does not match the {actual} recipe",
+            args.scene.label()
+        )
+        .into());
+    }
+    let lab = repository.join(LAB_DIR);
+    let mut build = Command::new("cargo");
+    build
+        .current_dir(&lab)
+        .args(["build", "--locked", "--bin", LAB_BINARY])
+        .stdin(Stdio::null());
+    let mut child = build
+        .spawn()
+        .map_err(|error| format!("cannot start scene capture build: {error}"))?;
+    let status = process::wait(
+        &mut child,
+        Some(BUILD_DEADLINE),
+        "scene capture build",
+        None,
+        || Ok(()),
+    )?;
+    if !status.success() {
+        return Err(format!("scene capture build exited with {status}").into());
+    }
+    let binary = lab.join("target/debug").join(LAB_BINARY);
+    let output = if args.output.is_absolute() {
+        args.output.clone()
+    } else {
+        repository.join(&args.output)
+    };
+    let status = Command::new(&binary)
+        .args(["--scene", args.scene.label(), "--recipe"])
+        .arg(&args.recipe)
+        .args(["--time-ms", &args.time_ms.to_string(), "--output"])
+        .arg(output)
+        .status()
+        .map_err(|error| format!("cannot start scene capture: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("scene capture exited with {status}").into())
     }
 }
 

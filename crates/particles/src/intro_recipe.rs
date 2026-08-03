@@ -128,12 +128,16 @@ pub struct IntroCamera {
 #[serde(deny_unknown_fields)]
 pub struct IntroAppearanceFileV1 {
     pub background: String,
+    pub crt_palette: [String; 4],
+    pub text_palette: [String; 4],
     pub palette: [String; 8],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IntroAppearance {
     pub background: RecipeRgb565,
+    pub crt_palette: [RecipeRgb565; 4],
+    pub text_palette: [RecipeRgb565; 4],
     pub palette: [RecipeRgb565; 8],
 }
 
@@ -234,6 +238,8 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
         camera: file.camera,
         appearance: IntroAppearance {
             background: parse_rgb565(&file.appearance.background)?,
+            crt_palette: parse_palette(file.appearance.crt_palette, "appearance.crt_palette")?,
+            text_palette: parse_palette(file.appearance.text_palette, "appearance.text_palette")?,
             palette: file
                 .appearance
                 .palette
@@ -247,6 +253,18 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
         cues: file.cues,
         total_ms,
     })
+}
+
+fn parse_palette<const N: usize>(
+    colors: [String; N],
+    name: &str,
+) -> Result<[RecipeRgb565; N], String> {
+    colors
+        .map(|color| parse_rgb565(&color))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map_err(|_| format!("{name} must contain {N} colors"))
 }
 
 fn validate_tracks(tracks: &[IntroTrack]) -> Result<(), String> {

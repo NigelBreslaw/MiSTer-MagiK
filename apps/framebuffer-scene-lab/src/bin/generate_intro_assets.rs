@@ -65,45 +65,58 @@ fn text_track(
     partition: usize,
     partitions: usize,
 ) -> Result<Vec<Point>, String> {
-    let mut candidates = Vec::new();
+    let mut mask_points = Vec::new();
     for y in 0..glyph.height {
         for x in 0..glyph.width {
             if glyph.alpha[y * glyph.width + x] < 128 {
                 continue;
             }
-            for layer in 0..LAYERS {
-                let ordinal = (y * glyph.width + x) * LAYERS + layer;
-                if ordinal % partitions != partition {
-                    continue;
-                }
-                let world_x = origin_x + x as f32;
-                let world_y = 48.0 + y as f32;
-                let world_z = (layer as f32 - 4.0) * 10.0;
-                candidates.push(Point {
-                    x: quantize(world_x, 480.0),
-                    y: quantize(world_y, 220.0),
-                    z: quantize(world_z, 96.0),
-                    palette: ((layer + usize::from(group)) & 7) as u8,
-                    group,
-                });
+            let ordinal = y * glyph.width + x;
+            if ordinal % partitions == partition {
+                mask_points.push((x, y));
             }
         }
     }
-    candidates.sort_unstable_by_key(|point| {
-        let x = u16::from_le_bytes(point.x.to_le_bytes()) as u64;
-        let y = u16::from_le_bytes(point.y.to_le_bytes()) as u64;
-        let z = u16::from_le_bytes(point.z.to_le_bytes()) as u64;
-        x.wrapping_mul(0x9e37) ^ y.wrapping_mul(0x85eb) ^ z.wrapping_mul(0xc2b2)
-    });
-    candidates.dedup_by_key(|point| (point.x, point.y, point.z));
-    if candidates.len() < count {
-        return Err(format!(
-            "glyph track {group} has {} unique samples, needs {count}",
-            candidates.len()
-        ));
+    if mask_points.is_empty() {
+        return Err(format!("glyph track {group} has no opaque samples"));
     }
-    candidates.truncate(count);
-    Ok(candidates)
+
+    // Match the original MagiK effect: every opaque mask sample receives
+    // particles before any sample is duplicated. Duplicates get the same
+    // small target jitter and shallow distributed depth used by that effect,
+    // producing a dense phosphor face rather than separated hologram sheets.
+    let mut points = Vec::with_capacity(count);
+    for index in 0..count {
+        let mask_index = index.saturating_mul(mask_points.len()) / count;
+        let (x, y) = mask_points[mask_index.min(mask_points.len() - 1)];
+        let hash = mix32((index as u32) ^ (u32::from(group) << 24) ^ 0x9e37_79b9);
+        let duplicate = count > mask_points.len();
+        let jitter_x = duplicate.then(|| signed_unit(hash) * 0.4).unwrap_or(0.0);
+        let jitter_y = duplicate
+            .then(|| signed_unit(hash.rotate_left(11)) * 0.4)
+            .unwrap_or(0.0);
+        let layer = ((hash.rotate_left(19) as usize) % LAYERS) as f32;
+        points.push(Point {
+            x: quantize(origin_x + x as f32 + jitter_x, 480.0),
+            y: quantize(48.0 + y as f32 + jitter_y, 220.0),
+            z: quantize((layer - 4.0) * 2.5, 96.0),
+            palette: (hash >> 29) as u8,
+            group,
+        });
+    }
+    Ok(points)
+}
+
+fn mix32(mut value: u32) -> u32 {
+    value ^= value >> 16;
+    value = value.wrapping_mul(0x7feb_352d);
+    value ^= value >> 15;
+    value = value.wrapping_mul(0x846c_a68b);
+    value ^ (value >> 16)
+}
+
+fn signed_unit(value: u32) -> f32 {
+    (value >> 8) as f32 * (2.0 / 16_777_215.0) - 1.0
 }
 
 fn text_target(font: swash::FontRef<'_>, text: &str) -> Result<Vec<Point>, String> {
@@ -271,7 +284,8 @@ fn run(output: &Path) -> Result<(), String> {
         "MiSTer MagiK intro particle assets".to_owned(),
         format!("font_sha256={FONT_SHA256}"),
         format!("particles={POINT_COUNT}"),
-        format!("hologram_layers={LAYERS}"),
+        format!("distributed_depth_layers={LAYERS}"),
+        "text_style=original-magik-phosphor".to_owned(),
     ];
     for (name, bytes) in [
         ("mister.pcloud", encode_cloud(&mister)),
