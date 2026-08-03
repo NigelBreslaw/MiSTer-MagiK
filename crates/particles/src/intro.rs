@@ -1216,7 +1216,7 @@ mod tests {
     }
 
     #[test]
-    fn common_m_remains_cohesive_at_the_middle_of_the_letter_morph() {
+    fn common_m_remains_cohesive_while_translating_between_centered_words() {
         let mut scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
         scene.render_letter_morph(
@@ -1231,9 +1231,13 @@ mod tests {
         );
         let m = scene.mister.groups[0];
         let source_pivot = pivot(&scene.mister.positions[m.start..m.start + m.count]);
+        let destination_pivot = pivot(&scene.magik.positions[m.start..m.start + m.count]);
         let dynamic_pivot = pivot(&scene.dynamic_positions[m.start..m.start + m.count]);
+        let progress = ease(1_750.0 / 2_750.0, RecipeEasing::Smoothstep);
         for axis in 0..3 {
-            assert!((source_pivot[axis] - dynamic_pivot[axis]).abs() < 0.01);
+            let expected =
+                source_pivot[axis] + (destination_pivot[axis] - source_pivot[axis]) * progress;
+            assert!((expected - dynamic_pivot[axis]).abs() < 0.01);
         }
     }
 
