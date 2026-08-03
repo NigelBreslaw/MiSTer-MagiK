@@ -350,6 +350,7 @@ impl IntroScene {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_letter_morph(
         &mut self,
         destination: &mut [Rgb565Pixel],
@@ -503,6 +504,7 @@ impl IntroScene {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_cabinet_orbit(
         &mut self,
         destination: &mut [Rgb565Pixel],

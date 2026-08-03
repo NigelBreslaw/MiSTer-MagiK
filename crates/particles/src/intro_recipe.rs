@@ -205,8 +205,8 @@ pub fn parse_intro_recipe(bytes: &[u8]) -> Result<IntroRecipe, String> {
         || file.initial_particle_count > MAX_PARTICLES
         || file.steady_particle_count == 0
         || file.steady_particle_count > file.initial_particle_count
-        || file.steady_particle_count % 4 != 0
-        || file.initial_particle_count % 4 != 0
+        || !file.steady_particle_count.is_multiple_of(4)
+        || !file.initial_particle_count.is_multiple_of(4)
     {
         return Err("intro particle counts are invalid or not four-lane aligned".into());
     }
