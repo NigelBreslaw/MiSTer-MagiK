@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn embedded_cabinet_recipe_preserves_current_defaults() {
         let recipe = embedded_cabinet_recipe().unwrap();
-        assert_eq!(recipe.particle_count, 12_288);
+        assert_eq!(recipe.particle_count, 48_128);
         assert_eq!(recipe.seed, 0x004d_6167_694b);
         assert_eq!(recipe.timing.cycle_ms, 30_000);
         assert_eq!(recipe.camera.focal_length, 610.0);

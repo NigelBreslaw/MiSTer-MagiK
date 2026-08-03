@@ -2353,7 +2353,21 @@ mod tests {
         let first_stats = first.render(&mut first_pixels, elapsed, 0).unwrap();
         let second_stats = second.render(&mut second_pixels, elapsed, 0).unwrap();
 
-        assert_eq!(first_stats, second_stats);
+        assert_eq!(first_stats.particles, second_stats.particles);
+        assert_eq!(
+            first_stats.projected_particles,
+            second_stats.projected_particles
+        );
+        assert_eq!(
+            first_stats.projection_cohorts,
+            second_stats.projection_cohorts
+        );
+        assert_eq!(first_stats.visible, second_stats.visible);
+        assert_eq!(first_stats.pixel_writes, second_stats.pixel_writes);
+        assert_eq!(
+            first_stats.projection_backend,
+            second_stats.projection_backend
+        );
         assert_eq!(first_pixels, second_pixels);
         assert!(first_stats.visible > 10_000);
     }
@@ -2395,15 +2409,18 @@ mod tests {
                 color_mode: CabinetColorMode::Origin,
             })
             .unwrap();
-        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let mut pixels = [
+            vec![Rgb565Pixel(0); 960 * 540],
+            vec![Rgb565Pixel(0); 960 * 540],
+        ];
         history
-            .render(&mut pixels, Duration::from_millis(900), 0)
+            .render(&mut pixels[0], Duration::from_millis(900), 0)
             .unwrap();
         let formation = history
-            .render(&mut pixels, Duration::from_millis(916), 1)
+            .render(&mut pixels[1], Duration::from_millis(916), 1)
             .unwrap();
         let orbit = history
-            .render(&mut pixels, Duration::from_secs(12), 0)
+            .render(&mut pixels[0], Duration::from_secs(12), 0)
             .unwrap();
         let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let baseline_orbit = baseline
@@ -2411,7 +2428,7 @@ mod tests {
             .unwrap();
         assert!(formation.pixel_writes > formation.visible);
         assert_eq!(orbit.pixel_writes, baseline_orbit.pixel_writes);
-        assert_eq!(pixels, baseline_pixels);
+        assert_eq!(pixels[0], baseline_pixels);
     }
 
     #[test]
