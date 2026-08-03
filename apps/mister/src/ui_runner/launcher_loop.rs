@@ -5701,7 +5701,7 @@ pub(super) fn run_launcher_loop(
         } else if navigation_snapshot_locked_before_render {
             None
         } else if startup_intro_prepare_live_launcher {
-            layer_target.render_slint_full(&window)
+            layer_target.render_slint_base(&window)
         } else {
             expand_home_pan_dirty_rect(
                 layer_target.render_slint_base(&window),

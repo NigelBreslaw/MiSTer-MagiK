@@ -72,7 +72,9 @@ The final handoff is derived only from the production launcher's live frame:
    launcher-ready event. The normal reveal cycle commits Arcade navigation,
    performs the established full bridge synchronization that populates the
    launcher and its tile models, and clears the scan overlay. The host then
-   performs one forced-full off-screen Slint render.
+   performs one off-screen Slint render into the persistent RGB565 composition
+   cache. It does not switch to `NewBuffer` and synchronously repaint unchanged
+   cache regions while the intro owns scanout.
    It immediately
    snapshots that exact cache, then a low-priority CPU0 worker derives all
    40,960 HDMI or 20,480 CRT launcher particle positions and colors without

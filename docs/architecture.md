@@ -629,7 +629,7 @@ suppressed while catalog changes accumulate in Rust. The existing lifecycle
 catalog-readiness flag is permitted. Its normal reveal cycle commits Arcade
 navigation and performs the established full bridge synchronization that
 populates the launcher and its tile models and clears the scan overlay. Only
-then does one forced-full off-screen Slint render
+then does one off-screen Slint render into the persistent composition cache
 produce the live RGB565 target. The host immediately retains that frame and a
 low-priority CPU0 worker derives its particle formation, leaving CPU1 to render
 the intro. Transient build-progress shell and taxonomy mutations are not
