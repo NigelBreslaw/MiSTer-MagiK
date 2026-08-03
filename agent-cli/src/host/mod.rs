@@ -6506,7 +6506,7 @@ fn profile_particle_preset(
 ) -> Result<Value> {
     let mut trials = Vec::new();
     let mut last_pass = PARTICLE_COUNT_SEED;
-    let mut first_fail = None;
+    let mut first_fail: Option<u64> = None;
     let mut increment_failures = 0u64;
     while last_pass > 0 && increment_failures < 3 && last_pass < PARTICLE_COUNT_MAX {
         let next_count = last_pass.saturating_add(PARTICLE_COUNT_STEP);
