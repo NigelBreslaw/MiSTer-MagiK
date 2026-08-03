@@ -115,6 +115,7 @@ pub enum CabinetColorMode {
     DepthPrism,
     MotionHeat,
     DirectionalMotion,
+    PhaseStory,
 }
 
 impl CabinetColorMode {
@@ -129,6 +130,7 @@ impl CabinetColorMode {
             Self::DepthPrism => "DEPTH PRISM",
             Self::MotionHeat => "MOTION HEAT",
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
+            Self::PhaseStory => "PHASE STORY",
         }
     }
 
@@ -244,6 +246,7 @@ pub struct ArcadeCabinetFormation {
     vortex_ready: bool,
     studio_lights: Vec<[Rgb565Pixel; 4]>,
     depth_prism: Vec<[Rgb565Pixel; 4]>,
+    phase_story: Vec<[Rgb565Pixel; 4]>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -633,6 +636,7 @@ impl ArcadeCabinetFormation {
                 ]
             })
             .collect();
+        let phase_story = build_phase_story(width);
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -723,6 +727,7 @@ impl ArcadeCabinetFormation {
             vortex_ready: false,
             studio_lights,
             depth_prism,
+            phase_story,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -821,6 +826,11 @@ impl ArcadeCabinetFormation {
             )
             .saturating_add(
                 self.depth_prism
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
+            )
+            .saturating_add(
+                self.phase_story
                     .capacity()
                     .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
             )
@@ -1174,6 +1184,18 @@ impl ArcadeCabinetFormation {
         };
         if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin {
             let aurora_phase = (elapsed.as_millis() as usize / 20) & 2_047;
+            let cycle_ms = elapsed.as_millis() as u64 % self.recipe.timing.cycle_ms;
+            let orbit_end = self.recipe.timing.formation_ms + self.recipe.timing.orbit_ms;
+            let return_end = orbit_end + self.recipe.timing.return_ms;
+            let phase_story_band = if cycle_ms < self.recipe.timing.formation_ms {
+                0
+            } else if cycle_ms < orbit_end {
+                1
+            } else if cycle_ms < return_end {
+                2
+            } else {
+                3
+            };
             for index in 0..self.options.active_count {
                 let command = self.commands[index];
                 let Some(offset) = command.offset() else {
@@ -1238,6 +1260,9 @@ impl ArcadeCabinetFormation {
                         } else {
                             Rgb565Pixel(0x9dff)
                         }
+                    }
+                    CabinetColorMode::PhaseStory => {
+                        self.phase_story[pixel_x][phase_story_band]
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
@@ -1594,6 +1619,28 @@ fn build_studio_lights(width: usize) -> Vec<[Rgb565Pixel; 4]> {
                 base,
             ]
         })
+        .collect()
+}
+
+fn build_phase_story(width: usize) -> Vec<[Rgb565Pixel; 4]> {
+    let formation = horizontal_gradient(
+        width,
+        &[Rgb565Pixel(0xf986), Rgb565Pixel(0xfd20), Rgb565Pixel(0xffc0)],
+    );
+    let orbit = horizontal_gradient(
+        width,
+        &[Rgb565Pixel(0x05ff), Rgb565Pixel(0x435f), Rgb565Pixel(0x981f)],
+    );
+    let returning = horizontal_gradient(
+        width,
+        &[Rgb565Pixel(0x07f3), Rgb565Pixel(0x05ff), Rgb565Pixel(0x435f)],
+    );
+    let dispersal = horizontal_gradient(
+        width,
+        &[Rgb565Pixel(0xffff), Rgb565Pixel(0xffc0), Rgb565Pixel(0xf986)],
+    );
+    (0..width)
+        .map(|x| [formation[x], orbit[x], returning[x], dispersal[x]])
         .collect()
 }
 

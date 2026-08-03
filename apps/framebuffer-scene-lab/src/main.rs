@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 22] = [
+const CABINET_CASES: [CabinetCase; 23] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -234,6 +234,12 @@ const CABINET_CASES: [CabinetCase; 22] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::DirectionalMotion,
+    },
+    CabinetCase {
+        name: "phase-story-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::PhaseStory,
     },
 ];
 
@@ -413,10 +419,11 @@ enum CabinetDemoMode {
     DepthPrism,
     MotionHeat,
     DirectionalMotion,
+    PhaseStory,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -430,6 +437,7 @@ impl CabinetDemoMode {
         Self::DepthPrism,
         Self::MotionHeat,
         Self::DirectionalMotion,
+        Self::PhaseStory,
     ];
 
     const fn index(self) -> usize {
@@ -451,6 +459,7 @@ impl CabinetDemoMode {
             Self::DepthPrism => "DEPTH PRISM",
             Self::MotionHeat => "MOTION HEAT",
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
+            Self::PhaseStory => "PHASE STORY",
         }
     }
 
@@ -468,7 +477,8 @@ impl CabinetDemoMode {
             | Self::StudioLights
             | Self::DepthPrism
             | Self::MotionHeat
-            | Self::DirectionalMotion => CabinetCreativeMode::Baseline,
+            | Self::DirectionalMotion
+            | Self::PhaseStory => CabinetCreativeMode::Baseline,
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
@@ -478,6 +488,7 @@ impl CabinetDemoMode {
             Self::DepthPrism => CabinetColorMode::DepthPrism,
             Self::MotionHeat => CabinetColorMode::MotionHeat,
             Self::DirectionalMotion => CabinetColorMode::DirectionalMotion,
+            Self::PhaseStory => CabinetColorMode::PhaseStory,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -1709,7 +1720,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::DirectionalMotion);
+        assert_eq!(controls.mode, CabinetDemoMode::PhaseStory);
     }
 
     #[test]
