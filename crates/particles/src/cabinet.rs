@@ -593,7 +593,10 @@ impl ArcadeCabinetFormation {
                 primary | (history << 16) | (neighbor << 32) | (satellite << 48)
             })
         });
-        let screen_prism = horizontal_gradient(width, &PRISM_STOPS);
+        let screen_prism = horizontal_gradient(
+            width.saturating_add(height.saturating_sub(1).saturating_mul(3)),
+            &PRISM_STOPS,
+        );
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -1113,12 +1116,14 @@ impl ArcadeCabinetFormation {
                 };
                 visible = visible.saturating_add(1);
                 let baseline = self.baseline_raster[index];
-                let primary = self.screen_prism[command.pixel_x()];
+                let pixel_x = command.pixel_x();
+                let pixel_y = projected_pixel_y(offset, pixel_x, self.width);
+                let primary = self.screen_prism[pixel_x + pixel_y * 3];
                 destination[offset] = primary;
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
                 if baseline & BASELINE_NEIGHBOR_PRESENT != 0
-                    && command.pixel_x() + 1 < self.width
+                    && pixel_x + 1 < self.width
                 {
                     destination[offset + 1] = darken_rgb565(primary);
                     dirty_offsets.push((offset + 1) as u32);
@@ -1367,6 +1372,16 @@ fn jittered_offset_with_x(
         1 => (offset - width, pixel_x),
         2 => (offset + 1, pixel_x + 1),
         _ => (offset + width, pixel_x),
+    }
+}
+
+#[inline(always)]
+fn projected_pixel_y(offset: usize, pixel_x: usize, width: usize) -> usize {
+    let row_offset = offset - pixel_x;
+    if width == 960 {
+        row_offset / 960
+    } else {
+        row_offset / width
     }
 }
 
