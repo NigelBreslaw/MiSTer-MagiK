@@ -119,8 +119,9 @@ pub struct IntroScene {
     scatter_vectors: Vec<[f32; 3]>,
     cloud: PointTarget,
     cabinet_formed: Vec<[f32; 3]>,
+    cabinet_blocks: Vec<PointCloudPositionBlock>,
     cabinet_formation: f32,
-    cabinet_final_yaw: f32,
+    launcher_source: Vec<[f32; 3]>,
     launcher: PointTarget,
     launcher_snapshot: Vec<Rgb565Pixel>,
     launcher_commands: Vec<PointCloudDrawCommand>,
@@ -211,7 +212,7 @@ impl IntroScene {
             ),
             _ => return Err("intro cabinet orbit cue is missing".into()),
         };
-        let cabinet_formed = cloud
+        let cabinet_formed: Vec<[f32; 3]> = cloud
             .positions
             .iter()
             .zip(&cabinet.positions)
@@ -220,6 +221,18 @@ impl IntroScene {
                     cloud[0] + (cabinet[0] - cloud[0]) * cabinet_formation,
                     cloud[1] + (cabinet[1] - cloud[1]) * cabinet_formation,
                     cloud[2] + (cabinet[2] - cloud[2]) * cabinet_formation,
+                ]
+            })
+            .collect();
+        let cabinet_blocks = prepare_position_blocks(&cabinet_formed);
+        let (cabinet_final_sin, cabinet_final_cos) = cabinet_final_yaw.sin_cos();
+        let launcher_source = cabinet_formed
+            .iter()
+            .map(|formed| {
+                [
+                    formed[0].mul_add(cabinet_final_cos, formed[2] * cabinet_final_sin),
+                    formed[1],
+                    (-formed[0]).mul_add(cabinet_final_sin, formed[2] * cabinet_final_cos),
                 ]
             })
             .collect();
@@ -311,8 +324,9 @@ impl IntroScene {
             scatter_vectors,
             cloud,
             cabinet_formed,
+            cabinet_blocks,
             cabinet_formation,
-            cabinet_final_yaw,
+            launcher_source,
             launcher,
             launcher_snapshot,
             launcher_commands,
@@ -513,6 +527,7 @@ impl IntroScene {
             &self.recipe,
             self.geometry,
             &self.dynamic_positions,
+            None,
             &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
@@ -521,6 +536,7 @@ impl IntroScene {
             frame,
             (!update_all).then_some((frame as usize) & 1),
             None,
+            [0.0, 1.0],
         )
         .with_outer_transform(transform_us)
     }
@@ -587,11 +603,7 @@ impl IntroScene {
                     spun[1] + (formed[1] - spun[1]) * progress,
                     spun[2] + (formed[2] - spun[2]) * progress,
                 ];
-                self.dynamic_positions[index] = [
-                    point[0].mul_add(global_cos, point[2] * global_sin),
-                    point[1],
-                    (-point[0]).mul_add(global_sin, point[2] * global_cos),
-                ];
+                self.dynamic_positions[index] = point;
             }
         }
         let transform_us = elapsed_us(transform_started.elapsed());
@@ -600,6 +612,7 @@ impl IntroScene {
             &self.recipe,
             self.geometry,
             &self.dynamic_positions,
+            None,
             &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
@@ -608,6 +621,7 @@ impl IntroScene {
             frame,
             (!update_all).then_some((frame as usize) & 1),
             None,
+            [global_sin, global_cos],
         )
         .with_outer_transform(transform_us)
     }
@@ -623,25 +637,15 @@ impl IntroScene {
         formation_percent: f32,
         frame: u64,
     ) -> IntroRenderResult {
-        let transform_started = Instant::now();
         let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, start_turns, turns);
         let (sin, cos) = yaw.sin_cos();
         debug_assert!((formation_percent / 100.0 - self.cabinet_formation).abs() < 0.0001);
-        for index in 0..self.recipe.steady_particle_count {
-            let point = self.cabinet_formed[index];
-            let dynamic = &mut self.dynamic_positions[index];
-            *dynamic = [
-                point[0].mul_add(cos, point[2] * sin),
-                point[1],
-                (-point[0]).mul_add(sin, point[2] * cos),
-            ];
-        }
-        let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
             destination,
             &self.recipe,
             self.geometry,
-            &self.dynamic_positions,
+            &self.cabinet_formed,
+            Some(&self.cabinet_blocks),
             &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
@@ -650,8 +654,8 @@ impl IntroScene {
             frame,
             None,
             None,
+            [sin, cos],
         )
-        .with_outer_transform(transform_us)
     }
 
     fn render_launcher_morph(
@@ -664,14 +668,8 @@ impl IntroScene {
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
-        let (sin, cos) = self.cabinet_final_yaw.sin_cos();
         for index in 0..self.recipe.steady_particle_count {
-            let formed = self.cabinet_formed[index];
-            let from = [
-                formed[0].mul_add(cos, formed[2] * sin),
-                formed[1],
-                (-formed[0]).mul_add(sin, formed[2] * cos),
-            ];
+            let from = self.launcher_source[index];
             let to = self.launcher.positions[index];
             self.dynamic_positions[index] = [
                 from[0] + (to[0] - from[0]) * progress,
@@ -685,6 +683,7 @@ impl IntroScene {
             &self.recipe,
             self.geometry,
             &self.dynamic_positions,
+            None,
             &self.launcher.palette,
             &mut self.positions,
             &mut self.commands,
@@ -693,6 +692,7 @@ impl IntroScene {
             frame,
             None,
             Some(&self.launcher_mix_thresholds),
+            [0.0, 1.0],
         )
         .with_outer_transform(transform_us)
     }
@@ -782,6 +782,7 @@ fn render_point_cloud(
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
     target_positions: &[[f32; 3]],
+    packed_target_positions: Option<&[PointCloudPositionBlock]>,
     target_palette: &[u8],
     positions: &mut [PointCloudPositionBlock],
     commands: &mut [PointCloudDrawCommand],
@@ -790,13 +791,17 @@ fn render_point_cloud(
     frame: u64,
     projection_cohort: Option<usize>,
     palette_thresholds: Option<&[u16]>,
+    yaw_sin_cos: [f32; 2],
 ) -> IntroRenderResult {
     let transform_started = Instant::now();
-    if let Some(first_block) = projection_cohort {
-        copy_target_cohort_to_blocks(target_positions, positions, first_block, 2);
-    } else {
-        copy_target_to_blocks(target_positions, positions);
+    if packed_target_positions.is_none() {
+        if let Some(first_block) = projection_cohort {
+            copy_target_cohort_to_blocks(target_positions, positions, first_block, 2);
+        } else {
+            copy_target_to_blocks(target_positions, positions);
+        }
     }
+    let projection_positions = packed_target_positions.unwrap_or(positions);
     let transform_us = elapsed_us(transform_started.elapsed());
     let projection_started = Instant::now();
     if projection_cohort.is_none() {
@@ -806,11 +811,11 @@ fn render_point_cloud(
     let block_step = projection_cohort.map_or(1, |_| 2);
     let vector_end = project_stable_neon(
         target_positions.len(),
-        positions,
+        projection_positions,
         first_block,
         block_step,
-        0.0,
-        1.0,
+        yaw_sin_cos[0],
+        yaw_sin_cos[1],
         0.0,
         1.0,
         recipe.camera.dolly,
@@ -823,13 +828,23 @@ fn render_point_cloud(
         commands,
     );
     for index in vector_end..target_positions.len() {
-        commands[index] = project_command(target_positions[index], recipe, geometry);
+        commands[index] = project_yaw_command(
+            target_positions[index],
+            yaw_sin_cos,
+            recipe,
+            geometry,
+        );
     }
     let backend = if vector_end > 0 {
         "point-cloud-neon"
     } else {
         for index in 0..target_positions.len() {
-            commands[index] = project_command(target_positions[index], recipe, geometry);
+            commands[index] = project_yaw_command(
+                target_positions[index],
+                yaw_sin_cos,
+                recipe,
+                geometry,
+            );
         }
         "point-cloud-scalar"
     };
@@ -1210,6 +1225,12 @@ fn copy_target_to_blocks(source: &[[f32; 3]], blocks: &mut [PointCloudPositionBl
     }
 }
 
+fn prepare_position_blocks(source: &[[f32; 3]]) -> Vec<PointCloudPositionBlock> {
+    let mut blocks = vec![empty_block(); source.len().div_ceil(PARTICLE_LANES)];
+    copy_target_to_blocks(source, &mut blocks);
+    blocks
+}
+
 fn copy_target_cohort_to_blocks(
     source: &[[f32; 3]],
     blocks: &mut [PointCloudPositionBlock],
@@ -1292,6 +1313,24 @@ fn project_command(
         y as usize * geometry.width() + x as usize,
         depth,
         x as usize,
+    )
+}
+
+fn project_yaw_command(
+    position: [f32; 3],
+    yaw_sin_cos: [f32; 2],
+    recipe: &IntroRecipe,
+    geometry: SceneGeometry,
+) -> PointCloudDrawCommand {
+    let [sin, cos] = yaw_sin_cos;
+    project_command(
+        [
+            position[0].mul_add(cos, position[2] * sin),
+            position[1],
+            (-position[0]).mul_add(sin, position[2] * cos),
+        ],
+        recipe,
+        geometry,
     )
 }
 
