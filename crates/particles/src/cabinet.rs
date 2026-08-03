@@ -113,6 +113,7 @@ pub struct CabinetRenderOptions {
 const PARTICLE_LANES: usize = 4;
 
 #[repr(C, align(16))]
+#[derive(Clone, Copy)]
 struct CabinetPositionBlock {
     target_x: [f32; PARTICLE_LANES],
     target_y: [f32; PARTICLE_LANES],
@@ -183,6 +184,7 @@ pub struct ArcadeCabinetFormation {
     recipe: CabinetRecipe,
     capacity: usize,
     positions: Vec<CabinetPositionBlock>,
+    dynamic_positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
@@ -571,12 +573,14 @@ impl ArcadeCabinetFormation {
             positions.push(position);
             attributes.push(attribute);
         }
+        let dynamic_positions = positions.clone();
         Ok(Self {
             width,
             height,
             recipe,
             capacity,
             positions,
+            dynamic_positions,
             attributes,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
@@ -632,6 +636,11 @@ impl ArcadeCabinetFormation {
         self.positions
             .capacity()
             .saturating_mul(std::mem::size_of::<CabinetPositionBlock>())
+            .saturating_add(
+                self.dynamic_positions
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<CabinetPositionBlock>()),
+            )
             .saturating_add(
                 self.attributes
                     .capacity()
@@ -864,89 +873,92 @@ impl ArcadeCabinetFormation {
                 .fill(CabinetDrawCommand(INVALID_PARTICLE_OFFSET));
         }
 
-        if dispersal > 0.0 {
-            for index in 0..self.options.active_count {
-                if !selected_for_projection!(index) {
-                    continue;
-                }
-                let position = &self.positions[index / PARTICLE_LANES];
-                let attribute = &self.attributes[index / PARTICLE_LANES];
-                let lane = index % PARTICLE_LANES;
-                let scale = 1.0
-                    + dispersal
-                        * (self.recipe.dispersal.radial_base
-                            + attribute.life[lane] * self.recipe.dispersal.radial_life_gain);
-                project_and_draw!(
-                    index,
-                    position.target_x[lane] * scale,
-                    position.target_y[lane] * scale
+        let first_projection_block = if project_all { 0 } else { projection_cohort };
+        let projection_block_step = if project_all {
+            1
+        } else {
+            usize::from(projection_cohorts)
+        };
+        let projection_block_count = self.options.active_count.div_ceil(PARTICLE_LANES);
+        let projection_positions = if dispersal > 0.0 {
+            for block_index in (first_projection_block..projection_block_count)
+                .step_by(projection_block_step)
+            {
+                let position = &self.positions[block_index];
+                let attribute = &self.attributes[block_index];
+                let dynamic = &mut self.dynamic_positions[block_index];
+                for lane in 0..PARTICLE_LANES {
+                    let scale = 1.0
+                        + dispersal
+                            * (self.recipe.dispersal.radial_base
+                                + attribute.life[lane]
+                                    * self.recipe.dispersal.radial_life_gain);
+                    dynamic.target_x[lane] = position.target_x[lane] * scale;
+                    dynamic.target_y[lane] = position.target_y[lane] * scale
                         + dispersal
                             * unit_signed(attribute.random[lane].rotate_left(11))
-                            * self.recipe.dispersal.vertical_jitter,
-                    position.target_z[lane] * scale
-                );
+                            * self.recipe.dispersal.vertical_jitter;
+                    dynamic.target_z[lane] = position.target_z[lane] * scale;
+                }
             }
+            &self.dynamic_positions
         } else if formation < 1.0 {
-            for index in 0..self.options.active_count {
-                if !selected_for_projection!(index) {
-                    continue;
+            for block_index in (first_projection_block..projection_block_count)
+                .step_by(projection_block_step)
+            {
+                let position = &self.positions[block_index];
+                let dynamic = &mut self.dynamic_positions[block_index];
+                for lane in 0..PARTICLE_LANES {
+                    dynamic.target_x[lane] = position.source_x[lane]
+                        + (position.target_x[lane] - position.source_x[lane]) * formation;
+                    dynamic.target_y[lane] = position.source_y[lane]
+                        + (position.target_y[lane] - position.source_y[lane]) * formation;
+                    dynamic.target_z[lane] = position.source_z[lane]
+                        + (position.target_z[lane] - position.source_z[lane]) * formation;
                 }
-                let position = &self.positions[index / PARTICLE_LANES];
-                let lane = index % PARTICLE_LANES;
-                project_and_draw!(
-                    index,
-                    position.source_x[lane]
-                        + (position.target_x[lane] - position.source_x[lane]) * formation,
-                    position.source_y[lane]
-                        + (position.target_y[lane] - position.source_y[lane]) * formation,
-                    position.source_z[lane]
-                        + (position.target_z[lane] - position.source_z[lane]) * formation
-                );
             }
+            &self.dynamic_positions
         } else {
-            let vector_end = project_stable_neon(
-                self.options.active_count,
-                &self.positions,
-                if project_all { 0 } else { projection_cohort },
-                if project_all {
-                    1
-                } else {
-                    usize::from(projection_cohorts)
-                },
-                sin_yaw,
-                cos_yaw,
-                sin_pitch,
-                cos_pitch,
-                dolly,
-                self.recipe.camera.near_depth,
-                self.recipe.camera.focal_length,
-                center_x,
-                center_y,
-                self.width,
-                self.height,
-                &mut self.commands,
+            &self.positions
+        };
+        let vector_end = project_stable_neon(
+            self.options.active_count,
+            projection_positions,
+            first_projection_block,
+            projection_block_step,
+            sin_yaw,
+            cos_yaw,
+            sin_pitch,
+            cos_pitch,
+            dolly,
+            self.recipe.camera.near_depth,
+            self.recipe.camera.focal_length,
+            center_x,
+            center_y,
+            self.width,
+            self.height,
+            &mut self.commands,
+        );
+        if vector_end > 0 {
+            projection_backend = match (project_all, projection_cohorts) {
+                (true, _) => "cabinet-neon",
+                (false, 2) => "cabinet-neon-cohort-2",
+                (false, 3) => "cabinet-neon-cohort-3",
+                (false, _) => "cabinet-neon-cohort",
+            };
+        }
+        for index in vector_end..self.options.active_count {
+            if !selected_for_projection!(index) {
+                continue;
+            }
+            let position = &projection_positions[index / PARTICLE_LANES];
+            let lane = index % PARTICLE_LANES;
+            project_and_draw!(
+                index,
+                position.target_x[lane],
+                position.target_y[lane],
+                position.target_z[lane]
             );
-            if vector_end > 0 {
-                projection_backend = match (project_all, projection_cohorts) {
-                    (true, _) => "cabinet-neon",
-                    (false, 2) => "cabinet-neon-cohort-2",
-                    (false, 3) => "cabinet-neon-cohort-3",
-                    (false, _) => "cabinet-neon-cohort",
-                };
-            }
-            for index in vector_end..self.options.active_count {
-                if !selected_for_projection!(index) {
-                    continue;
-                }
-                let position = &self.positions[index / PARTICLE_LANES];
-                let lane = index % PARTICLE_LANES;
-                project_and_draw!(
-                    index,
-                    position.target_x[lane],
-                    position.target_y[lane],
-                    position.target_z[lane]
-                );
-            }
         }
         self.commands_initialized = true;
         self.projection_frame = self.projection_frame.wrapping_add(1);
