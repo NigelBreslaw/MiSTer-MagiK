@@ -103,7 +103,9 @@ are archived with their code and visual contracts under
 The first-run launcher intro is not qualified by a host render average. Device
 evidence must begin with both Catalog V3 and the retained Arcade bootstrap
 absent, use the production direct hidden-slot route, and retain the complete
-launcher frame trace. A pass requires 1,201 ordered external-direct posts for
+launcher frame trace. The qualification run injects no launcher input; UI
+responsiveness under navigation load is measured separately so it cannot alter
+startup cadence or catalog completion time. A pass requires 1,201 ordered external-direct posts for
 logical frames 0 through 1,200, 60 Hz physical refresh within the ordinary
 tolerance, zero repeated refreshes, zero pacing failures, and independently
 zero latch-protocol drops or completion failures. Catalog coordinator and walker

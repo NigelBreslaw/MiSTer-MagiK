@@ -5549,21 +5549,7 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
             "MISTER_CATALOG_DIAGNOSTICS_DIR".into(),
             format!("{root}/diagnostics"),
         ),
-        (
-            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-            catalog_lifecycle_input_script(),
-        ),
-        (
-            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-            "1".into(),
-        ),
     ]
-}
-
-fn catalog_lifecycle_input_script() -> String {
-    std::iter::repeat_n("down,up,wait:600", 150)
-        .collect::<Vec<_>>()
-        .join(",")
 }
 
 const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 22;
@@ -16156,11 +16142,12 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn catalog_lifecycle_keeps_scripted_input_active_past_completion_deadline() {
-        let script = catalog_lifecycle_input_script();
-        assert_eq!(script.matches("wait:600").count(), 150);
-        assert!(script.starts_with("down,up,"));
-        assert!(script.len() < 4_096);
+    fn catalog_lifecycle_does_not_inject_launcher_input() {
+        let env = catalog_lifecycle_launcher_env();
+        assert!(env.iter().all(|(key, _)| {
+            key != "MISTER_LAUNCHER_INPUT_SCRIPT"
+                && key != "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
+        }));
     }
 
     #[test]
