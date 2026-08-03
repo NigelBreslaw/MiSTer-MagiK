@@ -36,7 +36,7 @@ scripts/particle-model compile \
   --points 72704
 
 Expected arcade-cabinet-slices.pcloud SHA-256:
-cb4babb3c9eefc107554101a40bfe0b100092ed4f3f8d19cde1f771e998f8e1e
+9601d42f45440da5f747a21e76fa0f085b8ed9596b6ae1e899ee5d1ecbf73a8a
 
 Expected arcade-cabinet-slices.pcolor SHA-256:
-40e36aeb0bbcad3c9de406e6dd4628006fc8b4055f89b13c5a1a4098ddeb9a7d
+444b452f0920fb81f52aca865ca985ba98b51161b933c9fdb65ef3e69db2a591
