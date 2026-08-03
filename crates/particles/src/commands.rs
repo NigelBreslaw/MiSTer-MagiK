@@ -66,13 +66,29 @@ pub fn raster_packed_visual_commands_recording(
     neighbor_palette_index: usize,
     dirty_offsets: &mut Vec<u32>,
 ) -> usize {
-    raster_packed_visual_commands_inner(
-        destination,
-        commands,
-        palette,
-        neighbor_palette_index,
-        |offset| dirty_offsets.push(offset),
-    )
+    assert!(neighbor_palette_index < palette.len());
+    let mut written = 0usize;
+    for &command in commands {
+        let Some((offset, palette_index, neighbor)) = unpack_visual_command(command) else {
+            continue;
+        };
+        let Some(pixel) = destination.get_mut(offset) else {
+            continue;
+        };
+        *pixel = palette[palette_index];
+        dirty_offsets.push(offset as u32);
+        written = written.saturating_add(1);
+        if neighbor {
+            let neighbor_offset = offset.saturating_add(1);
+            let Some(pixel) = destination.get_mut(neighbor_offset) else {
+                continue;
+            };
+            *pixel = palette[neighbor_palette_index];
+            dirty_offsets.push(neighbor_offset as u32);
+            written = written.saturating_add(1);
+        }
+    }
+    written
 }
 
 fn raster_packed_visual_commands_inner(
