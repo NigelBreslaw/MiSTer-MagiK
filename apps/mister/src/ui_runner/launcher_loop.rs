@@ -2282,7 +2282,52 @@ pub(super) fn run_launcher_loop(
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
+    let retained_arcade_seed =
+        (!capsule_seed_ready && !sharded_seed_ready).then(|| {
+            let probe = mister_magik_catalog::builder_service::probe_retained_arcade_startup_seed(
+                Path::new(&arcade_root),
+            );
+            match &probe {
+                mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Ready(seed) => {
+                    print_startup_event(
+                        start,
+                        "retained_arcade_startup_seed",
+                        format!(
+                            "status=ready games={} probe_us={} decode_us={} bytes={}",
+                            seed.catalog.len(), seed.probe_us, seed.decode_us, seed.bytes
+                        ),
+                    );
+                }
+                mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Unavailable {
+                    reason,
+                    probe_us,
+                } => {
+                    print_startup_event(
+                        start,
+                        "retained_arcade_startup_seed",
+                        format!("status=unavailable reason={reason} probe_us={probe_us}"),
+                    );
+                }
+            }
+            probe
+        });
+    let retained_arcade_seed = match retained_arcade_seed {
+        Some(mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Ready(seed)) => {
+            Some(seed)
+        }
+        _ => None,
+    };
+    let retained_arcade_seed_ready = retained_arcade_seed.is_some();
+    let retained_arcade_fingerprint = retained_arcade_seed
+        .as_ref()
+        .map(|seed| seed.stamp_fingerprint.clone());
+    if let Some(seed) = retained_arcade_seed {
+        catalog = seed.catalog;
+        catalog_ready = true;
+    }
+    let initial_catalog_fingerprint = return_capsule_fingerprint
+        .or(sharded_catalog_fingerprint)
+        .or(retained_arcade_fingerprint);
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
@@ -2372,6 +2417,30 @@ pub(super) fn run_launcher_loop(
         } else {
             catalog_session.mark_refresh_done();
         }
+    } else if retained_arcade_seed_ready {
+        startup_ready_catalog_source = CatalogSource::RetainedArcadeBootstrap;
+        catalog_session.note_summary_seed_ready();
+        if preview_route.allows_preview_work() {
+            media_session.request_catalog_seed();
+        }
+        catalog_version = catalog_version.wrapping_add(1);
+        print_startup_event(
+            start,
+            "catalog_worker_deferred",
+            format!(
+                "root={} request={} reason=retained_arcade_bootstrap",
+                arcade_root,
+                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS.label()
+            ),
+        );
+        // The retained projection is sufficient for immediate Arcade
+        // navigation but is never the authoritative complete library.
+        catalog_session.defer_catalog_worker(
+            arcade_root.clone(),
+            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
+            CatalogWorkerInitialCache::AlreadyProbedMissing,
+            CatalogExecutionMode::BackgroundInteractive,
+        );
     } else {
         let sqlite_state = catalog_startup_sqlite_state(&sqlite_path);
         match catalog_startup_without_summary_plan(

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 pub enum CatalogSource {
     ReturnCapsule,
     ShardedRegistry,
+    RetainedArcadeBootstrap,
     SummaryProjection,
     NavigationProjection,
     FullSqlite,
@@ -19,6 +20,7 @@ impl CatalogSource {
         match self {
             Self::ReturnCapsule => "return-capsule",
             Self::ShardedRegistry => "sharded-registry",
+            Self::RetainedArcadeBootstrap => "retained-arcade-bootstrap",
             Self::SummaryProjection => "summary-projection",
             Self::NavigationProjection => "navigation-projection",
             Self::FullSqlite => "full-sqlite",

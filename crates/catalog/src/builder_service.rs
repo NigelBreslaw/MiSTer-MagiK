@@ -26,6 +26,54 @@ pub enum BuilderOperation {
     FreshBuild,
 }
 
+/// Scheduling contract for an embedded catalog build.
+///
+/// The launcher selects `BackgroundContinuous` while animation or interactive
+/// UI owns CPU1. That policy applies before first-visible bootstrap and is
+/// inherited by every scan/prepare helper, rather than only by the outer
+/// catalog-worker thread.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BuilderExecutionPolicy {
+    #[default]
+    ForegroundUntilFirstVisible,
+    BackgroundContinuous,
+}
+
+#[derive(Debug)]
+pub struct RetainedArcadeStartupSeed {
+    pub catalog: ArcadeCatalog,
+    pub stamp_fingerprint: String,
+    pub probe_us: u64,
+    pub decode_us: u64,
+    pub bytes: u64,
+}
+
+#[derive(Debug)]
+pub enum RetainedArcadeStartupProbe {
+    Ready(RetainedArcadeStartupSeed),
+    Unavailable { reason: String, probe_us: u64 },
+}
+
+/// Loads the bounded, source-validated Arcade projection retained by the
+/// first-visible builder. This is a launcher seed only; the authoritative
+/// full catalog build must still run in the background.
+pub fn probe_retained_arcade_startup_seed(root: &Path) -> RetainedArcadeStartupProbe {
+    match crate::arcade_bootstrap_index::probe(root) {
+        crate::arcade_bootstrap_index::ProbeResult::Hit(loaded) => {
+            RetainedArcadeStartupProbe::Ready(RetainedArcadeStartupSeed {
+                catalog: loaded.catalog,
+                stamp_fingerprint: loaded.stamp.fingerprint_hex(),
+                probe_us: loaded.probe_us,
+                decode_us: loaded.decode_us,
+                bytes: loaded.bytes,
+            })
+        }
+        crate::arcade_bootstrap_index::ProbeResult::Miss { reason, probe_us } => {
+            RetainedArcadeStartupProbe::Unavailable { reason, probe_us }
+        }
+    }
+}
+
 /// Controls cooperative catalog checkpoints. Production launcher policy keeps
 /// this enabled continuously; tests may close it to exercise checkpoint safety.
 pub fn set_background_heavy_work_allowed(allowed: bool) {
@@ -54,6 +102,18 @@ impl BuilderOperation {
 
 pub fn run(
     operation: BuilderOperation,
+    emit: impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
+    run_with_execution_policy(
+        operation,
+        BuilderExecutionPolicy::ForegroundUntilFirstVisible,
+        emit,
+    )
+}
+
+pub fn run_with_execution_policy(
+    operation: BuilderOperation,
+    execution_policy: BuilderExecutionPolicy,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
@@ -66,8 +126,9 @@ pub fn run(
         force_all_systems: operation == BuilderOperation::RebuildAll,
         arcade_bootstrap_scan: None,
     };
-    run_with_backend(
+    run_with_backend_policy(
         operation,
+        execution_policy,
         BuilderConfig::production(),
         &mut backend,
         &mut emit,
@@ -195,6 +256,22 @@ fn run_with_backend<B: BuilderBackend>(
     backend: &mut B,
     emit: &mut impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
+    run_with_backend_policy(
+        operation,
+        BuilderExecutionPolicy::ForegroundUntilFirstVisible,
+        config,
+        backend,
+        emit,
+    )
+}
+
+fn run_with_backend_policy<B: BuilderBackend>(
+    operation: BuilderOperation,
+    execution_policy: BuilderExecutionPolicy,
+    config: BuilderConfig,
+    backend: &mut B,
+    emit: &mut impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
     let run_started = Instant::now();
     let protocol = CATALOG_BUILDER_PROTOCOL_VERSION;
     emit(CatalogBuilderEvent::Handshake {
@@ -246,10 +323,26 @@ fn run_with_backend<B: BuilderBackend>(
     }
     snapshot_cleanup.arm();
 
-    // Initial creation stays foreground only through first-visible bootstrap.
-    // Until then there is no usable game UI to protect with background policy.
+    let background_from_start = execution_policy == BuilderExecutionPolicy::BackgroundContinuous;
+    if background_from_start {
+        backend.set_post_reveal_background(true);
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        emit(CatalogBuilderEvent::Timing {
+            protocol,
+            name: "builder_execution_mode".into(),
+            detail: "mode=background_continuous affinity=cpu0 nice=5 boundary=builder-start".into(),
+        });
+    }
+    let _startup_background_scope =
+        background_from_start.then(crate::cooperative_work::BackgroundScope::enter);
+
+    // Standalone builds stay foreground through first-visible bootstrap. The
+    // embedded launcher may instead reserve CPU1 from the builder's first
+    // instruction so animation cadence cannot be disturbed.
     let build_role = initial_build_role(operation);
-    apply_runtime_thread_policy(build_role);
+    if !background_from_start {
+        apply_runtime_thread_policy(build_role);
+    }
     let bootstrap = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut progress = |title: &str, detail: &str| {
@@ -271,7 +364,9 @@ fn run_with_backend<B: BuilderBackend>(
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
     let first_visible_published = bootstrap.is_some();
-    let background_build = full_build_runs_in_background(operation) || first_visible_published;
+    let background_build = background_from_start
+        || full_build_runs_in_background(operation)
+        || first_visible_published;
     if let Some(bootstrap) = bootstrap {
         emit_timings(protocol, bootstrap.timings, emit);
         let games = backend.games(&bootstrap.value);
@@ -317,8 +412,10 @@ fn run_with_backend<B: BuilderBackend>(
             }),
         }
     }
-    backend.set_post_reveal_background(background_build);
-    if background_build {
+    if !background_from_start {
+        backend.set_post_reveal_background(background_build);
+    }
+    if background_build && !background_from_start {
         apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
         emit(CatalogBuilderEvent::Timing {
             protocol,
@@ -971,14 +1068,24 @@ impl BuilderBackend for SystemBuilderBackend {
         }
         progress("Indexing library", "Scanning Arcade first…");
         let mut scan_events = |event: library_db::LibraryScanEvent| scan_event(event);
-        let scanned = library_db::scan_arcade_bootstrap_ram_foreground_with_events(
-            Some(progress),
-            Some(&mut scan_events),
-        )?;
+        let scanned = if self.post_reveal_background {
+            library_db::scan_arcade_bootstrap_ram_background_with_events(
+                Some(progress),
+                Some(&mut scan_events),
+            )?
+        } else {
+            library_db::scan_arcade_bootstrap_ram_foreground_with_events(
+                Some(progress),
+                Some(&mut scan_events),
+            )?
+        };
         let stats = scanned.stats().clone();
         self.arcade_bootstrap_scan = Some(scanned.clone());
-        let (prepared_state, catalog, timing, scanner_cache) =
-            scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?;
+        let (prepared_state, catalog, timing, scanner_cache) = if self.post_reveal_background {
+            scanned.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
+        } else {
+            scanned.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
+        };
         let games = catalog.len();
         let stamp = prepared_state.stamp().clone();
         let persistence = PreparedPersistence::from_prepared(prepared_state);
@@ -1607,6 +1714,7 @@ mod tests {
         check_unchanged: bool,
         bootstrap_first_visible: bool,
         calls: Vec<&'static str>,
+        bootstrap_background_scopes: Vec<bool>,
         snapshot_background_scopes: Vec<bool>,
         scan_background_scopes: Vec<bool>,
         prepare_background_scopes: Vec<bool>,
@@ -1665,6 +1773,8 @@ mod tests {
                 return Ok(None);
             }
             self.calls.push("bootstrap");
+            self.bootstrap_background_scopes
+                .push(crate::cooperative_work::in_background_scope());
             progress("Indexing library", "Scanning Arcade first…");
             scan_event(library_db::LibraryScanEvent::SystemDiscovered {
                 system_id: "arcade".into(),
@@ -2013,6 +2123,41 @@ mod tests {
             .expect("persisted event");
         assert!(full_scan_timing < authoritative_prepared);
         assert!(authoritative_prepared < persisted);
+    }
+
+    #[test]
+    fn continuous_background_policy_covers_bootstrap_snapshot_and_full_build() {
+        set_background_heavy_work_allowed(true);
+        let config = fixture_config("continuous-background");
+        let mut backend = FakeBackend {
+            bootstrap_first_visible: true,
+            ..FakeBackend::default()
+        };
+        let mut events = Vec::new();
+
+        run_with_backend_policy(
+            BuilderOperation::Build,
+            BuilderExecutionPolicy::BackgroundContinuous,
+            config,
+            &mut backend,
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+
+        assert_eq!(backend.post_reveal_background, [true]);
+        assert_eq!(backend.bootstrap_background_scopes, [true]);
+        assert_eq!(backend.snapshot_background_scopes, [true]);
+        assert_eq!(backend.scan_background_scopes, [true]);
+        assert_eq!(backend.prepare_background_scopes, [true]);
+        assert_eq!(backend.persist_background_scopes, [true]);
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                CatalogBuilderEvent::Timing { name, detail, .. }
+                    if name == "builder_execution_mode"
+                        && detail.contains("boundary=builder-start")
+            )
+        }));
     }
 
     #[test]

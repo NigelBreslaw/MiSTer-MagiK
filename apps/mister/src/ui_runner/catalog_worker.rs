@@ -899,7 +899,15 @@ fn run_catalog_builder_in_process(
         return;
     };
     let mut state = EmbeddedBuilderEventState::default();
-    let result = builder_service::run(operation, |event| {
+    let execution_policy = match execution_mode {
+        CatalogExecutionMode::ForegroundExclusive => {
+            builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible
+        }
+        CatalogExecutionMode::BackgroundInteractive => {
+            builder_service::BuilderExecutionPolicy::BackgroundContinuous
+        }
+    };
+    let result = builder_service::run_with_execution_policy(operation, execution_policy, |event| {
         handle_embedded_builder_event(
             root,
             plan,
