@@ -602,7 +602,7 @@ impl IntroScene {
     pub fn render_waiting_for_launcher(
         &mut self,
         mut target: SceneTarget<'_>,
-        waiting_frame: u64,
+        clock: SceneClock,
     ) -> Result<IntroFrameStats, SceneError> {
         if target.geometry() != self.geometry {
             return Err(SceneError::Render("intro frame geometry changed".into()));
@@ -626,13 +626,11 @@ impl IntroScene {
             ),
             _ => (10_000, 0.7, 1.0),
         };
-        let cue_elapsed_ms = waiting_frame
-            .saturating_mul(1_000)
-            .checked_div(60)
-            .unwrap_or(0)
+        let cue_elapsed_ms = clock
+            .elapsed
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64
             % wait_duration_ms;
-        let wait_duration_frames = wait_duration_ms.saturating_mul(60).div_ceil(1_000).max(1);
-        let wait_loop_frame = waiting_frame % wait_duration_frames;
         let rendered = self.render_cabinet_orbit(
             target.pixels_mut(),
             cue_elapsed_ms,
@@ -640,7 +638,7 @@ impl IntroScene {
             wait_start_turns,
             wait_turns,
             self.cabinet_formation * 100.0,
-            wait_loop_frame,
+            clock.frame,
         );
         Ok(IntroFrameStats {
             particles: self.steady_particle_count,
@@ -2556,13 +2554,21 @@ mod tests {
         let first_stats = scene
             .render_waiting_for_launcher(
                 SceneTarget::new(&mut first, geometry, SceneBufferId::new(0, 2).unwrap()).unwrap(),
-                0,
+                SceneClock {
+                    frame: 0,
+                    elapsed: Duration::ZERO,
+                    next_elapsed: Some(Duration::from_millis(20)),
+                },
             )
             .unwrap();
         scene
             .render_waiting_for_launcher(
                 SceneTarget::new(&mut looped, geometry, SceneBufferId::new(1, 2).unwrap()).unwrap(),
-                600,
+                SceneClock {
+                    frame: 600,
+                    elapsed: Duration::from_secs(10),
+                    next_elapsed: Some(Duration::from_millis(10_020)),
+                },
             )
             .unwrap();
 

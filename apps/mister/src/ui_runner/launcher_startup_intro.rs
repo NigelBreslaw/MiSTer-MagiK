@@ -18,15 +18,16 @@ use mister_magik_particles::intro::{
 };
 use mister_magik_particles::intro_recipe::embedded_intro_recipe;
 
-const INTRO_FPS: u64 = 60;
-const MORPH_FRAME: u64 = 16 * INTRO_FPS;
-const FINAL_FRAME: u64 = 20 * INTRO_FPS;
+const DEFAULT_REFRESH_PERIOD_US: u64 = 16_667;
+const MORPH_START: Duration = Duration::from_secs(16);
+const FINAL_ELAPSED: Duration = Duration::from_secs(20);
 
 pub(super) struct PreparedStartupIntro {
     scene: IntroScene,
     handoff_snapshot: Vec<Rgb565Pixel>,
     composition_width: usize,
     composition_height: usize,
+    initial_refresh_period_us: u64,
 }
 
 impl PreparedStartupIntro {
@@ -46,6 +47,10 @@ impl PreparedStartupIntro {
             handoff_snapshot: vec![Rgb565Pixel(0); ui.render_w().saturating_mul(ui.render_h())],
             composition_width: ui.render_w(),
             composition_height: ui.render_h(),
+            initial_refresh_period_us: ui
+                .output_route()
+                .nominal_period_us()
+                .unwrap_or(DEFAULT_REFRESH_PERIOD_US),
         })
     }
 
@@ -58,6 +63,9 @@ impl PreparedStartupIntro {
             composition_height: self.composition_height,
             snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
+            elapsed: Duration::ZERO,
+            waiting_elapsed: Duration::ZERO,
+            refresh_period_us: self.initial_refresh_period_us,
             snapshot_ready: false,
             completed: false,
             confirmed_frames: 0,
@@ -80,6 +88,9 @@ pub(super) struct StartupIntroSession {
     composition_height: usize,
     snapshot_preparation: LauncherSnapshotPreparation,
     frame: u64,
+    elapsed: Duration,
+    waiting_elapsed: Duration,
+    refresh_period_us: u64,
     snapshot_ready: bool,
     completed: bool,
     confirmed_frames: u64,
@@ -201,7 +212,7 @@ impl StartupIntroSession {
                 self.scene.geometry().height()
             ));
         }
-        let waiting_for_launcher = self.frame >= MORPH_FRAME && !self.snapshot_ready;
+        let waiting_for_launcher = self.elapsed >= MORPH_START && !self.snapshot_ready;
         let slot = grant
             .slot_index
             .checked_sub(1)
@@ -209,9 +220,12 @@ impl StartupIntroSession {
         let buffer_id = SceneBufferId::new(slot, 2).map_err(|error| error.to_string())?;
         let geometry = SceneGeometry::new(grant.width, grant.height, grant.stride_pixels)
             .map_err(|error| error.to_string())?;
-        let elapsed = intro_frame_elapsed(self.frame);
-        let next_elapsed =
-            (self.frame < FINAL_FRAME).then(|| intro_frame_elapsed(self.frame.saturating_add(1)));
+        let elapsed = self.elapsed;
+        let next_elapsed = (elapsed < FINAL_ELAPSED).then(|| {
+            elapsed
+                .saturating_add(Duration::from_micros(self.refresh_period_us))
+                .min(FINAL_ELAPSED)
+        });
         let buffers = self
             .buffers
             .as_mut()
@@ -222,7 +236,17 @@ impl StartupIntroSession {
             .map_err(|error| error.to_string())?;
         if waiting_for_launcher {
             self.scene
-                .render_waiting_for_launcher(target, self.waiting_frames)
+                .render_waiting_for_launcher(
+                    target,
+                    SceneClock {
+                        frame: self.frame,
+                        elapsed: self.waiting_elapsed,
+                        next_elapsed: Some(
+                            self.waiting_elapsed
+                                .saturating_add(Duration::from_micros(self.refresh_period_us)),
+                        ),
+                    },
+                )
                 .map_err(|error| error.to_string())?;
         } else {
             self.scene
@@ -251,6 +275,9 @@ impl StartupIntroSession {
         refresh_period_us: u64,
         vsync_confirmed: bool,
     ) -> Option<StartupIntroCadence> {
+        if refresh_period_us != 0 {
+            self.refresh_period_us = refresh_period_us;
+        }
         self.confirmed_frames = self.confirmed_frames.saturating_add(1);
         if !vsync_confirmed {
             self.pacing_failures = self.pacing_failures.saturating_add(1);
@@ -268,13 +295,18 @@ impl StartupIntroSession {
                 .skipped_refreshes
                 .saturating_add(expected.saturating_sub(1));
         }
+        let refresh_period = Duration::from_micros(self.refresh_period_us);
         if self.last_render_waiting {
             self.waiting_frames = self.waiting_frames.saturating_add(1);
-        } else if self.frame >= FINAL_FRAME {
-            self.completed = true;
+            self.waiting_elapsed = self.waiting_elapsed.saturating_add(refresh_period);
         } else {
-            self.frame = self.frame.saturating_add(1);
+            self.elapsed = self
+                .elapsed
+                .saturating_add(refresh_period)
+                .min(FINAL_ELAPSED);
+            self.completed = self.elapsed >= FINAL_ELAPSED;
         }
+        self.frame = self.frame.saturating_add(1);
         self.completed.then_some(self.cadence())
     }
 
@@ -300,6 +332,11 @@ impl StartupIntroSession {
     #[cfg(test)]
     pub(super) fn frame(&self) -> u64 {
         self.frame
+    }
+
+    #[cfg(test)]
+    pub(super) fn elapsed(&self) -> Duration {
+        self.elapsed
     }
 }
 
@@ -367,10 +404,6 @@ fn scene_pixels_mut(buffer: &mut ScanoutSlotsRgb565Framebuffer) -> &mut [SceneRg
     }
 }
 
-fn intro_frame_elapsed(frame: u64) -> Duration {
-    Duration::from_nanos(frame.saturating_mul(1_000_000_000) / INTRO_FPS)
-}
-
 fn expected_refresh_intervals(gap_us: u64, refresh_period_us: u64) -> u64 {
     if refresh_period_us == 0 {
         return 1;
@@ -397,6 +430,9 @@ mod tests {
             composition_height: prepared.composition_height,
             snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
+            elapsed: Duration::ZERO,
+            waiting_elapsed: Duration::ZERO,
+            refresh_period_us: prepared.initial_refresh_period_us,
             snapshot_ready: false,
             completed: false,
             confirmed_frames: 0,
@@ -502,9 +538,30 @@ mod tests {
     }
 
     #[test]
-    fn rational_clock_hits_exact_storyboard_boundaries() {
-        assert_eq!(intro_frame_elapsed(MORPH_FRAME), Duration::from_secs(16));
-        assert_eq!(intro_frame_elapsed(FINAL_FRAME), Duration::from_secs(20));
+    fn pal_and_ntsc_cadence_cross_the_morph_boundary_by_elapsed_time() {
+        for period_us in [16_667, 20_000] {
+            let mut session = test_session();
+            let confirms_before_boundary = 16_000_000_u64.div_ceil(period_us) - 1;
+            for frame in 0..confirms_before_boundary {
+                assert!(
+                    session
+                        .note_confirmed_present(
+                            Instant::now() + Duration::from_micros(frame * period_us),
+                            period_us,
+                            true,
+                        )
+                        .is_none()
+                );
+            }
+            assert!(session.elapsed() < MORPH_START);
+
+            assert!(
+                session
+                    .note_confirmed_present(Instant::now(), period_us, true)
+                    .is_none()
+            );
+            assert!(session.elapsed() >= MORPH_START);
+        }
     }
 
     #[test]
@@ -522,53 +579,81 @@ mod tests {
         let run = |skip_at: Option<u64>| {
             let mut session = test_session();
             let mut completed = None;
-            for frame in 0..=FINAL_FRAME {
+            for frame in 0..2_000 {
                 let skipped_us = u64::from(skip_at.is_some_and(|at| frame >= at)) * period_us;
                 completed = session.note_confirmed_present(
                     origin + Duration::from_micros(frame * period_us + skipped_us),
                     period_us,
                     true,
                 );
+                if completed.is_some() {
+                    break;
+                }
             }
-            completed.unwrap()
+            (session, completed.unwrap())
         };
 
-        let exact = run(None);
-        assert_eq!(exact.confirmed_frames, FINAL_FRAME + 1);
-        assert_eq!(exact.expected_refresh_intervals, FINAL_FRAME);
+        let (exact_session, exact) = run(None);
+        assert_eq!(exact.confirmed_frames, 1_200);
+        assert_eq!(exact.expected_refresh_intervals, 1_199);
         assert_eq!(exact.skipped_refreshes, 0);
         assert_eq!(exact.pacing_failures, 0);
+        assert_eq!(exact_session.elapsed(), FINAL_ELAPSED);
 
-        let skipped = run(Some(600));
-        assert_eq!(skipped.confirmed_frames, FINAL_FRAME + 1);
-        assert_eq!(skipped.expected_refresh_intervals, FINAL_FRAME + 1);
+        let (skipped_session, skipped) = run(Some(600));
+        assert_eq!(skipped.confirmed_frames, 1_200);
+        assert_eq!(skipped.expected_refresh_intervals, 1_200);
         assert_eq!(skipped.skipped_refreshes, 1);
         assert_eq!(skipped.pacing_failures, 0);
+        assert_eq!(skipped_session.elapsed(), FINAL_ELAPSED);
+    }
+
+    #[test]
+    fn pal_and_ntsc_complete_at_exactly_twenty_storyboard_seconds() {
+        for (period_us, expected_frames) in [(16_667, 1_200), (20_000, 1_000)] {
+            let mut session = test_session();
+            let mut completed = None;
+            for frame in 0..expected_frames {
+                completed = session.note_confirmed_present(
+                    Instant::now() + Duration::from_micros(frame * period_us),
+                    period_us,
+                    true,
+                );
+            }
+
+            assert!(completed.is_some());
+            assert_eq!(session.frame(), expected_frames);
+            assert_eq!(session.elapsed(), FINAL_ELAPSED);
+        }
     }
 
     #[test]
     fn cabinet_wait_frames_do_not_advance_the_morph_clock() {
         let mut session = test_session();
-        session.frame = MORPH_FRAME;
+        session.frame = 800;
+        session.elapsed = MORPH_START;
         session.last_render_waiting = true;
         let origin = Instant::now();
 
         assert!(
             session
-                .note_confirmed_present(origin, 16_667, true)
+                .note_confirmed_present(origin, 20_000, true)
                 .is_none()
         );
-        assert_eq!(session.frame(), MORPH_FRAME);
+        assert_eq!(session.frame(), 801);
+        assert_eq!(session.elapsed(), MORPH_START);
+        assert_eq!(session.waiting_elapsed, Duration::from_millis(20));
         assert_eq!(session.waiting_frames(), 1);
 
         session.snapshot_ready = true;
         session.last_render_waiting = false;
         assert!(
             session
-                .note_confirmed_present(origin + Duration::from_micros(16_667), 16_667, true,)
+                .note_confirmed_present(origin + Duration::from_micros(20_000), 20_000, true,)
                 .is_none()
         );
-        assert_eq!(session.frame(), MORPH_FRAME + 1);
+        assert_eq!(session.frame(), 802);
+        assert_eq!(session.elapsed(), MORPH_START + Duration::from_millis(20));
         assert_eq!(session.waiting_frames(), 1);
     }
 }
