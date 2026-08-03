@@ -406,9 +406,8 @@ impl IntroScene {
         let mut static_origins = Vec::with_capacity(initial_particle_count);
         let mut formation_screen = Vec::with_capacity(steady_particle_count);
         let mut formation_styles = Vec::with_capacity(steady_particle_count);
-        let mut retiring_formation = Vec::with_capacity(
-            initial_particle_count.saturating_sub(steady_particle_count),
-        );
+        let mut retiring_formation =
+            Vec::with_capacity(initial_particle_count.saturating_sub(steady_particle_count));
         for index in 0..initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
             let target_index = index % steady_particle_count;
@@ -433,8 +432,7 @@ impl IntroScene {
         retiring_formation.sort_by_key(|point| point.threshold);
         let positions = vec![empty_block(); steady_particle_count.div_ceil(PARTICLE_LANES)];
         let dynamic_positions = vec![[0.0; 3]; steady_particle_count];
-        let commands =
-            vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); steady_particle_count];
+        let commands = vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); steady_particle_count];
         Ok(Self {
             geometry,
             recipe,
@@ -626,11 +624,8 @@ impl IntroScene {
             ),
             _ => (10_000, 0.7, 1.0),
         };
-        let cue_elapsed_ms = clock
-            .elapsed
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64
-            % wait_duration_ms;
+        let cue_elapsed_ms =
+            clock.elapsed.as_millis().min(u128::from(u64::MAX)) as u64 % wait_duration_ms;
         let rendered = self.render_cabinet_orbit(
             target.pixels_mut(),
             cue_elapsed_ms,
@@ -1194,27 +1189,25 @@ fn render_point_cloud(
         commands,
     );
     for index in vector_end..target_positions.len() {
-        commands[index] =
-            project_yaw_command(
+        commands[index] = project_yaw_command(
+            target_positions[index],
+            yaw_sin_cos,
+            recipe,
+            geometry,
+            projection_scale,
+        );
+    }
+    let backend = if vector_end > 0 {
+        "point-cloud-neon"
+    } else {
+        for index in 0..target_positions.len() {
+            commands[index] = project_yaw_command(
                 target_positions[index],
                 yaw_sin_cos,
                 recipe,
                 geometry,
                 projection_scale,
             );
-    }
-    let backend = if vector_end > 0 {
-        "point-cloud-neon"
-    } else {
-        for index in 0..target_positions.len() {
-            commands[index] =
-                project_yaw_command(
-                    target_positions[index],
-                    yaw_sin_cos,
-                    recipe,
-                    geometry,
-                    projection_scale,
-                );
         }
         "point-cloud-scalar"
     };
@@ -1688,7 +1681,8 @@ fn prepare_target_commands(
         &mut commands,
     );
     for index in vector_end..target_positions.len() {
-        commands[index] = project_command(target_positions[index], recipe, geometry, projection_scale);
+        commands[index] =
+            project_command(target_positions[index], recipe, geometry, projection_scale);
     }
     if vector_end == 0 {
         for index in 0..target_positions.len() {
@@ -2158,8 +2152,7 @@ mod tests {
             [4_096, 2_048, 4_096, 2_048, 4_096, 4_096]
         );
         assert!(scene.mister.groups.iter().all(|group| {
-            group.start.is_multiple_of(PARTICLE_LANES)
-                && group.count.is_multiple_of(PARTICLE_LANES)
+            group.start.is_multiple_of(PARTICLE_LANES) && group.count.is_multiple_of(PARTICLE_LANES)
         }));
         assert_eq!(scene.cabinet_formed.len(), 20_480);
         assert_eq!(scene.launcher.positions.len(), 20_480);
@@ -2302,11 +2295,7 @@ mod tests {
         let projection_scale = IntroProjectionScale::default();
         let compensation = launcher_projection_compensation(&recipe, projection_scale);
         let top_left = project(
-            [
-                -480.0 * compensation[0],
-                -270.0 * compensation[1],
-                0.0,
-            ],
+            [-480.0 * compensation[0], -270.0 * compensation[1], 0.0],
             0.0,
             0.0,
             &recipe,
@@ -2314,11 +2303,7 @@ mod tests {
             projection_scale,
         );
         let bottom_right = project(
-            [
-                479.0 * compensation[0],
-                269.0 * compensation[1],
-                0.0,
-            ],
+            [479.0 * compensation[0], 269.0 * compensation[1], 0.0],
             0.0,
             0.0,
             &recipe,
@@ -2334,10 +2319,8 @@ mod tests {
     #[test]
     fn crt_projection_centers_the_complete_widescreen_frame() {
         let recipe = embedded_intro_recipe().unwrap();
-        let authored_compensation = launcher_projection_compensation(
-            &recipe,
-            IntroProjectionScale::default(),
-        );
+        let authored_compensation =
+            launcher_projection_compensation(&recipe, IntroProjectionScale::default());
         for height in [240, 288, 480, 576] {
             let geometry = SceneGeometry::new(640, height, 640).unwrap();
             let projection_scale = IntroProjectionScale::crt(height);
