@@ -657,6 +657,8 @@ fn write_launcher_status_json(
     field!("effective_view", status.effective_view);
     field!("return_screen", status.return_screen);
     field!("output_route", status.output_route);
+    field!("framebuffer_width", status.framebuffer_width);
+    field!("framebuffer_height", status.framebuffer_height);
     field!("frames", status.frames);
     field!("idle", status.idle);
     field!("idle_loops", status.idle_loops);
@@ -952,6 +954,8 @@ fn launcher_status_value(
     insert!("preview_asset_key", status.preview_asset_key);
     insert!("catalog_generation", status.catalog_generation);
     insert!("output_route", status.output_route);
+    insert!("framebuffer_width", status.framebuffer_width);
+    insert!("framebuffer_height", status.framebuffer_height);
     insert!("frames", status.frames);
     insert!("idle", status.idle);
     insert!("idle_loops", status.idle_loops);
