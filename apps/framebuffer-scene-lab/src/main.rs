@@ -8,7 +8,9 @@ use mister_magik_framebuffer_scene_lab::{
     CABINET_LAB_MAX_PARTICLES, DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer,
     NavigationFixture, NavigationFixtureScene, read_effect_recipe,
 };
-use mister_magik_particles::cabinet::{CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel};
+use mister_magik_particles::cabinet::{
+    CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
+};
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -20,7 +22,7 @@ mod cpu_profile;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
-const CABINET_DEFAULT_PARTICLES: usize = 48_128;
+const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
 
@@ -97,83 +99,105 @@ struct CabinetCase {
     name: &'static str,
     particles: usize,
     mode: CabinetCreativeMode,
+    color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 15] = [
+const CABINET_CASES: [CabinetCase; 16] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
         mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "baseline-36096",
         particles: 36_096,
         mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "baseline-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "baseline-60160",
         particles: 60_160,
         mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "baseline-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "satellites-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::Satellites,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "satellites-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::Satellites,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "history-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::HistoryEcho,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "history-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::HistoryEcho,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "depth-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::DepthPalette,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "depth-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::DepthPalette,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "jitter-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::MicroJitter,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "jitter-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::MicroJitter,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "all-48128",
         particles: 48_128,
         mode: CabinetCreativeMode::All,
+        color: CabinetColorMode::Origin,
     },
     CabinetCase {
         name: "all-72192",
         particles: 72_192,
         mode: CabinetCreativeMode::All,
+        color: CabinetColorMode::Origin,
+    },
+    CabinetCase {
+        name: "prism-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::ScreenPrism,
     },
 ];
 
@@ -250,6 +274,7 @@ impl LabScene {
                     renderer.set_cabinet_render_options(CabinetRenderOptions {
                         active_count: case.particles,
                         creative_mode: case.mode,
+                        color_mode: case.color,
                     })?;
                     Ok(Self::Focused(renderer))
                 } else {
@@ -336,8 +361,68 @@ enum LabAction {
     DecreaseParticles,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum CabinetDemoMode {
+    #[default]
+    Baseline,
+    Satellites,
+    HistoryEcho,
+    DepthPalette,
+    MicroJitter,
+    All,
+    ScreenPrism,
+}
+
+impl CabinetDemoMode {
+    const ALL: [Self; 7] = [
+        Self::Baseline,
+        Self::Satellites,
+        Self::HistoryEcho,
+        Self::DepthPalette,
+        Self::MicroJitter,
+        Self::All,
+        Self::ScreenPrism,
+    ];
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "BASELINE",
+            Self::Satellites => "SATELLITES",
+            Self::HistoryEcho => "HISTORY ECHO",
+            Self::DepthPalette => "DEPTH PALETTE",
+            Self::MicroJitter => "MICRO-JITTER",
+            Self::All => "ALL",
+            Self::ScreenPrism => "SCREEN PRISM",
+        }
+    }
+
+    const fn render_options(self, active_count: usize) -> CabinetRenderOptions {
+        let creative_mode = match self {
+            Self::Satellites => CabinetCreativeMode::Satellites,
+            Self::HistoryEcho => CabinetCreativeMode::HistoryEcho,
+            Self::DepthPalette => CabinetCreativeMode::DepthPalette,
+            Self::MicroJitter => CabinetCreativeMode::MicroJitter,
+            Self::All => CabinetCreativeMode::All,
+            Self::Baseline | Self::ScreenPrism => CabinetCreativeMode::Baseline,
+        };
+        let color_mode = match self {
+            Self::ScreenPrism => CabinetColorMode::ScreenPrism,
+            _ => CabinetColorMode::Origin,
+        };
+        CabinetRenderOptions {
+            active_count,
+            creative_mode,
+            color_mode,
+        }
+    }
+}
+
 struct CabinetLabControls {
-    mode: CabinetCreativeMode,
+    mode: CabinetDemoMode,
     particles: usize,
     previous_direction: DirectionalState,
     hud: CabinetHud,
@@ -345,7 +430,7 @@ struct CabinetLabControls {
 
 impl CabinetLabControls {
     fn new() -> Self {
-        let mode = CabinetCreativeMode::Baseline;
+        let mode = CabinetDemoMode::Baseline;
         let particles = CABINET_DEFAULT_PARTICLES;
         Self {
             mode,
@@ -356,10 +441,7 @@ impl CabinetLabControls {
     }
 
     const fn render_options(&self) -> CabinetRenderOptions {
-        CabinetRenderOptions {
-            active_count: self.particles,
-            creative_mode: self.mode,
-        }
+        self.mode.render_options(self.particles)
     }
 
     fn poll_direction(&mut self, direction: DirectionalState) {
@@ -385,12 +467,12 @@ impl CabinetLabControls {
         match action {
             LabAction::PreviousMode => {
                 let index = self.mode.index();
-                self.mode = CabinetCreativeMode::ALL
-                    [(index + CabinetCreativeMode::ALL.len() - 1) % CabinetCreativeMode::ALL.len()];
+                self.mode = CabinetDemoMode::ALL
+                    [(index + CabinetDemoMode::ALL.len() - 1) % CabinetDemoMode::ALL.len()];
             }
             LabAction::NextMode => {
-                self.mode = CabinetCreativeMode::ALL
-                    [(self.mode.index() + 1) % CabinetCreativeMode::ALL.len()];
+                self.mode =
+                    CabinetDemoMode::ALL[(self.mode.index() + 1) % CabinetDemoMode::ALL.len()];
             }
             LabAction::IncreaseParticles => {
                 self.particles = self
@@ -423,7 +505,7 @@ struct CabinetHud {
 }
 
 impl CabinetHud {
-    fn new(mode: CabinetCreativeMode, particles: usize) -> Self {
+    fn new(mode: CabinetDemoMode, particles: usize) -> Self {
         let mut hud = Self {
             pixels: vec![Rgb565Pixel(0); HUD_WIDTH * HUD_HEIGHT],
         };
@@ -431,12 +513,12 @@ impl CabinetHud {
         hud
     }
 
-    fn update(&mut self, mode: CabinetCreativeMode, particles: usize) {
+    fn update(&mut self, mode: CabinetDemoMode, particles: usize) {
         self.pixels.fill(Rgb565Pixel(0));
         let mode_line = format!(
             "MODE {}/{}  {}",
             mode.index() + 1,
-            CabinetCreativeMode::ALL.len(),
+            CabinetDemoMode::ALL.len(),
             mode.label()
         );
         let count_line = format!("PARTICLES {},{:03}", particles / 1_000, particles % 1_000);
@@ -1545,22 +1627,22 @@ mod tests {
             right: true,
             ..DirectionalState::default()
         });
-        assert_eq!(controls.particles, 49_152);
-        assert_eq!(controls.mode, CabinetCreativeMode::Satellites);
+        assert_eq!(controls.particles, 40_960);
+        assert_eq!(controls.mode, CabinetDemoMode::Satellites);
 
         controls.poll_direction(DirectionalState {
             up: true,
             right: true,
             ..DirectionalState::default()
         });
-        assert_eq!(controls.particles, 49_152);
-        assert_eq!(controls.mode, CabinetCreativeMode::Satellites);
+        assert_eq!(controls.particles, 40_960);
+        assert_eq!(controls.mode, CabinetDemoMode::Satellites);
 
         controls.poll_direction(DirectionalState::default());
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetCreativeMode::Baseline);
+        assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetCreativeMode::All);
+        assert_eq!(controls.mode, CabinetDemoMode::ScreenPrism);
     }
 
     #[test]
@@ -1578,7 +1660,7 @@ mod tests {
 
     #[test]
     fn cabinet_hud_draws_inside_the_top_left_panel() {
-        let hud = CabinetHud::new(CabinetCreativeMode::MicroJitter, 48_128);
+        let hud = CabinetHud::new(CabinetDemoMode::MicroJitter, 48_128);
         let mut pixels = vec![Rgb565Pixel(0x1234); DEFAULT_WIDTH * DEFAULT_HEIGHT];
         hud.draw(&mut pixels);
         assert_eq!(pixels[HUD_Y * DEFAULT_WIDTH + HUD_X], Rgb565Pixel(0));

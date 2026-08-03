@@ -104,10 +104,28 @@ impl CabinetCreativeMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CabinetColorMode {
+    #[default]
+    Origin,
+    ScreenPrism,
+}
+
+impl CabinetColorMode {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Origin => "ORIGIN COLOUR",
+            Self::ScreenPrism => "SCREEN PRISM",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CabinetRenderOptions {
     pub active_count: usize,
     pub creative_mode: CabinetCreativeMode,
+    pub color_mode: CabinetColorMode,
 }
 
 const PARTICLE_LANES: usize = 4;
@@ -204,6 +222,7 @@ pub struct ArcadeCabinetFormation {
     attributes: Vec<CabinetAttributeBlock>,
     baseline_raster: Vec<u64>,
     creative_palette: [[u64; 4]; 8],
+    screen_prism: Vec<Rgb565Pixel>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -574,6 +593,7 @@ impl ArcadeCabinetFormation {
                 primary | (history << 16) | (neighbor << 32) | (satellite << 48)
             })
         });
+        let screen_prism = horizontal_gradient(width, &PRISM_STOPS);
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -658,6 +678,7 @@ impl ArcadeCabinetFormation {
             attributes,
             baseline_raster,
             creative_palette,
+            screen_prism,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -670,6 +691,7 @@ impl ArcadeCabinetFormation {
             options: CabinetRenderOptions {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
+                color_mode: CabinetColorMode::Origin,
             },
             #[cfg(test)]
             force_generic_all: false,
@@ -730,6 +752,11 @@ impl ArcadeCabinetFormation {
                     .saturating_mul(std::mem::size_of::<u64>()),
             )
             .saturating_add(
+                self.screen_prism
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
+            )
+            .saturating_add(
                 self.commands
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetDrawCommand>()),
@@ -767,6 +794,7 @@ impl ArcadeCabinetFormation {
         let clear_started = Instant::now();
         let background = pixel(self.recipe.appearance.background);
         let creative_mode = self.options.creative_mode;
+        let color_mode = self.options.color_mode;
         let dirty_offsets = &mut self.dirty_offsets[buffer_id];
         if self.full_clear[buffer_id]
             || creative_mode == CabinetCreativeMode::All
@@ -1075,7 +1103,29 @@ impl ArcadeCabinetFormation {
                 true
             }
         };
-        if creative_mode == CabinetCreativeMode::Baseline {
+        if creative_mode == CabinetCreativeMode::Baseline
+            && color_mode == CabinetColorMode::ScreenPrism
+        {
+            for index in 0..self.options.active_count {
+                let command = self.commands[index];
+                let Some(offset) = command.offset() else {
+                    continue;
+                };
+                visible = visible.saturating_add(1);
+                let baseline = self.baseline_raster[index];
+                let primary = self.screen_prism[command.pixel_x()];
+                destination[offset] = primary;
+                dirty_offsets.push(offset as u32);
+                pixel_writes = pixel_writes.saturating_add(1);
+                if baseline & BASELINE_NEIGHBOR_PRESENT != 0
+                    && command.pixel_x() + 1 < self.width
+                {
+                    destination[offset + 1] = darken_rgb565(primary);
+                    dirty_offsets.push((offset + 1) as u32);
+                    pixel_writes = pixel_writes.saturating_add(1);
+                }
+            }
+        } else if creative_mode == CabinetCreativeMode::Baseline {
             for index in 0..self.options.active_count {
                 let Some(offset) = self.commands[index].offset() else {
                     continue;
@@ -1318,6 +1368,46 @@ fn jittered_offset_with_x(
         2 => (offset + 1, pixel_x + 1),
         _ => (offset + width, pixel_x),
     }
+}
+
+const PRISM_STOPS: [Rgb565Pixel; 7] = [
+    Rgb565Pixel(0xf986),
+    Rgb565Pixel(0xfc80),
+    Rgb565Pixel(0xdfe0),
+    Rgb565Pixel(0x07f3),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x435f),
+    Rgb565Pixel(0x981f),
+];
+
+fn horizontal_gradient(width: usize, stops: &[Rgb565Pixel]) -> Vec<Rgb565Pixel> {
+    let mut gradient = Vec::with_capacity(width);
+    let denominator = width.saturating_sub(1).max(1);
+    let segments = stops.len().saturating_sub(1);
+    for x in 0..width {
+        let position = x.saturating_mul(segments).saturating_mul(256) / denominator;
+        let segment = (position / 256).min(segments.saturating_sub(1));
+        let amount = if x + 1 == width { 256 } else { position & 255 };
+        gradient.push(mix_rgb565(stops[segment], stops[segment + 1], amount as u16));
+    }
+    gradient
+}
+
+fn mix_rgb565(first: Rgb565Pixel, second: Rgb565Pixel, amount: u16) -> Rgb565Pixel {
+    let inverse = 256_u32.saturating_sub(u32::from(amount));
+    let amount = u32::from(amount);
+    let first = u32::from(first.0);
+    let second = u32::from(second.0);
+    let red = (((first >> 11) * inverse + (second >> 11) * amount) >> 8) & 0x1f;
+    let green = ((((first >> 5) & 0x3f) * inverse + ((second >> 5) & 0x3f) * amount) >> 8)
+        & 0x3f;
+    let blue = (((first & 0x1f) * inverse + (second & 0x1f) * amount) >> 8) & 0x1f;
+    Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
+}
+
+fn darken_rgb565(color: Rgb565Pixel) -> Rgb565Pixel {
+    let value = color.0;
+    Rgb565Pixel(((value & 0xf7de) >> 1) + ((value & 0xe79c) >> 2))
 }
 
 const fn pixel(color: RecipeRgb565) -> Rgb565Pixel {
@@ -1636,6 +1726,7 @@ mod tests {
         let options = CabinetRenderOptions {
             active_count: 48_128,
             creative_mode: CabinetCreativeMode::All,
+            color_mode: CabinetColorMode::Origin,
         };
         optimized.set_render_options(options).unwrap();
         reference.set_render_options(options).unwrap();
@@ -1692,6 +1783,42 @@ mod tests {
     }
 
     #[test]
+    fn screen_prism_is_position_bound_and_preserves_write_count() {
+        let gradient = horizontal_gradient(960, &PRISM_STOPS);
+        assert_eq!(gradient.first(), PRISM_STOPS.first());
+        assert_eq!(gradient.last(), PRISM_STOPS.last());
+
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut origin = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut prism = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        prism
+            .set_render_options(CabinetRenderOptions {
+                active_count: 39_936,
+                creative_mode: CabinetCreativeMode::Baseline,
+                color_mode: CabinetColorMode::ScreenPrism,
+            })
+            .unwrap();
+        origin
+            .set_render_options(CabinetRenderOptions {
+                active_count: 39_936,
+                creative_mode: CabinetCreativeMode::Baseline,
+                color_mode: CabinetColorMode::Origin,
+            })
+            .unwrap();
+        let mut origin_pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let mut prism_pixels = origin_pixels.clone();
+        let origin_stats = origin
+            .render(&mut origin_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        let prism_stats = prism
+            .render(&mut prism_pixels, Duration::from_secs(12), 0)
+            .unwrap();
+        assert_eq!(prism_stats.visible, origin_stats.visible);
+        assert_eq!(prism_stats.pixel_writes, origin_stats.pixel_writes);
+        assert_ne!(prism_pixels, origin_pixels);
+    }
+
+    #[test]
     fn lookahead_scene_matches_direct_render_across_alternating_buffers() {
         let recipe = embedded_cabinet_recipe().unwrap();
         let mut direct = ArcadeCabinetFormation::new(320, 180, recipe.clone()).unwrap();
@@ -1699,6 +1826,7 @@ mod tests {
         let options = CabinetRenderOptions {
             active_count: 1_024,
             creative_mode: CabinetCreativeMode::All,
+            color_mode: CabinetColorMode::Origin,
         };
         direct.set_render_options(options).unwrap();
         scene.set_render_options(options).unwrap();
@@ -1756,6 +1884,7 @@ mod tests {
             .set_render_options(CabinetRenderOptions {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::Satellites,
+                color_mode: CabinetColorMode::Origin,
             })
             .unwrap();
         let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -1780,6 +1909,7 @@ mod tests {
             .set_render_options(CabinetRenderOptions {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::HistoryEcho,
+                color_mode: CabinetColorMode::Origin,
             })
             .unwrap();
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -1810,6 +1940,7 @@ mod tests {
             .set_render_options(CabinetRenderOptions {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::DepthPalette,
+                color_mode: CabinetColorMode::Origin,
             })
             .unwrap();
         let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -1835,6 +1966,7 @@ mod tests {
                 .set_render_options(CabinetRenderOptions {
                     active_count: 48_128,
                     creative_mode: CabinetCreativeMode::MicroJitter,
+                    color_mode: CabinetColorMode::Origin,
                 })
                 .unwrap();
         }
