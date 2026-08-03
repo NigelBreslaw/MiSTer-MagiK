@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 17] = [
+const CABINET_CASES: [CabinetCase; 18] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -204,6 +204,12 @@ const CABINET_CASES: [CabinetCase; 17] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::DiagonalAurora,
+    },
+    CabinetCase {
+        name: "vortex-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::VortexSpectrum,
     },
 ];
 
@@ -378,10 +384,11 @@ enum CabinetDemoMode {
     All,
     ScreenPrism,
     DiagonalAurora,
+    VortexSpectrum,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -390,6 +397,7 @@ impl CabinetDemoMode {
         Self::All,
         Self::ScreenPrism,
         Self::DiagonalAurora,
+        Self::VortexSpectrum,
     ];
 
     const fn index(self) -> usize {
@@ -406,6 +414,7 @@ impl CabinetDemoMode {
             Self::All => "ALL",
             Self::ScreenPrism => "SCREEN PRISM",
             Self::DiagonalAurora => "DIAGONAL AURORA",
+            Self::VortexSpectrum => "VORTEX SPECTRUM",
         }
     }
 
@@ -416,13 +425,14 @@ impl CabinetDemoMode {
             Self::DepthPalette => CabinetCreativeMode::DepthPalette,
             Self::MicroJitter => CabinetCreativeMode::MicroJitter,
             Self::All => CabinetCreativeMode::All,
-            Self::Baseline | Self::ScreenPrism | Self::DiagonalAurora => {
+            Self::Baseline | Self::ScreenPrism | Self::DiagonalAurora | Self::VortexSpectrum => {
                 CabinetCreativeMode::Baseline
             }
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
             Self::DiagonalAurora => CabinetColorMode::DiagonalAurora,
+            Self::VortexSpectrum => CabinetColorMode::VortexSpectrum,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -1654,7 +1664,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::DiagonalAurora);
+        assert_eq!(controls.mode, CabinetDemoMode::VortexSpectrum);
     }
 
     #[test]
