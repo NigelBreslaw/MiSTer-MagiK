@@ -663,7 +663,12 @@ fn run_window(
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     loop {
-        let elapsed = Instant::now().saturating_duration_since(started);
+        let wall_elapsed = Instant::now().saturating_duration_since(started);
+        let elapsed = if case.is_some() {
+            Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(status_frames))
+        } else {
+            wall_elapsed
+        };
         if let Some(controls) = controls.as_mut() {
             controls.poll_direction(input.poll());
             renderer.set_cabinet_controls(controls)?;
