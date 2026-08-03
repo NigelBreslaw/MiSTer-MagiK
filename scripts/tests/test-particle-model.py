@@ -138,6 +138,31 @@ class ParticleModelTest(unittest.TestCase):
         self.assertEqual(exact, 0xF800)
         self.assertNotEqual(glow, exact)
 
+    def test_slice_layout_uses_equal_planes_and_keeps_feature_density(self):
+        vertices = [
+            (-0.5, 0.0, -0.5),
+            (0.5, 0.0, 0.5),
+            (-0.5, 1.0, 0.5),
+        ]
+        triangles = [particle_model.Triangle((0, 1, 2), "")]
+        spacing = 0.01
+        points = particle_model.sample_slice_points(
+            vertices,
+            triangles,
+            {},
+            4096,
+            19,
+            spacing,
+        )
+
+        self.assertEqual(len(points), 4096)
+        self.assertGreater(sum(point.flags == 1 for point in points), 800)
+        surface = [point for point in points if point.flags == 0]
+        self.assertGreater(len(surface), 3200)
+        for point in surface:
+            plane = point.xyz[2] / spacing
+            self.assertAlmostEqual(plane, round(plane), places=7)
+
 
 if __name__ == "__main__":
     unittest.main()
