@@ -1117,7 +1117,7 @@ impl ArcadeCabinetFormation {
             }
         };
         if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin {
-            let aurora_phase = (elapsed.as_millis() as usize / 40) & 2_047;
+            let aurora_phase = (elapsed.as_millis() as usize / 20) & 2_047;
             for index in 0..self.options.active_count {
                 let command = self.commands[index];
                 let Some(offset) = command.offset() else {
@@ -1130,7 +1130,8 @@ impl ArcadeCabinetFormation {
                 let primary = match color_mode {
                     CabinetColorMode::ScreenPrism => self.screen_prism[pixel_x + pixel_y * 3],
                     CabinetColorMode::DiagonalAurora => {
-                        self.aurora_ribbon[(pixel_x + pixel_y * 2 + aurora_phase) & 2_047]
+                        self.aurora_ribbon
+                            [((pixel_x + pixel_y * 2) * 2 + aurora_phase) & 2_047]
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
