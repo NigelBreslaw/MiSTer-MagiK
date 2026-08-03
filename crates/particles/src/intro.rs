@@ -85,9 +85,34 @@ impl IntroParticleDensity {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IntroProjectionScale {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl IntroProjectionScale {
+    pub const HDMI: Self = Self { x: 1.0, y: 1.0 };
+
+    #[must_use]
+    pub fn crt(framebuffer_height: usize) -> Self {
+        Self {
+            x: 2.0 / 3.0,
+            y: framebuffer_height as f32 / 720.0,
+        }
+    }
+}
+
+impl Default for IntroProjectionScale {
+    fn default() -> Self {
+        Self::HDMI
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct IntroSceneOptions {
     pub particle_density: IntroParticleDensity,
+    pub projection_scale: IntroProjectionScale,
 }
 
 #[derive(Clone, Copy)]
@@ -195,6 +220,13 @@ impl IntroScene {
         recipe: IntroRecipe,
         options: IntroSceneOptions,
     ) -> Result<Self, String> {
+        if !options.projection_scale.x.is_finite()
+            || options.projection_scale.x <= 0.0
+            || !options.projection_scale.y.is_finite()
+            || options.projection_scale.y <= 0.0
+        {
+            return Err("intro projection scales must be finite and positive".into());
+        }
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         let divisor = options.particle_density.divisor();
@@ -218,8 +250,18 @@ impl IntroScene {
         if magik.positions.len() != steady_particle_count || magik.groups != mister.groups {
             return Err("MagiK target does not match the six-track MiSTer contract".into());
         }
-        let mister_commands = prepare_target_commands(&mister.positions, &recipe, geometry);
-        let magik_commands = prepare_target_commands(&magik.positions, &recipe, geometry);
+        let mister_commands = prepare_target_commands(
+            &mister.positions,
+            &recipe,
+            geometry,
+            options.projection_scale,
+        );
+        let magik_commands = prepare_target_commands(
+            &magik.positions,
+            &recipe,
+            geometry,
+            options.projection_scale,
+        );
         let mister_pivots = std::array::from_fn(|group| {
             let span = mister.groups[group];
             pivot(&mister.positions[span.start..span.start + span.count])
@@ -231,7 +273,16 @@ impl IntroScene {
         let mister_screen: Vec<[f32; 2]> = mister
             .positions
             .iter()
-            .map(|position| project(*position, 0.0, 0.0, &recipe, geometry))
+            .map(|position| {
+                project(
+                    *position,
+                    0.0,
+                    0.0,
+                    &recipe,
+                    geometry,
+                    options.projection_scale,
+                )
+            })
             .collect();
         let scatter_vectors = (0..steady_particle_count)
             .map(|index| {
@@ -320,7 +371,12 @@ impl IntroScene {
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
         let launcher_snapshot =
             vec![Rgb565Pixel(recipe.appearance.background.0); width.saturating_mul(height)];
-        let launcher_commands = prepare_target_commands(&launcher.positions, &recipe, geometry);
+        let launcher_commands = prepare_target_commands(
+            &launcher.positions,
+            &recipe,
+            geometry,
+            options.projection_scale,
+        );
         let launcher_thresholds: Vec<u8> = launcher_commands
             .iter()
             .map(|command| {
@@ -478,9 +534,15 @@ impl IntroScene {
             recipe.steady_particle_count / options.particle_density.divisor(),
             &recipe,
             geometry,
+            options.projection_scale,
         )?;
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_commands = prepare_target_commands(&launcher.positions, &recipe, geometry);
+        let launcher_commands = prepare_target_commands(
+            &launcher.positions,
+            &recipe,
+            geometry,
+            options.projection_scale,
+        );
         let launcher_thresholds = launcher_commands
             .iter()
             .map(|command| {
@@ -791,6 +853,7 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
+            self.options.projection_scale,
             &self.dynamic_positions,
             None,
             &self.magik.palette,
@@ -893,6 +956,7 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
+            self.options.projection_scale,
             &self.dynamic_positions,
             None,
             &self.magik.palette,
@@ -927,6 +991,7 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
+            self.options.projection_scale,
             &self.cabinet_formed,
             Some(&self.cabinet_blocks),
             &self.magik.palette,
@@ -974,6 +1039,7 @@ impl IntroScene {
             destination,
             &self.recipe,
             self.geometry,
+            self.options.projection_scale,
             &self.dynamic_positions,
             None,
             &self.launcher.palette,
@@ -1079,6 +1145,7 @@ fn render_point_cloud(
     destination: &mut [Rgb565Pixel],
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
     target_positions: &[[f32; 3]],
     packed_target_positions: Option<&[PointCloudPositionBlock]>,
     target_palette: &[u8],
@@ -1120,6 +1187,8 @@ fn render_point_cloud(
         recipe.camera.dolly,
         recipe.camera.near_depth,
         recipe.camera.focal_length,
+        projection_scale.x,
+        projection_scale.y,
         geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
         geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
         geometry.width(),
@@ -1128,14 +1197,26 @@ fn render_point_cloud(
     );
     for index in vector_end..target_positions.len() {
         commands[index] =
-            project_yaw_command(target_positions[index], yaw_sin_cos, recipe, geometry);
+            project_yaw_command(
+                target_positions[index],
+                yaw_sin_cos,
+                recipe,
+                geometry,
+                projection_scale,
+            );
     }
     let backend = if vector_end > 0 {
         "point-cloud-neon"
     } else {
         for index in 0..target_positions.len() {
             commands[index] =
-                project_yaw_command(target_positions[index], yaw_sin_cos, recipe, geometry);
+                project_yaw_command(
+                    target_positions[index],
+                    yaw_sin_cos,
+                    recipe,
+                    geometry,
+                    projection_scale,
+                );
         }
         "point-cloud-scalar"
     };
@@ -1583,6 +1664,7 @@ fn prepare_target_commands(
     target_positions: &[[f32; 3]],
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
 ) -> Vec<PointCloudDrawCommand> {
     let mut positions = vec![empty_block(); target_positions.len().div_ceil(PARTICLE_LANES)];
     copy_target_to_blocks(target_positions, &mut positions);
@@ -1599,6 +1681,8 @@ fn prepare_target_commands(
         recipe.camera.dolly,
         recipe.camera.near_depth,
         recipe.camera.focal_length,
+        projection_scale.x,
+        projection_scale.y,
         geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x,
         geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y,
         geometry.width(),
@@ -1606,11 +1690,12 @@ fn prepare_target_commands(
         &mut commands,
     );
     for index in vector_end..target_positions.len() {
-        commands[index] = project_command(target_positions[index], recipe, geometry);
+        commands[index] = project_command(target_positions[index], recipe, geometry, projection_scale);
     }
     if vector_end == 0 {
         for index in 0..target_positions.len() {
-            commands[index] = project_command(target_positions[index], recipe, geometry);
+            commands[index] =
+                project_command(target_positions[index], recipe, geometry, projection_scale);
         }
     }
     commands
@@ -1628,14 +1713,19 @@ fn project_command(
     position: [f32; 3],
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
 ) -> PointCloudDrawCommand {
     let depth = recipe.camera.dolly + position[2];
     if depth <= recipe.camera.near_depth {
         return PointCloudDrawCommand(INVALID_PARTICLE_OFFSET);
     }
     let scale = recipe.camera.focal_length / depth;
-    let x = geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x + position[0] * scale;
-    let y = geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y + position[1] * scale;
+    let x = geometry.width() as f32 * 0.5
+        + recipe.camera.center_offset_x
+        + position[0] * scale * projection_scale.x;
+    let y = geometry.height() as f32 * 0.5
+        + recipe.camera.center_offset_y
+        + position[1] * scale * projection_scale.y;
     if x < 0.0 || y < 0.0 || x >= geometry.width() as f32 || y >= geometry.height() as f32 {
         return PointCloudDrawCommand(INVALID_PARTICLE_OFFSET);
     }
@@ -1651,6 +1741,7 @@ fn project_yaw_command(
     yaw_sin_cos: [f32; 2],
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
 ) -> PointCloudDrawCommand {
     let [sin, cos] = yaw_sin_cos;
     project_command(
@@ -1661,6 +1752,7 @@ fn project_yaw_command(
         ],
         recipe,
         geometry,
+        projection_scale,
     )
 }
 
@@ -1670,6 +1762,7 @@ fn project(
     pitch: f32,
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
 ) -> [f32; 2] {
     let (sin_yaw, cos_yaw) = yaw.sin_cos();
     let (sin_pitch, cos_pitch) = pitch.sin_cos();
@@ -1680,13 +1773,23 @@ fn project(
     let depth = recipe.camera.dolly + rotated_z;
     let scale = recipe.camera.focal_length / depth.max(recipe.camera.near_depth);
     [
-        geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x + rotated_x * scale,
-        geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y + rotated_y * scale,
+        geometry.width() as f32 * 0.5
+            + recipe.camera.center_offset_x
+            + rotated_x * scale * projection_scale.x,
+        geometry.height() as f32 * 0.5
+            + recipe.camera.center_offset_y
+            + rotated_y * scale * projection_scale.y,
     ]
 }
 
-fn launcher_projection_compensation(recipe: &IntroRecipe) -> f32 {
-    recipe.camera.dolly / recipe.camera.focal_length
+fn launcher_projection_compensation(
+    recipe: &IntroRecipe,
+    projection_scale: IntroProjectionScale,
+) -> [f32; 2] {
+    [
+        recipe.camera.dolly / (recipe.camera.focal_length * projection_scale.x),
+        recipe.camera.dolly / (recipe.camera.focal_length * projection_scale.y),
+    ]
 }
 
 fn live_launcher_target_from_snapshot(
@@ -1694,6 +1797,7 @@ fn live_launcher_target_from_snapshot(
     count: usize,
     recipe: &IntroRecipe,
     geometry: SceneGeometry,
+    projection_scale: IntroProjectionScale,
 ) -> Result<PointTarget, String> {
     if pixels.len() != geometry.len() || pixels.len() < count {
         return Err(format!(
@@ -1729,7 +1833,7 @@ fn live_launcher_target_from_snapshot(
     }
     let ties_needed = count.saturating_sub(above);
     let tie_total = histogram[usize::from(threshold)].max(1);
-    let compensation = launcher_projection_compensation(recipe);
+    let compensation = launcher_projection_compensation(recipe, projection_scale);
     let center_x = geometry.width() as f32 * 0.5 + recipe.camera.center_offset_x;
     let center_y = geometry.height() as f32 * 0.5 + recipe.camera.center_offset_y;
     let mut tie_accumulator = 0_usize;
@@ -1756,8 +1860,8 @@ fn live_launcher_target_from_snapshot(
         let x = (offset % geometry.width()) as f32 + 0.5;
         let y = (offset / geometry.width()) as f32 + 0.5;
         positions.push([
-            (x - center_x) * compensation,
-            (y - center_y) * compensation,
+            (x - center_x) * compensation[0],
+            (y - center_y) * compensation[1],
             0.0,
         ]);
         palette.push(nearest_launcher_palette(pixel, &recipe.appearance.palette));
@@ -2036,6 +2140,7 @@ mod tests {
             embedded_intro_recipe().unwrap(),
             IntroSceneOptions {
                 particle_density: IntroParticleDensity::Half,
+                ..IntroSceneOptions::default()
             },
         )
         .unwrap();
@@ -2113,7 +2218,14 @@ mod tests {
             let mut min = [f32::INFINITY; 2];
             let mut max = [f32::NEG_INFINITY; 2];
             for position in &target.positions {
-                let screen = project(*position, 0.0, 0.0, &recipe, geometry);
+                let screen = project(
+                    *position,
+                    0.0,
+                    0.0,
+                    &recipe,
+                    geometry,
+                    IntroProjectionScale::default(),
+                );
                 for axis in 0..2 {
                     min[axis] = min[axis].min(screen[axis]);
                     max[axis] = max[axis].max(screen[axis]);
@@ -2189,25 +2301,105 @@ mod tests {
     fn flat_launcher_target_precompensates_the_camera_to_exact_pixels() {
         let recipe = embedded_intro_recipe().unwrap();
         let geometry = SceneGeometry::new(960, 540, 960).unwrap();
-        let compensation = launcher_projection_compensation(&recipe);
+        let projection_scale = IntroProjectionScale::default();
+        let compensation = launcher_projection_compensation(&recipe, projection_scale);
         let top_left = project(
-            [-480.0 * compensation, -270.0 * compensation, 0.0],
+            [
+                -480.0 * compensation[0],
+                -270.0 * compensation[1],
+                0.0,
+            ],
             0.0,
             0.0,
             &recipe,
             geometry,
+            projection_scale,
         );
         let bottom_right = project(
-            [479.0 * compensation, 269.0 * compensation, 0.0],
+            [
+                479.0 * compensation[0],
+                269.0 * compensation[1],
+                0.0,
+            ],
             0.0,
             0.0,
             &recipe,
             geometry,
+            projection_scale,
         );
         assert!((top_left[0] - 0.0).abs() < 0.001);
         assert!((top_left[1] - 0.0).abs() < 0.001);
         assert!((bottom_right[0] - 959.0).abs() < 0.001);
         assert!((bottom_right[1] - 539.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn crt_projection_centers_the_complete_widescreen_frame() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let authored_compensation = launcher_projection_compensation(
+            &recipe,
+            IntroProjectionScale::default(),
+        );
+        for height in [240, 288, 480, 576] {
+            let geometry = SceneGeometry::new(640, height, 640).unwrap();
+            let projection_scale = IntroProjectionScale::crt(height);
+            let top_left = project(
+                [
+                    -480.0 * authored_compensation[0],
+                    -270.0 * authored_compensation[1],
+                    0.0,
+                ],
+                0.0,
+                0.0,
+                &recipe,
+                geometry,
+                projection_scale,
+            );
+            let bottom_right = project(
+                [
+                    480.0 * authored_compensation[0],
+                    270.0 * authored_compensation[1],
+                    0.0,
+                ],
+                0.0,
+                0.0,
+                &recipe,
+                geometry,
+                projection_scale,
+            );
+
+            assert!((top_left[0] - 0.0).abs() < 0.001);
+            assert!((bottom_right[0] - 640.0).abs() < 0.001);
+            assert!((top_left[1] - height as f32 / 8.0).abs() < 0.001);
+            assert!((bottom_right[1] - height as f32 * 7.0 / 8.0).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn crt_launcher_inverse_projection_returns_to_exact_pixels() {
+        let recipe = embedded_intro_recipe().unwrap();
+        for height in [240, 288, 480, 576] {
+            let geometry = SceneGeometry::new(640, height, 640).unwrap();
+            let projection_scale = IntroProjectionScale::crt(height);
+            let compensation = launcher_projection_compensation(&recipe, projection_scale);
+            let expected = [17.5, height as f32 - 23.5];
+            let center = [geometry.width() as f32 * 0.5, geometry.height() as f32 * 0.5];
+            let projected = project(
+                [
+                    (expected[0] - center[0]) * compensation[0],
+                    (expected[1] - center[1]) * compensation[1],
+                    0.0,
+                ],
+                0.0,
+                0.0,
+                &recipe,
+                geometry,
+                projection_scale,
+            );
+
+            assert!((projected[0] - expected[0]).abs() < 0.001);
+            assert!((projected[1] - expected[1]).abs() < 0.001);
+        }
     }
 
     #[test]

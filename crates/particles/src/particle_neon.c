@@ -323,6 +323,8 @@ size_t mister_magik_cabinet_neon_project_stable(
     float dolly,
     float near_depth,
     float focal_length,
+    float projection_scale_x,
+    float projection_scale_y,
     float center_x,
     float center_y,
     uint32_t width,
@@ -338,6 +340,8 @@ size_t mister_magik_cabinet_neon_project_stable(
     const float32x4_t dolly_v = vdupq_n_f32(dolly);
     const float32x4_t near_v = vdupq_n_f32(near_depth);
     const float32x4_t focal_v = vdupq_n_f32(focal_length);
+    const float32x4_t projection_scale_x_v = vdupq_n_f32(projection_scale_x);
+    const float32x4_t projection_scale_y_v = vdupq_n_f32(projection_scale_y);
     const float32x4_t center_x_v = vdupq_n_f32(center_x);
     const float32x4_t center_y_v = vdupq_n_f32(center_y);
     const float32x4_t zero = vdupq_n_f32(0.0f);
@@ -379,8 +383,14 @@ size_t mister_magik_cabinet_neon_project_stable(
         // conversion to the integer RGB565 pixel command. This matches the
         // qualified original MagiK particle projector.
         const float32x4_t scale = vmulq_f32(focal_v, reciprocal);
-        const float32x4_t x = vaddq_f32(center_x_v, vmulq_f32(rotated_x, scale));
-        const float32x4_t y = vaddq_f32(center_y_v, vmulq_f32(rotated_y, scale));
+        const float32x4_t x = vaddq_f32(
+            center_x_v,
+            vmulq_f32(rotated_x, vmulq_f32(scale, projection_scale_x_v))
+        );
+        const float32x4_t y = vaddq_f32(
+            center_y_v,
+            vmulq_f32(rotated_y, vmulq_f32(scale, projection_scale_y_v))
+        );
         uint32x4_t valid = vandq_u32(depth_valid, vcgeq_f32(x, zero));
         valid = vandq_u32(valid, vcgeq_f32(y, zero));
         valid = vandq_u32(valid, vcltq_f32(x, width_f));

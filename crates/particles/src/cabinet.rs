@@ -1100,6 +1100,8 @@ impl ArcadeCabinetFormation {
             dolly,
             self.recipe.camera.near_depth,
             self.recipe.camera.focal_length,
+            1.0,
+            1.0,
             center_x,
             center_y,
             self.width,
