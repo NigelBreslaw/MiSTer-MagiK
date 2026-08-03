@@ -152,4 +152,23 @@ mod tests {
         assert!(decode_particle_groups(&encoded(&[0; 4]), 8, 1).is_err());
         assert!(decode_particle_groups(&encoded(&[2; 4]), 4, 1).is_err());
     }
+
+    #[test]
+    fn checked_in_intro_groups_match_the_six_track_contract() {
+        for bytes in [
+            include_bytes!("../assets/intro/mister.pgroup").as_slice(),
+            include_bytes!("../assets/intro/magik.pgroup").as_slice(),
+        ] {
+            let groups = decode_particle_groups(bytes, 40_960, 6).unwrap();
+            assert_eq!(groups.spans().len(), 6);
+            assert_eq!(
+                groups
+                    .spans()
+                    .iter()
+                    .map(|span| span.count)
+                    .collect::<Vec<_>>(),
+                [8_192, 4_096, 8_192, 4_096, 8_192, 8_192]
+            );
+        }
+    }
 }

@@ -66,6 +66,13 @@ pub struct PreviewArgs {
 pub enum SceneLabCommand {
     Preview(ScenePreviewArgs),
     AnalyzeCabinetCodegen,
+    GenerateIntroAssets(GenerateIntroAssetsArgs),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Args)]
+pub struct GenerateIntroAssetsArgs {
+    #[arg(long)]
+    output: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -109,6 +116,45 @@ pub fn execute_scene_preview(
     match command {
         SceneLabCommand::Preview(args) => scene_preview(repository, args),
         SceneLabCommand::AnalyzeCabinetCodegen => analyze_cabinet_codegen(repository, reporter),
+        SceneLabCommand::GenerateIntroAssets(args) => generate_intro_assets(repository, args),
+    }
+}
+
+fn generate_intro_assets(repository: &Path, args: &GenerateIntroAssetsArgs) -> AgentResult<()> {
+    let lab = repository.join(LAB_DIR);
+    let output = if args.output.is_absolute() {
+        args.output.clone()
+    } else {
+        repository.join(&args.output)
+    };
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&lab)
+        .args([
+            "run",
+            "--locked",
+            "--features",
+            "asset-tools",
+            "--bin",
+            "generate-intro-assets",
+            "--",
+        ])
+        .arg(output)
+        .stdin(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot start intro asset generator: {error}"))?;
+    let status = process::wait(
+        &mut child,
+        Some(BUILD_DEADLINE),
+        "intro asset generator",
+        None,
+        || Ok(()),
+    )?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("intro asset generator exited with {status}").into())
     }
 }
 
