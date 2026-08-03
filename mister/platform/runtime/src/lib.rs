@@ -17,6 +17,8 @@ pub mod boot_analytics;
 pub mod display_resolution;
 pub mod fpga;
 pub mod framebuffer;
+#[cfg(all(feature = "framebuffer-lab", target_os = "linux"))]
+pub mod lab_input;
 pub mod latch_readiness;
 #[cfg(feature = "app-runtime")]
 pub mod runtime_status;

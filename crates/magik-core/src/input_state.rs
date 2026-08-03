@@ -17,6 +17,51 @@ pub const JS_EVENT_AXIS: u8 = 0x02;
 const AXIS_MAX: f32 = 32767.0;
 const STICK_DEADZONE: f32 = 8000.0;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectionalState {
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl DirectionalState {
+    #[must_use]
+    pub const fn from_pad(state: &PadState) -> Self {
+        Self {
+            up: state.dpad_up && !state.dpad_down,
+            down: state.dpad_down && !state.dpad_up,
+            left: state.dpad_left && !state.dpad_right,
+            right: state.dpad_right && !state.dpad_left,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_neutral(self) -> bool {
+        !self.up && !self.down && !self.left && !self.right
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DirectionalEdges {
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+}
+
+impl DirectionalEdges {
+    #[must_use]
+    pub const fn rising(current: DirectionalState, previous: DirectionalState) -> Self {
+        Self {
+            up: current.up && !previous.up,
+            down: current.down && !previous.down,
+            left: current.left && !previous.left,
+            right: current.right && !previous.right,
+        }
+    }
+}
+
 /// Best-guess D-Input map for Retro-bit 2563:0575 (A2 receiver).
 /// D-pad on axes 4/5 confirmed on device; buttons from LEGACY16 manual.
 #[derive(Debug, Clone, Default)]
@@ -519,6 +564,23 @@ fn normalize_stick(v: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn directional_edges_cancel_opposites_and_fire_once() {
+        let pad = PadState {
+            dpad_left: true,
+            dpad_right: true,
+            dpad_up: true,
+            ..PadState::default()
+        };
+        let current = DirectionalState::from_pad(&pad);
+        assert!(!current.left);
+        assert!(!current.right);
+        assert!(current.up);
+        let first = DirectionalEdges::rising(current, DirectionalState::default());
+        assert!(first.up);
+        assert!(!DirectionalEdges::rising(current, current).up);
+    }
 
     fn js_button(number: u8, value: i16) -> PadRawEvent {
         PadRawEvent {

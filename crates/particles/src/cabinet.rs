@@ -31,6 +31,51 @@ pub struct ArcadeCabinetFrameStats {
     pub pixel_writes: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CabinetCreativeMode {
+    #[default]
+    Baseline,
+    Satellites,
+    HistoryEcho,
+    DepthPalette,
+    MicroJitter,
+    All,
+}
+
+impl CabinetCreativeMode {
+    pub const ALL: [Self; 6] = [
+        Self::Baseline,
+        Self::Satellites,
+        Self::HistoryEcho,
+        Self::DepthPalette,
+        Self::MicroJitter,
+        Self::All,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "BASELINE",
+            Self::Satellites => "SATELLITES",
+            Self::HistoryEcho => "HISTORY ECHO",
+            Self::DepthPalette => "DEPTH PALETTE",
+            Self::MicroJitter => "MICRO-JITTER",
+            Self::All => "ALL",
+        }
+    }
+
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CabinetRenderOptions {
+    pub active_count: usize,
+    pub creative_mode: CabinetCreativeMode,
+}
+
 /// Exact extraction of the approved arcade-cabinet particle formation.
 pub struct ArcadeCabinetFormation {
     width: usize,
@@ -46,6 +91,7 @@ pub struct ArcadeCabinetFormation {
     life: Vec<f32>,
     style: Vec<u8>,
     flags: Vec<u8>,
+    options: CabinetRenderOptions,
 }
 
 pub struct CabinetScene {
@@ -61,16 +107,36 @@ impl CabinetScene {
         recipe: CabinetRecipe,
         reusable_buffers: u8,
     ) -> Result<Self, String> {
+        let capacity = recipe.particle_count;
+        Self::new_with_capacity(width, height, recipe, reusable_buffers, capacity)
+    }
+
+    pub fn new_with_capacity(
+        width: usize,
+        height: usize,
+        recipe: CabinetRecipe,
+        reusable_buffers: u8,
+        capacity: usize,
+    ) -> Result<Self, String> {
         if reusable_buffers == 0 {
             return Err("cabinet scene requires at least one reusable buffer".into());
         }
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
         Ok(Self {
-            formation: ArcadeCabinetFormation::new(width, height, recipe)?,
+            formation: ArcadeCabinetFormation::new_with_capacity(width, height, recipe, capacity)?,
             geometry,
             reusable_buffers,
         })
+    }
+
+    pub fn set_render_options(&mut self, options: CabinetRenderOptions) -> Result<(), String> {
+        self.formation.set_render_options(options)
+    }
+
+    #[must_use]
+    pub const fn render_options(&self) -> CabinetRenderOptions {
+        self.formation.render_options()
     }
 
     pub fn from_embedded(
@@ -123,24 +189,44 @@ impl ArcadeCabinetFormation {
     }
 
     pub fn new(width: usize, height: usize, recipe: CabinetRecipe) -> Result<Self, String> {
+        let capacity = recipe.particle_count;
+        Self::new_with_capacity(width, height, recipe, capacity)
+    }
+
+    pub fn new_with_capacity(
+        width: usize,
+        height: usize,
+        recipe: CabinetRecipe,
+        capacity: usize,
+    ) -> Result<Self, String> {
         if width == 0 || height == 0 {
             return Err("arcade cabinet formation requires a non-empty viewport".into());
         }
-        let particle_count = recipe.particle_count;
+        if capacity < recipe.particle_count {
+            return Err(format!(
+                "arcade cabinet capacity {capacity} is below recipe count {}",
+                recipe.particle_count
+            ));
+        }
+        let active_count = recipe.particle_count;
         let mut renderer = Self {
             width,
             height,
             recipe,
-            target_x: vec![0.0; particle_count],
-            target_y: vec![0.0; particle_count],
-            target_z: vec![0.0; particle_count],
-            source_x: vec![0.0; particle_count],
-            source_y: vec![0.0; particle_count],
-            source_z: vec![0.0; particle_count],
-            random: vec![0; particle_count],
-            life: vec![0.0; particle_count],
-            style: vec![0; particle_count],
-            flags: vec![0; particle_count],
+            target_x: vec![0.0; capacity],
+            target_y: vec![0.0; capacity],
+            target_z: vec![0.0; capacity],
+            source_x: vec![0.0; capacity],
+            source_y: vec![0.0; capacity],
+            source_z: vec![0.0; capacity],
+            random: vec![0; capacity],
+            life: vec![0.0; capacity],
+            style: vec![0; capacity],
+            flags: vec![0; capacity],
+            options: CabinetRenderOptions {
+                active_count,
+                creative_mode: CabinetCreativeMode::Baseline,
+            },
         };
         renderer.initialize()?;
         Ok(renderer)
@@ -148,7 +234,29 @@ impl ArcadeCabinetFormation {
 
     #[must_use]
     pub const fn particle_count(&self) -> usize {
-        self.recipe.particle_count
+        self.options.active_count
+    }
+
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.target_x.len()
+    }
+
+    pub fn set_render_options(&mut self, options: CabinetRenderOptions) -> Result<(), String> {
+        if options.active_count == 0 || options.active_count > self.capacity() {
+            return Err(format!(
+                "cabinet active count {} is outside 1..={}",
+                options.active_count,
+                self.capacity()
+            ));
+        }
+        self.options = options;
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn render_options(&self) -> CabinetRenderOptions {
+        self.options
     }
 
     #[must_use]
@@ -192,7 +300,7 @@ impl ArcadeCabinetFormation {
         let mut visible = 0usize;
         let mut pixel_writes = 0usize;
 
-        for index in 0..self.recipe.particle_count {
+        for index in 0..self.options.active_count {
             let formed_x =
                 self.source_x[index] + (self.target_x[index] - self.source_x[index]) * formation;
             let formed_y =
@@ -250,7 +358,7 @@ impl ArcadeCabinetFormation {
         }
 
         Ok(ArcadeCabinetFrameStats {
-            particles: self.recipe.particle_count,
+            particles: self.options.active_count,
             visible,
             pixel_writes,
         })
@@ -258,7 +366,7 @@ impl ArcadeCabinetFormation {
 
     fn initialize(&mut self) -> Result<(), String> {
         let mut state = fold_seed(self.recipe.seed);
-        for index in 0..self.recipe.particle_count {
+        for index in 0..self.capacity() {
             state = xorshift32(state);
             self.random[index] = state;
             self.source_x[index] =

@@ -1,13 +1,14 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 use mister_magik_framebuffer_scene_lab::LiveParticleRenderer;
 use mister_magik_framebuffer_scene_lab::{
-    DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer, NavigationFixture,
-    NavigationFixtureScene, read_effect_recipe,
+    CABINET_LAB_MAX_PARTICLES, DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer,
+    NavigationFixture, NavigationFixtureScene, read_effect_recipe,
 };
-use mister_magik_particles::cabinet::Rgb565Pixel;
+use mister_magik_particles::cabinet::{CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel};
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -16,6 +17,9 @@ use std::time::Duration;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
+const CABINET_DEFAULT_PARTICLES: usize = 48_128;
+const CABINET_MIN_PARTICLES: usize = 1_024;
+const CABINET_PARTICLE_STEP: usize = 1_024;
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
@@ -165,11 +169,19 @@ impl LabScene {
         }
     }
 
-    #[cfg(target_os = "macos")]
     fn effect(&self) -> EffectKind {
         match self {
             Self::Particle(renderer) => renderer.effect(),
             Self::Navigation(_) => EffectKind::NavigationTransition,
+        }
+    }
+
+    fn set_cabinet_controls(&mut self, controls: &CabinetLabControls) -> Result<(), String> {
+        match self {
+            Self::Particle(renderer) if renderer.effect() == EffectKind::Cabinet => {
+                renderer.set_cabinet_render_options(controls.render_options())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -195,6 +207,283 @@ impl LabScene {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LabAction {
+    PreviousMode,
+    NextMode,
+    IncreaseParticles,
+    DecreaseParticles,
+}
+
+struct CabinetLabControls {
+    mode: CabinetCreativeMode,
+    particles: usize,
+    previous_direction: DirectionalState,
+    hud: CabinetHud,
+}
+
+impl CabinetLabControls {
+    fn new() -> Self {
+        let mode = CabinetCreativeMode::Baseline;
+        let particles = CABINET_DEFAULT_PARTICLES;
+        Self {
+            mode,
+            particles,
+            previous_direction: DirectionalState::default(),
+            hud: CabinetHud::new(mode, particles),
+        }
+    }
+
+    const fn render_options(&self) -> CabinetRenderOptions {
+        CabinetRenderOptions {
+            active_count: self.particles,
+            creative_mode: self.mode,
+        }
+    }
+
+    fn poll_direction(&mut self, direction: DirectionalState) {
+        let edges = DirectionalEdges::rising(direction, self.previous_direction);
+        self.previous_direction = direction;
+        if edges.left != edges.right {
+            self.apply(if edges.left {
+                LabAction::PreviousMode
+            } else {
+                LabAction::NextMode
+            });
+        }
+        if edges.up != edges.down {
+            self.apply(if edges.up {
+                LabAction::IncreaseParticles
+            } else {
+                LabAction::DecreaseParticles
+            });
+        }
+    }
+
+    fn apply(&mut self, action: LabAction) {
+        match action {
+            LabAction::PreviousMode => {
+                let index = self.mode.index();
+                self.mode = CabinetCreativeMode::ALL
+                    [(index + CabinetCreativeMode::ALL.len() - 1) % CabinetCreativeMode::ALL.len()];
+            }
+            LabAction::NextMode => {
+                self.mode = CabinetCreativeMode::ALL
+                    [(self.mode.index() + 1) % CabinetCreativeMode::ALL.len()];
+            }
+            LabAction::IncreaseParticles => {
+                self.particles = self
+                    .particles
+                    .saturating_add(CABINET_PARTICLE_STEP)
+                    .min(CABINET_LAB_MAX_PARTICLES);
+            }
+            LabAction::DecreaseParticles => {
+                self.particles = self
+                    .particles
+                    .saturating_sub(CABINET_PARTICLE_STEP)
+                    .max(CABINET_MIN_PARTICLES);
+            }
+        }
+        self.hud.update(self.mode, self.particles);
+    }
+
+    fn draw_hud(&self, pixels: &mut [Rgb565Pixel]) {
+        self.hud.draw(pixels);
+    }
+}
+
+const HUD_X: usize = 8;
+const HUD_Y: usize = 8;
+const HUD_WIDTH: usize = 288;
+const HUD_HEIGHT: usize = 42;
+
+struct CabinetHud {
+    pixels: Vec<Rgb565Pixel>,
+}
+
+impl CabinetHud {
+    fn new(mode: CabinetCreativeMode, particles: usize) -> Self {
+        let mut hud = Self {
+            pixels: vec![Rgb565Pixel(0); HUD_WIDTH * HUD_HEIGHT],
+        };
+        hud.update(mode, particles);
+        hud
+    }
+
+    fn update(&mut self, mode: CabinetCreativeMode, particles: usize) {
+        self.pixels.fill(Rgb565Pixel(0));
+        let mode_line = format!(
+            "MODE {}/{}  {}",
+            mode.index() + 1,
+            CabinetCreativeMode::ALL.len(),
+            mode.label()
+        );
+        let count_line = format!("PARTICLES {},{:03}", particles / 1_000, particles % 1_000);
+        draw_hud_text(&mut self.pixels, 6, 5, &mode_line, Rgb565Pixel(0xffa0));
+        draw_hud_text(&mut self.pixels, 6, 23, &count_line, Rgb565Pixel(0x07ff));
+    }
+
+    fn draw(&self, destination: &mut [Rgb565Pixel]) {
+        if destination.len() != DEFAULT_WIDTH * DEFAULT_HEIGHT {
+            return;
+        }
+        for row in 0..HUD_HEIGHT {
+            let source = &self.pixels[row * HUD_WIDTH..(row + 1) * HUD_WIDTH];
+            let offset = (HUD_Y + row) * DEFAULT_WIDTH + HUD_X;
+            destination[offset..offset + HUD_WIDTH].copy_from_slice(source);
+        }
+    }
+}
+
+fn draw_hud_text(
+    destination: &mut [Rgb565Pixel],
+    origin_x: usize,
+    origin_y: usize,
+    text: &str,
+    color: Rgb565Pixel,
+) {
+    for (character_index, character) in text.chars().enumerate() {
+        let rows = hud_glyph(character);
+        let x = origin_x + character_index * 12;
+        for (row, bits) in rows.into_iter().enumerate() {
+            for column in 0..5 {
+                if bits & (1 << (4 - column)) == 0 {
+                    continue;
+                }
+                for scale_y in 0..2 {
+                    for scale_x in 0..2 {
+                        let pixel_x = x + column * 2 + scale_x;
+                        let pixel_y = origin_y + row * 2 + scale_y;
+                        if pixel_x < HUD_WIDTH && pixel_y < HUD_HEIGHT {
+                            destination[pixel_y * HUD_WIDTH + pixel_x] = color;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::unreadable_literal)]
+const fn hud_glyph(character: char) -> [u8; 7] {
+    match character {
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b10010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        '-' => [0, 0, 0, 0b11111, 0, 0, 0],
+        '/' => [
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ],
+        ',' => [0, 0, 0, 0, 0, 0b00100, 0b01000],
+        _ => [0; 7],
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn run_window(source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
@@ -209,9 +498,12 @@ fn run_window(source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
 
     let mut renderer = LabScene::start(source)?;
+    let mut controls = (renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
+    let mut input = FramebufferLabInput::open();
     let (destination_width, destination_height) = destination
         .ok_or("MiSTer startup particle preview requires an explicit scanout destination")?;
     let mut presenter = HiddenLatchPresenter::open_scaled(
@@ -248,6 +540,10 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
     let mut repeated_presentations = 0_u64;
     loop {
         let elapsed = Instant::now().saturating_duration_since(started);
+        if let Some(controls) = controls.as_mut() {
+            controls.poll_direction(input.poll());
+            renderer.set_cabinet_controls(controls)?;
+        }
         let writable_slot = presenter.writable_slot_index();
         let pixels = presenter.pixels_mut();
         // SAFETY: both pixel types are repr(transparent) wrappers around u16,
@@ -257,11 +553,14 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
         };
         let render_started = Instant::now();
         let stats = renderer.render_buffer(
-            pixels,
+            &mut *pixels,
             writable_slot - 1,
             elapsed,
             Some(elapsed.saturating_add(FRAME_DURATION)),
         )?;
+        if let Some(controls) = controls.as_ref() {
+            controls.draw_hud(pixels);
+        }
         render_samples_us.push(render_started.elapsed().as_micros() as u64);
         if let Some(stages) = stats.magik_stages {
             clear_samples_us.push(stages.clear_us);
@@ -579,11 +878,13 @@ mod macos {
         fps: f64,
         last_title: String,
         render_error: Option<String>,
+        controls: Option<CabinetLabControls>,
     }
 
     impl ParticleLabApplication {
         pub(super) fn new(source: SceneSource) -> Result<Self, String> {
             let renderer = LabScene::start(source)?;
+            let controls = (renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
             let now = Instant::now();
             Ok(Self {
                 renderer,
@@ -598,6 +899,7 @@ mod macos {
                 fps: 0.0,
                 last_title: String::new(),
                 render_error: None,
+                controls,
             })
         }
 
@@ -655,6 +957,13 @@ mod macos {
                 return;
             };
             let elapsed = self.epoch.elapsed();
+            if let Some(controls) = self.controls.as_ref() {
+                if let Err(error) = self.renderer.set_cabinet_controls(controls) {
+                    self.render_error = Some(error);
+                    self.update_title();
+                    return;
+                }
+            }
             if let Err(error) = self.renderer.render_buffer(
                 &mut self.pixels,
                 0,
@@ -664,6 +973,9 @@ mod macos {
                 self.render_error = Some(error);
                 self.update_title();
                 return;
+            }
+            if let Some(controls) = self.controls.as_ref() {
+                controls.draw_hud(&mut self.pixels);
             }
             self.render_error = None;
             self.fps_frames = self.fps_frames.saturating_add(1);
@@ -733,6 +1045,23 @@ mod macos {
                         && matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
                     event_loop.exit();
+                }
+                WindowEvent::KeyboardInput { event, .. }
+                    if event.state == ElementState::Pressed && !event.repeat =>
+                {
+                    let action = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => Some(LabAction::PreviousMode),
+                        PhysicalKey::Code(KeyCode::ArrowRight) => Some(LabAction::NextMode),
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some(LabAction::IncreaseParticles),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some(LabAction::DecreaseParticles),
+                        _ => None,
+                    };
+                    if let (Some(controls), Some(action)) = (self.controls.as_mut(), action) {
+                        controls.apply(action);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                    }
                 }
                 WindowEvent::Resized(_) => {
                     if let Some(window) = self.window.as_ref() {
@@ -921,6 +1250,55 @@ mod tests {
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0xf800)), [255, 0, 0]);
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0x07e0)), [0, 255, 0]);
         assert_eq!(rgb565_to_rgb888(Rgb565Pixel(0x001f)), [0, 0, 255]);
+    }
+
+    #[test]
+    fn cabinet_controls_use_rising_edges_exact_steps_and_wrap_modes() {
+        let mut controls = CabinetLabControls::new();
+        controls.poll_direction(DirectionalState {
+            up: true,
+            right: true,
+            ..DirectionalState::default()
+        });
+        assert_eq!(controls.particles, 49_152);
+        assert_eq!(controls.mode, CabinetCreativeMode::Satellites);
+
+        controls.poll_direction(DirectionalState {
+            up: true,
+            right: true,
+            ..DirectionalState::default()
+        });
+        assert_eq!(controls.particles, 49_152);
+        assert_eq!(controls.mode, CabinetCreativeMode::Satellites);
+
+        controls.poll_direction(DirectionalState::default());
+        controls.apply(LabAction::PreviousMode);
+        assert_eq!(controls.mode, CabinetCreativeMode::Baseline);
+        controls.apply(LabAction::PreviousMode);
+        assert_eq!(controls.mode, CabinetCreativeMode::All);
+    }
+
+    #[test]
+    fn cabinet_controls_clamp_to_interactive_capacity() {
+        let mut controls = CabinetLabControls::new();
+        for _ in 0..100 {
+            controls.apply(LabAction::IncreaseParticles);
+        }
+        assert_eq!(controls.particles, CABINET_LAB_MAX_PARTICLES);
+        for _ in 0..100 {
+            controls.apply(LabAction::DecreaseParticles);
+        }
+        assert_eq!(controls.particles, CABINET_MIN_PARTICLES);
+    }
+
+    #[test]
+    fn cabinet_hud_draws_inside_the_top_left_panel() {
+        let hud = CabinetHud::new(CabinetCreativeMode::MicroJitter, 48_128);
+        let mut pixels = vec![Rgb565Pixel(0x1234); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+        hud.draw(&mut pixels);
+        assert_eq!(pixels[HUD_Y * DEFAULT_WIDTH + HUD_X], Rgb565Pixel(0));
+        assert!(pixels.iter().any(|pixel| *pixel == Rgb565Pixel(0xffa0)));
+        assert!(pixels.iter().any(|pixel| *pixel == Rgb565Pixel(0x07ff)));
     }
 
     #[test]

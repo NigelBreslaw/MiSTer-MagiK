@@ -10,7 +10,7 @@ use mister_magik_framebuffer_scenes::navigation::{
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
 };
-use mister_magik_particles::cabinet::CabinetScene;
+use mister_magik_particles::cabinet::{CabinetRenderOptions, CabinetScene};
 use mister_magik_particles::engine::ParticlePreset;
 use mister_magik_particles::magik::{MagikScene, MagikSceneOptions, MagikSceneStats};
 use mister_magik_particles::recipes::{
@@ -318,6 +318,8 @@ pub struct FocusedParticleRenderer {
     geometry: SceneGeometry,
 }
 
+pub const CABINET_LAB_MAX_PARTICLES: usize = 72_704;
+
 enum PreparedEffect {
     Magik(Box<MagikScene>),
     Cabinet(Box<CabinetScene>),
@@ -340,7 +342,13 @@ impl FocusedParticleRenderer {
                 )?))
             }
             EffectRecipe::Cabinet(recipe) => {
-                PreparedEffect::Cabinet(Box::new(CabinetScene::new(width, height, recipe, 2)?))
+                PreparedEffect::Cabinet(Box::new(CabinetScene::new_with_capacity(
+                    width,
+                    height,
+                    recipe,
+                    2,
+                    CABINET_LAB_MAX_PARTICLES,
+                )?))
             }
         };
         Self::with_effect(width, height, effect)
@@ -361,7 +369,13 @@ impl FocusedParticleRenderer {
                 )?,
             )),
             EffectRecipe::Cabinet(recipe) => {
-                PreparedEffect::Cabinet(Box::new(CabinetScene::new(width, height, recipe, 2)?))
+                PreparedEffect::Cabinet(Box::new(CabinetScene::new_with_capacity(
+                    width,
+                    height,
+                    recipe,
+                    2,
+                    CABINET_LAB_MAX_PARTICLES,
+                )?))
             }
         };
         Self::with_effect(width, height, effect)
@@ -428,6 +442,16 @@ impl FocusedParticleRenderer {
             }
         }
     }
+
+    pub fn set_cabinet_render_options(
+        &mut self,
+        options: CabinetRenderOptions,
+    ) -> Result<(), String> {
+        match &mut self.effect {
+            PreparedEffect::Cabinet(renderer) => renderer.set_render_options(options),
+            PreparedEffect::Magik(_) => Err("cabinet controls require the cabinet scene".into()),
+        }
+    }
 }
 
 fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
@@ -456,6 +480,7 @@ pub struct LiveParticleRenderer {
     generation: u64,
     status_state: StartupParticleStatusState,
     last_error: Option<String>,
+    cabinet_options: Option<CabinetRenderOptions>,
 }
 
 struct PreparedCandidate {
@@ -526,6 +551,7 @@ impl LiveParticleRenderer {
             generation: 0,
             status_state: StartupParticleStatusState::Applied,
             last_error: None,
+            cabinet_options: None,
         })
     }
 
@@ -567,10 +593,22 @@ impl LiveParticleRenderer {
         if let Err(error) = self.apply_latest(elapsed) {
             self.last_error = Some(error);
         }
+        if let Some(options) = self.cabinet_options {
+            self.renderer.set_cabinet_render_options(options)?;
+        }
         let logical_elapsed = elapsed.saturating_sub(self.logical_origin);
         let logical_next = next_elapsed.map(|next| next.saturating_sub(self.logical_origin));
         self.renderer
             .render_buffer(destination, buffer_id, logical_elapsed, logical_next)
+    }
+
+    pub fn set_cabinet_render_options(
+        &mut self,
+        options: CabinetRenderOptions,
+    ) -> Result<(), String> {
+        self.renderer.set_cabinet_render_options(options)?;
+        self.cabinet_options = Some(options);
+        Ok(())
     }
 
     fn apply_latest(&mut self, elapsed: Duration) -> Result<(), String> {
