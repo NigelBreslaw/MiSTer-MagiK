@@ -519,6 +519,8 @@ impl IntroScene {
             .checked_div(60)
             .unwrap_or(0)
             % wait_duration_ms;
+        let wait_duration_frames = wait_duration_ms.saturating_mul(60).div_ceil(1_000).max(1);
+        let wait_loop_frame = waiting_frame % wait_duration_frames;
         let rendered = self.render_cabinet_orbit(
             target.pixels_mut(),
             cue_elapsed_ms,
@@ -526,7 +528,7 @@ impl IntroScene {
             wait_start_turns,
             wait_turns,
             self.cabinet_formation * 100.0,
-            waiting_frame,
+            wait_loop_frame,
         );
         Ok(IntroFrameStats {
             particles: self.recipe.steady_particle_count,
@@ -1913,13 +1915,11 @@ mod tests {
     fn live_test_snapshot(geometry: SceneGeometry) -> Vec<Rgb565Pixel> {
         let mut pixels = vec![Rgb565Pixel(0x0841); geometry.len()];
         let live_width = geometry.width() * 3 / 4;
+        let ui_colors = [0x07d9, 0xf7de, 0x5aeb, 0xffff];
         for y in 0..geometry.height() {
             for x in 0..live_width {
-                pixels[y * geometry.width() + x] = if (x / 16 + y / 16) & 1 == 0 {
-                    Rgb565Pixel(0x07d9)
-                } else {
-                    Rgb565Pixel(0xf7de)
-                };
+                pixels[y * geometry.width() + x] =
+                    Rgb565Pixel(ui_colors[(x / 16 + y / 16) & 3]);
             }
         }
         pixels
