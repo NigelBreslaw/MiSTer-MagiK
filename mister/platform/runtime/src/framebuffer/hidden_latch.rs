@@ -72,6 +72,26 @@ pub struct HiddenLatchPresentReceipt {
     pub drop_count: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HiddenLatchPostReceipt {
+    pub slot_index: u8,
+    pub sequence: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HiddenLatchPipelineStats {
+    pub status_reads: u64,
+    pub poll_reads: u64,
+    pub settle_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingPresentation {
+    slot_index: u8,
+    sequence: u16,
+    base: u32,
+}
+
 /// Owns both hidden scanout slots and publishes one completed RGB565 frame at a time.
 pub struct HiddenLatchPresenter {
     fpga: Fpga,
@@ -83,6 +103,8 @@ pub struct HiddenLatchPresenter {
     height: u16,
     geometry: LatchedFbufGeometry,
     settle_timeout: Duration,
+    pending: Option<PendingPresentation>,
+    pipeline_stats: HiddenLatchPipelineStats,
 }
 
 impl HiddenLatchPresenter {
@@ -141,6 +163,8 @@ impl HiddenLatchPresenter {
                 0,
             ),
             settle_timeout: DEFAULT_SETTLE_TIMEOUT,
+            pending: None,
+            pipeline_stats: HiddenLatchPipelineStats::default(),
         })
     }
 
@@ -185,26 +209,73 @@ impl HiddenLatchPresenter {
 
     #[must_use]
     pub const fn writable_slot_index(&self) -> u8 {
+        assert!(
+            self.pending.is_none(),
+            "pending latch post must settle before slot access"
+        );
         self.writable_slot as u8 + 1
+    }
+
+    #[must_use]
+    pub const fn pipeline_stats(&self) -> HiddenLatchPipelineStats {
+        self.pipeline_stats
     }
 
     /// Returns the inactive slot selected after the previous verified presentation.
     pub fn pixels_mut(&mut self) -> &mut [Rgb565] {
+        assert!(
+            self.pending.is_none(),
+            "pending latch post must settle before pixel access"
+        );
         self.slots[self.writable_slot].pixels_mut()
     }
 
-    /// Publishes current slot writes, posts through the existing v4 protocol, and
-    /// waits for a bounded verified flip before exposing the other slot.
-    pub fn present(&mut self) -> Result<HiddenLatchPresentReceipt, HiddenLatchError> {
-        let before = wait_for_settled_status(&mut self.fpga, self.settle_timeout)?;
-        let expected_slot = writable_slot_for_status(self.bases, before)?;
-        if expected_slot != self.writable_slot {
+    /// Verifies a previously posted frame and exposes the other slot for writing.
+    /// In a paced loop this normally performs one status transaction after the
+    /// vblank deadline; bounded polling remains the late-flip recovery path.
+    pub fn settle_pending(
+        &mut self,
+    ) -> Result<Option<HiddenLatchPresentReceipt>, HiddenLatchError> {
+        let Some(pending) = self.pending.take() else {
+            return Ok(None);
+        };
+        let started = Instant::now();
+        let (after, status_reads) = wait_for_posted_status(
+            &mut self.fpga,
+            self.settle_timeout,
+            pending.sequence,
+            pending.base,
+        )?;
+        self.pipeline_stats.status_reads = self
+            .pipeline_stats
+            .status_reads
+            .saturating_add(status_reads);
+        self.pipeline_stats.poll_reads = self
+            .pipeline_stats
+            .poll_reads
+            .saturating_add(status_reads.saturating_sub(1));
+        self.pipeline_stats.settle_us = self
+            .pipeline_stats
+            .settle_us
+            .saturating_add(started.elapsed().as_micros() as u64);
+        self.writable_slot = 1 - self.writable_slot;
+        Ok(Some(HiddenLatchPresentReceipt {
+            slot_index: pending.slot_index,
+            sequence: pending.sequence,
+            flip_count: after.flip_count,
+            post_count: after.post_count,
+            drop_count: after.drop_count,
+        }))
+    }
+
+    /// Publishes the current writable slot without waiting for its vblank flip.
+    pub fn post(&mut self) -> Result<HiddenLatchPostReceipt, HiddenLatchError> {
+        if let Some(pending) = self.pending {
             return Err(HiddenLatchError::NoWritableSlot(format!(
-                "selected slot {} became active before post",
-                self.writable_slot + 1
+                "sequence {} is still pending verification",
+                pending.sequence
             )));
         }
-
         self.slots[self.writable_slot].publish_writes();
         let sequence = self.sequence;
         self.sequence = next_sequence(sequence);
@@ -228,14 +299,23 @@ impl HiddenLatchPresenter {
                 post.ack_high, post.ack_low
             )));
         }
-        let after = wait_for_posted_status(&mut self.fpga, self.settle_timeout, sequence, base)?;
-        self.writable_slot = 1 - self.writable_slot;
-        Ok(HiddenLatchPresentReceipt {
+        self.pending = Some(PendingPresentation {
             slot_index,
             sequence,
-            flip_count: after.flip_count,
-            post_count: after.post_count,
-            drop_count: after.drop_count,
+            base,
+        });
+        Ok(HiddenLatchPostReceipt {
+            slot_index,
+            sequence,
+        })
+    }
+
+    /// Publishes current slot writes, posts through the existing v4 protocol, and
+    /// waits for a bounded verified flip before exposing the other slot.
+    pub fn present(&mut self) -> Result<HiddenLatchPresentReceipt, HiddenLatchError> {
+        self.post()?;
+        self.settle_pending()?.ok_or_else(|| {
+            HiddenLatchError::PostNotObserved("posted frame lost pending state".into())
         })
     }
 }
@@ -289,16 +369,18 @@ fn wait_for_posted_status(
     timeout: Duration,
     sequence: u16,
     base: u32,
-) -> Result<LatchedFbufStatus, HiddenLatchError> {
+) -> Result<(LatchedFbufStatus, u64), HiddenLatchError> {
     let started = Instant::now();
+    let mut status_reads = 0_u64;
     loop {
         let status = fpga.read_magik_latched_fbuf_status()?;
+        status_reads = status_reads.saturating_add(1);
         if status.supported()
             && !status.pending()
             && status.active_sequence == sequence
             && status.active_base == base
         {
-            return Ok(status);
+            return Ok((status, status_reads));
         }
         if started.elapsed() >= timeout {
             return Err(HiddenLatchError::PostNotObserved(format!(

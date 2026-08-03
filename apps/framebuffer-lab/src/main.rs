@@ -124,12 +124,15 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
     let mut status_started = started;
     let mut status_frames = 0_u64;
     loop {
+        presenter
+            .settle_pending()
+            .map_err(|error| format!("settle hidden RGB565 particle frame: {error}"))?;
         let elapsed = Instant::now().saturating_duration_since(started);
         let slot = presenter.writable_slot_index();
         let stats = renderer.render(presenter.pixels_mut(), slot, elapsed)?;
-        let receipt = presenter
-            .present()
-            .map_err(|error| format!("present hidden RGB565 particle frame: {error}"))?;
+        let post = presenter
+            .post()
+            .map_err(|error| format!("post hidden RGB565 particle frame: {error}"))?;
         status_frames = status_frames.saturating_add(1);
         if status_started.elapsed() >= Duration::from_secs(1) {
             let seconds = status_started.elapsed().as_secs_f64();
@@ -143,8 +146,8 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
                 reload,
                 status_frames as f64 / seconds,
                 stats.visible,
-                receipt.slot_index,
-                receipt.sequence,
+                post.slot_index,
+                post.sequence,
                 error
             );
             status_started = Instant::now();

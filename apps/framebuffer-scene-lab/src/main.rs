@@ -884,6 +884,7 @@ fn run_window(
     let mut prepared_age_samples_us = Vec::with_capacity(64);
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
+    let mut latch_drop_count = 0_u16;
     #[cfg(feature = "profile")]
     let profiler = profile.then(cpu_profile::start).transpose()?;
     #[cfg(not(feature = "profile"))]
@@ -891,6 +892,16 @@ fn run_window(
         return Err("cabinet profiling requires a release-device-profile build".into());
     }
     loop {
+        if let Some(receipt) = presenter
+            .settle_pending()
+            .map_err(|error| format!("settle hidden RGB565 startup particle frame: {error}"))?
+        {
+            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
+                repeated_presentations = repeated_presentations.saturating_add(1);
+            }
+            last_sequence = Some(receipt.sequence);
+            latch_drop_count = receipt.drop_count;
+        }
         let wall_elapsed = Instant::now().saturating_duration_since(started);
         let elapsed = if case.is_some() {
             Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(status_frames))
@@ -952,13 +963,9 @@ fn run_window(
             worker_wait_samples_us.clear();
             prepared_age_samples_us.clear();
         }
-        let receipt = presenter
-            .present()
-            .map_err(|error| format!("present hidden RGB565 startup particle frame: {error}"))?;
-        if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
-            repeated_presentations = repeated_presentations.saturating_add(1);
-        }
-        last_sequence = Some(receipt.sequence);
+        let post = presenter
+            .post()
+            .map_err(|error| format!("post hidden RGB565 startup particle frame: {error}"))?;
         status_frames = status_frames.saturating_add(1);
         if let Some(case) = case
             && started.elapsed() >= Duration::from_secs(60)
@@ -1036,7 +1043,7 @@ fn run_window(
                 )
             };
             println!(
-                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} latch_drop_count={} latch_status_reads={} latch_poll_reads={} latch_settle_us={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.state_label(),
@@ -1053,9 +1060,13 @@ fn run_window(
                 stats.visible,
                 stats.simulation_backend,
                 stats.projection_backend,
-                receipt.slot_index,
-                receipt.sequence,
+                post.slot_index,
+                post.sequence,
                 repeated_presentations,
+                latch_drop_count,
+                presenter.pipeline_stats().status_reads,
+                presenter.pipeline_stats().poll_reads,
+                presenter.pipeline_stats().settle_us,
                 error,
             );
             status_started = Instant::now();
