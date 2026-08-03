@@ -90,6 +90,54 @@ class ParticleModelTest(unittest.TestCase):
             self.assertLessEqual(x + y, 1.0 + 1.0e-7)
             self.assertAlmostEqual(z, 0.0)
 
+    def test_texture_sampling_repeats_and_filters_at_texel_centres(self):
+        texture = particle_model.TextureImage(
+            2,
+            2,
+            bytes(
+                (
+                    255, 0, 0,
+                    0, 255, 0,
+                    0, 0, 255,
+                    255, 255, 255,
+                )
+            ),
+        )
+
+        self.assertEqual(
+            particle_model.sample_texture(texture, (0.25, 0.25)),
+            (255.0, 0.0, 0.0),
+        )
+        self.assertEqual(
+            particle_model.sample_texture(texture, (1.75, -0.25)),
+            (255.0, 255.0, 255.0),
+        )
+        self.assertEqual(
+            particle_model.sample_texture(texture, (0.5, 0.25)),
+            (127.5, 127.5, 0.0),
+        )
+
+    def test_particle_colour_sidecar_is_fixed_width_rgb565(self):
+        point = particle_model.Point(
+            (0.0, 0.0, 0.0),
+            0,
+            0,
+            particle_model.rgb565((255.0, 0.0, 0.0)),
+            particle_model.glow_rgb565((8.0, 4.0, 2.0)),
+        )
+        encoded = particle_model.encode_colors([point])
+
+        self.assertEqual(len(encoded), particle_model.COLOR_HEADER.size + 4)
+        self.assertEqual(
+            particle_model.COLOR_HEADER.unpack_from(encoded),
+            (particle_model.COLOR_MAGIC, 1, 4, 1),
+        )
+        exact, glow = particle_model.COLOR_RECORD.unpack_from(
+            encoded, particle_model.COLOR_HEADER.size
+        )
+        self.assertEqual(exact, 0xF800)
+        self.assertNotEqual(glow, exact)
+
 
 if __name__ == "__main__":
     unittest.main()

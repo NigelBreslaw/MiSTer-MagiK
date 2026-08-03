@@ -10,7 +10,9 @@ import argparse
 import json
 import math
 import random
+import shutil
 import struct
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -22,6 +24,11 @@ VERSION = 1
 STRIDE = 8
 HEADER = struct.Struct("<8sHHI6h")
 RECORD = struct.Struct("<hhhBB")
+COLOR_MAGIC = b"PCOLOR1\0"
+COLOR_VERSION = 1
+COLOR_STRIDE = 4
+COLOR_HEADER = struct.Struct("<8sHHI")
+COLOR_RECORD = struct.Struct("<HH")
 PALETTE = (
     (8, 8, 20),
     (30, 38, 64),
@@ -38,6 +45,8 @@ PALETTE = (
 class Triangle:
     vertices: tuple[int, int, int]
     material: str
+    texture: int | None = None
+    texture_factor: tuple[float, float, float] = (1.0, 1.0, 1.0)
 
 
 @dataclass(frozen=True)
@@ -45,6 +54,27 @@ class Point:
     xyz: tuple[float, float, float]
     palette: int
     flags: int
+    texture_exact: int
+    texture_glow: int
+
+
+@dataclass(frozen=True)
+class TextureImage:
+    width: int
+    height: int
+    rgb: bytes
+
+    def __post_init__(self) -> None:
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("texture dimensions must be positive")
+        if len(self.rgb) != self.width * self.height * 3:
+            raise ValueError("texture RGB payload has the wrong length")
+
+
+@dataclass(frozen=True)
+class EdgeSample:
+    vertices: tuple[int, int]
+    triangle: Triangle
 
 
 def _vector(value: str) -> tuple[float, float, float]:
@@ -159,6 +189,70 @@ def _glb_accessor(
     return [record.unpack_from(binary, start + index * stride) for index in range(accessor["count"])]
 
 
+def _decode_texture_image(payload: bytes) -> TextureImage:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise ValueError("baking GLB texture colours requires ffmpeg on PATH")
+    try:
+        completed = subprocess.run(
+            (
+                ffmpeg,
+                "-v",
+                "error",
+                "-i",
+                "pipe:0",
+                "-frames:v",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "ppm",
+                "pipe:1",
+            ),
+            input=payload,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("ffmpeg timed out decoding the GLB texture") from error
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"ffmpeg cannot decode GLB texture: {detail}")
+    ppm = completed.stdout
+    cursor = 0
+
+    def token() -> bytes:
+        nonlocal cursor
+        while cursor < len(ppm):
+            if ppm[cursor] == ord("#"):
+                cursor = ppm.find(b"\n", cursor)
+                if cursor < 0:
+                    raise ValueError("ffmpeg emitted a truncated PPM comment")
+            elif chr(ppm[cursor]).isspace():
+                cursor += 1
+            else:
+                break
+        start = cursor
+        while cursor < len(ppm) and not chr(ppm[cursor]).isspace():
+            cursor += 1
+        if start == cursor:
+            raise ValueError("ffmpeg emitted a truncated PPM header")
+        return ppm[start:cursor]
+
+    if token() != b"P6":
+        raise ValueError("ffmpeg did not emit a binary RGB PPM")
+    width = int(token())
+    height = int(token())
+    if token() != b"255":
+        raise ValueError("ffmpeg emitted a non-eight-bit PPM")
+    if cursor >= len(ppm) or not chr(ppm[cursor]).isspace():
+        raise ValueError("ffmpeg emitted a malformed PPM header")
+    cursor += 1
+    return TextureImage(width, height, ppm[cursor:])
+
+
 def _matrix_multiply(a: list[float], b: list[float]) -> list[float]:
     result = [0.0] * 16
     for column in range(4):
@@ -181,9 +275,15 @@ def _transform_point(matrix: list[float], point: tuple[float, ...]) -> tuple[flo
     )
 
 
-def load_glb(
-    path: Path,
-) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
+def _load_glb(
+    path: Path, decode_textures: bool
+) -> tuple[
+    list[tuple[float, float, float]],
+    list[Triangle],
+    dict[str, tuple[float, float, float]],
+    list[tuple[float, float] | None],
+    list[TextureImage | None],
+]:
     payload = path.read_bytes()
     if len(payload) < 20 or payload[:4] != b"glTF":
         raise ValueError(f"{path}: invalid GLB header")
@@ -206,13 +306,33 @@ def load_glb(
     vertices: list[tuple[float, float, float]] = []
     triangles: list[Triangle] = []
     colors: dict[str, tuple[float, float, float]] = {}
+    texture_coordinates: list[tuple[float, float] | None] = []
     materials = document.get("materials", [])
+    material_textures: list[int | None] = []
+    material_texture_factors: list[tuple[float, float, float]] = []
     for index, material in enumerate(materials):
         name = material.get("name", f"material-{index}")
-        factor = material.get("pbrMetallicRoughness", {}).get(
-            "baseColorFactor", (0.55, 0.65, 0.8, 1.0)
-        )
-        colors[name] = tuple(float(value) for value in factor[:3])
+        pbr = material.get("pbrMetallicRoughness", {})
+        palette_factor = pbr.get("baseColorFactor", (0.55, 0.65, 0.8, 1.0))
+        texture_factor = pbr.get("baseColorFactor", (1.0, 1.0, 1.0, 1.0))
+        colors[name] = tuple(float(value) for value in palette_factor[:3])
+        texture = pbr.get("baseColorTexture")
+        material_textures.append(int(texture["index"]) if texture is not None else None)
+        material_texture_factors.append(tuple(float(value) for value in texture_factor[:3]))
+    textures: list[TextureImage | None] = [None] * len(document.get("textures", []))
+    if decode_textures:
+        images = document.get("images", [])
+        for texture_index in {index for index in material_textures if index is not None}:
+            texture = document["textures"][texture_index]
+            source = images[texture["source"]]
+            if "bufferView" not in source:
+                raise ValueError("external GLB texture images are not supported")
+            view = document["bufferViews"][source["bufferView"]]
+            start = view.get("byteOffset", 0)
+            end = start + view["byteLength"]
+            if end > len(binary):
+                raise ValueError("GLB texture image exceeds the binary buffer")
+            textures[texture_index] = _decode_texture_image(binary[start:end])
     nodes = document.get("nodes", [])
     parents: dict[int, int] = {}
     for parent, node in enumerate(nodes):
@@ -272,6 +392,14 @@ def load_glb(
             ]
             base = len(vertices)
             vertices.extend(tuple(float(value) for value in position) for position in positions)
+            encoded_uvs = primitive.get("attributes", {}).get("TEXCOORD_0")
+            if encoded_uvs is None:
+                texture_coordinates.extend([None] * len(positions))
+            else:
+                uvs = _glb_accessor(document, binary, encoded_uvs)
+                if len(uvs) != len(positions):
+                    raise ValueError("GLB texture-coordinate count does not match positions")
+                texture_coordinates.extend((float(uv[0]), float(uv[1])) for uv in uvs)
             if "indices" in primitive:
                 indices = [int(value[0]) for value in _glb_accessor(document, binary, primitive["indices"])]
             else:
@@ -284,15 +412,28 @@ def load_glb(
                 if material_index is not None
                 else ""
             )
+            texture = material_textures[material_index] if material_index is not None else None
+            texture_factor = (
+                material_texture_factors[material_index]
+                if material_index is not None
+                else (1.0, 1.0, 1.0)
+            )
             for offset in range(0, len(indices), 3):
                 face = tuple(base + indices[offset + lane] for lane in range(3))
                 if any(index < base or index >= len(vertices) for index in face):
                     raise ValueError("GLB triangle index is out of bounds")
                 a, b, c = (vertices[index] for index in face)
                 if _length(_cross(_sub(b, a), _sub(c, a))) > 1.0e-9:
-                    triangles.append(Triangle(face, material))
+                    triangles.append(Triangle(face, material, texture, texture_factor))
     if not vertices or not triangles:
         raise ValueError(f"{path}: no non-degenerate GLB triangle geometry")
+    return vertices, triangles, colors, texture_coordinates, textures
+
+
+def load_glb(
+    path: Path,
+) -> tuple[list[tuple[float, float, float]], list[Triangle], dict[str, tuple[float, float, float]]]:
+    vertices, triangles, colors, _, _ = _load_glb(path, False)
     return vertices, triangles, colors
 
 
@@ -327,10 +468,55 @@ def palette_class(material: str, colors: dict[str, tuple[float, float, float]]) 
     )
 
 
+def rgb565(color: tuple[float, float, float]) -> int:
+    red, green, blue = (round(max(0.0, min(255.0, value))) for value in color)
+    return ((red * 31 + 127) // 255) << 11 | ((green * 63 + 127) // 255) << 5 | (
+        (blue * 31 + 127) // 255
+    )
+
+
+def glow_rgb565(color: tuple[float, float, float]) -> int:
+    red, green, blue = (max(0.0, min(255.0, value)) for value in color)
+    luma = (54.0 * red + 183.0 * green + 19.0 * blue) / 256.0
+    if luma < 1.0:
+        return rgb565((16.0, 20.0, 40.0))
+    scale = max(1.0, 56.0 / luma)
+    return rgb565((red * scale, green * scale, blue * scale))
+
+
+def sample_texture(texture: TextureImage, uv: tuple[float, float]) -> tuple[float, float, float]:
+    # glTF's default sampler repeats and filters linearly. Subtracting half a
+    # texel matches the normalized-coordinate sampling convention at borders.
+    x = (uv[0] - math.floor(uv[0])) * texture.width - 0.5
+    y = (uv[1] - math.floor(uv[1])) * texture.height - 0.5
+    x0 = math.floor(x)
+    y0 = math.floor(y)
+    x_fraction = x - x0
+    y_fraction = y - y0
+
+    def texel(pixel_x: int, pixel_y: int) -> tuple[int, int, int]:
+        pixel_x %= texture.width
+        pixel_y %= texture.height
+        offset = (pixel_y * texture.width + pixel_x) * 3
+        return tuple(texture.rgb[offset + channel] for channel in range(3))
+
+    top_left = texel(x0, y0)
+    top_right = texel(x0 + 1, y0)
+    bottom_left = texel(x0, y0 + 1)
+    bottom_right = texel(x0 + 1, y0 + 1)
+    return tuple(
+        (top_left[channel] * (1.0 - x_fraction) + top_right[channel] * x_fraction)
+        * (1.0 - y_fraction)
+        + (bottom_left[channel] * (1.0 - x_fraction) + bottom_right[channel] * x_fraction)
+        * y_fraction
+        for channel in range(3)
+    )
+
+
 def edge_sets(
     vertices: list[tuple[float, float, float]], triangles: list[Triangle]
-) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    uses: dict[tuple[int, int], list[tuple[tuple[float, float, float], str]]] = {}
+) -> tuple[list[EdgeSample], list[EdgeSample]]:
+    uses: dict[tuple[int, int], list[tuple[tuple[float, float, float], Triangle]]] = {}
     for triangle in triangles:
         a, b, c = (vertices[index] for index in triangle.vertices)
         normal = _cross(_sub(b, a), _sub(c, a))
@@ -341,14 +527,14 @@ def edge_sets(
             (triangle.vertices[1], triangle.vertices[2]),
             (triangle.vertices[2], triangle.vertices[0]),
         ):
-            uses.setdefault(tuple(sorted((first, second))), []).append((normal, triangle.material))
-    features: list[tuple[int, int]] = []
-    seams: list[tuple[int, int]] = []
+            uses.setdefault(tuple(sorted((first, second))), []).append((normal, triangle))
+    features: list[EdgeSample] = []
+    seams: list[EdgeSample] = []
     for edge, adjacent in uses.items():
         if len(adjacent) == 1 or any(_dot(adjacent[0][0], other[0]) < 0.75 for other in adjacent[1:]):
-            features.append(edge)
-        if len({entry[1] for entry in adjacent}) > 1:
-            seams.append(edge)
+            features.append(EdgeSample(edge, adjacent[0][1]))
+        if len({entry[1].material for entry in adjacent}) > 1:
+            seams.append(EdgeSample(edge, adjacent[0][1]))
     return features, seams
 
 
@@ -367,6 +553,8 @@ def sample_points(
     colors: dict[str, tuple[float, float, float]],
     count: int,
     seed: int,
+    texture_coordinates: list[tuple[float, float] | None] | None = None,
+    textures: list[TextureImage | None] | None = None,
 ) -> list[Point]:
     rng = random.Random(seed)
     features, seams = edge_sets(vertices, triangles)
@@ -375,6 +563,25 @@ def sample_points(
     surface_count = count - edge_count - seam_count
     groups: list[list[Point]] = [[], [], []]
     seen_xyz: set[tuple[int, int, int]] = set()
+
+    def baked_colors(color: tuple[float, float, float]) -> tuple[int, int]:
+        return rgb565(color), glow_rgb565(color)
+
+    def textured_color(
+        triangle: Triangle, uv: tuple[float, float] | None
+    ) -> tuple[float, float, float]:
+        material_color = tuple(
+            value * 255.0 for value in colors.get(triangle.material, (0.55, 0.65, 0.8))
+        )
+        if textures is None or triangle.texture is None or uv is None:
+            return material_color
+        texture = textures[triangle.texture]
+        if texture is None:
+            return material_color
+        sampled = sample_texture(texture, uv)
+        return tuple(
+            sampled[channel] * triangle.texture_factor[channel] for channel in range(3)
+        )
 
     def append_unique(group: list[Point], amount: int, create: Callable[[], Point]) -> None:
         attempts = 0
@@ -390,17 +597,33 @@ def sample_points(
             seen_xyz.add(xyz)
             group.append(point)
 
-    def append_edges(group: list[Point], edges: list[tuple[int, int]], amount: int, flags: int) -> None:
+    def append_edges(
+        group: list[Point], edges: list[EdgeSample], amount: int, flags: int
+    ) -> None:
         if not edges:
             return
-        lengths = [_length(_sub(vertices[b], vertices[a])) for a, b in edges]
+        lengths = [
+            _length(_sub(vertices[edge.vertices[1]], vertices[edge.vertices[0]]))
+            for edge in edges
+        ]
         total = sum(lengths)
 
         def create() -> Point:
             edge = edges[_weighted_choice(rng, lengths, total)]
             value = rng.random()
-            xyz = _add(_mul(vertices[edge[0]], 1.0 - value), _mul(vertices[edge[1]], value))
-            return Point(xyz, 7, flags)
+            first, second = edge.vertices
+            xyz = _add(_mul(vertices[first], 1.0 - value), _mul(vertices[second], value))
+            uv = None
+            if texture_coordinates is not None:
+                first_uv = texture_coordinates[first]
+                second_uv = texture_coordinates[second]
+                if first_uv is not None and second_uv is not None:
+                    uv = (
+                        first_uv[0] * (1.0 - value) + second_uv[0] * value,
+                        first_uv[1] * (1.0 - value) + second_uv[1] * value,
+                    )
+            exact, glow = baked_colors(textured_color(edge.triangle, uv))
+            return Point(xyz, 7, flags, exact, glow)
 
         append_unique(group, amount, create)
 
@@ -418,7 +641,18 @@ def sample_points(
         split = rng.random()
         u, v, w = 1.0 - root, root * (1.0 - split), root * split
         xyz = _add(_add(_mul(a, u), _mul(b, v)), _mul(c, w))
-        return Point(xyz, palette_class(triangle.material, colors), 0)
+        uv = None
+        if texture_coordinates is not None:
+            triangle_uvs = [texture_coordinates[index] for index in triangle.vertices]
+            if all(point_uv is not None for point_uv in triangle_uvs):
+                first, second, third = triangle_uvs
+                assert first is not None and second is not None and third is not None
+                uv = (
+                    first[0] * u + second[0] * v + third[0] * w,
+                    first[1] * u + second[1] * v + third[1] * w,
+                )
+        exact, glow = baked_colors(textured_color(triangle, uv))
+        return Point(xyz, palette_class(triangle.material, colors), 0, exact, glow)
 
     append_unique(groups[2], surface_count, create_surface)
 
@@ -470,21 +704,47 @@ def encode(points: list[Point]) -> bytes:
     return header + b"".join(RECORD.pack(*record) for record in quantized)
 
 
+def encode_colors(points: list[Point]) -> bytes:
+    header = COLOR_HEADER.pack(COLOR_MAGIC, COLOR_VERSION, COLOR_STRIDE, len(points))
+    return header + b"".join(
+        COLOR_RECORD.pack(point.texture_exact, point.texture_glow) for point in points
+    )
+
+
 def compile_model(args: argparse.Namespace) -> int:
     started = time.perf_counter()
     if args.model.suffix.lower() == ".glb":
-        vertices, triangles, colors = load_glb(args.model)
+        vertices, triangles, colors, texture_coordinates, textures = _load_glb(
+            args.model, args.colors_output is not None
+        )
     else:
         vertices, triangles, colors = load_obj(args.model)
+        texture_coordinates = None
+        textures = None
     vertices = transform_and_normalize(vertices, args.up_axis, args.front_axis)
-    points = sample_points(vertices, triangles, colors, args.points, args.seed)
+    points = sample_points(
+        vertices,
+        triangles,
+        colors,
+        args.points,
+        args.seed,
+        texture_coordinates,
+        textures,
+    )
     payload = encode(points)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(payload)
+    color_bytes = 0
+    if args.colors_output is not None:
+        color_payload = encode_colors(points)
+        args.colors_output.parent.mkdir(parents=True, exist_ok=True)
+        args.colors_output.write_bytes(color_payload)
+        color_bytes = len(color_payload)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     print(
         f"particle-model points={len(points)} triangles={len(triangles)} "
-        f"bytes={len(payload)} elapsed_ms={elapsed_ms:.2f} output={args.output}"
+        f"bytes={len(payload)} color_bytes={color_bytes} elapsed_ms={elapsed_ms:.2f} "
+        f"output={args.output}"
     )
     return 0
 
@@ -495,6 +755,7 @@ def parser() -> argparse.ArgumentParser:
     compile_parser = commands.add_parser("compile")
     compile_parser.add_argument("model", type=Path, help="Wavefront OBJ or binary glTF GLB")
     compile_parser.add_argument("--output", type=Path, required=True)
+    compile_parser.add_argument("--colors-output", type=Path)
     compile_parser.add_argument("--points", type=int, default=65_536)
     compile_parser.add_argument("--seed", type=int, default=0x1983)
     compile_parser.add_argument("--up-axis", choices=("x", "y", "z", "-x", "-y", "-z"), default="y")
