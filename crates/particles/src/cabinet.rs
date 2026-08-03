@@ -333,8 +333,7 @@ fn decode_particle_cloud(
         ));
     }
     let output_count = target_x.len();
-    if output_count > count
-        || target_y.len() != output_count
+    if target_y.len() != output_count
         || target_z.len() != output_count
         || life.len() != output_count
         || random.len() != output_count
@@ -378,6 +377,15 @@ fn decode_particle_cloud(
             flags[index] = feature_flags;
             life[index] = unit01(random[index].rotate_left(17));
         }
+    }
+    for index in count..output_count {
+        let source = index % count;
+        target_x[index] = target_x[source];
+        target_y[index] = target_y[source];
+        target_z[index] = target_z[source];
+        style[index] = style[source];
+        flags[index] = flags[source];
+        life[index] = unit01(random[index].rotate_left(17));
     }
     Ok(())
 }
