@@ -2843,6 +2843,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-framebuffer-scenes"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-framebuffer-stream"
 version = "0.1.0"
 
@@ -2876,10 +2880,6 @@ dependencies = [
  "serde_json",
  "slint",
 ]
-
-[[package]]
-name = "mister-magik-framebuffer-scenes"
-version = "0.1.0"
 
 [[package]]
 name = "mister-magik-particles"
