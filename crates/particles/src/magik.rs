@@ -759,22 +759,8 @@ fn prepare_cached_particle_commands(
     if engine.validates_vector_projection() {
         validate_sampled_packed_commands(engine, &cache.commands)?;
     }
-    match update {
-        ProjectionCacheUpdate::None => {
-            if commands.len() != count {
-                commands.clear();
-                commands.extend_from_slice(&cache.commands);
-            }
-        }
-        ProjectionCacheUpdate::Cohort(cohort) if commands.len() == count => {
-            let range = particle_cohort_range(count, usize::from(cohort));
-            commands[range.clone()].copy_from_slice(&cache.commands[range]);
-        }
-        ProjectionCacheUpdate::Cohort(_) | ProjectionCacheUpdate::All => {
-            commands.clear();
-            commands.extend_from_slice(&cache.commands);
-        }
-    }
+    commands.clear();
+    commands.extend_from_slice(&cache.commands);
     Ok(cache.cohort_visible.iter().sum())
 }
 
