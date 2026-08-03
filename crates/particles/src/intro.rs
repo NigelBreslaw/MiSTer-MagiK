@@ -2381,7 +2381,10 @@ mod tests {
             let projection_scale = IntroProjectionScale::crt(height);
             let compensation = launcher_projection_compensation(&recipe, projection_scale);
             let expected = [17.5, height as f32 - 23.5];
-            let center = [geometry.width() as f32 * 0.5, geometry.height() as f32 * 0.5];
+            let center = [
+                geometry.width() as f32 * 0.5,
+                geometry.height() as f32 * 0.5,
+            ];
             let projected = project(
                 [
                     (expected[0] - center[0]) * compensation[0],
