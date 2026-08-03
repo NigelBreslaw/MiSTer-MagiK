@@ -82,6 +82,22 @@ impl CabinetCreativeMode {
     pub const fn index(self) -> usize {
         self as usize
     }
+
+    const fn uses_satellites(self) -> bool {
+        matches!(self, Self::Satellites | Self::All)
+    }
+
+    const fn uses_history_echo(self) -> bool {
+        matches!(self, Self::HistoryEcho | Self::All)
+    }
+
+    const fn uses_depth_palette(self) -> bool {
+        matches!(self, Self::DepthPalette | Self::All)
+    }
+
+    const fn uses_micro_jitter(self) -> bool {
+        matches!(self, Self::MicroJitter | Self::All)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -494,22 +510,12 @@ impl ArcadeCabinetFormation {
         let center_x = self.width as f32 * 0.5 + self.recipe.camera.center_offset_x;
         let center_y = self.height as f32 * 0.5 + self.recipe.camera.center_offset_y;
         let appearance = self.recipe.appearance;
-        let satellite_mode = matches!(
-            self.options.creative_mode,
-            CabinetCreativeMode::Satellites | CabinetCreativeMode::All
-        );
-        let history_mode = matches!(
-            self.options.creative_mode,
-            CabinetCreativeMode::HistoryEcho | CabinetCreativeMode::All
-        ) && (formation < 1.0 || dispersal > 0.0);
-        let depth_palette_mode = matches!(
-            self.options.creative_mode,
-            CabinetCreativeMode::DepthPalette | CabinetCreativeMode::All
-        );
-        let micro_jitter_mode = matches!(
-            self.options.creative_mode,
-            CabinetCreativeMode::MicroJitter | CabinetCreativeMode::All
-        );
+        let creative_mode = self.options.creative_mode;
+        let satellite_mode = creative_mode.uses_satellites();
+        let history_mode =
+            creative_mode.uses_history_echo() && (formation < 1.0 || dispersal > 0.0);
+        let depth_palette_mode = creative_mode.uses_depth_palette();
+        let micro_jitter_mode = creative_mode.uses_micro_jitter();
         let jitter_phase = (self.projection_frame & 3) as u8;
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
@@ -543,6 +549,9 @@ impl ArcadeCabinetFormation {
                 let attribute = $attribute;
                 let lane = $lane;
                 let feature = attribute.flags[lane];
+                // All-mode composition is intentionally ordered: jitter the
+                // position, choose depth color, draw history, draw satellites,
+                // and finally overwrite the center with the current primary.
                 if micro_jitter_mode && feature == 0 && attribute.random[lane] & 1 == 0 {
                     offset = jittered_offset(
                         offset,
@@ -1220,6 +1229,18 @@ mod tests {
             delta == 1 || delta == 32
         }));
         assert_eq!(jittered_offset(0, 32, 32 * 24, 0, 2), 0);
+    }
+
+    #[test]
+    fn all_mode_enables_every_creative_pass() {
+        assert!(CabinetCreativeMode::All.uses_micro_jitter());
+        assert!(CabinetCreativeMode::All.uses_depth_palette());
+        assert!(CabinetCreativeMode::All.uses_history_echo());
+        assert!(CabinetCreativeMode::All.uses_satellites());
+        assert!(!CabinetCreativeMode::Baseline.uses_micro_jitter());
+        assert!(!CabinetCreativeMode::Baseline.uses_depth_palette());
+        assert!(!CabinetCreativeMode::Baseline.uses_history_echo());
+        assert!(!CabinetCreativeMode::Baseline.uses_satellites());
     }
 
     #[test]
