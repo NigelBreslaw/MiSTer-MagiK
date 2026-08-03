@@ -1543,6 +1543,16 @@ fn catalog_hydration_execution_mode(_request: CatalogWorkerRequest) -> CatalogEx
     CatalogExecutionMode::BackgroundInteractive
 }
 
+fn startup_intro_catalog_worker_request(request: CatalogWorkerRequest) -> CatalogWorkerRequest {
+    if request == CatalogWorkerRequest::FreshBuild {
+        CatalogWorkerRequest::FreshBuild
+    } else {
+        // Missing-cache planning maps CheckStamp to InitialBuild, preserving
+        // first-visible Arcade publication before the authoritative full scan.
+        CatalogWorkerRequest::CheckStamp
+    }
+}
+
 fn catalog_taxonomy_sync_required(catalog_ready: bool, source: CatalogSource) -> bool {
     !(catalog_ready && source == CatalogSource::NavigationProjection)
 }
@@ -2674,38 +2684,39 @@ pub(super) fn run_launcher_loop(
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
         && screensaver_start_mode == ScreensaverStartMode::Inactive;
-    let mut startup_intro =
-        if startup_intro_eligible && launcher_presenter.direct_hidden_slots_available(ui) {
-            match PreparedStartupIntro::new(ui.render_w(), ui.render_h()) {
-                Ok(prepared) => match launcher_presenter.take_direct_hidden_frame_buffers() {
-                    Ok(buffers) => {
-                        print_startup_event(
-                            start,
-                            "startup_intro_started",
-                            format!("width={} height={} fps=60", ui.render_w(), ui.render_h()),
-                        );
-                        Some(prepared.attach(buffers))
-                    }
-                    Err(failure) => {
-                        launcher_presenter.fail_latch_completion(failure);
-                        None
-                    }
-                },
-                Err(error) => {
-                    crate::ui_errln!("startup intro preparation failed: {error}");
+    let mut startup_intro = if startup_intro_eligible
+        && launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
+    {
+        match PreparedStartupIntro::new(ui.render_w(), ui.render_h()) {
+            Ok(prepared) => match launcher_presenter.take_direct_hidden_frame_buffers() {
+                Ok(buffers) => {
+                    print_startup_event(
+                        start,
+                        "startup_intro_started",
+                        format!("width={} height={} fps=60", ui.render_w(), ui.render_h()),
+                    );
+                    Some(prepared.attach(buffers))
+                }
+                Err(failure) => {
+                    launcher_presenter.fail_latch_completion(failure);
                     None
                 }
+            },
+            Err(error) => {
+                crate::ui_errln!("startup intro preparation failed: {error}");
+                None
             }
-        } else {
-            if startup_intro_eligible {
-                print_startup_event(
-                    start,
-                    "startup_intro_skipped",
-                    "reason=direct-hidden-route-unavailable",
-                );
-            }
-            None
-        };
+        }
+    } else {
+        if startup_intro_eligible {
+            print_startup_event(
+                start,
+                "startup_intro_skipped",
+                "reason=direct-hidden-route-unavailable",
+            );
+        }
+        None
+    };
     if startup_intro.is_some()
         && let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
@@ -2717,16 +2728,16 @@ pub(super) fn run_launcher_loop(
         )
     {
         print_startup_event(start, "catalog_worker_start", &worker.root);
-        let lifecycle_input =
-            deferred_catalog_worker_lifecycle_input(worker.execution_mode, worker.request);
+        // A missing catalog always needs the first-visible Build operation,
+        // even when a force-refresh request selected Reconcile before the
+        // cache probe. The intro also owns CPU1, so override the ordinary cold
+        // foreground mode at this boundary.
+        let request = startup_intro_catalog_worker_request(worker.request);
+        let execution_mode = CatalogExecutionMode::BackgroundInteractive;
+        let lifecycle_input = deferred_catalog_worker_lifecycle_input(execution_mode, request);
         lifecycle.handle(lifecycle_input, &mut lifecycle_effects);
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        scheduler.start_catalog_worker(
-            worker.root,
-            worker.request,
-            worker.initial_cache,
-            worker.execution_mode,
-        );
+        scheduler.start_catalog_worker(worker.root, request, worker.initial_cache, execution_mode);
     }
     macro_rules! request_launcher_redraw {
         () => {{
@@ -7847,6 +7858,18 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_intro_preserves_first_visible_build_planning() {
+        assert_eq!(
+            startup_intro_catalog_worker_request(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
+            CatalogWorkerRequest::CheckStamp
+        );
+        assert_eq!(
+            startup_intro_catalog_worker_request(CatalogWorkerRequest::FreshBuild),
+            CatalogWorkerRequest::FreshBuild
+        );
+    }
 
     fn crt_240_display() -> UiDisplay {
         let plan = UiDisplayPlan::from_mister_ini_text(
