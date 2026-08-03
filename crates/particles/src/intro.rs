@@ -420,7 +420,7 @@ impl IntroScene {
             &mut self.positions,
             &mut self.commands,
             Some(0.0),
-            true,
+            false,
             frame,
         )
     }
