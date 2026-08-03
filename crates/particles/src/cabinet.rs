@@ -76,21 +76,34 @@ pub struct CabinetRenderOptions {
     pub creative_mode: CabinetCreativeMode,
 }
 
+const PARTICLE_LANES: usize = 4;
+
+#[repr(C, align(16))]
+struct CabinetPositionBlock {
+    target_x: [f32; PARTICLE_LANES],
+    target_y: [f32; PARTICLE_LANES],
+    target_z: [f32; PARTICLE_LANES],
+    source_x: [f32; PARTICLE_LANES],
+    source_y: [f32; PARTICLE_LANES],
+    source_z: [f32; PARTICLE_LANES],
+}
+
+#[repr(C, align(16))]
+struct CabinetAttributeBlock {
+    random: [u32; PARTICLE_LANES],
+    life: [f32; PARTICLE_LANES],
+    style: [u8; PARTICLE_LANES],
+    flags: [u8; PARTICLE_LANES],
+}
+
 /// Exact extraction of the approved arcade-cabinet particle formation.
 pub struct ArcadeCabinetFormation {
     width: usize,
     height: usize,
     recipe: CabinetRecipe,
-    target_x: Vec<f32>,
-    target_y: Vec<f32>,
-    target_z: Vec<f32>,
-    source_x: Vec<f32>,
-    source_y: Vec<f32>,
-    source_z: Vec<f32>,
-    random: Vec<u32>,
-    life: Vec<f32>,
-    style: Vec<u8>,
-    flags: Vec<u8>,
+    capacity: usize,
+    positions: Vec<CabinetPositionBlock>,
+    attributes: Vec<CabinetAttributeBlock>,
     options: CabinetRenderOptions,
 }
 
@@ -209,27 +222,87 @@ impl ArcadeCabinetFormation {
             ));
         }
         let active_count = recipe.particle_count;
-        let mut renderer = Self {
+        let mut target_x = vec![0.0; capacity];
+        let mut target_y = vec![0.0; capacity];
+        let mut target_z = vec![0.0; capacity];
+        let mut source_x = vec![0.0; capacity];
+        let mut source_y = vec![0.0; capacity];
+        let mut source_z = vec![0.0; capacity];
+        let mut random = vec![0; capacity];
+        let mut life = vec![0.0; capacity];
+        let mut style = vec![0; capacity];
+        let mut flags = vec![0; capacity];
+        let mut state = fold_seed(recipe.seed);
+        for index in 0..capacity {
+            state = xorshift32(state);
+            random[index] = state;
+            source_x[index] =
+                unit_signed(state.rotate_left(3)) * recipe.source_scatter.x_half_extent;
+            source_y[index] =
+                unit_signed(state.rotate_left(13)) * recipe.source_scatter.y_half_extent;
+            source_z[index] =
+                unit_signed(state.rotate_left(23)) * recipe.source_scatter.z_half_extent;
+        }
+        decode_particle_cloud(
+            ARCADE_CLOUD,
+            recipe.model,
+            &mut target_x,
+            &mut target_y,
+            &mut target_z,
+            &mut life,
+            &random,
+            &mut style,
+            &mut flags,
+        )?;
+        let block_count = capacity.div_ceil(PARTICLE_LANES);
+        let mut positions = Vec::with_capacity(block_count);
+        let mut attributes = Vec::with_capacity(block_count);
+        for block_index in 0..block_count {
+            let mut position = CabinetPositionBlock {
+                target_x: [0.0; PARTICLE_LANES],
+                target_y: [0.0; PARTICLE_LANES],
+                target_z: [0.0; PARTICLE_LANES],
+                source_x: [0.0; PARTICLE_LANES],
+                source_y: [0.0; PARTICLE_LANES],
+                source_z: [0.0; PARTICLE_LANES],
+            };
+            let mut attribute = CabinetAttributeBlock {
+                random: [0; PARTICLE_LANES],
+                life: [0.0; PARTICLE_LANES],
+                style: [0; PARTICLE_LANES],
+                flags: [0; PARTICLE_LANES],
+            };
+            for lane in 0..PARTICLE_LANES {
+                let index = block_index * PARTICLE_LANES + lane;
+                if index >= capacity {
+                    break;
+                }
+                position.target_x[lane] = target_x[index];
+                position.target_y[lane] = target_y[index];
+                position.target_z[lane] = target_z[index];
+                position.source_x[lane] = source_x[index];
+                position.source_y[lane] = source_y[index];
+                position.source_z[lane] = source_z[index];
+                attribute.random[lane] = random[index];
+                attribute.life[lane] = life[index];
+                attribute.style[lane] = style[index];
+                attribute.flags[lane] = flags[index];
+            }
+            positions.push(position);
+            attributes.push(attribute);
+        }
+        Ok(Self {
             width,
             height,
             recipe,
-            target_x: vec![0.0; capacity],
-            target_y: vec![0.0; capacity],
-            target_z: vec![0.0; capacity],
-            source_x: vec![0.0; capacity],
-            source_y: vec![0.0; capacity],
-            source_z: vec![0.0; capacity],
-            random: vec![0; capacity],
-            life: vec![0.0; capacity],
-            style: vec![0; capacity],
-            flags: vec![0; capacity],
+            capacity,
+            positions,
+            attributes,
             options: CabinetRenderOptions {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
             },
-        };
-        renderer.initialize()?;
-        Ok(renderer)
+        })
     }
 
     #[must_use]
@@ -239,7 +312,7 @@ impl ArcadeCabinetFormation {
 
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.target_x.len()
+        self.capacity
     }
 
     pub fn set_render_options(&mut self, options: CabinetRenderOptions) -> Result<(), String> {
@@ -261,22 +334,14 @@ impl ArcadeCabinetFormation {
 
     #[must_use]
     pub fn allocated_bytes(&self) -> usize {
-        let float_capacity = self.target_x.capacity()
-            + self.target_y.capacity()
-            + self.target_z.capacity()
-            + self.source_x.capacity()
-            + self.source_y.capacity()
-            + self.source_z.capacity()
-            + self.life.capacity();
-        float_capacity
-            .saturating_mul(std::mem::size_of::<f32>())
+        self.positions
+            .capacity()
+            .saturating_mul(std::mem::size_of::<CabinetPositionBlock>())
             .saturating_add(
-                self.random
+                self.attributes
                     .capacity()
-                    .saturating_mul(std::mem::size_of::<u32>()),
+                    .saturating_mul(std::mem::size_of::<CabinetAttributeBlock>()),
             )
-            .saturating_add(self.style.capacity())
-            .saturating_add(self.flags.capacity())
     }
 
     pub fn render(
@@ -319,11 +384,11 @@ impl ArcadeCabinetFormation {
                     let x = center_x + rotated_x * scale;
                     let y = center_y + rotated_y * scale;
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
-                        let feature = self.flags[index];
+                        let feature = attribute.flags[lane];
                         let style = if feature & appearance.priority_feature_mask != 0 {
                             appearance.priority_palette_index
                         } else if feature & appearance.accent_feature_mask != 0 {
-                            self.style[index]
+                            attribute.style[lane]
                                 .saturating_add(appearance.accent_palette_add)
                                 .min(7)
                         } else {
@@ -351,39 +416,48 @@ impl ArcadeCabinetFormation {
 
         if dispersal > 0.0 {
             for index in 0..self.options.active_count {
+                let position = &self.positions[index / PARTICLE_LANES];
+                let attribute = &self.attributes[index / PARTICLE_LANES];
+                let lane = index % PARTICLE_LANES;
                 let scale = 1.0
                     + dispersal
                         * (self.recipe.dispersal.radial_base
-                            + self.life[index] * self.recipe.dispersal.radial_life_gain);
+                            + attribute.life[lane] * self.recipe.dispersal.radial_life_gain);
                 project_and_draw!(
                     index,
-                    self.target_x[index] * scale,
-                    self.target_y[index] * scale
+                    position.target_x[lane] * scale,
+                    position.target_y[lane] * scale
                         + dispersal
-                            * unit_signed(self.random[index].rotate_left(11))
+                            * unit_signed(attribute.random[lane].rotate_left(11))
                             * self.recipe.dispersal.vertical_jitter,
-                    self.target_z[index] * scale
+                    position.target_z[lane] * scale
                 );
             }
         } else if formation < 1.0 {
             for index in 0..self.options.active_count {
+                let position = &self.positions[index / PARTICLE_LANES];
+                let attribute = &self.attributes[index / PARTICLE_LANES];
+                let lane = index % PARTICLE_LANES;
                 project_and_draw!(
                     index,
-                    self.source_x[index]
-                        + (self.target_x[index] - self.source_x[index]) * formation,
-                    self.source_y[index]
-                        + (self.target_y[index] - self.source_y[index]) * formation,
-                    self.source_z[index]
-                        + (self.target_z[index] - self.source_z[index]) * formation
+                    position.source_x[lane]
+                        + (position.target_x[lane] - position.source_x[lane]) * formation,
+                    position.source_y[lane]
+                        + (position.target_y[lane] - position.source_y[lane]) * formation,
+                    position.source_z[lane]
+                        + (position.target_z[lane] - position.source_z[lane]) * formation
                 );
             }
         } else {
             for index in 0..self.options.active_count {
+                let position = &self.positions[index / PARTICLE_LANES];
+                let attribute = &self.attributes[index / PARTICLE_LANES];
+                let lane = index % PARTICLE_LANES;
                 project_and_draw!(
                     index,
-                    self.target_x[index],
-                    self.target_y[index],
-                    self.target_z[index]
+                    position.target_x[lane],
+                    position.target_y[lane],
+                    position.target_z[lane]
                 );
             }
         }
@@ -393,31 +467,6 @@ impl ArcadeCabinetFormation {
             visible,
             pixel_writes,
         })
-    }
-
-    fn initialize(&mut self) -> Result<(), String> {
-        let mut state = fold_seed(self.recipe.seed);
-        for index in 0..self.capacity() {
-            state = xorshift32(state);
-            self.random[index] = state;
-            self.source_x[index] =
-                unit_signed(state.rotate_left(3)) * self.recipe.source_scatter.x_half_extent;
-            self.source_y[index] =
-                unit_signed(state.rotate_left(13)) * self.recipe.source_scatter.y_half_extent;
-            self.source_z[index] =
-                unit_signed(state.rotate_left(23)) * self.recipe.source_scatter.z_half_extent;
-        }
-        decode_particle_cloud(
-            ARCADE_CLOUD,
-            self.recipe.model,
-            &mut self.target_x,
-            &mut self.target_y,
-            &mut self.target_z,
-            &mut self.life,
-            &self.random,
-            &mut self.style,
-            &mut self.flags,
-        )
     }
 }
 
@@ -667,6 +716,8 @@ mod tests {
             u32::from_le_bytes(ARCADE_CLOUD[12..16].try_into().unwrap()) as usize,
             ARCADE_CLOUD_POINT_COUNT
         );
+        assert_eq!(renderer.positions.as_ptr().align_offset(16), 0);
+        assert_eq!(renderer.attributes.as_ptr().align_offset(16), 0);
     }
 
     #[test]
