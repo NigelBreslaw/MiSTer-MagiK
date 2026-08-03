@@ -621,15 +621,12 @@ impl ArcadeCabinetFormation {
                 let adjustment = [2_i16, 1, 0, -1][depth_band];
                 let style = (base_style as i16 + adjustment).clamp(0, 7) as u8;
                 let primary = u64::from(pixel(appearance.palette[usize::from(style)]).0);
-                let history = u64::from(
-                    pixel(appearance.palette[usize::from(style.saturating_sub(2))]).0,
-                );
+                let history =
+                    u64::from(pixel(appearance.palette[usize::from(style.saturating_sub(2))]).0);
                 let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
-                let neighbor =
-                    u64::from(pixel(appearance.palette[usize::from(neighbor_style)]).0);
-                let satellite = u64::from(
-                    pixel(appearance.palette[usize::from(style.saturating_sub(1))]).0,
-                );
+                let neighbor = u64::from(pixel(appearance.palette[usize::from(neighbor_style)]).0);
+                let satellite =
+                    u64::from(pixel(appearance.palette[usize::from(style.saturating_sub(1))]).0);
                 primary | (history << 16) | (neighbor << 32) | (satellite << 48)
             })
         });
@@ -1083,8 +1080,7 @@ impl ArcadeCabinetFormation {
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
-                        self.commands[index] =
-                            CabinetDrawCommand::visible(offset, depth, pixel_x);
+                        self.commands[index] = CabinetDrawCommand::visible(offset, depth, pixel_x);
                     }
                 }
             }};
@@ -1117,8 +1113,8 @@ impl ArcadeCabinetFormation {
         };
         let projection_block_count = self.options.active_count.div_ceil(PARTICLE_LANES);
         let projection_positions = if dispersal > 0.0 {
-            for block_index in (first_projection_block..projection_block_count)
-                .step_by(projection_block_step)
+            for block_index in
+                (first_projection_block..projection_block_count).step_by(projection_block_step)
             {
                 let position = &self.positions[block_index];
                 let attribute = &self.attributes[block_index];
@@ -1127,8 +1123,7 @@ impl ArcadeCabinetFormation {
                     let scale = 1.0
                         + dispersal
                             * (self.recipe.dispersal.radial_base
-                                + attribute.life[lane]
-                                    * self.recipe.dispersal.radial_life_gain);
+                                + attribute.life[lane] * self.recipe.dispersal.radial_life_gain);
                     dynamic.target_x[lane] = position.target_x[lane] * scale;
                     dynamic.target_y[lane] = position.target_y[lane] * scale
                         + dispersal
@@ -1139,8 +1134,8 @@ impl ArcadeCabinetFormation {
             }
             &self.dynamic_positions
         } else if formation < 1.0 {
-            for block_index in (first_projection_block..projection_block_count)
-                .step_by(projection_block_step)
+            for block_index in
+                (first_projection_block..projection_block_count).step_by(projection_block_step)
             {
                 let position = &self.positions[block_index];
                 let dynamic = &mut self.dynamic_positions[block_index];
@@ -1213,7 +1208,8 @@ impl ArcadeCabinetFormation {
                 true
             }
         };
-        if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin {
+        if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin
+        {
             let aurora_phase = (elapsed.as_millis() as usize / 20) & 2_047;
             let interference_phase = (elapsed.as_millis() as usize / 12) & 2_047;
             let cycle_ms = elapsed.as_millis() as u64 % self.recipe.timing.cycle_ms;
@@ -1228,8 +1224,8 @@ impl ArcadeCabinetFormation {
             } else {
                 3
             };
-            let arcade_palette = (cycle_ms.saturating_mul(4) / self.recipe.timing.cycle_ms)
-                .min(3) as usize;
+            let arcade_palette =
+                (cycle_ms.saturating_mul(4) / self.recipe.timing.cycle_ms).min(3) as usize;
             for index in 0..self.options.active_count {
                 let command = self.commands[index];
                 let Some(offset) = command.offset() else {
@@ -1242,8 +1238,7 @@ impl ArcadeCabinetFormation {
                 let primary = match color_mode {
                     CabinetColorMode::ScreenPrism => self.screen_prism[pixel_x + pixel_y * 3],
                     CabinetColorMode::DiagonalAurora => {
-                        self.aurora_ribbon
-                            [((pixel_x + pixel_y * 2) * 2 + aurora_phase) & 2_047]
+                        self.aurora_ribbon[((pixel_x + pixel_y * 2) * 2 + aurora_phase) & 2_047]
                     }
                     CabinetColorMode::VortexSpectrum => self.vortex_field[offset],
                     CabinetColorMode::StudioLights => {
@@ -1253,8 +1248,7 @@ impl ArcadeCabinetFormation {
                         self.studio_lights[pixel_x][band]
                     }
                     CabinetColorMode::DepthPrism => {
-                        self.depth_prism[pixel_x + pixel_y * 3]
-                            [usize::from(command.depth_band())]
+                        self.depth_prism[pixel_x + pixel_y * 3][usize::from(command.depth_band())]
                     }
                     CabinetColorMode::MotionHeat => {
                         let previous = self.previous_commands[index];
@@ -1295,9 +1289,7 @@ impl ArcadeCabinetFormation {
                             Rgb565Pixel(0x9dff)
                         }
                     }
-                    CabinetColorMode::PhaseStory => {
-                        self.phase_story[pixel_x][phase_story_band]
-                    }
+                    CabinetColorMode::PhaseStory => self.phase_story[pixel_x][phase_story_band],
                     CabinetColorMode::InterferenceBands => {
                         let first = usize::from(
                             self.interference_wave[(pixel_x * 5 + interference_phase) & 2_047],
@@ -1322,9 +1314,7 @@ impl ArcadeCabinetFormation {
                 destination[offset] = primary;
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
-                if baseline & BASELINE_NEIGHBOR_PRESENT != 0
-                    && pixel_x + 1 < self.width
-                {
+                if baseline & BASELINE_NEIGHBOR_PRESENT != 0 && pixel_x + 1 < self.width {
                     destination[offset + 1] = darken_rgb565(primary);
                     dirty_offsets.push((offset + 1) as u32);
                     pixel_writes = pixel_writes.saturating_add(1);
@@ -1359,8 +1349,7 @@ impl ArcadeCabinetFormation {
                 let metadata = self.baseline_raster[index];
                 let filler = metadata & BASELINE_FILLER != 0;
                 let jitter = metadata & BASELINE_JITTER != 0;
-                let satellite_direction =
-                    ((metadata >> BASELINE_SATELLITE_SHIFT) & 3) as u8;
+                let satellite_direction = ((metadata >> BASELINE_SATELLITE_SHIFT) & 3) as u8;
                 let jitter_seed = ((metadata >> BASELINE_JITTER_SEED_SHIFT) & 3) as u32;
                 let mut pixel_x = command.pixel_x();
                 if jitter {
@@ -1560,11 +1549,7 @@ fn jittered_offset_with_x(
     random: u32,
     phase: u8,
 ) -> (usize, usize) {
-    if pixel_x == 0
-        || pixel_x + 1 >= width
-        || offset < width
-        || offset + width >= frame_len
-    {
+    if pixel_x == 0 || pixel_x + 1 >= width || offset < width || offset + width >= frame_len {
         return (offset, pixel_x);
     }
     match (u32::from(phase) + ((random >> 3) & 3)) & 3 {
@@ -1678,19 +1663,35 @@ fn build_studio_lights(width: usize) -> Vec<[Rgb565Pixel; 4]> {
 fn build_phase_story(width: usize) -> Vec<[Rgb565Pixel; 4]> {
     let formation = horizontal_gradient(
         width,
-        &[Rgb565Pixel(0xf986), Rgb565Pixel(0xfd20), Rgb565Pixel(0xffc0)],
+        &[
+            Rgb565Pixel(0xf986),
+            Rgb565Pixel(0xfd20),
+            Rgb565Pixel(0xffc0),
+        ],
     );
     let orbit = horizontal_gradient(
         width,
-        &[Rgb565Pixel(0x05ff), Rgb565Pixel(0x435f), Rgb565Pixel(0x981f)],
+        &[
+            Rgb565Pixel(0x05ff),
+            Rgb565Pixel(0x435f),
+            Rgb565Pixel(0x981f),
+        ],
     );
     let returning = horizontal_gradient(
         width,
-        &[Rgb565Pixel(0x07f3), Rgb565Pixel(0x05ff), Rgb565Pixel(0x435f)],
+        &[
+            Rgb565Pixel(0x07f3),
+            Rgb565Pixel(0x05ff),
+            Rgb565Pixel(0x435f),
+        ],
     );
     let dispersal = horizontal_gradient(
         width,
-        &[Rgb565Pixel(0xffff), Rgb565Pixel(0xffc0), Rgb565Pixel(0xf986)],
+        &[
+            Rgb565Pixel(0xffff),
+            Rgb565Pixel(0xffc0),
+            Rgb565Pixel(0xf986),
+        ],
     );
     (0..width)
         .map(|x| [formation[x], orbit[x], returning[x], dispersal[x]])
@@ -1749,7 +1750,11 @@ fn horizontal_gradient(width: usize, stops: &[Rgb565Pixel]) -> Vec<Rgb565Pixel> 
         let position = x.saturating_mul(segments).saturating_mul(256) / denominator;
         let segment = (position / 256).min(segments.saturating_sub(1));
         let amount = if x + 1 == width { 256 } else { position & 255 };
-        gradient.push(mix_rgb565(stops[segment], stops[segment + 1], amount as u16));
+        gradient.push(mix_rgb565(
+            stops[segment],
+            stops[segment + 1],
+            amount as u16,
+        ));
     }
     gradient
 }
@@ -1760,8 +1765,7 @@ fn mix_rgb565(first: Rgb565Pixel, second: Rgb565Pixel, amount: u16) -> Rgb565Pix
     let first = u32::from(first.0);
     let second = u32::from(second.0);
     let red = (((first >> 11) * inverse + (second >> 11) * amount) >> 8) & 0x1f;
-    let green = ((((first >> 5) & 0x3f) * inverse + ((second >> 5) & 0x3f) * amount) >> 8)
-        & 0x3f;
+    let green = ((((first >> 5) & 0x3f) * inverse + ((second >> 5) & 0x3f) * amount) >> 8) & 0x3f;
     let blue = (((first & 0x1f) * inverse + (second & 0x1f) * amount) >> 8) & 0x1f;
     Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
 }
@@ -2161,8 +2165,14 @@ mod tests {
         optimized.set_render_options(options).unwrap();
         reference.set_render_options(options).unwrap();
         reference.force_generic_all = true;
-        let mut optimized_buffers = [vec![Rgb565Pixel(0); 960 * 540], vec![Rgb565Pixel(0); 960 * 540]];
-        let mut reference_buffers = [vec![Rgb565Pixel(0); 960 * 540], vec![Rgb565Pixel(0); 960 * 540]];
+        let mut optimized_buffers = [
+            vec![Rgb565Pixel(0); 960 * 540],
+            vec![Rgb565Pixel(0); 960 * 540],
+        ];
+        let mut reference_buffers = [
+            vec![Rgb565Pixel(0); 960 * 540],
+            vec![Rgb565Pixel(0); 960 * 540],
+        ];
 
         for (frame, elapsed) in [
             Duration::from_secs(2),
