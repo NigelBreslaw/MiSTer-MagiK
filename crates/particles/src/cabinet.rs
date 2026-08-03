@@ -467,6 +467,10 @@ impl ArcadeCabinetFormation {
         let center_x = self.width as f32 * 0.5 + self.recipe.camera.center_offset_x;
         let center_y = self.height as f32 * 0.5 + self.recipe.camera.center_offset_y;
         let appearance = self.recipe.appearance;
+        let satellite_mode = matches!(
+            self.options.creative_mode,
+            CabinetCreativeMode::Satellites | CabinetCreativeMode::All
+        );
         let width_f32 = self.width as f32;
         let height_f32 = self.height as f32;
         let projection_started = Instant::now();
@@ -509,13 +513,36 @@ impl ArcadeCabinetFormation {
                 } else {
                     attribute.style[lane]
                 };
+                let recipe_neighbor = feature & appearance.neighbor_feature_mask != 0
+                    && index % usize::from(appearance.neighbor_every) == 0
+                    && pixel_x + 1 < self.width;
+                if satellite_mode && recipe_neighbor {
+                    let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
+                    destination[offset + 1] =
+                        pixel(appearance.palette[usize::from(neighbor_style)]);
+                    dirty_offsets.push((offset + 1) as u32);
+                    pixel_writes = pixel_writes.saturating_add(1);
+                }
+                if satellite_mode && feature == 0 {
+                    let satellite_offset = match attribute.random[lane] & 3 {
+                        0 if pixel_x > 0 => Some(offset - 1),
+                        1 if pixel_x + 1 < self.width => Some(offset + 1),
+                        2 if offset >= self.width => Some(offset - self.width),
+                        3 if offset + self.width < destination.len() => Some(offset + self.width),
+                        _ => None,
+                    };
+                    if let Some(satellite_offset) = satellite_offset {
+                        let satellite_style = style.saturating_sub(1);
+                        destination[satellite_offset] =
+                            pixel(appearance.palette[usize::from(satellite_style)]);
+                        dirty_offsets.push(satellite_offset as u32);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                    }
+                }
                 destination[offset] = pixel(appearance.palette[usize::from(style)]);
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
-                if feature & appearance.neighbor_feature_mask != 0
-                    && index % usize::from(appearance.neighbor_every) == 0
-                    && pixel_x + 1 < self.width
-                {
+                if !satellite_mode && recipe_neighbor {
                     let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
                     destination[offset + 1] =
                         pixel(appearance.palette[usize::from(neighbor_style)]);
@@ -1102,6 +1129,30 @@ mod tests {
         assert_eq!(first_stats, second_stats);
         assert_eq!(first_pixels, second_pixels);
         assert!(first_stats.visible > 10_000);
+    }
+
+    #[test]
+    fn satellite_mode_adds_writes_without_changing_primary_count() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut baseline = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut satellites = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        satellites
+            .set_render_options(CabinetRenderOptions {
+                active_count: 48_128,
+                creative_mode: CabinetCreativeMode::Satellites,
+            })
+            .unwrap();
+        let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
+        let mut satellite_pixels = baseline_pixels.clone();
+        let elapsed = Duration::from_secs(12);
+        let baseline_stats = baseline.render(&mut baseline_pixels, elapsed, 0).unwrap();
+        let satellite_stats = satellites
+            .render(&mut satellite_pixels, elapsed, 0)
+            .unwrap();
+        assert_eq!(satellite_stats.particles, baseline_stats.particles);
+        assert_eq!(satellite_stats.visible, baseline_stats.visible);
+        assert!(satellite_stats.pixel_writes > baseline_stats.pixel_writes);
+        assert_ne!(satellite_pixels, baseline_pixels);
     }
 
     #[test]
