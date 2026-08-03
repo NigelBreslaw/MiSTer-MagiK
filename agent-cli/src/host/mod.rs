@@ -4263,12 +4263,18 @@ fn profile_installed_catalog_lifecycle(
 
     let mut lifecycle_log = String::new();
     let mut inspect_log = String::new();
+    let mut intro_telemetry_handle = None;
     let run_result = (|| -> Result<Value> {
         exec_checked(
             &session,
             "catalog lifecycle isolated fixture",
             &catalog_lifecycle_prepare_command(),
         )?;
+        let endpoint = config.agent()?.clone();
+        intro_telemetry_handle = Some(thread::spawn(move || {
+            agent_telemetry_for_duration(&endpoint, Duration::from_secs(25))
+                .map_err(|error| error.to_string())
+        }));
         let started = Instant::now();
         restart_launcher_with_one_shot_env(
             &session,
@@ -4366,6 +4372,34 @@ fn profile_installed_catalog_lifecycle(
             "output_dir": output_dir,
         }))
     })();
+
+    let intro_evidence_result = (|| -> Result<Value> {
+        let telemetry = intro_telemetry_handle
+            .take()
+            .ok_or("catalog lifecycle did not start intro telemetry")?
+            .join()
+            .map_err(|_| "catalog lifecycle intro telemetry thread panicked")??;
+        fs::write(
+            output_dir.join("startup-intro-telemetry.jsonl"),
+            format!(
+                "{}\n",
+                telemetry
+                    .iter()
+                    .map(serde_json::to_string)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                    .join("\n")
+            ),
+        )?;
+        summarize_startup_intro_telemetry(&telemetry)
+    })();
+    let run_result = match (run_result, intro_evidence_result) {
+        (Ok(mut summary), Ok(intro)) => {
+            summary["startup_intro"] = intro;
+            Ok(summary)
+        }
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+    };
 
     match exec(&session, &catalog_lifecycle_evidence_command(), true) {
         Ok(diagnostics) => {
@@ -6059,6 +6093,129 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
     }))
 }
 
+fn summarize_startup_intro_telemetry(telemetry: &[Value]) -> Result<Value> {
+    const EXPECTED_INTRO_FRAMES: usize = 1_201;
+
+    let mut frames = BTreeMap::<u64, Value>::new();
+    for sample in telemetry.iter().filter(|sample| {
+        sample
+            .pointer("/launcher/catalog_refresh_policy")
+            .and_then(Value::as_str)
+            == Some("force")
+    }) {
+        let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for frame in recent.iter().filter(|frame| {
+            frame.get("main_present_copy_path").and_then(Value::as_str) == Some("external-direct")
+        }) {
+            if let Some(id) = frame.get("frame").and_then(Value::as_u64) {
+                frames.insert(id, frame.clone());
+            }
+        }
+    }
+    if frames.len() < 2 {
+        return Err("catalog lifecycle captured insufficient startup intro frame evidence".into());
+    }
+    let selected = frames.values().collect::<Vec<_>>();
+    let mut refresh_periods = selected
+        .iter()
+        .filter_map(|frame| frame.get("vsync_period_us").and_then(Value::as_u64))
+        .filter(|period| *period > 0)
+        .collect::<Vec<_>>();
+    refresh_periods.sort_unstable();
+    let refresh_period_us = median_u64(&refresh_periods)
+        .ok_or("startup intro telemetry has no physical refresh period")?;
+    let physical_refresh = physical_refresh_summary(0, &selected, refresh_period_us)?;
+    let skipped_refreshes = physical_refresh
+        .get("repeated_refreshes")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let long_completion_intervals = physical_refresh
+        .get("long_completion_intervals")
+        .and_then(Value::as_array)
+        .map_or(usize::MAX, Vec::len);
+    let sequence_gaps = selected
+        .windows(2)
+        .filter(|pair| {
+            !presentation_sequence_is_contiguous(
+                frame_u16(pair[0], "main_present_sequence"),
+                frame_u16(pair[1], "main_present_sequence"),
+            )
+        })
+        .count();
+    let frame_id_gaps = selected
+        .windows(2)
+        .filter(|pair| frame_u64(pair[1], "frame") != frame_u64(pair[0], "frame").saturating_add(1))
+        .count();
+    let latch_drop_delta = frame_u16(
+        selected.last().copied().expect("non-empty"),
+        "main_present_drop_count",
+    )
+    .wrapping_sub(frame_u16(selected[0], "main_present_drop_count"));
+    let latch_completion_failures = selected
+        .iter()
+        .filter(|frame| {
+            frame.get("main_present_status").and_then(Value::as_str) != Some("ok")
+                || frame_u16(frame, "main_present_active_sequence")
+                    != frame_u16(frame, "main_present_sequence")
+                || frame.get("main_present_pending").and_then(Value::as_bool) != Some(false)
+        })
+        .count();
+    let pacing_failures = selected
+        .iter()
+        .filter(|frame| {
+            frame.get("vsync_source").and_then(Value::as_str) != Some("vsync")
+                || frame_u64(frame, "vsync_miss_streak") > 0
+        })
+        .count();
+    let extra_completion_status_reads = selected
+        .iter()
+        .map(|frame| frame_u64(frame, "main_present_completion_poll_count").saturating_sub(1))
+        .sum::<u64>();
+    let unique_fps = physical_refresh
+        .get("unique_fps")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let refresh_hz = physical_refresh
+        .get("refresh_hz")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::INFINITY);
+    let cadence_qualified = selected.len() == EXPECTED_INTRO_FRAMES
+        && skipped_refreshes == 0
+        && long_completion_intervals == 0
+        && frame_id_gaps == 0
+        && pacing_failures == 0
+        && (unique_fps - refresh_hz).abs() <= 0.1;
+    let latch_qualified =
+        latch_drop_delta == 0 && latch_completion_failures == 0 && sequence_gaps == 0;
+
+    Ok(json!({
+        "schema": "mister-magik-startup-intro-qualification-v1",
+        "expected_frames": EXPECTED_INTRO_FRAMES,
+        "captured_frames": selected.len(),
+        "cadence": {
+            "qualified": cadence_qualified,
+            "skipped_refreshes": skipped_refreshes,
+            "frame_id_gaps": frame_id_gaps,
+            "pacing_failures": pacing_failures,
+            "long_completion_intervals": long_completion_intervals,
+            "physical_refresh": physical_refresh,
+        },
+        "latch_protocol": {
+            "qualified": latch_qualified,
+            "drop_delta": latch_drop_delta,
+            "completion_failures": latch_completion_failures,
+            "sequence_gaps": sequence_gaps,
+            "extra_completion_status_reads": extra_completion_status_reads,
+        },
+        "qualified": cadence_qualified && latch_qualified,
+    }))
+}
+
 fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
     let elapsed_ms = summary
         .get("elapsed_ms")
@@ -6072,8 +6229,33 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .pointer("/catalog/systems")
         .and_then(Value::as_array)
         .ok_or("catalog lifecycle summary has no systems")?;
+    let cadence_qualified = summary
+        .pointer("/startup_intro/cadence/qualified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let skipped_refreshes = summary
+        .pointer("/startup_intro/cadence/skipped_refreshes")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let unique_fps = summary
+        .pointer("/startup_intro/cadence/physical_refresh/unique_fps")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let latch_qualified = summary
+        .pointer("/startup_intro/latch_protocol/qualified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let latch_drop_delta = summary
+        .pointer("/startup_intro/latch_protocol/drop_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let result = if cadence_qualified && latch_qualified {
+        "passed"
+    } else {
+        "failed"
+    };
     let mut report = format!(
-        "# Catalog Lifecycle Benchmark\n\n- Result: passed\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Systems\n\n",
+        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
         systems.len()
     );
     for system in systems {
@@ -8598,10 +8780,9 @@ fn physical_refresh_summary(
     refresh_period_us: u64,
 ) -> Result<Value> {
     if frames.len() < 2 {
-        return Err(format!(
-            "screensaver profile run {run} has insufficient physical refresh evidence"
-        )
-        .into());
+        return Err(
+            format!("physical refresh run {run} has insufficient presentation evidence").into(),
+        );
     }
     let completions = frames
         .iter()
@@ -8612,7 +8793,7 @@ fn physical_refresh_summary(
                 .filter(|value| *value > 0)
                 .ok_or_else(|| {
                     format!(
-                        "screensaver profile run {run} frame {} has no completion timestamp",
+                        "physical refresh run {run} frame {} has no completion timestamp",
                         frame_u64(frame, "frame")
                     )
                 })
@@ -8625,7 +8806,7 @@ fn physical_refresh_summary(
         .checked_sub(completions[0])
         .filter(|elapsed| *elapsed > 0)
         .ok_or_else(|| {
-            format!("screensaver profile run {run} has non-increasing completion timestamps")
+            format!("physical refresh run {run} has non-increasing completion timestamps")
         })?;
     let intervals = completions
         .windows(2)
@@ -8637,7 +8818,7 @@ fn physical_refresh_summary(
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
-            format!("screensaver profile run {run} has non-monotonic completion timestamps")
+            format!("physical refresh run {run} has non-monotonic completion timestamps")
         })?;
     let latch_flip_deltas = frames
         .windows(2)
@@ -15980,6 +16161,51 @@ H: Handlers=event3 js0"#
         assert_eq!(script.matches("wait:600").count(), 150);
         assert!(script.starts_with("down,up,"));
         assert!(script.len() < 4_096);
+    }
+
+    #[test]
+    fn startup_intro_cadence_fails_independently_of_a_healthy_latch() {
+        let intro_frames = |skip_at: Option<u64>| {
+            (0_u64..1_201)
+                .map(|frame| {
+                    let skipped_us = u64::from(skip_at.is_some_and(|at| frame >= at)) * 16_667;
+                    json!({
+                        "frame": frame,
+                        "completion_monotonic_us": 1_000_000 + frame * 16_667 + skipped_us,
+                        "main_present_copy_path": "external-direct",
+                        "main_present_status": "ok",
+                        "main_present_sequence": (frame as u16).wrapping_add(1),
+                        "main_present_active_sequence": (frame as u16).wrapping_add(1),
+                        "main_present_pending": false,
+                        "main_present_flip_count": (frame as u16).wrapping_add(1),
+                        "main_present_drop_count": 0,
+                        "main_present_completion_poll_count": 1,
+                        "vsync_source": "vsync",
+                        "vsync_miss_streak": 0,
+                        "vsync_period_us": 16_667,
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let telemetry = |frames| {
+            vec![json!({
+                "launcher": {
+                    "catalog_refresh_policy": "force",
+                    "frame_budget": {"recent_frames": frames}
+                }
+            })]
+        };
+
+        let passing = summarize_startup_intro_telemetry(&telemetry(intro_frames(None))).unwrap();
+        assert_eq!(passing["cadence"]["qualified"], true);
+        assert_eq!(passing["latch_protocol"]["qualified"], true);
+
+        let skipped =
+            summarize_startup_intro_telemetry(&telemetry(intro_frames(Some(600)))).unwrap();
+        assert_eq!(skipped["cadence"]["qualified"], false);
+        assert_eq!(skipped["cadence"]["skipped_refreshes"], 1);
+        assert_eq!(skipped["latch_protocol"]["qualified"], true);
+        assert_eq!(skipped["latch_protocol"]["drop_delta"], 0);
     }
 
     #[test]

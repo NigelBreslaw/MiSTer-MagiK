@@ -231,16 +231,19 @@ def print_window_report(rows: list[dict[str, int | float | str]]) -> None:
             continue
         walls = [int(row["wall_us"]) for row in group]
         works = [work_us(row) for row in group]
-        near = [row for row in group if int(row["wall_us"]) >= 16_000]
-        drops = [row for row in group if int(row["wall_us"]) > 16_667]
+        warnings = [row for row in group if int(row["wall_us"]) >= 16_000]
+        overruns = [row for row in group if int(row["wall_us"]) > 16_667]
         print(
             f"  {label}: frames={len(group)} "
             f"wall_p99={percentile(walls, 99)} wall_max={max(walls)} "
             f"work_p99={percentile(works, 99)} work_max={max(works)} "
-            f"near_drop_ge_16ms={len(near)} drops_gt_16_7ms={len(drops)}"
+            f"cadence_warnings_ge_16ms={len(warnings)} "
+            f"wall_overruns_gt_16_7ms={len(overruns)}"
         )
-        if near:
-            print_interruption_summary(f"    near/drop correlation {label}", near)
+        if warnings:
+            print_interruption_summary(
+                f"    cadence-warning correlation {label}", warnings
+            )
 
 
 def print_interruption_summary(

@@ -463,8 +463,9 @@ def print_summary(
         rows, home_motion_contract
     )
     detail = (
-        f"frames={len(rows)} near_ge_16000={len(near)} drops_gt_16667={len(over)} "
-        f"loop_drops_gt_16667={len(loop_over)} "
+        f"frames={len(rows)} cadence_warnings_ge_16000={len(near)} "
+        f"wall_overruns_gt_16667={len(over)} "
+        f"loop_wall_overruns_gt_16667={len(loop_over)} "
         f"strict_cadence_misses={len(cadence_misses)} "
         f"wall_p50={percentile(walls, 50)} wall_p95={percentile(walls, 95)} "
         f"wall_p99={percentile(walls, 99)} wall_max={max(walls)} "

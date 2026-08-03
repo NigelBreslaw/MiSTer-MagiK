@@ -799,6 +799,34 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
     if systems.is_empty() {
         return Err("catalog lifecycle benchmark produced no systems".into());
     }
+    if summary
+        .pointer("/startup_intro/cadence/qualified")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(format!(
+            "startup intro skipped physical refreshes; cadence={}",
+            summary
+                .pointer("/startup_intro/cadence")
+                .cloned()
+                .unwrap_or(Value::Null)
+        )
+        .into());
+    }
+    if summary
+        .pointer("/startup_intro/latch_protocol/qualified")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err(format!(
+            "startup intro latch protocol failed independently of cadence; latch_protocol={}",
+            summary
+                .pointer("/startup_intro/latch_protocol")
+                .cloned()
+                .unwrap_or(Value::Null)
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -996,6 +1024,10 @@ mod tests {
             "catalog": {
                 "valid": true,
                 "systems": [{"system": "atari2600", "games": 2}]
+            },
+            "startup_intro": {
+                "cadence": {"qualified": true},
+                "latch_protocol": {"qualified": true}
             }
         });
         assert!(evaluate_catalog_lifecycle_summary(&passing).is_ok());
@@ -1007,6 +1039,19 @@ mod tests {
         let mut empty = passing;
         empty["catalog"]["systems"] = json!([]);
         assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
+
+        let mut skipped = json!({
+            "scenario": "catalog-lifecycle",
+            "catalog": {"valid": true, "systems": [{"system": "arcade"}]},
+            "startup_intro": {
+                "cadence": {"qualified": false, "skipped_refreshes": 1},
+                "latch_protocol": {"qualified": true, "drop_delta": 0}
+            }
+        });
+        assert!(evaluate_catalog_lifecycle_summary(&skipped).is_err());
+        skipped["startup_intro"]["cadence"]["qualified"] = json!(true);
+        skipped["startup_intro"]["latch_protocol"]["qualified"] = json!(false);
+        assert!(evaluate_catalog_lifecycle_summary(&skipped).is_err());
     }
 
     #[test]
