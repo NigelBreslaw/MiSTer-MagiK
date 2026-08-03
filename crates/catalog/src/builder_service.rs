@@ -250,6 +250,7 @@ trait BuilderBackend {
     ) -> Result<u64, String>;
 }
 
+#[cfg(test)]
 fn run_with_backend<B: BuilderBackend>(
     operation: BuilderOperation,
     config: BuilderConfig,
