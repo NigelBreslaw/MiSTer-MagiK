@@ -230,6 +230,7 @@ pub struct SceneLabArgs {
 pub enum SceneLabScene {
     Magik,
     Cabinet,
+    Intro,
     NavigationTransition,
 }
 
@@ -238,6 +239,7 @@ impl SceneLabScene {
         match self {
             Self::Magik => "magik",
             Self::Cabinet => "cabinet",
+            Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
         }
     }

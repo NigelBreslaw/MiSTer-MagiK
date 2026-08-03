@@ -20,6 +20,9 @@ const MISTER_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
 const MAGIK_CLOUD: &[u8] = include_bytes!("../assets/intro/magik.pcloud");
 const MAGIK_GROUPS: &[u8] = include_bytes!("../assets/intro/magik.pgroup");
 const CABINET_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
+const LAUNCHER_CLOUD: &[u8] = include_bytes!("../assets/intro/launcher-mock.pcloud");
+const LAUNCHER_GROUPS: &[u8] = include_bytes!("../assets/intro/launcher-mock.pgroup");
+const LAUNCHER_SNAPSHOT: &[u8] = include_bytes!("../assets/intro/launcher-mock.rgb565");
 const PCLOUD_HEADER_BYTES: usize = 28;
 const PCLOUD_RECORD_BYTES: usize = 8;
 
@@ -39,7 +42,10 @@ pub struct IntroFrameStats {
     pub visible: usize,
     pub pixel_writes: usize,
     pub cue_index: usize,
+    pub cue_start_ms: u64,
+    pub previous_cue_start_ms: u64,
     pub cue_elapsed_ms: u64,
+    pub cue_duration_ms: u64,
     pub cue_id: &'static str,
     pub projection_backend: &'static str,
     pub stages: IntroStageTimings,
@@ -58,6 +64,8 @@ pub struct IntroScene {
     magik: PointTarget,
     cloud: PointTarget,
     cabinet: PointTarget,
+    launcher: PointTarget,
+    launcher_snapshot: Vec<Rgb565Pixel>,
     static_xy: Vec<[f32; 2]>,
     dynamic_positions: Vec<[f32; 3]>,
     positions: Vec<PointCloudPositionBlock>,
@@ -94,6 +102,12 @@ impl IntroScene {
             start: 0,
             count: recipe.steady_particle_count,
         }];
+        let launcher = decode_target(
+            LAUNCHER_CLOUD,
+            Some((LAUNCHER_GROUPS, 1)),
+            TargetScale::Launcher,
+        )?;
+        let launcher_snapshot = decode_launcher_snapshot(LAUNCHER_SNAPSHOT, width, height)?;
         let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
         for index in 0..recipe.initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
@@ -115,6 +129,8 @@ impl IntroScene {
             magik,
             cloud,
             cabinet,
+            launcher,
+            launcher_snapshot,
             static_xy,
             dynamic_positions,
             positions,
@@ -208,6 +224,7 @@ impl IntroScene {
             ScenePointTarget::Mister => &self.mister,
             ScenePointTarget::Magik => &self.magik,
             ScenePointTarget::Cabinet => &self.cabinet,
+            ScenePointTarget::Launcher => &self.launcher,
         };
         render_point_cloud(
             destination,
@@ -349,6 +366,60 @@ impl IntroScene {
             &mut self.commands,
         )
     }
+
+    fn render_launcher_morph(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        cue_elapsed_ms: u64,
+        duration_ms: u64,
+        easing: RecipeEasing,
+    ) -> (usize, usize, &'static str) {
+        let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
+        for index in 0..self.recipe.steady_particle_count {
+            let from = self.cabinet.positions[index];
+            let to = self.launcher.positions[index];
+            self.dynamic_positions[index] = [
+                from[0] + (to[0] - from[0]) * progress,
+                from[1] + (to[1] - from[1]) * progress,
+                from[2] + (to[2] - from[2]) * progress,
+            ];
+        }
+        render_point_cloud(
+            destination,
+            &self.recipe,
+            self.geometry,
+            &self.dynamic_positions,
+            &self.launcher.palette,
+            &mut self.positions,
+            &mut self.commands,
+        )
+    }
+
+    fn render_mock_crossfade(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        cue_elapsed_ms: u64,
+        duration_ms: u64,
+        easing: RecipeEasing,
+    ) -> (usize, usize, &'static str) {
+        let (visible, mut writes, backend) =
+            self.render_point_target(destination, ScenePointTarget::Launcher);
+        let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
+        let threshold = (progress * 64.0).round() as u8;
+        for (offset, (destination, source)) in destination
+            .iter_mut()
+            .zip(&self.launcher_snapshot)
+            .enumerate()
+        {
+            let x = offset % self.geometry.width();
+            let y = offset / self.geometry.width();
+            if bayer8(x, y) < threshold {
+                *destination = *source;
+                writes += 1;
+            }
+        }
+        (visible, writes, backend)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -429,6 +500,14 @@ impl FramebufferScene for IntroScene {
             .min(u128::from(self.recipe.total_ms)) as u64;
         let (cue_index, cue_elapsed_ms) = self.recipe.cue_at(elapsed_ms);
         let cue = &self.recipe.cues[cue_index];
+        let cue_start_ms = self.recipe.cues[..cue_index]
+            .iter()
+            .map(IntroCue::duration_ms)
+            .sum();
+        let previous_cue_start_ms = self.recipe.cues[..cue_index.saturating_sub(1)]
+            .iter()
+            .map(IntroCue::duration_ms)
+            .sum();
         let clear_started = Instant::now();
         target
             .pixels_mut()
@@ -481,11 +560,36 @@ impl FramebufferScene for IntroScene {
                 *duration_ms,
                 *turns,
             ),
+            IntroCue::MorphTarget {
+                duration_ms, easing, ..
+            } if cue_index == 8 => self.render_launcher_morph(
+                target.pixels_mut(),
+                cue_elapsed_ms,
+                *duration_ms,
+                *easing,
+            ),
+            IntroCue::MockCrossfade {
+                duration_ms, easing, ..
+            } => self.render_mock_crossfade(
+                target.pixels_mut(),
+                cue_elapsed_ms,
+                *duration_ms,
+                *easing,
+            ),
+            IntroCue::HoldTarget { .. } if cue_index == 10 => {
+                target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
+                (
+                    0,
+                    self.launcher_snapshot.len(),
+                    "launcher-mock-rgb565",
+                )
+            }
             _ => {
                 let point_target = match cue_index {
                     0..=3 => ScenePointTarget::Mister,
                     4..=7 => ScenePointTarget::Magik,
-                    _ => ScenePointTarget::Cabinet,
+                    8 => ScenePointTarget::Cabinet,
+                    _ => ScenePointTarget::Launcher,
                 };
                 self.render_point_target(target.pixels_mut(), point_target)
             }
@@ -503,7 +607,10 @@ impl FramebufferScene for IntroScene {
             visible,
             pixel_writes,
             cue_index,
+            cue_start_ms,
+            previous_cue_start_ms,
             cue_elapsed_ms,
+            cue_duration_ms: cue.duration_ms(),
             cue_id: cue_label(cue_index),
             projection_backend,
             stages: IntroStageTimings {
@@ -522,6 +629,7 @@ impl FramebufferScene for IntroScene {
 enum TargetScale {
     Text,
     Cabinet,
+    Launcher,
 }
 
 #[derive(Clone, Copy)]
@@ -529,6 +637,7 @@ enum ScenePointTarget {
     Mister,
     Magik,
     Cabinet,
+    Launcher,
 }
 
 fn decode_target(
@@ -569,6 +678,11 @@ fn decode_target(
                 f32::from(x) * (390.0 / 32_767.0),
                 220.0 - f32::from(y) * (440.0 / 32_767.0),
                 f32::from(z) * (390.0 / 32_767.0),
+            ],
+            TargetScale::Launcher => [
+                f32::from(x) * (480.0 / 32_767.0),
+                f32::from(y) * (540.0 / 32_767.0) - 270.0,
+                f32::from(z) * (96.0 / 32_767.0),
             ],
         };
         positions.push(position);
@@ -713,6 +827,44 @@ fn cabinet_yaw(elapsed_ms: u64, duration_ms: u64, turns: f32) -> f32 {
     (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0)
         * turns
         * std::f32::consts::TAU
+}
+
+fn decode_launcher_snapshot(
+    bytes: &[u8],
+    expected_width: usize,
+    expected_height: usize,
+) -> Result<Vec<Rgb565Pixel>, String> {
+    if bytes.len() < 16 || &bytes[..8] != b"RGB565M1" {
+        return Err("launcher mock snapshot header is invalid".into());
+    }
+    let width = usize::from(u16::from_le_bytes([bytes[8], bytes[9]]));
+    let height = usize::from(u16::from_le_bytes([bytes[10], bytes[11]]));
+    let count = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    if width != expected_width
+        || height != expected_height
+        || count != width.saturating_mul(height)
+        || bytes.len() != 16 + count * 2
+    {
+        return Err("launcher mock snapshot geometry is invalid".into());
+    }
+    Ok(bytes[16..]
+        .chunks_exact(2)
+        .map(|pixel| Rgb565Pixel(u16::from_le_bytes([pixel[0], pixel[1]])))
+        .collect())
+}
+
+fn bayer8(x: usize, y: usize) -> u8 {
+    const MATRIX: [[u8; 8]; 8] = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21],
+    ];
+    MATRIX[y & 7][x & 7]
 }
 
 fn ease(value: f32, easing: RecipeEasing) -> f32 {

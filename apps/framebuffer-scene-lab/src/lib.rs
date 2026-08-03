@@ -12,6 +12,10 @@ use mister_magik_framebuffer_scenes::{
 };
 use mister_magik_particles::cabinet::{CabinetRenderOptions, CabinetScene, CabinetStageTimings};
 use mister_magik_particles::engine::ParticlePreset;
+use mister_magik_particles::intro::{IntroScene, IntroStageTimings};
+use mister_magik_particles::intro_recipe::{
+    INTRO_RECIPE_SCHEMA_V1, IntroRecipe, embedded_intro_recipe, parse_intro_recipe,
+};
 use mister_magik_particles::magik::{MagikScene, MagikSceneOptions, MagikSceneStats};
 use mister_magik_particles::recipes::{
     CABINET_RECIPE_SCHEMA_V1, CabinetRecipe, MAGIK_RECIPE_SCHEMA_V1, MagikRecipe,
@@ -31,6 +35,7 @@ use std::time::Duration;
 pub enum EffectKind {
     Magik,
     Cabinet,
+    Intro,
     NavigationTransition,
 }
 
@@ -40,6 +45,7 @@ impl EffectKind {
         match self {
             Self::Magik => "magik",
             Self::Cabinet => "cabinet",
+            Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
         }
     }
@@ -49,6 +55,7 @@ impl EffectKind {
         match value.trim().to_ascii_lowercase().as_str() {
             "magik" => Some(Self::Magik),
             "cabinet" => Some(Self::Cabinet),
+            "intro" => Some(Self::Intro),
             "navigation-transition" => Some(Self::NavigationTransition),
             _ => None,
         }
@@ -58,6 +65,7 @@ impl EffectKind {
         match self {
             Self::Magik => StartupParticleRecipe::Magik,
             Self::Cabinet => StartupParticleRecipe::Cabinet,
+            Self::Intro => StartupParticleRecipe::Intro,
             Self::NavigationTransition => {
                 unreachable!("navigation fixtures do not publish particle recipe status")
             }
@@ -205,6 +213,14 @@ impl NavigationFixtureScene {
             projection_backend: self.fixture.label(),
             magik_stages: None,
             cabinet_stages: None,
+            intro_stages: None,
+            cue_id: "navigation-transition",
+            cue_index: 0,
+            cue_start_ms: 0,
+            previous_cue_start_ms: 0,
+            cue_elapsed_ms: 0,
+            cue_duration_ms: 0,
+            total_ms: 0,
         })
     }
 }
@@ -243,6 +259,7 @@ fn generated_navigation_snapshot(
 pub enum EffectRecipe {
     Magik(MagikRecipe),
     Cabinet(CabinetRecipe),
+    Intro(IntroRecipe),
 }
 
 impl EffectRecipe {
@@ -251,6 +268,7 @@ impl EffectRecipe {
         match self {
             Self::Magik(_) => EffectKind::Magik,
             Self::Cabinet(_) => EffectKind::Cabinet,
+            Self::Intro(_) => EffectKind::Intro,
         }
     }
 
@@ -258,6 +276,7 @@ impl EffectRecipe {
         match kind {
             EffectKind::Magik => embedded_magik_recipe().map(Self::Magik),
             EffectKind::Cabinet => embedded_cabinet_recipe().map(Self::Cabinet),
+            EffectKind::Intro => embedded_intro_recipe().map(Self::Intro),
             EffectKind::NavigationTransition => {
                 Err("navigation fixtures do not have embedded particle recipes".into())
             }
@@ -277,6 +296,7 @@ pub fn parse_effect_recipe(bytes: &[u8]) -> Result<EffectRecipe, String> {
     match header.schema.as_str() {
         MAGIK_RECIPE_SCHEMA_V1 => parse_magik_recipe(bytes).map(EffectRecipe::Magik),
         CABINET_RECIPE_SCHEMA_V1 => parse_cabinet_recipe(bytes).map(EffectRecipe::Cabinet),
+        INTRO_RECIPE_SCHEMA_V1 => parse_intro_recipe(bytes).map(EffectRecipe::Intro),
         schema => Err(format!(
             "unsupported startup particle recipe schema {schema:?}"
         )),
@@ -314,6 +334,14 @@ pub struct FrameStats {
     pub projection_backend: &'static str,
     pub magik_stages: Option<MagikStageTimings>,
     pub cabinet_stages: Option<CabinetStageTimings>,
+    pub intro_stages: Option<IntroStageTimings>,
+    pub cue_id: &'static str,
+    pub cue_index: usize,
+    pub cue_start_ms: u64,
+    pub previous_cue_start_ms: u64,
+    pub cue_elapsed_ms: u64,
+    pub cue_duration_ms: u64,
+    pub total_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -334,6 +362,7 @@ pub const CABINET_LAB_MAX_PARTICLES: usize = 72_704;
 enum PreparedEffect {
     Magik(Box<MagikScene>),
     Cabinet(Box<CabinetScene>),
+    Intro(Box<IntroScene>),
 }
 
 impl FocusedParticleRenderer {
@@ -360,6 +389,9 @@ impl FocusedParticleRenderer {
                     2,
                     CABINET_LAB_MAX_PARTICLES,
                 )?))
+            }
+            EffectRecipe::Intro(recipe) => {
+                PreparedEffect::Intro(Box::new(IntroScene::new(width, height, recipe)?))
             }
         };
         Self::with_effect(width, height, effect)
@@ -388,6 +420,9 @@ impl FocusedParticleRenderer {
                     CABINET_LAB_MAX_PARTICLES,
                 )?))
             }
+            EffectRecipe::Intro(recipe) => {
+                PreparedEffect::Intro(Box::new(IntroScene::new(width, height, recipe)?))
+            }
         };
         Self::with_effect(width, height, effect)
     }
@@ -403,6 +438,7 @@ impl FocusedParticleRenderer {
         match self.effect {
             PreparedEffect::Magik(_) => EffectKind::Magik,
             PreparedEffect::Cabinet(_) => EffectKind::Cabinet,
+            PreparedEffect::Intro(_) => EffectKind::Intro,
         }
     }
 
@@ -453,6 +489,49 @@ impl FocusedParticleRenderer {
                     projection_backend: stats.projection_backend,
                     magik_stages: None,
                     cabinet_stages: Some(stats.stages),
+                    intro_stages: None,
+                    cue_id: "cabinet",
+                    cue_index: 0,
+                    cue_start_ms: 0,
+                    previous_cue_start_ms: 0,
+                    cue_elapsed_ms: 0,
+                    cue_duration_ms: 0,
+                    total_ms: 0,
+                })
+            }
+            PreparedEffect::Intro(renderer) => {
+                let buffer = SceneBufferId::new(buffer_id, 2).map_err(|error| error.to_string())?;
+                let target = SceneTarget::new(destination, self.geometry, buffer)
+                    .map_err(|error| error.to_string())?;
+                let stats = FramebufferScene::render(
+                    renderer.as_mut(),
+                    target,
+                    SceneClock {
+                        frame: elapsed.as_nanos().saturating_mul(60) as u64 / 1_000_000_000,
+                        elapsed,
+                        next_elapsed,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+                Ok(FrameStats {
+                    effect: EffectKind::Intro,
+                    particles: stats.particles,
+                    projected_particles: stats.projected_particles,
+                    projection_cohorts: stats.projection_cohorts,
+                    visible: stats.visible,
+                    pixel_writes: stats.pixel_writes,
+                    simulation_backend: "intro-storyboard",
+                    projection_backend: stats.projection_backend,
+                    magik_stages: None,
+                    cabinet_stages: None,
+                    intro_stages: Some(stats.stages),
+                    cue_id: stats.cue_id,
+                    cue_index: stats.cue_index,
+                    cue_start_ms: stats.cue_start_ms,
+                    previous_cue_start_ms: stats.previous_cue_start_ms,
+                    cue_elapsed_ms: stats.cue_elapsed_ms,
+                    cue_duration_ms: stats.cue_duration_ms,
+                    total_ms: renderer.recipe().total_ms,
                 })
             }
         }
@@ -465,7 +544,30 @@ impl FocusedParticleRenderer {
         match &mut self.effect {
             PreparedEffect::Cabinet(renderer) => renderer.set_render_options(options),
             PreparedEffect::Magik(_) => Err("cabinet controls require the cabinet scene".into()),
+            PreparedEffect::Intro(_) => Err("cabinet controls require the cabinet scene".into()),
         }
+    }
+
+    fn intro_cue_id_at(&self, elapsed: Duration) -> Option<&str> {
+        let PreparedEffect::Intro(renderer) = &self.effect else {
+            return None;
+        };
+        let (index, _) = renderer.cue_at(elapsed);
+        Some(renderer.recipe().cues[index].id())
+    }
+
+    fn intro_cue_start_ms(&self, id: &str) -> Option<u64> {
+        let PreparedEffect::Intro(renderer) = &self.effect else {
+            return None;
+        };
+        let mut start = 0;
+        for cue in &renderer.recipe().cues {
+            if cue.id() == id {
+                return Some(start);
+            }
+            start += cue.duration_ms();
+        }
+        None
     }
 }
 
@@ -486,6 +588,14 @@ fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
             raster_us: stats.raster_us.min(u128::from(u64::MAX)) as u64,
         }),
         cabinet_stages: None,
+        intro_stages: None,
+        cue_id: "magik",
+        cue_index: 0,
+        cue_start_ms: 0,
+        previous_cue_start_ms: 0,
+        cue_elapsed_ms: 0,
+        cue_duration_ms: 0,
+        total_ms: 0,
     }
 }
 
@@ -635,11 +745,21 @@ impl LiveParticleRenderer {
             return Ok(());
         };
         self.generation = attempt.generation;
+        let logical_elapsed = elapsed.saturating_sub(self.logical_origin);
+        let resume_cue = self
+            .renderer
+            .intro_cue_id_at(logical_elapsed)
+            .map(str::to_owned);
         match attempt.action {
             ReloadAction::Apply(candidate) => {
                 self.renderer = candidate.renderer;
                 self.embedded_reset = Some(candidate.embedded);
-                self.logical_origin = elapsed;
+                self.logical_origin = resume_cue
+                    .as_deref()
+                    .and_then(|id| self.renderer.intro_cue_start_ms(id))
+                    .map_or(elapsed, |start| {
+                        elapsed.saturating_sub(Duration::from_millis(start))
+                    });
                 self.status_state = StartupParticleStatusState::Applied;
                 self.last_error = None;
                 publish_startup_particle_status(
@@ -660,7 +780,12 @@ impl LiveParticleRenderer {
                     );
                 };
                 self.renderer = renderer;
-                self.logical_origin = elapsed;
+                self.logical_origin = resume_cue
+                    .as_deref()
+                    .and_then(|id| self.renderer.intro_cue_start_ms(id))
+                    .map_or(elapsed, |start| {
+                        elapsed.saturating_sub(Duration::from_millis(start))
+                    });
                 self.status_state = StartupParticleStatusState::Embedded;
                 self.last_error = None;
                 publish_startup_particle_status(

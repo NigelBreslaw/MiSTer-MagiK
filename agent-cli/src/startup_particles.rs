@@ -22,6 +22,7 @@ const LAB_DIR: &str = "apps/framebuffer-scene-lab";
 const LAB_BINARY: &str = "mister-magik-framebuffer-scene-lab";
 const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
+const INTRO_SCHEMA: &str = "mister-magik-particle-intro-v1";
 const MAX_RECIPE_BYTES: u64 = 1024 * 1024;
 const CABINET_CASES: [&str; 27] = [
     "baseline-24064",
@@ -79,6 +80,7 @@ pub struct GenerateIntroAssetsArgs {
 pub enum SceneLabScene {
     Magik,
     Cabinet,
+    Intro,
     NavigationTransition,
 }
 
@@ -87,6 +89,7 @@ impl SceneLabScene {
         match self {
             Self::Magik => "magik",
             Self::Cabinet => "cabinet",
+            Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
         }
     }
@@ -198,7 +201,7 @@ pub fn execute_scene_device(
 ) -> AgentResult<()> {
     require_attended_terminal()?;
     match args.scene {
-        DeviceSceneLabScene::Magik | DeviceSceneLabScene::Cabinet => {
+        DeviceSceneLabScene::Magik | DeviceSceneLabScene::Cabinet | DeviceSceneLabScene::Intro => {
             let recipe = args
                 .recipe
                 .as_deref()
@@ -256,7 +259,7 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
 
 fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> {
     match args.scene {
-        SceneLabScene::Magik | SceneLabScene::Cabinet => {
+        SceneLabScene::Magik | SceneLabScene::Cabinet | SceneLabScene::Intro => {
             let recipe = args
                 .recipe
                 .as_deref()
@@ -353,7 +356,8 @@ fn recipe_scene(path: &Path) -> AgentResult<&'static str> {
     match value.get("schema").and_then(serde_json::Value::as_str) {
         Some(MAGIK_SCHEMA) => Ok("magik"),
         Some(CABINET_SCHEMA) => Ok("cabinet"),
-        _ => Err("scene lab accepts only MagiK V1 or cabinet V1 recipes".into()),
+        Some(INTRO_SCHEMA) => Ok("intro"),
+        _ => Err("scene lab accepts only MagiK V1, cabinet V1, or intro V1 recipes".into()),
     }
 }
 

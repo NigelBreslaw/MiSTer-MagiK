@@ -935,6 +935,14 @@ fn run_window(
             raster_samples_us.push(stages.raster_us);
             worker_wait_samples_us.push(stages.worker_wait_us);
             prepared_age_samples_us.push(stages.prepared_age_us);
+        } else if let Some(stages) = stats.intro_stages {
+            clear_samples_us.push(stages.clear_us);
+            simulation_samples_us.push(stages.transform_us);
+            projection_samples_us.push(stages.projection_us);
+            ordering_samples_us.push(0);
+            raster_samples_us.push(stages.raster_us);
+            worker_wait_samples_us.push(0);
+            prepared_age_samples_us.push(0);
         } else {
             clear_samples_us.clear();
             simulation_samples_us.clear();
@@ -1028,10 +1036,14 @@ fn run_window(
                 )
             };
             println!(
-                "framebuffer-scene-lab effect={} generation={} state={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.state_label(),
+                stats.cue_id,
+                stats.cue_elapsed_ms,
+                stats.total_ms,
+                stats.particles,
                 status_frames as f64 / seconds,
                 cpu_percent,
                 render_average_us,
@@ -1146,7 +1158,7 @@ impl Options {
                     scene = EffectKind::parse(&value);
                     if scene.is_none() {
                         return Err(format!(
-                            "invalid scene {value:?}; expected magik, cabinet, or navigation-transition"
+                            "invalid scene {value:?}; expected magik, cabinet, intro, or navigation-transition"
                         ));
                     }
                 }
@@ -1236,7 +1248,7 @@ impl Options {
             return Err("--profile requires a closed --case".into());
         }
         match self.scene {
-            EffectKind::Magik | EffectKind::Cabinet => {
+            EffectKind::Magik | EffectKind::Cabinet | EffectKind::Intro => {
                 if self.recipe.is_none() {
                     return Err("particle scenes require --recipe".into());
                 }
@@ -1267,7 +1279,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -1328,6 +1340,89 @@ mod macos {
     use winit::keyboard::{KeyCode, PhysicalKey};
     use winit::window::{Window, WindowId};
 
+    #[derive(Clone, Copy)]
+    enum IntroAction {
+        Pause,
+        ScrubBack,
+        ScrubForward,
+        PreviousCue,
+        NextCue,
+        Restart,
+        ToggleLoop,
+    }
+
+    struct IntroTransport {
+        playhead: Duration,
+        last_tick: Instant,
+        paused: bool,
+        looping: bool,
+        total: Duration,
+    }
+
+    impl IntroTransport {
+        fn new(now: Instant) -> Self {
+            Self {
+                playhead: Duration::ZERO,
+                last_tick: now,
+                paused: false,
+                looping: true,
+                total: Duration::from_secs(20),
+            }
+        }
+
+        fn tick(&mut self, now: Instant) -> Duration {
+            if !self.paused {
+                self.playhead = self
+                    .playhead
+                    .saturating_add(now.duration_since(self.last_tick));
+            }
+            self.last_tick = now;
+            if self.looping && !self.total.is_zero() {
+                self.playhead = Duration::from_nanos(
+                    self.playhead.as_nanos().rem_euclid(self.total.as_nanos()) as u64,
+                );
+            } else {
+                self.playhead = self.playhead.min(self.total);
+            }
+            self.playhead
+        }
+
+        fn apply(
+            &mut self,
+            action: IntroAction,
+            stats: Option<mister_magik_framebuffer_scene_lab::FrameStats>,
+        ) {
+            match action {
+                IntroAction::Pause => self.paused = !self.paused,
+                IntroAction::ScrubBack => {
+                    self.playhead = self.playhead.saturating_sub(Duration::from_millis(100));
+                }
+                IntroAction::ScrubForward => {
+                    self.playhead = self
+                        .playhead
+                        .saturating_add(Duration::from_millis(100))
+                        .min(self.total);
+                }
+                IntroAction::PreviousCue => {
+                    if let Some(stats) = stats {
+                        self.playhead = Duration::from_millis(stats.previous_cue_start_ms);
+                    }
+                }
+                IntroAction::NextCue => {
+                    if let Some(stats) = stats {
+                        self.playhead = Duration::from_millis(
+                            stats.cue_start_ms.saturating_add(stats.cue_duration_ms),
+                        )
+                        .min(self.total);
+                    }
+                }
+                IntroAction::Restart => self.playhead = Duration::ZERO,
+                IntroAction::ToggleLoop => self.looping = !self.looping,
+            }
+            self.last_tick = Instant::now();
+        }
+    }
+
     pub(super) struct ParticleLabApplication {
         renderer: LabScene,
         window: Option<Arc<Window>>,
@@ -1342,6 +1437,8 @@ mod macos {
         last_title: String,
         render_error: Option<String>,
         controls: Option<CabinetLabControls>,
+        intro_transport: Option<IntroTransport>,
+        last_stats: Option<mister_magik_framebuffer_scene_lab::FrameStats>,
     }
 
     impl ParticleLabApplication {
@@ -1350,6 +1447,8 @@ mod macos {
             let controls = (case.is_none() && renderer.effect() == EffectKind::Cabinet)
                 .then(CabinetLabControls::new);
             let now = Instant::now();
+            let intro_transport =
+                (renderer.effect() == EffectKind::Intro).then(|| IntroTransport::new(now));
             Ok(Self {
                 renderer,
                 window: None,
@@ -1364,6 +1463,8 @@ mod macos {
                 last_title: String::new(),
                 render_error: None,
                 controls,
+                intro_transport,
+                last_stats: None,
             })
         }
 
@@ -1397,8 +1498,22 @@ mod macos {
                 .as_deref()
                 .or_else(|| self.renderer.last_error())
                 .map_or_else(String::new, |error| format!(" — error: {error}"));
+            let cue = self.last_stats.as_ref().map_or_else(String::new, |stats| {
+                if stats.effect == EffectKind::Intro {
+                    format!(
+                        " — {} {:05}/{:05}ms particles={} cohorts={}",
+                        stats.cue_id,
+                        stats.cue_elapsed_ms,
+                        stats.total_ms,
+                        stats.particles,
+                        stats.projection_cohorts
+                    )
+                } else {
+                    String::new()
+                }
+            });
             format!(
-                "MiSTer MagiK Framebuffer Scenes — {} — generation {} {} — {:.1} fps{error}",
+                "MiSTer MagiK Framebuffer Scenes — {} — generation {} {} — {:.1} fps{cue}{error}",
                 self.renderer.effect().label(),
                 self.renderer.generation(),
                 self.renderer.state_label(),
@@ -1420,7 +1535,11 @@ mod macos {
             let Some(window) = self.window.as_ref() else {
                 return;
             };
-            let elapsed = self.epoch.elapsed();
+            let now = Instant::now();
+            let elapsed = self
+                .intro_transport
+                .as_mut()
+                .map_or_else(|| self.epoch.elapsed(), |transport| transport.tick(now));
             if let Some(controls) = self.controls.as_ref()
                 && let Err(error) = self.renderer.set_cabinet_controls(controls)
             {
@@ -1428,16 +1547,23 @@ mod macos {
                 self.update_title();
                 return;
             }
-            if let Err(error) = self.renderer.render_buffer(
+            let stats = match self.renderer.render_buffer(
                 &mut self.pixels,
                 0,
                 elapsed,
                 Some(elapsed.saturating_add(FRAME_DURATION)),
             ) {
-                self.render_error = Some(error);
-                self.update_title();
-                return;
+                Ok(stats) => stats,
+                Err(error) => {
+                    self.render_error = Some(error);
+                    self.update_title();
+                    return;
+                }
+            };
+            if let Some(transport) = self.intro_transport.as_mut() {
+                transport.total = Duration::from_millis(stats.total_ms);
             }
+            self.last_stats = Some(stats);
             if let Some(controls) = self.controls.as_ref() {
                 controls.draw_hud(&mut self.pixels);
             }
@@ -1513,6 +1639,25 @@ mod macos {
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed && !event.repeat =>
                 {
+                    let intro_action = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::Space) => Some(IntroAction::Pause),
+                        PhysicalKey::Code(KeyCode::ArrowLeft) => Some(IntroAction::ScrubBack),
+                        PhysicalKey::Code(KeyCode::ArrowRight) => Some(IntroAction::ScrubForward),
+                        PhysicalKey::Code(KeyCode::ArrowUp) => Some(IntroAction::PreviousCue),
+                        PhysicalKey::Code(KeyCode::ArrowDown) => Some(IntroAction::NextCue),
+                        PhysicalKey::Code(KeyCode::Home) => Some(IntroAction::Restart),
+                        PhysicalKey::Code(KeyCode::KeyL) => Some(IntroAction::ToggleLoop),
+                        _ => None,
+                    };
+                    if let (Some(transport), Some(action)) =
+                        (self.intro_transport.as_mut(), intro_action)
+                    {
+                        transport.apply(action, self.last_stats);
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     let action = match event.physical_key {
                         PhysicalKey::Code(KeyCode::ArrowLeft) => Some(LabAction::PreviousMode),
                         PhysicalKey::Code(KeyCode::ArrowRight) => Some(LabAction::NextMode),

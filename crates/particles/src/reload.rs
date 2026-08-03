@@ -252,6 +252,7 @@ fn read_error(path: &Path, error: std::io::Error) -> FileObservation {
 pub enum StartupParticleRecipe {
     Magik,
     Cabinet,
+    Intro,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
