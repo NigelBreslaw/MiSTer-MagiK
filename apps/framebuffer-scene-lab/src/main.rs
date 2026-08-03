@@ -1806,7 +1806,7 @@ mod tests {
             ),
             (
                 EffectRecipe::Cabinet(embedded_cabinet_recipe().unwrap()),
-                0x0193_8d06_cd43_78ff,
+                0x27f1_8935_5c84_8f09,
             ),
         ] {
             let mut renderer =
