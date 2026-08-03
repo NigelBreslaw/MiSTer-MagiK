@@ -276,10 +276,8 @@ impl IntroScene {
             }],
         };
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_snapshot = vec![
-            Rgb565Pixel(recipe.appearance.background.0);
-            width.saturating_mul(height)
-        ];
+        let launcher_snapshot =
+            vec![Rgb565Pixel(recipe.appearance.background.0); width.saturating_mul(height)];
         let launcher_commands = prepare_target_commands(&launcher.positions, &recipe, geometry);
         let launcher_thresholds: Vec<u8> = launcher_commands
             .iter()
@@ -398,10 +396,7 @@ impl IntroScene {
     /// production launcher's live off-screen RGB565 render. All allocation and
     /// target preparation happens before the morph cue; the crossfade hot path
     /// only consumes the prepared storage.
-    pub fn replace_launcher_snapshot(
-        &mut self,
-        pixels: &[Rgb565Pixel],
-    ) -> Result<(), String> {
+    pub fn replace_launcher_snapshot(&mut self, pixels: &[Rgb565Pixel]) -> Result<(), String> {
         let prepared = Self::prepare_launcher_snapshot(
             self.geometry.width(),
             self.geometry.height(),
@@ -506,20 +501,19 @@ impl IntroScene {
             .fill(Rgb565Pixel(self.recipe.appearance.background.0));
         self.slot_states[usize::from(target.buffer_id().get())] = IntroSlotState::Dynamic;
         let clear_us = elapsed_us(clear_started.elapsed());
-        let (wait_duration_ms, wait_start_turns, wait_turns) =
-            match self.recipe.cues.get(6) {
-                Some(IntroCue::TargetOrbit {
-                    duration_ms,
-                    start_turns,
-                    turns,
-                    ..
-                }) if turns.abs() > f32::EPSILON => (
-                    ((*duration_ms as f32 / turns.abs()).round() as u64).max(1),
-                    *start_turns + *turns,
-                    turns.signum(),
-                ),
-                _ => (10_000, 0.7, 1.0),
-            };
+        let (wait_duration_ms, wait_start_turns, wait_turns) = match self.recipe.cues.get(6) {
+            Some(IntroCue::TargetOrbit {
+                duration_ms,
+                start_turns,
+                turns,
+                ..
+            }) if turns.abs() > f32::EPSILON => (
+                ((*duration_ms as f32 / turns.abs()).round() as u64).max(1),
+                *start_turns + *turns,
+                turns.signum(),
+            ),
+            _ => (10_000, 0.7, 1.0),
+        };
         let cue_elapsed_ms = waiting_frame
             .saturating_mul(1_000)
             .checked_div(60)
@@ -1753,10 +1747,7 @@ fn rgb565_channels(pixel: Rgb565Pixel) -> [u16; 3] {
     ]
 }
 
-fn nearest_launcher_palette(
-    pixel: Rgb565Pixel,
-    palette: &[crate::recipes::RecipeRgb565; 8],
-) -> u8 {
+fn nearest_launcher_palette(pixel: Rgb565Pixel, palette: &[crate::recipes::RecipeRgb565; 8]) -> u8 {
     let [red, green, blue] = rgb565_channels(pixel);
     palette
         .iter()
@@ -2211,7 +2202,10 @@ mod tests {
             .unwrap();
 
         assert!(scene.launcher_ready);
-        assert_eq!(scene.launcher.positions.len(), scene.recipe.steady_particle_count);
+        assert_eq!(
+            scene.launcher.positions.len(),
+            scene.recipe.steady_particle_count
+        );
         assert!(scene.launcher_commands.iter().all(|command| {
             command
                 .offset()
