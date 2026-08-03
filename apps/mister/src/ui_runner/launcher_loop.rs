@@ -6001,31 +6001,10 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
-        let startup_intro_was_active = startup_intro.is_some();
-        let mut startup_intro_completed = false;
-        if visible_frame_presented
-            && accepted_startup_intro_frame
-            && let Some(intro) = startup_intro.as_mut()
-            && intro.note_presented()
-        {
-            startup_intro_completed = true;
-            let restored = intro.restore_handoff_snapshot(&mut layer_target);
-            let returned = intro.take_buffers();
-            if !restored {
-                crate::ui_errln!("startup intro handoff cache geometry mismatch");
-            }
-            if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
-                launcher_presenter.fail_latch_completion(failure);
-            }
-            launcher_presenter.invalidate_external_hidden_mode();
-            startup_intro = None;
-            window.request_redraw();
-            print_startup_event(
-                start,
-                "startup_intro_completed",
-                "frames=1201 elapsed_ms=20000",
-            );
-        }
+        // Posting a buffer and observing it pending proves latch acceptance,
+        // not physical presentation. The intro advances only after the final
+        // active-sequence confirmation below.
+        let startup_intro_frame_posted = visible_frame_presented && accepted_startup_intro_frame;
         if navigation_transition_frame_active && visible_frame_presented {
             screensaver_cpu_profile.begin_navigation_transition(frames.saturating_add(1));
         }
@@ -6052,7 +6031,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
-        if visible_frame_presented && (!startup_intro_was_active || startup_intro_completed) {
+        if visible_frame_presented && startup_intro.is_none() {
             if !first_launcher_frame_logged
                 && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
             {
@@ -6297,6 +6276,44 @@ pub(super) fn run_launcher_loop(
                     if launcher_readiness.needs_full_present() {
                         request_launcher_redraw!();
                     }
+                }
+            }
+            if accepted_and_active_confirmed
+                && startup_intro_frame_posted
+                && let Some(intro) = startup_intro.as_mut()
+            {
+                let confirmed_at = pace.hit_at.unwrap_or(wait_done);
+                let cadence = intro.note_confirmed_present(
+                    confirmed_at,
+                    pace.period_us,
+                    pace.source == VsyncPaceSource::Vsync,
+                );
+                if let Some(cadence) = cadence {
+                    let restored = intro.restore_handoff_snapshot(&mut layer_target);
+                    let returned = intro.take_buffers();
+                    if !restored {
+                        crate::ui_errln!("startup intro handoff cache geometry mismatch");
+                    }
+                    if let Err(failure) =
+                        launcher_presenter.restore_direct_hidden_frame_buffers(returned)
+                    {
+                        launcher_presenter.fail_latch_completion(failure);
+                    }
+                    launcher_presenter.invalidate_external_hidden_mode();
+                    startup_intro = None;
+                    window.request_redraw();
+                    print_startup_event(
+                        start,
+                        "startup_intro_completed",
+                        format!(
+                            "frames={} elapsed_ms=20000 expected_refresh_intervals={} skipped_refreshes={} pacing_failures={} max_confirmation_gap_us={}",
+                            cadence.confirmed_frames,
+                            cadence.expected_refresh_intervals,
+                            cadence.skipped_refreshes,
+                            cadence.pacing_failures,
+                            cadence.max_confirmation_gap_us,
+                        ),
+                    );
                 }
             }
             frame_accounting.record_finished_frame(

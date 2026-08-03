@@ -1816,7 +1816,7 @@ mod tests {
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
                         frame: 41,
-                        severity: "drop",
+                        severity: "cadence-overrun",
                         wall_us: 22_000,
                         warning_us: 16_000,
                         budget_us: 16_667,
@@ -1951,7 +1951,10 @@ mod tests {
             262_144
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
-        assert_eq!(value["frame_budget"]["slow_frames"][0]["severity"], "drop");
+        assert_eq!(
+            value["frame_budget"]["slow_frames"][0]["severity"],
+            "cadence-overrun"
+        );
         assert_eq!(
             value["frame_budget"]["slow_frames"][0]["dominant_phase"],
             "custom-draw"

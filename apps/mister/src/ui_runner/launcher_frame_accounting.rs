@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::io::{BufWriter, Write as _};
 
 const FRAME_BUDGET_US: u64 = 16_667;
-const FRAME_NEAR_DROP_US: u64 = 16_000;
+const FRAME_CADENCE_WARNING_US: u64 = 16_000;
 const FRAME_BUDGET_20MS_US: u64 = 20_000;
 const FRAME_BUDGET_33MS_US: u64 = 33_334;
 const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analytics";
@@ -1779,7 +1779,7 @@ impl LauncherFrameAccounting {
         };
         self.frame_budget_total.record(sample);
         self.frame_budget_window.record(sample);
-        if wall_us >= FRAME_NEAR_DROP_US {
+        if wall_us >= FRAME_CADENCE_WARNING_US {
             self.push_slow_frame_sample(
                 frame,
                 wall_us,
@@ -2103,12 +2103,12 @@ impl LauncherFrameAccounting {
             .push(runtime_status::FrameBudgetSlowFrame {
                 frame: frame.frames,
                 severity: if wall_us > FRAME_BUDGET_US {
-                    "drop"
+                    "cadence-overrun"
                 } else {
-                    "near-drop"
+                    "cadence-warning"
                 },
                 wall_us,
-                warning_us: FRAME_NEAR_DROP_US,
+                warning_us: FRAME_CADENCE_WARNING_US,
                 budget_us: FRAME_BUDGET_US,
                 over_budget_us: wall_us.saturating_sub(FRAME_BUDGET_US),
                 dominant_phase: dominant_frame_phase(
@@ -3451,16 +3451,16 @@ mod tests {
     }
 
     #[test]
-    fn near_drop_frame_samples_are_retained_before_budget_miss() {
+    fn cadence_warning_samples_are_retained_before_budget_overrun() {
         let start = Instant::now();
         let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50");
-        accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_NEAR_DROP_US), 0);
+        accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_CADENCE_WARNING_US), 0);
 
         let status = accounting.current_frame_budget_status();
         assert_eq!(status.slow_frames.len(), 1);
         assert_eq!(status.slow_frames[0].frame, 7);
-        assert_eq!(status.slow_frames[0].severity, "near-drop");
-        assert_eq!(status.slow_frames[0].warning_us, FRAME_NEAR_DROP_US);
+        assert_eq!(status.slow_frames[0].severity, "cadence-warning");
+        assert_eq!(status.slow_frames[0].warning_us, FRAME_CADENCE_WARNING_US);
         assert_eq!(status.slow_frames[0].over_budget_us, 0);
     }
 }

@@ -41,6 +41,12 @@ impl PreparedStartupIntro {
             frame: 0,
             snapshot_ready: false,
             completed: false,
+            confirmed_frames: 0,
+            expected_refresh_intervals: 0,
+            skipped_refreshes: 0,
+            pacing_failures: 0,
+            max_confirmation_gap_us: 0,
+            last_confirmed_at: None,
         }
     }
 }
@@ -53,6 +59,21 @@ pub(super) struct StartupIntroSession {
     frame: u64,
     snapshot_ready: bool,
     completed: bool,
+    confirmed_frames: u64,
+    expected_refresh_intervals: u64,
+    skipped_refreshes: u64,
+    pacing_failures: u64,
+    max_confirmation_gap_us: u64,
+    last_confirmed_at: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StartupIntroCadence {
+    pub(super) confirmed_frames: u64,
+    pub(super) expected_refresh_intervals: u64,
+    pub(super) skipped_refreshes: u64,
+    pub(super) pacing_failures: u64,
+    pub(super) max_confirmation_gap_us: u64,
 }
 
 impl StartupIntroSession {
@@ -137,16 +158,49 @@ impl StartupIntroSession {
         Ok(CompletedHiddenFrame { grant })
     }
 
-    /// Advances only after the presenter confirms that the direct frame was
-    /// posted successfully. A missed grant or failed presentation therefore
-    /// retries the same logical 60 Hz timestamp.
-    pub(super) fn note_presented(&mut self) -> bool {
+    /// Advances only after the latch reports this sequence active at the
+    /// physical scanout boundary. Latch protocol drops and missed refreshes
+    /// are deliberately separate signals: a healthy latch may still repeat a
+    /// frame when rendering takes longer than one refresh interval.
+    pub(super) fn note_confirmed_present(
+        &mut self,
+        confirmed_at: Instant,
+        refresh_period_us: u64,
+        vsync_confirmed: bool,
+    ) -> Option<StartupIntroCadence> {
+        self.confirmed_frames = self.confirmed_frames.saturating_add(1);
+        if !vsync_confirmed {
+            self.pacing_failures = self.pacing_failures.saturating_add(1);
+        }
+        if let Some(previous) = self.last_confirmed_at.replace(confirmed_at) {
+            let gap_us = confirmed_at
+                .saturating_duration_since(previous)
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            self.max_confirmation_gap_us = self.max_confirmation_gap_us.max(gap_us);
+            let expected = expected_refresh_intervals(gap_us, refresh_period_us);
+            self.expected_refresh_intervals =
+                self.expected_refresh_intervals.saturating_add(expected);
+            self.skipped_refreshes = self
+                .skipped_refreshes
+                .saturating_add(expected.saturating_sub(1));
+        }
         if self.frame >= FINAL_FRAME {
             self.completed = true;
         } else {
             self.frame = self.frame.saturating_add(1);
         }
-        self.completed
+        self.completed.then_some(self.cadence())
+    }
+
+    pub(super) const fn cadence(&self) -> StartupIntroCadence {
+        StartupIntroCadence {
+            confirmed_frames: self.confirmed_frames,
+            expected_refresh_intervals: self.expected_refresh_intervals,
+            skipped_refreshes: self.skipped_refreshes,
+            pacing_failures: self.pacing_failures,
+            max_confirmation_gap_us: self.max_confirmation_gap_us,
+        }
     }
 
     pub(super) fn restore_handoff_snapshot(&self, target: &mut LayerTarget<'_>) -> bool {
@@ -186,13 +240,82 @@ fn intro_frame_elapsed(frame: u64) -> Duration {
     Duration::from_nanos(frame.saturating_mul(1_000_000_000) / INTRO_FPS)
 }
 
+fn expected_refresh_intervals(gap_us: u64, refresh_period_us: u64) -> u64 {
+    if refresh_period_us == 0 {
+        return 1;
+    }
+    gap_us
+        .saturating_add(refresh_period_us / 2)
+        .checked_div(refresh_period_us)
+        .unwrap_or(1)
+        .max(1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_session() -> StartupIntroSession {
+        let prepared = PreparedStartupIntro::new(320, 180).unwrap();
+        StartupIntroSession {
+            scene: prepared.scene,
+            buffers: None,
+            handoff_snapshot: prepared.handoff_snapshot,
+            scene_handoff_snapshot: prepared.scene_handoff_snapshot,
+            frame: 0,
+            snapshot_ready: false,
+            completed: false,
+            confirmed_frames: 0,
+            expected_refresh_intervals: 0,
+            skipped_refreshes: 0,
+            pacing_failures: 0,
+            max_confirmation_gap_us: 0,
+            last_confirmed_at: None,
+        }
+    }
 
     #[test]
     fn rational_clock_hits_exact_storyboard_boundaries() {
         assert_eq!(intro_frame_elapsed(SNAPSHOT_FRAME), Duration::from_secs(18));
         assert_eq!(intro_frame_elapsed(FINAL_FRAME), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn refresh_intervals_round_to_the_nearest_physical_period() {
+        assert_eq!(expected_refresh_intervals(16_667, 16_667), 1);
+        assert_eq!(expected_refresh_intervals(33_334, 16_667), 2);
+        assert_eq!(expected_refresh_intervals(24_999, 16_667), 1);
+        assert_eq!(expected_refresh_intervals(25_001, 16_667), 2);
+    }
+
+    #[test]
+    fn confirmed_cadence_counts_a_skip_with_a_healthy_latch() {
+        let period_us = 16_667;
+        let origin = Instant::now();
+        let run = |skip_at: Option<u64>| {
+            let mut session = test_session();
+            let mut completed = None;
+            for frame in 0..=FINAL_FRAME {
+                let skipped_us = u64::from(skip_at.is_some_and(|at| frame >= at)) * period_us;
+                completed = session.note_confirmed_present(
+                    origin + Duration::from_micros(frame * period_us + skipped_us),
+                    period_us,
+                    true,
+                );
+            }
+            completed.unwrap()
+        };
+
+        let exact = run(None);
+        assert_eq!(exact.confirmed_frames, FINAL_FRAME + 1);
+        assert_eq!(exact.expected_refresh_intervals, FINAL_FRAME);
+        assert_eq!(exact.skipped_refreshes, 0);
+        assert_eq!(exact.pacing_failures, 0);
+
+        let skipped = run(Some(600));
+        assert_eq!(skipped.confirmed_frames, FINAL_FRAME + 1);
+        assert_eq!(skipped.expected_refresh_intervals, FINAL_FRAME + 1);
+        assert_eq!(skipped.skipped_refreshes, 1);
+        assert_eq!(skipped.pacing_failures, 0);
     }
 }
