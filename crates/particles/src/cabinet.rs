@@ -1171,6 +1171,7 @@ fn cohort_particle_count(count: usize, cohorts: usize, cohort: usize) -> usize {
     (complete + extra_block) * PARTICLE_LANES + tail
 }
 
+#[cfg(test)]
 fn jittered_offset(offset: usize, width: usize, frame_len: usize, random: u32, phase: u8) -> usize {
     jittered_offset_with_x(offset, offset % width, width, frame_len, random, phase).0
 }
