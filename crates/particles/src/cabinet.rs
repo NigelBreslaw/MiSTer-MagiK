@@ -109,6 +109,7 @@ pub enum CabinetColorMode {
     #[default]
     Origin,
     ScreenPrism,
+    DiagonalAurora,
 }
 
 impl CabinetColorMode {
@@ -117,6 +118,7 @@ impl CabinetColorMode {
         match self {
             Self::Origin => "ORIGIN COLOUR",
             Self::ScreenPrism => "SCREEN PRISM",
+            Self::DiagonalAurora => "DIAGONAL AURORA",
         }
     }
 }
@@ -223,6 +225,7 @@ pub struct ArcadeCabinetFormation {
     baseline_raster: Vec<u64>,
     creative_palette: [[u64; 4]; 8],
     screen_prism: Vec<Rgb565Pixel>,
+    aurora_ribbon: Vec<Rgb565Pixel>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -597,6 +600,7 @@ impl ArcadeCabinetFormation {
             width.saturating_add(height.saturating_sub(1).saturating_mul(3)),
             &PRISM_STOPS,
         );
+        let aurora_ribbon = horizontal_gradient(2_048, &AURORA_STOPS);
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -682,6 +686,7 @@ impl ArcadeCabinetFormation {
             baseline_raster,
             creative_palette,
             screen_prism,
+            aurora_ribbon,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -756,6 +761,11 @@ impl ArcadeCabinetFormation {
             )
             .saturating_add(
                 self.screen_prism
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
+            )
+            .saturating_add(
+                self.aurora_ribbon
                     .capacity()
                     .saturating_mul(std::mem::size_of::<Rgb565Pixel>()),
             )
@@ -1106,9 +1116,8 @@ impl ArcadeCabinetFormation {
                 true
             }
         };
-        if creative_mode == CabinetCreativeMode::Baseline
-            && color_mode == CabinetColorMode::ScreenPrism
-        {
+        if creative_mode == CabinetCreativeMode::Baseline && color_mode != CabinetColorMode::Origin {
+            let aurora_phase = (elapsed.as_millis() as usize / 40) & 2_047;
             for index in 0..self.options.active_count {
                 let command = self.commands[index];
                 let Some(offset) = command.offset() else {
@@ -1118,7 +1127,13 @@ impl ArcadeCabinetFormation {
                 let baseline = self.baseline_raster[index];
                 let pixel_x = command.pixel_x();
                 let pixel_y = projected_pixel_y(offset, pixel_x, self.width);
-                let primary = self.screen_prism[pixel_x + pixel_y * 3];
+                let primary = match color_mode {
+                    CabinetColorMode::ScreenPrism => self.screen_prism[pixel_x + pixel_y * 3],
+                    CabinetColorMode::DiagonalAurora => {
+                        self.aurora_ribbon[(pixel_x + pixel_y * 2 + aurora_phase) & 2_047]
+                    }
+                    CabinetColorMode::Origin => unreachable!(),
+                };
                 destination[offset] = primary;
                 dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
@@ -1394,6 +1409,15 @@ const PRISM_STOPS: [Rgb565Pixel; 7] = [
     Rgb565Pixel(0x05ff),
     Rgb565Pixel(0x435f),
     Rgb565Pixel(0x981f),
+];
+
+const AURORA_STOPS: [Rgb565Pixel; 6] = [
+    Rgb565Pixel(0x781f),
+    Rgb565Pixel(0x18bf),
+    Rgb565Pixel(0x05ff),
+    Rgb565Pixel(0x07f3),
+    Rgb565Pixel(0xdfc0),
+    Rgb565Pixel(0x781f),
 ];
 
 fn horizontal_gradient(width: usize, stops: &[Rgb565Pixel]) -> Vec<Rgb565Pixel> {

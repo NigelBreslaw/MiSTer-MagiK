@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 16] = [
+const CABINET_CASES: [CabinetCase; 17] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -198,6 +198,12 @@ const CABINET_CASES: [CabinetCase; 16] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::ScreenPrism,
+    },
+    CabinetCase {
+        name: "aurora-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::DiagonalAurora,
     },
 ];
 
@@ -371,10 +377,11 @@ enum CabinetDemoMode {
     MicroJitter,
     All,
     ScreenPrism,
+    DiagonalAurora,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -382,6 +389,7 @@ impl CabinetDemoMode {
         Self::MicroJitter,
         Self::All,
         Self::ScreenPrism,
+        Self::DiagonalAurora,
     ];
 
     const fn index(self) -> usize {
@@ -397,6 +405,7 @@ impl CabinetDemoMode {
             Self::MicroJitter => "MICRO-JITTER",
             Self::All => "ALL",
             Self::ScreenPrism => "SCREEN PRISM",
+            Self::DiagonalAurora => "DIAGONAL AURORA",
         }
     }
 
@@ -407,10 +416,13 @@ impl CabinetDemoMode {
             Self::DepthPalette => CabinetCreativeMode::DepthPalette,
             Self::MicroJitter => CabinetCreativeMode::MicroJitter,
             Self::All => CabinetCreativeMode::All,
-            Self::Baseline | Self::ScreenPrism => CabinetCreativeMode::Baseline,
+            Self::Baseline | Self::ScreenPrism | Self::DiagonalAurora => {
+                CabinetCreativeMode::Baseline
+            }
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
+            Self::DiagonalAurora => CabinetColorMode::DiagonalAurora,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -1642,7 +1654,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::ScreenPrism);
+        assert_eq!(controls.mode, CabinetDemoMode::DiagonalAurora);
     }
 
     #[test]
