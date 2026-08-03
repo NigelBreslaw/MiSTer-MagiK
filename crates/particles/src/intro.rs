@@ -126,8 +126,6 @@ pub struct IntroScene {
     crossfade_visible_counts: [usize; 65],
     crossfade_buckets: Vec<Vec<u32>>,
     slot_states: [IntroSlotState; 2],
-    full_clear: [bool; 2],
-    dirty_offsets: [Vec<u32>; 2],
     static_xy: Vec<[f32; 2]>,
     static_origins: Vec<[u16; 2]>,
     formation_screen: Vec<[f32; 2]>,
@@ -293,7 +291,6 @@ impl IntroScene {
         let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
         let commands =
             vec![PointCloudDrawCommand(INVALID_PARTICLE_OFFSET); recipe.steady_particle_count];
-        let dirty_capacity = recipe.initial_particle_count;
         Ok(Self {
             geometry,
             recipe,
@@ -313,11 +310,6 @@ impl IntroScene {
             crossfade_visible_counts,
             crossfade_buckets,
             slot_states: [IntroSlotState::Uninitialized; 2],
-            full_clear: [true; 2],
-            dirty_offsets: [
-                Vec::with_capacity(dirty_capacity),
-                Vec::with_capacity(dirty_capacity),
-            ],
             static_xy,
             static_origins,
             formation_screen,
@@ -340,12 +332,7 @@ impl IntroScene {
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
     }
 
-    fn render_crt(
-        &self,
-        destination: &mut [Rgb565Pixel],
-        frame: u64,
-        dirty_offsets: &mut Vec<u32>,
-    ) -> IntroRenderResult {
+    fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> IntroRenderResult {
         let raster_started = Instant::now();
         let palette = self.recipe.appearance.crt_palette;
         let mut visible = 0;
@@ -356,9 +343,8 @@ impl IntroScene {
             }
             let x = wrap_small_jitter(source[0], (noise & 3) as u16, self.geometry.width());
             let y = wrap_small_jitter(source[1], ((noise >> 2) & 3) as u16, self.geometry.height());
-            let offset = y * self.geometry.width() + x;
-            destination[offset] = Rgb565Pixel(palette[((noise >> 30) & 3) as usize].0);
-            dirty_offsets.push(offset as u32);
+            destination[y * self.geometry.width() + x] =
+                Rgb565Pixel(palette[((noise >> 30) & 3) as usize].0);
             visible += 1;
         }
         IntroRenderResult::raster_only(
@@ -374,7 +360,6 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         progress: f32,
         frame: u64,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let raster_started = Instant::now();
         let progress = ease(progress, RecipeEasing::EaseOutCubic);
@@ -389,9 +374,7 @@ impl IntroScene {
                 && x < self.geometry.width() as f32
                 && y < self.geometry.height() as f32
             {
-                let offset = y as usize * self.geometry.width() + x as usize;
-                destination[offset] = color;
-                dirty_offsets.push(offset as u32);
+                destination[y as usize * self.geometry.width() + x as usize] = color;
                 visible += 1;
             }
         };
@@ -423,7 +406,6 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         target: ScenePointTarget,
         frame: u64,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let text_palette_mix =
             matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
@@ -443,7 +425,6 @@ impl IntroScene {
             text_palette_mix,
             false,
             frame,
-            dirty_offsets,
         )
     }
 
@@ -458,7 +439,6 @@ impl IntroScene {
         easing: RecipeEasing,
         frame: u64,
         update_all: bool,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let local_duration = duration_ms
@@ -525,7 +505,6 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
-            dirty_offsets,
         )
         .with_outer_transform(transform_us)
     }
@@ -545,7 +524,6 @@ impl IntroScene {
         easing: RecipeEasing,
         frame: u64,
         update_all: bool,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let cue_progress = ease(
@@ -612,7 +590,6 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
-            dirty_offsets,
         )
         .with_outer_transform(transform_us)
     }
@@ -627,7 +604,6 @@ impl IntroScene {
         turns: f32,
         formation_percent: f32,
         frame: u64,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, start_turns, turns);
@@ -654,7 +630,6 @@ impl IntroScene {
             Some(0.0),
             false,
             frame,
-            dirty_offsets,
         )
         .with_outer_transform(transform_us)
     }
@@ -666,7 +641,6 @@ impl IntroScene {
         duration_ms: u64,
         easing: RecipeEasing,
         frame: u64,
-        dirty_offsets: &mut Vec<u32>,
     ) -> IntroRenderResult {
         let transform_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
@@ -697,7 +671,6 @@ impl IntroScene {
             Some(progress),
             false,
             frame,
-            dirty_offsets,
         )
         .with_outer_transform(transform_us)
     }
@@ -793,7 +766,6 @@ fn render_point_cloud(
     text_palette_mix: Option<f32>,
     text_neighbors: bool,
     frame: u64,
-    dirty_offsets: &mut Vec<u32>,
 ) -> IntroRenderResult {
     let transform_started = Instant::now();
     copy_target_to_blocks(target_positions, positions);
@@ -852,7 +824,6 @@ fn render_point_cloud(
             recipe.appearance.palette[usize::from(target_palette[index])]
         };
         destination[offset] = Rgb565Pixel(color.0);
-        dirty_offsets.push(offset as u32);
         visible += 1;
         writes += 1;
         if !target_color
@@ -861,7 +832,6 @@ fn render_point_cloud(
             && offset % geometry.width() + 1 < geometry.width()
         {
             destination[offset + 1] = Rgb565Pixel(recipe.appearance.text_palette[2].0);
-            dirty_offsets.push((offset + 1) as u32);
             writes += 1;
         }
     }
@@ -911,41 +881,22 @@ impl FramebufferScene for IntroScene {
             .sum();
         let buffer_id = usize::from(target.buffer_id().get());
         let incremental_frame = matches!(&cue, IntroCue::MockCrossfade { .. }) || cue_index == 9;
-        let mut dirty_offsets = std::mem::take(&mut self.dirty_offsets[buffer_id]);
         let clear_us = if incremental_frame {
-            dirty_offsets.clear();
             0
         } else {
             let clear_started = Instant::now();
-            let background = Rgb565Pixel(self.recipe.appearance.background.0);
-            if self.full_clear[buffer_id]
-                || self.slot_states[buffer_id] != IntroSlotState::Dynamic
-                || dirty_offsets.len() >= self.geometry.len().div_ceil(8)
-            {
-                target.pixels_mut().fill(background);
-                self.full_clear[buffer_id] = false;
-            } else {
-                for &offset in &dirty_offsets {
-                    target.pixels_mut()[offset as usize] = background;
-                }
-            }
-            dirty_offsets.clear();
+            target
+                .pixels_mut()
+                .fill(Rgb565Pixel(self.recipe.appearance.background.0));
             self.slot_states[buffer_id] = IntroSlotState::Dynamic;
             elapsed_us(clear_started.elapsed())
         };
         let update_all_transforms = clock.next_elapsed.is_none() || cue_elapsed_ms < 34;
         let rendered = match &cue {
-            IntroCue::CrtStatic { .. } => {
-                self.render_crt(target.pixels_mut(), clock.frame, &mut dirty_offsets)
-            }
+            IntroCue::CrtStatic { .. } => self.render_crt(target.pixels_mut(), clock.frame),
             IntroCue::MorphTarget { duration_ms, .. } if cue_index == 1 => {
                 let progress = cue_elapsed_ms as f32 / *duration_ms as f32;
-                self.render_mister_formation(
-                    target.pixels_mut(),
-                    progress,
-                    clock.frame,
-                    &mut dirty_offsets,
-                )
+                self.render_mister_formation(target.pixels_mut(), progress, clock.frame)
             }
             IntroCue::LetterMorph {
                 duration_ms,
@@ -962,7 +913,6 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
                 update_all_transforms,
-                &mut dirty_offsets,
             ),
             IntroCue::Cloud {
                 duration_ms,
@@ -987,7 +937,6 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
                 update_all_transforms,
-                &mut dirty_offsets,
             ),
             IntroCue::TargetOrbit {
                 duration_ms,
@@ -1003,7 +952,6 @@ impl FramebufferScene for IntroScene {
                 *turns,
                 *formation_percent,
                 clock.frame,
-                &mut dirty_offsets,
             ),
             IntroCue::MorphTarget {
                 duration_ms,
@@ -1015,7 +963,6 @@ impl FramebufferScene for IntroScene {
                 *duration_ms,
                 *easing,
                 clock.frame,
-                &mut dirty_offsets,
             ),
             IntroCue::MockCrossfade {
                 duration_ms,
@@ -1051,15 +998,9 @@ impl FramebufferScene for IntroScene {
                     4 => ScenePointTarget::Magik,
                     _ => ScenePointTarget::Launcher,
                 };
-                self.render_point_target(
-                    target.pixels_mut(),
-                    point_target,
-                    clock.frame,
-                    &mut dirty_offsets,
-                )
+                self.render_point_target(target.pixels_mut(), point_target, clock.frame)
             }
         };
-        self.dirty_offsets[buffer_id] = dirty_offsets;
         let particles = if cue_index < 2 {
             self.recipe.initial_particle_count
         } else {
@@ -1091,10 +1032,7 @@ impl FramebufferScene for IntroScene {
     }
 
     fn invalidate_buffer(&mut self, buffer: SceneBufferId) {
-        let buffer = usize::from(buffer.get());
-        self.slot_states[buffer] = IntroSlotState::Uninitialized;
-        self.full_clear[buffer] = true;
-        self.dirty_offsets[buffer].clear();
+        self.slot_states[usize::from(buffer.get())] = IntroSlotState::Uninitialized;
     }
 }
 
@@ -1480,7 +1418,6 @@ mod tests {
     fn common_m_remains_cohesive_while_translating_between_centered_words() {
         let mut scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
-        let mut dirty_offsets = Vec::new();
         scene.render_letter_morph(
             &mut pixels,
             1_750,
@@ -1490,7 +1427,6 @@ mod tests {
             RecipeEasing::Smoothstep,
             105,
             true,
-            &mut dirty_offsets,
         );
         let m = scene.mister.groups[0];
         let source_pivot = pivot(&scene.mister.positions[m.start..m.start + m.count]);
@@ -1508,7 +1444,6 @@ mod tests {
     fn each_letter_finishes_its_spin_on_the_exact_destination() {
         let mut scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
-        let mut dirty_offsets = Vec::new();
         scene.render_letter_morph(
             &mut pixels,
             3_500,
@@ -1518,7 +1453,6 @@ mod tests {
             RecipeEasing::Smoothstep,
             210,
             true,
-            &mut dirty_offsets,
         );
         for (actual, expected) in scene.dynamic_positions.iter().zip(&scene.magik.positions) {
             for axis in 0..3 {
@@ -1583,42 +1517,6 @@ mod tests {
                 frame: frame as u64,
                 elapsed: Duration::from_millis(time_ms),
                 next_elapsed: Some(Duration::from_millis(time_ms + 16)),
-            };
-            live.render(
-                SceneTarget::new(&mut slots[slot], geometry, buffer).unwrap(),
-                clock,
-            )
-            .unwrap();
-
-            let mut expected = vec![Rgb565Pixel(0); geometry.len()];
-            reference.invalidate_buffer(buffer);
-            reference
-                .render(
-                    SceneTarget::new(&mut expected, geometry, buffer).unwrap(),
-                    clock,
-                )
-                .unwrap();
-            assert_eq!(slots[slot], expected, "time_ms={time_ms} slot={slot}");
-        }
-    }
-
-    #[test]
-    fn dirty_buffer_histories_match_fresh_absolute_timestamp_frames() {
-        let recipe = embedded_intro_recipe().unwrap();
-        let geometry = SceneGeometry::new(960, 540, 960).unwrap();
-        let mut live = IntroScene::new(960, 540, recipe.clone()).unwrap();
-        let mut reference = IntroScene::new(960, 540, recipe).unwrap();
-        let mut slots = [
-            vec![Rgb565Pixel(0); geometry.len()],
-            vec![Rgb565Pixel(0); geometry.len()],
-        ];
-        for (frame, time_ms) in (0..=20_000).step_by(1_000).enumerate() {
-            let slot = frame & 1;
-            let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
-            let clock = SceneClock {
-                frame: frame as u64,
-                elapsed: Duration::from_millis(time_ms),
-                next_elapsed: None,
             };
             live.render(
                 SceneTarget::new(&mut slots[slot], geometry, buffer).unwrap(),
