@@ -112,6 +112,7 @@ pub enum CabinetColorMode {
     DiagonalAurora,
     VortexSpectrum,
     StudioLights,
+    DepthPrism,
 }
 
 impl CabinetColorMode {
@@ -123,6 +124,7 @@ impl CabinetColorMode {
             Self::DiagonalAurora => "DIAGONAL AURORA",
             Self::VortexSpectrum => "VORTEX SPECTRUM",
             Self::StudioLights => "STUDIO LIGHTS",
+            Self::DepthPrism => "DEPTH PRISM",
         }
     }
 }
@@ -233,6 +235,7 @@ pub struct ArcadeCabinetFormation {
     vortex_field: Vec<Rgb565Pixel>,
     vortex_ready: bool,
     studio_lights: Vec<[Rgb565Pixel; 4]>,
+    depth_prism: Vec<[Rgb565Pixel; 4]>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -610,6 +613,18 @@ impl ArcadeCabinetFormation {
         let aurora_ribbon = horizontal_gradient(2_048, &AURORA_STOPS);
         let vortex_field = vec![Rgb565Pixel(0); width.saturating_mul(height)];
         let studio_lights = build_studio_lights(width);
+        let depth_prism = screen_prism
+            .iter()
+            .copied()
+            .map(|color| {
+                [
+                    color,
+                    scale_rgb565(color, 7, 8),
+                    scale_rgb565(color, 3, 4),
+                    scale_rgb565(color, 1, 2),
+                ]
+            })
+            .collect();
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -699,6 +714,7 @@ impl ArcadeCabinetFormation {
             vortex_field,
             vortex_ready: false,
             studio_lights,
+            depth_prism,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -792,6 +808,11 @@ impl ArcadeCabinetFormation {
             )
             .saturating_add(
                 self.studio_lights
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
+            )
+            .saturating_add(
+                self.depth_prism
                     .capacity()
                     .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
             )
@@ -1166,6 +1187,10 @@ impl ArcadeCabinetFormation {
                             + usize::from(pixel_y >= self.height * 3 / 4);
                         self.studio_lights[pixel_x][band]
                     }
+                    CabinetColorMode::DepthPrism => {
+                        self.depth_prism[pixel_x + pixel_y * 3]
+                            [usize::from(command.depth_band())]
+                    }
                     CabinetColorMode::Origin => unreachable!(),
                 };
                 destination[offset] = primary;
@@ -1539,6 +1564,14 @@ fn mix_rgb565(first: Rgb565Pixel, second: Rgb565Pixel, amount: u16) -> Rgb565Pix
     let green = ((((first >> 5) & 0x3f) * inverse + ((second >> 5) & 0x3f) * amount) >> 8)
         & 0x3f;
     let blue = (((first & 0x1f) * inverse + (second & 0x1f) * amount) >> 8) & 0x1f;
+    Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
+}
+
+fn scale_rgb565(color: Rgb565Pixel, numerator: u32, denominator: u32) -> Rgb565Pixel {
+    let value = u32::from(color.0);
+    let red = ((value >> 11) * numerator / denominator).min(0x1f);
+    let green = (((value >> 5) & 0x3f) * numerator / denominator).min(0x3f);
+    let blue = ((value & 0x1f) * numerator / denominator).min(0x1f);
     Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
 }
 
