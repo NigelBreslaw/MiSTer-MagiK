@@ -43,7 +43,9 @@ bootstrap, walker, audit, projection, snapshot, and persistence work all use
 the continuous CPU0 background policy. While particles own the display, normal
 Slint timer dispatch, bridge synchronization, and launcher rendering are
 suppressed. Catalog/UI changes are coalesced in Rust state rather than copied
-into an invisible Slint tree.
+into an invisible Slint tree. Transient catalog scan milestones do not clone
+navigation shells or rebuild launcher taxonomy on CPU1; the authoritative
+published projection supplies that state.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
 the FPGA latch did not reject or supersede a post. Skipless animation requires
@@ -55,10 +57,10 @@ either axis is nonzero.
 The final handoff is derived only from the production launcher's live frame:
 
 1. When the first usable Arcade projection arrives, the host performs one full
-   bridge synchronization and one off-screen Slint render. At or after 15
-   logical seconds it snapshots that exact cache and derives all 40,960
-   launcher particle positions and colors from it. No design-time launcher
-   image or point cloud is embedded.
+   bridge synchronization and one off-screen Slint render. It immediately
+   snapshots that exact cache, then a low-priority CPU0 worker derives all
+   40,960 launcher particle positions and colors without blocking CPU1. No
+   design-time launcher image or point cloud is embedded.
 2. If no usable launcher frame exists at 16 seconds, logical storyboard time
    pauses and the fully formed cabinet keeps spinning at 60 Hz. Each four-second
    waiting loop is a seamless full turn. Once the real launcher frame is ready,

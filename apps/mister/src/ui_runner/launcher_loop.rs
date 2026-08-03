@@ -2898,7 +2898,9 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        sync_startup_visibility(&app, &lifecycle);
+        if startup_intro.is_none() || startup_intro_needs_live_launcher {
+            sync_startup_visibility(&app, &lifecycle);
+        }
         scheduler.record_loading_frame(loop_start);
         if launcher_presenter.retry_latch_automatically(ui) {
             runtime_status::event(
@@ -2999,11 +3001,10 @@ pub(super) fn run_launcher_loop(
         let clock_update_due = last_clock_update.elapsed() >= Duration::from_secs(1);
         let clock_update_start = clock_update_due.then(Instant::now);
         if clock_update_due {
-            let clock_text = launcher_clock_text();
             if startup_intro.is_some() {
-                last_clock_text = clock_text;
                 startup_intro_bridge_dirty_pending = true;
             } else if dirty_opt {
+                let clock_text = launcher_clock_text();
                 if clock_text != last_clock_text {
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                     bridge.set_clock_text(clock_text.clone().into());
@@ -3011,6 +3012,7 @@ pub(super) fn run_launcher_loop(
                     light_bridge_dirty = true;
                 }
             } else {
+                let clock_text = launcher_clock_text();
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 bridge.set_clock_text(clock_text.clone().into());
                 last_clock_text = clock_text;
@@ -5431,20 +5433,31 @@ pub(super) fn run_launcher_loop(
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
         if let Some(intro) = startup_intro.as_mut() {
-            if intro.snapshot_due() && startup_intro_launcher_frame_ready {
+            if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
                 let launcher_pixels = layer_target.cached_frame_view().pixels();
-                if let Err(error) = intro.install_launcher_snapshot(launcher_pixels) {
+                if let Err(error) = intro.begin_launcher_snapshot_preparation(launcher_pixels) {
                     startup_intro_failure = Some(error);
                 } else {
                     print_startup_event(
                         start,
-                        "startup_intro_launcher_snapshot",
+                        "startup_intro_launcher_snapshot_captured",
                         format!(
-                            "pixels={} logical_ms=15000 cabinet_wait_frames={}",
+                            "pixels={} cabinet_wait_frames={}",
                             launcher_pixels.len(),
                             intro.waiting_frames(),
                         ),
                     );
+                }
+            }
+            if startup_intro_failure.is_none() {
+                match intro.poll_launcher_snapshot_preparation() {
+                    Ok(true) => print_startup_event(
+                        start,
+                        "startup_intro_launcher_snapshot_prepared",
+                        format!("cabinet_wait_frames={}", intro.waiting_frames()),
+                    ),
+                    Ok(false) => {}
+                    Err(error) => startup_intro_failure = Some(error),
                 }
             }
             if startup_intro_failure.is_none() {
@@ -7356,6 +7369,9 @@ fn apply_catalog_session_effects(
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogBuildStarted => {
+                if defer_bridge_ui {
+                    continue;
+                }
                 nav.catalog_build_started();
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
@@ -7366,6 +7382,15 @@ fn apply_catalog_session_effects(
                 system_ids,
                 all_published_systems,
             } => {
+                // The first-run intro needs only the authoritative Arcade
+                // projection used for its live launcher frame. Rebuilding
+                // navigation shells here clones the resident Arcade rows on
+                // CPU1 once per scan milestone, despite the launcher being
+                // dormant. The final published catalog will install the same
+                // taxonomy authoritatively.
+                if defer_bridge_ui {
+                    continue;
+                }
                 nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
                 *catalog = nav.catalog_with_build_shells(catalog.clone());
                 *catalog_version = (*catalog_version).wrapping_add(1);
@@ -7375,6 +7400,9 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::CatalogSystemDiscovered { .. } => {}
             CatalogSessionEffect::CatalogSystemScanning { system_id } => {
+                if defer_bridge_ui {
+                    continue;
+                }
                 nav.catalog_system_scanning(&system_id);
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
@@ -7386,9 +7414,11 @@ fn apply_catalog_session_effects(
                 system_id,
                 generation,
             } => {
-                nav.catalog_system_prepared(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                *full_bridge_dirty = true;
+                if !defer_bridge_ui {
+                    nav.catalog_system_prepared(&system_id);
+                    *catalog_version = (*catalog_version).wrapping_add(1);
+                    *full_bridge_dirty = true;
+                }
                 print_startup_event(
                     start,
                     "catalog_system_prepared",

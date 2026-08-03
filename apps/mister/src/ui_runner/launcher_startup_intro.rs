@@ -4,24 +4,21 @@
 //! First-run startup intro presentation over the production hidden-slot latch.
 
 use super::*;
+use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel as SceneRgb565Pixel, SceneBufferId, SceneClock, SceneGeometry,
     SceneTarget,
 };
-use mister_magik_particles::intro::IntroScene;
+use mister_magik_particles::intro::{IntroScene, PreparedLauncherSnapshot};
 use mister_magik_particles::intro_recipe::embedded_intro_recipe;
 
 const INTRO_FPS: u64 = 60;
-// Capture one second before the 16-second launcher morph cue so the live
-// target is fully prepared without touching the morph/crossfade hot path.
-const SNAPSHOT_FRAME: u64 = 15 * INTRO_FPS;
 const MORPH_FRAME: u64 = 16 * INTRO_FPS;
 const FINAL_FRAME: u64 = 20 * INTRO_FPS;
 
 pub(super) struct PreparedStartupIntro {
     scene: IntroScene,
     handoff_snapshot: Vec<Rgb565Pixel>,
-    scene_handoff_snapshot: Vec<SceneRgb565Pixel>,
 }
 
 impl PreparedStartupIntro {
@@ -31,7 +28,6 @@ impl PreparedStartupIntro {
         Ok(Self {
             scene,
             handoff_snapshot: vec![Rgb565Pixel(0); width.saturating_mul(height)],
-            scene_handoff_snapshot: vec![SceneRgb565Pixel(0); width.saturating_mul(height)],
         })
     }
 
@@ -40,7 +36,7 @@ impl PreparedStartupIntro {
             scene: self.scene,
             buffers: Some(buffers),
             handoff_snapshot: self.handoff_snapshot,
-            scene_handoff_snapshot: self.scene_handoff_snapshot,
+            snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
             snapshot_ready: false,
             completed: false,
@@ -60,7 +56,7 @@ pub(super) struct StartupIntroSession {
     scene: IntroScene,
     buffers: Option<PluginLatchFrameBuffers>,
     handoff_snapshot: Vec<Rgb565Pixel>,
-    scene_handoff_snapshot: Vec<SceneRgb565Pixel>,
+    snapshot_preparation: LauncherSnapshotPreparation,
     frame: u64,
     snapshot_ready: bool,
     completed: bool,
@@ -74,6 +70,12 @@ pub(super) struct StartupIntroSession {
     last_render_waiting: bool,
 }
 
+enum LauncherSnapshotPreparation {
+    AwaitingFrame,
+    Running(mpsc::Receiver<Result<PreparedLauncherSnapshot, String>>),
+    Installed,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct StartupIntroCadence {
     pub(super) confirmed_frames: u64,
@@ -85,18 +87,24 @@ pub(super) struct StartupIntroCadence {
 }
 
 impl StartupIntroSession {
-    pub(super) fn snapshot_due(&self) -> bool {
-        !self.snapshot_ready && self.frame >= SNAPSHOT_FRAME
+    pub(super) fn snapshot_capture_needed(&self) -> bool {
+        matches!(
+            self.snapshot_preparation,
+            LauncherSnapshotPreparation::AwaitingFrame
+        )
     }
 
     pub(super) const fn waiting_frames(&self) -> u64 {
         self.waiting_frames
     }
 
-    pub(super) fn install_launcher_snapshot(
+    pub(super) fn begin_launcher_snapshot_preparation(
         &mut self,
         launcher_pixels: &[Rgb565Pixel],
     ) -> Result<(), String> {
+        if !self.snapshot_capture_needed() {
+            return Ok(());
+        }
         if launcher_pixels.len() != self.handoff_snapshot.len() {
             return Err(format!(
                 "launcher handoff snapshot has {} pixels, expected {}",
@@ -105,15 +113,41 @@ impl StartupIntroSession {
             ));
         }
         self.handoff_snapshot.copy_from_slice(launcher_pixels);
-        for (scene_pixel, launcher_pixel) in
-            self.scene_handoff_snapshot.iter_mut().zip(launcher_pixels)
-        {
-            scene_pixel.0 = launcher_pixel.0;
-        }
-        self.scene
-            .replace_launcher_snapshot(&self.scene_handoff_snapshot)?;
-        self.snapshot_ready = true;
+        let pixels = launcher_pixels
+            .iter()
+            .map(|pixel| SceneRgb565Pixel(pixel.0))
+            .collect::<Vec<_>>();
+        let width = self.scene.geometry().width();
+        let height = self.scene.geometry().height();
+        let recipe = self.scene.recipe().clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::Builder::new()
+            .name("intro-snapshot".to_string())
+            .spawn(move || {
+                apply_runtime_thread_policy(RuntimeThreadRole::StartupIntroSnapshot);
+                let prepared = IntroScene::prepare_launcher_snapshot(width, height, recipe, pixels);
+                let _ = tx.send(prepared);
+            })
+            .map_err(|error| format!("failed to start launcher snapshot preparation: {error}"))?;
+        self.snapshot_preparation = LauncherSnapshotPreparation::Running(rx);
         Ok(())
+    }
+
+    pub(super) fn poll_launcher_snapshot_preparation(&mut self) -> Result<bool, String> {
+        let LauncherSnapshotPreparation::Running(receiver) = &self.snapshot_preparation else {
+            return Ok(false);
+        };
+        let prepared = match receiver.try_recv() {
+            Ok(prepared) => prepared?,
+            Err(mpsc::TryRecvError::Empty) => return Ok(false),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err("launcher snapshot preparation worker disconnected".into());
+            }
+        };
+        self.scene.install_launcher_snapshot(prepared)?;
+        self.snapshot_preparation = LauncherSnapshotPreparation::Installed;
+        self.snapshot_ready = true;
+        Ok(true)
     }
 
     pub(super) fn render_grant(
@@ -282,7 +316,7 @@ mod tests {
             scene: prepared.scene,
             buffers: None,
             handoff_snapshot: prepared.handoff_snapshot,
-            scene_handoff_snapshot: prepared.scene_handoff_snapshot,
+            snapshot_preparation: LauncherSnapshotPreparation::AwaitingFrame,
             frame: 0,
             snapshot_ready: false,
             completed: false,
@@ -299,7 +333,7 @@ mod tests {
 
     #[test]
     fn rational_clock_hits_exact_storyboard_boundaries() {
-        assert_eq!(intro_frame_elapsed(SNAPSHOT_FRAME), Duration::from_secs(15));
+        assert_eq!(intro_frame_elapsed(MORPH_FRAME), Duration::from_secs(16));
         assert_eq!(intro_frame_elapsed(FINAL_FRAME), Duration::from_secs(20));
     }
 

@@ -24,6 +24,7 @@ pub enum RuntimeThreadRole {
     VideoAudio,
     ScreensaverRenderer,
     ParticlePreparer,
+    StartupIntroSnapshot,
     ScreensaverLoader,
     ScreensaverScaler,
 }
@@ -48,6 +49,7 @@ impl RuntimeThreadRole {
             Self::VideoAudio => "video-audio",
             Self::ScreensaverRenderer => "screensaver-renderer",
             Self::ParticlePreparer => "particle-preparer",
+            Self::StartupIntroSnapshot => "startup-intro-snapshot",
             Self::ScreensaverLoader => "screensaver-loader",
             Self::ScreensaverScaler => "screensaver-scaler",
         }
@@ -85,7 +87,7 @@ impl RuntimeThreadRole {
             }
             Self::ScreensaverRenderer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu0),
             Self::ParticlePreparer => RuntimeThreadPolicy::new(-5, ThreadAffinity::Cpu1),
-            Self::ScreensaverLoader | Self::ScreensaverScaler => {
+            Self::StartupIntroSnapshot | Self::ScreensaverLoader | Self::ScreensaverScaler => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
         }
@@ -388,6 +390,7 @@ mod tests {
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
             RuntimeThreadRole::ScreensaverRenderer,
+            RuntimeThreadRole::StartupIntroSnapshot,
             RuntimeThreadRole::ScreensaverLoader,
             RuntimeThreadRole::ScreensaverScaler,
         ] {
@@ -479,6 +482,11 @@ mod tests {
                 RuntimeThreadRole::ParticlePreparer,
                 -5,
                 ThreadAffinity::Cpu1,
+            ),
+            (
+                RuntimeThreadRole::StartupIntroSnapshot,
+                10,
+                ThreadAffinity::Cpu0,
             ),
             (
                 RuntimeThreadRole::ScreensaverLoader,

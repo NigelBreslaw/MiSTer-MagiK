@@ -56,6 +56,19 @@ struct PointTarget {
     groups: Vec<ParticleGroupSpan>,
 }
 
+/// Fully prepared live-launcher target that can be built away from the
+/// scanout thread and installed with ownership transfers only.
+pub struct PreparedLauncherSnapshot {
+    geometry: SceneGeometry,
+    particle_count: usize,
+    launcher: PointTarget,
+    launcher_q5: QuantizedPointCloud,
+    launcher_snapshot: Vec<Rgb565Pixel>,
+    launcher_commands: Vec<PointCloudDrawCommand>,
+    launcher_thresholds: Vec<u8>,
+    crossfade_visible_counts: [usize; 65],
+}
+
 #[derive(Clone, Copy)]
 struct RetiringFormationPoint {
     source: [f32; 2],
@@ -389,33 +402,45 @@ impl IntroScene {
         &mut self,
         pixels: &[Rgb565Pixel],
     ) -> Result<(), String> {
-        if pixels.len() != self.geometry.len() {
+        let prepared = Self::prepare_launcher_snapshot(
+            self.geometry.width(),
+            self.geometry.height(),
+            self.recipe.clone(),
+            pixels.to_vec(),
+        )?;
+        self.install_launcher_snapshot(prepared)
+    }
+
+    /// Performs all expensive live-target analysis and command preparation.
+    /// The returned value owns its snapshot and can cross a worker channel.
+    pub fn prepare_launcher_snapshot(
+        width: usize,
+        height: usize,
+        recipe: IntroRecipe,
+        pixels: Vec<Rgb565Pixel>,
+    ) -> Result<PreparedLauncherSnapshot, String> {
+        let geometry =
+            SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        if pixels.len() != geometry.len() {
             return Err(format!(
                 "launcher snapshot has {} pixels, expected {}",
                 pixels.len(),
-                self.geometry.len()
+                geometry.len()
             ));
         }
         let launcher = live_launcher_target_from_snapshot(
-            pixels,
-            self.recipe.steady_particle_count,
-            &self.recipe,
-            self.geometry,
+            &pixels,
+            recipe.steady_particle_count,
+            &recipe,
+            geometry,
         )?;
         let launcher_q5 = QuantizedPointCloud::from_positions(&launcher.positions);
-        let launcher_commands = prepare_target_commands(
-            &launcher.positions,
-            &self.recipe,
-            self.geometry,
-        );
+        let launcher_commands = prepare_target_commands(&launcher.positions, &recipe, geometry);
         let launcher_thresholds = launcher_commands
             .iter()
             .map(|command| {
                 command.offset().map_or(64, |offset| {
-                    bayer8(
-                        offset % self.geometry.width(),
-                        offset / self.geometry.width(),
-                    )
+                    bayer8(offset % geometry.width(), offset / geometry.width())
                 })
             })
             .collect::<Vec<_>>();
@@ -429,12 +454,35 @@ impl IntroScene {
                 .count()
         });
 
-        self.launcher_snapshot.copy_from_slice(pixels);
-        self.launcher = launcher;
-        self.launcher_q5 = launcher_q5;
-        self.launcher_commands = launcher_commands;
-        self.launcher_thresholds = launcher_thresholds;
-        self.crossfade_visible_counts = crossfade_visible_counts;
+        Ok(PreparedLauncherSnapshot {
+            geometry,
+            particle_count: recipe.steady_particle_count,
+            launcher,
+            launcher_q5,
+            launcher_snapshot: pixels,
+            launcher_commands,
+            launcher_thresholds,
+            crossfade_visible_counts,
+        })
+    }
+
+    /// Installs a worker-prepared live target without repeating its analysis
+    /// or allocating on the scanout thread.
+    pub fn install_launcher_snapshot(
+        &mut self,
+        prepared: PreparedLauncherSnapshot,
+    ) -> Result<(), String> {
+        if prepared.geometry != self.geometry
+            || prepared.particle_count != self.recipe.steady_particle_count
+        {
+            return Err("prepared launcher snapshot does not match the intro scene".into());
+        }
+        self.launcher_snapshot = prepared.launcher_snapshot;
+        self.launcher = prepared.launcher;
+        self.launcher_q5 = prepared.launcher_q5;
+        self.launcher_commands = prepared.launcher_commands;
+        self.launcher_thresholds = prepared.launcher_thresholds;
+        self.crossfade_visible_counts = prepared.crossfade_visible_counts;
         self.launcher_ready = true;
         self.slot_states = [IntroSlotState::Uninitialized; 2];
         Ok(())
