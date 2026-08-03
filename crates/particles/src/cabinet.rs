@@ -10,6 +10,10 @@
 use crate::recipes::{
     CabinetModel, CabinetRecipe, RecipeEasing, RecipeRgb565, embedded_cabinet_recipe,
 };
+use crate::point_cloud::{
+    INVALID_PARTICLE_OFFSET, PARTICLE_LANES, PointCloudDrawCommand as CabinetDrawCommand,
+    PointCloudPositionBlock as CabinetPositionBlock, project_stable_neon,
+};
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, SceneBufferId, SceneClock, SceneError, SceneGeometry, SceneTarget,
 };
@@ -158,19 +162,6 @@ pub struct CabinetRenderOptions {
     pub color_mode: CabinetColorMode,
 }
 
-const PARTICLE_LANES: usize = 4;
-
-#[repr(C, align(16))]
-#[derive(Clone, Copy)]
-struct CabinetPositionBlock {
-    target_x: [f32; PARTICLE_LANES],
-    target_y: [f32; PARTICLE_LANES],
-    target_z: [f32; PARTICLE_LANES],
-    source_x: [f32; PARTICLE_LANES],
-    source_y: [f32; PARTICLE_LANES],
-    source_z: [f32; PARTICLE_LANES],
-}
-
 #[repr(C, align(16))]
 struct CabinetAttributeBlock {
     random: [u32; PARTICLE_LANES],
@@ -179,67 +170,12 @@ struct CabinetAttributeBlock {
     flags: [u8; PARTICLE_LANES],
 }
 
-const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
-const COMMAND_OFFSET_MASK: u32 = (1 << 20) - 1;
-const COMMAND_DEPTH_SHIFT: u32 = 20;
-const COMMAND_X_SHIFT: u32 = 22;
-const COMMAND_X_MASK: u32 = (1 << 10) - 1;
 const BASELINE_NEIGHBOR_PRESENT: u64 = 1 << 32;
 const BASELINE_STYLE_SHIFT: u32 = 33;
 const BASELINE_FILLER: u64 = 1 << 36;
 const BASELINE_JITTER: u64 = 1 << 37;
 const BASELINE_SATELLITE_SHIFT: u32 = 38;
 const BASELINE_JITTER_SEED_SHIFT: u32 = 40;
-
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-struct CabinetDrawCommand(u32);
-
-impl CabinetDrawCommand {
-    fn visible(offset: usize, depth: f32, pixel_x: usize) -> Self {
-        let depth_band =
-            u32::from(depth >= 480.0) + u32::from(depth >= 640.0) + u32::from(depth >= 800.0);
-        Self(
-            (offset as u32)
-                | (depth_band << COMMAND_DEPTH_SHIFT)
-                | ((pixel_x as u32) << COMMAND_X_SHIFT),
-        )
-    }
-
-    fn offset(self) -> Option<usize> {
-        (self.0 != INVALID_PARTICLE_OFFSET).then_some((self.0 & COMMAND_OFFSET_MASK) as usize)
-    }
-
-    fn depth_band(self) -> u8 {
-        ((self.0 >> COMMAND_DEPTH_SHIFT) & 3) as u8
-    }
-
-    fn pixel_x(self) -> usize {
-        ((self.0 >> COMMAND_X_SHIFT) & COMMAND_X_MASK) as usize
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-unsafe extern "C" {
-    fn mister_magik_cabinet_neon_project_stable(
-        count: usize,
-        blocks: *const CabinetPositionBlock,
-        first_block: usize,
-        block_step: usize,
-        sin_yaw: f32,
-        cos_yaw: f32,
-        sin_pitch: f32,
-        cos_pitch: f32,
-        dolly: f32,
-        near_depth: f32,
-        focal_length: f32,
-        center_x: f32,
-        center_y: f32,
-        width: u32,
-        height: u32,
-        offsets: *mut u32,
-    ) -> usize;
-}
 
 /// Exact extraction of the approved arcade-cabinet particle formation.
 pub struct ArcadeCabinetFormation {
@@ -1436,87 +1372,6 @@ impl ArcadeCabinetFormation {
                 prepared_age_us: 0,
             },
         })
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn project_stable_neon(
-    count: usize,
-    positions: &[CabinetPositionBlock],
-    first_block: usize,
-    block_step: usize,
-    sin_yaw: f32,
-    cos_yaw: f32,
-    sin_pitch: f32,
-    cos_pitch: f32,
-    dolly: f32,
-    near_depth: f32,
-    focal_length: f32,
-    center_x: f32,
-    center_y: f32,
-    width: usize,
-    height: usize,
-    offsets: &mut [CabinetDrawCommand],
-) -> usize {
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
-    {
-        if count < PARTICLE_LANES
-            || block_step == 0
-            || positions.len() * PARTICLE_LANES < count
-            || offsets.len() < count
-        {
-            return 0;
-        }
-        let Ok(width) = u32::try_from(width) else {
-            return 0;
-        };
-        let Ok(height) = u32::try_from(height) else {
-            return 0;
-        };
-        // SAFETY: position blocks have the C layout declared above, the input
-        // covers count rounded down to four lanes, and offsets has count words.
-        unsafe {
-            mister_magik_cabinet_neon_project_stable(
-                count,
-                positions.as_ptr(),
-                first_block,
-                block_step,
-                sin_yaw,
-                cos_yaw,
-                sin_pitch,
-                cos_pitch,
-                dolly,
-                near_depth,
-                focal_length,
-                center_x,
-                center_y,
-                width,
-                height,
-                offsets.as_mut_ptr().cast::<u32>(),
-            )
-        }
-    }
-    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
-    {
-        let _ = (
-            count,
-            positions,
-            first_block,
-            block_step,
-            sin_yaw,
-            cos_yaw,
-            sin_pitch,
-            cos_pitch,
-            dolly,
-            near_depth,
-            focal_length,
-            center_x,
-            center_y,
-            width,
-            height,
-            offsets,
-        );
-        0
     }
 }
 
