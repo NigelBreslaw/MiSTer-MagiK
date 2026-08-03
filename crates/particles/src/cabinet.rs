@@ -297,64 +297,95 @@ impl ArcadeCabinetFormation {
         let (sin_pitch, cos_pitch) = pitch.sin_cos();
         let center_x = self.width as f32 * 0.5 + self.recipe.camera.center_offset_x;
         let center_y = self.height as f32 * 0.5 + self.recipe.camera.center_offset_y;
+        let appearance = self.recipe.appearance;
+        let width_f32 = self.width as f32;
+        let height_f32 = self.height as f32;
         let mut visible = 0usize;
         let mut pixel_writes = 0usize;
 
-        for index in 0..self.options.active_count {
-            let formed_x =
-                self.source_x[index] + (self.target_x[index] - self.source_x[index]) * formation;
-            let formed_y =
-                self.source_y[index] + (self.target_y[index] - self.source_y[index]) * formation;
-            let formed_z =
-                self.source_z[index] + (self.target_z[index] - self.source_z[index]) * formation;
-            let disperse_scale = 1.0
-                + dispersal
-                    * (self.recipe.dispersal.radial_base
-                        + self.life[index] * self.recipe.dispersal.radial_life_gain);
-            let world_x = formed_x * disperse_scale;
-            let world_y = formed_y * disperse_scale
-                + dispersal
-                    * unit_signed(self.random[index].rotate_left(11))
-                    * self.recipe.dispersal.vertical_jitter;
-            let world_z = formed_z * disperse_scale;
-            let rotated_x = world_x.mul_add(cos_yaw, world_z * sin_yaw);
-            let yaw_z = (-world_x).mul_add(sin_yaw, world_z * cos_yaw);
-            let rotated_y = world_y.mul_add(cos_pitch, -(yaw_z * sin_pitch));
-            let rotated_z = world_y.mul_add(sin_pitch, yaw_z * cos_pitch);
-            let depth = dolly + rotated_z;
-            if depth <= self.recipe.camera.near_depth {
-                continue;
+        macro_rules! project_and_draw {
+            ($index:expr, $world_x:expr, $world_y:expr, $world_z:expr) => {{
+                let index = $index;
+                let world_x = $world_x;
+                let world_y = $world_y;
+                let world_z = $world_z;
+                let rotated_x = world_x.mul_add(cos_yaw, world_z * sin_yaw);
+                let yaw_z = (-world_x).mul_add(sin_yaw, world_z * cos_yaw);
+                let rotated_y = world_y.mul_add(cos_pitch, -(yaw_z * sin_pitch));
+                let rotated_z = world_y.mul_add(sin_pitch, yaw_z * cos_pitch);
+                let depth = dolly + rotated_z;
+                if depth > self.recipe.camera.near_depth {
+                    let scale = self.recipe.camera.focal_length / depth;
+                    let x = center_x + rotated_x * scale;
+                    let y = center_y + rotated_y * scale;
+                    if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
+                        let feature = self.flags[index];
+                        let style = if feature & appearance.priority_feature_mask != 0 {
+                            appearance.priority_palette_index
+                        } else if feature & appearance.accent_feature_mask != 0 {
+                            self.style[index]
+                                .saturating_add(appearance.accent_palette_add)
+                                .min(7)
+                        } else {
+                            self.style[index]
+                        };
+                        let pixel_x = x as usize;
+                        let offset = y as usize * self.width + pixel_x;
+                        destination[offset] = pixel(appearance.palette[usize::from(style)]);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                        if feature & appearance.neighbor_feature_mask != 0
+                            && index % usize::from(appearance.neighbor_every) == 0
+                            && pixel_x + 1 < self.width
+                        {
+                            let neighbor_style =
+                                style.saturating_sub(appearance.neighbor_palette_subtract);
+                            destination[offset + 1] =
+                                pixel(appearance.palette[usize::from(neighbor_style)]);
+                            pixel_writes = pixel_writes.saturating_add(1);
+                        }
+                        visible = visible.saturating_add(1);
+                    }
+                }
+            }};
+        }
+
+        if dispersal > 0.0 {
+            for index in 0..self.options.active_count {
+                let scale = 1.0
+                    + dispersal
+                        * (self.recipe.dispersal.radial_base
+                            + self.life[index] * self.recipe.dispersal.radial_life_gain);
+                project_and_draw!(
+                    index,
+                    self.target_x[index] * scale,
+                    self.target_y[index] * scale
+                        + dispersal
+                            * unit_signed(self.random[index].rotate_left(11))
+                            * self.recipe.dispersal.vertical_jitter,
+                    self.target_z[index] * scale
+                );
             }
-            let scale = self.recipe.camera.focal_length / depth;
-            let x = center_x + rotated_x * scale;
-            let y = center_y + rotated_y * scale;
-            if x < 0.0 || y < 0.0 || x >= self.width as f32 || y >= self.height as f32 {
-                continue;
+        } else if formation < 1.0 {
+            for index in 0..self.options.active_count {
+                project_and_draw!(
+                    index,
+                    self.source_x[index]
+                        + (self.target_x[index] - self.source_x[index]) * formation,
+                    self.source_y[index]
+                        + (self.target_y[index] - self.source_y[index]) * formation,
+                    self.source_z[index]
+                        + (self.target_z[index] - self.source_z[index]) * formation
+                );
             }
-            let feature = self.flags[index];
-            let appearance = self.recipe.appearance;
-            let style = if feature & appearance.priority_feature_mask != 0 {
-                appearance.priority_palette_index
-            } else if feature & appearance.accent_feature_mask != 0 {
-                self.style[index]
-                    .saturating_add(appearance.accent_palette_add)
-                    .min(7)
-            } else {
-                self.style[index]
-            };
-            let pixel_x = x as usize;
-            let offset = y as usize * self.width + pixel_x;
-            destination[offset] = pixel(appearance.palette[usize::from(style)]);
-            pixel_writes = pixel_writes.saturating_add(1);
-            if feature & appearance.neighbor_feature_mask != 0
-                && index % usize::from(appearance.neighbor_every) == 0
-                && pixel_x + 1 < self.width
-            {
-                let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
-                destination[offset + 1] = pixel(appearance.palette[usize::from(neighbor_style)]);
-                pixel_writes = pixel_writes.saturating_add(1);
+        } else {
+            for index in 0..self.options.active_count {
+                project_and_draw!(
+                    index,
+                    self.target_x[index],
+                    self.target_y[index],
+                    self.target_z[index]
+                );
             }
-            visible = visible.saturating_add(1);
         }
 
         Ok(ArcadeCabinetFrameStats {
