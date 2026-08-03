@@ -729,8 +729,12 @@ impl ArcadeCabinetFormation {
         }
         let clear_started = Instant::now();
         let background = pixel(self.recipe.appearance.background);
+        let creative_mode = self.options.creative_mode;
         let dirty_offsets = &mut self.dirty_offsets[buffer_id];
-        if self.full_clear[buffer_id] || dirty_offsets.len() >= expected.div_ceil(8) {
+        if self.full_clear[buffer_id]
+            || creative_mode == CabinetCreativeMode::All
+            || dirty_offsets.len() >= expected.div_ceil(8)
+        {
             destination.fill(background);
             self.full_clear[buffer_id] = false;
         } else {
@@ -746,7 +750,6 @@ impl ArcadeCabinetFormation {
         let center_x = self.width as f32 * 0.5 + self.recipe.camera.center_offset_x;
         let center_y = self.height as f32 * 0.5 + self.recipe.camera.center_offset_y;
         let appearance = self.recipe.appearance;
-        let creative_mode = self.options.creative_mode;
         let satellite_mode = creative_mode.uses_satellites();
         let history_mode =
             creative_mode.uses_history_echo() && (formation < 1.0 || dispersal > 0.0);
@@ -777,6 +780,14 @@ impl ArcadeCabinetFormation {
         let mut visible: usize;
         let mut pixel_writes = 0usize;
         let mut projection_backend = "cabinet-scalar";
+
+        macro_rules! record_dirty_offset {
+            ($offset:expr) => {
+                if creative_mode != CabinetCreativeMode::All {
+                    dirty_offsets.push($offset as u32);
+                }
+            };
+        }
 
         macro_rules! draw_offset {
             ($index:expr, $offset:expr, $pixel_x:expr, $attribute:expr, $lane:expr) => {{
@@ -838,7 +849,7 @@ impl ArcadeCabinetFormation {
                         let history_style = style.saturating_sub(2);
                         destination[history_offset] =
                             pixel(appearance.palette[usize::from(history_style)]);
-                        dirty_offsets.push(history_offset as u32);
+                        record_dirty_offset!(history_offset);
                         pixel_writes = pixel_writes.saturating_add(1);
                     }
                 }
@@ -846,7 +857,7 @@ impl ArcadeCabinetFormation {
                     let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
                     destination[offset + 1] =
                         pixel(appearance.palette[usize::from(neighbor_style)]);
-                    dirty_offsets.push((offset + 1) as u32);
+                    record_dirty_offset!(offset + 1);
                     pixel_writes = pixel_writes.saturating_add(1);
                 }
                 if satellite_mode && feature == 0 {
@@ -861,18 +872,18 @@ impl ArcadeCabinetFormation {
                         let satellite_style = style.saturating_sub(1);
                         destination[satellite_offset] =
                             pixel(appearance.palette[usize::from(satellite_style)]);
-                        dirty_offsets.push(satellite_offset as u32);
+                        record_dirty_offset!(satellite_offset);
                         pixel_writes = pixel_writes.saturating_add(1);
                     }
                 }
                 destination[offset] = pixel(appearance.palette[usize::from(style)]);
-                dirty_offsets.push(offset as u32);
+                record_dirty_offset!(offset);
                 pixel_writes = pixel_writes.saturating_add(1);
                 if !satellite_mode && recipe_neighbor {
                     let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
                     destination[offset + 1] =
                         pixel(appearance.palette[usize::from(neighbor_style)]);
-                    dirty_offsets.push((offset + 1) as u32);
+                    record_dirty_offset!(offset + 1);
                     pixel_writes = pixel_writes.saturating_add(1);
                 }
             }};
