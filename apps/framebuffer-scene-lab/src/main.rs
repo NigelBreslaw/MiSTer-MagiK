@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 25] = [
+const CABINET_CASES: [CabinetCase; 26] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -252,6 +252,12 @@ const CABINET_CASES: [CabinetCase; 25] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::ArcadePalettes,
+    },
+    CabinetCase {
+        name: "texture-exact-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::TextureExact,
     },
 ];
 
@@ -434,10 +440,11 @@ enum CabinetDemoMode {
     PhaseStory,
     InterferenceBands,
     ArcadePalettes,
+    TextureExact,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -454,6 +461,7 @@ impl CabinetDemoMode {
         Self::PhaseStory,
         Self::InterferenceBands,
         Self::ArcadePalettes,
+        Self::TextureExact,
     ];
 
     const fn index(self) -> usize {
@@ -478,6 +486,7 @@ impl CabinetDemoMode {
             Self::PhaseStory => "PHASE STORY",
             Self::InterferenceBands => "INTERFERENCE BANDS",
             Self::ArcadePalettes => "ARCADE PALETTES",
+            Self::TextureExact => "TEXTURE EXACT",
         }
     }
 
@@ -498,7 +507,8 @@ impl CabinetDemoMode {
             | Self::DirectionalMotion
             | Self::PhaseStory
             | Self::InterferenceBands
-            | Self::ArcadePalettes => CabinetCreativeMode::Baseline,
+            | Self::ArcadePalettes
+            | Self::TextureExact => CabinetCreativeMode::Baseline,
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
@@ -511,6 +521,7 @@ impl CabinetDemoMode {
             Self::PhaseStory => CabinetColorMode::PhaseStory,
             Self::InterferenceBands => CabinetColorMode::InterferenceBands,
             Self::ArcadePalettes => CabinetColorMode::ArcadePalettes,
+            Self::TextureExact => CabinetColorMode::TextureExact,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -1745,7 +1756,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::ArcadePalettes);
+        assert_eq!(controls.mode, CabinetDemoMode::TextureExact);
     }
 
     #[test]

@@ -8,15 +8,20 @@ Author profile: https://sketchfab.com/LlucGuardiola
 License: Creative Commons Attribution-NonCommercial 4.0 International
 License URL: https://creativecommons.org/licenses/by-nc/4.0/
 
-The compiled arcade-cabinet.pcloud is derived from this model and is subject
-to the attribution and non-commercial requirements of CC-BY-NC-4.0.
+The compiled arcade-cabinet.pcloud and arcade-cabinet.pcolor are derived from
+this model and are subject to the attribution and non-commercial requirements
+of CC-BY-NC-4.0.
 
 Reproduce the checked-in particle cloud from the licensed source model with:
 
 scripts/particle-model compile \
   crates/particles/assets/cabinet/arcade-cabinet.glb \
   --output crates/particles/assets/cabinet/arcade-cabinet.pcloud \
+  --colors-output crates/particles/assets/cabinet/arcade-cabinet.pcolor \
   --points 72704
 
-Expected SHA-256:
+Expected arcade-cabinet.pcloud SHA-256:
 717cab23f46e6de3d37aa818870a697b4c83d1101f35ef7cec241c956e8682b1
+
+Expected arcade-cabinet.pcolor SHA-256:
+08c51cc4a20920ca78ae79737cd8661b87eea2e4e4bd41dfb08ed70f8a5246a9

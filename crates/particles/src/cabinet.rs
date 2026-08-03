@@ -19,9 +19,13 @@ use std::time::{Duration, Instant};
 
 const ARCADE_CLOUD_POINT_COUNT: usize = 72_704;
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
+const ARCADE_COLORS: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcolor");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
+const PARTICLE_COLOR_MAGIC: &[u8; 8] = b"PCOLOR1\0";
+const PARTICLE_COLOR_HEADER_BYTES: usize = 16;
+const PARTICLE_COLOR_RECORD_BYTES: usize = 4;
 const ARCADE_DEMO_NUMBER: u64 = 21;
 const FULL_RATE_PARTICLE_LIMIT: usize = 48_128;
 const TWO_WAY_PARTICLE_LIMIT: usize = 72_192;
@@ -118,6 +122,7 @@ pub enum CabinetColorMode {
     PhaseStory,
     InterferenceBands,
     ArcadePalettes,
+    TextureExact,
 }
 
 impl CabinetColorMode {
@@ -135,6 +140,7 @@ impl CabinetColorMode {
             Self::PhaseStory => "PHASE STORY",
             Self::InterferenceBands => "INTERFERENCE BANDS",
             Self::ArcadePalettes => "ARCADE PALETTES",
+            Self::TextureExact => "TEXTURE EXACT",
         }
     }
 
@@ -243,6 +249,7 @@ pub struct ArcadeCabinetFormation {
     dynamic_positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     baseline_raster: Vec<u64>,
+    texture_raster: Vec<u32>,
     creative_palette: [[u64; 4]; 8],
     screen_prism: Vec<Rgb565Pixel>,
     aurora_ribbon: Vec<Rgb565Pixel>,
@@ -605,6 +612,7 @@ impl ArcadeCabinetFormation {
             &mut style,
             &mut flags,
         )?;
+        let texture_raster = decode_particle_colors(ARCADE_COLORS, capacity)?;
         let appearance = recipe.appearance;
         let creative_palette = std::array::from_fn(|base_style| {
             std::array::from_fn(|depth_band| {
@@ -728,6 +736,7 @@ impl ArcadeCabinetFormation {
             dynamic_positions,
             attributes,
             baseline_raster,
+            texture_raster,
             creative_palette,
             screen_prism,
             aurora_ribbon,
@@ -1300,6 +1309,9 @@ impl ArcadeCabinetFormation {
                     CabinetColorMode::ArcadePalettes => {
                         self.arcade_palettes[pixel_x][arcade_palette]
                     }
+                    CabinetColorMode::TextureExact => {
+                        Rgb565Pixel(self.texture_raster[index] as u16)
+                    }
                     CabinetColorMode::Origin => unreachable!(),
                 };
                 destination[offset] = primary;
@@ -1766,6 +1778,50 @@ const fn pixel(color: RecipeRgb565) -> Rgb565Pixel {
     Rgb565Pixel(color.0)
 }
 
+/// Decodes the canonical little-endian `PCOLOR1` sidecar.
+///
+/// The 16-byte header contains the eight-byte magic, `u16` version, `u16`
+/// record stride, and `u32` point count. Each record stores faithful and
+/// visibility-lifted RGB565 colours for the corresponding `PCLOUD1` point.
+fn decode_particle_colors(bytes: &[u8], output_count: usize) -> Result<Vec<u32>, String> {
+    if bytes.len() < PARTICLE_COLOR_HEADER_BYTES || &bytes[..8] != PARTICLE_COLOR_MAGIC {
+        return Err("arcade particle colour header is invalid".into());
+    }
+    let version = u16::from_le_bytes([bytes[8], bytes[9]]);
+    let stride = usize::from(u16::from_le_bytes([bytes[10], bytes[11]]));
+    let count = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    if version != 1 || stride != PARTICLE_COLOR_RECORD_BYTES {
+        return Err(format!(
+            "arcade particle colour contract mismatch: version={version} stride={stride} count={count}"
+        ));
+    }
+    if count != ARCADE_CLOUD_POINT_COUNT {
+        return Err(format!(
+            "arcade particle colour sidecar has {count} points, expected {ARCADE_CLOUD_POINT_COUNT}"
+        ));
+    }
+    let expected = PARTICLE_COLOR_HEADER_BYTES.saturating_add(count.saturating_mul(stride));
+    if bytes.len() != expected {
+        return Err(format!(
+            "arcade particle colour length {} does not match expected {expected}",
+            bytes.len()
+        ));
+    }
+    if output_count > count {
+        return Err(format!(
+            "arcade particle colour output count {output_count} exceeds {count}"
+        ));
+    }
+    Ok((0..output_count)
+        .map(|index| {
+            let offset = PARTICLE_COLOR_HEADER_BYTES + index * stride;
+            let exact = u32::from(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]));
+            let glow = u32::from(u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]));
+            exact | (glow << 16)
+        })
+        .collect())
+}
+
 /// Decodes the canonical little-endian `PCLOUD1` representation.
 ///
 /// The 28-byte header is the eight-byte `PCLOUD1\0` magic, `u16` version,
@@ -2013,6 +2069,23 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_texture_colours_align_with_every_cloud_point() {
+        assert_eq!(&ARCADE_COLORS[..8], PARTICLE_COLOR_MAGIC);
+        assert_eq!(
+            u32::from_le_bytes(ARCADE_COLORS[12..16].try_into().unwrap()) as usize,
+            ARCADE_CLOUD_POINT_COUNT
+        );
+        let colours = decode_particle_colors(ARCADE_COLORS, ARCADE_CLOUD_POINT_COUNT).unwrap();
+        assert_eq!(colours.len(), ARCADE_CLOUD_POINT_COUNT);
+        assert!(colours.iter().any(|colour| *colour as u16 != 0));
+        assert!(
+            colours
+                .iter()
+                .any(|colour| *colour as u16 != (*colour >> 16) as u16)
+        );
+    }
+
+    #[test]
     fn checked_in_cloud_prefixes_have_unique_quantized_targets() {
         use std::collections::HashSet;
 
@@ -2135,7 +2208,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_prism_is_position_bound_and_preserves_write_count() {
+    fn screen_prism_and_texture_colour_preserve_write_count() {
         let gradient = horizontal_gradient(960, &PRISM_STOPS);
         assert_eq!(gradient.first(), PRISM_STOPS.first());
         assert_eq!(gradient.last(), PRISM_STOPS.last());
@@ -2146,7 +2219,8 @@ mod tests {
 
         let recipe = embedded_cabinet_recipe().unwrap();
         let mut origin = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
-        let mut prism = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        let mut prism = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut texture = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
         prism
             .set_render_options(CabinetRenderOptions {
                 active_count: 39_936,
@@ -2161,17 +2235,31 @@ mod tests {
                 color_mode: CabinetColorMode::Origin,
             })
             .unwrap();
+        texture
+            .set_render_options(CabinetRenderOptions {
+                active_count: 39_936,
+                creative_mode: CabinetCreativeMode::Baseline,
+                color_mode: CabinetColorMode::TextureExact,
+            })
+            .unwrap();
         let mut origin_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let mut prism_pixels = origin_pixels.clone();
+        let mut texture_pixels = origin_pixels.clone();
         let origin_stats = origin
             .render(&mut origin_pixels, Duration::from_secs(12), 0)
             .unwrap();
         let prism_stats = prism
             .render(&mut prism_pixels, Duration::from_secs(12), 0)
             .unwrap();
+        let texture_stats = texture
+            .render(&mut texture_pixels, Duration::from_secs(12), 0)
+            .unwrap();
         assert_eq!(prism_stats.visible, origin_stats.visible);
         assert_eq!(prism_stats.pixel_writes, origin_stats.pixel_writes);
+        assert_eq!(texture_stats.visible, origin_stats.visible);
+        assert_eq!(texture_stats.pixel_writes, origin_stats.pixel_writes);
         assert_ne!(prism_pixels, origin_pixels);
+        assert_ne!(texture_pixels, origin_pixels);
     }
 
     #[test]

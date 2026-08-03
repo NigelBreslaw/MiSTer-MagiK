@@ -142,6 +142,14 @@ The decoder requires version 1, stride 8, the exact expected length and point
 count, ordered bounds, in-bounds coordinates, material values 0 through 7, only
 the two defined flag bits, and no trailing data.
 
+`arcade-cabinet.pcolor` is the aligned `PCOLOR1` colour sidecar generated from
+the GLB base-colour texture and the exact progressive `PCLOUD1` point order. Its
+16-byte little-endian header contains the eight-byte `PCOLOR1\0` magic, `u16`
+version, `u16` stride, and `u32` point count. Each four-byte record stores a
+faithful RGB565 texture sample followed by a visibility-lifted RGB565 sample.
+The runtime validates the exact count, stride, and length once, then performs
+only sequential packed-colour reads while rasterizing.
+
 ## Compile-time boundary and evidence
 
 Changing shared scene rendering, recipes, or the focused lab must not compile
