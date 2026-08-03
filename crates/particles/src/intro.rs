@@ -440,6 +440,61 @@ impl IntroScene {
         Ok(())
     }
 
+    /// Keeps the fully formed cabinet rotating while the host waits for a
+    /// usable live launcher frame. The first waiting frame begins at the
+    /// cabinet orbit's exact final angle and each four-second loop adds one
+    /// full turn, so there is no visual seam or frozen fallback.
+    pub fn render_waiting_for_launcher(
+        &mut self,
+        mut target: SceneTarget<'_>,
+        waiting_frame: u64,
+    ) -> Result<IntroFrameStats, SceneError> {
+        if target.geometry() != self.geometry {
+            return Err(SceneError::Render("intro frame geometry changed".into()));
+        }
+        let clear_started = Instant::now();
+        target
+            .pixels_mut()
+            .fill(Rgb565Pixel(self.recipe.appearance.background.0));
+        self.slot_states[usize::from(target.buffer_id().get())] = IntroSlotState::Dynamic;
+        let clear_us = elapsed_us(clear_started.elapsed());
+        let wait_duration_ms = 4_000;
+        let cue_elapsed_ms = waiting_frame
+            .saturating_mul(1_000)
+            .checked_div(60)
+            .unwrap_or(0)
+            % wait_duration_ms;
+        let rendered = self.render_cabinet_orbit(
+            target.pixels_mut(),
+            cue_elapsed_ms,
+            wait_duration_ms,
+            0.7,
+            1.0,
+            self.cabinet_formation * 100.0,
+            waiting_frame,
+        );
+        Ok(IntroFrameStats {
+            particles: self.recipe.steady_particle_count,
+            projected_particles: self.recipe.steady_particle_count,
+            projection_cohorts: 1,
+            visible: rendered.visible,
+            pixel_writes: rendered.pixel_writes,
+            cue_index: 6,
+            cue_start_ms: 16_000,
+            previous_cue_start_ms: 12_000,
+            cue_elapsed_ms,
+            cue_duration_ms: wait_duration_ms,
+            cue_id: "wait-for-live-launcher",
+            projection_backend: rendered.projection_backend,
+            stages: IntroStageTimings {
+                clear_us,
+                transform_us: rendered.transform_us,
+                projection_us: rendered.projection_us,
+                raster_us: rendered.raster_us,
+            },
+        })
+    }
+
     fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> IntroRenderResult {
         let raster_started = Instant::now();
         let palette = self.recipe.appearance.crt_palette;
@@ -2119,5 +2174,29 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("live launcher snapshot"));
+    }
+
+    #[test]
+    fn cabinet_wait_loops_continuously_without_a_launcher_snapshot() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(320, 180, 320).unwrap();
+        let mut scene = IntroScene::new(320, 180, recipe).unwrap();
+        let mut first = vec![Rgb565Pixel(0); geometry.len()];
+        let mut looped = vec![Rgb565Pixel(0); geometry.len()];
+
+        scene
+            .render_waiting_for_launcher(
+                SceneTarget::new(&mut first, geometry, SceneBufferId::new(0, 2).unwrap()).unwrap(),
+                0,
+            )
+            .unwrap();
+        scene
+            .render_waiting_for_launcher(
+                SceneTarget::new(&mut looped, geometry, SceneBufferId::new(1, 2).unwrap()).unwrap(),
+                240,
+            )
+            .unwrap();
+
+        assert_eq!(first, looped);
     }
 }

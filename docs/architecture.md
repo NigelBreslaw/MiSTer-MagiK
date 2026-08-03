@@ -619,10 +619,14 @@ A build without a valid registry first probes the retained Arcade mini-nav. A
 matching index restores the exact local Arcade projection; a missing, corrupt,
 oversized, or stale index starts the 20-second first-run particle intro and a
 CPU0-confined first-visible Arcade scan. The interactive Slint launcher is
-maintained in its cached RGB565 target behind the intro. At 15 seconds that live
-frame is sampled into the particle formation and retained as the exact
-crossfade destination before the morph begins at 16 seconds. The 20-second
-endpoint and first interactive frame are therefore pixel-identical. After the projection is
+not rendered continuously behind the intro: timer dispatch and bridge sync are
+suppressed while catalog changes accumulate in Rust. Once the first usable
+Arcade projection exists, one full bridge sync and one off-screen Slint render
+produce the live RGB565 target. At or after 15 logical seconds that frame is
+sampled into the particle formation and retained as the exact crossfade
+destination. If it is not ready by 16 seconds, the cabinet continues spinning
+and storyboard time pauses. The 20-second logical endpoint and first interactive
+frame are therefore pixel-identical. After the projection is
 acknowledged, the complete authoritative scan continues. It audits the retained projection and
 atomically refreshes the bootstrap index. Background walkers, classification
 batches, archive inspection, prepared-payload indexing, and projection work all
@@ -759,15 +763,12 @@ Current rules:
 - Rust launcher owns normal boot-time catalog validation. Main_MiSTer may invoke
   `library-refresh` only for the missing/empty DB first-boot deferral path and
   must not schedule delayed background refreshes when a database already exists.
-- When the V3 registry is missing or invalid, boot must start the Slint
-  launcher immediately and let the launcher worker perform the first scan behind
-  a visible full-screen scan state. Do not run foreground `library-refresh`
-  before UI on first boot or after an attended purge; that regresses to a black
-  HDMI screen while the index is built.
-- The launcher presents a minimal `MiSTer MagiK` Slint splash immediately after
-  `app.show()` and before catalog loading. Keep that path free of catalog,
-  preview, media, or controller work so HDMI never sits on a black screen while
-  the launcher warms up.
+- When the V3 registry and retained Arcade projection are both missing or
+  invalid, boot starts the direct hidden-slot particle intro immediately and
+  lets the CPU0 launcher worker perform the first scan. The invisible Slint UI
+  remains dormant until one real launcher frame is needed for the morph. Do not
+  run foreground `library-refresh` before the intro or after an attended purge;
+  that regresses to a black HDMI screen while the index is built.
 - Do not count helper payloads as games: BIOS ROMs, raw `.rbf` core binaries,
   menu-level computer/console launchers, and known support files are not normal
   launchables.

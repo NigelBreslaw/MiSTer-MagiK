@@ -40,7 +40,10 @@ status is insufficient. A missing grant, failed post, or incomplete latch
 confirmation retries the same logical timestamp. The catalog builder starts
 with the intro and reserves CPU1 for rendering: its coordinator, Arcade
 bootstrap, walker, audit, projection, snapshot, and persistence work all use
-the continuous CPU0 background policy.
+the continuous CPU0 background policy. While particles own the display, normal
+Slint timer dispatch, bridge synchronization, and launcher rendering are
+suppressed. Catalog/UI changes are coalesced in Rust state rather than copied
+into an invisible Slint tree.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
 the FPGA latch did not reject or supersede a post. Skipless animation requires
@@ -51,24 +54,31 @@ either axis is nonzero.
 
 The final handoff is derived only from the production launcher's live frame:
 
-1. The normal launcher continues to process catalog events and render into its
-   cached RGB565 frame off screen. At 15 seconds the host snapshots that exact
-   cache and derives all 40,960 launcher particle positions and colors from it.
-   No design-time launcher image or point cloud is embedded.
-2. From 16 to 18 seconds the cabinet particles morph into that live launcher
+1. When the first usable Arcade projection arrives, the host performs one full
+   bridge synchronization and one off-screen Slint render. At or after 15
+   logical seconds it snapshots that exact cache and derives all 40,960
+   launcher particle positions and colors from it. No design-time launcher
+   image or point cloud is embedded.
+2. If no usable launcher frame exists at 16 seconds, logical storyboard time
+   pauses and the fully formed cabinet keeps spinning at 60 Hz. Each four-second
+   waiting loop is a seamless full turn. Once the real launcher frame is ready,
+   the normal morph begins.
+3. From 16 to 18 seconds the cabinet particles morph into that live launcher
    formation. At 18 seconds both hidden slots settle on the static target;
    repeated hold frames perform no pixel writes.
-3. From 19 to 20 seconds the particle scene uses incremental Bayer buckets to
+4. From 19 to 20 seconds the particle scene uses incremental Bayer buckets to
    crossfade into the same retained live frame without allocation or a
    full-frame rewrite.
-4. The frame at exactly 20 seconds is pixel-identical to the cached launcher.
+5. The frame at exactly 20 logical seconds is pixel-identical to the cached launcher.
    The host restores the same pixels to the interactive cache, returns the
    hidden mappings, leaves external-direct mode, and only then enables startup
    input.
 
 Unsupported presentation routes fail open to the ordinary launcher rather than
-running an unqualified copied-frame approximation. The recipe renderer itself
-remains geometry-aware so focused-lab captures can exercise non-960x540 sizes.
+running an unqualified copied-frame approximation. A delayed catalog never
+fails the intro or reveals a loading UI; it extends only the spinning-cabinet
+wait. The recipe renderer itself remains geometry-aware so focused-lab captures
+can exercise non-960x540 sizes.
 
 ## Recipe contracts
 

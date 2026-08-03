@@ -1115,6 +1115,27 @@ enum LauncherBridgeSyncPlan {
     Light,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupIntroLauncherUiPlan {
+    Suppress,
+    PrepareLiveFrame,
+    Interactive,
+}
+
+fn startup_intro_launcher_ui_plan(
+    intro_active: bool,
+    arcade_ready: bool,
+    live_frame_ready: bool,
+) -> StartupIntroLauncherUiPlan {
+    if !intro_active {
+        StartupIntroLauncherUiPlan::Interactive
+    } else if arcade_ready && !live_frame_ready {
+        StartupIntroLauncherUiPlan::PrepareLiveFrame
+    } else {
+        StartupIntroLauncherUiPlan::Suppress
+    }
+}
+
 fn launcher_bridge_sync_plan(
     launching: bool,
     _startup_input_enabled: bool,
@@ -2717,6 +2738,11 @@ pub(super) fn run_launcher_loop(
         }
         None
     };
+    // The particle scene owns the visible output. Keep Slint and its bridge
+    // dormant until Arcade has usable rows, then build exactly one off-screen
+    // launcher frame for the live morph target.
+    let mut startup_intro_launcher_frame_ready = false;
+    let mut startup_intro_bridge_dirty_pending = false;
     if startup_intro.is_some()
         && let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
@@ -2791,7 +2817,14 @@ pub(super) fn run_launcher_loop(
         let loop_start = Instant::now();
         let slint_timer_dispatch_started = Instant::now();
         let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
-        if !navigation_snapshot_locked_at_loop_start {
+        let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
+            startup_intro.is_some(),
+            arcade_navigation_ready(catalog_ready, &catalog),
+            startup_intro_launcher_frame_ready,
+        ) == StartupIntroLauncherUiPlan::PrepareLiveFrame;
+        if !navigation_snapshot_locked_at_loop_start
+            && (startup_intro.is_none() || startup_intro_needs_live_launcher)
+        {
             slint::platform::update_timers_and_animations();
         }
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
@@ -2967,7 +3000,10 @@ pub(super) fn run_launcher_loop(
         let clock_update_start = clock_update_due.then(Instant::now);
         if clock_update_due {
             let clock_text = launcher_clock_text();
-            if dirty_opt {
+            if startup_intro.is_some() {
+                last_clock_text = clock_text;
+                startup_intro_bridge_dirty_pending = true;
+            } else if dirty_opt {
                 if clock_text != last_clock_text {
                     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                     bridge.set_clock_text(clock_text.clone().into());
@@ -3125,6 +3161,7 @@ pub(super) fn run_launcher_loop(
                         &mut lifecycle,
                         &mut lifecycle_effects,
                         &mut full_bridge_dirty,
+                        startup_intro.is_some(),
                         start,
                     );
                     catalog_messages_processed = catalog_messages_processed.saturating_add(1);
@@ -3183,6 +3220,7 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle,
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
+                    startup_intro.is_some(),
                     start,
                 );
                 catalog_messages_processed = catalog_messages_processed.saturating_add(1);
@@ -3220,6 +3258,7 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle,
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
+                    startup_intro.is_some(),
                     start,
                 );
             }
@@ -3511,6 +3550,7 @@ pub(super) fn run_launcher_loop(
                 &mut lifecycle,
                 &mut lifecycle_effects,
                 &mut full_bridge_dirty,
+                false,
                 loop_start,
                 start,
             );
@@ -3671,7 +3711,9 @@ pub(super) fn run_launcher_loop(
         frame_accounting.set_effective_view(effective_view.label());
         frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if bridge.get_effective_view().as_str() != effective_view.label() {
+        if !startup_intro_suppress_launcher_ui
+            && bridge.get_effective_view().as_str() != effective_view.label()
+        {
             bridge.set_effective_view(effective_view.label().into());
         }
 
@@ -4183,6 +4225,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle,
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    false,
                                     loop_start,
                                     start,
                                 );
@@ -4246,6 +4289,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle,
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    false,
                                     loop_start,
                                     start,
                                 );
@@ -4270,6 +4314,7 @@ pub(super) fn run_launcher_loop(
                                     &mut lifecycle,
                                     &mut lifecycle_effects,
                                     &mut full_bridge_dirty,
+                                    false,
                                     loop_start,
                                     start,
                                 );
@@ -4526,7 +4571,34 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
 
-        sync_settings_bridge(&app, &nav, &lifecycle);
+        let startup_intro_launcher_ui_plan = startup_intro_launcher_ui_plan(
+            startup_intro.is_some(),
+            arcade_navigation_ready(catalog_ready, &catalog),
+            startup_intro_launcher_frame_ready,
+        );
+        let startup_intro_prepare_live_launcher =
+            startup_intro_launcher_ui_plan == StartupIntroLauncherUiPlan::PrepareLiveFrame;
+        let startup_intro_suppress_launcher_ui =
+            startup_intro_launcher_ui_plan == StartupIntroLauncherUiPlan::Suppress;
+        if startup_intro_suppress_launcher_ui {
+            startup_intro_bridge_dirty_pending |= full_bridge_dirty || light_bridge_dirty;
+            full_bridge_dirty = false;
+            light_bridge_dirty = false;
+        } else {
+            if std::mem::take(&mut startup_intro_bridge_dirty_pending)
+                || startup_intro_prepare_live_launcher
+            {
+                full_bridge_dirty = true;
+            }
+            if startup_intro_prepare_live_launcher {
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                let clock_text = launcher_clock_text();
+                bridge.set_clock_text(clock_text.clone().into());
+                last_clock_text = clock_text;
+                last_clock_update = Instant::now();
+            }
+            sync_settings_bridge(&app, &nav, &lifecycle);
+        }
         let source_was_arcade = pending_navigation_transition
             .as_ref()
             .is_some_and(|pending| pending.source_was_arcade);
@@ -4594,7 +4666,9 @@ pub(super) fn run_launcher_loop(
         prepare_trace.bridge_sync_us = bridge_sync_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
-        sync_startup_visibility(&app, &lifecycle);
+        if !startup_intro_suppress_launcher_ui {
+            sync_startup_visibility(&app, &lifecycle);
+        }
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
         if !navigation_snapshot_locked_at_loop_start {
@@ -4803,7 +4877,9 @@ pub(super) fn run_launcher_loop(
             &mut launch_return_session,
         );
         apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        sync_startup_visibility(&app, &lifecycle);
+        if !startup_intro_suppress_launcher_ui {
+            sync_startup_visibility(&app, &lifecycle);
+        }
         let startup_reveal_ready =
             lifecycle.startup_status().state == StartupRevealState::RevealLauncher;
         effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
@@ -4877,7 +4953,9 @@ pub(super) fn run_launcher_loop(
         for event in composition_decision.events.iter() {
             runtime_status::event(event.name, event.detail.as_str());
         }
-        sync_navigation_transition_active(&app, &navigation_transition);
+        if !startup_intro_suppress_launcher_ui {
+            sync_navigation_transition_active(&app, &navigation_transition);
+        }
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
         }
@@ -5351,7 +5429,7 @@ pub(super) fn run_launcher_loop(
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
         if let Some(intro) = startup_intro.as_mut() {
-            if intro.snapshot_due() {
+            if intro.snapshot_due() && startup_intro_launcher_frame_ready {
                 let launcher_pixels = layer_target.cached_frame_view().pixels();
                 if let Err(error) = intro.install_launcher_snapshot(launcher_pixels) {
                     startup_intro_failure = Some(error);
@@ -5359,7 +5437,11 @@ pub(super) fn run_launcher_loop(
                     print_startup_event(
                         start,
                         "startup_intro_launcher_snapshot",
-                        format!("pixels={} at_ms=15000", launcher_pixels.len()),
+                        format!(
+                            "pixels={} logical_ms=15000 cabinet_wait_frames={}",
+                            launcher_pixels.len(),
+                            intro.waiting_frames(),
+                        ),
                     );
                 }
             }
@@ -5590,6 +5672,8 @@ pub(super) fn run_launcher_loop(
             Some(layer_target.render_black())
         } else if screensaver.active {
             None
+        } else if startup_intro_suppress_launcher_ui {
+            None
         } else if navigation_snapshot_locked_before_render {
             None
         } else {
@@ -5599,6 +5683,14 @@ pub(super) fn run_launcher_loop(
                 home_pan_present_active,
             )
         };
+        if startup_intro_prepare_live_launcher {
+            startup_intro_launcher_frame_ready = true;
+            print_startup_event(
+                start,
+                "startup_intro_launcher_frame_ready",
+                format!("games={} systems={}", catalog.len(), catalog.systems.len()),
+            );
+        }
         if accepted_screensaver_frame && !screensaver_first_render_logged {
             screensaver_first_render_logged = true;
             if let Some(started) = screensaver_show_started {
@@ -6306,8 +6398,9 @@ pub(super) fn run_launcher_loop(
                         start,
                         "startup_intro_completed",
                         format!(
-                            "frames={} elapsed_ms=20000 expected_refresh_intervals={} skipped_refreshes={} pacing_failures={} max_confirmation_gap_us={}",
+                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} skipped_refreshes={} pacing_failures={} max_confirmation_gap_us={}",
                             cadence.confirmed_frames,
+                            cadence.cabinet_wait_frames,
                             cadence.expected_refresh_intervals,
                             cadence.skipped_refreshes,
                             cadence.pacing_failures,
@@ -6572,6 +6665,7 @@ fn process_catalog_worker_message(
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
+    defer_bridge_ui: bool,
     start: Instant,
 ) {
     prepare_trace.catalog_message_count = prepare_trace.catalog_message_count.saturating_add(1);
@@ -6630,6 +6724,7 @@ fn process_catalog_worker_message(
         lifecycle,
         lifecycle_effects,
         full_bridge_dirty,
+        defer_bridge_ui,
         loop_start,
         start,
     );
@@ -7103,6 +7198,7 @@ fn apply_catalog_session_effects(
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
+    defer_bridge_ui: bool,
     now: Instant,
     start: Instant,
 ) {
@@ -7394,7 +7490,11 @@ fn apply_catalog_session_effects(
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::Ui(intent) => {
-                apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
+                if defer_bridge_ui {
+                    *full_bridge_dirty = true;
+                } else {
+                    apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
+                }
             }
             CatalogSessionEffect::FinishMediaWorker
             | CatalogSessionEffect::FinishMediaWorkerIfNoCatalogSeedPending
@@ -8401,6 +8501,26 @@ mod tests {
     #[test]
     fn production_build_cannot_enable_media_benchmark_contention() {
         assert!(!media_benchmark_contention_enabled());
+    }
+
+    #[test]
+    fn startup_intro_suppresses_slint_until_one_live_frame_is_needed() {
+        assert_eq!(
+            startup_intro_launcher_ui_plan(true, false, false),
+            StartupIntroLauncherUiPlan::Suppress
+        );
+        assert_eq!(
+            startup_intro_launcher_ui_plan(true, true, false),
+            StartupIntroLauncherUiPlan::PrepareLiveFrame
+        );
+        assert_eq!(
+            startup_intro_launcher_ui_plan(true, true, true),
+            StartupIntroLauncherUiPlan::Suppress
+        );
+        assert_eq!(
+            startup_intro_launcher_ui_plan(false, true, true),
+            StartupIntroLauncherUiPlan::Interactive
+        );
     }
 
     #[test]

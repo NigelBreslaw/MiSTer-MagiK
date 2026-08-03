@@ -15,6 +15,7 @@ const INTRO_FPS: u64 = 60;
 // Capture one second before the 16-second launcher morph cue so the live
 // target is fully prepared without touching the morph/crossfade hot path.
 const SNAPSHOT_FRAME: u64 = 15 * INTRO_FPS;
+const MORPH_FRAME: u64 = 16 * INTRO_FPS;
 const FINAL_FRAME: u64 = 20 * INTRO_FPS;
 
 pub(super) struct PreparedStartupIntro {
@@ -49,6 +50,8 @@ impl PreparedStartupIntro {
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
+            waiting_frames: 0,
+            last_render_waiting: false,
         }
     }
 }
@@ -67,11 +70,14 @@ pub(super) struct StartupIntroSession {
     pacing_failures: u64,
     max_confirmation_gap_us: u64,
     last_confirmed_at: Option<Instant>,
+    waiting_frames: u64,
+    last_render_waiting: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct StartupIntroCadence {
     pub(super) confirmed_frames: u64,
+    pub(super) cabinet_wait_frames: u64,
     pub(super) expected_refresh_intervals: u64,
     pub(super) skipped_refreshes: u64,
     pub(super) pacing_failures: u64,
@@ -81,6 +87,10 @@ pub(super) struct StartupIntroCadence {
 impl StartupIntroSession {
     pub(super) fn snapshot_due(&self) -> bool {
         !self.snapshot_ready && self.frame >= SNAPSHOT_FRAME
+    }
+
+    pub(super) const fn waiting_frames(&self) -> u64 {
+        self.waiting_frames
     }
 
     pub(super) fn install_launcher_snapshot(
@@ -126,9 +136,7 @@ impl StartupIntroSession {
                 self.scene.geometry().height()
             ));
         }
-        if self.frame >= SNAPSHOT_FRAME && !self.snapshot_ready {
-            return Err("startup intro reached handoff cue without a launcher snapshot".into());
-        }
+        let waiting_for_launcher = self.frame >= MORPH_FRAME && !self.snapshot_ready;
         let slot = grant
             .slot_index
             .checked_sub(1)
@@ -145,17 +153,25 @@ impl StartupIntroSession {
             .ok_or("startup intro hidden mappings are unavailable")?;
         let buffer = buffers.buffer_mut(grant.slot_index);
         let scene_pixels = scene_pixels_mut(buffer);
-        self.scene
-            .render(
-                SceneTarget::new(scene_pixels, geometry, buffer_id)
-                    .map_err(|error| error.to_string())?,
-                SceneClock {
-                    frame: self.frame,
-                    elapsed,
-                    next_elapsed,
-                },
-            )
+        let target = SceneTarget::new(scene_pixels, geometry, buffer_id)
             .map_err(|error| error.to_string())?;
+        if waiting_for_launcher {
+            self.scene
+                .render_waiting_for_launcher(target, self.waiting_frames)
+                .map_err(|error| error.to_string())?;
+        } else {
+            self.scene
+                .render(
+                    target,
+                    SceneClock {
+                        frame: self.frame,
+                        elapsed,
+                        next_elapsed,
+                    },
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        self.last_render_waiting = waiting_for_launcher;
         buffer.publish_writes();
         Ok(CompletedHiddenFrame { grant })
     }
@@ -187,7 +203,9 @@ impl StartupIntroSession {
                 .skipped_refreshes
                 .saturating_add(expected.saturating_sub(1));
         }
-        if self.frame >= FINAL_FRAME {
+        if self.last_render_waiting {
+            self.waiting_frames = self.waiting_frames.saturating_add(1);
+        } else if self.frame >= FINAL_FRAME {
             self.completed = true;
         } else {
             self.frame = self.frame.saturating_add(1);
@@ -198,6 +216,7 @@ impl StartupIntroSession {
     pub(super) const fn cadence(&self) -> StartupIntroCadence {
         StartupIntroCadence {
             confirmed_frames: self.confirmed_frames,
+            cabinet_wait_frames: self.waiting_frames,
             expected_refresh_intervals: self.expected_refresh_intervals,
             skipped_refreshes: self.skipped_refreshes,
             pacing_failures: self.pacing_failures,
@@ -273,6 +292,8 @@ mod tests {
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
+            waiting_frames: 0,
+            last_render_waiting: false,
         }
     }
 
@@ -319,5 +340,31 @@ mod tests {
         assert_eq!(skipped.expected_refresh_intervals, FINAL_FRAME + 1);
         assert_eq!(skipped.skipped_refreshes, 1);
         assert_eq!(skipped.pacing_failures, 0);
+    }
+
+    #[test]
+    fn cabinet_wait_frames_do_not_advance_the_morph_clock() {
+        let mut session = test_session();
+        session.frame = MORPH_FRAME;
+        session.last_render_waiting = true;
+        let origin = Instant::now();
+
+        assert!(
+            session
+                .note_confirmed_present(origin, 16_667, true)
+                .is_none()
+        );
+        assert_eq!(session.frame(), MORPH_FRAME);
+        assert_eq!(session.waiting_frames(), 1);
+
+        session.snapshot_ready = true;
+        session.last_render_waiting = false;
+        assert!(
+            session
+                .note_confirmed_present(origin + Duration::from_micros(16_667), 16_667, true,)
+                .is_none()
+        );
+        assert_eq!(session.frame(), MORPH_FRAME + 1);
+        assert_eq!(session.waiting_frames(), 1);
     }
 }
