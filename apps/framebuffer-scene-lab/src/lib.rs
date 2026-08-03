@@ -436,7 +436,7 @@ impl FocusedParticleRenderer {
                     particles: stats.particles,
                     visible: stats.visible,
                     simulation_backend: "cabinet-scalar",
-                    projection_backend: "cabinet-scalar",
+                    projection_backend: stats.projection_backend,
                     magik_stages: None,
                 })
             }

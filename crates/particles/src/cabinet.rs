@@ -29,6 +29,7 @@ pub struct ArcadeCabinetFrameStats {
     pub particles: usize,
     pub visible: usize,
     pub pixel_writes: usize,
+    pub projection_backend: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -96,6 +97,28 @@ struct CabinetAttributeBlock {
     flags: [u8; PARTICLE_LANES],
 }
 
+const INVALID_PARTICLE_OFFSET: u32 = u32::MAX;
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+unsafe extern "C" {
+    fn mister_magik_cabinet_neon_project_stable(
+        count: usize,
+        blocks: *const CabinetPositionBlock,
+        sin_yaw: f32,
+        cos_yaw: f32,
+        sin_pitch: f32,
+        cos_pitch: f32,
+        dolly: f32,
+        near_depth: f32,
+        focal_length: f32,
+        center_x: f32,
+        center_y: f32,
+        width: u32,
+        height: u32,
+        offsets: *mut u32,
+    ) -> usize;
+}
+
 /// Exact extraction of the approved arcade-cabinet particle formation.
 pub struct ArcadeCabinetFormation {
     width: usize,
@@ -104,6 +127,7 @@ pub struct ArcadeCabinetFormation {
     capacity: usize,
     positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
+    projected_offsets: Vec<u32>,
     options: CabinetRenderOptions,
 }
 
@@ -298,6 +322,7 @@ impl ArcadeCabinetFormation {
             capacity,
             positions,
             attributes,
+            projected_offsets: vec![INVALID_PARTICLE_OFFSET; capacity],
             options: CabinetRenderOptions {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
@@ -342,10 +367,15 @@ impl ArcadeCabinetFormation {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetAttributeBlock>()),
             )
+            .saturating_add(
+                self.projected_offsets
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
     }
 
     pub fn render(
-        &self,
+        &mut self,
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<ArcadeCabinetFrameStats, String> {
@@ -367,6 +397,37 @@ impl ArcadeCabinetFormation {
         let height_f32 = self.height as f32;
         let mut visible = 0usize;
         let mut pixel_writes = 0usize;
+        let mut projection_backend = "cabinet-scalar";
+
+        macro_rules! draw_offset {
+            ($index:expr, $offset:expr, $pixel_x:expr) => {{
+                let index = $index;
+                let offset = $offset;
+                let pixel_x = $pixel_x;
+                let feature = attribute.flags[lane];
+                let style = if feature & appearance.priority_feature_mask != 0 {
+                    appearance.priority_palette_index
+                } else if feature & appearance.accent_feature_mask != 0 {
+                    attribute.style[lane]
+                        .saturating_add(appearance.accent_palette_add)
+                        .min(7)
+                } else {
+                    attribute.style[lane]
+                };
+                destination[offset] = pixel(appearance.palette[usize::from(style)]);
+                pixel_writes = pixel_writes.saturating_add(1);
+                if feature & appearance.neighbor_feature_mask != 0
+                    && index % usize::from(appearance.neighbor_every) == 0
+                    && pixel_x + 1 < self.width
+                {
+                    let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
+                    destination[offset + 1] =
+                        pixel(appearance.palette[usize::from(neighbor_style)]);
+                    pixel_writes = pixel_writes.saturating_add(1);
+                }
+                visible = visible.saturating_add(1);
+            }};
+        }
 
         macro_rules! project_and_draw {
             ($index:expr, $world_x:expr, $world_y:expr, $world_z:expr) => {{
@@ -384,31 +445,9 @@ impl ArcadeCabinetFormation {
                     let x = center_x + rotated_x * scale;
                     let y = center_y + rotated_y * scale;
                     if x >= 0.0 && y >= 0.0 && x < width_f32 && y < height_f32 {
-                        let feature = attribute.flags[lane];
-                        let style = if feature & appearance.priority_feature_mask != 0 {
-                            appearance.priority_palette_index
-                        } else if feature & appearance.accent_feature_mask != 0 {
-                            attribute.style[lane]
-                                .saturating_add(appearance.accent_palette_add)
-                                .min(7)
-                        } else {
-                            self.style[index]
-                        };
                         let pixel_x = x as usize;
                         let offset = y as usize * self.width + pixel_x;
-                        destination[offset] = pixel(appearance.palette[usize::from(style)]);
-                        pixel_writes = pixel_writes.saturating_add(1);
-                        if feature & appearance.neighbor_feature_mask != 0
-                            && index % usize::from(appearance.neighbor_every) == 0
-                            && pixel_x + 1 < self.width
-                        {
-                            let neighbor_style =
-                                style.saturating_sub(appearance.neighbor_palette_subtract);
-                            destination[offset + 1] =
-                                pixel(appearance.palette[usize::from(neighbor_style)]);
-                            pixel_writes = pixel_writes.saturating_add(1);
-                        }
-                        visible = visible.saturating_add(1);
+                        draw_offset!(index, offset, pixel_x);
                     }
                 }
             }};
@@ -449,7 +488,35 @@ impl ArcadeCabinetFormation {
                 );
             }
         } else {
-            for index in 0..self.options.active_count {
+            let vector_end = project_stable_neon(
+                self.options.active_count,
+                &self.positions,
+                sin_yaw,
+                cos_yaw,
+                sin_pitch,
+                cos_pitch,
+                dolly,
+                self.recipe.camera.near_depth,
+                self.recipe.camera.focal_length,
+                center_x,
+                center_y,
+                self.width,
+                self.height,
+                &mut self.projected_offsets,
+            );
+            if vector_end > 0 {
+                projection_backend = "cabinet-neon";
+                for index in 0..vector_end {
+                    let offset = self.projected_offsets[index];
+                    if offset == INVALID_PARTICLE_OFFSET {
+                        continue;
+                    }
+                    let attribute = &self.attributes[index / PARTICLE_LANES];
+                    let lane = index % PARTICLE_LANES;
+                    draw_offset!(index, offset as usize, offset as usize % self.width);
+                }
+            }
+            for index in vector_end..self.options.active_count {
                 let position = &self.positions[index / PARTICLE_LANES];
                 let attribute = &self.attributes[index / PARTICLE_LANES];
                 let lane = index % PARTICLE_LANES;
@@ -466,7 +533,82 @@ impl ArcadeCabinetFormation {
             particles: self.options.active_count,
             visible,
             pixel_writes,
+            projection_backend,
         })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_stable_neon(
+    count: usize,
+    positions: &[CabinetPositionBlock],
+    sin_yaw: f32,
+    cos_yaw: f32,
+    sin_pitch: f32,
+    cos_pitch: f32,
+    dolly: f32,
+    near_depth: f32,
+    focal_length: f32,
+    center_x: f32,
+    center_y: f32,
+    width: usize,
+    height: usize,
+    offsets: &mut [u32],
+) -> usize {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        if count < PARTICLE_LANES
+            || positions.len() * PARTICLE_LANES < count
+            || offsets.len() < count
+        {
+            return 0;
+        }
+        let Ok(width) = u32::try_from(width) else {
+            return 0;
+        };
+        let Ok(height) = u32::try_from(height) else {
+            return 0;
+        };
+        // SAFETY: position blocks have the C layout declared above, the input
+        // covers count rounded down to four lanes, and offsets has count words.
+        unsafe {
+            mister_magik_cabinet_neon_project_stable(
+                count,
+                positions.as_ptr(),
+                sin_yaw,
+                cos_yaw,
+                sin_pitch,
+                cos_pitch,
+                dolly,
+                near_depth,
+                focal_length,
+                center_x,
+                center_y,
+                width,
+                height,
+                offsets.as_mut_ptr(),
+            )
+        }
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (
+            count,
+            positions,
+            sin_yaw,
+            cos_yaw,
+            sin_pitch,
+            cos_pitch,
+            dolly,
+            near_depth,
+            focal_length,
+            center_x,
+            center_y,
+            width,
+            height,
+            offsets,
+        );
+        0
     }
 }
 
@@ -738,8 +880,8 @@ mod tests {
     #[test]
     fn arcade_formation_is_deterministic() {
         let recipe = embedded_cabinet_recipe().unwrap();
-        let first = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
-        let second = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        let mut first = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut second = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
         let mut first_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let mut second_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let elapsed = Duration::from_secs(12);

@@ -16,6 +16,88 @@ static const uint32_t PARTICLE_NOT_VISIBLE = UINT32_MAX;
 static const uint32_t COMMAND_PALETTE_SHIFT = 20;
 static const uint32_t COMMAND_NEIGHBOR = 1u << 22;
 
+typedef struct {
+    float target_x[4];
+    float target_y[4];
+    float target_z[4];
+    float source_x[4];
+    float source_y[4];
+    float source_z[4];
+} cabinet_position_block;
+
+size_t mister_magik_cabinet_neon_project_stable(
+    size_t count,
+    const cabinet_position_block *restrict blocks,
+    float sin_yaw,
+    float cos_yaw,
+    float sin_pitch,
+    float cos_pitch,
+    float dolly,
+    float near_depth,
+    float focal_length,
+    float center_x,
+    float center_y,
+    uint32_t width,
+    uint32_t height,
+    uint32_t *restrict offsets
+) {
+    const size_t vector_end = count & ~(size_t)3;
+    const float32x4_t sin_yaw_v = vdupq_n_f32(sin_yaw);
+    const float32x4_t cos_yaw_v = vdupq_n_f32(cos_yaw);
+    const float32x4_t sin_pitch_v = vdupq_n_f32(sin_pitch);
+    const float32x4_t cos_pitch_v = vdupq_n_f32(cos_pitch);
+    const float32x4_t dolly_v = vdupq_n_f32(dolly);
+    const float32x4_t near_v = vdupq_n_f32(near_depth);
+    const float32x4_t focal_v = vdupq_n_f32(focal_length);
+    const float32x4_t center_x_v = vdupq_n_f32(center_x);
+    const float32x4_t center_y_v = vdupq_n_f32(center_y);
+    const float32x4_t zero = vdupq_n_f32(0.0f);
+    const float32x4_t width_f = vdupq_n_f32((float)width);
+    const float32x4_t height_f = vdupq_n_f32((float)height);
+    const uint32x4_t width_u = vdupq_n_u32(width);
+    const uint32x4_t invalid = vdupq_n_u32(UINT32_MAX);
+    for (size_t index = 0; index < vector_end; index += 4) {
+        const cabinet_position_block *block = blocks + index / 4;
+        const float32x4_t world_x = vld1q_f32(block->target_x);
+        const float32x4_t world_y = vld1q_f32(block->target_y);
+        const float32x4_t world_z = vld1q_f32(block->target_z);
+        const float32x4_t rotated_x = vaddq_f32(
+            vmulq_f32(world_x, cos_yaw_v),
+            vmulq_f32(world_z, sin_yaw_v)
+        );
+        const float32x4_t yaw_z = vsubq_f32(
+            vmulq_f32(world_z, cos_yaw_v),
+            vmulq_f32(world_x, sin_yaw_v)
+        );
+        const float32x4_t rotated_y = vsubq_f32(
+            vmulq_f32(world_y, cos_pitch_v),
+            vmulq_f32(yaw_z, sin_pitch_v)
+        );
+        const float32x4_t rotated_z = vaddq_f32(
+            vmulq_f32(world_y, sin_pitch_v),
+            vmulq_f32(yaw_z, cos_pitch_v)
+        );
+        const float32x4_t depth = vaddq_f32(dolly_v, rotated_z);
+        const uint32x4_t depth_valid = vcgtq_f32(depth, near_v);
+        const float32x4_t safe_depth = vmaxq_f32(depth, near_v);
+        float32x4_t reciprocal = vrecpeq_f32(safe_depth);
+        reciprocal = vmulq_f32(reciprocal, vrecpsq_f32(safe_depth, reciprocal));
+        reciprocal = vmulq_f32(reciprocal, vrecpsq_f32(safe_depth, reciprocal));
+        const float32x4_t scale = vmulq_f32(focal_v, reciprocal);
+        const float32x4_t x = vaddq_f32(center_x_v, vmulq_f32(rotated_x, scale));
+        const float32x4_t y = vaddq_f32(center_y_v, vmulq_f32(rotated_y, scale));
+        uint32x4_t valid = vandq_u32(depth_valid, vcgeq_f32(x, zero));
+        valid = vandq_u32(valid, vcgeq_f32(y, zero));
+        valid = vandq_u32(valid, vcltq_f32(x, width_f));
+        valid = vandq_u32(valid, vcltq_f32(y, height_f));
+        const uint32x4_t pixel_x = vcvtq_u32_f32(x);
+        const uint32x4_t pixel_y = vcvtq_u32_f32(y);
+        const uint32x4_t offset = vmlaq_u32(pixel_x, pixel_y, width_u);
+        vst1q_u32(offsets + index, vbslq_u32(valid, offset, invalid));
+    }
+    return vector_end;
+}
+
 static inline uint32x4_t next_random(uint32_t *states) {
     uint32x4_t value = vld1q_u32(states);
     value = veorq_u32(value, vshlq_n_u32(value, 13));
