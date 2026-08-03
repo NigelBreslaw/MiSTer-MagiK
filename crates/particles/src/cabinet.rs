@@ -123,6 +123,7 @@ pub enum CabinetColorMode {
     InterferenceBands,
     ArcadePalettes,
     TextureExact,
+    TextureGlow,
 }
 
 impl CabinetColorMode {
@@ -141,6 +142,7 @@ impl CabinetColorMode {
             Self::InterferenceBands => "INTERFERENCE BANDS",
             Self::ArcadePalettes => "ARCADE PALETTES",
             Self::TextureExact => "TEXTURE EXACT",
+            Self::TextureGlow => "TEXTURE GLOW",
         }
     }
 
@@ -1312,6 +1314,9 @@ impl ArcadeCabinetFormation {
                     CabinetColorMode::TextureExact => {
                         Rgb565Pixel(self.texture_raster[index] as u16)
                     }
+                    CabinetColorMode::TextureGlow => {
+                        Rgb565Pixel((self.texture_raster[index] >> 16) as u16)
+                    }
                     CabinetColorMode::Origin => unreachable!(),
                 };
                 destination[offset] = primary;
@@ -2208,7 +2213,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_prism_and_texture_colour_preserve_write_count() {
+    fn screen_prism_and_texture_colours_preserve_write_count() {
         let gradient = horizontal_gradient(960, &PRISM_STOPS);
         assert_eq!(gradient.first(), PRISM_STOPS.first());
         assert_eq!(gradient.last(), PRISM_STOPS.last());
@@ -2220,7 +2225,8 @@ mod tests {
         let recipe = embedded_cabinet_recipe().unwrap();
         let mut origin = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
         let mut prism = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
-        let mut texture = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        let mut texture = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut glow = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
         prism
             .set_render_options(CabinetRenderOptions {
                 active_count: 39_936,
@@ -2242,9 +2248,16 @@ mod tests {
                 color_mode: CabinetColorMode::TextureExact,
             })
             .unwrap();
+        glow.set_render_options(CabinetRenderOptions {
+            active_count: 39_936,
+            creative_mode: CabinetCreativeMode::Baseline,
+            color_mode: CabinetColorMode::TextureGlow,
+        })
+        .unwrap();
         let mut origin_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let mut prism_pixels = origin_pixels.clone();
         let mut texture_pixels = origin_pixels.clone();
+        let mut glow_pixels = origin_pixels.clone();
         let origin_stats = origin
             .render(&mut origin_pixels, Duration::from_secs(12), 0)
             .unwrap();
@@ -2254,12 +2267,19 @@ mod tests {
         let texture_stats = texture
             .render(&mut texture_pixels, Duration::from_secs(12), 0)
             .unwrap();
+        let glow_stats = glow
+            .render(&mut glow_pixels, Duration::from_secs(12), 0)
+            .unwrap();
         assert_eq!(prism_stats.visible, origin_stats.visible);
         assert_eq!(prism_stats.pixel_writes, origin_stats.pixel_writes);
         assert_eq!(texture_stats.visible, origin_stats.visible);
         assert_eq!(texture_stats.pixel_writes, origin_stats.pixel_writes);
+        assert_eq!(glow_stats.visible, origin_stats.visible);
+        assert_eq!(glow_stats.pixel_writes, origin_stats.pixel_writes);
         assert_ne!(prism_pixels, origin_pixels);
         assert_ne!(texture_pixels, origin_pixels);
+        assert_ne!(glow_pixels, origin_pixels);
+        assert_ne!(glow_pixels, texture_pixels);
     }
 
     #[test]
