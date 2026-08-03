@@ -445,7 +445,7 @@ mod tests {
         };
         assert_eq!(*stagger_ms, 100);
         assert_eq!(*formation_start_percent, 0.0);
-        assert_eq!(*formation_end_percent, 95.0);
+        assert_eq!(*formation_end_percent, 98.0);
         let IntroCue::TargetOrbit {
             start_turns,
             turns,
@@ -455,7 +455,7 @@ mod tests {
         else {
             panic!("seventh intro cue must orbit the cabinet");
         };
-        assert_eq!((*start_turns, *turns, *formation_percent), (0.3, 0.4, 95.0));
+        assert_eq!((*start_turns, *turns, *formation_percent), (0.3, 0.4, 98.0));
     }
 
     #[test]

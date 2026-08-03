@@ -68,8 +68,9 @@ The final handoff is derived only from the production launcher's live frame:
    design-time launcher image or point cloud is embedded.
 2. If no usable launcher frame exists at 16 seconds, logical storyboard time
    pauses and the fully formed cabinet keeps spinning at 60 Hz. Each four-second
-   waiting loop is a seamless full turn. Once the real launcher frame is ready,
-   the normal morph begins.
+   source orbit flowed at 0.4 turns per four seconds, so the wait continues at
+   exactly that velocity: one seamless full turn every ten seconds. Once the
+   real launcher frame is ready, the normal morph begins.
 3. From 16 to 18 seconds the cabinet particles morph into that live launcher
    formation. At 18 seconds both hidden slots settle on the static target;
    repeated hold frames perform no pixel writes.

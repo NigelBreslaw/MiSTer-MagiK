@@ -490,8 +490,8 @@ impl IntroScene {
 
     /// Keeps the fully formed cabinet rotating while the host waits for a
     /// usable live launcher frame. The first waiting frame begins at the
-    /// cabinet orbit's exact final angle and each four-second loop adds one
-    /// full turn, so there is no visual seam or frozen fallback.
+    /// cabinet orbit's exact final angle and continues at that cue's exact
+    /// outgoing angular velocity, so there is no visual or velocity seam.
     pub fn render_waiting_for_launcher(
         &mut self,
         mut target: SceneTarget<'_>,
@@ -506,7 +506,20 @@ impl IntroScene {
             .fill(Rgb565Pixel(self.recipe.appearance.background.0));
         self.slot_states[usize::from(target.buffer_id().get())] = IntroSlotState::Dynamic;
         let clear_us = elapsed_us(clear_started.elapsed());
-        let wait_duration_ms = 4_000;
+        let (wait_duration_ms, wait_start_turns, wait_turns) =
+            match self.recipe.cues.get(6) {
+                Some(IntroCue::TargetOrbit {
+                    duration_ms,
+                    start_turns,
+                    turns,
+                    ..
+                }) if turns.abs() > f32::EPSILON => (
+                    ((*duration_ms as f32 / turns.abs()).round() as u64).max(1),
+                    *start_turns + *turns,
+                    turns.signum(),
+                ),
+                _ => (10_000, 0.7, 1.0),
+            };
         let cue_elapsed_ms = waiting_frame
             .saturating_mul(1_000)
             .checked_div(60)
@@ -516,8 +529,8 @@ impl IntroScene {
             target.pixels_mut(),
             cue_elapsed_ms,
             wait_duration_ms,
-            0.7,
-            1.0,
+            wait_start_turns,
+            wait_turns,
             self.cabinet_formation * 100.0,
             waiting_frame,
         );
@@ -2056,7 +2069,7 @@ mod tests {
         let yaw = cabinet_yaw(4_000, 4_000, 0.3, 0.4);
         assert!((yaw - 0.7 * std::f32::consts::TAU).abs() < f32::EPSILON * 8.0);
         let scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
-        assert!((scene.cabinet_formation - 0.95).abs() < f32::EPSILON);
+        assert!((scene.cabinet_formation - 0.98).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2232,7 +2245,7 @@ mod tests {
         let mut first = vec![Rgb565Pixel(0); geometry.len()];
         let mut looped = vec![Rgb565Pixel(0); geometry.len()];
 
-        scene
+        let first_stats = scene
             .render_waiting_for_launcher(
                 SceneTarget::new(&mut first, geometry, SceneBufferId::new(0, 2).unwrap()).unwrap(),
                 0,
@@ -2241,10 +2254,11 @@ mod tests {
         scene
             .render_waiting_for_launcher(
                 SceneTarget::new(&mut looped, geometry, SceneBufferId::new(1, 2).unwrap()).unwrap(),
-                240,
+                600,
             )
             .unwrap();
 
+        assert_eq!(first_stats.cue_duration_ms, 10_000);
         assert_eq!(first, looped);
     }
 }

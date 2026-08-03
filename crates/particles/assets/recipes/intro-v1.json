@@ -30,8 +30,8 @@
     { "type": "hold_target", "id": "hold-mister", "duration_ms": 750, "target": "mister" },
     { "type": "letter_morph", "id": "letters", "duration_ms": 3500, "from": "mister", "to": "magik", "turns": 1.0, "stagger_ms": 150, "easing": "smoothstep" },
     { "type": "hold_target", "id": "hold-magik", "duration_ms": 750, "target": "magik" },
-    { "type": "cloud", "id": "letters-to-cabinet", "duration_ms": 3000, "from": "magik", "to": "cabinet", "turns": 0.3, "letter_turns": 1.0, "stagger_ms": 100, "radius": 72.0, "formation_start_percent": 0.0, "formation_end_percent": 95.0, "easing": "smoothstep" },
-    { "type": "target_orbit", "id": "cabinet-orbit", "duration_ms": 4000, "target": "cabinet", "start_turns": 0.3, "turns": 0.4, "formation_percent": 95.0 },
+    { "type": "cloud", "id": "letters-to-cabinet", "duration_ms": 3000, "from": "magik", "to": "cabinet", "turns": 0.3, "letter_turns": 1.0, "stagger_ms": 100, "radius": 72.0, "formation_start_percent": 0.0, "formation_end_percent": 98.0, "easing": "smoothstep" },
+    { "type": "target_orbit", "id": "cabinet-orbit", "duration_ms": 4000, "target": "cabinet", "start_turns": 0.3, "turns": 0.4, "formation_percent": 98.0 },
     { "type": "morph_target", "id": "form-launcher", "duration_ms": 2000, "from": "cabinet", "to": "launcher_live", "active_at_end": 40960, "easing": "smoothstep" },
     { "type": "hold_target", "id": "hold-launcher-particles", "duration_ms": 1000, "target": "launcher_live" },
     { "type": "launcher_crossfade", "id": "crossfade-launcher", "duration_ms": 1000, "from": "launcher_live", "to": "launcher_live_rgb565", "easing": "smoothstep" }
