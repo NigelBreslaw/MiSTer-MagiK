@@ -82,10 +82,13 @@ Host-only work never contacts MiSTer.
 The runtime executable and its platform manifest are inseparable deployment
 state. No operator command, benchmark request, or device-agent endpoint may
 replace `mister-magik-fb` alone. Runtime changes use the coherent Dev bundle
-transaction, activate the regenerated manifest last, and retain rollback until
-Main has passed preflight and the launcher has proved ready on the real latch
-path. A Main suspend/resume acknowledgement confirms command acceptance only;
-it is never deployment health evidence. The host tool intentionally exposes no
+transaction, update the v3 manifest's GUI and MagiK identity fields, activate
+the regenerated manifest last, and retain rollback until Main has passed
+preflight and the launcher has proved ready on the real latch path. Runtime
+delivery uses Main suspend/resume and does not reboot Linux; platform changes
+retain the complete manifest-bound transaction and its supervised reboot. A
+Main suspend/resume acknowledgement confirms command acceptance only; it is
+never deployment health evidence. The host tool intentionally exposes no
 generic remote shell, file upload, directory upload, or binary deployment
 subcommand; fixed typed operations own all device mutation.
 

@@ -105,8 +105,8 @@ pub fn run_transaction(
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
-        (Phase::GithubResolution, 15),
-        (Phase::Reconcile, 22),
+        (Phase::Reconcile, 15),
+        (Phase::GithubResolution, 22),
         (Phase::RuntimeBuild, 32),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
@@ -355,6 +355,17 @@ impl<D> ProcessActions<'_, D> {
         Ok(())
     }
 
+    fn prepare_runtime_manifest(&self) -> AgentResult<()> {
+        crate::platform_manifest::update_runtime(
+            &self.stage.join(crate::platform_manifest::FILE_NAME),
+            self.installed_manifest
+                .as_deref()
+                .ok_or("runtime delivery is missing the installed platform manifest")?,
+            &self.repository.join(self.deployment.build.artifact()),
+            self.expected_commit,
+        )
+    }
+
     fn qualify_manager(&mut self) -> AgentResult<()> {
         self.manager_artifact = Some(self.prepare_manager()?);
         Ok(())
@@ -435,15 +446,7 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 self.deployment.platform_candidate = platform_candidate;
-                self.decision = match reconciliation.decision {
-                    DeliveryDecision::NoOp => DeliveryDecision::NoOp,
-                    DeliveryDecision::Runtime | DeliveryDecision::Platform => {
-                        DeliveryDecision::Platform
-                    }
-                };
-                if self.decision == DeliveryDecision::Platform {
-                    self.deployment.kind = crate::deploy::DeploymentKind::Platform;
-                }
+                self.decision = reconciliation.decision;
                 self.installed_manifest = Some(installed_manifest);
                 Ok(())
             }
@@ -451,9 +454,7 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
             Phase::ManagerQualification => self.qualify_manager(),
             Phase::LocalStaging => match self.decision {
                 DeliveryDecision::Platform => self.prepare_local_stage(),
-                DeliveryDecision::Runtime => {
-                    Err("runtime-only delivery is forbidden by the v4 platform contract".into())
-                }
+                DeliveryDecision::Runtime => self.prepare_runtime_manifest(),
                 DeliveryDecision::NoOp => Ok(()),
             },
             Phase::DatabasePreparation => self.prepare_databases(),
@@ -481,8 +482,7 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
 
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
-            Phase::GithubResolution => true,
-            Phase::ManagerQualification | Phase::DatabasePreparation => {
+            Phase::GithubResolution | Phase::ManagerQualification | Phase::DatabasePreparation => {
                 self.decision == DeliveryDecision::Platform
             }
             Phase::RuntimeBuild
@@ -727,8 +727,8 @@ mod tests {
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
-        Phase::GithubResolution,
         Phase::Reconcile,
+        Phase::GithubResolution,
         Phase::RuntimeBuild,
         Phase::ManagerQualification,
         Phase::LocalStaging,

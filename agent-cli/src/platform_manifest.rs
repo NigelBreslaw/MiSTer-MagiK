@@ -293,6 +293,39 @@ pub fn write_local_main_overlay(
     })
 }
 
+pub fn update_runtime(
+    output: &Path,
+    installed: &str,
+    gui: &Path,
+    magik_revision: &str,
+) -> AgentResult<()> {
+    require_hex("magik_revision", magik_revision, 40)?;
+    if !gui.is_file() {
+        return classified(
+            "platform_artifact_missing",
+            format!("gui: {}", gui.display()),
+        );
+    }
+    let mut values = parse_installed(installed, Layout::Development)?.values;
+    values.insert("gui_sha256".into(), digest(gui)?);
+    values.insert("magik_revision".into(), magik_revision.into());
+    values.insert(
+        "qualification_candidate_id".into(),
+        qualification_candidate_id(&values),
+    );
+    let text = FIELDS
+        .iter()
+        .map(|field| format!("{field}={}\n", values[*field]))
+        .collect::<String>();
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    fs::write(output, text)
+        .map_err(|error| format!("cannot write {}: {error}", output.display()))?;
+    verify(output, None, Layout::Development)
+}
+
 impl Artifacts {
     fn values(&self) -> [(&'static str, &Path); 7] {
         [
@@ -754,6 +787,29 @@ mod tests {
             )
             .is_err()
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn runtime_update_changes_only_gui_identity_and_magik_revision() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-runtime-overlay-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let gui = root.join("mister-magik-fb");
+        let output = root.join(FILE_NAME);
+        fs::write(&gui, b"new gui").unwrap();
+
+        update_runtime(&output, &canonical_manifest(), &gui, &"d".repeat(40)).unwrap();
+
+        let updated =
+            parse_installed(&fs::read_to_string(&output).unwrap(), Layout::Development).unwrap();
+        assert_eq!(updated.magik_revision(), "d".repeat(40));
+        assert_eq!(updated.gui_sha256(), digest(&gui).unwrap());
+        assert_eq!(updated.main_revision(), "b".repeat(40));
+        assert_eq!(updated.main_sha256(), "a".repeat(64));
         let _ = fs::remove_dir_all(root);
     }
 }
