@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 24] = [
+const CABINET_CASES: [CabinetCase; 25] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -246,6 +246,12 @@ const CABINET_CASES: [CabinetCase; 24] = [
         particles: 39_936,
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::InterferenceBands,
+    },
+    CabinetCase {
+        name: "arcade-palettes-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::ArcadePalettes,
     },
 ];
 
@@ -427,10 +433,11 @@ enum CabinetDemoMode {
     DirectionalMotion,
     PhaseStory,
     InterferenceBands,
+    ArcadePalettes,
 }
 
 impl CabinetDemoMode {
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 16] = [
         Self::Baseline,
         Self::Satellites,
         Self::HistoryEcho,
@@ -446,6 +453,7 @@ impl CabinetDemoMode {
         Self::DirectionalMotion,
         Self::PhaseStory,
         Self::InterferenceBands,
+        Self::ArcadePalettes,
     ];
 
     const fn index(self) -> usize {
@@ -469,6 +477,7 @@ impl CabinetDemoMode {
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
             Self::PhaseStory => "PHASE STORY",
             Self::InterferenceBands => "INTERFERENCE BANDS",
+            Self::ArcadePalettes => "ARCADE PALETTES",
         }
     }
 
@@ -488,7 +497,8 @@ impl CabinetDemoMode {
             | Self::MotionHeat
             | Self::DirectionalMotion
             | Self::PhaseStory
-            | Self::InterferenceBands => CabinetCreativeMode::Baseline,
+            | Self::InterferenceBands
+            | Self::ArcadePalettes => CabinetCreativeMode::Baseline,
         };
         let color_mode = match self {
             Self::ScreenPrism => CabinetColorMode::ScreenPrism,
@@ -500,6 +510,7 @@ impl CabinetDemoMode {
             Self::DirectionalMotion => CabinetColorMode::DirectionalMotion,
             Self::PhaseStory => CabinetColorMode::PhaseStory,
             Self::InterferenceBands => CabinetColorMode::InterferenceBands,
+            Self::ArcadePalettes => CabinetColorMode::ArcadePalettes,
             _ => CabinetColorMode::Origin,
         };
         CabinetRenderOptions {
@@ -586,7 +597,7 @@ impl CabinetLabControls {
 
 const HUD_X: usize = 8;
 const HUD_Y: usize = 8;
-const HUD_WIDTH: usize = 288;
+const HUD_WIDTH: usize = 420;
 const HUD_HEIGHT: usize = 42;
 
 struct CabinetHud {
@@ -637,6 +648,9 @@ fn draw_hud_text(
     for (character_index, character) in text.chars().enumerate() {
         let rows = hud_glyph(character);
         let x = origin_x + character_index * 12;
+        if x + 9 >= HUD_WIDTH {
+            break;
+        }
         for (row, bits) in rows.into_iter().enumerate() {
             for column in 0..5 {
                 if bits & (1 << (4 - column)) == 0 {
@@ -1731,7 +1745,7 @@ mod tests {
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
-        assert_eq!(controls.mode, CabinetDemoMode::InterferenceBands);
+        assert_eq!(controls.mode, CabinetDemoMode::ArcadePalettes);
     }
 
     #[test]

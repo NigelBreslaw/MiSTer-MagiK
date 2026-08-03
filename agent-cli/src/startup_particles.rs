@@ -23,7 +23,7 @@ const LAB_BINARY: &str = "mister-magik-framebuffer-scene-lab";
 const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 const MAX_RECIPE_BYTES: u64 = 1024 * 1024;
-const CABINET_CASES: [&str; 24] = [
+const CABINET_CASES: [&str; 25] = [
     "baseline-24064",
     "baseline-36096",
     "baseline-48128",
@@ -48,6 +48,7 @@ const CABINET_CASES: [&str; 24] = [
     "directional-39936",
     "phase-story-39936",
     "interference-39936",
+    "arcade-palettes-39936",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]

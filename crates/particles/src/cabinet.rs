@@ -117,6 +117,7 @@ pub enum CabinetColorMode {
     DirectionalMotion,
     PhaseStory,
     InterferenceBands,
+    ArcadePalettes,
 }
 
 impl CabinetColorMode {
@@ -133,6 +134,7 @@ impl CabinetColorMode {
             Self::DirectionalMotion => "DIRECTIONAL COLOUR",
             Self::PhaseStory => "PHASE STORY",
             Self::InterferenceBands => "INTERFERENCE BANDS",
+            Self::ArcadePalettes => "ARCADE PALETTES",
         }
     }
 
@@ -250,6 +252,7 @@ pub struct ArcadeCabinetFormation {
     depth_prism: Vec<[Rgb565Pixel; 4]>,
     phase_story: Vec<[Rgb565Pixel; 4]>,
     interference_wave: Vec<u16>,
+    arcade_palettes: Vec<[Rgb565Pixel; 4]>,
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -641,6 +644,7 @@ impl ArcadeCabinetFormation {
             .collect();
         let phase_story = build_phase_story(width);
         let interference_wave = build_interference_wave();
+        let arcade_palettes = build_arcade_palettes(width);
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -733,6 +737,7 @@ impl ArcadeCabinetFormation {
             depth_prism,
             phase_story,
             interference_wave,
+            arcade_palettes,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -843,6 +848,11 @@ impl ArcadeCabinetFormation {
                 self.interference_wave
                     .capacity()
                     .saturating_mul(std::mem::size_of::<u16>()),
+            )
+            .saturating_add(
+                self.arcade_palettes
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<[Rgb565Pixel; 4]>()),
             )
             .saturating_add(
                 self.commands
@@ -1207,6 +1217,8 @@ impl ArcadeCabinetFormation {
             } else {
                 3
             };
+            let arcade_palette = (cycle_ms.saturating_mul(4) / self.recipe.timing.cycle_ms)
+                .min(3) as usize;
             for index in 0..self.options.active_count {
                 let command = self.commands[index];
                 let Some(offset) = command.offset() else {
@@ -1284,6 +1296,9 @@ impl ArcadeCabinetFormation {
                                 [(pixel_y * 9 + 2_048 - interference_phase) & 2_047],
                         );
                         self.aurora_ribbon[(first + second) & 2_047]
+                    }
+                    CabinetColorMode::ArcadePalettes => {
+                        self.arcade_palettes[pixel_x][arcade_palette]
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
@@ -1670,6 +1685,41 @@ fn build_interference_wave() -> Vec<u16> {
         .map(|index| {
             let phase = index as f32 * std::f32::consts::TAU / 2_048.0;
             ((phase.sin() + 1.0) * 511.5) as u16
+        })
+        .collect()
+}
+
+fn build_arcade_palettes(width: usize) -> Vec<[Rgb565Pixel; 4]> {
+    const SETS: [[Rgb565Pixel; 4]; 4] = [
+        [
+            Rgb565Pixel(0xf986),
+            Rgb565Pixel(0xfd20),
+            Rgb565Pixel(0x981f),
+            Rgb565Pixel(0x05ff),
+        ],
+        [
+            Rgb565Pixel(0x07f3),
+            Rgb565Pixel(0xffc0),
+            Rgb565Pixel(0x05ff),
+            Rgb565Pixel(0xffff),
+        ],
+        [
+            Rgb565Pixel(0xf81f),
+            Rgb565Pixel(0x981f),
+            Rgb565Pixel(0x435f),
+            Rgb565Pixel(0x05ff),
+        ],
+        [
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0xfd20),
+            Rgb565Pixel(0x05ff),
+            Rgb565Pixel(0x001f),
+        ],
+    ];
+    (0..width)
+        .map(|x| {
+            let band = x.saturating_mul(4) / width.max(1);
+            std::array::from_fn(|set| SETS[set][band.min(3)])
         })
         .collect()
 }
