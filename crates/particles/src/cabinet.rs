@@ -20,10 +20,6 @@ use std::time::{Duration, Instant};
 const ARCADE_CLOUD_POINT_COUNT: usize = 72_704;
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
 const ARCADE_COLORS: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcolor");
-const ARCADE_SLICE_CLOUD: &[u8] =
-    include_bytes!("../assets/cabinet/arcade-cabinet-slices.pcloud");
-const ARCADE_SLICE_COLORS: &[u8] =
-    include_bytes!("../assets/cabinet/arcade-cabinet-slices.pcolor");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
 const PARTICLE_CLOUD_RECORD_BYTES: usize = 8;
@@ -155,29 +151,11 @@ impl CabinetColorMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CabinetGeometry {
-    #[default]
-    Surface,
-    MriSlices,
-}
-
-impl CabinetGeometry {
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Surface => "SURFACE",
-            Self::MriSlices => "MRI SLICES",
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CabinetRenderOptions {
     pub active_count: usize,
     pub creative_mode: CabinetCreativeMode,
     pub color_mode: CabinetColorMode,
-    pub geometry: CabinetGeometry,
 }
 
 const PARTICLE_LANES: usize = 4;
@@ -270,12 +248,10 @@ pub struct ArcadeCabinetFormation {
     recipe: CabinetRecipe,
     capacity: usize,
     positions: Vec<CabinetPositionBlock>,
-    slice_positions: Vec<CabinetPositionBlock>,
     dynamic_positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     baseline_raster: Vec<u64>,
     texture_raster: Vec<u32>,
-    slice_texture_raster: Vec<u32>,
     creative_palette: [[u64; 4]; 8],
     screen_prism: Vec<Rgb565Pixel>,
     aurora_ribbon: Vec<Rgb565Pixel>,
@@ -639,27 +615,6 @@ impl ArcadeCabinetFormation {
             &mut flags,
         )?;
         let texture_raster = decode_particle_colors(ARCADE_COLORS, capacity)?;
-        let mut slice_target_x = vec![0.0; capacity];
-        let mut slice_target_y = vec![0.0; capacity];
-        let mut slice_target_z = vec![0.0; capacity];
-        let mut slice_life = vec![0.0; capacity];
-        let mut slice_style = vec![0; capacity];
-        let mut slice_flags = vec![0; capacity];
-        decode_particle_cloud(
-            ARCADE_SLICE_CLOUD,
-            recipe.model,
-            &mut slice_target_x,
-            &mut slice_target_y,
-            &mut slice_target_z,
-            &mut slice_life,
-            &random,
-            &mut slice_style,
-            &mut slice_flags,
-        )?;
-        if slice_style != style || slice_flags != flags || slice_life != life {
-            return Err("arcade slice cloud metadata is not aligned with the surface cloud".into());
-        }
-        let slice_texture_raster = decode_particle_colors(ARCADE_SLICE_COLORS, capacity)?;
         let appearance = recipe.appearance;
         let creative_palette = std::array::from_fn(|base_style| {
             std::array::from_fn(|depth_band| {
@@ -773,18 +728,6 @@ impl ArcadeCabinetFormation {
             positions.push(position);
             attributes.push(attribute);
         }
-        let mut slice_positions = positions.clone();
-        for block_index in 0..block_count {
-            for lane in 0..PARTICLE_LANES {
-                let index = block_index * PARTICLE_LANES + lane;
-                if index >= capacity {
-                    break;
-                }
-                slice_positions[block_index].target_x[lane] = slice_target_x[index];
-                slice_positions[block_index].target_y[lane] = slice_target_y[index];
-                slice_positions[block_index].target_z[lane] = slice_target_z[index];
-            }
-        }
         let dynamic_positions = positions.clone();
         Ok(Self {
             width,
@@ -792,12 +735,10 @@ impl ArcadeCabinetFormation {
             recipe,
             capacity,
             positions,
-            slice_positions,
             dynamic_positions,
             attributes,
             baseline_raster,
             texture_raster,
-            slice_texture_raster,
             creative_palette,
             screen_prism,
             aurora_ribbon,
@@ -821,7 +762,6 @@ impl ArcadeCabinetFormation {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
                 color_mode: CabinetColorMode::Origin,
-                geometry: CabinetGeometry::Surface,
             },
             #[cfg(test)]
             force_generic_all: false,
@@ -871,11 +811,6 @@ impl ArcadeCabinetFormation {
             .capacity()
             .saturating_mul(std::mem::size_of::<CabinetPositionBlock>())
             .saturating_add(
-                self.slice_positions
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<CabinetPositionBlock>()),
-            )
-            .saturating_add(
                 self.dynamic_positions
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetPositionBlock>()),
@@ -889,12 +824,6 @@ impl ArcadeCabinetFormation {
                 self.baseline_raster
                     .capacity()
                     .saturating_mul(std::mem::size_of::<u64>()),
-            )
-            .saturating_add(
-                self.texture_raster
-                    .capacity()
-                    .saturating_add(self.slice_texture_raster.capacity())
-                    .saturating_mul(std::mem::size_of::<u32>()),
             )
             .saturating_add(
                 self.screen_prism
@@ -975,10 +904,6 @@ impl ArcadeCabinetFormation {
         let background = pixel(self.recipe.appearance.background);
         let creative_mode = self.options.creative_mode;
         let color_mode = self.options.color_mode;
-        let (positions, texture_raster) = match self.options.geometry {
-            CabinetGeometry::Surface => (&self.positions, &self.texture_raster),
-            CabinetGeometry::MriSlices => (&self.slice_positions, &self.slice_texture_raster),
-        };
         let dirty_offsets = &mut self.dirty_offsets[buffer_id];
         if self.full_clear[buffer_id]
             || creative_mode == CabinetCreativeMode::All
@@ -1195,7 +1120,7 @@ impl ArcadeCabinetFormation {
             for block_index in (first_projection_block..projection_block_count)
                 .step_by(projection_block_step)
             {
-                let position = &positions[block_index];
+                let position = &self.positions[block_index];
                 let attribute = &self.attributes[block_index];
                 let dynamic = &mut self.dynamic_positions[block_index];
                 for lane in 0..PARTICLE_LANES {
@@ -1217,7 +1142,7 @@ impl ArcadeCabinetFormation {
             for block_index in (first_projection_block..projection_block_count)
                 .step_by(projection_block_step)
             {
-                let position = &positions[block_index];
+                let position = &self.positions[block_index];
                 let dynamic = &mut self.dynamic_positions[block_index];
                 for lane in 0..PARTICLE_LANES {
                     dynamic.target_x[lane] = position.source_x[lane]
@@ -1230,7 +1155,7 @@ impl ArcadeCabinetFormation {
             }
             &self.dynamic_positions
         } else {
-            positions
+            &self.positions
         };
         let vector_end = project_stable_neon(
             self.options.active_count,
@@ -1387,10 +1312,10 @@ impl ArcadeCabinetFormation {
                         self.arcade_palettes[pixel_x][arcade_palette]
                     }
                     CabinetColorMode::TextureExact => {
-                        Rgb565Pixel(texture_raster[index] as u16)
+                        Rgb565Pixel(self.texture_raster[index] as u16)
                     }
                     CabinetColorMode::TextureGlow => {
-                        Rgb565Pixel((texture_raster[index] >> 16) as u16)
+                        Rgb565Pixel((self.texture_raster[index] >> 16) as u16)
                     }
                     CabinetColorMode::Origin => unreachable!(),
                 };
@@ -2166,45 +2091,6 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_slice_cloud_uses_aligned_planes_and_metadata() {
-        use std::collections::HashSet;
-
-        assert_eq!(
-            u32::from_le_bytes(ARCADE_SLICE_CLOUD[12..16].try_into().unwrap()) as usize,
-            ARCADE_CLOUD_POINT_COUNT
-        );
-        let mut planes = HashSet::new();
-        for index in 0..ARCADE_CLOUD_POINT_COUNT {
-            let offset = PARTICLE_CLOUD_HEADER_BYTES + index * PARTICLE_CLOUD_RECORD_BYTES;
-            assert_eq!(
-                &ARCADE_SLICE_CLOUD[offset + 6..offset + 8],
-                &ARCADE_CLOUD[offset + 6..offset + 8]
-            );
-            if ARCADE_SLICE_CLOUD[offset + 7] == 0 {
-                planes.insert(&ARCADE_SLICE_CLOUD[offset + 4..offset + 6]);
-            }
-        }
-        assert_eq!(planes.len(), 79);
-    }
-
-    #[test]
-    fn geometry_toggle_changes_targets_without_changing_animation_time() {
-        let recipe = embedded_cabinet_recipe().unwrap();
-        let mut renderer = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
-        let mut surface = vec![Rgb565Pixel(0); 960 * 540];
-        let mut slices = surface.clone();
-        let elapsed = Duration::from_secs(12);
-        let surface_stats = renderer.render(&mut surface, elapsed, 0).unwrap();
-        let mut options = renderer.render_options();
-        options.geometry = CabinetGeometry::MriSlices;
-        renderer.set_render_options(options).unwrap();
-        let slice_stats = renderer.render(&mut slices, elapsed, 1).unwrap();
-
-        assert_eq!(slice_stats.projected_particles, surface_stats.projected_particles);
-        assert_ne!(slices, surface);
-    }
-
-    #[test]
     fn checked_in_cloud_prefixes_have_unique_quantized_targets() {
         use std::collections::HashSet;
 
@@ -2271,7 +2157,6 @@ mod tests {
             active_count: 48_128,
             creative_mode: CabinetCreativeMode::All,
             color_mode: CabinetColorMode::Origin,
-            geometry: CabinetGeometry::Surface,
         };
         optimized.set_render_options(options).unwrap();
         reference.set_render_options(options).unwrap();
@@ -2347,7 +2232,6 @@ mod tests {
                 active_count: 39_936,
                 creative_mode: CabinetCreativeMode::Baseline,
                 color_mode: CabinetColorMode::ScreenPrism,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         origin
@@ -2355,7 +2239,6 @@ mod tests {
                 active_count: 39_936,
                 creative_mode: CabinetCreativeMode::Baseline,
                 color_mode: CabinetColorMode::Origin,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         texture
@@ -2363,14 +2246,12 @@ mod tests {
                 active_count: 39_936,
                 creative_mode: CabinetCreativeMode::Baseline,
                 color_mode: CabinetColorMode::TextureExact,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         glow.set_render_options(CabinetRenderOptions {
             active_count: 39_936,
             creative_mode: CabinetCreativeMode::Baseline,
             color_mode: CabinetColorMode::TextureGlow,
-            geometry: CabinetGeometry::Surface,
         })
         .unwrap();
         let mut origin_pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -2419,7 +2300,6 @@ mod tests {
             active_count: 1_024,
             creative_mode: CabinetCreativeMode::All,
             color_mode: CabinetColorMode::Origin,
-            geometry: CabinetGeometry::Surface,
         };
         direct.set_render_options(options).unwrap();
         scene.set_render_options(options).unwrap();
@@ -2478,7 +2358,6 @@ mod tests {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::Satellites,
                 color_mode: CabinetColorMode::Origin,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -2504,7 +2383,6 @@ mod tests {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::HistoryEcho,
                 color_mode: CabinetColorMode::Origin,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -2536,7 +2414,6 @@ mod tests {
                 active_count: 48_128,
                 creative_mode: CabinetCreativeMode::DepthPalette,
                 color_mode: CabinetColorMode::Origin,
-                geometry: CabinetGeometry::Surface,
             })
             .unwrap();
         let mut baseline_pixels = vec![Rgb565Pixel(0); 960 * 540];
@@ -2563,7 +2440,6 @@ mod tests {
                     active_count: 48_128,
                     creative_mode: CabinetCreativeMode::MicroJitter,
                     color_mode: CabinetColorMode::Origin,
-                    geometry: CabinetGeometry::Surface,
                 })
                 .unwrap();
         }

@@ -150,15 +150,6 @@ faithful RGB565 texture sample followed by a visibility-lifted RGB565 sample.
 The runtime validates the exact count, stride, and length once, then performs
 only sequential packed-colour reads while rasterizing.
 
-The aligned `arcade-cabinet-slices` pair is an alternate target layout built
-from 79 equally spaced front-to-back planes intersecting the model surface.
-Twenty percent of its particles remain reserved for sharp model features so
-the silhouette, joystick, buttons, bezel, and control panel remain legible.
-Its material and feature metadata is index-identical to the surface cloud.
-In the interactive cabinet lab, a rising `A` button edge switches between the
-surface and MRI-slice targets without changing animation time, particle count,
-or selected creative/colour mode; the macOS `A` key mirrors the control.
-
 ## Compile-time boundary and evidence
 
 Changing shared scene rendering, recipes, or the focused lab must not compile

@@ -8,7 +8,7 @@ Author profile: https://sketchfab.com/LlucGuardiola
 License: Creative Commons Attribution-NonCommercial 4.0 International
 License URL: https://creativecommons.org/licenses/by-nc/4.0/
 
-The compiled surface and slice-layout PCLOUD/PCOLOR assets are derived from
+The compiled arcade-cabinet.pcloud and arcade-cabinet.pcolor are derived from
 this model and are subject to the attribution and non-commercial requirements
 of CC-BY-NC-4.0.
 
@@ -25,18 +25,3 @@ Expected arcade-cabinet.pcloud SHA-256:
 
 Expected arcade-cabinet.pcolor SHA-256:
 08c51cc4a20920ca78ae79737cd8661b87eea2e4e4bd41dfb08ed70f8a5246a9
-
-Reproduce the equally spaced MRI slice layout with:
-
-scripts/particle-model compile \
-  crates/particles/assets/cabinet/arcade-cabinet.glb \
-  --output crates/particles/assets/cabinet/arcade-cabinet-slices.pcloud \
-  --colors-output crates/particles/assets/cabinet/arcade-cabinet-slices.pcolor \
-  --layout slices \
-  --points 72704
-
-Expected arcade-cabinet-slices.pcloud SHA-256:
-cb4babb3c9eefc107554101a40bfe0b100092ed4f3f8d19cde1f771e998f8e1e
-
-Expected arcade-cabinet-slices.pcolor SHA-256:
-40e36aeb0bbcad3c9de406e6dd4628006fc8b4055f89b13c5a1a4098ddeb9a7d

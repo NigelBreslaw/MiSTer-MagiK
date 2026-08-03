@@ -28,11 +28,6 @@ scripts/agent device scene-lab --scene navigation-transition --fixture home-arca
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
-The interactive cabinet lab uses left/right for colour and creative modes,
-up/down for exact 1,024-particle count steps, and `A` to toggle the particle
-targets between the original surface cloud and equally spaced MRI slices.
-macOS arrow keys and the `A` key mirror those controls without key repeat.
-
 The older `startup-particles preview RECIPE` and attended `--runtime lab`
 commands remain typed compatibility aliases. The old particle-only lab app and
 binary names are compatibility-only; new workflows use `framebuffer-scene-lab`.
