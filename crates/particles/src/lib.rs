@@ -10,3 +10,4 @@ pub mod magik;
 mod point_cloud;
 pub mod recipes;
 pub mod reload;
+pub mod targets;
