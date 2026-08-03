@@ -1124,12 +1124,12 @@ enum StartupIntroLauncherUiPlan {
 
 fn startup_intro_launcher_ui_plan(
     intro_active: bool,
-    arcade_ready: bool,
+    reveal_state: StartupRevealState,
     live_frame_ready: bool,
 ) -> StartupIntroLauncherUiPlan {
     if !intro_active {
         StartupIntroLauncherUiPlan::Interactive
-    } else if arcade_ready && !live_frame_ready {
+    } else if reveal_state == StartupRevealState::RevealLauncher && !live_frame_ready {
         StartupIntroLauncherUiPlan::PrepareLiveFrame
     } else {
         StartupIntroLauncherUiPlan::Suppress
@@ -2739,8 +2739,8 @@ pub(super) fn run_launcher_loop(
         None
     };
     // The particle scene owns the visible output. Keep Slint and its bridge
-    // dormant until Arcade has usable rows, then build exactly one off-screen
-    // launcher frame for the live morph target.
+    // dormant until the existing launcher reveal transition fires, then build
+    // exactly one off-screen launcher frame for the live morph target.
     let mut startup_intro_launcher_frame_ready = false;
     let mut startup_intro_bridge_dirty_pending = false;
     if startup_intro.is_some()
@@ -2819,13 +2819,7 @@ pub(super) fn run_launcher_loop(
         let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
-            startup_intro_launcher_ready(
-                catalog_session.launcher_snapshot_catalog_ready(),
-                catalog_ready,
-                &catalog,
-                &nav,
-                arcade_screen_pending,
-            ),
+            lifecycle.startup_status().state,
             startup_intro_launcher_frame_ready,
         ) == StartupIntroLauncherUiPlan::PrepareLiveFrame;
         if !navigation_snapshot_locked_at_loop_start
@@ -4581,13 +4575,7 @@ pub(super) fn run_launcher_loop(
 
         let startup_intro_launcher_ui_plan = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
-            startup_intro_launcher_ready(
-                catalog_session.launcher_snapshot_catalog_ready(),
-                catalog_ready,
-                &catalog,
-                &nav,
-                arcade_screen_pending,
-            ),
+            lifecycle.startup_status().state,
             startup_intro_launcher_frame_ready,
         );
         let startup_intro_prepare_live_launcher =
@@ -7895,20 +7883,6 @@ fn arcade_navigation_ready(catalog_ready: bool, catalog: &ArcadeCatalog) -> bool
     catalog_ready && arcade_catalog_rows_ready(catalog)
 }
 
-fn startup_intro_launcher_ready(
-    publication_ready: bool,
-    catalog_ready: bool,
-    catalog: &ArcadeCatalog,
-    nav: &LauncherNav,
-    arcade_screen_pending: bool,
-) -> bool {
-    publication_ready
-        && !arcade_screen_pending
-        && arcade_navigation_ready(catalog_ready, catalog)
-        && nav.screen == Screen::Arcade
-        && !active_system_game_view(catalog, nav).is_empty()
-}
-
 fn should_draw_arcade_overlay(
     nav: &LauncherNav,
     launching: bool,
@@ -8566,21 +8540,21 @@ mod tests {
     }
 
     #[test]
-    fn startup_intro_suppresses_slint_until_one_live_frame_is_needed() {
+    fn startup_intro_consumes_the_existing_launcher_reveal_transition() {
         assert_eq!(
-            startup_intro_launcher_ui_plan(true, false, false),
+            startup_intro_launcher_ui_plan(true, StartupRevealState::CatalogProgressVisible, false,),
             StartupIntroLauncherUiPlan::Suppress
         );
         assert_eq!(
-            startup_intro_launcher_ui_plan(true, true, false),
+            startup_intro_launcher_ui_plan(true, StartupRevealState::RevealLauncher, false),
             StartupIntroLauncherUiPlan::PrepareLiveFrame
         );
         assert_eq!(
-            startup_intro_launcher_ui_plan(true, true, true),
+            startup_intro_launcher_ui_plan(true, StartupRevealState::RevealLauncher, true),
             StartupIntroLauncherUiPlan::Suppress
         );
         assert_eq!(
-            startup_intro_launcher_ui_plan(false, true, true),
+            startup_intro_launcher_ui_plan(false, StartupRevealState::InputEnabled, true),
             StartupIntroLauncherUiPlan::Interactive
         );
     }
@@ -9430,23 +9404,6 @@ mod tests {
             effective_lock_screen(Some(Screen::Arcade), true, &catalog),
             Some(Screen::Arcade)
         );
-    }
-
-    #[test]
-    pub(super) fn startup_snapshot_waits_for_publication_navigation_and_rows() {
-        let catalog = catalog_for_media_systems(&["arcade", "amiga"]);
-        let mut nav = LauncherNav::new();
-        assert!(nav.open_default_arcade(&catalog));
-
-        assert!(!startup_intro_launcher_ready(
-            false, true, &catalog, &nav, false
-        ));
-        assert!(!startup_intro_launcher_ready(
-            true, true, &catalog, &nav, true
-        ));
-        assert!(startup_intro_launcher_ready(
-            true, true, &catalog, &nav, false
-        ));
     }
 
     #[test]

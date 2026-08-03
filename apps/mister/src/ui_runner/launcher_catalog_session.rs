@@ -148,7 +148,6 @@ pub(super) struct LauncherCatalogSession {
     bootstrap_counter_climb_logged: bool,
     bootstrap_counter_sustained_climb_logged: bool,
     full_scan_counter_climb_logged: bool,
-    launcher_snapshot_catalog_ready: bool,
 }
 
 impl LauncherCatalogSession {
@@ -164,7 +163,6 @@ impl LauncherCatalogSession {
             bootstrap_counter_climb_logged: false,
             bootstrap_counter_sustained_climb_logged: false,
             full_scan_counter_climb_logged: false,
-            launcher_snapshot_catalog_ready: false,
         }
     }
 
@@ -174,10 +172,6 @@ impl LauncherCatalogSession {
 
     pub(super) fn refresh_done(&self) -> bool {
         self.refresh_done
-    }
-
-    pub(super) fn launcher_snapshot_catalog_ready(&self) -> bool {
-        self.launcher_snapshot_catalog_ready
     }
 
     pub(super) fn mark_refresh_done(&mut self) {
@@ -688,9 +682,6 @@ impl LauncherCatalogSession {
                 effects.event("full_scan_counter_climb", format!("target={target}"));
             }
         }
-        if self.launcher_snapshot_catalog_ready && !intent.failed {
-            return;
-        }
         let detail = self
             .games_found_counter
             .progress_detail(&intent.title, &intent.detail);
@@ -716,14 +707,6 @@ impl LauncherCatalogSession {
         self.refresh_done =
             validation_already_finished || (!cached_before_refresh && !durable_save_pending);
         let catalog_len = ready_catalog.len();
-        if catalog_len > 0
-            && matches!(
-                source,
-                CatalogSource::NavigationProjection | CatalogSource::FreshBuild
-            )
-        {
-            self.launcher_snapshot_catalog_ready = true;
-        }
         if !duplicate_cached_catalog {
             self.summary_only = false;
             effects.push(CatalogSessionEffect::RequestMediaCatalogSeed);
@@ -935,55 +918,6 @@ mod tests {
             })
             .collect();
         arcade_catalog(games, vec![arcade_system("arcade", count)])
-    }
-
-    #[test]
-    fn launcher_snapshot_gate_opens_only_for_first_visible_publication() {
-        let now = Instant::now();
-        let ready = |source| CatalogWorkerMessage::Ready {
-            catalog: catalog_with_games(1),
-            summary: None,
-            load_us: 1,
-            source,
-            durable_save_pending: true,
-            generation_fingerprint: None,
-            publication_ack: None,
-        };
-        let context = || CatalogWorkerMessageContext {
-            catalog_ready: false,
-            catalog_partial: false,
-            screen: Screen::Home,
-            media_gate: None,
-        };
-
-        let mut final_registry = LauncherCatalogSession::new(false);
-        final_registry.handle_worker_message(context(), ready(CatalogSource::ShardedRegistry), now);
-        assert!(!final_registry.launcher_snapshot_catalog_ready());
-
-        let mut first_visible = LauncherCatalogSession::new(false);
-        first_visible.handle_worker_message(context(), ready(CatalogSource::FreshBuild), now);
-        assert!(first_visible.launcher_snapshot_catalog_ready());
-        let progress = first_visible.handle_worker_message(
-            CatalogWorkerMessageContext {
-                catalog_ready: true,
-                catalog_partial: false,
-                screen: Screen::Arcade,
-                media_gate: None,
-            },
-            CatalogWorkerMessage::Progress {
-                title: "Scanning library".into(),
-                detail: "still building non-Arcade systems".into(),
-                percent: 50,
-                metadata: None,
-            },
-            now,
-        );
-        assert!(
-            !progress
-                .into_effects()
-                .into_iter()
-                .any(|effect| matches!(effect, CatalogSessionEffect::Ui(_)))
-        );
     }
 
     fn effect_names(effects: CatalogSessionEffects) -> Vec<&'static str> {

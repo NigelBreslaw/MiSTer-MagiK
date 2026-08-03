@@ -45,9 +45,7 @@ Slint timer dispatch, bridge synchronization, and launcher rendering are
 suppressed. Catalog/UI changes are coalesced in Rust state rather than copied
 into an invisible Slint tree. Transient catalog scan milestones do not clone
 navigation shells or rebuild launcher taxonomy on CPU1; the authoritative
-published projection supplies that state. After first-visible publication,
-ordinary non-failure scan progress also stops producing launcher bridge intents;
-the remainder of the full catalog build is visually silent.
+published projection supplies that state.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
 the FPGA latch did not reject or supersede a post. Skipless animation requires
@@ -58,10 +56,11 @@ either axis is nonzero.
 
 The final handoff is derived only from the production launcher's live frame:
 
-1. A non-empty catalog is not the launcher-ready event. The first-visible
-   publication must be applied, Arcade navigation must be committed with
-   resident rows, and the scan overlay must be cleared. The host then performs
-   one full bridge synchronization and one forced-full off-screen Slint render.
+1. The existing lifecycle `launcher_reveal_ready` transition is the sole
+   launcher-ready event. The normal reveal cycle commits Arcade navigation,
+   performs the established full bridge synchronization that populates the
+   launcher and its tile models, and clears the scan overlay. The host then
+   performs one forced-full off-screen Slint render.
    It immediately
    snapshots that exact cache, then a low-priority CPU0 worker derives all
    40,960 launcher particle positions and colors without blocking CPU1. No
