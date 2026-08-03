@@ -140,6 +140,8 @@ pub struct ArcadeCabinetFormation {
     positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     commands: Vec<CabinetDrawCommand>,
+    dirty_offsets: [Vec<u32>; 2],
+    full_clear: [bool; 2],
     options: CabinetRenderOptions,
 }
 
@@ -222,8 +224,9 @@ impl FramebufferScene for CabinetScene {
                 reusable_buffers: self.reusable_buffers,
             });
         }
+        let buffer_id = usize::from(target.buffer_id().get());
         self.formation
-            .render(target.into_pixels(), clock.elapsed)
+            .render(target.into_pixels(), clock.elapsed, buffer_id)
             .map_err(SceneError::Render)
     }
 
@@ -335,6 +338,11 @@ impl ArcadeCabinetFormation {
             positions,
             attributes,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
+            dirty_offsets: [
+                Vec::with_capacity(capacity * 2),
+                Vec::with_capacity(capacity * 2),
+            ],
+            full_clear: [true; 2],
             options: CabinetRenderOptions {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
@@ -360,7 +368,10 @@ impl ArcadeCabinetFormation {
                 self.capacity()
             ));
         }
-        self.options = options;
+        if self.options != options {
+            self.options = options;
+            self.full_clear = [true; 2];
+        }
         Ok(())
     }
 
@@ -384,12 +395,20 @@ impl ArcadeCabinetFormation {
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetDrawCommand>()),
             )
+            .saturating_add(
+                self.dirty_offsets
+                    .iter()
+                    .map(Vec::capacity)
+                    .sum::<usize>()
+                    .saturating_mul(std::mem::size_of::<u32>()),
+            )
     }
 
     pub fn render(
         &mut self,
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
+        buffer_id: usize,
     ) -> Result<ArcadeCabinetFrameStats, String> {
         let expected = self.width.saturating_mul(self.height);
         if destination.len() != expected {
@@ -398,8 +417,21 @@ impl ArcadeCabinetFormation {
                 destination.len()
             ));
         }
+        if buffer_id >= self.dirty_offsets.len() {
+            return Err(format!("cabinet buffer id {buffer_id} is outside 0..2"));
+        }
         let clear_started = Instant::now();
-        destination.fill(pixel(self.recipe.appearance.background));
+        let background = pixel(self.recipe.appearance.background);
+        let dirty_offsets = &mut self.dirty_offsets[buffer_id];
+        if self.full_clear[buffer_id] {
+            destination.fill(background);
+            self.full_clear[buffer_id] = false;
+        } else {
+            for &offset in dirty_offsets.iter() {
+                destination[offset as usize] = background;
+            }
+        }
+        dirty_offsets.clear();
         let clear_us = elapsed_us(clear_started.elapsed());
         let (formation, yaw, pitch, dolly, dispersal) = arcade_camera(&self.recipe, elapsed);
         let (sin_yaw, cos_yaw) = yaw.sin_cos();
@@ -432,6 +464,7 @@ impl ArcadeCabinetFormation {
                     attribute.style[lane]
                 };
                 destination[offset] = pixel(appearance.palette[usize::from(style)]);
+                dirty_offsets.push(offset as u32);
                 pixel_writes = pixel_writes.saturating_add(1);
                 if feature & appearance.neighbor_feature_mask != 0
                     && index % usize::from(appearance.neighbor_every) == 0
@@ -440,6 +473,7 @@ impl ArcadeCabinetFormation {
                     let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
                     destination[offset + 1] =
                         pixel(appearance.palette[usize::from(neighbor_style)]);
+                    dirty_offsets.push((offset + 1) as u32);
                     pixel_writes = pixel_writes.saturating_add(1);
                 }
             }};
@@ -928,8 +962,8 @@ mod tests {
         let mut second_pixels = vec![Rgb565Pixel(0); 960 * 540];
         let elapsed = Duration::from_secs(12);
 
-        let first_stats = first.render(&mut first_pixels, elapsed).unwrap();
-        let second_stats = second.render(&mut second_pixels, elapsed).unwrap();
+        let first_stats = first.render(&mut first_pixels, elapsed, 0).unwrap();
+        let second_stats = second.render(&mut second_pixels, elapsed, 0).unwrap();
 
         assert_eq!(first_stats, second_stats);
         assert_eq!(first_pixels, second_pixels);
