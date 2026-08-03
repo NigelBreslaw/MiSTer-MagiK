@@ -668,6 +668,8 @@ mod tests {
             "validate-runtime",
             "device-agent",
             "manager-device",
+            "framebuffer-scene-lab-device",
+            "framebuffer-scene-lab-analysis",
             "release-binaries",
         ] {
             assert!(Cli::try_parse_from(["agent-cli", "build", intent]).is_ok());

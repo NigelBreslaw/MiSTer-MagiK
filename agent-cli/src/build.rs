@@ -51,6 +51,7 @@ pub enum BuildCommand {
     ManagerDevice,
     FramebufferLabDevice,
     FramebufferSceneLabDevice,
+    FramebufferSceneLabAnalysis,
     ReleaseBinaries,
 }
 
@@ -166,10 +167,18 @@ impl BuildSpec {
             BuildCommand::FramebufferSceneLabDevice => (
                 BuildTarget::FramebufferSceneLab,
                 BuildMode::Build,
-                "release-live",
+                "release-device",
                 Vec::new(),
                 UiScope::All,
-                framebuffer_scene_lab_artifact("release-live"),
+                framebuffer_scene_lab_artifact("release-device"),
+            ),
+            BuildCommand::FramebufferSceneLabAnalysis => (
+                BuildTarget::FramebufferSceneLab,
+                BuildMode::Build,
+                "release-device-profile",
+                Vec::new(),
+                UiScope::All,
+                framebuffer_scene_lab_artifact("release-device-profile"),
             ),
             BuildCommand::ReleaseBinaries => return None,
         };
@@ -230,6 +239,12 @@ impl BuildSpec {
     pub fn framebuffer_scene_lab_device() -> Self {
         Self::for_command(BuildCommand::FramebufferSceneLabDevice)
             .expect("startup particle lab device builds have a specification")
+    }
+
+    #[must_use]
+    pub fn framebuffer_scene_lab_analysis() -> Self {
+        Self::for_command(BuildCommand::FramebufferSceneLabAnalysis)
+            .expect("startup particle analysis builds have a specification")
     }
 
     /// Reproduces the current full Slint application build used to quantify
@@ -1639,9 +1654,13 @@ mod tests {
         assert_eq!(
             spec.artifact,
             PathBuf::from(
-                "apps/framebuffer-scene-lab/target/armv7-unknown-linux-gnueabihf/release-live/mister-magik-framebuffer-scene-lab"
+                "apps/framebuffer-scene-lab/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-framebuffer-scene-lab"
             )
         );
+        let analysis = BuildSpec::framebuffer_scene_lab_analysis();
+        assert_eq!(analysis.target, BuildTarget::FramebufferSceneLab);
+        assert_eq!(analysis.profile, "release-device-profile");
+        assert!(analysis.features.is_empty());
     }
 
     #[test]

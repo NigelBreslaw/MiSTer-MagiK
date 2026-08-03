@@ -36,6 +36,7 @@ pub struct PreviewArgs {
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum SceneLabCommand {
     Preview(ScenePreviewArgs),
+    AnalyzeCabinetCodegen,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -71,9 +72,30 @@ pub fn execute_preview(repository: &Path, command: &StartupParticlesCommand) -> 
     }
 }
 
-pub fn execute_scene_preview(repository: &Path, command: &SceneLabCommand) -> AgentResult<()> {
+pub fn execute_scene_preview(
+    repository: &Path,
+    command: &SceneLabCommand,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
     match command {
         SceneLabCommand::Preview(args) => scene_preview(repository, args),
+        SceneLabCommand::AnalyzeCabinetCodegen => analyze_cabinet_codegen(repository, reporter),
+    }
+}
+
+fn analyze_cabinet_codegen(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<()> {
+    let spec = BuildSpec::framebuffer_scene_lab_analysis();
+    execute(repository, &spec, reporter)?;
+    let status = Command::new(
+        repository.join("apps/framebuffer-scene-lab/scripts/analyze-cabinet-codegen.sh"),
+    )
+    .arg(repository.join(spec.artifact()))
+    .status()
+    .map_err(|error| format!("cannot start cabinet codegen analysis: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("cabinet codegen analysis exited with {status}").into())
     }
 }
 

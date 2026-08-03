@@ -243,7 +243,7 @@ fn dispatch(
             return Ok(Outcome::Passed);
         }
         CliCommand::SceneLab { command } => {
-            agent_cli::startup_particles::execute_scene_preview(repository, command)?;
+            agent_cli::startup_particles::execute_scene_preview(repository, command, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Device {
