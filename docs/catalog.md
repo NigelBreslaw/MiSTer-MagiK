@@ -144,13 +144,14 @@ Resident Arcade rows must never be reported as the total catalog.
 
 ## First Build And Progressive Reveal
 
-With no valid registry, the launcher shows its Slint splash immediately. It
-first probes the bounded `arcade-bootstrap.nav.lz4b` index beside `catalog-v3`.
+With no valid registry, the launcher first probes the bounded
+`arcade-bootstrap.nav.lz4b` index beside `catalog-v3`.
 The index is an exact, checksummed Arcade mini-nav plus its source stamp. A
 matching index restores the canonical Arcade rows and structured launch plans
 without walking `_Arcade` or opening every MRA. Missing, corrupt, oversized, or
-stale indexes fall back to the existing foreground Arcade scan. When that
-bounded projection is acknowledged, the launcher can reveal Home and Arcade.
+stale indexes enter the first-run particle intro and fall back to a CPU0 Arcade
+scan. When that bounded projection is acknowledged, the launcher can prepare
+Home and Arcade off screen.
 System discoveries update scanning tiles while the complete authoritative scan
 continues. These progressive discovery tiles are presentation-only placeholders:
 they cannot schedule a system-shard read until a valid registry generation is
@@ -162,7 +163,7 @@ The retained index is generated locally from each MiSTer's canonical catalog;
 it is not a catalog of one developer's paths and is not assumed to match every
 Update All installation. Different game sets and files therefore receive their
 own exact index. The standard `/media/fat/_Arcade` root remains the production
-Arcade bootstrap input, matching the existing foreground scanner.
+Arcade bootstrap input.
 
 After the first-visible boundary, the build becomes background work. The full
 catalog is projected into per-system immutable artifacts and committed through
@@ -173,16 +174,18 @@ and never used to suppress the authoritative background scan. That scan audits
 weak filesystem stamps and replaces any initially stale projection during the
 same launch.
 
-Foreground first-visible Arcade work is not pinned to CPU0. It must finish
-promptly because there is no usable game UI yet. It must also remain free of
-preview-cache rebuilds and screenshot/media walks.
+The standalone catalog-builder command retains its foreground-through-first-
+visible policy. The embedded cold launcher instead selects
+`BackgroundContinuous` before bootstrap begins. That explicit execution policy
+prevents the builder from silently changing its coordinator or helper threads
+back to all-core foreground roles while the intro owns CPU1.
 
 ## Continuous CPU0 Background Work
 
-Once a first-visible catalog is usable, the catalog parent switches to the
-`CatalogWorker` policy (nice 5, CPU0) before it starts the authoritative full
-scan. The walker uses the lower-priority `LibraryWalker` policy (nice 10,
-CPU0). Audit, projection, snapshot, shard construction, publication,
+During the first-run intro, and after any first-visible catalog becomes usable,
+the catalog parent uses the `CatalogWorker` policy (nice 5, CPU0). The walker
+uses the lower-priority `LibraryWalker` policy (nice 10, CPU0). Audit,
+projection, snapshot, shard construction, publication,
 scanner-cache, catalog-state, and helper threads remain explicitly pinned to
 CPU0 or inherit that affinity.
 
@@ -202,10 +205,10 @@ Checks occur at bounded batches rather than by polling an atomic for every
 file. A checkpoint must not hold a filesystem iterator borrow, database
 transaction, publication lock, or UI lock.
 
-Foreground Arcade bootstrap remains all-core and normal priority until its
-snapshot is published and retained. If no first-visible projection can be
-published, initial creation stays foreground rather than waiting on a
-post-reveal policy transition that never happened.
+The embedded launcher applies CPU0 confinement at the builder-start boundary;
+it does not depend on successful first-visible publication to make that
+transition. Standalone administrative builds remain all-core and normal
+priority until their first-visible snapshot is published and retained.
 
 Initial and warm builds keep disposable durable progress in
 `catalog-v3/state/build-progress.sqlite3`. Completed scan

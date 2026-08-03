@@ -98,6 +98,25 @@ The former showcase, firework, commercial-technique and Form-scene scenarios
 are archived with their code and visual contracts under
 `docs/experiments/particles/`. They are not valid production benchmarks.
 
+## First-run intro qualification
+
+The first-run launcher intro is not qualified by a host render average. Device
+evidence must begin with both Catalog V3 and the retained Arcade bootstrap
+absent, use the production direct hidden-slot route, and retain the complete
+launcher frame trace. A pass requires 1,201 ordered external-direct posts for
+logical frames 0 through 1,200, 60 Hz physical refresh within the ordinary
+tolerance, zero repeat/drop/presentation-miss counters, catalog coordinator and
+walker affinity on CPU0, a snapshot milestone at logical 18 seconds, and a
+pixel-identical 20-second frame/cache handoff. A second launcher start must use
+either the retained Arcade projection or completed registry and must emit no
+intro-start event.
+
+This is runtime/platform qualification, so it requires a clean committed Dev
+delivery before measurement. Host tests cover recipe duration, exact rational
+clock boundaries, per-slot zero-write hold behavior, incremental versus fresh
+crossfade equivalence, and pixel equality at the endpoint; they are necessary
+but not a substitute for physical latch evidence.
+
 ## Fixed particle optimisation trial
 
 `particle-demo-40k` is the campaign comparison trial: exactly 40,960 Visual

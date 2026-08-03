@@ -23,6 +23,41 @@ surface. Its registry, recipe-family maps, and copy of the cabinet experiment
 are not part of this production workflow and must not be folded into the shared
 engine.
 
+## First-run launcher intro
+
+The production launcher uses the embedded `intro-v1` scene only for
+`ColdNoCatalog`: no return capsule, no Catalog V3 registry, and no valid
+retained Arcade bootstrap projection. A valid registry or retained projection
+is a warm start and goes directly to the interactive launcher. The retained
+projection is source-stamped, bounded, and checksummed, so an interrupted first
+run repeats the intro unless it reached the first-visible publication barrier.
+
+The intro owns the production direct hidden-slot latch for 1,201 logical frames
+(timestamps 0 through 1,200) at 60 Hz. Logical time is the rational value
+`frame * 1s / 60`; it advances only after the latch confirms an external-direct
+post. A missing grant or failed post cannot skip animation time. The catalog
+builder starts with the intro and reserves CPU1 for rendering: its coordinator,
+Arcade bootstrap, walker, audit, projection, snapshot, and persistence work all
+use the continuous CPU0 background policy.
+
+The final two seconds are a strict handoff protocol:
+
+1. At 18 seconds both hidden slots settle on the static launcher-shaped
+   particle target. Repeated frames then perform no pixel writes.
+2. The normal launcher continues to process catalog events and render into its
+   cached RGB565 frame off screen. The host copies that exact cache into
+   preallocated intro storage at the 18-second barrier.
+3. From 19 to 20 seconds the particle scene uses incremental Bayer buckets to
+   crossfade into that live frame without allocation or a full-frame rewrite.
+4. The frame at exactly 20 seconds is pixel-identical to the cached launcher.
+   The host restores the same pixels to the interactive cache, returns the
+   hidden mappings, leaves external-direct mode, and only then enables startup
+   input.
+
+Unsupported presentation routes fail open to the ordinary launcher rather than
+running an unqualified copied-frame approximation. The recipe renderer itself
+remains geometry-aware so focused-lab captures can exercise non-960x540 sizes.
+
 ## Recipe contracts
 
 The two checked-in defaults are independent, versioned JSON contracts. Every
@@ -72,7 +107,7 @@ an acknowledgement by itself.
 | Attended MiSTer focused lab | Watches the volatile recipe used for the session; accepts MagiK or cabinet. Uses the Dev framebuffer/latch lifecycle, scales its 960x540 RGB565 source to Main's confirmed fixed HDMI output rectangle in the FPGA, and restores the launcher on exit. CRT routing remains production-owned. |
 | Navigation fixture lab | Uses an immutable generated `home-arcade`, `home-consoles`, or `consoles-system` RGB565 fixture and cycles forward/reverse. It opens no recipe, Slint snapshot, or catalog. |
 | `MiSTer_MagiKDev` launcher | Watches only `/tmp/mister-magik/startup-particles/magik.json`; acknowledges through `/tmp/mister-magik/startup-particles/status.json`. Only MagiK is accepted. |
-| Public `MiSTer_MagiK` launcher | Uses the validated embedded MagiK default. It does not construct a watcher and never opens or polls the Dev recipe path. |
+| Public `MiSTer_MagiK` launcher | Uses validated embedded particle defaults, including the cold-catalog intro. It does not construct a watcher and never opens or polls the Dev recipe path. |
 
 The Dev launcher gate is structural: `DeviceLayout::current()` must be `Dev`
 before watcher construction. There is no environment override or persistent
