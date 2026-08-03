@@ -1723,12 +1723,16 @@ fn launcher_pixel_salience(
 ) -> u8 {
     let pixel = pixels[offset];
     let background_distance = rgb565_distance(pixel, background);
-    let horizontal = (offset % width + 1 < width)
-        .then(|| rgb565_distance(pixel, pixels[offset + 1]))
-        .unwrap_or(0);
-    let vertical = (offset + width < pixels.len())
-        .then(|| rgb565_distance(pixel, pixels[offset + width]))
-        .unwrap_or(0);
+    let horizontal = if offset % width + 1 < width {
+        rgb565_distance(pixel, pixels[offset + 1])
+    } else {
+        0
+    };
+    let vertical = if offset + width < pixels.len() {
+        rgb565_distance(pixel, pixels[offset + width])
+    } else {
+        0
+    };
     background_distance
         .saturating_mul(3)
         .saturating_add(horizontal.max(vertical).saturating_mul(5))
