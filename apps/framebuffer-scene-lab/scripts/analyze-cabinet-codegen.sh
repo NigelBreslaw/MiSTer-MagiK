@@ -25,7 +25,6 @@ if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]] || ! command -v conta
   exit 1
 fi
 
-container build --arch arm64 --file "$ROOT/Dockerfile.cross-armv7" --tag "$APPLE_IMAGE" "$ROOT" >/dev/null
 container run --arch arm64 --rm \
   --cpus "$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.logicalcpu)" \
   --memory 8g \
