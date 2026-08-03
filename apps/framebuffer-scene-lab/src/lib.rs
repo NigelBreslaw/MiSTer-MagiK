@@ -191,7 +191,13 @@ impl NavigationFixtureScene {
         Ok(FrameStats {
             effect: EffectKind::NavigationTransition,
             particles: 0,
+            projected_particles: 0,
+            projection_cohorts: 1,
             visible: stats
+                .copied_pixels
+                .saturating_add(stats.filled_pixels)
+                .min(usize::MAX as u64) as usize,
+            pixel_writes: stats
                 .copied_pixels
                 .saturating_add(stats.filled_pixels)
                 .min(usize::MAX as u64) as usize,
@@ -300,7 +306,10 @@ fn read_effect_recipe_bytes(path: &Path) -> Result<Vec<u8>, String> {
 pub struct FrameStats {
     pub effect: EffectKind,
     pub particles: usize,
+    pub projected_particles: usize,
+    pub projection_cohorts: u8,
     pub visible: usize,
+    pub pixel_writes: usize,
     pub simulation_backend: &'static str,
     pub projection_backend: &'static str,
     pub magik_stages: Option<MagikStageTimings>,
@@ -436,7 +445,10 @@ impl FocusedParticleRenderer {
                 Ok(FrameStats {
                     effect: EffectKind::Cabinet,
                     particles: stats.particles,
+                    projected_particles: stats.projected_particles,
+                    projection_cohorts: stats.projection_cohorts,
                     visible: stats.visible,
+                    pixel_writes: stats.pixel_writes,
                     simulation_backend: "cabinet-scalar",
                     projection_backend: stats.projection_backend,
                     magik_stages: None,
@@ -461,7 +473,10 @@ fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
     FrameStats {
         effect: EffectKind::Magik,
         particles: stats.count,
+        projected_particles: stats.count,
+        projection_cohorts: 1,
         visible: stats.visible,
+        pixel_writes: stats.visible,
         simulation_backend: stats.simulation_backend,
         projection_backend: stats.projection_backend,
         magik_stages: Some(MagikStageTimings {

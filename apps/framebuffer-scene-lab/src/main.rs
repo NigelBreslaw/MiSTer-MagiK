@@ -45,7 +45,7 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(SceneSource::Navigation(fixture), options.destination);
+        return run_window(SceneSource::Navigation(fixture), options.destination, None);
     }
     let recipe_path = options
         .recipe
@@ -79,7 +79,97 @@ fn main() -> Result<(), String> {
     run_window(
         SceneSource::Particle(recipe_path.to_path_buf()),
         options.destination,
+        options.case,
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CabinetCase {
+    name: &'static str,
+    particles: usize,
+    mode: CabinetCreativeMode,
+}
+
+const CABINET_CASES: [CabinetCase; 15] = [
+    CabinetCase {
+        name: "baseline-24064",
+        particles: 24_064,
+        mode: CabinetCreativeMode::Baseline,
+    },
+    CabinetCase {
+        name: "baseline-36096",
+        particles: 36_096,
+        mode: CabinetCreativeMode::Baseline,
+    },
+    CabinetCase {
+        name: "baseline-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::Baseline,
+    },
+    CabinetCase {
+        name: "baseline-60160",
+        particles: 60_160,
+        mode: CabinetCreativeMode::Baseline,
+    },
+    CabinetCase {
+        name: "baseline-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::Baseline,
+    },
+    CabinetCase {
+        name: "satellites-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::Satellites,
+    },
+    CabinetCase {
+        name: "satellites-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::Satellites,
+    },
+    CabinetCase {
+        name: "history-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::HistoryEcho,
+    },
+    CabinetCase {
+        name: "history-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::HistoryEcho,
+    },
+    CabinetCase {
+        name: "depth-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::DepthPalette,
+    },
+    CabinetCase {
+        name: "depth-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::DepthPalette,
+    },
+    CabinetCase {
+        name: "jitter-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::MicroJitter,
+    },
+    CabinetCase {
+        name: "jitter-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::MicroJitter,
+    },
+    CabinetCase {
+        name: "all-48128",
+        particles: 48_128,
+        mode: CabinetCreativeMode::All,
+    },
+    CabinetCase {
+        name: "all-72192",
+        particles: 72_192,
+        mode: CabinetCreativeMode::All,
+    },
+];
+
+fn cabinet_case(name: &str) -> Option<CabinetCase> {
+    CABINET_CASES.iter().copied().find(|case| case.name == name)
 }
 
 #[derive(Clone, Debug)]
@@ -135,19 +225,33 @@ fn render_navigation_headless(
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 enum LabScene {
     Particle(LiveParticleRenderer),
+    Focused(FocusedParticleRenderer),
     Navigation(NavigationFixtureScene),
 }
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 impl LabScene {
-    fn start(source: SceneSource) -> Result<Self, String> {
+    fn start(source: SceneSource, case: Option<CabinetCase>) -> Result<Self, String> {
         match source {
-            SceneSource::Particle(recipe) => Ok(Self::Particle(LiveParticleRenderer::start(
-                DEFAULT_WIDTH,
-                DEFAULT_HEIGHT,
-                recipe.clone(),
-                status_path(&recipe),
-            )?)),
+            SceneSource::Particle(recipe) => {
+                if let Some(case) = case {
+                    let selected = read_effect_recipe(&recipe)?;
+                    let mut renderer =
+                        FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, selected)?;
+                    renderer.set_cabinet_render_options(CabinetRenderOptions {
+                        active_count: case.particles,
+                        creative_mode: case.mode,
+                    })?;
+                    Ok(Self::Focused(renderer))
+                } else {
+                    Ok(Self::Particle(LiveParticleRenderer::start(
+                        DEFAULT_WIDTH,
+                        DEFAULT_HEIGHT,
+                        recipe.clone(),
+                        status_path(&recipe),
+                    )?))
+                }
+            }
             SceneSource::Navigation(fixture) => {
                 Ok(Self::Navigation(NavigationFixtureScene::new(fixture)))
             }
@@ -165,6 +269,9 @@ impl LabScene {
             Self::Particle(renderer) => {
                 renderer.render_buffer(destination, buffer_id, elapsed, next_elapsed)
             }
+            Self::Focused(renderer) => {
+                renderer.render_buffer(destination, buffer_id, elapsed, next_elapsed)
+            }
             Self::Navigation(renderer) => renderer.render(destination, elapsed),
         }
     }
@@ -172,6 +279,7 @@ impl LabScene {
     fn effect(&self) -> EffectKind {
         match self {
             Self::Particle(renderer) => renderer.effect(),
+            Self::Focused(renderer) => renderer.kind(),
             Self::Navigation(_) => EffectKind::NavigationTransition,
         }
     }
@@ -181,6 +289,7 @@ impl LabScene {
             Self::Particle(renderer) if renderer.effect() == EffectKind::Cabinet => {
                 renderer.set_cabinet_render_options(controls.render_options())
             }
+            Self::Focused(_) => Ok(()),
             _ => Ok(()),
         }
     }
@@ -188,6 +297,7 @@ impl LabScene {
     fn generation(&self) -> u64 {
         match self {
             Self::Particle(renderer) => renderer.generation(),
+            Self::Focused(_) => 0,
             Self::Navigation(_) => 0,
         }
     }
@@ -195,6 +305,7 @@ impl LabScene {
     fn state_label(&self) -> String {
         match self {
             Self::Particle(renderer) => format!("{:?}", renderer.status_state()),
+            Self::Focused(_) => "locked-case".into(),
             Self::Navigation(renderer) => format!("fixture:{}", renderer.fixture().label()),
         }
     }
@@ -202,6 +313,7 @@ impl LabScene {
     fn last_error(&self) -> Option<&str> {
         match self {
             Self::Particle(renderer) => renderer.last_error(),
+            Self::Focused(_) => None,
             Self::Navigation(_) => None,
         }
     }
@@ -485,24 +597,33 @@ const fn hud_glyph(character: char) -> [u8; 7] {
 }
 
 #[cfg(target_os = "macos")]
-fn run_window(source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(
+    source: SceneSource,
+    _destination: Option<(u16, u16)>,
+    case: Option<CabinetCase>,
+) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-    let mut application = macos::ParticleLabApplication::new(source)?;
+    let mut application = macos::ParticleLabApplication::new(source, case)?;
     event_loop
         .run_app(&mut application)
         .map_err(|error| format!("run framebuffer-scene-lab window: {error}"))
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(
+    source: SceneSource,
+    destination: Option<(u16, u16)>,
+    case: Option<CabinetCase>,
+) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
 
-    let mut renderer = LabScene::start(source)?;
-    let mut controls = (renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
+    let mut renderer = LabScene::start(source, case)?;
+    let mut controls =
+        (case.is_none() && renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
     let mut input = FramebufferLabInput::open();
     let (destination_width, destination_height) = destination
         .ok_or("MiSTer startup particle preview requires an explicit scanout destination")?;
@@ -535,7 +656,10 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
     let mut clear_samples_us = Vec::with_capacity(64);
     let mut simulation_samples_us = Vec::with_capacity(64);
     let mut projection_samples_us = Vec::with_capacity(64);
+    let mut ordering_samples_us = Vec::with_capacity(64);
     let mut raster_samples_us = Vec::with_capacity(64);
+    let mut worker_wait_samples_us = Vec::with_capacity(64);
+    let mut prepared_age_samples_us = Vec::with_capacity(64);
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     loop {
@@ -566,17 +690,26 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
             clear_samples_us.push(stages.clear_us);
             simulation_samples_us.push(stages.simulation_us);
             projection_samples_us.push(stages.projection_us);
+            ordering_samples_us.push(0);
             raster_samples_us.push(stages.raster_us);
+            worker_wait_samples_us.push(0);
+            prepared_age_samples_us.push(0);
         } else if let Some(stages) = stats.cabinet_stages {
             clear_samples_us.push(stages.clear_us);
             simulation_samples_us.push(0);
             projection_samples_us.push(stages.projection_us);
+            ordering_samples_us.push(stages.ordering_us);
             raster_samples_us.push(stages.raster_us);
+            worker_wait_samples_us.push(stages.worker_wait_us);
+            prepared_age_samples_us.push(stages.prepared_age_us);
         } else {
             clear_samples_us.clear();
             simulation_samples_us.clear();
             projection_samples_us.clear();
+            ordering_samples_us.clear();
             raster_samples_us.clear();
+            worker_wait_samples_us.clear();
+            prepared_age_samples_us.clear();
         }
         let receipt = presenter
             .present()
@@ -586,7 +719,58 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
         }
         last_sequence = Some(receipt.sequence);
         status_frames = status_frames.saturating_add(1);
-        if status_started.elapsed() >= Duration::from_secs(1) {
+        if let Some(case) = case
+            && started.elapsed() >= Duration::from_secs(60)
+        {
+            let seconds = started.elapsed().as_secs_f64();
+            let cpu_now = process_cpu_time();
+            let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
+            let (render_average_us, render_p99_us, render_max_us) =
+                sample_summary(&mut render_samples_us);
+            let (clear_average_us, clear_p99_us, _) = sample_summary(&mut clear_samples_us);
+            let (projection_average_us, projection_p99_us, _) =
+                sample_summary(&mut projection_samples_us);
+            let (ordering_average_us, ordering_p99_us, _) =
+                sample_summary(&mut ordering_samples_us);
+            let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
+            let (worker_wait_average_us, worker_wait_p99_us, _) =
+                sample_summary(&mut worker_wait_samples_us);
+            let (prepared_age_average_us, prepared_age_p99_us, _) =
+                sample_summary(&mut prepared_age_samples_us);
+            println!(
+                "cabinet-case name={} particles={} projected_particles={} projection_cohorts={} visible={} pixel_writes={} mode={} seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} clear_avg_us={} clear_p99_us={} projection_avg_us={} projection_p99_us={} ordering_avg_us={} ordering_p99_us={} raster_avg_us={} raster_p99_us={} worker_wait_avg_us={} worker_wait_p99_us={} prepared_age_avg_us={} prepared_age_p99_us={} repeated_presentations={} projection_backend={}",
+                case.name,
+                case.particles,
+                stats.projected_particles,
+                stats.projection_cohorts,
+                stats.visible,
+                stats.pixel_writes,
+                case.mode.label(),
+                seconds,
+                status_frames,
+                status_frames as f64 / seconds,
+                cpu_percent,
+                render_average_us,
+                render_p99_us,
+                render_max_us,
+                clear_average_us,
+                clear_p99_us,
+                projection_average_us,
+                projection_p99_us,
+                ordering_average_us,
+                ordering_p99_us,
+                raster_average_us,
+                raster_p99_us,
+                worker_wait_average_us,
+                worker_wait_p99_us,
+                prepared_age_average_us,
+                prepared_age_p99_us,
+                repeated_presentations,
+                stats.projection_backend,
+            );
+            return Ok(());
+        }
+        if case.is_none() && status_started.elapsed() >= Duration::from_secs(1) {
             let seconds = status_started.elapsed().as_secs_f64();
             let cpu_now = process_cpu_time();
             let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
@@ -632,7 +816,10 @@ fn run_window(source: SceneSource, destination: Option<(u16, u16)>) -> Result<()
             clear_samples_us.clear();
             simulation_samples_us.clear();
             projection_samples_us.clear();
+            ordering_samples_us.clear();
             raster_samples_us.clear();
+            worker_wait_samples_us.clear();
+            prepared_age_samples_us.clear();
             repeated_presentations = 0;
         }
         next_frame += FRAME_DURATION;
@@ -681,7 +868,11 @@ fn process_cpu_time() -> Duration {
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
-fn run_window(_source: SceneSource, _destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_window(
+    _source: SceneSource,
+    _destination: Option<(u16, u16)>,
+    _case: Option<CabinetCase>,
+) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
 
@@ -693,6 +884,7 @@ struct Options {
     output: Option<PathBuf>,
     check: bool,
     destination: Option<(u16, u16)>,
+    case: Option<CabinetCase>,
 }
 
 impl Options {
@@ -705,6 +897,7 @@ impl Options {
         let mut check = false;
         let mut destination_width = None;
         let mut destination_height = None;
+        let mut case = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -745,6 +938,14 @@ impl Options {
                     destination_height =
                         Some(parse_dimension("--destination-height", arguments.next())?);
                 }
+                "--case" => {
+                    let value = arguments.next().ok_or("--case requires a named case")?;
+                    case = Some(cabinet_case(&value).ok_or_else(|| {
+                        format!(
+                            "unknown cabinet case {value:?}; use one of the closed case registry"
+                        )
+                    })?);
+                }
                 "--help" | "-h" => return Err(usage().into()),
                 other => return Err(format!("unknown framebuffer-scene-lab argument {other:?}")),
             }
@@ -762,6 +963,7 @@ impl Options {
             output,
             check,
             destination,
+            case,
         };
         options.validate()?;
         Ok(options)
@@ -776,6 +978,17 @@ impl Options {
         }
         if self.destination.is_some() && (self.check || self.output.is_some()) {
             return Err("scanout destination is only valid for an interactive preview".into());
+        }
+        if self.case.is_some()
+            && (self.scene != EffectKind::Cabinet
+                || self.check
+                || self.output.is_some()
+                || self.destination.is_none())
+        {
+            return Err(
+                "--case requires an interactive cabinet device run with a scanout destination"
+                    .into(),
+            );
         }
         match self.scene {
             EffectKind::Magik | EffectKind::Cabinet => {
@@ -809,7 +1022,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -887,9 +1100,10 @@ mod macos {
     }
 
     impl ParticleLabApplication {
-        pub(super) fn new(source: SceneSource) -> Result<Self, String> {
-            let renderer = LabScene::start(source)?;
-            let controls = (renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
+        pub(super) fn new(source: SceneSource, case: Option<CabinetCase>) -> Result<Self, String> {
+            let renderer = LabScene::start(source, case)?;
+            let controls = (case.is_none() && renderer.effect() == EffectKind::Cabinet)
+                .then(CabinetLabControls::new);
             let now = Instant::now();
             Ok(Self {
                 renderer,
@@ -1164,6 +1378,24 @@ mod tests {
         .unwrap();
         assert_eq!(device.destination, Some((1920, 1080)));
 
+        let case = Options::parse(
+            [
+                "--scene",
+                "cabinet",
+                "--recipe",
+                "cabinet.json",
+                "--destination-width",
+                "1920",
+                "--destination-height",
+                "1080",
+                "--case",
+                "all-72192",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(case.case, cabinet_case("all-72192"));
+
         let capture = Options::parse(
             [
                 "--scene",
@@ -1201,6 +1433,20 @@ mod tests {
                     "x.ppm",
                 ]
                 .map(String::from),
+            )
+            .is_err()
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "cabinet",
+                    "--recipe",
+                    "cabinet.json",
+                    "--case",
+                    "unknown",
+                ]
+                .map(String::from)
             )
             .is_err()
         );
