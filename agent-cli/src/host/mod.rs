@@ -4058,7 +4058,10 @@ const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
-const PARTICLE_SEARCH_TRIAL_SECS: u64 = 12;
+// Search trials are deliberately short: they only bracket/refine the limit.
+// The candidate is still required to pass a complete 30-second confirmation
+// before it is reported as the 60 FPS maximum.
+const PARTICLE_SEARCH_TRIAL_SECS: u64 = 2;
 const PARTICLE_CONFIRMATION_SECS: u64 = 30;
 const PARTICLE_DEMO_40K_DURATION_SECS: u64 = 15;
 const PARTICLE_DEMO_40K_COUNT: u64 = 40_960;
@@ -4068,6 +4071,7 @@ const PARTICLE_CPU_PROFILE_DURATION_SECS: u64 = 30;
 const PARTICLE_CPU_PROFILE_CAPACITY_COUNT: u64 = 14_336;
 const PARTICLE_CPU_PROFILE_VISUAL_COUNT: u64 = 9_216;
 const PARTICLE_COUNT_STEP: u64 = 1_024;
+const PARTICLE_SEARCH_COARSE_STEP: u64 = 16 * PARTICLE_COUNT_STEP;
 const PARTICLE_COUNT_SEED: u64 = 122_880;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
@@ -6510,7 +6514,7 @@ fn profile_particle_preset(
             preset,
             count,
             PARTICLE_SEARCH_TRIAL_SECS,
-            "search",
+            "probe",
         )?;
         let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
         trials.push(trial);
@@ -6519,7 +6523,9 @@ fn profile_particle_preset(
             if count == PARTICLE_COUNT_MAX {
                 break;
             }
-            count = count.saturating_mul(2).min(PARTICLE_COUNT_MAX);
+            count = count
+                .saturating_add(PARTICLE_SEARCH_COARSE_STEP)
+                .min(PARTICLE_COUNT_MAX);
         } else {
             first_fail = Some(count);
             break;
@@ -6533,7 +6539,7 @@ fn profile_particle_preset(
                 preset,
                 middle,
                 PARTICLE_SEARCH_TRIAL_SECS,
-                "refine",
+                "probe",
             )?;
             let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
             trials.push(trial);
@@ -6543,6 +6549,30 @@ fn profile_particle_preset(
                 upper = middle;
                 first_fail = Some(middle);
             }
+        }
+    }
+    let mut increment_failures = 0u64;
+    while last_pass > 0 && increment_failures < 3 && last_pass < PARTICLE_COUNT_MAX {
+        let next_count = last_pass.saturating_add(PARTICLE_COUNT_STEP);
+        if next_count > PARTICLE_COUNT_MAX {
+            break;
+        }
+        let trial = run_particle_trial(
+            config,
+            output_dir,
+            preset,
+            next_count,
+            PARTICLE_SEARCH_TRIAL_SECS,
+            "increment-probe",
+        )?;
+        let qualified = trial.get("qualified").and_then(Value::as_bool) == Some(true);
+        trials.push(trial);
+        if qualified {
+            last_pass = next_count;
+            increment_failures = 0;
+        } else {
+            increment_failures += 1;
+            first_fail = Some(first_fail.map_or(next_count, |upper| upper.min(next_count)));
         }
     }
     let mut confirmation_count = last_pass;
@@ -6588,6 +6618,14 @@ fn profile_particle_preset(
         "trials": trials,
         "confirmation_attempts": confirmation_attempts,
         "confirmation": confirmation,
+        "increment_failures": increment_failures,
+        "increment_stop_reason": if increment_failures >= 3 {
+            "three-consecutive-failures"
+        } else if last_pass == PARTICLE_COUNT_MAX {
+            "maximum-count-reached"
+        } else {
+            "count-boundary-reached"
+        },
     }))
 }
 
@@ -6819,7 +6857,7 @@ fn summarize_particle_trial_for_renderer(
         .iter()
         .filter_map(|frame| frame.get("particle_phase").and_then(Value::as_str))
         .collect::<std::collections::BTreeSet<_>>();
-    if renderer == "particle-magik" {
+    if kind != "probe" && kind != "increment-probe" && renderer == "particle-magik" {
         for required in ["static", "form", "hold", "disperse"] {
             if !phases.contains(required) {
                 failures.push(json!({"kind": "missing-phase", "phase": required}));
