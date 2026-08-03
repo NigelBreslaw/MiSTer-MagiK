@@ -77,6 +77,28 @@ write-combined framebuffer writes and before posting the FPGA latch. Route
 fallback and fixed-animation pacing use Main's resolved periods: 16,652 µs
 for 240p, 19,830 µs for 288p, 16,683 µs for 480p, and 19,829 µs for 576p.
 
+## Cold-catalog intro
+
+All four resolved CRT routes support the 20-second cold-catalog particle intro
+through an intro-specific native hidden-slot grant. This capability does not
+broaden direct screensaver eligibility. CRT uses 51,200 initial and 20,480
+steady particles, exactly half the HDMI density, with deterministic per-letter
+track thinning so MiSTer-to-MagiK identities remain paired.
+
+The authored 16:9 scene is fully visible and centred within the physical 4:3
+raster. Projection uses X scale `2/3` and Y scale
+`native_framebuffer_height/720`; inverse scales generate pixel-exact launcher
+morph targets. The scene renders at 640×240, 640×288, 640×480, or 640×576. For
+240p only, the live launcher target is derived from the retained 640×480
+composition with the standard centred nearest-row transform. The original
+composition cache is restored after the final native frame.
+
+Storyboard time advances after each confirmed presentation using the resolved
+refresh period and clamps to exactly 20 seconds, so PAL routes do not stretch
+the sequence. Physical frame numbering remains independent. Preparation,
+transform, grant, route, or latch failure reveals the ordinary launcher rather
+than leaving the intro in control.
+
 An attended trial moving the 576p destination bottom from line 615 through line
 607 did not move or remove the unstable coloured pixels observed on the final
 physical raster row. A coordinated Main trial that transferred that row into
@@ -132,4 +154,6 @@ also show zero physical refreshes that reused the previous confirmed frame;
 zero latch or FPGA drops alone is not skipless-motion evidence. HDMI regression,
 core launch/return (including native interlace), cleanup, recovery, and stock
 rollback remain part of the gate. No current document should be read as claiming
-that attended gate has passed.
+that attended gate has passed. CRT intro implementation and host assurance are
+present; four-mode installed-device cadence and visual qualification remain
+pending until the delivery and attended review complete.

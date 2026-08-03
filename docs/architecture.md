@@ -526,8 +526,12 @@ stateDiagram-v2
 Only cold boot without a valid catalog or retained Arcade projection shows the
 20-second first-run particle intro while catalog work runs on CPU0. Its logical
 clock advances only after the posted sequence is active at a confirmed physical
-refresh. Warm boot and return-from-game keep HDMI black until the first intended
-launcher frame is ready. Warm registry startup opens only Arcade's
+refresh. HDMI uses full particle density; the four resolved CRT routes render
+half density at their native framebuffer geometry with the complete 16:9 scene
+centred in the 4:3 raster. The 240p handoff derives its native target through
+the standard centred 640×480-to-640×240 transform while retaining the original
+composition cache. Warm boot and return-from-game keep HDMI black until the
+first intended launcher frame is ready. Warm registry startup opens only Arcade's
 mini-nav before reveal; other systems remain lazy. Return-from-game consumes a
 bounded catalog capsule when possible. If that capsule is unavailable, only the
 registry and selected system mini-nav are foreground reveal work. Return-from-game

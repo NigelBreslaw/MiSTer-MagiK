@@ -32,12 +32,15 @@ is a warm start and goes directly to the interactive launcher. The retained
 projection is source-stamped, bounded, and checksummed, so an interrupted first
 run repeats the intro unless it reached the first-visible publication barrier.
 
-The intro owns the production direct hidden-slot latch for 1,201 logical frames
-(timestamps 0 through 1,200) at 60 Hz. Logical time is the rational value
-`frame * 1s / 60`; it advances only after the posted sequence becomes the
-active scanout sequence at a confirmed physical vblank. Acceptance or pending
-status is insufficient. A missing grant, failed post, or incomplete latch
-confirmation retries the same logical timestamp. The catalog builder starts
+The intro owns the production direct hidden-slot latch for 20 seconds of
+storyboard time. Storyboard time advances by the resolved physical refresh
+period only after the posted sequence becomes the active scanout sequence at a
+confirmed physical vblank, and is clamped to exactly 20 seconds. Physical frame
+numbering remains independent for projection cohorts and flicker. Acceptance or
+pending status is insufficient. A missing grant, failed post, or incomplete
+latch confirmation retries the same storyboard timestamp. The expected post
+count is therefore `ceil(20 seconds / refresh_period)`, plus any cabinet-wait
+frames. The catalog builder starts
 with the intro and reserves CPU1 for rendering: its coordinator, Arcade
 bootstrap, walker, audit, projection, snapshot, and persistence work all use
 the continuous CPU0 background policy. While particles own the display, normal
@@ -46,6 +49,15 @@ suppressed. Catalog/UI changes are coalesced in Rust state rather than copied
 into an invisible Slint tree. Transient catalog scan milestones do not clone
 navigation shells or rebuild launcher taxonomy on CPU1; the authoritative
 published projection supplies that state.
+
+HDMI retains the original 102,400 initial and 40,960 steady particles. All four
+resolved CRT routes (`crt-240p60`, `crt-288p50`, `crt-480p60`, and
+`crt-576p50`) use deterministic half-density tracks with 51,200 initial and
+20,480 steady particles. Thinning occurs independently within each MiSTer/MagiK
+letter track, preserving paired morph identity, group alignment, and cabinet
+ordering. CRT projection fits the complete 16:9 scene inside the 4:3 raster:
+X uses scale `2/3`, Y uses `framebuffer_height/720`, and the resulting frame is
+centred with equal top and bottom margins.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
 the FPGA latch did not reject or supersede a post. Skipless animation requires
@@ -63,10 +75,12 @@ The final handoff is derived only from the production launcher's live frame:
    performs one forced-full off-screen Slint render.
    It immediately
    snapshots that exact cache, then a low-priority CPU0 worker derives all
-   40,960 launcher particle positions and colors without blocking CPU1. No
+   40,960 HDMI or 20,480 CRT launcher particle positions and colors without
+   blocking CPU1. No
    design-time launcher image or point cloud is embedded.
 2. If no usable launcher frame exists at 16 seconds, logical storyboard time
-   pauses and the fully formed cabinet keeps spinning at 60 Hz. Each four-second
+   pauses and the fully formed cabinet keeps spinning at the resolved physical
+   refresh cadence. Each four-second
    source orbit flowed at 0.4 turns per four seconds, so the wait continues at
    exactly that velocity: one seamless full turn every ten seconds. Once the
    real launcher frame is ready, the normal morph begins.
@@ -81,8 +95,13 @@ The final handoff is derived only from the production launcher's live frame:
    hidden mappings, leaves external-direct mode, and only then enables startup
    input.
 
-Unsupported presentation routes fail open to the ordinary launcher rather than
-running an unqualified copied-frame approximation. A delayed catalog never
+The intro renders directly at the native CRT framebuffer size. On 240p, the
+live 640×480 launcher cache is converted to the 640×240 morph target with the
+same centred nearest-row transform used by ordinary presentation; the original
+640×480 cache remains retained and is restored at handoff. The other CRT routes
+use their native 640×288, 640×480, or 640×576 cache geometry directly. Any
+route, preparation, grant, latch, or transform failure fails open to the
+ordinary launcher. A delayed catalog never
 fails the intro or reveals a loading UI; it extends only the spinning-cabinet
 wait. The recipe renderer itself remains geometry-aware so focused-lab captures
 can exercise non-960x540 sizes.

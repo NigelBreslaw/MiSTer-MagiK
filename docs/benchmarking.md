@@ -105,14 +105,18 @@ evidence must begin with both Catalog V3 and the retained Arcade bootstrap
 absent, use the production direct hidden-slot route, and retain the complete
 launcher frame trace. The qualification run injects no launcher input; UI
 responsiveness under navigation load is measured separately so it cannot alter
-startup cadence or catalog completion time. A pass requires at least 1,201
-ordered external-direct posts for logical frames 0 through 1,200, plus any
-reported spinning-cabinet wait frames before the live launcher is ready. All
-must sustain 60 Hz physical refresh within the ordinary
+startup cadence or catalog completion time. A pass derives the required ordered
+external-direct post count as `ceil(20 seconds / measured refresh period)`, plus
+any reported spinning-cabinet wait frames before the live launcher is ready.
+This applies to HDMI and to `crt-240p60`, `crt-288p50`, `crt-480p60`, and
+`crt-576p50`. All must sustain the resolved physical refresh within the ordinary
 tolerance, zero repeated refreshes, zero pacing failures, and independently
 zero latch-protocol drops or completion failures. Catalog coordinator and walker
 affinity must remain on CPU0. The run also requires a snapshot milestone before
 the launcher morph begins and a pixel-identical 20-second frame/cache handoff.
+A qualification record includes the resolved route, native framebuffer
+geometry, particle density, logical elapsed duration, and expected/captured
+frame counts.
 A second launcher start must use either the retained Arcade projection or
 completed registry and must emit no intro-start event.
 
@@ -131,8 +135,9 @@ show the cadence and latch-protocol sections as separate gates even when both
 pass.
 
 This is runtime/platform qualification, so it requires a clean committed Dev
-delivery before measurement. Host tests cover recipe duration, exact rational
-clock boundaries, per-slot zero-write hold behavior, incremental versus fresh
+delivery before measurement. Host tests cover route-aware cue boundaries,
+50/60 Hz completion and wait behavior, per-slot zero-write hold behavior,
+incremental versus fresh
 crossfade equivalence, and pixel equality at the endpoint; they are necessary
 but not a substitute for physical latch evidence.
 
