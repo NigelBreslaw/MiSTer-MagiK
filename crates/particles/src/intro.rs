@@ -62,16 +62,23 @@ pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
     mister: PointTarget,
-    mister_screen: Vec<[f32; 2]>,
     mister_pivots: [[f32; 3]; 6],
     magik: PointTarget,
     magik_pivots: [[f32; 3]; 6],
     scatter_vectors: Vec<[f32; 3]>,
     cloud: PointTarget,
-    cabinet: PointTarget,
+    cabinet_formed: Vec<[f32; 3]>,
+    cabinet_formation: f32,
+    cabinet_final_yaw: f32,
     launcher: PointTarget,
     launcher_snapshot: Vec<Rgb565Pixel>,
+    launcher_commands: Vec<PointCloudDrawCommand>,
+    launcher_thresholds: Vec<u8>,
+    crossfade_buckets: Vec<Vec<u32>>,
     static_xy: Vec<[f32; 2]>,
+    formation_screen: Vec<[f32; 2]>,
+    formation_random: Vec<u16>,
+    formation_styles: Vec<u8>,
     dynamic_positions: Vec<[f32; 3]>,
     positions: Vec<PointCloudPositionBlock>,
     commands: Vec<PointCloudDrawCommand>,
@@ -121,7 +128,13 @@ impl IntroScene {
             Some(IntroCue::Cloud { radius, .. }) => *radius,
             _ => return Err("intro cloud cue is missing".into()),
         };
-        let cloud = cloud_target(recipe.steady_particle_count, recipe.seed, cloud_radius);
+        let cloud = letter_cloud_target(
+            recipe.steady_particle_count,
+            recipe.seed,
+            cloud_radius,
+            &magik.groups,
+            &magik_pivots,
+        );
         let mut cabinet = decode_target(CABINET_CLOUD, None, TargetScale::Cabinet)?;
         cabinet.positions.truncate(recipe.steady_particle_count);
         cabinet.palette.truncate(recipe.steady_particle_count);
@@ -130,19 +143,75 @@ impl IntroScene {
             start: 0,
             count: recipe.steady_particle_count,
         }];
-        let launcher = decode_target(
+        let (cabinet_formation, cabinet_final_yaw) = match recipe.cues.get(6) {
+            Some(IntroCue::TargetOrbit {
+                start_turns,
+                turns,
+                formation_percent,
+                ..
+            }) => (
+                *formation_percent / 100.0,
+                (*start_turns + *turns) * std::f32::consts::TAU,
+            ),
+            _ => return Err("intro cabinet orbit cue is missing".into()),
+        };
+        let cabinet_formed = cloud
+            .positions
+            .iter()
+            .zip(&cabinet.positions)
+            .map(|(cloud, cabinet)| {
+                [
+                    cloud[0] + (cabinet[0] - cloud[0]) * cabinet_formation,
+                    cloud[1] + (cabinet[1] - cloud[1]) * cabinet_formation,
+                    cloud[2] + (cabinet[2] - cloud[2]) * cabinet_formation,
+                ]
+            })
+            .collect();
+        let mut launcher = decode_target(
             LAUNCHER_CLOUD,
             Some((LAUNCHER_GROUPS, 1)),
             TargetScale::Launcher,
         )?;
+        let launcher_projection_compensation = launcher_projection_compensation(&recipe);
+        for position in &mut launcher.positions {
+            position[0] *= launcher_projection_compensation;
+            position[1] *= launcher_projection_compensation;
+        }
         let launcher_snapshot = decode_launcher_snapshot(LAUNCHER_SNAPSHOT, width, height)?;
+        let launcher_commands = launcher
+            .positions
+            .iter()
+            .map(|position| project_command(*position, &recipe, geometry))
+            .collect::<Vec<_>>();
+        let launcher_thresholds = launcher_commands
+            .iter()
+            .map(|command| {
+                command.offset().map_or(64, |offset| {
+                    bayer8(offset % geometry.width(), offset / geometry.width())
+                })
+            })
+            .collect();
+        let mut crossfade_buckets = vec![Vec::new(); 64];
+        for offset in 0..width.saturating_mul(height) {
+            crossfade_buckets[usize::from(bayer8(offset % width, offset / width))]
+                .push(offset as u32);
+        }
         let mut static_xy = Vec::with_capacity(recipe.initial_particle_count);
+        let mut formation_screen = Vec::with_capacity(recipe.initial_particle_count);
+        let mut formation_random = Vec::with_capacity(recipe.initial_particle_count);
+        let mut formation_styles = Vec::with_capacity(recipe.initial_particle_count);
         for index in 0..recipe.initial_particle_count {
             let random = mix32((recipe.seed as u32).wrapping_add(index as u32));
+            let target_index = index % recipe.steady_particle_count;
             static_xy.push([
                 unit01(random) * width as f32,
                 unit01(random.rotate_left(13)) * height as f32,
             ]);
+            formation_screen.push(mister_screen[target_index]);
+            formation_random.push(
+                (mix32((index as u32).wrapping_add(recipe.seed as u32)) & 0xffff) as u16,
+            );
+            formation_styles.push(mister.palette[target_index]);
         }
         let positions = vec![empty_block(); recipe.steady_particle_count.div_ceil(PARTICLE_LANES)];
         let dynamic_positions = vec![[0.0; 3]; recipe.steady_particle_count];
@@ -154,16 +223,23 @@ impl IntroScene {
             geometry,
             recipe,
             mister,
-            mister_screen,
             mister_pivots,
             magik,
             magik_pivots,
             scatter_vectors,
             cloud,
-            cabinet,
+            cabinet_formed,
+            cabinet_formation,
+            cabinet_final_yaw,
             launcher,
             launcher_snapshot,
+            launcher_commands,
+            launcher_thresholds,
+            crossfade_buckets,
             static_xy,
+            formation_screen,
+            formation_random,
+            formation_styles,
             dynamic_positions,
             positions,
             commands,
@@ -214,15 +290,13 @@ impl IntroScene {
         let text_palette = self.recipe.appearance.text_palette;
         let mut visible = 0;
         for index in 0..self.recipe.initial_particle_count {
-            let target_index = index % self.recipe.steady_particle_count;
-            let target = self.mister_screen[target_index];
+            let target = self.formation_screen[index];
             let source = self.static_xy[index];
             let x = source[0] + (target[0] - source[0]) * progress;
             let y = source[1] + (target[1] - source[1]) * progress;
             let retire = index >= self.recipe.steady_particle_count;
             let keep_threshold = ((1.0 - progress) * 65_535.0) as u32;
-            let random = mix32((index as u32).wrapping_add(self.recipe.seed as u32));
-            if retire && (random & 0xffff) > keep_threshold {
+            if retire && u32::from(self.formation_random[index]) > keep_threshold {
                 continue;
             }
             if x >= 0.0
@@ -236,8 +310,8 @@ impl IntroScene {
                     crt_palette[fade.min(3)]
                 } else {
                     let flicker = text_flicker_index(
-                        self.mister.palette[target_index],
-                        target_index,
+                        self.formation_styles[index],
+                        index,
                         frame,
                     );
                     text_palette[flicker]
@@ -260,7 +334,6 @@ impl IntroScene {
         let target = match target {
             ScenePointTarget::Mister => &self.mister,
             ScenePointTarget::Magik => &self.magik,
-            ScenePointTarget::Cabinet => &self.cabinet,
             ScenePointTarget::Launcher => &self.launcher,
         };
         render_point_cloud(
@@ -272,6 +345,7 @@ impl IntroScene {
             &mut self.positions,
             &mut self.commands,
             text_palette_mix,
+            text_palette_mix.is_some(),
             frame,
         )
     }
@@ -285,6 +359,7 @@ impl IntroScene {
         stagger_ms: u64,
         easing: RecipeEasing,
         frame: u64,
+        update_all: bool,
     ) -> (usize, usize, &'static str) {
         let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(5)).max(1);
         for (group_index, span) in self.mister.groups.iter().enumerate() {
@@ -296,6 +371,9 @@ impl IntroScene {
             let angle = progress * turns * std::f32::consts::TAU;
             let (sin, cos) = angle.sin_cos();
             for index in span.start..span.start + span.count {
+                if !update_all && !updates_transform_cohort(index, frame) {
+                    continue;
+                }
                 let source = self.mister.positions[index];
                 let destination_point = self.magik.positions[index];
                 let source_local = [
@@ -342,51 +420,86 @@ impl IntroScene {
             &mut self.positions,
             &mut self.commands,
             Some(0.0),
+            true,
             frame,
         )
     }
 
-    fn render_cloud_transition(
+    #[allow(clippy::too_many_arguments)]
+    fn render_letters_to_cabinet(
         &mut self,
         destination: &mut [Rgb565Pixel],
-        cue_index: usize,
         cue_elapsed_ms: u64,
         duration_ms: u64,
         turns: f32,
+        letter_turns: f32,
+        stagger_ms: u64,
+        _radius: f32,
+        formation_start_percent: f32,
+        formation_end_percent: f32,
         easing: RecipeEasing,
+        frame: u64,
+        update_all: bool,
     ) -> (usize, usize, &'static str) {
-        let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
-        let (source, target, palette) = if cue_index == 5 {
-            (&self.magik, &self.cloud, &self.magik.palette)
-        } else {
-            (&self.cloud, &self.cabinet, &self.cabinet.palette)
-        };
-        let angle = progress * turns * std::f32::consts::TAU;
-        let (sin, cos) = angle.sin_cos();
-        for index in 0..self.recipe.steady_particle_count {
-            let from = source.positions[index];
-            let rotated = [
-                from[0].mul_add(cos, from[2] * sin),
-                from[1],
-                (-from[0]).mul_add(sin, from[2] * cos),
-            ];
-            let to = target.positions[index];
-            self.dynamic_positions[index] = [
-                rotated[0] + (to[0] - rotated[0]) * progress,
-                rotated[1] + (to[1] - rotated[1]) * progress,
-                rotated[2] + (to[2] - rotated[2]) * progress,
-            ];
+        let cue_progress =
+            ease(cue_elapsed_ms as f32 / duration_ms.max(1) as f32, RecipeEasing::Linear);
+        let global_yaw = cue_progress * turns * std::f32::consts::TAU;
+        let (global_sin, global_cos) = global_yaw.sin_cos();
+        let local_duration = duration_ms.saturating_sub(stagger_ms.saturating_mul(4)).max(1);
+        for (group_index, span) in self.magik.groups.iter().enumerate() {
+            let start_ms = letter_stagger_start_ms(group_index, stagger_ms);
+            let progress = ease(
+                cue_elapsed_ms.saturating_sub(start_ms) as f32 / local_duration as f32,
+                easing,
+            );
+            let local_angle = progress * letter_turns * std::f32::consts::TAU;
+            let (local_sin, local_cos) = local_angle.sin_cos();
+            let formation_percent = formation_start_percent
+                + (formation_end_percent - formation_start_percent) * progress;
+            let formation = formation_percent / 100.0;
+            let pivot = self.magik_pivots[group_index];
+            for index in span.start..span.start + span.count {
+                if !update_all && !updates_transform_cohort(index, frame) {
+                    continue;
+                }
+                let source = self.magik.positions[index];
+                let local_x = source[0] - pivot[0];
+                let local_z = source[2] - pivot[2];
+                let spun = [
+                    pivot[0] + local_x.mul_add(local_cos, local_z * local_sin),
+                    source[1],
+                    pivot[2] + (-local_x).mul_add(local_sin, local_z * local_cos),
+                ];
+                let cloud = self.cloud.positions[index];
+                let cabinet = self.cabinet_formed[index];
+                let formed = [
+                    cloud[0] + (cabinet[0] - cloud[0]) * (formation / self.cabinet_formation),
+                    cloud[1] + (cabinet[1] - cloud[1]) * (formation / self.cabinet_formation),
+                    cloud[2] + (cabinet[2] - cloud[2]) * (formation / self.cabinet_formation),
+                ];
+                let point = [
+                    spun[0] + (formed[0] - spun[0]) * progress,
+                    spun[1] + (formed[1] - spun[1]) * progress,
+                    spun[2] + (formed[2] - spun[2]) * progress,
+                ];
+                self.dynamic_positions[index] = [
+                    point[0].mul_add(global_cos, point[2] * global_sin),
+                    point[1],
+                    (-point[0]).mul_add(global_sin, point[2] * global_cos),
+                ];
+            }
         }
         render_point_cloud(
             destination,
             &self.recipe,
             self.geometry,
             &self.dynamic_positions,
-            palette,
+            &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
-            (cue_index == 5).then_some(progress),
-            0,
+            Some(0.0),
+            false,
+            frame,
         )
     }
 
@@ -395,15 +508,17 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         cue_elapsed_ms: u64,
         duration_ms: u64,
+        start_turns: f32,
         turns: f32,
+        formation_percent: f32,
+        frame: u64,
     ) -> (usize, usize, &'static str) {
-        let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, turns);
+        let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, start_turns, turns);
         let (sin, cos) = yaw.sin_cos();
-        for (dynamic, point) in self
-            .dynamic_positions
-            .iter_mut()
-            .zip(&self.cabinet.positions)
-        {
+        debug_assert!((formation_percent / 100.0 - self.cabinet_formation).abs() < 0.0001);
+        for index in 0..self.recipe.steady_particle_count {
+            let point = self.cabinet_formed[index];
+            let dynamic = &mut self.dynamic_positions[index];
             *dynamic = [
                 point[0].mul_add(cos, point[2] * sin),
                 point[1],
@@ -415,11 +530,12 @@ impl IntroScene {
             &self.recipe,
             self.geometry,
             &self.dynamic_positions,
-            &self.cabinet.palette,
+            &self.magik.palette,
             &mut self.positions,
             &mut self.commands,
-            None,
-            0,
+            Some(0.0),
+            false,
+            frame,
         )
     }
 
@@ -429,10 +545,17 @@ impl IntroScene {
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
+        frame: u64,
     ) -> (usize, usize, &'static str) {
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
+        let (sin, cos) = self.cabinet_final_yaw.sin_cos();
         for index in 0..self.recipe.steady_particle_count {
-            let from = self.cabinet.positions[index];
+            let formed = self.cabinet_formed[index];
+            let from = [
+                formed[0].mul_add(cos, formed[2] * sin),
+                formed[1],
+                (-formed[0]).mul_add(sin, formed[2] * cos),
+            ];
             let to = self.launcher.positions[index];
             self.dynamic_positions[index] = [
                 from[0] + (to[0] - from[0]) * progress,
@@ -448,8 +571,9 @@ impl IntroScene {
             &self.launcher.palette,
             &mut self.positions,
             &mut self.commands,
-            None,
-            0,
+            Some(progress),
+            false,
+            frame,
         )
     }
 
@@ -459,25 +583,35 @@ impl IntroScene {
         cue_elapsed_ms: u64,
         duration_ms: u64,
         easing: RecipeEasing,
-        frame: u64,
+        _frame: u64,
     ) -> (usize, usize, &'static str) {
-        let (visible, mut writes, backend) =
-            self.render_point_target(destination, ScenePointTarget::Launcher, frame);
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
         let threshold = (progress * 64.0).round() as u8;
-        for (offset, (destination, source)) in destination
-            .iter_mut()
-            .zip(&self.launcher_snapshot)
-            .enumerate()
-        {
-            let x = offset % self.geometry.width();
-            let y = offset / self.geometry.width();
-            if bayer8(x, y) < threshold {
-                *destination = *source;
+        if threshold >= 64 {
+            destination.copy_from_slice(&self.launcher_snapshot);
+            return (0, destination.len(), "launcher-static-crossfade");
+        }
+        let mut visible = 0;
+        let mut writes = 0;
+        for (index, command) in self.launcher_commands.iter().copied().enumerate() {
+            let Some(offset) = command.offset() else {
+                continue;
+            };
+            if self.launcher_thresholds[index] >= threshold {
+                destination[offset] = Rgb565Pixel(
+                    self.recipe.appearance.palette[usize::from(self.launcher.palette[index])].0,
+                );
+                visible += 1;
                 writes += 1;
             }
         }
-        (visible, writes, backend)
+        for bucket in &self.crossfade_buckets[..usize::from(threshold)] {
+            for &offset in bucket {
+                destination[offset as usize] = self.launcher_snapshot[offset as usize];
+                writes += 1;
+            }
+        }
+        (visible, writes, "launcher-static-crossfade")
     }
 }
 
@@ -491,6 +625,7 @@ fn render_point_cloud(
     positions: &mut [PointCloudPositionBlock],
     commands: &mut [PointCloudDrawCommand],
     text_palette_mix: Option<f32>,
+    text_neighbors: bool,
     frame: u64,
 ) -> (usize, usize, &'static str) {
         let transform_started = Instant::now();
@@ -557,6 +692,7 @@ fn render_point_cloud(
             visible += 1;
             writes += 1;
             if !target_color
+                && text_neighbors
                 && target_positions[index][2] < 0.0
                 && offset % geometry.width() + 1 < geometry.width()
             {
@@ -608,6 +744,7 @@ impl FramebufferScene for IntroScene {
             .fill(Rgb565Pixel(self.recipe.appearance.background.0));
         let clear_us = elapsed_us(clear_started.elapsed());
         let render_started = Instant::now();
+        let update_all_transforms = clock.next_elapsed.is_none() || cue_elapsed_ms < 34;
         let (visible, pixel_writes, projection_backend) = match &cue {
             IntroCue::CrtStatic { .. } => {
                 let (visible, writes) = self.render_crt(target.pixels_mut(), clock.frame);
@@ -633,35 +770,55 @@ impl FramebufferScene for IntroScene {
                 *stagger_ms,
                 *easing,
                 clock.frame,
+                update_all_transforms,
             ),
             IntroCue::Cloud {
                 duration_ms,
                 turns,
+                letter_turns,
+                stagger_ms,
+                radius,
+                formation_start_percent,
+                formation_end_percent,
                 easing,
                 ..
-            } => self.render_cloud_transition(
+            } => self.render_letters_to_cabinet(
                 target.pixels_mut(),
-                cue_index,
                 cue_elapsed_ms,
                 *duration_ms,
                 *turns,
+                *letter_turns,
+                *stagger_ms,
+                *radius,
+                *formation_start_percent,
+                *formation_end_percent,
                 *easing,
+                clock.frame,
+                update_all_transforms,
             ),
             IntroCue::TargetOrbit {
-                duration_ms, turns, ..
+                duration_ms,
+                start_turns,
+                turns,
+                formation_percent,
+                ..
             } => self.render_cabinet_orbit(
                 target.pixels_mut(),
                 cue_elapsed_ms,
                 *duration_ms,
+                *start_turns,
                 *turns,
+                *formation_percent,
+                clock.frame,
             ),
             IntroCue::MorphTarget {
                 duration_ms, easing, ..
-            } if cue_index == 8 => self.render_launcher_morph(
+            } if cue_index == 7 => self.render_launcher_morph(
                 target.pixels_mut(),
                 cue_elapsed_ms,
                 *duration_ms,
                 *easing,
+                clock.frame,
             ),
             IntroCue::MockCrossfade {
                 duration_ms, easing, ..
@@ -672,7 +829,7 @@ impl FramebufferScene for IntroScene {
                 *easing,
                 clock.frame,
             ),
-            IntroCue::HoldTarget { .. } if cue_index == 10 => {
+            IntroCue::HoldTarget { .. } if cue_index == 9 => {
                 target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
                 (
                     0,
@@ -683,8 +840,7 @@ impl FramebufferScene for IntroScene {
             _ => {
                 let point_target = match cue_index {
                     0..=3 => ScenePointTarget::Mister,
-                    4..=7 => ScenePointTarget::Magik,
-                    8 => ScenePointTarget::Cabinet,
+                    4 => ScenePointTarget::Magik,
                     _ => ScenePointTarget::Launcher,
                 };
                 self.render_point_target(target.pixels_mut(), point_target, clock.frame)
@@ -699,7 +855,7 @@ impl FramebufferScene for IntroScene {
         Ok(IntroFrameStats {
             particles,
             projected_particles: particles,
-            projection_cohorts: 1,
+            projection_cohorts: u8::from(matches!(cue, IntroCue::LetterMorph { .. } | IntroCue::Cloud { .. })) + 1,
             visible,
             pixel_writes,
             cue_index,
@@ -732,7 +888,6 @@ enum TargetScale {
 enum ScenePointTarget {
     Mister,
     Magik,
-    Cabinet,
     Launcher,
 }
 
@@ -869,6 +1024,10 @@ fn project(
     ]
 }
 
+fn launcher_projection_compensation(recipe: &IntroRecipe) -> f32 {
+    recipe.camera.dolly / recipe.camera.focal_length
+}
+
 fn mix32(mut value: u32) -> u32 {
     value ^= value >> 16;
     value = value.wrapping_mul(0x7feb_352d);
@@ -896,22 +1055,32 @@ fn pivot(points: &[[f32; 3]]) -> [f32; 3] {
     [sum[0] * reciprocal, sum[1] * reciprocal, sum[2] * reciprocal]
 }
 
-fn cloud_target(count: usize, seed: u64, radius: f32) -> PointTarget {
+fn letter_cloud_target(
+    count: usize,
+    seed: u64,
+    radius: f32,
+    groups: &[ParticleGroupSpan],
+    pivots: &[[f32; 3]; 6],
+) -> PointTarget {
     let mut positions = Vec::with_capacity(count);
     let mut palette = Vec::with_capacity(count);
     let golden_angle = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
-    for index in 0..count {
-        let unit = (index as f32 + 0.5) / count as f32;
-        let y = 1.0 - unit * 2.0;
-        let radial = (1.0 - y * y).sqrt();
-        let angle = index as f32 * golden_angle;
-        let jitter = 0.82 + unit01(mix32(index as u32 ^ seed as u32)) * 0.18;
-        positions.push([
-            angle.cos() * radial * radius * jitter,
-            y * radius * 0.62,
-            angle.sin() * radial * radius * jitter,
-        ]);
-        palette.push((index & 7) as u8);
+    for (group_index, span) in groups.iter().enumerate() {
+        let pivot = pivots[group_index];
+        for local_index in 0..span.count {
+            let index = span.start + local_index;
+            let unit = (local_index as f32 + 0.5) / span.count as f32;
+            let y = 1.0 - unit * 2.0;
+            let radial = (1.0 - y * y).sqrt();
+            let angle = local_index as f32 * golden_angle;
+            let jitter = 0.78 + unit01(mix32(index as u32 ^ seed as u32)) * 0.22;
+            positions.push([
+                pivot[0] + angle.cos() * radial * radius * jitter,
+                pivot[1] + y * radius * 0.58,
+                pivot[2] + angle.sin() * radial * radius * jitter,
+            ]);
+            palette.push((index & 7) as u8);
+        }
     }
     PointTarget {
         positions,
@@ -924,10 +1093,18 @@ fn cloud_target(count: usize, seed: u64, radius: f32) -> PointTarget {
     }
 }
 
-fn cabinet_yaw(elapsed_ms: u64, duration_ms: u64, turns: f32) -> f32 {
-    (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0)
-        * turns
+fn cabinet_yaw(elapsed_ms: u64, duration_ms: u64, start_turns: f32, turns: f32) -> f32 {
+    (start_turns
+        + (elapsed_ms as f32 / duration_ms.max(1) as f32).clamp(0.0, 1.0) * turns)
         * std::f32::consts::TAU
+}
+
+fn letter_stagger_start_ms(group_index: usize, stagger_ms: u64) -> u64 {
+    stagger_ms.saturating_mul(group_index.min(4) as u64)
+}
+
+fn updates_transform_cohort(index: usize, frame: u64) -> bool {
+    ((index / PARTICLE_LANES) & 1) == ((frame as usize) & 1)
 }
 
 fn decode_launcher_snapshot(
@@ -988,11 +1165,10 @@ const fn cue_label(index: usize) -> &'static str {
         2 => "hold-mister",
         3 => "letters",
         4 => "hold-magik",
-        5 => "spin-out",
-        6 => "form-cabinet",
-        7 => "cabinet-orbit",
-        8 => "form-launcher",
-        9 => "crossfade",
+        5 => "letters-to-cabinet",
+        6 => "cabinet-orbit",
+        7 => "form-launcher",
+        8 => "crossfade",
         _ => "hold-launcher",
     }
 }
@@ -1033,6 +1209,7 @@ mod tests {
             150,
             RecipeEasing::Smoothstep,
             105,
+            true,
         );
         let m = scene.mister.groups[0];
         let source_pivot = pivot(&scene.mister.positions[m.start..m.start + m.count]);
@@ -1054,6 +1231,7 @@ mod tests {
             150,
             RecipeEasing::Smoothstep,
             210,
+            true,
         );
         for (actual, expected) in scene.dynamic_positions.iter().zip(&scene.magik.positions) {
             for axis in 0..3 {
@@ -1063,8 +1241,41 @@ mod tests {
     }
 
     #[test]
-    fn cabinet_orbit_accumulates_exactly_two_turns() {
-        let yaw = cabinet_yaw(4_000, 4_000, 2.0);
-        assert!((yaw - 4.0 * std::f32::consts::PI).abs() < f32::EPSILON * 8.0);
+    fn final_k_shares_one_hundred_ms_stagger_and_cabinet_orbit_is_slow() {
+        assert_eq!(
+            (0..6)
+                .map(|group| letter_stagger_start_ms(group, 100))
+                .collect::<Vec<_>>(),
+            [0, 100, 200, 300, 400, 400]
+        );
+        let yaw = cabinet_yaw(4_000, 4_000, 0.3, 0.4);
+        assert!((yaw - 0.7 * std::f32::consts::TAU).abs() < f32::EPSILON * 8.0);
+        let scene = IntroScene::new(960, 540, embedded_intro_recipe().unwrap()).unwrap();
+        assert!((scene.cabinet_formation - 0.95).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn flat_launcher_target_precompensates_the_camera_to_exact_pixels() {
+        let recipe = embedded_intro_recipe().unwrap();
+        let geometry = SceneGeometry::new(960, 540, 960).unwrap();
+        let compensation = launcher_projection_compensation(&recipe);
+        let top_left = project(
+            [-480.0 * compensation, -270.0 * compensation, 0.0],
+            0.0,
+            0.0,
+            &recipe,
+            geometry,
+        );
+        let bottom_right = project(
+            [479.0 * compensation, 269.0 * compensation, 0.0],
+            0.0,
+            0.0,
+            &recipe,
+            geometry,
+        );
+        assert!((top_left[0] - 0.0).abs() < 0.001);
+        assert!((top_left[1] - 0.0).abs() < 0.001);
+        assert!((bottom_right[0] - 959.0).abs() < 0.001);
+        assert!((bottom_right[1] - 539.0).abs() < 0.001);
     }
 }

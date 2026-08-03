@@ -68,14 +68,20 @@ pub enum IntroCue {
         from: IntroTarget,
         to: IntroTarget,
         turns: f32,
+        letter_turns: f32,
+        stagger_ms: u64,
         radius: f32,
+        formation_start_percent: f32,
+        formation_end_percent: f32,
         easing: RecipeEasing,
     },
     TargetOrbit {
         id: String,
         duration_ms: u64,
         target: IntroTarget,
+        start_turns: f32,
         turns: f32,
+        formation_percent: f32,
     },
     MockCrossfade {
         id: String,
@@ -307,7 +313,6 @@ fn validate_storyboard(cues: &[IntroCue]) -> Result<(), String> {
         "letter_morph",
         "hold_target",
         "cloud",
-        "cloud",
         "target_orbit",
         "morph_target",
         "mock_crossfade",
@@ -333,15 +338,44 @@ fn validate_cue(cue: &IntroCue, steady_count: usize) -> Result<(), String> {
             }
             Ok(())
         }
-        IntroCue::Cloud { turns, radius, .. } => {
+        IntroCue::Cloud {
+            turns,
+            letter_turns,
+            stagger_ms,
+            radius,
+            formation_start_percent,
+            formation_end_percent,
+            ..
+        } => {
             validate_finite(*turns, -16.0, 16.0, "cloud.turns")?;
-            validate_finite(*radius, 0.0, 4_096.0, "cloud.radius")
+            validate_finite(*letter_turns, -16.0, 16.0, "cloud.letter_turns")?;
+            validate_finite(*radius, 0.0, 1_024.0, "cloud.radius")?;
+            validate_percent(*formation_start_percent, "cloud.formation_start_percent")?;
+            validate_percent(*formation_end_percent, "cloud.formation_end_percent")?;
+            if formation_end_percent < formation_start_percent {
+                return Err("cloud formation percentage must not move backwards".into());
+            }
+            if *stagger_ms > 2_000 {
+                return Err("cloud.stagger_ms exceeds 2000".into());
+            }
+            Ok(())
         }
-        IntroCue::TargetOrbit { turns, .. } => {
-            validate_finite(*turns, -16.0, 16.0, "target_orbit.turns")
+        IntroCue::TargetOrbit {
+            start_turns,
+            turns,
+            formation_percent,
+            ..
+        } => {
+            validate_finite(*start_turns, -16.0, 16.0, "target_orbit.start_turns")?;
+            validate_finite(*turns, -16.0, 16.0, "target_orbit.turns")?;
+            validate_percent(*formation_percent, "target_orbit.formation_percent")
         }
         _ => Ok(()),
     }
+}
+
+fn validate_percent(value: f32, name: &str) -> Result<(), String> {
+    validate_finite(value, 0.0, 100.0, name)
 }
 
 fn validate_finite(value: f32, minimum: f32, maximum: f32, name: &str) -> Result<(), String> {
@@ -379,8 +413,30 @@ mod tests {
         assert_eq!(recipe.total_ms, 20_000);
         assert_eq!(recipe.initial_particle_count, 102_400);
         assert_eq!(recipe.steady_particle_count, 40_960);
-        assert_eq!(recipe.cue_at(12_000), (7, 0));
-        assert_eq!(recipe.cue_at(20_100), (10, 1_000));
+        assert_eq!(recipe.cue_at(12_000), (6, 0));
+        assert_eq!(recipe.cue_at(20_100), (9, 1_000));
+        let IntroCue::Cloud {
+            stagger_ms,
+            formation_start_percent,
+            formation_end_percent,
+            ..
+        } = &recipe.cues[5]
+        else {
+            panic!("sixth intro cue must form the cabinet");
+        };
+        assert_eq!(*stagger_ms, 100);
+        assert_eq!(*formation_start_percent, 0.0);
+        assert_eq!(*formation_end_percent, 95.0);
+        let IntroCue::TargetOrbit {
+            start_turns,
+            turns,
+            formation_percent,
+            ..
+        } = &recipe.cues[6]
+        else {
+            panic!("seventh intro cue must orbit the cabinet");
+        };
+        assert_eq!((*start_turns, *turns, *formation_percent), (0.3, 0.4, 95.0));
     }
 
     #[test]

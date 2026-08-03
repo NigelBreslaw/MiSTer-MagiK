@@ -14,7 +14,7 @@
     "background": "#000000",
     "crt_palette": ["#303030", "#686868", "#B8B8B8", "#FFFFFF"],
     "text_palette": ["#202020", "#585C58", "#B8BCB8", "#FFFFFF"],
-    "palette": ["#182030", "#283858", "#305880", "#3878A8", "#5098C8", "#78B8E0", "#B0DCF0", "#FFFFFF"]
+    "palette": ["#080C10", "#101828", "#181828", "#584870", "#A090B8", "#00F0C8", "#F0F0F0", "#FFC800"]
   },
   "tracks": [
     { "id": "m", "source": "mister:M", "destination": "magik:M", "preserve": true },
@@ -30,9 +30,8 @@
     { "type": "hold_target", "id": "hold-mister", "duration_ms": 750, "target": "mister" },
     { "type": "letter_morph", "id": "letters", "duration_ms": 3500, "from": "mister", "to": "magik", "turns": 1.0, "stagger_ms": 150, "easing": "smoothstep" },
     { "type": "hold_target", "id": "hold-magik", "duration_ms": 750, "target": "magik" },
-    { "type": "cloud", "id": "spin-out", "duration_ms": 1500, "from": "magik", "to": "cloud", "turns": 0.75, "radius": 520.0, "easing": "ease_out_cubic" },
-    { "type": "cloud", "id": "form-cabinet", "duration_ms": 1500, "from": "cloud", "to": "cabinet", "turns": 0.5, "radius": 520.0, "easing": "smoothstep" },
-    { "type": "target_orbit", "id": "cabinet-orbit", "duration_ms": 4000, "target": "cabinet", "turns": 2.0 },
+    { "type": "cloud", "id": "letters-to-cabinet", "duration_ms": 3000, "from": "magik", "to": "cabinet", "turns": 0.3, "letter_turns": 1.0, "stagger_ms": 100, "radius": 72.0, "formation_start_percent": 0.0, "formation_end_percent": 95.0, "easing": "smoothstep" },
+    { "type": "target_orbit", "id": "cabinet-orbit", "duration_ms": 4000, "target": "cabinet", "start_turns": 0.3, "turns": 0.4, "formation_percent": 95.0 },
     { "type": "morph_target", "id": "form-launcher", "duration_ms": 2000, "from": "cabinet", "to": "launcher_mock", "active_at_end": 40960, "easing": "smoothstep" },
     { "type": "mock_crossfade", "id": "crossfade", "duration_ms": 1000, "from": "launcher_mock", "to": "launcher_mock_rgb565", "easing": "smoothstep" },
     { "type": "hold_target", "id": "hold-launcher", "duration_ms": 1000, "target": "launcher_mock_rgb565" }
