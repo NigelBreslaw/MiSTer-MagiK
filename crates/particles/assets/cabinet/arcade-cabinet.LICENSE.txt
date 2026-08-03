@@ -16,7 +16,7 @@ Reproduce the checked-in particle cloud from the licensed source model with:
 scripts/particle-model compile \
   crates/particles/assets/cabinet/arcade-cabinet.glb \
   --output crates/particles/assets/cabinet/arcade-cabinet.pcloud \
-  --points 12288
+  --points 72704
 
 Expected SHA-256:
-711babef573a5599a86deed7a91641ac8e80f13399ae09533f7e2a86dbce5d76
+717cab23f46e6de3d37aa818870a697b4c83d1101f35ef7cec241c956e8682b1

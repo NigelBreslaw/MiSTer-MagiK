@@ -1,6 +1,6 @@
 {
   "schema": "mister-magik-particle-cabinet-v1",
-  "particle_count": 12288,
+  "particle_count": 48128,
   "seed": 332346648907,
   "timing": {
     "formation_ms": 4000,

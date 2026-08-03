@@ -15,7 +15,7 @@ use mister_magik_framebuffer_scenes::{
 };
 use std::time::Duration;
 
-const ARCADE_CLOUD_POINT_COUNT: usize = 12_288;
+const ARCADE_CLOUD_POINT_COUNT: usize = 72_704;
 const ARCADE_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
 const PARTICLE_CLOUD_HEADER_BYTES: usize = 28;
@@ -486,14 +486,10 @@ fn decode_particle_cloud(
             life[index] = unit01(random[index].rotate_left(17));
         }
     }
-    for index in count..output_count {
-        let source = index % count;
-        target_x[index] = target_x[source];
-        target_y[index] = target_y[source];
-        target_z[index] = target_z[source];
-        style[index] = style[source];
-        flags[index] = flags[source];
-        life[index] = unit01(random[index].rotate_left(17));
+    if output_count > count {
+        return Err(format!(
+            "arcade particle cloud capacity {output_count} exceeds its {count} unique points"
+        ));
     }
     Ok(())
 }
@@ -632,9 +628,29 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_arcade_cloud_preserves_the_approved_particle_count() {
+    fn checked_in_arcade_cloud_supports_the_48k_embedded_prefix() {
         let renderer = ArcadeCabinetFormation::from_embedded(960, 540).unwrap();
-        assert_eq!(renderer.particle_count(), ARCADE_CLOUD_POINT_COUNT);
+        assert_eq!(renderer.particle_count(), 48_128);
+        assert_eq!(renderer.capacity(), 48_128);
+        assert_eq!(
+            u32::from_le_bytes(ARCADE_CLOUD[12..16].try_into().unwrap()) as usize,
+            ARCADE_CLOUD_POINT_COUNT
+        );
+    }
+
+    #[test]
+    fn checked_in_cloud_prefixes_have_unique_quantized_targets() {
+        use std::collections::HashSet;
+
+        for count in [1_024, 24_064, 48_128, 72_192, 72_704] {
+            let unique = (0..count)
+                .map(|index| {
+                    let offset = PARTICLE_CLOUD_HEADER_BYTES + index * PARTICLE_CLOUD_RECORD_BYTES;
+                    &ARCADE_CLOUD[offset..offset + 6]
+                })
+                .collect::<HashSet<_>>();
+            assert_eq!(unique.len(), count);
+        }
     }
 
     #[test]

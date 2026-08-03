@@ -59,6 +59,13 @@ class ParticleModelTest(unittest.TestCase):
         flags = [record[4] for record in struct.iter_unpack("<hhhBB", first[particle_model.HEADER.size :])]
         self.assertIn(1, flags)
         self.assertIn(2, flags)
+        records = list(struct.iter_unpack("<hhhBB", first[particle_model.HEADER.size :]))
+        self.assertEqual(len({record[:3] for record in records}), 1024)
+
+        for prefix in (64, 256, 1024):
+            prefix_flags = [record[4] for record in records[:prefix]]
+            self.assertGreater(sum(flag == 1 for flag in prefix_flags), prefix * 0.15)
+            self.assertGreater(sum(flag == 2 for flag in prefix_flags), prefix * 0.05)
 
     def test_rejects_bad_indices_and_degenerate_only_models(self):
         with tempfile.TemporaryDirectory() as temporary:

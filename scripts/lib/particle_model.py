@@ -15,6 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 MAGIC = b"PCLOUD1\0"
 VERSION = 1
@@ -372,42 +373,84 @@ def sample_points(
     edge_count = min(count, round(count * 0.20))
     seam_count = min(count - edge_count, round(count * 0.08)) if seams else 0
     surface_count = count - edge_count - seam_count
-    points: list[Point] = []
+    groups: list[list[Point]] = [[], [], []]
+    seen_xyz: set[tuple[int, int, int]] = set()
 
-    def append_edges(edges: list[tuple[int, int]], amount: int, flags: int) -> None:
+    def append_unique(group: list[Point], amount: int, create: Callable[[], Point]) -> None:
+        attempts = 0
+        limit = max(10_000, amount * 100)
+        while len(group) < amount:
+            point = create()
+            xyz = tuple(max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz)
+            attempts += 1
+            if xyz in seen_xyz:
+                if attempts >= limit:
+                    raise ValueError(f"cannot produce {amount} unique quantized particle points")
+                continue
+            seen_xyz.add(xyz)
+            group.append(point)
+
+    def append_edges(group: list[Point], edges: list[tuple[int, int]], amount: int, flags: int) -> None:
         if not edges:
             return
         lengths = [_length(_sub(vertices[b], vertices[a])) for a, b in edges]
         total = sum(lengths)
-        for _ in range(amount):
+
+        def create() -> Point:
             edge = edges[_weighted_choice(rng, lengths, total)]
             value = rng.random()
             xyz = _add(_mul(vertices[edge[0]], 1.0 - value), _mul(vertices[edge[1]], value))
-            points.append(Point(xyz, 7, flags))
+            return Point(xyz, 7, flags)
 
-    append_edges(features, edge_count, 1)
-    append_edges(seams, seam_count, 2)
+        append_unique(group, amount, create)
+
+    append_edges(groups[0], features, edge_count, 1)
+    append_edges(groups[1], seams, seam_count, 2)
     areas: list[float] = []
     for triangle in triangles:
         a, b, c = (vertices[index] for index in triangle.vertices)
         areas.append(_length(_cross(_sub(b, a), _sub(c, a))) * 0.5)
     total_area = sum(areas)
-    for _ in range(surface_count):
+    def create_surface() -> Point:
         triangle = triangles[_weighted_choice(rng, areas, total_area)]
         a, b, c = (vertices[index] for index in triangle.vertices)
         root = math.sqrt(rng.random())
         split = rng.random()
         u, v, w = 1.0 - root, root * (1.0 - split), root * split
         xyz = _add(_add(_mul(a, u), _mul(b, v)), _mul(c, w))
-        points.append(Point(xyz, palette_class(triangle.material, colors), 0))
+        return Point(xyz, palette_class(triangle.material, colors), 0)
 
-    # Stable Morton-like ordering gives the runtime coherent formation targets and
-    # thins local clumps without changing feature quotas.
-    def spatial_key(point: Point) -> tuple[int, int, int, int]:
-        x, y, z = point.xyz
-        return (round(y * 2048), round(x * 2048), round(z * 2048), point.flags)
+    append_unique(groups[2], surface_count, create_surface)
 
-    points.sort(key=spatial_key)
+    # Reversed Morton significance visits coarse spatial cells before refining
+    # them. Interleaving the separately ordered feature/seam/surface streams
+    # makes every prefix a representative, deterministic nested cloud.
+    def progressive_key(point: Point) -> tuple[int, int, int, int]:
+        coordinates = tuple(
+            max(0, min(1023, round((value + 1.0) * 511.5))) for value in point.xyz
+        )
+        morton = 0
+        for bit in range(10):
+            for axis, value in enumerate(coordinates):
+                morton |= ((value >> bit) & 1) << (bit * 3 + axis)
+        reversed_morton = int(f"{morton:030b}"[::-1], 2)
+        return (reversed_morton, morton, point.palette, point.flags)
+
+    for group in groups:
+        group.sort(key=progressive_key)
+
+    points: list[Point] = []
+    emitted = [0, 0, 0]
+    totals = [len(group) for group in groups]
+    for output_index in range(count):
+        available = [index for index, group in enumerate(groups) if emitted[index] < len(group)]
+        selected = max(
+            available,
+            key=lambda index: totals[index] * (output_index + 1) / count - emitted[index],
+        )
+        points.append(groups[selected][emitted[selected]])
+        emitted[selected] += 1
+
     return points
 
 
@@ -416,6 +459,8 @@ def encode(points: list[Point]) -> bytes:
     for point in points:
         xyz = tuple(max(-32767, min(32767, round(value * 32767.0))) for value in point.xyz)
         quantized.append((*xyz, point.palette, point.flags))
+    if len({record[:3] for record in quantized}) != len(quantized):
+        raise ValueError("particle cloud contains duplicate quantized coordinates")
     bounds = tuple(
         function(record[axis] for record in quantized)
         for axis in range(3)
