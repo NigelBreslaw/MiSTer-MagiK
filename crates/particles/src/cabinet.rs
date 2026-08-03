@@ -114,6 +114,7 @@ pub enum CabinetColorMode {
     StudioLights,
     DepthPrism,
     MotionHeat,
+    DirectionalMotion,
 }
 
 impl CabinetColorMode {
@@ -127,11 +128,12 @@ impl CabinetColorMode {
             Self::StudioLights => "STUDIO LIGHTS",
             Self::DepthPrism => "DEPTH PRISM",
             Self::MotionHeat => "MOTION HEAT",
+            Self::DirectionalMotion => "DIRECTIONAL COLOUR",
         }
     }
 
     const fn uses_command_history(self) -> bool {
-        matches!(self, Self::MotionHeat)
+        matches!(self, Self::MotionHeat | Self::DirectionalMotion)
     }
 }
 
@@ -1210,6 +1212,31 @@ impl ArcadeCabinetFormation {
                                 + usize::from(speed >= 10)]
                         } else {
                             MOTION_HEAT_COLORS[0]
+                        }
+                    }
+                    CabinetColorMode::DirectionalMotion => {
+                        let previous = self.previous_commands[index];
+                        if let Some(previous_offset) = previous.offset() {
+                            let previous_x = previous.pixel_x();
+                            let previous_y =
+                                projected_pixel_y(previous_offset, previous_x, self.width);
+                            let horizontal = pixel_x.abs_diff(previous_x);
+                            let vertical = pixel_y.abs_diff(previous_y);
+                            if horizontal == 0 && vertical == 0 {
+                                Rgb565Pixel(0x9dff)
+                            } else if horizontal >= vertical {
+                                if pixel_x >= previous_x {
+                                    Rgb565Pixel(0xfd20)
+                                } else {
+                                    Rgb565Pixel(0x05ff)
+                                }
+                            } else if pixel_y < previous_y {
+                                Rgb565Pixel(0x07f3)
+                            } else {
+                                Rgb565Pixel(0x981f)
+                            }
+                        } else {
+                            Rgb565Pixel(0x9dff)
                         }
                     }
                     CabinetColorMode::Origin => unreachable!(),
