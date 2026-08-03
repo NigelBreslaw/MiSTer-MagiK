@@ -137,6 +137,11 @@ const COMMAND_DEPTH_SHIFT: u32 = 20;
 const COMMAND_X_SHIFT: u32 = 22;
 const COMMAND_X_MASK: u32 = (1 << 10) - 1;
 const BASELINE_NEIGHBOR_PRESENT: u64 = 1 << 32;
+const BASELINE_STYLE_SHIFT: u32 = 33;
+const BASELINE_FILLER: u64 = 1 << 36;
+const BASELINE_JITTER: u64 = 1 << 37;
+const BASELINE_SATELLITE_SHIFT: u32 = 38;
+const BASELINE_JITTER_SEED_SHIFT: u32 = 40;
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -198,6 +203,7 @@ pub struct ArcadeCabinetFormation {
     dynamic_positions: Vec<CabinetPositionBlock>,
     attributes: Vec<CabinetAttributeBlock>,
     baseline_raster: Vec<u64>,
+    creative_palette: [[u64; 4]; 8],
     commands: Vec<CabinetDrawCommand>,
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
@@ -205,6 +211,8 @@ pub struct ArcadeCabinetFormation {
     projection_frame: u64,
     commands_initialized: bool,
     options: CabinetRenderOptions,
+    #[cfg(test)]
+    force_generic_all: bool,
 }
 
 pub struct CabinetScene {
@@ -549,6 +557,23 @@ impl ArcadeCabinetFormation {
             &mut flags,
         )?;
         let appearance = recipe.appearance;
+        let creative_palette = std::array::from_fn(|base_style| {
+            std::array::from_fn(|depth_band| {
+                let adjustment = [2_i16, 1, 0, -1][depth_band];
+                let style = (base_style as i16 + adjustment).clamp(0, 7) as u8;
+                let primary = u64::from(pixel(appearance.palette[usize::from(style)]).0);
+                let history = u64::from(
+                    pixel(appearance.palette[usize::from(style.saturating_sub(2))]).0,
+                );
+                let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
+                let neighbor =
+                    u64::from(pixel(appearance.palette[usize::from(neighbor_style)]).0);
+                let satellite = u64::from(
+                    pixel(appearance.palette[usize::from(style.saturating_sub(1))]).0,
+                );
+                primary | (history << 16) | (neighbor << 32) | (satellite << 48)
+            })
+        });
         let mut baseline_raster = Vec::with_capacity(capacity);
         for index in 0..capacity {
             let feature = flags[index];
@@ -573,7 +598,16 @@ impl ArcadeCabinetFormation {
                         BASELINE_NEIGHBOR_PRESENT
                     } else {
                         0
-                    },
+                    }
+                    | (u64::from(style) << BASELINE_STYLE_SHIFT)
+                    | if feature == 0 { BASELINE_FILLER } else { 0 }
+                    | if feature == 0 && random[index] & 1 == 0 {
+                        BASELINE_JITTER
+                    } else {
+                        0
+                    }
+                    | (u64::from(random[index] & 3) << BASELINE_SATELLITE_SHIFT)
+                    | (u64::from((random[index] >> 3) & 3) << BASELINE_JITTER_SEED_SHIFT),
             );
         }
         let block_count = capacity.div_ceil(PARTICLE_LANES);
@@ -623,6 +657,7 @@ impl ArcadeCabinetFormation {
             dynamic_positions,
             attributes,
             baseline_raster,
+            creative_palette,
             commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             previous_commands: vec![CabinetDrawCommand(INVALID_PARTICLE_OFFSET); capacity],
             dirty_offsets: [
@@ -636,6 +671,8 @@ impl ArcadeCabinetFormation {
                 active_count,
                 creative_mode: CabinetCreativeMode::Baseline,
             },
+            #[cfg(test)]
+            force_generic_all: false,
         })
     }
 
@@ -1028,6 +1065,16 @@ impl ArcadeCabinetFormation {
         let ordering_us = 0;
         let raster_started = Instant::now();
         visible = 0;
+        let fast_all = creative_mode == CabinetCreativeMode::All && {
+            #[cfg(test)]
+            {
+                !self.force_generic_all
+            }
+            #[cfg(not(test))]
+            {
+                true
+            }
+        };
         if creative_mode == CabinetCreativeMode::Baseline {
             for index in 0..self.options.active_count {
                 let Some(offset) = self.commands[index].offset() else {
@@ -1046,6 +1093,69 @@ impl ArcadeCabinetFormation {
                         pixel_writes = pixel_writes.saturating_add(1);
                     }
                 }
+            }
+        } else if fast_all {
+            for index in 0..self.options.active_count {
+                let command = self.commands[index];
+                let Some(mut offset) = command.offset() else {
+                    continue;
+                };
+                visible = visible.saturating_add(1);
+                let metadata = self.baseline_raster[index];
+                let filler = metadata & BASELINE_FILLER != 0;
+                let jitter = metadata & BASELINE_JITTER != 0;
+                let satellite_direction =
+                    ((metadata >> BASELINE_SATELLITE_SHIFT) & 3) as u8;
+                let jitter_seed = ((metadata >> BASELINE_JITTER_SEED_SHIFT) & 3) as u32;
+                let mut pixel_x = command.pixel_x();
+                if jitter {
+                    (offset, pixel_x) = jittered_offset_with_x(
+                        offset,
+                        pixel_x,
+                        self.width,
+                        destination.len(),
+                        jitter_seed << 3,
+                        jitter_phase,
+                    );
+                }
+                let base_style = ((metadata >> BASELINE_STYLE_SHIFT) & 7) as usize;
+                let colors = self.creative_palette[base_style][usize::from(command.depth_band())];
+                if history_mode {
+                    let previous = self.previous_commands[index];
+                    if let Some(mut history_offset) = previous.offset() {
+                        if jitter {
+                            (history_offset, _) = jittered_offset_with_x(
+                                history_offset,
+                                previous.pixel_x(),
+                                self.width,
+                                destination.len(),
+                                jitter_seed << 3,
+                                jitter_phase.wrapping_sub(1),
+                            );
+                        }
+                        destination[history_offset] = Rgb565Pixel((colors >> 16) as u16);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                    }
+                }
+                if metadata & BASELINE_NEIGHBOR_PRESENT != 0 && pixel_x + 1 < self.width {
+                    destination[offset + 1] = Rgb565Pixel((colors >> 32) as u16);
+                    pixel_writes = pixel_writes.saturating_add(1);
+                }
+                if filler {
+                    let satellite_offset = match satellite_direction {
+                        0 if pixel_x > 0 => Some(offset - 1),
+                        1 if pixel_x + 1 < self.width => Some(offset + 1),
+                        2 if offset >= self.width => Some(offset - self.width),
+                        3 if offset + self.width < destination.len() => Some(offset + self.width),
+                        _ => None,
+                    };
+                    if let Some(satellite_offset) = satellite_offset {
+                        destination[satellite_offset] = Rgb565Pixel((colors >> 48) as u16);
+                        pixel_writes = pixel_writes.saturating_add(1);
+                    }
+                }
+                destination[offset] = Rgb565Pixel(colors as u16);
+                pixel_writes = pixel_writes.saturating_add(1);
             }
         } else {
             for index in 0..self.options.active_count {
@@ -1515,6 +1625,43 @@ mod tests {
                     assert_eq!(packed, reference);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn optimized_all_matches_generic_reference_across_phases_and_buffers() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut optimized = ArcadeCabinetFormation::new(960, 540, recipe.clone()).unwrap();
+        let mut reference = ArcadeCabinetFormation::new(960, 540, recipe).unwrap();
+        let options = CabinetRenderOptions {
+            active_count: 48_128,
+            creative_mode: CabinetCreativeMode::All,
+        };
+        optimized.set_render_options(options).unwrap();
+        reference.set_render_options(options).unwrap();
+        reference.force_generic_all = true;
+        let mut optimized_buffers = [vec![Rgb565Pixel(0); 960 * 540], vec![Rgb565Pixel(0); 960 * 540]];
+        let mut reference_buffers = [vec![Rgb565Pixel(0); 960 * 540], vec![Rgb565Pixel(0); 960 * 540]];
+
+        for (frame, elapsed) in [
+            Duration::from_secs(2),
+            Duration::from_secs(12),
+            Duration::from_secs(27),
+            Duration::from_millis(29_500),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let buffer_id = frame & 1;
+            let optimized_stats = optimized
+                .render(&mut optimized_buffers[buffer_id], elapsed, buffer_id)
+                .unwrap();
+            let reference_stats = reference
+                .render(&mut reference_buffers[buffer_id], elapsed, buffer_id)
+                .unwrap();
+            assert_eq!(optimized_buffers[buffer_id], reference_buffers[buffer_id]);
+            assert_eq!(optimized_stats.visible, reference_stats.visible);
+            assert_eq!(optimized_stats.pixel_writes, reference_stats.pixel_writes);
         }
     }
 
