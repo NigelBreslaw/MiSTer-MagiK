@@ -163,36 +163,6 @@ class ParticleModelTest(unittest.TestCase):
             plane = point.xyz[2] / spacing
             self.assertAlmostEqual(plane, round(plane), places=7)
 
-    def test_slice_layout_populates_faces_parallel_to_slice_planes(self):
-        vertices = [
-            (-0.5, 0.0, 0.0),
-            (0.5, 0.0, 0.0),
-            (-0.5, 1.0, 0.0),
-        ]
-        triangles = [particle_model.Triangle((0, 1, 2), "")]
-        spacing = 0.05
-        points = particle_model.sample_slice_points(
-            vertices,
-            triangles,
-            {},
-            128,
-            23,
-            spacing,
-        )
-
-        surface = [point for point in points if point.flags == 0]
-        self.assertGreater(len(surface), 100)
-        self.assertGreater(len({round(point.xyz[0], 5) for point in surface}), 8)
-        self.assertGreater(len({round(point.xyz[1], 5) for point in surface}), 8)
-        side_threshold = 0.5 * particle_model.SLICE_SIDE_THRESHOLD
-        left = sum(point.xyz[0] <= -side_threshold for point in surface)
-        right = sum(point.xyz[0] >= side_threshold for point in surface)
-        self.assertEqual(left, right)
-        self.assertGreater(left, 18)
-        for point in surface:
-            plane = point.xyz[2] / spacing
-            self.assertAlmostEqual(plane, round(plane), places=7)
-
 
 if __name__ == "__main__":
     unittest.main()

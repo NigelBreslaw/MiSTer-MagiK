@@ -39,8 +39,6 @@ PALETTE = (
     (245, 205, 65),
     (245, 245, 245),
 )
-SLICE_SIDE_FRACTION = 0.20
-SLICE_SIDE_THRESHOLD = 0.75
 
 
 @dataclass(frozen=True)
@@ -561,21 +559,6 @@ def _progressive_key(point: Point) -> tuple[int, int, int, int]:
     return (reversed_morton, morton, point.palette, point.flags)
 
 
-def _interleave_point_groups(groups: list[list[Point]], count: int) -> list[Point]:
-    emitted = [0] * len(groups)
-    totals = [len(group) for group in groups]
-    points: list[Point] = []
-    for output_index in range(count):
-        available = [index for index, group in enumerate(groups) if emitted[index] < len(group)]
-        selected = max(
-            available,
-            key=lambda index: totals[index] * (output_index + 1) / count - emitted[index],
-        )
-        points.append(groups[selected][emitted[selected]])
-        emitted[selected] += 1
-    return points
-
-
 def _triangle_point(
     triangle: Triangle,
     barycentric: tuple[float, float, float],
@@ -613,28 +596,6 @@ def _triangle_point(
         rgb565(material_color),
         glow_rgb565(material_color),
     )
-
-
-def _projected_xy_barycentric(
-    triangle_vertices: list[tuple[float, float, float]],
-    x: float,
-    y: float,
-) -> tuple[float, float, float] | None:
-    first, second, third = triangle_vertices
-    denominator = (second[1] - third[1]) * (first[0] - third[0]) + (
-        third[0] - second[0]
-    ) * (first[1] - third[1])
-    if abs(denominator) < 1.0e-12:
-        return None
-    first_weight = (
-        (second[1] - third[1]) * (x - third[0])
-        + (third[0] - second[0]) * (y - third[1])
-    ) / denominator
-    second_weight = (
-        (third[1] - first[1]) * (x - third[0])
-        + (first[0] - third[0]) * (y - third[1])
-    ) / denominator
-    return first_weight, second_weight, 1.0 - first_weight - second_weight
 
 
 def sample_slice_points(
@@ -698,46 +659,6 @@ def sample_slice_points(
     surface_points: list[Point] = []
     for triangle in triangles:
         triangle_vertices = [vertices[index] for index in triangle.vertices]
-        normal = _cross(
-            _sub(triangle_vertices[1], triangle_vertices[0]),
-            _sub(triangle_vertices[2], triangle_vertices[0]),
-        )
-        if abs(normal[2]) >= max(abs(normal[0]), abs(normal[1])):
-            minimum_x = min(vertex[0] for vertex in triangle_vertices)
-            maximum_x = max(vertex[0] for vertex in triangle_vertices)
-            minimum_y = min(vertex[1] for vertex in triangle_vertices)
-            maximum_y = max(vertex[1] for vertex in triangle_vertices)
-            first_x = math.ceil(minimum_x / spacing)
-            last_x = math.floor(maximum_x / spacing)
-            first_y = math.ceil(minimum_y / spacing)
-            last_y = math.floor(maximum_y / spacing)
-            for x_index in range(first_x, last_x + 1):
-                x = x_index * spacing
-                for y_index in range(first_y, last_y + 1):
-                    y = y_index * spacing
-                    barycentric = _projected_xy_barycentric(triangle_vertices, x, y)
-                    if barycentric is None or min(barycentric) < -1.0e-9:
-                        continue
-                    sampled = _triangle_point(
-                        triangle,
-                        barycentric,
-                        vertices,
-                        colors,
-                        texture_coordinates,
-                        textures,
-                    )
-                    point = Point(
-                        (x, y, round(sampled.xyz[2] / spacing) * spacing),
-                        sampled.palette,
-                        sampled.flags,
-                        sampled.texture_exact,
-                        sampled.texture_glow,
-                    )
-                    quantized = tuple(round(axis * 32767.0) for axis in point.xyz)
-                    if quantized in seen_xyz:
-                        continue
-                    seen_xyz.add(quantized)
-                    surface_points.append(point)
         minimum_z = min(vertex[2] for vertex in triangle_vertices)
         maximum_z = max(vertex[2] for vertex in triangle_vertices)
         first_plane = math.ceil(minimum_z / spacing)
@@ -794,47 +715,22 @@ def sample_slice_points(
             f"need {surface_count}"
         )
     feature_points.sort(key=_progressive_key)
-    half_width = max(abs(vertex[0]) for vertex in vertices)
-    side_threshold = half_width * SLICE_SIDE_THRESHOLD
-    left = [point for point in surface_points if point.xyz[0] <= -side_threshold]
-    middle = [point for point in surface_points if abs(point.xyz[0]) < side_threshold]
-    right = [point for point in surface_points if point.xyz[0] >= side_threshold]
-    desired_side_count = round(surface_count * SLICE_SIDE_FRACTION)
+    surface_points.sort(key=_progressive_key)
+    surface_points = surface_points[:surface_count]
 
-    # Some display models omit or heavily simplify the normally hidden flank.
-    # Reflect only the exterior side band so both sides stay legible as the
-    # cabinet rotates; controls and asymmetric detail remain untouched.
-    for source, destination in ((left, right), (right, left)):
-        if len(destination) >= desired_side_count:
-            continue
-        for point in source:
-            mirrored = Point(
-                (-point.xyz[0], point.xyz[1], point.xyz[2]),
-                point.palette,
-                point.flags,
-                point.texture_exact,
-                point.texture_glow,
-            )
-            quantized = tuple(round(axis * 32767.0) for axis in mirrored.xyz)
-            if quantized in seen_xyz:
-                continue
-            seen_xyz.add(quantized)
-            destination.append(mirrored)
-            if len(destination) >= desired_side_count:
-                break
-    if min(len(left), len(right)) < desired_side_count:
-        raise ValueError("slice layout cannot preserve both cabinet side surfaces")
-    middle_count = surface_count - desired_side_count * 2
-    if len(middle) < middle_count:
-        raise ValueError("slice layout cannot preserve the cabinet centre surfaces")
-    for group in (left, middle, right):
-        group.sort(key=_progressive_key)
-    surface_points = _interleave_point_groups(
-        [left[:desired_side_count], middle[:middle_count], right[:desired_side_count]],
-        surface_count,
-    )
-
-    return _interleave_point_groups([feature_points, surface_points], count)
+    points: list[Point] = []
+    emitted = [0, 0]
+    totals = [len(feature_points), len(surface_points)]
+    groups = [feature_points, surface_points]
+    for output_index in range(count):
+        available = [index for index, group in enumerate(groups) if emitted[index] < len(group)]
+        selected = max(
+            available,
+            key=lambda index: totals[index] * (output_index + 1) / count - emitted[index],
+        )
+        points.append(groups[selected][emitted[selected]])
+        emitted[selected] += 1
+    return points
 
 
 def sample_points(

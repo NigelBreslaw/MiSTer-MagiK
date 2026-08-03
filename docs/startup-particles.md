@@ -152,13 +152,6 @@ only sequential packed-colour reads while rasterizing.
 
 The aligned `arcade-cabinet-slices` pair is an alternate target layout built
 from 79 equally spaced front-to-back planes intersecting the model surface.
-Faces parallel to a slice receive an equally spaced two-dimensional lattice,
-snapped by at most half a slice interval in depth, rather than collapsing to
-their perimeter. Forty percent of the non-feature lattice is split evenly
-between the two exterior side bands at every progressive prefix. When the
-source model simplifies its normally hidden side, exterior points from the
-opposite flank are mirrored to preserve the rotating silhouette; interior and
-control details are never mirrored.
 Twenty percent of its particles remain reserved for sharp model features so
 the silhouette, joystick, buttons, bezel, and control panel remain legible.
 Its material and feature metadata is index-identical to the surface cloud.
