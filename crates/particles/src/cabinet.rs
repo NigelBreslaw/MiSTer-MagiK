@@ -955,14 +955,49 @@ impl ArcadeCabinetFormation {
         let ordering_us = 0;
         let raster_started = Instant::now();
         visible = 0;
-        for index in 0..self.options.active_count {
-            let Some(offset) = self.commands[index].offset() else {
-                continue;
-            };
-            visible = visible.saturating_add(1);
-            let attribute = &self.attributes[index / PARTICLE_LANES];
-            let lane = index % PARTICLE_LANES;
-            draw_offset!(index, offset, offset % self.width, attribute, lane);
+        if creative_mode == CabinetCreativeMode::Baseline {
+            for index in 0..self.options.active_count {
+                let Some(offset) = self.commands[index].offset() else {
+                    continue;
+                };
+                visible = visible.saturating_add(1);
+                let attribute = &self.attributes[index / PARTICLE_LANES];
+                let lane = index % PARTICLE_LANES;
+                let feature = attribute.flags[lane];
+                let style = if feature & appearance.priority_feature_mask != 0 {
+                    appearance.priority_palette_index
+                } else if feature & appearance.accent_feature_mask != 0 {
+                    attribute.style[lane]
+                        .saturating_add(appearance.accent_palette_add)
+                        .min(7)
+                } else {
+                    attribute.style[lane]
+                };
+                destination[offset] = pixel(appearance.palette[usize::from(style)]);
+                dirty_offsets.push(offset as u32);
+                pixel_writes = pixel_writes.saturating_add(1);
+                let pixel_x = offset % self.width;
+                if feature & appearance.neighbor_feature_mask != 0
+                    && index % usize::from(appearance.neighbor_every) == 0
+                    && pixel_x + 1 < self.width
+                {
+                    let neighbor_style = style.saturating_sub(appearance.neighbor_palette_subtract);
+                    destination[offset + 1] =
+                        pixel(appearance.palette[usize::from(neighbor_style)]);
+                    dirty_offsets.push((offset + 1) as u32);
+                    pixel_writes = pixel_writes.saturating_add(1);
+                }
+            }
+        } else {
+            for index in 0..self.options.active_count {
+                let Some(offset) = self.commands[index].offset() else {
+                    continue;
+                };
+                visible = visible.saturating_add(1);
+                let attribute = &self.attributes[index / PARTICLE_LANES];
+                let lane = index % PARTICLE_LANES;
+                draw_offset!(index, offset, offset % self.width, attribute, lane);
+            }
         }
         let raster_us = elapsed_us(raster_started.elapsed());
 
