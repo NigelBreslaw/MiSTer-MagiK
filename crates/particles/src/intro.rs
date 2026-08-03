@@ -58,6 +58,39 @@ struct PointTarget {
     groups: Vec<ParticleGroupSpan>,
 }
 
+#[derive(Clone, Copy)]
+struct IntroRenderResult {
+    visible: usize,
+    pixel_writes: usize,
+    projection_backend: &'static str,
+    transform_us: u64,
+    projection_us: u64,
+    raster_us: u64,
+}
+
+impl IntroRenderResult {
+    fn raster_only(
+        visible: usize,
+        pixel_writes: usize,
+        projection_backend: &'static str,
+        raster_us: u64,
+    ) -> Self {
+        Self {
+            visible,
+            pixel_writes,
+            projection_backend,
+            transform_us: 0,
+            projection_us: 0,
+            raster_us,
+        }
+    }
+
+    fn with_outer_transform(mut self, transform_us: u64) -> Self {
+        self.transform_us = self.transform_us.saturating_add(transform_us);
+        self
+    }
+}
+
 pub struct IntroScene {
     geometry: SceneGeometry,
     recipe: IntroRecipe,
@@ -253,7 +286,8 @@ impl IntroScene {
         self.recipe.cue_at(elapsed_ms.min(self.recipe.total_ms))
     }
 
-    fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> (usize, usize) {
+    fn render_crt(&self, destination: &mut [Rgb565Pixel], frame: u64) -> IntroRenderResult {
+        let raster_started = Instant::now();
         let palette = self.recipe.appearance.crt_palette;
         let mut visible = 0;
         for (index, source) in self.static_xy.iter().enumerate() {
@@ -268,7 +302,12 @@ impl IntroScene {
                 Rgb565Pixel(palette[((noise >> 30) & 3) as usize].0);
             visible += 1;
         }
-        (visible, visible)
+        IntroRenderResult::raster_only(
+            visible,
+            visible,
+            "crt-packed",
+            elapsed_us(raster_started.elapsed()),
+        )
     }
 
     fn render_mister_formation(
@@ -276,7 +315,8 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         progress: f32,
         frame: u64,
-    ) -> (usize, usize) {
+    ) -> IntroRenderResult {
+        let raster_started = Instant::now();
         let progress = ease(progress, RecipeEasing::EaseOutCubic);
         let crt_palette = self.recipe.appearance.crt_palette;
         let text_palette = self.recipe.appearance.text_palette;
@@ -308,7 +348,12 @@ impl IntroScene {
                 visible += 1;
             }
         }
-        (visible, visible)
+        IntroRenderResult::raster_only(
+            visible,
+            visible,
+            "crt-to-point-cloud",
+            elapsed_us(raster_started.elapsed()),
+        )
     }
 
     fn render_point_target(
@@ -316,7 +361,7 @@ impl IntroScene {
         destination: &mut [Rgb565Pixel],
         target: ScenePointTarget,
         frame: u64,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
         let text_palette_mix =
             matches!(target, ScenePointTarget::Mister | ScenePointTarget::Magik).then_some(0.0);
         let target = match target {
@@ -349,7 +394,8 @@ impl IntroScene {
         easing: RecipeEasing,
         frame: u64,
         update_all: bool,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
+        let transform_started = Instant::now();
         let local_duration = duration_ms
             .saturating_sub(stagger_ms.saturating_mul(5))
             .max(1);
@@ -402,6 +448,7 @@ impl IntroScene {
                 ];
             }
         }
+        let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
             destination,
             &self.recipe,
@@ -414,6 +461,7 @@ impl IntroScene {
             false,
             frame,
         )
+        .with_outer_transform(transform_us)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -431,7 +479,8 @@ impl IntroScene {
         easing: RecipeEasing,
         frame: u64,
         update_all: bool,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
+        let transform_started = Instant::now();
         let cue_progress = ease(
             cue_elapsed_ms as f32 / duration_ms.max(1) as f32,
             RecipeEasing::Linear,
@@ -484,6 +533,7 @@ impl IntroScene {
                 ];
             }
         }
+        let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
             destination,
             &self.recipe,
@@ -496,6 +546,7 @@ impl IntroScene {
             false,
             frame,
         )
+        .with_outer_transform(transform_us)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -508,7 +559,8 @@ impl IntroScene {
         turns: f32,
         formation_percent: f32,
         frame: u64,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
+        let transform_started = Instant::now();
         let yaw = cabinet_yaw(cue_elapsed_ms, duration_ms, start_turns, turns);
         let (sin, cos) = yaw.sin_cos();
         debug_assert!((formation_percent / 100.0 - self.cabinet_formation).abs() < 0.0001);
@@ -521,6 +573,7 @@ impl IntroScene {
                 (-point[0]).mul_add(sin, point[2] * cos),
             ];
         }
+        let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
             destination,
             &self.recipe,
@@ -533,6 +586,7 @@ impl IntroScene {
             false,
             frame,
         )
+        .with_outer_transform(transform_us)
     }
 
     fn render_launcher_morph(
@@ -542,7 +596,8 @@ impl IntroScene {
         duration_ms: u64,
         easing: RecipeEasing,
         frame: u64,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
+        let transform_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
         let (sin, cos) = self.cabinet_final_yaw.sin_cos();
         for index in 0..self.recipe.steady_particle_count {
@@ -559,6 +614,7 @@ impl IntroScene {
                 from[2] + (to[2] - from[2]) * progress,
             ];
         }
+        let transform_us = elapsed_us(transform_started.elapsed());
         render_point_cloud(
             destination,
             &self.recipe,
@@ -571,6 +627,7 @@ impl IntroScene {
             false,
             frame,
         )
+        .with_outer_transform(transform_us)
     }
 
     fn render_mock_crossfade(
@@ -580,12 +637,18 @@ impl IntroScene {
         duration_ms: u64,
         easing: RecipeEasing,
         _frame: u64,
-    ) -> (usize, usize, &'static str) {
+    ) -> IntroRenderResult {
+        let raster_started = Instant::now();
         let progress = ease(cue_elapsed_ms as f32 / duration_ms as f32, easing);
         let threshold = (progress * 64.0).round() as u8;
         if threshold >= 64 {
             destination.copy_from_slice(&self.launcher_snapshot);
-            return (0, destination.len(), "launcher-static-crossfade");
+            return IntroRenderResult::raster_only(
+                0,
+                destination.len(),
+                "launcher-static-crossfade",
+                elapsed_us(raster_started.elapsed()),
+            );
         }
         let mut visible = 0;
         let mut writes = 0;
@@ -607,7 +670,12 @@ impl IntroScene {
                 writes += 1;
             }
         }
-        (visible, writes, "launcher-static-crossfade")
+        IntroRenderResult::raster_only(
+            visible,
+            writes,
+            "launcher-static-crossfade",
+            elapsed_us(raster_started.elapsed()),
+        )
     }
 }
 
@@ -623,10 +691,10 @@ fn render_point_cloud(
     text_palette_mix: Option<f32>,
     text_neighbors: bool,
     frame: u64,
-) -> (usize, usize, &'static str) {
+) -> IntroRenderResult {
     let transform_started = Instant::now();
     copy_target_to_blocks(target_positions, positions);
-    let _transform_us = elapsed_us(transform_started.elapsed());
+    let transform_us = elapsed_us(transform_started.elapsed());
     let projection_started = Instant::now();
     commands.fill(PointCloudDrawCommand(INVALID_PARTICLE_OFFSET));
     let vector_end = project_stable_neon(
@@ -658,7 +726,8 @@ fn render_point_cloud(
         }
         "point-cloud-scalar"
     };
-    let _projection_us = elapsed_us(projection_started.elapsed());
+    let projection_us = elapsed_us(projection_started.elapsed());
+    let raster_started = Instant::now();
     let mut visible = 0;
     let mut writes = 0;
     for (index, command) in commands.iter().copied().enumerate() {
@@ -691,7 +760,14 @@ fn render_point_cloud(
             writes += 1;
         }
     }
-    (visible, writes, backend)
+    IntroRenderResult {
+        visible,
+        pixel_writes: writes,
+        projection_backend: backend,
+        transform_us,
+        projection_us,
+        raster_us: elapsed_us(raster_started.elapsed()),
+    }
 }
 
 #[inline(always)]
@@ -733,18 +809,12 @@ impl FramebufferScene for IntroScene {
             .pixels_mut()
             .fill(Rgb565Pixel(self.recipe.appearance.background.0));
         let clear_us = elapsed_us(clear_started.elapsed());
-        let render_started = Instant::now();
         let update_all_transforms = clock.next_elapsed.is_none() || cue_elapsed_ms < 34;
-        let (visible, pixel_writes, projection_backend) = match &cue {
-            IntroCue::CrtStatic { .. } => {
-                let (visible, writes) = self.render_crt(target.pixels_mut(), clock.frame);
-                (visible, writes, "crt-packed")
-            }
+        let rendered = match &cue {
+            IntroCue::CrtStatic { .. } => self.render_crt(target.pixels_mut(), clock.frame),
             IntroCue::MorphTarget { duration_ms, .. } if cue_index == 1 => {
                 let progress = cue_elapsed_ms as f32 / *duration_ms as f32;
-                let (visible, writes) =
-                    self.render_mister_formation(target.pixels_mut(), progress, clock.frame);
-                (visible, writes, "crt-to-point-cloud")
+                self.render_mister_formation(target.pixels_mut(), progress, clock.frame)
             }
             IntroCue::LetterMorph {
                 duration_ms,
@@ -824,8 +894,14 @@ impl FramebufferScene for IntroScene {
                 clock.frame,
             ),
             IntroCue::HoldTarget { .. } if cue_index == 9 => {
+                let raster_started = Instant::now();
                 target.pixels_mut().copy_from_slice(&self.launcher_snapshot);
-                (0, self.launcher_snapshot.len(), "launcher-mock-rgb565")
+                IntroRenderResult::raster_only(
+                    0,
+                    self.launcher_snapshot.len(),
+                    "launcher-mock-rgb565",
+                    elapsed_us(raster_started.elapsed()),
+                )
             }
             _ => {
                 let point_target = match cue_index {
@@ -836,7 +912,6 @@ impl FramebufferScene for IntroScene {
                 self.render_point_target(target.pixels_mut(), point_target, clock.frame)
             }
         };
-        let raster_us = elapsed_us(render_started.elapsed());
         let particles = if cue_index < 2 {
             self.recipe.initial_particle_count
         } else {
@@ -849,20 +924,20 @@ impl FramebufferScene for IntroScene {
                 cue,
                 IntroCue::LetterMorph { .. } | IntroCue::Cloud { .. }
             )) + 1,
-            visible,
-            pixel_writes,
+            visible: rendered.visible,
+            pixel_writes: rendered.pixel_writes,
             cue_index,
             cue_start_ms,
             previous_cue_start_ms,
             cue_elapsed_ms,
             cue_duration_ms: cue.duration_ms(),
             cue_id: cue_label(cue_index),
-            projection_backend,
+            projection_backend: rendered.projection_backend,
             stages: IntroStageTimings {
                 clear_us,
-                transform_us: 0,
-                projection_us: 0,
-                raster_us,
+                transform_us: rendered.transform_us,
+                projection_us: rendered.projection_us,
+                raster_us: rendered.raster_us,
             },
         })
     }
