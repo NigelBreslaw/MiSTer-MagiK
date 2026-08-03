@@ -188,9 +188,6 @@ pub struct ArcadeCabinetFormation {
     previous_commands: Vec<CabinetDrawCommand>,
     dirty_offsets: [Vec<u32>; 2],
     full_clear: [bool; 2],
-    tile_order: Vec<u32>,
-    tile_counts: Vec<usize>,
-    tile_cursors: Vec<usize>,
     projection_frame: u64,
     commands_initialized: bool,
     options: CabinetRenderOptions,
@@ -505,7 +502,6 @@ impl ArcadeCabinetFormation {
             ));
         }
         let active_count = recipe.particle_count;
-        let tile_count = width.div_ceil(32).saturating_mul(height.div_ceil(32));
         let mut target_x = vec![0.0; capacity];
         let mut target_y = vec![0.0; capacity];
         let mut target_z = vec![0.0; capacity];
@@ -589,9 +585,6 @@ impl ArcadeCabinetFormation {
                 Vec::with_capacity(capacity * 2),
             ],
             full_clear: [true; 2],
-            tile_order: vec![0; capacity],
-            tile_counts: vec![0; tile_count],
-            tile_cursors: vec![0; tile_count],
             projection_frame: 0,
             commands_initialized: false,
             options: CabinetRenderOptions {
@@ -643,15 +636,6 @@ impl ArcadeCabinetFormation {
                 self.attributes
                     .capacity()
                     .saturating_mul(std::mem::size_of::<CabinetAttributeBlock>()),
-            )
-            .saturating_add(
-                self.tile_order
-                    .capacity()
-                    .saturating_mul(std::mem::size_of::<u32>()),
-            )
-            .saturating_add(
-                (self.tile_counts.capacity() + self.tile_cursors.capacity())
-                    .saturating_mul(std::mem::size_of::<usize>()),
             )
             .saturating_add(
                 self.commands
@@ -968,41 +952,14 @@ impl ArcadeCabinetFormation {
         self.projection_frame = self.projection_frame.wrapping_add(1);
 
         let projection_us = elapsed_us(projection_started.elapsed());
-        let ordering_started = Instant::now();
-        self.tile_counts.fill(0);
-        let tiles_x = self.width.div_ceil(32);
-        for command in &self.commands[..self.options.active_count] {
-            let Some(offset) = command.offset() else {
-                continue;
-            };
-            let tile = (offset % self.width) / 32 + (offset / self.width) / 32 * tiles_x;
-            self.tile_counts[tile] += 1;
-        }
-        let mut cursor = 0;
-        for (start, count) in self.tile_cursors.iter_mut().zip(&self.tile_counts) {
-            *start = cursor;
-            cursor += *count;
-        }
-        visible = cursor;
-        for (index, command) in self.commands[..self.options.active_count]
-            .iter()
-            .enumerate()
-        {
-            let Some(offset) = command.offset() else {
-                continue;
-            };
-            let tile = (offset % self.width) / 32 + (offset / self.width) / 32 * tiles_x;
-            let output = self.tile_cursors[tile];
-            self.tile_order[output] = index as u32;
-            self.tile_cursors[tile] = output + 1;
-        }
-        let ordering_us = elapsed_us(ordering_started.elapsed());
+        let ordering_us = 0;
         let raster_started = Instant::now();
-        for ordered in 0..visible {
-            let index = self.tile_order[ordered] as usize;
+        visible = 0;
+        for index in 0..self.options.active_count {
             let Some(offset) = self.commands[index].offset() else {
                 continue;
             };
+            visible = visible.saturating_add(1);
             let attribute = &self.attributes[index / PARTICLE_LANES];
             let lane = index % PARTICLE_LANES;
             draw_offset!(index, offset, offset % self.width, attribute, lane);
