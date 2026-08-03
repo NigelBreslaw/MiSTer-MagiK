@@ -3711,7 +3711,7 @@ pub(super) fn run_launcher_loop(
         frame_accounting.set_effective_view(effective_view.label());
         frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if !startup_intro_suppress_launcher_ui
+        if (startup_intro.is_none() || startup_intro_needs_live_launcher)
             && bridge.get_effective_view().as_str() != effective_view.label()
         {
             bridge.set_effective_view(effective_view.label().into());
@@ -4891,7 +4891,9 @@ pub(super) fn run_launcher_loop(
         frame_accounting.set_effective_view(effective_view.label());
         frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if bridge.get_effective_view().as_str() != effective_view.label() {
+        if !startup_intro_suppress_launcher_ui
+            && bridge.get_effective_view().as_str() != effective_view.label()
+        {
             bridge.set_effective_view(effective_view.label().into());
         }
         let mut full_frame_present = display_session
