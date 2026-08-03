@@ -101,6 +101,8 @@ pub fn execute_scene_preview(
 }
 
 fn analyze_cabinet_codegen(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<()> {
+    let release = BuildSpec::framebuffer_scene_lab_device();
+    execute(repository, &release, reporter)?;
     let spec = BuildSpec::framebuffer_scene_lab_analysis();
     execute(repository, &spec, reporter)?;
     let status = Command::new(
