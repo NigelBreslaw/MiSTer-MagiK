@@ -13,6 +13,8 @@ use crate::recipes::{
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, SceneBufferId, SceneClock, SceneError, SceneGeometry, SceneTarget,
 };
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const ARCADE_CLOUD_POINT_COUNT: usize = 72_704;
@@ -43,6 +45,8 @@ pub struct CabinetStageTimings {
     pub projection_us: u64,
     pub ordering_us: u64,
     pub raster_us: u64,
+    pub worker_wait_us: u64,
+    pub prepared_age_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -193,8 +197,38 @@ pub struct ArcadeCabinetFormation {
 }
 
 pub struct CabinetScene {
-    formation: ArcadeCabinetFormation,
+    pipeline: CabinetPreparationPipeline,
     geometry: SceneGeometry,
+    reusable_buffers: u8,
+    capacity: usize,
+    options: CabinetRenderOptions,
+}
+
+struct CabinetPreparationRequest {
+    tick: u64,
+    elapsed: Duration,
+    buffer_id: usize,
+    options: CabinetRenderOptions,
+    pixels: Vec<Rgb565Pixel>,
+}
+
+struct PreparedCabinetFrame {
+    tick: u64,
+    elapsed: Duration,
+    buffer_id: usize,
+    options: CabinetRenderOptions,
+    completed_at: Instant,
+    pixels: Vec<Rgb565Pixel>,
+    stats: ArcadeCabinetFrameStats,
+}
+
+struct CabinetPreparationPipeline {
+    request_tx: Option<SyncSender<CabinetPreparationRequest>>,
+    ready_rx: Receiver<Result<PreparedCabinetFrame, String>>,
+    worker: Option<JoinHandle<()>>,
+    spare_pixels: [Option<Vec<Rgb565Pixel>>; 2],
+    pending: bool,
+    tick: u64,
     reusable_buffers: u8,
 }
 
@@ -221,20 +255,31 @@ impl CabinetScene {
         }
         let geometry =
             SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        let formation = ArcadeCabinetFormation::new_with_capacity(width, height, recipe, capacity)?;
+        let options = formation.render_options();
         Ok(Self {
-            formation: ArcadeCabinetFormation::new_with_capacity(width, height, recipe, capacity)?,
+            pipeline: CabinetPreparationPipeline::start(formation, reusable_buffers)?,
             geometry,
             reusable_buffers,
+            capacity,
+            options,
         })
     }
 
     pub fn set_render_options(&mut self, options: CabinetRenderOptions) -> Result<(), String> {
-        self.formation.set_render_options(options)
+        if options.active_count == 0 || options.active_count > self.capacity {
+            return Err(format!(
+                "cabinet active count {} is outside 1..={}",
+                options.active_count, self.capacity
+            ));
+        }
+        self.options = options;
+        Ok(())
     }
 
     #[must_use]
     pub const fn render_options(&self) -> CabinetRenderOptions {
-        self.formation.render_options()
+        self.options
     }
 
     pub fn from_embedded(
@@ -272,13 +317,165 @@ impl FramebufferScene for CabinetScene {
             });
         }
         let buffer_id = usize::from(target.buffer_id().get());
-        self.formation
-            .render(target.into_pixels(), clock.elapsed, buffer_id)
+        self.pipeline
+            .acquire(
+                target.into_pixels(),
+                buffer_id,
+                clock.elapsed,
+                clock.next_elapsed,
+                self.options,
+            )
             .map_err(SceneError::Render)
     }
 
     fn invalidate_buffer(&mut self, _buffer: SceneBufferId) {
         // Cabinet clears the complete target on every frame.
+    }
+}
+
+impl CabinetPreparationPipeline {
+    fn start(formation: ArcadeCabinetFormation, reusable_buffers: u8) -> Result<Self, String> {
+        if reusable_buffers == 0 || reusable_buffers > 2 {
+            return Err("cabinet preparation supports one or two reusable buffers".into());
+        }
+        let frame_len = formation.width.saturating_mul(formation.height);
+        let background = pixel(formation.recipe.appearance.background);
+        let (request_tx, request_rx) = sync_channel::<CabinetPreparationRequest>(1);
+        let (ready_tx, ready_rx) = sync_channel::<Result<PreparedCabinetFrame, String>>(1);
+        let worker = thread::Builder::new()
+            .name("cabinet-prepare".into())
+            .spawn(move || run_cabinet_preparation_worker(formation, request_rx, ready_tx))
+            .map_err(|error| format!("start cabinet preparation worker: {error}"))?;
+        Ok(Self {
+            request_tx: Some(request_tx),
+            ready_rx,
+            worker: Some(worker),
+            spare_pixels: [
+                Some(vec![background; frame_len]),
+                (reusable_buffers > 1).then(|| vec![background; frame_len]),
+            ],
+            pending: false,
+            tick: 0,
+            reusable_buffers,
+        })
+    }
+
+    fn dispatch(
+        &mut self,
+        tick: u64,
+        elapsed: Duration,
+        buffer_id: usize,
+        options: CabinetRenderOptions,
+    ) -> Result<(), String> {
+        let pixels = self.spare_pixels[buffer_id]
+            .take()
+            .ok_or_else(|| format!("cabinet buffer {buffer_id} is already in flight"))?;
+        self.request_tx
+            .as_ref()
+            .ok_or("cabinet preparation worker has stopped")?
+            .send(CabinetPreparationRequest {
+                tick,
+                elapsed,
+                buffer_id,
+                options,
+                pixels,
+            })
+            .map_err(|_| "cabinet preparation worker disconnected".to_string())?;
+        self.pending = true;
+        Ok(())
+    }
+
+    fn receive(&mut self) -> Result<PreparedCabinetFrame, String> {
+        let prepared = self
+            .ready_rx
+            .recv()
+            .map_err(|_| "cabinet preparation worker disconnected".to_string())??;
+        self.pending = false;
+        Ok(prepared)
+    }
+
+    fn recycle(&mut self, prepared: PreparedCabinetFrame) {
+        self.spare_pixels[prepared.buffer_id] = Some(prepared.pixels);
+    }
+
+    fn acquire(
+        &mut self,
+        destination: &mut [Rgb565Pixel],
+        buffer_id: usize,
+        elapsed: Duration,
+        next_elapsed: Option<Duration>,
+        options: CabinetRenderOptions,
+    ) -> Result<ArcadeCabinetFrameStats, String> {
+        let wait_started = Instant::now();
+        if !self.pending {
+            self.dispatch(self.tick, elapsed, buffer_id, options)?;
+        }
+        let mut prepared = self.receive()?;
+        if prepared.tick != self.tick
+            || prepared.elapsed != elapsed
+            || prepared.buffer_id != buffer_id
+            || prepared.options != options
+        {
+            self.recycle(prepared);
+            self.dispatch(self.tick, elapsed, buffer_id, options)?;
+            prepared = self.receive()?;
+        }
+        let worker_wait_us = elapsed_us(wait_started.elapsed());
+        let prepared_age_us = elapsed_us(prepared.completed_at.elapsed());
+        if destination.len() != prepared.pixels.len() {
+            return Err("prepared cabinet frame geometry changed".into());
+        }
+        destination.copy_from_slice(&prepared.pixels);
+        let mut stats = prepared.stats;
+        stats.stages.worker_wait_us = worker_wait_us;
+        stats.stages.prepared_age_us = prepared_age_us;
+        self.recycle(prepared);
+        self.tick = self.tick.wrapping_add(1);
+        if let Some(next_elapsed) = next_elapsed {
+            let next_buffer = if self.reusable_buffers > 1 {
+                1 - buffer_id
+            } else {
+                0
+            };
+            self.dispatch(self.tick, next_elapsed, next_buffer, options)?;
+        }
+        Ok(stats)
+    }
+}
+
+impl Drop for CabinetPreparationPipeline {
+    fn drop(&mut self) {
+        self.request_tx.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn run_cabinet_preparation_worker(
+    mut formation: ArcadeCabinetFormation,
+    request_rx: Receiver<CabinetPreparationRequest>,
+    ready_tx: SyncSender<Result<PreparedCabinetFrame, String>>,
+) {
+    while let Ok(mut request) = request_rx.recv() {
+        let result = formation
+            .set_render_options(request.options)
+            .and_then(|()| {
+                formation.render(&mut request.pixels, request.elapsed, request.buffer_id)
+            })
+            .map(|stats| PreparedCabinetFrame {
+                tick: request.tick,
+                elapsed: request.elapsed,
+                buffer_id: request.buffer_id,
+                options: request.options,
+                completed_at: Instant::now(),
+                pixels: request.pixels,
+                stats,
+            });
+        let failed = result.is_err();
+        if ready_tx.send(result).is_err() || failed {
+            break;
+        }
     }
 }
 
@@ -824,6 +1021,8 @@ impl ArcadeCabinetFormation {
                 projection_us,
                 ordering_us,
                 raster_us,
+                worker_wait_us: 0,
+                prepared_age_us: 0,
             },
         })
     }
@@ -1241,6 +1440,45 @@ mod tests {
         assert!(!CabinetCreativeMode::Baseline.uses_depth_palette());
         assert!(!CabinetCreativeMode::Baseline.uses_history_echo());
         assert!(!CabinetCreativeMode::Baseline.uses_satellites());
+    }
+
+    #[test]
+    fn lookahead_scene_matches_direct_render_across_alternating_buffers() {
+        let recipe = embedded_cabinet_recipe().unwrap();
+        let mut direct = ArcadeCabinetFormation::new(320, 180, recipe.clone()).unwrap();
+        let mut scene = CabinetScene::new(320, 180, recipe, 2).unwrap();
+        let options = CabinetRenderOptions {
+            active_count: 1_024,
+            creative_mode: CabinetCreativeMode::All,
+        };
+        direct.set_render_options(options).unwrap();
+        scene.set_render_options(options).unwrap();
+        let mut direct_pixels = [
+            vec![Rgb565Pixel(0); 320 * 180],
+            vec![Rgb565Pixel(0); 320 * 180],
+        ];
+        let mut scene_pixels = direct_pixels.clone();
+        for frame in 0..6_u64 {
+            let slot = (frame & 1) as usize;
+            let elapsed = Duration::from_micros(frame * 16_667);
+            direct
+                .render(&mut direct_pixels[slot], elapsed, slot)
+                .unwrap();
+            let buffer = SceneBufferId::new(slot as u8, 2).unwrap();
+            let target =
+                SceneTarget::new(&mut scene_pixels[slot], scene.geometry(), buffer).unwrap();
+            FramebufferScene::render(
+                &mut scene,
+                target,
+                SceneClock {
+                    frame,
+                    elapsed,
+                    next_elapsed: Some(Duration::from_micros((frame + 1) * 16_667)),
+                },
+            )
+            .unwrap();
+            assert_eq!(scene_pixels[slot], direct_pixels[slot]);
+        }
     }
 
     #[test]
