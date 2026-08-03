@@ -9,7 +9,7 @@ use mister_magik_framebuffer_scene_lab::{
     NavigationFixture, NavigationFixtureScene, read_effect_recipe,
 };
 use mister_magik_particles::cabinet::{
-    CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
+    CabinetColorMode, CabinetCreativeMode, CabinetGeometry, CabinetRenderOptions, Rgb565Pixel,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -102,7 +102,7 @@ struct CabinetCase {
     color: CabinetColorMode,
 }
 
-const CABINET_CASES: [CabinetCase; 27] = [
+const CABINET_CASES: [CabinetCase; 28] = [
     CabinetCase {
         name: "baseline-24064",
         particles: 24_064,
@@ -265,6 +265,12 @@ const CABINET_CASES: [CabinetCase; 27] = [
         mode: CabinetCreativeMode::Baseline,
         color: CabinetColorMode::TextureGlow,
     },
+    CabinetCase {
+        name: "mri-slices-39936",
+        particles: 39_936,
+        mode: CabinetCreativeMode::Baseline,
+        color: CabinetColorMode::Origin,
+    },
 ];
 
 fn cabinet_case(name: &str) -> Option<CabinetCase> {
@@ -341,6 +347,11 @@ impl LabScene {
                         active_count: case.particles,
                         creative_mode: case.mode,
                         color_mode: case.color,
+                        geometry: if case.name == "mri-slices-39936" {
+                            CabinetGeometry::MriSlices
+                        } else {
+                            CabinetGeometry::Surface
+                        },
                     })?;
                     Ok(Self::Focused(renderer))
                 } else {
@@ -425,6 +436,7 @@ enum LabAction {
     NextMode,
     IncreaseParticles,
     DecreaseParticles,
+    ToggleGeometry,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -499,7 +511,11 @@ impl CabinetDemoMode {
         }
     }
 
-    const fn render_options(self, active_count: usize) -> CabinetRenderOptions {
+    const fn render_options(
+        self,
+        active_count: usize,
+        geometry: CabinetGeometry,
+    ) -> CabinetRenderOptions {
         let creative_mode = match self {
             Self::Satellites => CabinetCreativeMode::Satellites,
             Self::HistoryEcho => CabinetCreativeMode::HistoryEcho,
@@ -539,6 +555,7 @@ impl CabinetDemoMode {
             active_count,
             creative_mode,
             color_mode,
+            geometry,
         }
     }
 }
@@ -546,7 +563,9 @@ impl CabinetDemoMode {
 struct CabinetLabControls {
     mode: CabinetDemoMode,
     particles: usize,
+    geometry: CabinetGeometry,
     previous_direction: DirectionalState,
+    previous_action: bool,
     hud: CabinetHud,
 }
 
@@ -554,19 +573,22 @@ impl CabinetLabControls {
     fn new() -> Self {
         let mode = CabinetDemoMode::Baseline;
         let particles = CABINET_DEFAULT_PARTICLES;
+        let geometry = CabinetGeometry::Surface;
         Self {
             mode,
             particles,
+            geometry,
             previous_direction: DirectionalState::default(),
-            hud: CabinetHud::new(mode, particles),
+            previous_action: false,
+            hud: CabinetHud::new(mode, particles, geometry),
         }
     }
 
     const fn render_options(&self) -> CabinetRenderOptions {
-        self.mode.render_options(self.particles)
+        self.mode.render_options(self.particles, self.geometry)
     }
 
-    fn poll_direction(&mut self, direction: DirectionalState) {
+    fn poll_input(&mut self, direction: DirectionalState, action: bool) {
         let edges = DirectionalEdges::rising(direction, self.previous_direction);
         self.previous_direction = direction;
         if edges.left != edges.right {
@@ -583,6 +605,10 @@ impl CabinetLabControls {
                 LabAction::DecreaseParticles
             });
         }
+        if action && !self.previous_action {
+            self.apply(LabAction::ToggleGeometry);
+        }
+        self.previous_action = action;
     }
 
     fn apply(&mut self, action: LabAction) {
@@ -608,8 +634,14 @@ impl CabinetLabControls {
                     .saturating_sub(CABINET_PARTICLE_STEP)
                     .max(CABINET_MIN_PARTICLES);
             }
+            LabAction::ToggleGeometry => {
+                self.geometry = match self.geometry {
+                    CabinetGeometry::Surface => CabinetGeometry::MriSlices,
+                    CabinetGeometry::MriSlices => CabinetGeometry::Surface,
+                };
+            }
         }
-        self.hud.update(self.mode, self.particles);
+        self.hud.update(self.mode, self.particles, self.geometry);
     }
 
     fn draw_hud(&self, pixels: &mut [Rgb565Pixel]) {
@@ -627,15 +659,15 @@ struct CabinetHud {
 }
 
 impl CabinetHud {
-    fn new(mode: CabinetDemoMode, particles: usize) -> Self {
+    fn new(mode: CabinetDemoMode, particles: usize, geometry: CabinetGeometry) -> Self {
         let mut hud = Self {
             pixels: vec![Rgb565Pixel(0); HUD_WIDTH * HUD_HEIGHT],
         };
-        hud.update(mode, particles);
+        hud.update(mode, particles, geometry);
         hud
     }
 
-    fn update(&mut self, mode: CabinetDemoMode, particles: usize) {
+    fn update(&mut self, mode: CabinetDemoMode, particles: usize, geometry: CabinetGeometry) {
         self.pixels.fill(Rgb565Pixel(0));
         let mode_line = format!(
             "MODE {}/{}  {}",
@@ -643,7 +675,12 @@ impl CabinetHud {
             CabinetDemoMode::ALL.len(),
             mode.label()
         );
-        let count_line = format!("PARTICLES {},{:03}", particles / 1_000, particles % 1_000);
+        let count_line = format!(
+            "PARTICLES {},{:03}  POS {}",
+            particles / 1_000,
+            particles % 1_000,
+            geometry.label()
+        );
         draw_hud_text(&mut self.pixels, 6, 5, &mode_line, Rgb565Pixel(0xffa0));
         draw_hud_text(&mut self.pixels, 6, 23, &count_line, Rgb565Pixel(0x07ff));
     }
@@ -894,7 +931,8 @@ fn run_window(
             wall_elapsed
         };
         if let Some(controls) = controls.as_mut() {
-            controls.poll_direction(input.poll());
+            let input_state = input.poll();
+            controls.poll_input(input_state.direction, input_state.action);
             renderer.set_cabinet_controls(controls)?;
         }
         let writable_slot = presenter.writable_slot_index();
@@ -1514,6 +1552,7 @@ mod macos {
                         PhysicalKey::Code(KeyCode::ArrowRight) => Some(LabAction::NextMode),
                         PhysicalKey::Code(KeyCode::ArrowUp) => Some(LabAction::IncreaseParticles),
                         PhysicalKey::Code(KeyCode::ArrowDown) => Some(LabAction::DecreaseParticles),
+                        PhysicalKey::Code(KeyCode::KeyA) => Some(LabAction::ToggleGeometry),
                         _ => None,
                     };
                     if let (Some(controls), Some(action)) = (self.controls.as_mut(), action) {
@@ -1747,27 +1786,41 @@ mod tests {
     #[test]
     fn cabinet_controls_use_rising_edges_exact_steps_and_wrap_modes() {
         let mut controls = CabinetLabControls::new();
-        controls.poll_direction(DirectionalState {
-            up: true,
-            right: true,
-            ..DirectionalState::default()
-        });
+        controls.poll_input(
+            DirectionalState {
+                up: true,
+                right: true,
+                ..DirectionalState::default()
+            },
+            false,
+        );
         assert_eq!(controls.particles, 40_960);
         assert_eq!(controls.mode, CabinetDemoMode::Satellites);
 
-        controls.poll_direction(DirectionalState {
-            up: true,
-            right: true,
-            ..DirectionalState::default()
-        });
+        controls.poll_input(
+            DirectionalState {
+                up: true,
+                right: true,
+                ..DirectionalState::default()
+            },
+            false,
+        );
         assert_eq!(controls.particles, 40_960);
         assert_eq!(controls.mode, CabinetDemoMode::Satellites);
 
-        controls.poll_direction(DirectionalState::default());
+        controls.poll_input(DirectionalState::default(), false);
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::Baseline);
         controls.apply(LabAction::PreviousMode);
         assert_eq!(controls.mode, CabinetDemoMode::TextureGlow);
+
+        controls.poll_input(DirectionalState::default(), true);
+        assert_eq!(controls.geometry, CabinetGeometry::MriSlices);
+        controls.poll_input(DirectionalState::default(), true);
+        assert_eq!(controls.geometry, CabinetGeometry::MriSlices);
+        controls.poll_input(DirectionalState::default(), false);
+        controls.poll_input(DirectionalState::default(), true);
+        assert_eq!(controls.geometry, CabinetGeometry::Surface);
     }
 
     #[test]
@@ -1785,7 +1838,11 @@ mod tests {
 
     #[test]
     fn cabinet_hud_draws_inside_the_top_left_panel() {
-        let hud = CabinetHud::new(CabinetDemoMode::MicroJitter, 48_128);
+        let hud = CabinetHud::new(
+            CabinetDemoMode::MicroJitter,
+            48_128,
+            CabinetGeometry::MriSlices,
+        );
         let mut pixels = vec![Rgb565Pixel(0x1234); DEFAULT_WIDTH * DEFAULT_HEIGHT];
         hud.draw(&mut pixels);
         assert_eq!(pixels[HUD_Y * DEFAULT_WIDTH + HUD_X], Rgb565Pixel(0));

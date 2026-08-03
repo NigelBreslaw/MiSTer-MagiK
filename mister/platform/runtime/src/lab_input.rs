@@ -16,6 +16,18 @@ const EVENT_BYTES: usize = 8;
 const JS_EVENT_INIT: u8 = 0x80;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FramebufferLabInputState {
+    pub direction: DirectionalState,
+    pub action: bool,
+}
+
+impl FramebufferLabInputState {
+    const fn is_neutral(self) -> bool {
+        self.direction.is_neutral() && !self.action
+    }
+}
+
 struct Pad {
     path: String,
     file: File,
@@ -47,7 +59,7 @@ impl FramebufferLabInput {
         input
     }
 
-    pub fn poll(&mut self) -> DirectionalState {
+    pub fn poll(&mut self) -> FramebufferLabInputState {
         if self.last_rescan.elapsed() >= RESCAN_INTERVAL {
             self.rescan();
             self.last_rescan = Instant::now();
@@ -61,12 +73,12 @@ impl FramebufferLabInput {
                 index += 1;
             }
         }
-        let state = merge_directions(&self.pads);
+        let state = merge_state(&self.pads);
         if self.await_neutral {
             if state.is_neutral() {
                 self.await_neutral = false;
             }
-            DirectionalState::default()
+            FramebufferLabInputState::default()
         } else {
             state
         }
@@ -136,15 +148,19 @@ fn drain(pad: &mut Pad) -> io::Result<()> {
     }
 }
 
-fn merge_directions(pads: &[Pad]) -> DirectionalState {
+fn merge_state(pads: &[Pad]) -> FramebufferLabInputState {
     let mut merged = PadState::default();
     for pad in pads {
         merged.dpad_up |= pad.state.dpad_up;
         merged.dpad_down |= pad.state.dpad_down;
         merged.dpad_left |= pad.state.dpad_left;
         merged.dpad_right |= pad.state.dpad_right;
+        merged.btn_a |= pad.state.btn_a;
     }
-    DirectionalState::from_pad(&merged)
+    FramebufferLabInputState {
+        direction: DirectionalState::from_pad(&merged),
+        action: merged.btn_a,
+    }
 }
 
 fn discover() -> Vec<String> {
