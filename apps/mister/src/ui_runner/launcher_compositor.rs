@@ -54,12 +54,21 @@ impl<'a> LayerTarget<'a> {
         Self { target, ui }
     }
 
-    pub(super) fn render_slint_base(
+    pub(super) fn render_slint_base(&mut self, window: &MisterSoftwareWindow) -> Option<DirtyRect> {
+        let mut slint_dirty = None;
+        window.draw_if_needed(|renderer| {
+            let region = self.target.render(renderer, frame_target_geometry(self.ui));
+            slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
+        });
+        slint_dirty
+    }
+
+    pub(super) fn render_slint_full(
         &mut self,
         window: &MisterSoftwareWindow,
     ) -> (Option<DirtyRect>, bool) {
         let mut slint_dirty = None;
-        let rendered = window.draw_if_needed(|renderer| {
+        let rendered = window.draw_full_frame_if_needed(|renderer| {
             let region = self.target.render(renderer, frame_target_geometry(self.ui));
             slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
         });

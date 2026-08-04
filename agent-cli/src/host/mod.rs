@@ -324,7 +324,9 @@ impl NativeDevice {
                 | DeviceCommand::Display { .. }
                 | DeviceCommand::Crt { .. }
                 | DeviceCommand::Launcher {
-                    command: LauncherCommand::Status | LauncherCommand::ReturnToLauncher(_),
+                    command: LauncherCommand::Status
+                        | LauncherCommand::CaptureFirstArcade(_)
+                        | LauncherCommand::ReturnToLauncher(_),
                 }
         );
         let mutation = command.is_mutation();
@@ -434,6 +436,9 @@ impl NativeDevice {
                                 ..LauncherRestartOptions::default()
                             },
                         )
+                    }
+                    LauncherCommand::CaptureFirstArcade(args) => {
+                        capture_first_arcade(&prepared.config, &args.output)
                     }
                     LauncherCommand::ReturnToLauncher(_) => {
                         agent_magik(&device_strings(["return-to-launcher"]))
@@ -11651,6 +11656,62 @@ fn launcher_restart(sess: &Session, options: &LauncherRestartOptions) -> Result<
         ready.screen
     );
     Ok(())
+}
+
+fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
+    if output.exists() {
+        return Err(format!("capture output already exists: {}", output.display()).into());
+    }
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+                    "wait:120,a,wait:120".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+                    "1".into(),
+                ),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+
+    let started = Instant::now();
+    let timeout = Duration::from_secs(15);
+    loop {
+        let status = read_launcher_status(&session)?;
+        let arcade_settled = status.get("screen").and_then(Value::as_str) == Some("arcade")
+            && status.get("composition_state").and_then(Value::as_str) == Some("mixed-arcade")
+            && status
+                .get("selected_game_id")
+                .and_then(Value::as_str)
+                .is_some_and(|game| !game.is_empty());
+        if arcade_settled {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "first Arcade entry did not settle within {} ms; final status={status}",
+                started.elapsed().as_millis()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(session);
+
+    capture_buffer_at(
+        config.agent()?,
+        &["--output".into(), output.to_string_lossy().into_owned()],
+    )
 }
 
 fn launcher_env_text(vars: &[(String, String)]) -> String {

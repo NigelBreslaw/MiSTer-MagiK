@@ -231,18 +231,7 @@ struct PendingNavigationTransition {
     source_state: launcher::NavigationTransitionState,
     source_was_arcade: bool,
     committed: bool,
-    destination_base_rendered: bool,
     status_quiesce_started_at: Option<Instant>,
-}
-
-impl PendingNavigationTransition {
-    fn note_slint_base_rendered(&mut self, rendered: bool) {
-        self.destination_base_rendered |= self.committed && rendered;
-    }
-
-    const fn destination_base_ready(&self) -> bool {
-        self.committed && self.destination_base_rendered
-    }
 }
 
 const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
@@ -1162,14 +1151,6 @@ fn launcher_bridge_sync_plan(
     } else {
         LauncherBridgeSyncPlan::None
     }
-}
-
-const fn launcher_application_input_enabled(
-    startup_intro_active: bool,
-    view_accepts_input: bool,
-    startup_input_enabled: bool,
-) -> bool {
-    !startup_intro_active && view_accepts_input && startup_input_enabled
 }
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
@@ -2967,16 +2948,12 @@ pub(super) fn run_launcher_loop(
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
-        let application_input_enabled_before_updates = launcher_application_input_enabled(
-            startup_intro.is_some(),
-            effective_view.accepts_application_input(),
-            lifecycle.startup_input_enabled(),
-        );
-        let mut pad_changed_for_input = if application_input_enabled_before_updates {
-            Some(pad.poll_with_debug_labels(setup_active))
-        } else {
-            None
-        };
+        let mut pad_changed_for_input =
+            if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
+                Some(pad.poll_with_debug_labels(setup_active))
+            } else {
+                None
+            };
         if let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -3751,20 +3728,15 @@ pub(super) fn run_launcher_loop(
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
         let frame_now = Instant::now();
-        let application_input_enabled = launcher_application_input_enabled(
-            startup_intro.is_some(),
-            effective_view.accepts_application_input(),
-            lifecycle.startup_input_enabled(),
-        );
         let launcher_state = launcher_automation.poll_input(
             ControllerSetupInputSession::new(&pad, &setup).launcher_state(),
-            application_input_enabled,
+            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
             setup.is_active(),
             frame_now,
         );
         frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
-        if application_input_enabled {
+        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
             if setup_active && setup.target_pad_idx >= pad.len() {
                 crate::ui_errln!(
                     "controller setup: pad {} disappeared; closing setup flow",
@@ -4016,7 +3988,6 @@ pub(super) fn run_launcher_loop(
                                 source_state,
                                 source_was_arcade: false,
                                 committed: true,
-                                destination_base_rendered: false,
                                 status_quiesce_started_at: None,
                             });
                             full_bridge_dirty = true;
@@ -4180,7 +4151,6 @@ pub(super) fn run_launcher_loop(
                                             source_state,
                                             source_was_arcade: nav.screen == Screen::Arcade,
                                             committed: false,
-                                            destination_base_rendered: false,
                                             status_quiesce_started_at: None,
                                         });
                                     full_bridge_dirty = true;
@@ -4972,9 +4942,23 @@ pub(super) fn run_launcher_loop(
             }
             pending_navigation_transition = None;
         }
+        let navigation_destination_committed = pending_navigation_transition
+            .as_ref()
+            .is_some_and(|pending| pending.committed);
+        let navigation_destination_layers_ready = navigation_destination_committed
+            && (nav.screen != Screen::Arcade
+                || navigation_preview_snapshot_ready(
+                    selected_arcade_game_has_preview(&nav, &catalog),
+                    preview.terminal_empty(),
+                    preview_cache_state_before_composition,
+                    preview_frame_status,
+                ));
         let composition_decision = composition.tick(UiCompositionInput {
             screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
             navigation_transition_active: navigation_transition.is_active(),
+            navigation_destination_committed,
+            navigation_destination_ready: navigation_transition.destination_ready(),
+            navigation_destination_layers_ready,
             return_screen: effective_view.return_screen(),
             confirm_visible,
             fullscreen_overlay_visible: catalog_scan_visible,
@@ -4999,6 +4983,9 @@ pub(super) fn run_launcher_loop(
         }
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
+        }
+        if composition_decision.force_full_slint_raster {
+            request_launcher_redraw!();
         }
         if composition_decision.clear_direct_layers {
             arcade_list_renderer.invalidate_presented_layer();
@@ -5731,18 +5718,19 @@ pub(super) fn run_launcher_loop(
             None
         } else if navigation_snapshot_locked_before_render {
             None
-        } else if startup_intro_prepare_live_launcher {
-            let (dirty, rendered) = layer_target.render_slint_base(&window);
+        } else if composition_decision.force_full_slint_raster {
+            let (dirty, rendered) = layer_target.render_slint_full(&window);
             slint_base_rendered = rendered;
             dirty
+        } else if startup_intro_prepare_live_launcher {
+            layer_target.render_slint_base(&window)
         } else {
-            let (dirty, rendered) = layer_target.render_slint_base(&window);
-            slint_base_rendered = rendered;
-            expand_home_pan_dirty_rect(dirty, ui, home_pan_present_active)
+            expand_home_pan_dirty_rect(
+                layer_target.render_slint_base(&window),
+                ui,
+                home_pan_present_active,
+            )
         };
-        if let Some(pending) = pending_navigation_transition.as_mut() {
-            pending.note_slint_base_rendered(slint_base_rendered);
-        }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
             print_startup_event(
@@ -5836,12 +5824,11 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = true;
             if destination_committed && !navigation_transition.destination_ready() {
-                let destination_base_ready = pending_navigation_transition
-                    .as_ref()
-                    .is_some_and(PendingNavigationTransition::destination_base_ready);
+                let destination_raster_ready =
+                    composition_decision.prepare_navigation_destination && slint_base_rendered;
                 let mut destination_layers_ready =
-                    destination_base_ready && nav.screen != Screen::Arcade;
-                if destination_base_ready && nav.screen == Screen::Arcade {
+                    destination_raster_ready && nav.screen != Screen::Arcade;
+                if destination_raster_ready && nav.screen == Screen::Arcade {
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
                     let preview_snapshot_ready = navigation_preview_snapshot_ready(
                         preview_expected,
@@ -8069,18 +8056,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn startup_intro_handoff_opens_application_input_only_after_completion() {
-        let states = [
-            launcher_application_input_enabled(true, true, true),
-            launcher_application_input_enabled(false, true, true),
-        ];
-
-        assert_eq!(states, [false, true]);
-        assert!(!launcher_application_input_enabled(false, false, true));
-        assert!(!launcher_application_input_enabled(false, true, false));
-    }
-
     fn crt_240_display() -> UiDisplay {
         let plan = UiDisplayPlan::from_mister_ini_text(
             "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -8339,33 +8314,6 @@ mod tests {
     }
 
     #[test]
-    fn navigation_destination_waits_for_post_commit_slint_base_render() {
-        let nav = LauncherNav::new();
-        let mut pending = PendingNavigationTransition {
-            event: launcher::LauncherEvent {
-                action: LauncherAction::OpenCollection,
-                path: Some("arcade".to_string()),
-                settings: None,
-            },
-            source_state: nav.navigation_transition_state(),
-            source_was_arcade: false,
-            committed: false,
-            destination_base_rendered: false,
-            status_quiesce_started_at: None,
-        };
-
-        pending.note_slint_base_rendered(true);
-        assert!(!pending.destination_base_ready());
-
-        pending.committed = true;
-        pending.note_slint_base_rendered(false);
-        assert!(!pending.destination_base_ready());
-
-        pending.note_slint_base_rendered(true);
-        assert!(pending.destination_base_ready());
-    }
-
-    #[test]
     fn arcade_source_preview_survives_suppressed_transition_composition() {
         assert!(should_clear_suppressed_preview(false, false));
         assert!(!should_clear_suppressed_preview(false, true));
@@ -8543,6 +8491,9 @@ mod tests {
         let input = UiCompositionInput {
             screensaver_active: false,
             navigation_transition_active: false,
+            navigation_destination_committed: false,
+            navigation_destination_ready: false,
+            navigation_destination_layers_ready: false,
             return_screen: Some(Screen::Arcade),
             confirm_visible: false,
             fullscreen_overlay_visible: false,

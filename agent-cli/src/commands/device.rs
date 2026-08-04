@@ -249,7 +249,16 @@ impl SceneLabScene {
 pub enum LauncherCommand {
     Status,
     Restart(AttendedArgs),
+    CaptureFirstArcade(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FirstArcadeCaptureArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long)]
+    pub(crate) output: PathBuf,
 }
 
 #[derive(Debug, Subcommand)]
