@@ -20,6 +20,7 @@ pub fn execute(
 trait BenchmarkDevice {
     fn connect(&mut self) -> AgentResult<()>;
     fn verify_development_platform(&mut self) -> AgentResult<()>;
+    fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime>;
     fn verify_health(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String>;
@@ -49,6 +50,10 @@ impl BenchmarkDevice for DeviceClient {
 
     fn verify_development_platform(&mut self) -> AgentResult<()> {
         self.read(crate::NativeDevice::verify_development_platform)
+    }
+
+    fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime> {
+        self.read(crate::NativeDevice::read_active_runtime)
     }
 
     fn verify_health(&mut self) -> AgentResult<()> {
@@ -100,6 +105,7 @@ fn require_clean_installed_commit(
     )?;
     device.connect()?;
     device.verify_development_platform()?;
+    require_active_development_runtime(&device.read_active_runtime()?)?;
     if benchmark_requires_initial_health(scenario) {
         device.verify_health()?;
     }
@@ -156,6 +162,18 @@ fn require_clean_installed_commit(
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
+    }
+}
+
+fn require_active_development_runtime(active: &crate::host::ActiveRuntime) -> AgentResult<()> {
+    if active.is_development_launcher() {
+        Ok(())
+    } else {
+        Err(format!(
+            "benchmark requires the active development launcher, found {}; run scripts/agent deliver",
+            active.description()
+        )
+        .into())
     }
 }
 
@@ -1138,6 +1156,31 @@ mod tests {
         assert!(benchmark_requires_initial_health(
             BenchmarkScenario::Screensaver
         ));
+    }
+
+    #[test]
+    fn benchmark_rejects_public_or_suspended_runtime_with_remediation() {
+        for active in [
+            crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiK"),
+                Some("LauncherActive"),
+            ),
+            crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiKDev"),
+                Some("LauncherSuspended"),
+            ),
+        ] {
+            let error = require_active_development_runtime(&active).unwrap_err();
+            assert!(error.to_string().contains(&active.description()));
+            assert!(error.to_string().contains("scripts/agent deliver"));
+        }
+        assert!(
+            require_active_development_runtime(&crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiKDev"),
+                Some("LauncherActive"),
+            ))
+            .is_ok()
+        );
     }
 
     #[test]

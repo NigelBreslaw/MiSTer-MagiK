@@ -109,6 +109,34 @@ pub struct NativeDevice {
     config: Option<NativeDeviceConfig>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ActiveRuntime {
+    executable_path: Option<String>,
+    launcher_state: Option<String>,
+}
+
+impl ActiveRuntime {
+    pub(crate) fn new(executable_path: Option<&str>, launcher_state: Option<&str>) -> Self {
+        Self {
+            executable_path: executable_path.map(str::to_owned),
+            launcher_state: launcher_state.map(str::to_owned),
+        }
+    }
+
+    pub(crate) fn is_development_launcher(&self) -> bool {
+        self.executable_path.as_deref() == Some("/media/fat/MiSTer_MagiKDev")
+            && self.launcher_state.as_deref() == Some("LauncherActive")
+    }
+
+    pub(crate) fn description(&self) -> String {
+        format!(
+            "executable_path={} launcher_state={}",
+            self.executable_path.as_deref().unwrap_or("unknown"),
+            self.launcher_state.as_deref().unwrap_or("unknown")
+        )
+    }
+}
+
 struct DeviceProcessLock {
     file: fs::File,
 }
@@ -456,6 +484,16 @@ impl NativeDevice {
         )
     }
 
+    pub(crate) fn read_active_runtime(
+        &mut self,
+    ) -> std::result::Result<ActiveRuntime, DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        Ok(parse_active_runtime_status(
+            remote_read(&session, MAIN_STATUS_REMOTE).as_deref(),
+        ))
+    }
+
     pub(crate) fn verify_development_platform(&mut self) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::SSH_READ)?;
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
@@ -620,6 +658,14 @@ impl NativeDevice {
     pub(crate) fn verify_development_health(&mut self) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::SSH_READ)?;
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        let active =
+            parse_active_runtime_status(remote_read(&session, MAIN_STATUS_REMOTE).as_deref());
+        if !active.is_development_launcher() {
+            return Err(DeviceFailure::Unhealthy(format!(
+                "benchmark requires the active development launcher, found {}; run scripts/agent deliver",
+                active.description()
+            )));
+        }
         wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))
             .map_err(|error| DeviceFailure::Unhealthy(error.to_string()))?;
         wait_delivery_health(&session, "dev", Duration::from_secs(10))
@@ -3510,6 +3556,20 @@ fn delivery_health_command(layout: &str) -> Result<String> {
     Ok(format!(
         "set -eu; health_check=initializing; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_health_failure_tsv\\tcheck=%s\\trc=%s\\n\" \"$health_check\" \"$rc\" >&2; fi' EXIT; health_check=main-process; pidof {main} >/dev/null; health_check=launcher-process; pidof mister-magik-fb >/dev/null; health_check=scanout-module; grep -q '^mister_magik_scanout_slots ' /proc/modules; health_check=scanout-device; test -c /dev/mister-magik-scanout-slots; health_check=latch-readiness; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; health_check=launcher-env-clear; test ! -e {directory}/launcher.env; health_check=rebuild-clear; test ! -e {directory}/rebuild-on-next-boot; health_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; health_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; health_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; health_check=complete; trap - EXIT; printf 'delivery_health_tsv\\tvalid=1\\n'"
     ))
+}
+
+fn parse_active_runtime_status(status: Option<&str>) -> ActiveRuntime {
+    let status = status.and_then(|status| serde_json::from_str::<Value>(status).ok());
+    ActiveRuntime::new(
+        status
+            .as_ref()
+            .and_then(|status| status.get("executable_path"))
+            .and_then(Value::as_str),
+        status
+            .as_ref()
+            .and_then(|status| status.get("launcher_state"))
+            .and_then(Value::as_str),
+    )
 }
 
 fn wait_delivery_health(session: &Session, layout: &str, timeout: Duration) -> Result<()> {
@@ -15362,6 +15422,32 @@ H: Handlers=event3 js0"#
         assert!(command.contains("pid_after"));
         assert!(command.contains("test -r \"$status\""));
         assert!(command.contains("pid_before=; sequence_before=; pid_after=; sequence_after="));
+    }
+
+    #[test]
+    fn active_runtime_requires_the_exact_development_launcher_state() {
+        let development = parse_active_runtime_status(Some(
+            r#"{"executable_path":"/media/fat/MiSTer_MagiKDev","launcher_state":"LauncherActive"}"#,
+        ));
+        assert!(development.is_development_launcher());
+
+        for status in [
+            Some(
+                r#"{"executable_path":"/media/fat/MiSTer_MagiK","launcher_state":"LauncherActive"}"#,
+            ),
+            Some(
+                r#"{"executable_path":"/media/fat/MiSTer_MagiKDev","launcher_state":"LauncherSuspended"}"#,
+            ),
+            Some(r#"{"executable_path":"unknown","launcher_state":"Unconfigured"}"#),
+            Some("invalid"),
+            None,
+        ] {
+            assert!(!parse_active_runtime_status(status).is_development_launcher());
+        }
+        assert_eq!(
+            parse_active_runtime_status(None).description(),
+            "executable_path=unknown launcher_state=unknown"
+        );
     }
 
     #[test]

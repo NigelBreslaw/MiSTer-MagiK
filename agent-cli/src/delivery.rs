@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::deploy::{DeliveryDecision, DeploymentPlan};
+use crate::deploy::{DeliveryDecision, DeploymentKind, DeploymentPlan, UiScope};
 use crate::device::DeviceClient;
 use crate::error::{AgentError, AgentResult};
 use crate::model::Outcome;
@@ -168,6 +168,7 @@ pub struct DeliveryExecution {
 trait DeliveryDevice {
     fn connect(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
+    fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime>;
     fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()>;
     fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()>;
 }
@@ -186,6 +187,10 @@ impl DeliveryDevice for DeviceClient {
 
     fn read_development_manifest(&mut self) -> AgentResult<String> {
         self.read(crate::NativeDevice::read_development_manifest)
+    }
+
+    fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime> {
+        self.read(crate::NativeDevice::read_active_runtime)
     }
 
     fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()> {
@@ -421,6 +426,17 @@ fn validate_commit_identity(
     Ok(())
 }
 
+fn reconcile_active_runtime(
+    artifact_decision: DeliveryDecision,
+    active: &crate::host::ActiveRuntime,
+) -> DeliveryDecision {
+    if active.is_development_launcher() {
+        artifact_decision
+    } else {
+        DeliveryDecision::Platform
+    }
+}
+
 impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
@@ -439,7 +455,13 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                 self.deployment =
                     crate::deploy::plan(self.repository, reconciliation.changed_paths)?;
                 self.deployment.platform_candidate = platform_candidate;
-                self.decision = reconciliation.decision;
+                let active = self.device.read_active_runtime()?;
+                self.decision = reconcile_active_runtime(reconciliation.decision, &active);
+                if self.decision == DeliveryDecision::Platform {
+                    self.deployment.kind = DeploymentKind::Platform;
+                    self.deployment.ui_scope = UiScope::All;
+                    self.deployment.build = crate::build::BuildSpec::canonical(UiScope::All);
+                }
                 self.installed_manifest = Some(installed_manifest);
                 Ok(())
             }
@@ -674,6 +696,13 @@ mod tests {
             Ok(String::new())
         }
 
+        fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime> {
+            Ok(crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiKDev"),
+                Some("LauncherActive"),
+            ))
+        }
+
         fn deliver_runtime(&mut self, _delivery: RuntimeDelivery) -> AgentResult<()> {
             self.0.borrow_mut().push(DeliveryCall::Runtime);
             Ok(())
@@ -797,6 +826,35 @@ mod tests {
         assert!(validate_commit_identity("other", "abc", false, None).is_err());
         assert!(validate_commit_identity("abc", "abc", true, None).is_err());
         assert!(validate_commit_identity("abc", "abc", false, Some("other")).is_err());
+    }
+
+    #[test]
+    fn non_development_launcher_promotes_delivery_to_platform() {
+        for active in [
+            crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiK"),
+                Some("LauncherActive"),
+            ),
+            crate::host::ActiveRuntime::new(
+                Some("/media/fat/MiSTer_MagiKDev"),
+                Some("LauncherSuspended"),
+            ),
+            crate::host::ActiveRuntime::new(Some("unknown"), Some("Unconfigured")),
+            crate::host::ActiveRuntime::new(None, None),
+        ] {
+            assert_eq!(
+                reconcile_active_runtime(DeliveryDecision::NoOp, &active),
+                DeliveryDecision::Platform
+            );
+        }
+        let development = crate::host::ActiveRuntime::new(
+            Some("/media/fat/MiSTer_MagiKDev"),
+            Some("LauncherActive"),
+        );
+        assert_eq!(
+            reconcile_active_runtime(DeliveryDecision::Runtime, &development),
+            DeliveryDecision::Runtime
+        );
     }
 
     #[test]
