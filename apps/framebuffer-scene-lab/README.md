@@ -78,10 +78,11 @@ restore the launcher automatically:
 scripts/agent device scene-lab --scene card-flip --profile --attended
 ```
 
-The 2026-08-04 ARMv7 profile measured 3.372 ms average / 5.312 ms p99 render,
-1.999 ms average / 2.339 ms p99 transfer, zero repeated presentations, and zero
-latch drops over 507 changed frames. The isolated device paint symbol contains
-no calls, software division, wide multiply, or bounds-check branches in its
+The 2026-08-04 continuous ARMv7 profile measured 59.571 fps over 30.014 seconds
+and 1,788 changed frames. Render measured 3.507 ms average / 5.387 ms p99;
+transfer measured 2.088 ms average / 2.313 ms p99, with zero repeated
+presentations and zero latch drops. The isolated device paint symbol contains no
+calls, software division, wide multiply, or bounds-check branches in its
 generated release assembly.
 
 Create a deterministic capture without opening a window:
