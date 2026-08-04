@@ -374,7 +374,7 @@ enum LabScene {
     Particle(LiveParticleRenderer),
     Focused(FocusedParticleRenderer),
     Navigation(NavigationFixtureScene),
-    CardFlip(CardFlip),
+    CardFlip(Box<CardFlip>),
 }
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
@@ -416,7 +416,7 @@ impl LabScene {
                 };
                 let mut renderer = CardFlip::new(raster_path);
                 renderer.set_duration(duration);
-                Ok(Self::CardFlip(renderer))
+                Ok(Self::CardFlip(Box::new(renderer)))
             }
         }
     }

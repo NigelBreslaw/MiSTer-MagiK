@@ -555,8 +555,7 @@ fn render_spine(destination: &mut [Rgb565Pixel], outline: Rgb565Pixel) -> usize 
         {
             let edge = x < x0 + OUTLINE_WIDTH
                 || x >= x0 + MINIMUM_SPINE_WIDTH - OUTLINE_WIDTH
-                || y < CARD_Y + OUTLINE_WIDTH
-                || y >= CARD_Y + CARD_HEIGHT - OUTLINE_WIDTH;
+                || !(CARD_Y + OUTLINE_WIDTH..CARD_Y + CARD_HEIGHT - OUTLINE_WIDTH).contains(&y);
             destination[y * WIDTH + x] = if edge { outline } else { PURPLE_DARK };
             writes += 1;
         }
