@@ -54,6 +54,7 @@ fn run_prepared(
 ) -> Result<()> {
     install_prepared_device_environment(&prepared.config);
     let upload = connect_with(&prepared.config.connection, 10)?;
+    let display_contracts = super::startup_particles::active_lab_display_contracts(&upload)?;
     prepare_remote_files(&upload, binary, family, demo)?;
 
     let run_config = prepared.config.connection.clone();
@@ -62,7 +63,8 @@ fn run_prepared(
     let worker = thread::Builder::new()
         .name("particle-lab-device".into())
         .spawn(move || {
-            let result = run_remote_lab(&run_config, &run_demo).map_err(|error| error.to_string());
+            let result = run_remote_lab(&run_config, &run_demo, &display_contracts)
+                .map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
         })?;
 
@@ -153,9 +155,13 @@ fn publish_family(session: &Session, family: &Path) -> Result<()> {
     )
 }
 
-fn run_remote_lab(config: &super::remote::ConnectionConfig, demo: &str) -> Result<()> {
+fn run_remote_lab(
+    config: &super::remote::ConnectionConfig,
+    demo: &str,
+    display_contracts: &super::startup_particles::LabDisplayContracts,
+) -> Result<()> {
     let session = connect_with(config, 10)?;
-    let command = remote_run_command(demo);
+    let command = remote_run_command(demo, display_contracts);
     stream_exec(&session, &command)
 }
 
@@ -206,15 +212,20 @@ fn remote_publish_command(binary_hash: &str, family_hash: &str) -> String {
     )
 }
 
-fn remote_run_command(demo: &str) -> String {
+fn remote_run_command(
+    demo: &str,
+    display_contracts: &super::startup_particles::LabDisplayContracts,
+) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; {resume} || resume_rc=$?; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; {binary} --demo {demo} --family {family}",
+        "cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; {resume} || resume_rc=$?; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; MISTER_MAGIK_RUNTIME_SETTINGS_V1={runtime_settings} MISTER_MAGIK_RUNTIME_DISPLAY_V1={runtime_display} {binary} --demo {demo} --family {family}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
         demo = sh(demo),
         family = sh(REMOTE_FAMILY),
+        runtime_settings = sh(&display_contracts.settings),
+        runtime_display = sh(&display_contracts.display),
     )
 }
 
@@ -236,13 +247,20 @@ mod tests {
     #[test]
     fn volatile_paths_never_touch_installed_runtime() {
         let publish = remote_publish_command("binary", "family");
-        let run = remote_run_command("solar-chrysanthemum");
+        let contracts = super::super::startup_particles::LabDisplayContracts {
+            settings: "schema=1&output=hdmi".into(),
+            display: "schema=1&mode=hdmi-1920x1200p60".into(),
+        };
+        let run = remote_run_command("solar-chrysanthemum", &contracts);
         assert!(publish.contains(REMOTE_DIR));
         assert!(run.contains(REMOTE_DIR));
         assert!(!publish.contains("platform-v3.manifest"));
         assert!(!run.contains("launcher.env"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
+        assert!(run.contains("MISTER_MAGIK_RUNTIME_SETTINGS_V1="));
+        assert!(run.contains("MISTER_MAGIK_RUNTIME_DISPLAY_V1="));
+        assert!(!run.contains("--destination"));
     }
 
     #[test]

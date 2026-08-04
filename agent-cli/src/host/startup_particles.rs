@@ -33,9 +33,9 @@ const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct LabDisplayContracts {
-    settings: String,
-    display: String,
+pub(super) struct LabDisplayContracts {
+    pub(super) settings: String,
+    pub(super) display: String,
 }
 
 pub(super) fn run(
@@ -210,7 +210,7 @@ fn run_lab(
     combine_results(run_result, safety_result)
 }
 
-fn active_lab_display_contracts(session: &Session) -> Result<LabDisplayContracts> {
+pub(super) fn active_lab_display_contracts(session: &Session) -> Result<LabDisplayContracts> {
     let reply = super::exec_checked_output(
         session,
         "query startup particle display mode",
