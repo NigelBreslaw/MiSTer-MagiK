@@ -817,6 +817,7 @@ version = "0.1.0"
 name = "mister-magik-framebuffer-scene-lab"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "libc",
  "mister-magik-core",
  "mister-magik-framebuffer-scenes",

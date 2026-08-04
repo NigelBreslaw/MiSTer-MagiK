@@ -47,6 +47,9 @@ default = []
 asset-tools = ["dep:png", "dep:swash"]
 profile = ["dep:pprof"]
 
+[build-dependencies]
+cc = "1.3"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

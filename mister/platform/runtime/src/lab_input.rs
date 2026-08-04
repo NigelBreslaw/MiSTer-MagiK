@@ -29,6 +29,19 @@ pub struct FramebufferLabInput {
     await_neutral: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct FramebufferLabState {
+    pub directions: DirectionalState,
+    pub button_a: bool,
+    pub button_b: bool,
+}
+
+impl FramebufferLabState {
+    fn is_neutral(self) -> bool {
+        self.directions.is_neutral() && !self.button_a && !self.button_b
+    }
+}
+
 impl Default for FramebufferLabInput {
     fn default() -> Self {
         Self::open()
@@ -48,6 +61,10 @@ impl FramebufferLabInput {
     }
 
     pub fn poll(&mut self) -> DirectionalState {
+        self.poll_state().directions
+    }
+
+    pub fn poll_state(&mut self) -> FramebufferLabState {
         if self.last_rescan.elapsed() >= RESCAN_INTERVAL {
             self.rescan();
             self.last_rescan = Instant::now();
@@ -61,12 +78,12 @@ impl FramebufferLabInput {
                 index += 1;
             }
         }
-        let state = merge_directions(&self.pads);
+        let state = merge_state(&self.pads);
         if self.await_neutral {
             if state.is_neutral() {
                 self.await_neutral = false;
             }
-            DirectionalState::default()
+            FramebufferLabState::default()
         } else {
             state
         }
@@ -136,15 +153,21 @@ fn drain(pad: &mut Pad) -> io::Result<()> {
     }
 }
 
-fn merge_directions(pads: &[Pad]) -> DirectionalState {
+fn merge_state(pads: &[Pad]) -> FramebufferLabState {
     let mut merged = PadState::default();
     for pad in pads {
         merged.dpad_up |= pad.state.dpad_up;
         merged.dpad_down |= pad.state.dpad_down;
         merged.dpad_left |= pad.state.dpad_left;
         merged.dpad_right |= pad.state.dpad_right;
+        merged.btn_a |= pad.state.btn_a;
+        merged.btn_b |= pad.state.btn_b;
     }
-    DirectionalState::from_pad(&merged)
+    FramebufferLabState {
+        directions: DirectionalState::from_pad(&merged),
+        button_a: merged.btn_a,
+        button_b: merged.btn_b,
+    }
 }
 
 fn discover() -> Vec<String> {

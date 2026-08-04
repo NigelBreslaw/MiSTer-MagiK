@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod card_flip;
+mod card_flip_neon;
 
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
@@ -544,6 +545,28 @@ enum LabAction {
     DecreaseParticles,
 }
 
+#[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
+#[derive(Default)]
+struct CardFlipLabControls {
+    previous_a: bool,
+    previous_b: bool,
+}
+
+#[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
+impl CardFlipLabControls {
+    fn poll(&mut self, button_a: bool, button_b: bool) -> Option<CardFlipDirection> {
+        let forward = button_a && !self.previous_a;
+        let reverse = button_b && !self.previous_b;
+        self.previous_a = button_a;
+        self.previous_b = button_b;
+        match (forward, reverse) {
+            (true, false) => Some(CardFlipDirection::Forward),
+            (false, true) => Some(CardFlipDirection::Reverse),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum CabinetDemoMode {
     #[default]
@@ -959,6 +982,9 @@ fn run_window(
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
 
+    if let SceneSource::CardFlip(duration) = &source {
+        return run_card_flip_mister(*duration, destination);
+    }
     let mut renderer = LabScene::start(source, case)?;
     let mut controls =
         (case.is_none() && renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
@@ -1203,6 +1229,153 @@ fn run_window(
             std::thread::sleep(remaining);
         } else {
             next_frame = Instant::now();
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> Result<(), String> {
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
+    use std::time::Instant;
+
+    let (destination_width, destination_height) =
+        destination.ok_or("MiSTer card flip requires an explicit scanout destination")?;
+    let mut presenter = HiddenLatchPresenter::open_scaled(
+        DEFAULT_WIDTH as u16,
+        DEFAULT_HEIGHT as u16,
+        destination_width,
+        destination_height,
+    )
+    .map_err(|error| format!("open scaled hidden RGB565 card presenter: {error}"))?;
+    if presenter.stride_pixels() != DEFAULT_WIDTH {
+        return Err(format!(
+            "card flip requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
+            presenter.stride_pixels()
+        ));
+    }
+
+    let mut renderer = CardFlip::new(CardFlipRasterPath::Device);
+    renderer.set_duration(duration);
+    let mut staging = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+    card_flip_neon::fill_rgb565(&mut staging, Rgb565Pixel(0));
+    let mut controls = CardFlipLabControls::default();
+    let mut input = FramebufferLabInput::open();
+    let started = Instant::now();
+    let mut next_frame = started;
+    let mut status_started = started;
+    let mut cpu_started = process_cpu_time();
+    let mut rendered_frames = 0_u64;
+    let mut render_samples_us = Vec::with_capacity(64);
+    let mut transfer_samples_us = Vec::with_capacity(64);
+    let mut last_sequence = None;
+    let mut repeated_presentations = 0_u64;
+    let mut latch_drop_count = 0_u16;
+
+    println!(
+        "framebuffer-scene-lab scene=card-flip source={}x{} destination={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=neon",
+        presenter.width(),
+        presenter.height(),
+        presenter.destination_width(),
+        presenter.destination_height(),
+    );
+
+    loop {
+        if let Some(receipt) = presenter
+            .settle_pending()
+            .map_err(|error| format!("settle hidden RGB565 card frame: {error}"))?
+        {
+            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
+                repeated_presentations = repeated_presentations.saturating_add(1);
+            }
+            last_sequence = Some(receipt.sequence);
+            latch_drop_count = receipt.drop_count;
+        }
+
+        let elapsed = started.elapsed();
+        let state = input.poll_state();
+        if let Some(direction) = controls.poll(state.button_a, state.button_b) {
+            renderer.play(direction, elapsed);
+            next_frame = Instant::now();
+        }
+
+        let now = Instant::now();
+        if renderer.is_dirty() && now >= next_frame {
+            let render_started = Instant::now();
+            let stats = renderer
+                .render(&mut staging, elapsed)
+                .map_err(str::to_owned)?;
+            let render_us = render_started.elapsed().as_micros() as u64;
+            if stats.changed {
+                let writable_slot = presenter.writable_slot_index();
+                let pixels = presenter.pixels_mut();
+                // SAFETY: both RGB565 wrappers are transparent over u16 and
+                // every u16 bit pattern is valid for either representation.
+                let pixels = unsafe {
+                    std::slice::from_raw_parts_mut(
+                        pixels.as_mut_ptr().cast::<Rgb565Pixel>(),
+                        pixels.len(),
+                    )
+                };
+                let transfer_started = Instant::now();
+                card_flip_neon::copy_rgb565(pixels, &staging);
+                let transfer_us = transfer_started.elapsed().as_micros() as u64;
+                let post = presenter
+                    .post()
+                    .map_err(|error| format!("post hidden RGB565 card frame: {error}"))?;
+                debug_assert_eq!(post.slot_index, writable_slot);
+                rendered_frames = rendered_frames.saturating_add(1);
+                render_samples_us.push(render_us);
+                transfer_samples_us.push(transfer_us);
+            }
+            next_frame += FRAME_DURATION;
+            if next_frame <= Instant::now() {
+                next_frame = Instant::now() + FRAME_DURATION;
+            }
+        }
+
+        if status_started.elapsed() >= Duration::from_secs(1) {
+            let seconds = status_started.elapsed().as_secs_f64();
+            let cpu_now = process_cpu_time();
+            let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
+            let (render_average_us, render_p99_us, render_max_us) =
+                sample_summary(&mut render_samples_us);
+            let (transfer_average_us, transfer_p99_us, transfer_max_us) =
+                sample_summary(&mut transfer_samples_us);
+            println!(
+                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} repeated_presentations={} latch_drop_count={}",
+                rendered_frames,
+                rendered_frames as f64 / seconds,
+                cpu_percent,
+                renderer.is_active(),
+                renderer.progress_q16(),
+                renderer.direction().label(),
+                render_average_us,
+                render_p99_us,
+                render_max_us,
+                transfer_average_us,
+                transfer_p99_us,
+                transfer_max_us,
+                repeated_presentations,
+                latch_drop_count,
+            );
+            status_started = Instant::now();
+            cpu_started = cpu_now;
+            rendered_frames = 0;
+            render_samples_us.clear();
+            transfer_samples_us.clear();
+            repeated_presentations = 0;
+        }
+
+        let wait = if renderer.is_dirty() {
+            next_frame
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(2))
+        } else {
+            Duration::from_millis(2)
+        };
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
         }
     }
 }
@@ -2017,6 +2190,25 @@ mod tests {
         )
         .unwrap();
         assert!(check.check);
+
+        let card = Options::parse(
+            [
+                "--scene",
+                "card-flip",
+                "--direction",
+                "reverse",
+                "--duration-ms",
+                "600",
+                "--time-ms",
+                "300",
+                "--output",
+                "card.ppm",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(card.direction, CardFlipDirection::Reverse);
+        assert_eq!(card.card_duration(), Duration::from_millis(600));
     }
 
     #[test]
@@ -2093,6 +2285,34 @@ mod tests {
             )
             .is_err()
         );
+        assert!(
+            Options::parse(["--scene", "card-flip", "--recipe", "card.json"].map(String::from))
+                .is_err()
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "magik",
+                    "--recipe",
+                    "magik.json",
+                    "--direction",
+                    "forward",
+                ]
+                .map(String::from)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn card_controls_use_a_and_b_rising_edges() {
+        let mut controls = CardFlipLabControls::default();
+        assert_eq!(controls.poll(true, false), Some(CardFlipDirection::Forward));
+        assert_eq!(controls.poll(true, false), None);
+        assert_eq!(controls.poll(false, false), None);
+        assert_eq!(controls.poll(false, true), Some(CardFlipDirection::Reverse));
+        assert_eq!(controls.poll(true, true), None);
     }
 
     #[test]
