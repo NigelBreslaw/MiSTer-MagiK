@@ -250,7 +250,8 @@ fn generated_navigation_snapshot(
     for y in 0..height {
         let band = ((y / band_height) as u16).wrapping_mul(0x0021);
         for x in 0..width {
-            if (x / pattern_width + y / pattern_height + usize::from(destination)) % 7 == 0 {
+            if (x / pattern_width + y / pattern_height + usize::from(destination)).is_multiple_of(7)
+            {
                 pixels[y * width + x] = Rgb565Pixel(seed.wrapping_add(band));
             }
         }
