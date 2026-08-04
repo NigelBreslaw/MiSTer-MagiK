@@ -7,29 +7,21 @@
 //! framebuffer from MiSTer.ini's Menu output mode and lets the MiSTer FPGA
 //! scale it to the final HDMI/direct-video rectangle.
 
+pub use mister_magik_core::display::{
+    CRT_COMPOSITION_H, CRT_COMPOSITION_W, DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute,
+    RuntimeDisplayGeometry, UI_FB_720P_H, UI_FB_720P_W, UI_FB_H, UI_FB_W,
+};
+use mister_magik_core::display::{
+    DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
+    runtime_display_geometry_v1, video_mode_geometry,
+};
+#[cfg(test)]
+use mister_magik_core::display::{launcher_framebuffer_size, predefined_video_mode};
+
 const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
-pub const DEFAULT_OUTPUT_W: u16 = 1920;
-pub const DEFAULT_OUTPUT_H: u16 = 1080;
-pub const UI_FB_W: usize = 960;
-pub const UI_FB_H: usize = 540;
-pub const UI_FB_720P_W: usize = 1280;
-pub const UI_FB_720P_H: usize = 720;
-pub const CRT_COMPOSITION_W: usize = 640;
-pub const CRT_COMPOSITION_H: usize = 480;
-const MIN_RUNTIME_SCAN_W: u16 = 320;
-const MIN_RUNTIME_SCAN_H: u16 = 200;
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ResolvedOutputRoute {
-    Hdmi,
-    Crt240p60,
-    Crt288p50,
-    Crt480p60,
-    Crt576p50,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
@@ -161,14 +153,6 @@ impl CrtUiMetrics {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CrtContentInsets {
-    pub left: usize,
-    pub top: usize,
-    pub right: usize,
-    pub bottom: usize,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CrtContentRect {
     pub x: usize,
@@ -184,110 +168,6 @@ impl CrtContentRect {
 
     pub const fn bottom(self) -> usize {
         self.y + self.height
-    }
-}
-
-impl ResolvedOutputRoute {
-    fn from_runtime_settings_v1(value: &str) -> Option<Self> {
-        let mut schema = None;
-        let mut output = None;
-        for field in value.split('&') {
-            let (key, value) = field.split_once('=')?;
-            match key {
-                "schema" if schema.replace(value).is_none() => {}
-                "output" if output.replace(value).is_none() => {}
-                _ => return None,
-            }
-        }
-        if schema != Some("1") {
-            return None;
-        }
-        match output? {
-            "hdmi" => Some(Self::Hdmi),
-            "crt-240p60" => Some(Self::Crt240p60),
-            "crt-288p50" => Some(Self::Crt288p50),
-            "crt-480p60" => Some(Self::Crt480p60),
-            "crt-576p50" => Some(Self::Crt576p50),
-            _ => None,
-        }
-    }
-
-    pub const fn is_crt(self) -> bool {
-        !matches!(self, Self::Hdmi)
-    }
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Hdmi => "hdmi",
-            Self::Crt240p60 => "crt-240p60",
-            Self::Crt288p50 => "crt-288p50",
-            Self::Crt480p60 => "crt-480p60",
-            Self::Crt576p50 => "crt-576p50",
-        }
-    }
-
-    /// Nominal period of Main's resolved progressive CRT raster. This is the
-    /// route-owned fallback for animation and vsync pacing, rounded to the
-    /// nearest microsecond.
-    pub const fn nominal_period_us(self) -> Option<u64> {
-        match self {
-            Self::Hdmi => None,
-            Self::Crt240p60 => Some(16_652),
-            Self::Crt288p50 => Some(19_830),
-            Self::Crt480p60 => Some(16_683),
-            Self::Crt576p50 => Some(19_829),
-        }
-    }
-
-    pub const fn content_insets(self) -> CrtContentInsets {
-        match self {
-            Self::Crt288p50 => CrtContentInsets {
-                top: 20,
-                bottom: 13,
-                left: 0,
-                right: 0,
-            },
-            Self::Crt576p50 => CrtContentInsets {
-                right: 64,
-                left: 0,
-                top: 0,
-                bottom: 0,
-            },
-            _ => CrtContentInsets {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
-        }
-    }
-
-    const fn progressive_geometry(self) -> Option<VideoModeGeometry> {
-        match self {
-            Self::Hdmi => None,
-            Self::Crt240p60 => Some(VideoModeGeometry::new(640, 240)),
-            Self::Crt288p50 => Some(VideoModeGeometry::new(640, 288)),
-            Self::Crt480p60 => Some(VideoModeGeometry::new(640, 480)),
-            Self::Crt576p50 => Some(VideoModeGeometry::new(640, 576)),
-        }
-    }
-
-    const fn framebuffer_geometry(self) -> Option<(usize, usize)> {
-        match self {
-            Self::Hdmi => None,
-            Self::Crt240p60 => Some((640, 240)),
-            Self::Crt288p50 => Some((640, 288)),
-            Self::Crt480p60 => Some((640, 480)),
-            Self::Crt576p50 => Some((640, 576)),
-        }
-    }
-
-    const fn composition_geometry(self, framebuffer: (usize, usize)) -> (usize, usize) {
-        match self {
-            Self::Crt288p50 | Self::Crt576p50 => framebuffer,
-            Self::Crt240p60 | Self::Crt480p60 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
-            Self::Hdmi => framebuffer,
-        }
     }
 }
 
@@ -328,11 +208,11 @@ impl UiFramebufferSizePolicy {
         UI_FB_SIZE_ENV
     }
 
-    fn framebuffer_size(self, output_w: usize, output_h: usize) -> (usize, usize) {
+    const fn shared(self) -> FramebufferSizePolicy {
         match self {
-            Self::Auto => launcher_framebuffer_size(output_w, output_h),
-            Self::Force960x540 => (UI_FB_W, UI_FB_H),
-            Self::Force1280x720 => (UI_FB_720P_W, UI_FB_720P_H),
+            Self::Auto => FramebufferSizePolicy::Auto,
+            Self::Force960x540 => FramebufferSizePolicy::Force960x540,
+            Self::Force1280x720 => FramebufferSizePolicy::Force1280x720,
         }
     }
 }
@@ -590,24 +470,21 @@ impl UiDisplayPlan {
         source: &'static str,
         fb_policy: UiFramebufferSizePolicy,
     ) -> Self {
-        let (fb_w, fb_h, fb_policy) = match output_route.framebuffer_geometry() {
-            Some((fb_w, fb_h)) => (fb_w, fb_h, UiFramebufferSizePolicy::Auto),
-            None => {
-                let (fb_w, fb_h) = fb_policy
-                    .framebuffer_size(geometry.output_w as usize, geometry.output_h as usize);
-                (fb_w, fb_h, fb_policy)
-            }
+        let shared = ResolvedDisplayPlan::from_geometry(geometry, output_route, fb_policy.shared());
+        let fb_policy = match shared.fb_policy {
+            FramebufferSizePolicy::Auto => UiFramebufferSizePolicy::Auto,
+            FramebufferSizePolicy::Force960x540 => UiFramebufferSizePolicy::Force960x540,
+            FramebufferSizePolicy::Force1280x720 => UiFramebufferSizePolicy::Force1280x720,
         };
-        let (render_w, render_h) = output_route.composition_geometry((fb_w, fb_h));
         Self {
-            fb_w,
-            fb_h,
-            render_w,
-            render_h,
-            output_w: geometry.output_w,
-            output_h: geometry.output_h,
-            scan_w: geometry.scan_w,
-            scan_h: geometry.scan_h,
+            fb_w: shared.fb_w,
+            fb_h: shared.fb_h,
+            render_w: shared.render_w,
+            render_h: shared.render_h,
+            output_w: shared.output_w,
+            output_h: shared.output_h,
+            scan_w: shared.scan_w,
+            scan_h: shared.scan_h,
             direct_video: output_route.is_crt(),
             output_route,
             fb_policy,
@@ -634,36 +511,6 @@ impl UiDisplayPlan {
             self.direct_video,
             self.fallback
         )
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RuntimeDisplayGeometry {
-    pub output_w: u16,
-    pub output_h: u16,
-    pub scan_w: u16,
-    pub scan_h: u16,
-}
-
-impl RuntimeDisplayGeometry {
-    pub fn from_video_words(width: u32, height: u32, de_h: u16, de_v: u16) -> Option<Self> {
-        let scan_w = u16::try_from(width).ok().filter(|value| *value > 0)?;
-        let scan_h = u16::try_from(height).ok().filter(|value| *value > 0)?;
-        let output_w = if de_h > 0 { de_h } else { scan_w };
-        let output_h = if de_v > 0 { de_v } else { scan_h };
-        if scan_w < MIN_RUNTIME_SCAN_W
-            || scan_h < MIN_RUNTIME_SCAN_H
-            || output_w < MIN_RUNTIME_SCAN_W
-            || output_h < MIN_RUNTIME_SCAN_H
-        {
-            return None;
-        }
-        Some(Self {
-            output_w,
-            output_h,
-            scan_w,
-            scan_h,
-        })
     }
 }
 
@@ -780,106 +627,6 @@ impl UiDisplay {
             self.direct_video
         )
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct VideoModeGeometry {
-    output_w: u16,
-    output_h: u16,
-    scan_w: u16,
-    scan_h: u16,
-}
-
-impl VideoModeGeometry {
-    const fn new(output_w: u16, output_h: u16) -> Self {
-        Self {
-            output_w,
-            output_h,
-            scan_w: output_w,
-            scan_h: output_h,
-        }
-    }
-
-    const fn with_scan(output_w: u16, output_h: u16, scan_w: u16, scan_h: u16) -> Self {
-        Self {
-            output_w,
-            output_h,
-            scan_w,
-            scan_h,
-        }
-    }
-}
-
-fn launcher_framebuffer_size(output_w: usize, output_h: usize) -> (usize, usize) {
-    if output_w >= 1366 || output_h >= 900 {
-        ((output_w / 2).max(1), (output_h / 2).max(1))
-    } else {
-        (output_w.max(1), output_h.max(1))
-    }
-}
-
-fn runtime_display_geometry_v1(value: &str) -> Option<VideoModeGeometry> {
-    let mut schema = None;
-    let mut mode = None;
-    for field in value.split('&') {
-        let (key, value) = field.split_once('=')?;
-        match key {
-            "schema" if schema.replace(value).is_none() => {}
-            "mode" if mode.replace(value).is_none() => {}
-            _ => return None,
-        }
-    }
-    if schema != Some("1") {
-        return None;
-    }
-    match mode? {
-        "hdmi-1280x720p60" => Some(VideoModeGeometry::new(1280, 720)),
-        "hdmi-1366x768p60" => Some(VideoModeGeometry::new(1366, 768)),
-        "hdmi-1920x1080p60" => Some(VideoModeGeometry::new(1920, 1080)),
-        "hdmi-1920x1200p60" => Some(VideoModeGeometry::new(1920, 1200)),
-        "hdmi-2048x1536p60" => Some(VideoModeGeometry::new(2048, 1536)),
-        "hdmi-2560x1440p60" => Some(VideoModeGeometry::with_scan(2560, 1440, 1280, 1440)),
-        "auto" | "custom" => None,
-        _ => None,
-    }
-}
-
-fn video_mode_geometry(value: &str) -> Option<VideoModeGeometry> {
-    let value = value.trim();
-    if let Ok(mode) = value.parse::<usize>() {
-        return predefined_video_mode(mode);
-    }
-
-    let parts = value
-        .split(',')
-        .filter_map(|part| part.trim().parse::<u16>().ok())
-        .collect::<Vec<_>>();
-    match parts.as_slice() {
-        [w, _, _, _, h, ..] => Some(VideoModeGeometry::new(*w, *h)),
-        [w, h, ..] => Some(VideoModeGeometry::new(*w, *h)),
-        _ => None,
-    }
-}
-
-fn predefined_video_mode(mode: usize) -> Option<VideoModeGeometry> {
-    const MODES: &[VideoModeGeometry] = &[
-        VideoModeGeometry::new(1280, 720),
-        VideoModeGeometry::new(1024, 768),
-        VideoModeGeometry::new(720, 480),
-        VideoModeGeometry::new(720, 576),
-        VideoModeGeometry::new(1280, 1024),
-        VideoModeGeometry::new(800, 600),
-        VideoModeGeometry::new(640, 480),
-        VideoModeGeometry::new(1280, 720),
-        VideoModeGeometry::new(1920, 1080),
-        VideoModeGeometry::new(1920, 1080),
-        VideoModeGeometry::new(1366, 768),
-        VideoModeGeometry::new(1024, 600),
-        VideoModeGeometry::new(1920, 1440),
-        VideoModeGeometry::new(2048, 1536),
-        VideoModeGeometry::with_scan(2560, 1440, 1280, 1440),
-    ];
-    MODES.get(mode).copied()
 }
 
 fn direct_video_from_parsed(parsed: &ParsedIni<'_>) -> bool {

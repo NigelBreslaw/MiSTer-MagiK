@@ -430,6 +430,44 @@ pub fn runtime_display_geometry_v1(value: &str) -> Option<DisplayGeometry> {
     geometry_for_mode_id(mode?)
 }
 
+pub fn video_mode_geometry(value: &str) -> Option<DisplayGeometry> {
+    let value = value.trim();
+    if let Ok(mode) = value.parse::<usize>() {
+        return predefined_video_mode(mode);
+    }
+
+    let parts = value
+        .split(',')
+        .filter_map(|part| part.trim().parse::<u16>().ok())
+        .collect::<Vec<_>>();
+    match parts.as_slice() {
+        [w, _, _, _, h, ..] => Some(DisplayGeometry::new(*w, *h)),
+        [w, h, ..] => Some(DisplayGeometry::new(*w, *h)),
+        _ => None,
+    }
+}
+
+pub fn predefined_video_mode(mode: usize) -> Option<DisplayGeometry> {
+    const MODES: &[DisplayGeometry] = &[
+        DisplayGeometry::new(1280, 720),
+        DisplayGeometry::new(1024, 768),
+        DisplayGeometry::new(720, 480),
+        DisplayGeometry::new(720, 576),
+        DisplayGeometry::new(1280, 1024),
+        DisplayGeometry::new(800, 600),
+        DisplayGeometry::new(640, 480),
+        DisplayGeometry::new(1280, 720),
+        DisplayGeometry::new(1920, 1080),
+        DisplayGeometry::new(1920, 1080),
+        DisplayGeometry::new(1366, 768),
+        DisplayGeometry::new(1024, 600),
+        DisplayGeometry::new(1920, 1440),
+        DisplayGeometry::new(2048, 1536),
+        DisplayGeometry::with_scan(2560, 1440, 1280, 1440),
+    ];
+    MODES.get(mode).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +541,26 @@ mod tests {
             Some(DisplayGeometry::with_scan(2560, 1440, 1280, 1440))
         );
         assert!(DisplayGeometry::from_video_words(192, 30, 192, 30).is_none());
+    }
+
+    #[test]
+    fn predefined_and_custom_video_modes_preserve_launcher_fallbacks() {
+        assert_eq!(
+            predefined_video_mode(0),
+            Some(DisplayGeometry::new(1280, 720))
+        );
+        assert_eq!(
+            predefined_video_mode(14),
+            geometry_for_mode_id("hdmi-2560x1440p60")
+        );
+        assert!(predefined_video_mode(15).is_none());
+        assert_eq!(
+            video_mode_geometry("1280,110,40,220,720,5,5,20,74250"),
+            Some(DisplayGeometry::new(1280, 720))
+        );
+        assert_eq!(
+            video_mode_geometry("1920,1200,60"),
+            Some(DisplayGeometry::new(1920, 1200))
+        );
     }
 }

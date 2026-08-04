@@ -7,130 +7,12 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
+pub use mister_magik_core::display::{DISPLAY_RESOLUTIONS, DisplayResolution};
+
 pub const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DisplayResolution {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub output_w: u16,
-    pub output_h: u16,
-    pub video_mode: Option<&'static str>,
-    pub direct_video: u8,
-    pub menu_pal: u8,
-    pub forced_scandoubler: u8,
-}
-
-const AUTOMATIC_DISPLAY_RESOLUTION: DisplayResolution = DisplayResolution {
-    id: "auto",
-    label: "Automatic (HDMI / VGA DAC)",
-    output_w: 0,
-    output_h: 0,
-    video_mode: None,
-    direct_video: 2,
-    menu_pal: 0,
-    forced_scandoubler: 0,
-};
-
-pub const DISPLAY_RESOLUTIONS: &[DisplayResolution] = &[
-    DisplayResolution {
-        id: "hdmi-1280x720p60",
-        label: "1280x720 (16:9)",
-        output_w: 1280,
-        output_h: 720,
-        video_mode: Some("0"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "hdmi-1366x768p60",
-        label: "1366x768 (16:9)",
-        output_w: 1366,
-        output_h: 768,
-        video_mode: Some("10"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "hdmi-1920x1080p60",
-        label: "1920x1080 (16:9)",
-        output_w: 1920,
-        output_h: 1080,
-        video_mode: Some("8"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "hdmi-1920x1200p60",
-        label: "1920x1200 (16:10)",
-        output_w: 1920,
-        output_h: 1200,
-        video_mode: Some("1920,1200,60"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "hdmi-2048x1536p60",
-        label: "2048x1536 (4:3)",
-        output_w: 2048,
-        output_h: 1536,
-        video_mode: Some("13"),
-        direct_video: 0,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "crt-240p60",
-        label: "CRT 240p 60hz NTSC",
-        output_w: 640,
-        output_h: 240,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 0,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "crt-480p60",
-        label: "CRT 480p 60hz NTSC",
-        output_w: 640,
-        output_h: 480,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 0,
-        forced_scandoubler: 1,
-    },
-    DisplayResolution {
-        id: "crt-288p50",
-        label: "CRT 288p 50hz PAL",
-        output_w: 640,
-        output_h: 288,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 1,
-        forced_scandoubler: 0,
-    },
-    DisplayResolution {
-        id: "crt-576p50",
-        label: "CRT 576p 50hz PAL",
-        output_w: 640,
-        output_h: 576,
-        video_mode: None,
-        direct_video: 1,
-        menu_pal: 1,
-        forced_scandoubler: 1,
-    },
-];
-
 pub fn find(id: &str) -> Option<&'static DisplayResolution> {
-    if id == AUTOMATIC_DISPLAY_RESOLUTION.id {
-        Some(&AUTOMATIC_DISPLAY_RESOLUTION)
-    } else {
-        DISPLAY_RESOLUTIONS.iter().find(|mode| mode.id == id)
-    }
+    mister_magik_core::display::find_display_resolution(id)
 }
 
 pub fn persist(id: &str) -> io::Result<()> {
@@ -255,7 +137,7 @@ mod tests {
             assert!(!mode.label.is_empty());
         }
         assert!(DISPLAY_RESOLUTIONS.iter().all(|mode| mode.id != "auto"));
-        assert_eq!(find("auto"), Some(&AUTOMATIC_DISPLAY_RESOLUTION));
+        assert_eq!(find("auto").map(|mode| mode.id), Some("auto"));
     }
 
     #[test]
