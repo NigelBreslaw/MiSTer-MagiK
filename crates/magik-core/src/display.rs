@@ -274,10 +274,14 @@ impl ResolvedDisplayPlan {
 
 pub const fn launcher_framebuffer_size(output_w: usize, output_h: usize) -> (usize, usize) {
     if output_w >= 1366 || output_h >= 900 {
-        ((output_w / 2).max(1), (output_h / 2).max(1))
+        (at_least_one(output_w / 2), at_least_one(output_h / 2))
     } else {
-        (output_w.max(1), output_h.max(1))
+        (at_least_one(output_w), at_least_one(output_h))
     }
+}
+
+const fn at_least_one(value: usize) -> usize {
+    if value == 0 { 1 } else { value }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
