@@ -396,7 +396,7 @@ impl CardFlip {
             first += 1;
         }
         if first == WIDTH {
-            return 0;
+            return render_spine(destination, outline);
         }
         let mut last = WIDTH - 1;
         while last > first && unsafe { !(*columns.add(last)).valid } {
@@ -550,9 +550,8 @@ fn render_spine(destination: &mut [Rgb565Pixel], outline: Rgb565Pixel) -> usize 
     let mut writes = 0;
     for y in CARD_Y..CARD_Y + CARD_HEIGHT {
         let inset = corner_inset(y - CARD_Y);
-        for x in x0 + inset.min(MINIMUM_SPINE_WIDTH / 2)
-            ..x0 + MINIMUM_SPINE_WIDTH - inset.min(MINIMUM_SPINE_WIDTH / 2)
-        {
+        let inset = inset.min((MINIMUM_SPINE_WIDTH - 1) / 2);
+        for x in x0 + inset..x0 + MINIMUM_SPINE_WIDTH - inset {
             let edge = x < x0 + OUTLINE_WIDTH
                 || x >= x0 + MINIMUM_SPINE_WIDTH - OUTLINE_WIDTH
                 || !(CARD_Y + OUTLINE_WIDTH..CARD_Y + CARD_HEIGHT - OUTLINE_WIDTH).contains(&y);
@@ -733,7 +732,7 @@ mod tests {
     use super::*;
 
     fn frame(scene: &mut CardFlip, at: Duration) -> Vec<Rgb565Pixel> {
-        let mut pixels = vec![Rgb565Pixel(0); WIDTH * HEIGHT];
+        let mut pixels = vec![BACKGROUND; WIDTH * HEIGHT];
         scene.render(&mut pixels, at).unwrap();
         pixels
     }

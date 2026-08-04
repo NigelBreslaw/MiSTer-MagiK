@@ -562,6 +562,9 @@ impl CardFlipLabControls {
         let reverse = button_b && !self.previous_b;
         self.previous_a = button_a;
         self.previous_b = button_b;
+        if button_a && button_b {
+            return None;
+        }
         match (forward, reverse) {
             (true, false) => Some(CardFlipDirection::Forward),
             (false, true) => Some(CardFlipDirection::Reverse),
