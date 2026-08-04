@@ -8,9 +8,9 @@ use std::time::Duration;
 #[cfg(mister_experiments)]
 use crate::experiments::preview_transitions as experiment_preview_transitions;
 use crate::preview_state::PreviewRawTransitionFrame;
-use mister_magik_fb::preview_transition::{PreviewTransitionController, transition_duration};
+use mister_magik_fb::preview_transition::{PreviewTransitionController, transition_duration_ratio};
 
-const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 200;
+const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 130;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewTransitionEffect {
@@ -332,7 +332,11 @@ impl PreviewTransitionDemo {
     ) -> PreviewTransitionTrace {
         let scheduled_effect = self.current_effect(elapsed);
         let duration = frame.map_or(self.duration, |frame| {
-            transition_duration(self.duration, frame.duration_divisor)
+            transition_duration_ratio(
+                self.duration,
+                frame.duration_numerator,
+                frame.duration_denominator,
+            )
         });
         let state = self.timeline.update(
             frame.map(|frame| frame.transition_id),
@@ -377,9 +381,10 @@ mod tests {
         }
     }
 
-    fn transition_frame_with_divisor(
+    fn transition_frame_with_ratio(
         transition_id: u64,
-        duration_divisor: u32,
+        duration_numerator: u32,
+        duration_denominator: u32,
     ) -> PreviewRawTransitionFrame<'static> {
         let frame = || PreviewRawFrame {
             pixels: PreviewRawPixels::Empty,
@@ -392,12 +397,13 @@ mod tests {
             previous: Some(frame()),
             current: frame(),
             transition_id,
-            duration_divisor,
+            duration_numerator,
+            duration_denominator,
         }
     }
 
     fn transition_frame(transition_id: u64) -> PreviewRawTransitionFrame<'static> {
-        transition_frame_with_divisor(transition_id, 1)
+        transition_frame_with_ratio(transition_id, 1, 1)
     }
 
     #[test]
@@ -439,17 +445,20 @@ mod tests {
 
     #[test]
     fn rapid_retargets_keep_the_initial_effective_duration() {
-        let mut demo = transition_demo(Duration::from_millis(200));
+        let mut demo = transition_demo(Duration::from_millis(130));
 
-        demo.update(Some(&transition_frame_with_divisor(1, 2)), Duration::ZERO);
+        demo.update(
+            Some(&transition_frame_with_ratio(1, 63, 130)),
+            Duration::ZERO,
+        );
         let turbo = demo.update(
-            Some(&transition_frame_with_divisor(2, 2)),
-            Duration::from_millis(50),
+            Some(&transition_frame_with_ratio(2, 63, 130)),
+            Duration::from_micros(31_500),
         );
         assert_eq!(turbo.progress, 0.5);
         let normal_retarget = demo.update(
-            Some(&transition_frame_with_divisor(3, 1)),
-            Duration::from_millis(75),
+            Some(&transition_frame_with_ratio(3, 1, 1)),
+            Duration::from_micros(47_250),
         );
         assert_eq!(normal_retarget.progress, 0.75);
     }
@@ -462,7 +471,7 @@ mod tests {
             PreviewTransitionEffect::all(),
             &[PreviewTransitionEffect::Fade]
         );
-        assert_eq!(DEFAULT_PREVIEW_TRANSITION_MS, 200);
+        assert_eq!(DEFAULT_PREVIEW_TRANSITION_MS, 130);
     }
 
     #[test]
@@ -487,14 +496,18 @@ mod tests {
     }
 
     #[test]
-    fn transition_duration_divisor_shortens_fade() {
+    fn transition_duration_ratio_sets_exact_turbo_fade() {
         assert_eq!(
-            transition_duration(Duration::from_millis(200), 2),
-            Duration::from_millis(100)
+            transition_duration_ratio(Duration::from_millis(130), 63, 130),
+            Duration::from_millis(63)
         );
         assert_eq!(
-            transition_duration(Duration::from_millis(200), 0),
-            Duration::from_millis(200)
+            transition_duration_ratio(Duration::from_millis(130), 1, 1),
+            Duration::from_millis(130)
+        );
+        assert_eq!(
+            transition_duration_ratio(Duration::from_millis(130), 0, 0),
+            Duration::from_millis(130)
         );
     }
 

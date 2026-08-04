@@ -122,6 +122,13 @@ pub fn transition_duration(duration: Duration, divisor: u32) -> Duration {
     Duration::from_micros(micros.min(u64::MAX as u128) as u64)
 }
 
+pub fn transition_duration_ratio(duration: Duration, numerator: u32, denominator: u32) -> Duration {
+    let numerator = numerator.max(1) as u128;
+    let denominator = denominator.max(1) as u128;
+    let micros = (duration.as_micros().saturating_mul(numerator) / denominator).max(1);
+    Duration::from_micros(micros.min(u64::MAX as u128) as u64)
+}
+
 fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
     let denominator = duration.as_secs_f32();
     if denominator <= 0.0 {

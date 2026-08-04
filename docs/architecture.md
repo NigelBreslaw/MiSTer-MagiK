@@ -387,8 +387,9 @@ currently presented surface: an existing image stays visible, while a request
 started from empty stays black. A transition to `Empty` keeps the direct layer
 owned until black has been written to the cached preview rectangle and the
 final black frame is confirmed active. Only then may the latch restore the
-cached base and retire the layer. Normal transitions use 200 ms; velocity-list
-turbo transitions retain their existing half-duration timing.
+cached base and retire the layer. Normal transitions use 130 ms and
+velocity-list turbo transitions use 63 ms, completing just before their
+respective constant-velocity row intervals.
 
 ```mermaid
 stateDiagram-v2

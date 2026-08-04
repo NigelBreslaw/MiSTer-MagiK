@@ -24,7 +24,8 @@ const DEFAULT_TURBO_PREVIEW_LOOKAHEAD: usize = 32;
 const MAX_TURBO_PREVIEW_LOOKAHEAD: usize = 64;
 const TURBO_PREVIEW_BACKTAIL: usize = 4;
 const TURBO_PREVIEW_CACHE_CAP: usize = 512;
-const TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR: u32 = 2;
+const TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR: u32 = 63;
+const TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR: u32 = 130;
 const PREFETCH_SCROLL_SETTLE: Duration = Duration::from_millis(40);
 pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
 pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
@@ -322,7 +323,8 @@ pub(crate) struct PreviewState {
     empty_base_commit_pending: bool,
     selection_transition: PreviewSelectionTransition,
     raw_transition_id: u64,
-    raw_transition_duration_divisor: u32,
+    raw_transition_duration_numerator: u32,
+    raw_transition_duration_denominator: u32,
     window_preview_keys: Vec<String>,
     window_shape: Option<PreviewWindowShape>,
     pending_prefetch_keys: HashSet<String>,
@@ -461,7 +463,8 @@ pub(crate) struct PreviewRawTransitionFrame<'a> {
     pub(crate) previous: Option<PreviewRawFrame<'a>>,
     pub(crate) current: PreviewRawFrame<'a>,
     pub(crate) transition_id: u64,
-    pub(crate) duration_divisor: u32,
+    pub(crate) duration_numerator: u32,
+    pub(crate) duration_denominator: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -471,10 +474,13 @@ enum PreviewTransitionPace {
 }
 
 impl PreviewTransitionPace {
-    fn duration_divisor(self) -> u32 {
+    fn duration_ratio(self) -> (u32, u32) {
         match self {
-            Self::Normal => 1,
-            Self::Turbo => TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR,
+            Self::Normal => (1, 1),
+            Self::Turbo => (
+                TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR,
+                TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR,
+            ),
         }
     }
 }
@@ -538,7 +544,8 @@ impl PreviewState {
             empty_base_commit_pending: false,
             selection_transition: PreviewSelectionTransition::InstantOnEntry,
             raw_transition_id: 0,
-            raw_transition_duration_divisor: 1,
+            raw_transition_duration_numerator: 1,
+            raw_transition_duration_denominator: 1,
             window_preview_keys: Vec::new(),
             window_shape: None,
             pending_prefetch_keys: HashSet::new(),
@@ -577,7 +584,8 @@ impl PreviewState {
                 self.previous_image = None;
                 self.previous_was_empty = false;
                 self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-                self.raw_transition_duration_divisor = 1;
+                self.raw_transition_duration_numerator = 1;
+                self.raw_transition_duration_denominator = 1;
                 self.raw_dirty = false;
             }
             self.window_preview_keys.clear();
@@ -659,7 +667,10 @@ impl PreviewState {
             && !had_visible_preview
             && self.selection_transition == PreviewSelectionTransition::CrossFade;
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-        self.raw_transition_duration_divisor = pace.duration_divisor();
+        (
+            self.raw_transition_duration_numerator,
+            self.raw_transition_duration_denominator,
+        ) = pace.duration_ratio();
     }
 
     fn begin_raw_transition_to_empty(&mut self, pace: PreviewTransitionPace) {
@@ -678,7 +689,10 @@ impl PreviewState {
         self.visible_preview_key.clear();
         self.visible_preview_load_source = "none";
         self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-        self.raw_transition_duration_divisor = pace.duration_divisor();
+        (
+            self.raw_transition_duration_numerator,
+            self.raw_transition_duration_denominator,
+        ) = pace.duration_ratio();
         self.raw_dirty = true;
     }
 
@@ -807,7 +821,8 @@ impl PreviewState {
             previous,
             current,
             transition_id: self.raw_transition_id,
-            duration_divisor: self.raw_transition_duration_divisor,
+            duration_numerator: self.raw_transition_duration_numerator,
+            duration_denominator: self.raw_transition_duration_denominator,
         })
     }
 }
@@ -2836,7 +2851,7 @@ mod tests {
     }
 
     #[test]
-    fn turbo_empty_retarget_keeps_half_duration_and_can_retarget_to_image() {
+    fn turbo_empty_retarget_keeps_63_over_130_duration_and_can_retarget_to_image() {
         let mut preview = PreviewState::new();
         preview.cache.insert(
             "1941.png".into(),
@@ -2855,12 +2870,16 @@ mod tests {
         preview.visible_preview_key = "1941.png".into();
 
         preview.select_empty_preview(PreviewTransitionPace::Turbo);
+        let empty_frame = preview.raw_transition_frame().expect("turbo empty frame");
         assert_eq!(
-            preview
-                .raw_transition_frame()
-                .expect("turbo empty frame")
-                .duration_divisor,
-            TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR
+            (
+                empty_frame.duration_numerator,
+                empty_frame.duration_denominator,
+            ),
+            (
+                TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR,
+                TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR,
+            )
         );
 
         preview.has_visible_preview = true;
@@ -2874,12 +2893,16 @@ mod tests {
                 target: PreviewPresentationTarget::Image
             }
         );
+        let image_frame = preview.raw_transition_frame().expect("turbo image frame");
         assert_eq!(
-            preview
-                .raw_transition_frame()
-                .expect("turbo image frame")
-                .duration_divisor,
-            TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR
+            (
+                image_frame.duration_numerator,
+                image_frame.duration_denominator,
+            ),
+            (
+                TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR,
+                TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR,
+            )
         );
     }
 
@@ -3024,17 +3047,17 @@ mod tests {
 
         preview.begin_raw_transition_to("selected.png", preview_transition_pace(false));
 
+        let frame = preview
+            .raw_transition_frame()
+            .expect("normal transition frame");
         assert_eq!(
-            preview
-                .raw_transition_frame()
-                .expect("normal transition frame")
-                .duration_divisor,
-            1
+            (frame.duration_numerator, frame.duration_denominator),
+            (1, 1)
         );
     }
 
     #[test]
-    fn raw_transition_uses_half_duration_for_turbo_pace() {
+    fn raw_transition_uses_63_over_130_duration_for_turbo_pace() {
         let mut preview = PreviewState::new();
         preview.cache.insert(
             "previous.png".into(),
@@ -3059,12 +3082,15 @@ mod tests {
             previous_transition_id.wrapping_add(1)
         );
         assert!(preview.previous_image.is_some());
+        let frame = preview
+            .raw_transition_frame()
+            .expect("turbo transition frame");
         assert_eq!(
-            preview
-                .raw_transition_frame()
-                .expect("turbo transition frame")
-                .duration_divisor,
-            TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR
+            (frame.duration_numerator, frame.duration_denominator),
+            (
+                TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR,
+                TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR,
+            )
         );
     }
 
