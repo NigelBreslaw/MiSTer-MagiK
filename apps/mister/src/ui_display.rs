@@ -8,8 +8,8 @@
 //! scale it to the final HDMI/direct-video rectangle.
 
 pub use mister_magik_core::display::{
-    CRT_COMPOSITION_H, CRT_COMPOSITION_W, DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute,
-    RuntimeDisplayGeometry, UI_FB_720P_H, UI_FB_720P_W, UI_FB_H, UI_FB_W,
+    DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute, RuntimeDisplayGeometry, UI_FB_H,
+    UI_FB_W,
 };
 use mister_magik_core::display::{
     DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
