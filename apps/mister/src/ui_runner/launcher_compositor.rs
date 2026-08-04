@@ -54,25 +54,32 @@ impl<'a> LayerTarget<'a> {
         Self { target, ui }
     }
 
-    pub(super) fn render_slint_base(&mut self, window: &MisterSoftwareWindow) -> Option<DirtyRect> {
+    pub(super) fn render_slint_base(
+        &mut self,
+        window: &MisterSoftwareWindow,
+    ) -> (Option<DirtyRect>, DirtyRectList) {
         let mut slint_dirty = None;
+        let mut slint_damage = DirtyRectList::new();
         window.draw_if_needed(|renderer| {
             let region = self.target.render(renderer, frame_target_geometry(self.ui));
             slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
+            slint_damage = dirty_rects(&region, self.ui.render_w(), self.ui.render_h());
         });
-        slint_dirty
+        (slint_dirty, slint_damage)
     }
 
     pub(super) fn render_slint_full(
         &mut self,
         window: &MisterSoftwareWindow,
-    ) -> (Option<DirtyRect>, bool) {
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
         let mut slint_dirty = None;
+        let mut slint_damage = DirtyRectList::new();
         let rendered = window.draw_full_frame_if_needed(|renderer| {
             let region = self.target.render(renderer, frame_target_geometry(self.ui));
             slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
+            slint_damage = dirty_rects(&region, self.ui.render_w(), self.ui.render_h());
         });
-        (slint_dirty, rendered)
+        (slint_dirty, slint_damage, rendered)
     }
 
     pub(super) fn render_black(&mut self) -> DirtyRect {

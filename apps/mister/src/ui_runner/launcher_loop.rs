@@ -5746,6 +5746,7 @@ pub(super) fn run_launcher_loop(
             && !retiring_screensaver_pipelines.is_empty())
             || (screensaver_direct_pipeline.is_none() && !retiring_direct_pipelines.is_empty());
         let mut slint_base_rendered = false;
+        let mut slint_damage = DirtyRectList::new();
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if screensaver_direct_pipeline.is_some() {
                 Some(DirtyRect {
@@ -5784,17 +5785,23 @@ pub(super) fn run_launcher_loop(
         } else if navigation_snapshot_locked_before_render {
             None
         } else if composition_decision.force_full_slint_raster {
-            let (dirty, rendered) = layer_target.render_slint_full(&window);
+            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+            slint_damage = damage;
             slint_base_rendered = rendered;
             dirty
         } else if startup_intro_prepare_live_launcher {
-            layer_target.render_slint_base(&window)
+            let (dirty, damage) = layer_target.render_slint_base(&window);
+            slint_damage = damage;
+            dirty
         } else {
-            expand_home_pan_dirty_rect(
-                layer_target.render_slint_base(&window),
-                ui,
-                home_pan_present_active,
-            )
+            let (dirty, damage) = layer_target.render_slint_base(&window);
+            let expanded = expand_home_pan_dirty_rect(dirty, ui, home_pan_present_active);
+            slint_damage = if expanded == dirty {
+                damage
+            } else {
+                expanded.map_or_else(DirtyRectList::new, DirtyRectList::from_one)
+            };
+            expanded
         };
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
@@ -6052,11 +6059,6 @@ pub(super) fn run_launcher_loop(
             x1: ui.render_w(),
             y1: ui.render_h(),
         };
-        let base_damage = if full_frame_present {
-            Some(full_rect)
-        } else {
-            this_rect
-        };
         let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
         if raw_preview_direct_rect.is_some() {
@@ -6100,8 +6102,15 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let mut cached_damage = DirtyRectList::new();
-        cached_damage.push_if_some(base_damage);
+        let mut cached_damage = if full_frame_present {
+            DirtyRectList::from_one(full_rect)
+        } else if slint_damage.is_empty() {
+            let mut damage = DirtyRectList::new();
+            damage.push_if_some(this_rect);
+            damage
+        } else {
+            slint_damage
+        };
         cached_damage.push_if_some(empty_base_cached_rect);
         cached_damage.push_if_some(raw_preview_cached_rect);
         cached_damage.push_if_some(crt_arcade_cached_rect);
