@@ -232,6 +232,7 @@ pub enum SceneLabScene {
     Cabinet,
     Intro,
     NavigationTransition,
+    CardFlip,
 }
 
 impl SceneLabScene {
@@ -241,6 +242,7 @@ impl SceneLabScene {
             Self::Cabinet => "cabinet",
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
+            Self::CardFlip => "card-flip",
         }
     }
 }

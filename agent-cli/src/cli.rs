@@ -441,6 +441,71 @@ mod tests {
     }
 
     #[test]
+    fn card_flip_scene_lab_commands_are_typed_and_recipe_free() {
+        assert!(
+            Cli::try_parse_from(["agent-cli", "scene-lab", "preview", "--scene", "card-flip"])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "scene-lab",
+                "capture",
+                "--scene",
+                "card-flip",
+                "--time-ms",
+                "0",
+                "--output",
+                "/tmp/card-flip-front.ppm",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "scene-lab",
+                "capture",
+                "--scene",
+                "card-flip",
+                "--direction",
+                "reverse",
+                "--time-ms",
+                "220",
+                "--output",
+                "/tmp/card-flip.ppm",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "device",
+                "scene-lab",
+                "--scene",
+                "card-flip",
+                "--attended",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "scene-lab",
+                "capture",
+                "--scene",
+                "card-flip",
+                "--direction",
+                "sideways",
+                "--time-ms",
+                "220",
+                "--output",
+                "/tmp/card-flip.ppm",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn compile_time_commands_require_closed_targets_and_explicit_paths() {
         assert!(
             Cli::try_parse_from([

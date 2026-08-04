@@ -82,7 +82,9 @@ pub struct SceneCaptureArgs {
     #[arg(long, value_enum)]
     scene: SceneLabScene,
     #[arg(long)]
-    recipe: PathBuf,
+    recipe: Option<PathBuf>,
+    #[arg(long, value_enum)]
+    direction: Option<CardFlipDirection>,
     #[arg(long)]
     time_ms: u64,
     #[arg(long)]
@@ -95,6 +97,7 @@ pub enum SceneLabScene {
     Cabinet,
     Intro,
     NavigationTransition,
+    CardFlip,
 }
 
 impl SceneLabScene {
@@ -104,6 +107,23 @@ impl SceneLabScene {
             Self::Cabinet => "cabinet",
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
+            Self::CardFlip => "card-flip",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+enum CardFlipDirection {
+    #[default]
+    Forward,
+    Reverse,
+}
+
+impl CardFlipDirection {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
         }
     }
 }
@@ -138,16 +158,32 @@ pub fn execute_scene_preview(
 }
 
 fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> {
-    if args.scene == SceneLabScene::NavigationTransition {
-        return Err("scene-lab capture currently accepts particle recipes only".into());
-    }
-    let actual = recipe_scene(&args.recipe)?;
-    if actual != args.scene.label() {
-        return Err(format!(
-            "--scene {} does not match the {actual} recipe",
-            args.scene.label()
-        )
-        .into());
+    match args.scene {
+        SceneLabScene::Magik | SceneLabScene::Cabinet | SceneLabScene::Intro => {
+            let recipe = args
+                .recipe
+                .as_deref()
+                .ok_or("particle scene capture requires --recipe")?;
+            if args.direction.is_some() {
+                return Err("particle scene capture does not accept --direction".into());
+            }
+            let actual = recipe_scene(recipe)?;
+            if actual != args.scene.label() {
+                return Err(format!(
+                    "--scene {} does not match the {actual} recipe",
+                    args.scene.label()
+                )
+                .into());
+            }
+        }
+        SceneLabScene::NavigationTransition => {
+            return Err("scene-lab capture does not yet accept navigation fixtures".into());
+        }
+        SceneLabScene::CardFlip => {
+            if args.recipe.is_some() {
+                return Err("card-flip does not accept --recipe".into());
+            }
+        }
     }
     let lab = repository.join(LAB_DIR);
     let mut build = Command::new("cargo");
@@ -174,9 +210,17 @@ fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> 
     } else {
         repository.join(&args.output)
     };
-    let status = Command::new(&binary)
-        .args(["--scene", args.scene.label(), "--recipe"])
-        .arg(&args.recipe)
+    let mut capture = Command::new(&binary);
+    capture.args(["--scene", args.scene.label()]);
+    if let Some(recipe) = args.recipe.as_deref() {
+        capture.arg("--recipe").arg(recipe);
+    }
+    if args.scene == SceneLabScene::CardFlip {
+        capture
+            .arg("--direction")
+            .arg(args.direction.unwrap_or_default().label());
+    }
+    let status = capture
         .args(["--time-ms", &args.time_ms.to_string(), "--output"])
         .arg(output)
         .status()
@@ -293,6 +337,11 @@ pub fn execute_scene_device(
                     .ok_or("navigation-transition requires --fixture")?,
             )?;
         }
+        DeviceSceneLabScene::CardFlip => {
+            if args.recipe.is_some() || args.fixture.is_some() {
+                return Err("card-flip does not accept --recipe or --fixture".into());
+            }
+        }
     }
     if let Some(case) = args.case.as_deref() {
         if args.scene != DeviceSceneLabScene::Cabinet {
@@ -352,6 +401,12 @@ fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> 
                 .ok_or("navigation-transition requires --fixture")?;
             validate_navigation_fixture(fixture)?;
             run_preview(repository, args.scene.label(), None, Some(fixture))
+        }
+        SceneLabScene::CardFlip => {
+            if args.recipe.is_some() || args.fixture.is_some() {
+                return Err("card-flip does not accept --recipe or --fixture".into());
+            }
+            run_preview(repository, args.scene.label(), None, None)
         }
     }
 }

@@ -100,6 +100,7 @@ fn run_lab(
     case: Option<&str>,
     profile: bool,
 ) -> Result<()> {
+    let has_recipe = recipe.is_some();
     let session = connect_with(&prepared.config.connection, 10)?;
     let destination = active_lab_destination(&session)?;
     if let Err(error) = prepare_lab_files(&session, binary, recipe, scene, fixture) {
@@ -130,6 +131,7 @@ fn run_lab(
                 &run_config,
                 destination,
                 &scene,
+                has_recipe,
                 fixture.as_deref(),
                 case.as_deref(),
                 profile,
@@ -346,7 +348,7 @@ fn prepare_lab_files(
         &format!(
             "{} --check {}",
             sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, fixture)
+            remote_scene_arguments(scene, recipe.is_some(), fixture)
         ),
     )
 }
@@ -583,6 +585,7 @@ fn run_remote_lab(
     config: &super::remote::ConnectionConfig,
     destination: (u16, u16),
     scene: &str,
+    has_recipe: bool,
     fixture: Option<&str>,
     case: Option<&str>,
     profile: bool,
@@ -590,7 +593,7 @@ fn run_remote_lab(
     let session = connect_with(config, 10)?;
     stream_exec(
         &session,
-        &remote_run_lab_command(destination, scene, fixture, case, profile),
+        &remote_run_lab_command(destination, scene, has_recipe, fixture, case, profile),
     )
 }
 
@@ -694,16 +697,20 @@ fn remote_publish_lab_command(binary_hash: &str, recipe_hash: Option<&str>) -> S
     )
 }
 
-fn remote_scene_arguments(scene: &str, fixture: Option<&str>) -> String {
-    fixture.map_or_else(
-        || format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE)),
-        |fixture| format!("--scene {} --fixture {}", sh(scene), sh(fixture)),
-    )
+fn remote_scene_arguments(scene: &str, has_recipe: bool, fixture: Option<&str>) -> String {
+    if has_recipe {
+        format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE))
+    } else if let Some(fixture) = fixture {
+        format!("--scene {} --fixture {}", sh(scene), sh(fixture))
+    } else {
+        format!("--scene {}", sh(scene))
+    }
 }
 
 fn remote_run_lab_command(
     destination: (u16, u16),
     scene: &str,
+    has_recipe: bool,
     fixture: Option<&str>,
     case: Option<&str>,
     profile: bool,
@@ -714,7 +721,7 @@ fn remote_run_lab_command(
         "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} {case_argument} {profile_argument} --destination-width {destination_width} --destination-height {destination_height}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
-        scene_arguments = remote_scene_arguments(scene, fixture),
+        scene_arguments = remote_scene_arguments(scene, has_recipe, fixture),
         case_argument = case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
         profile_argument = if profile { "--profile" } else { "" },
         destination_width = destination.0,
@@ -749,11 +756,12 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080), "magik", None, None, false);
+        let run = remote_run_lab_command((1920, 1080), "magik", true, None, None, false);
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
         assert!(!run.contains("/media/fat/mister-magik/mister-magik-fb"));
+        assert!(run.contains("--recipe"));
         assert!(run.contains("--destination-width 1920 --destination-height 1080"));
     }
 
@@ -762,6 +770,7 @@ mod tests {
         let run = remote_run_lab_command(
             (1920, 1080),
             "navigation-transition",
+            false,
             Some("home-arcade"),
             None,
             false,
@@ -772,6 +781,16 @@ mod tests {
             sh("home-arcade")
         )));
         assert!(!run.contains("--recipe"));
+        assert!(run.contains("mister_magik_suspend"));
+        assert!(run.contains("mister_magik_resume"));
+    }
+
+    #[test]
+    fn card_flip_lab_is_self_contained() {
+        let run = remote_run_lab_command((1920, 1080), "card-flip", false, None, None, false);
+        assert!(run.contains(&format!("--scene {}", sh("card-flip"))));
+        assert!(!run.contains("--recipe"));
+        assert!(!run.contains("--fixture"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
     }
