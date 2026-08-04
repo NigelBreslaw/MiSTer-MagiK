@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::{ArcadeListUpdate, arcade_update_dirty_rect};
+use mister_magik_fb::framebuffer::damage::TwoSlotDamageLedger;
 use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +37,6 @@ impl DirectLayerState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LatchSlotCoherency {
-    base_invalid: DirtyRectList,
     preview_present: Option<DirectLayerState>,
     arcade_present: Option<DirectLayerState>,
     hardware: LatchSlotHardwareState,
@@ -117,7 +117,6 @@ pub(super) struct LatchPresentPlan {
     pub(super) restore_rects: DirtyRectList,
     pub(super) preview_redraw: Option<DirtyRect>,
     pub(super) arcade_redraw: Option<ArcadeListUpdate>,
-    cached_damage: DirtyRectList,
     preview_after: Option<DirectLayerState>,
     arcade_after: Option<DirectLayerState>,
 }
@@ -125,42 +124,33 @@ pub(super) struct LatchPresentPlan {
 #[derive(Clone, Debug)]
 pub(super) struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],
+    base_damage: TwoSlotDamageLedger,
     next_slot_index: u8,
-    full_rect: DirtyRect,
 }
 
 impl TwoBufferLatchState {
     pub(super) fn new(width: usize, height: usize) -> Self {
-        let full_rect = DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: width,
-            y1: height,
-        };
-        let full_invalid = DirtyRectList::from_one(full_rect);
         Self {
             slots: [
                 LatchSlotCoherency {
-                    base_invalid: full_invalid,
                     preview_present: None,
                     arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
                 },
                 LatchSlotCoherency {
-                    base_invalid: full_invalid,
                     preview_present: None,
                     arcade_present: None,
                     hardware: LatchSlotHardwareState::Unknown,
                 },
             ],
+            base_damage: TwoSlotDamageLedger::new(width, height),
             next_slot_index: 1,
-            full_rect,
         }
     }
 
     pub(super) fn invalidate_all(&mut self) {
+        self.base_damage.invalidate_all();
         for slot in &mut self.slots {
-            slot.base_invalid = DirtyRectList::from_one(self.full_rect);
             slot.preview_present = None;
             slot.arcade_present = None;
             slot.hardware = LatchSlotHardwareState::Unknown;
@@ -190,31 +180,25 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub(super) fn plan_next(&self, input: LauncherFramePlan) -> Option<LatchPresentPlan> {
+    pub(super) fn plan_next(&mut self, input: LauncherFramePlan) -> Option<LatchPresentPlan> {
+        self.base_damage.record_damage(&input.cached_damage);
         let slot_index = self.select_writable_slot()?;
         Some(self.plan_for_slot(slot_index, input))
     }
 
     pub(super) fn mark_post_success(&mut self, plan: LatchPresentPlan) {
         let slot_index = plan.slot_index;
-        let other_index = other_slot(slot_index);
-
+        self.base_damage.mark_presented(slot_index);
         let selected = self.slot_mut(slot_index);
-        selected.base_invalid.clear();
         selected.preview_present = plan.preview_after;
         selected.arcade_present = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
-
-        self.slot_mut(other_index)
-            .base_invalid
-            .extend_from(&plan.cached_damage);
-        self.next_slot_index = other_index;
+        self.next_slot_index = other_slot(slot_index);
     }
 
     pub(super) fn mark_attempt_failed(&mut self, slot_index: u8) {
-        let full_rect = self.full_rect;
+        self.base_damage.mark_attempt_failed(slot_index);
         let slot = self.slot_mut(slot_index);
-        slot.base_invalid = DirtyRectList::from_one(full_rect);
         slot.preview_present = None;
         slot.arcade_present = None;
         slot.hardware = LatchSlotHardwareState::Unknown;
@@ -222,7 +206,7 @@ impl TwoBufferLatchState {
 
     pub(super) fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
-        let mut bytes = slot.base_invalid.total_rgb565_bytes();
+        let mut bytes = self.base_damage.invalid_bytes(slot_index);
         if let Some(preview) = slot.preview_present {
             bytes = bytes.saturating_add(rect_bytes(preview.rect));
         }
@@ -254,9 +238,7 @@ impl TwoBufferLatchState {
 
     fn plan_for_slot(&self, slot_index: u8, input: LauncherFramePlan) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
-        let mut restore_rects = DirtyRectList::new();
-        extend_without_covered_rects(&mut restore_rects, &slot.base_invalid);
-        extend_without_covered_rects(&mut restore_rects, &input.cached_damage);
+        let mut restore_rects = self.base_damage.plan(slot_index);
 
         let restore_preview =
             direct_layer_needs_restore(slot.preview_present, input.preview_desired);
@@ -299,7 +281,6 @@ impl TwoBufferLatchState {
             restore_rects,
             preview_redraw,
             arcade_redraw,
-            cached_damage: input.cached_damage,
             preview_after: input.preview_desired,
             arcade_after: input.arcade_desired,
         }
