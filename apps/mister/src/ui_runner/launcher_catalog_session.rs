@@ -72,10 +72,10 @@ pub(super) enum CatalogSessionEffect {
         rebuilt: Vec<String>,
         removed: Vec<String>,
     },
-    CatalogSystemReady {
+    CatalogSystemUpdateFailed {
         system_id: String,
     },
-    CatalogSystemFailed {
+    CatalogSystemHydrationFailed {
         system_id: String,
     },
     PersistCatalogFailure {
@@ -346,7 +346,7 @@ impl LauncherCatalogSession {
                 });
             }
             CatalogWorkerMessage::SystemUpdateFailed { system_id, error } => {
-                effects.push(CatalogSessionEffect::CatalogSystemFailed {
+                effects.push(CatalogSessionEffect::CatalogSystemUpdateFailed {
                     system_id: system_id.clone(),
                 });
                 effects.event(
@@ -366,13 +366,10 @@ impl LauncherCatalogSession {
                 });
             }
             CatalogWorkerMessage::SystemShardReady { system_id, games } => {
-                effects.push(CatalogSessionEffect::CatalogSystemReady {
-                    system_id: system_id.clone(),
-                });
                 effects.push(CatalogSessionEffect::ApplySystemShard { system_id, games });
             }
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
-                effects.push(CatalogSessionEffect::CatalogSystemFailed {
+                effects.push(CatalogSessionEffect::CatalogSystemHydrationFailed {
                     system_id: system_id.clone(),
                 });
                 effects.event(
@@ -933,8 +930,8 @@ mod tests {
                         | CatalogSessionEffect::CatalogSystemScanning { .. }
                         | CatalogSessionEffect::CatalogSystemPrepared { .. }
                         | CatalogSessionEffect::CatalogManifestPublished { .. }
-                        | CatalogSessionEffect::CatalogSystemReady { .. }
-                        | CatalogSessionEffect::CatalogSystemFailed { .. }
+                        | CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+                        | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
                         | CatalogSessionEffect::PersistCatalogFailure { .. }
                         | CatalogSessionEffect::CatalogBuildFinished
                         | CatalogSessionEffect::ApplySystemShard { .. }
@@ -955,8 +952,8 @@ mod tests {
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemPrepared { .. }
                 | CatalogSessionEffect::CatalogManifestPublished { .. }
-                | CatalogSessionEffect::CatalogSystemReady { .. }
-                | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+                | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }
                 | CatalogSessionEffect::CatalogBuildFinished
                 | CatalogSessionEffect::ApplySystemShard { .. } => {
@@ -992,8 +989,8 @@ mod tests {
                     | CatalogSessionEffect::CatalogSystemScanning { .. }
                     | CatalogSessionEffect::CatalogSystemPrepared { .. }
                     | CatalogSessionEffect::CatalogManifestPublished { .. }
-                    | CatalogSessionEffect::CatalogSystemReady { .. }
-                    | CatalogSessionEffect::CatalogSystemFailed { .. }
+                    | CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+                    | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
                     | CatalogSessionEffect::PersistCatalogFailure { .. }
                     | CatalogSessionEffect::CatalogBuildFinished
                     | CatalogSessionEffect::ApplySystemShard { .. }
@@ -1021,8 +1018,8 @@ mod tests {
                 | CatalogSessionEffect::CatalogSystemScanning { .. }
                 | CatalogSessionEffect::CatalogSystemPrepared { .. }
                 | CatalogSessionEffect::CatalogManifestPublished { .. }
-                | CatalogSessionEffect::CatalogSystemReady { .. }
-                | CatalogSessionEffect::CatalogSystemFailed { .. }
+                | CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+                | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
                 | CatalogSessionEffect::PersistCatalogFailure { .. }
                 | CatalogSessionEffect::CatalogBuildFinished
                 | CatalogSessionEffect::ApplySystemShard { .. } => {
@@ -1171,9 +1168,15 @@ mod tests {
             },
             now,
         );
-        assert!(ready.into_effects().into_iter().any(|effect| matches!(
+        let ready_effects = ready.into_effects().into_iter().collect::<Vec<_>>();
+        assert!(ready_effects.iter().any(|effect| matches!(
             effect,
-            CatalogSessionEffect::CatalogSystemReady { system_id } if system_id == "snes"
+            CatalogSessionEffect::ApplySystemShard { system_id, .. } if system_id == "snes"
+        )));
+        assert!(!ready_effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+                | CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
         )));
 
         let finished = session.handle_worker_message(
@@ -1191,6 +1194,62 @@ mod tests {
                 .into_iter()
                 .any(|effect| matches!(effect, CatalogSessionEffect::CatalogBuildFinished))
         );
+    }
+
+    #[test]
+    fn update_and_hydration_failures_emit_distinct_state_effects() {
+        let now = Instant::now();
+        let context = || CatalogWorkerMessageContext {
+            catalog_ready: true,
+            catalog_partial: false,
+            screen: Screen::Home,
+            media_gate: None,
+        };
+        let mut session = LauncherCatalogSession::new(false);
+
+        let update_effects = session
+            .handle_worker_message(
+                context(),
+                CatalogWorkerMessage::SystemUpdateFailed {
+                    system_id: "snes".to_string(),
+                    error: "update failed".to_string(),
+                },
+                now,
+            )
+            .into_effects()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert!(update_effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemUpdateFailed { system_id }
+                if system_id == "snes"
+        )));
+        assert!(!update_effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemHydrationFailed { .. }
+        )));
+
+        let hydration_effects = session
+            .handle_worker_message(
+                context(),
+                CatalogWorkerMessage::SystemShardFailed {
+                    system_id: "snes".to_string(),
+                    error: "load failed".to_string(),
+                },
+                now,
+            )
+            .into_effects()
+            .into_iter()
+            .collect::<Vec<_>>();
+        assert!(hydration_effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemHydrationFailed { system_id }
+                if system_id == "snes"
+        )));
+        assert!(!hydration_effects.iter().any(|effect| matches!(
+            effect,
+            CatalogSessionEffect::CatalogSystemUpdateFailed { .. }
+        )));
     }
 
     #[test]

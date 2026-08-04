@@ -430,6 +430,28 @@ fn commit_pending_collection_entry(
     true
 }
 
+fn restore_failed_pending_collection_entry(
+    pending: &mut Option<PendingCollectionEntry>,
+    nav: &mut LauncherNav,
+    start: Instant,
+) -> bool {
+    let Some(entry) = pending
+        .as_ref()
+        .filter(|entry| nav.catalog_system_hydration_has_failed(&entry.collection_id))
+    else {
+        return false;
+    };
+    let collection_id = entry.collection_id.clone();
+    let entry = pending.take().expect("failed pending collection entry");
+    nav.restore_pending_home_view(entry.source);
+    print_startup_event(
+        start,
+        "catalog_system_entry_failed",
+        format!("system={collection_id}"),
+    );
+    true
+}
+
 fn cancel_pending_collection_entry_for_input(
     pending: &mut Option<PendingCollectionEntry>,
     nav: &mut LauncherNav,
@@ -1520,6 +1542,35 @@ fn initialize_catalog_generation(
     generation
 }
 
+fn request_system_shard_hydration(
+    scheduler: &mut LauncherScheduler,
+    nav: &mut LauncherNav,
+    system_id: &str,
+    priority: SystemShardPriority,
+    reason: &'static str,
+    now: Instant,
+) -> bool {
+    if !scheduler.request_system_shard(system_id.to_string(), priority, reason, now) {
+        return false;
+    }
+    nav.catalog_system_hydration_started(system_id);
+    true
+}
+
+fn retry_system_shard_hydration(
+    scheduler: &mut LauncherScheduler,
+    nav: &mut LauncherNav,
+    system_id: &str,
+    reason: &'static str,
+    now: Instant,
+) -> bool {
+    if !scheduler.retry_system_shard(system_id.to_string(), reason, now) {
+        return false;
+    }
+    nav.catalog_system_hydration_started(system_id);
+    true
+}
+
 fn request_pending_launch_return_shard(
     pending: Option<&launcher::LaunchReturnState>,
     catalog: &ArcadeCatalog,
@@ -1543,15 +1594,16 @@ fn request_pending_launch_return_shard(
     if !catalog.systems.iter().any(|system| system.id == system_id) {
         return false;
     }
-    if !scheduler.request_system_shard(
-        system_id.to_string(),
+    if !request_system_shard_hydration(
+        scheduler,
+        nav,
+        system_id,
         SystemShardPriority::Urgent,
         "launch-return",
         now,
     ) {
         return false;
     }
-    nav.catalog_system_hydration_started(system_id);
     print_startup_event(
         start,
         "launch_return_system_shard_requested",
@@ -3059,8 +3111,10 @@ pub(super) fn run_launcher_loop(
                 } else {
                     SystemShardPriority::Prefetch
                 };
-                if scheduler.request_system_shard(
-                    system_id.clone(),
+                let _ = request_system_shard_hydration(
+                    &mut scheduler,
+                    &mut nav,
+                    &system_id,
                     priority,
                     if index == 0 {
                         "home-highlight"
@@ -3068,10 +3122,7 @@ pub(super) fn run_launcher_loop(
                         "home-neighbor"
                     },
                     loop_start,
-                ) {
-                    nav.catalog_system_hydration_started(&system_id);
-                    full_bridge_dirty = true;
-                }
+                );
             }
         }
         let deferred_worker_policy = deferred_catalog_worker_start_policy(
@@ -3394,27 +3445,19 @@ pub(super) fn run_launcher_loop(
             arcade_entry_latency.record_rows_ready(start, loop_start, &lifecycle, &catalog, &nav);
             full_bridge_dirty = true;
             request_launcher_redraw!();
-        } else if pending_collection_entry
-            .as_ref()
-            .is_some_and(|entry| nav.catalog_system_has_failed(&entry.collection_id))
-        {
-            if let Some(entry) = pending_collection_entry.take() {
-                nav.catalog_system_hydration_finished(&entry.collection_id);
-                nav.restore_pending_home_view(entry.source);
-                arcade_entry_latency.cancel_enter();
-                print_startup_event(
-                    start,
-                    "catalog_system_entry_failed",
-                    format!("system={}", entry.collection_id),
-                );
-                full_bridge_dirty = true;
-                if navigation_transition.is_active() {
-                    let now_us = loop_start
-                        .saturating_duration_since(start)
-                        .as_micros()
-                        .min(u64::MAX as u128) as u64;
-                    navigation_transition.request_reverse(now_us);
-                }
+        } else if restore_failed_pending_collection_entry(
+            &mut pending_collection_entry,
+            &mut nav,
+            start,
+        ) {
+            arcade_entry_latency.cancel_enter();
+            full_bridge_dirty = true;
+            if navigation_transition.is_active() {
+                let now_us = loop_start
+                    .saturating_duration_since(start)
+                    .as_micros()
+                    .min(u64::MAX as u128) as u64;
+                navigation_transition.request_reverse(now_us);
             }
         }
 
@@ -4008,42 +4051,63 @@ pub(super) fn run_launcher_loop(
                                     && !collection_has_resident_rows(&catalog, collection_id)
                                 {
                                     let requested_at = Instant::now();
-                                    arcade_entry_latency.record_collection_enter_input(
-                                        start,
-                                        requested_at,
-                                        &lifecycle,
-                                        collection_id,
-                                    );
-                                    pending_collection_entry = Some(PendingCollectionEntry {
-                                        collection_id: collection_id.to_string(),
-                                        requested_at,
-                                        source: nav.home_view_state(),
-                                    });
-                                    if nav.catalog_system_has_failed(collection_id) {
-                                        nav.catalog_system_retry_started(collection_id);
-                                        let _ = scheduler.retry_system_shard(
-                                            collection_id.to_string(),
+                                    let hydration_failed =
+                                        nav.catalog_system_hydration_has_failed(collection_id);
+                                    let hydration_requested = if hydration_failed {
+                                        let accepted = retry_system_shard_hydration(
+                                            &mut scheduler,
+                                            &mut nav,
+                                            collection_id,
                                             "explicit-retry",
                                             requested_at,
                                         );
+                                        if accepted {
+                                            catalog_version = catalog_version.wrapping_add(1);
+                                            full_bridge_dirty = true;
+                                        }
+                                        accepted
                                     } else {
-                                        nav.catalog_system_hydration_started(collection_id);
-                                        let _ = scheduler.request_system_shard(
-                                            collection_id.to_string(),
+                                        request_system_shard_hydration(
+                                            &mut scheduler,
+                                            &mut nav,
+                                            collection_id,
                                             SystemShardPriority::Urgent,
                                             "open-collection",
                                             requested_at,
+                                        )
+                                    };
+                                    if hydration_requested
+                                        || nav.catalog_system_hydration_is_loading(collection_id)
+                                    {
+                                        arcade_entry_latency.record_collection_enter_input(
+                                            start,
+                                            requested_at,
+                                            &lifecycle,
+                                            collection_id,
+                                        );
+                                        pending_collection_entry = Some(PendingCollectionEntry {
+                                            collection_id: collection_id.to_string(),
+                                            requested_at,
+                                            source: nav.home_view_state(),
+                                        });
+                                        print_startup_event(
+                                            start,
+                                            "catalog_system_entry_pending",
+                                            format!("system={collection_id}"),
                                         );
                                     }
-                                    print_startup_event(
-                                        start,
-                                        "catalog_system_entry_pending",
-                                        format!("system={collection_id}"),
-                                    );
                                 }
 
-                                let transition_spec =
-                                    navigation_transition_for_intent(&nav, &event);
+                                let collection_navigation_ready =
+                                    collection_id.as_deref().map_or(true, |collection_id| {
+                                        collection_has_resident_rows(&catalog, collection_id)
+                                            || pending_collection_entry.as_ref().is_some_and(
+                                                |entry| entry.collection_id == collection_id,
+                                            )
+                                    });
+                                let transition_spec = collection_navigation_ready
+                                    .then(|| navigation_transition_for_intent(&nav, &event))
+                                    .flatten();
                                 if transition_spec.is_some()
                                     && nav.screen == Screen::Arcade
                                     && !crt_layout
@@ -7517,20 +7581,17 @@ fn apply_catalog_session_effects(
                     ),
                 );
             }
-            CatalogSessionEffect::CatalogSystemReady { system_id } => {
-                nav.catalog_system_hydration_finished(&system_id);
-                nav.catalog_system_ready(&system_id);
-                *catalog_version = (*catalog_version).wrapping_add(1);
-                let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                *full_bridge_dirty = true;
-            }
-            CatalogSessionEffect::CatalogSystemFailed { system_id } => {
-                nav.catalog_system_hydration_finished(&system_id);
-                nav.catalog_system_failed(&system_id);
+            CatalogSessionEffect::CatalogSystemUpdateFailed { system_id } => {
+                nav.catalog_system_update_failed(&system_id);
                 *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
+                *full_bridge_dirty = true;
+            }
+            CatalogSessionEffect::CatalogSystemHydrationFailed { system_id } => {
+                nav.catalog_system_hydration_failed(&system_id);
+                *catalog_version = (*catalog_version).wrapping_add(1);
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::PersistCatalogFailure {
@@ -7619,6 +7680,7 @@ fn apply_catalog_session_effects(
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
             CatalogSessionEffect::ApplySystemShard { system_id, games } => {
+                nav.catalog_system_hydration_finished(&system_id);
                 let (replacement, launch_plans) = arcade_rows_from_shard(&system_id, &games);
                 *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
                 *catalog_version = (*catalog_version).wrapping_add(1);
@@ -8749,6 +8811,42 @@ mod tests {
     }
 
     #[test]
+    fn shard_request_state_changes_only_after_scheduler_acceptance() {
+        let mut nav = LauncherNav::new();
+        let mut scheduler = LauncherScheduler::new(false);
+
+        assert!(!request_system_shard_hydration(
+            &mut scheduler,
+            &mut nav,
+            "c64",
+            SystemShardPriority::Urgent,
+            "rejected-without-generation",
+            Instant::now()
+        ));
+        assert!(!nav.catalog_system_hydration_is_loading("c64"));
+
+        nav.catalog_system_hydration_failed("c64");
+        assert!(!retry_system_shard_hydration(
+            &mut scheduler,
+            &mut nav,
+            "c64",
+            "rejected-retry-without-generation",
+            Instant::now()
+        ));
+        assert!(nav.catalog_system_hydration_has_failed("c64"));
+
+        let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
+        assert!(retry_system_shard_hydration(
+            &mut scheduler,
+            &mut nav,
+            "c64",
+            "accepted-retry",
+            Instant::now()
+        ));
+        assert!(nav.catalog_system_hydration_is_loading("c64"));
+    }
+
+    #[test]
     fn pending_launch_return_requests_its_registry_shard_before_home_prefetch() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
@@ -9211,6 +9309,33 @@ mod tests {
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
         assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Arcade);
+    }
+
+    #[test]
+    fn failed_pending_collection_restores_home_without_clearing_load_failure() {
+        let catalog = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("c64", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        let source = nav.home_view_state();
+        let mut pending = Some(PendingCollectionEntry {
+            collection_id: "c64".to_string(),
+            requested_at: Instant::now(),
+            source: source.clone(),
+        });
+        nav.catalog_system_hydration_failed("c64");
+
+        assert!(restore_failed_pending_collection_entry(
+            &mut pending,
+            &mut nav,
+            Instant::now(),
+        ));
+        assert!(pending.is_none());
+        assert_eq!(nav.home_view_state(), source);
+        assert!(nav.catalog_system_hydration_has_failed("c64"));
     }
 
     #[test]

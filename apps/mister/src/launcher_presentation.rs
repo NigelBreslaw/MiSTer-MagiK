@@ -7,7 +7,9 @@
 //! in `ui_runner`; this presenter is deliberately shared with the macOS host.
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
-use crate::launcher::{ArcadeSearchPane, ArcadeSearchStatus, LauncherNav, Screen};
+use crate::launcher::{
+    ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, LauncherNav, Screen,
+};
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use mister_magik_ui::launcher::{Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -325,13 +327,12 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let (scanning, failed, available) = nav.menu_item_catalog_presentation(item);
-            let partial = !scanning && item.kind == LauncherMenuItemKind::Menu && failed;
+            let presentation = nav.menu_item_catalog_presentation(item);
             MenuItem {
                 id: item.id.clone().into(),
                 label: item.title.clone().into(),
-                subtitle: if scanning {
-                    match item.kind {
+                subtitle: match presentation.status {
+                    CatalogMenuItemStatus::Scanning => match item.kind {
                         LauncherMenuItemKind::Menu => {
                             let systems = nav.menu_discovered_system_count(&item.id);
                             format!(
@@ -341,39 +342,38 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                             .into()
                         }
                         LauncherMenuItemKind::Collection => {
-                            if available {
+                            if presentation.available {
                                 format!("{} games available", item.count).into()
                             } else {
                                 "".into()
                             }
                         }
+                    },
+                    CatalogMenuItemStatus::Partial => "Some items failed".into(),
+                    CatalogMenuItemStatus::UpdateFailed if presentation.available => {
+                        format!("Update failed • {} games", item.count).into()
                     }
-                } else if partial {
-                    "Some items failed".into()
-                } else if failed && available {
-                    format!("Update failed • {} games", item.count).into()
-                } else if failed {
-                    "Load failed — A to retry".into()
-                } else {
-                    format!("{} games", item.count).into()
+                    CatalogMenuItemStatus::UpdateFailed => "Update failed".into(),
+                    CatalogMenuItemStatus::LoadFailed => "Load failed — A to retry".into(),
+                    CatalogMenuItemStatus::Ready => format!("{} games", item.count).into(),
                 },
                 focused: index == nav.selected,
                 focus_transition_enabled: false,
-                available,
+                available: presentation.available,
                 node_kind: match item.kind {
                     LauncherMenuItemKind::Menu => MenuItemKind::Group,
                     LauncherMenuItemKind::Collection => MenuItemKind::Collection,
                 },
-                status: if scanning {
-                    MenuItemStatus::Scanning
-                } else if partial {
-                    MenuItemStatus::Partial
-                } else if failed && available {
-                    MenuItemStatus::UpdateFailed
-                } else if failed {
-                    MenuItemStatus::Failed
-                } else {
-                    MenuItemStatus::Ready
+                status: match presentation.status {
+                    CatalogMenuItemStatus::Ready => MenuItemStatus::Ready,
+                    CatalogMenuItemStatus::Scanning => MenuItemStatus::Scanning,
+                    CatalogMenuItemStatus::Partial => MenuItemStatus::Partial,
+                    CatalogMenuItemStatus::UpdateFailed if presentation.available => {
+                        MenuItemStatus::UpdateFailed
+                    }
+                    CatalogMenuItemStatus::UpdateFailed | CatalogMenuItemStatus::LoadFailed => {
+                        MenuItemStatus::Failed
+                    }
                 },
             }
         })
