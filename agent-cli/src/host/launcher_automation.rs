@@ -19,6 +19,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const MAX_WAIT: Duration = Duration::from_secs(10);
 const HANDOFF_WAIT: Duration = Duration::from_secs(15);
 const RETURN_WAIT: Duration = Duration::from_secs(12);
+const CHECKPOINT_CAPTURE_ATTEMPTS: usize = 3;
+const LAUNCH_INPUT_ATTEMPTS: usize = 3;
+const LAUNCH_START_WAIT: Duration = Duration::from_secs(2);
 const PUBLIC_MAIN_PATH: &str = "/media/fat/MiSTer_MagiK";
 
 #[derive(Clone, Debug)]
@@ -48,6 +51,12 @@ struct ReturnedLauncherIdentity {
 pub(super) enum LaunchReturnError {
     Failed(String),
     RecoveryRequired(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchProgress {
+    Started,
+    HandoffObserved,
 }
 
 impl std::fmt::Display for LaunchReturnError {
@@ -189,13 +198,34 @@ pub(super) fn capture_checkpoint(
     output_dir: &Path,
 ) -> Result<String> {
     validate_checkpoint_label(label)?;
-    let before = snapshot(config, nonce)?;
-    require_presented_action(&before, action_sequence)?;
-    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
-    validate_visible_launcher_capture(&capture)?;
-    let after = snapshot(config, nonce)?;
-    require_stable_snapshot(&before, &after)?;
-    require_capture_sequence(&capture, &after)?;
+    let mut confirmed = None;
+    let mut last_stability_error = None;
+    for attempt in 0..CHECKPOINT_CAPTURE_ATTEMPTS {
+        let before = snapshot(config, nonce)?;
+        require_presented_action(&before, action_sequence)?;
+        let capture =
+            request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
+        validate_visible_launcher_capture(&capture)?;
+        let after = snapshot(config, nonce)?;
+        match require_stable_snapshot(&before, &after) {
+            Ok(()) => {
+                require_capture_sequence(&capture, &after)?;
+                confirmed = Some((capture, after));
+                break;
+            }
+            Err(error) => {
+                last_stability_error = Some(error.to_string());
+                if attempt + 1 < CHECKPOINT_CAPTURE_ATTEMPTS {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    }
+    let Some((capture, after)) = confirmed else {
+        return Err(last_stability_error
+            .unwrap_or_else(|| "launcher checkpoint did not reach a stable presentation".into())
+            .into());
+    };
 
     fs::create_dir_all(output_dir)?;
     let png_path = output_dir.join(format!("{label}.png"));
@@ -363,36 +393,64 @@ pub(super) fn exercise_launch_return(
         Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
     };
 
-    // Model a real button press across several launcher frames. A one-frame tap can be
-    // presented on a frame that is consumed by catalog publication or another transient
-    // UI task, even though the launcher remains ready for input on the next frame.
-    let action = match send_action(
-        config,
-        nonce,
-        &AutomationAction::Hold {
-            button: AutomationButton::A,
-            duration_ms: 120,
-        },
-    ) {
-        Ok(action) => action,
-        Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
-    };
-    let action: Value = serde_json::from_str(&action)
-        .map_err(|error| LaunchReturnError::Failed(format!("decode launch action: {error}")))?;
-    let action_sequence = action
-        .get("action_sequence")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| LaunchReturnError::Failed("launch action has no sequence".into()))?;
-    let presentation_error = await_presented(config, nonce, action_sequence, 1_000).err();
+    // A presented logical press can arrive while the navigation transition router
+    // is still consuming its queued input. Require the launcher lifecycle to begin
+    // before we enter the long handoff wait, and retry only while it remains idle.
+    let mut launch_progress = None;
+    let mut last_presentation_error = None;
+    for _ in 0..LAUNCH_INPUT_ATTEMPTS {
+        let action = match send_action(
+            config,
+            nonce,
+            &AutomationAction::Hold {
+                button: AutomationButton::A,
+                duration_ms: 120,
+            },
+        ) {
+            Ok(action) => action,
+            Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
+        };
+        let action: Value = serde_json::from_str(&action)
+            .map_err(|error| LaunchReturnError::Failed(format!("decode launch action: {error}")))?;
+        let action_sequence = action
+            .get("action_sequence")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| LaunchReturnError::Failed("launch action has no sequence".into()))?;
+        last_presentation_error = await_presented(config, nonce, action_sequence, 1_000).err();
+
+        match wait_for_launch_progress(config, nonce, &identity) {
+            Ok(Some(progress)) => {
+                launch_progress = Some(progress);
+                break;
+            }
+            Ok(None) => {
+                if let Err(error) = send_action(config, nonce, &AutomationAction::ReleaseAll) {
+                    return fail_before_launch(config, nonce, &error.to_string());
+                }
+            }
+            Err(error) => return fail_before_launch(config, nonce, &error.to_string()),
+        }
+    }
+    if launch_progress.is_none() {
+        let detail = last_presentation_error.map_or_else(
+            || {
+                format!(
+                    "launch press did not start the lifecycle after {LAUNCH_INPUT_ATTEMPTS} bounded input attempts"
+                )
+            },
+            |presentation| {
+                format!(
+                    "launch press did not start the lifecycle after {LAUNCH_INPUT_ATTEMPTS} bounded input attempts; last press was not presented: {presentation}"
+                )
+            },
+        );
+        return fail_before_launch(config, nonce, &detail);
+    }
 
     let (handoff, handoff_main) = match wait_for_handoff(config, &identity) {
         Ok(evidence) => evidence,
         Err(error) => {
-            let detail = presentation_error.map_or_else(
-                || error.to_string(),
-                |presentation| format!("{error}; launch press was not presented: {presentation}"),
-            );
-            return recover_after_launch_failure(config, nonce, &identity, detail);
+            return recover_after_launch_failure(config, nonce, &identity, error);
         }
     };
     if let Err(error) = request_return_to_launcher(config, handoff_main.generation) {
@@ -607,6 +665,57 @@ fn wait_for_handoff(
         thread::sleep(Duration::from_millis(50));
     }
     Err(format!("real core handoff was not proven before timeout; last_status={last}").into())
+}
+
+fn wait_for_launch_progress(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    identity: &LaunchIdentity,
+) -> Result<Option<LaunchProgress>> {
+    let deadline = Instant::now() + LAUNCH_START_WAIT;
+    let mut last_snapshot_error = None;
+    let mut observed_snapshot = false;
+    while Instant::now() < deadline {
+        match snapshot(config, nonce) {
+            Ok(value) => {
+                observed_snapshot = true;
+                validate_snapshot(&value)?;
+                if semantic(&value, "launch_state").and_then(Value::as_str) == Some("launching") {
+                    return Ok(Some(LaunchProgress::Started));
+                }
+                if semantic(&value, "overlay").and_then(Value::as_str) == Some("confirm") {
+                    let title = semantic(&value, "dialog_title")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("launch failed");
+                    let message = semantic(&value, "dialog_message")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("launcher did not provide a failure detail");
+                    return Err(
+                        format!("launcher rejected selected core: {title}: {message}").into(),
+                    );
+                }
+            }
+            Err(error) => {
+                last_snapshot_error = Some(error.to_string());
+                if magik_status(config)
+                    .ok()
+                    .is_some_and(|status| validate_handoff_status(&status, identity).is_ok())
+                {
+                    return Ok(Some(LaunchProgress::HandoffObserved));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    if !observed_snapshot && let Some(error) = last_snapshot_error {
+        return Err(format!(
+            "launcher automation became unavailable before launch progress: {error}"
+        )
+        .into());
+    }
+    Ok(None)
 }
 
 fn wait_for_returned_launcher(

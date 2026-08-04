@@ -34,6 +34,11 @@ after the journey. Use `--reuse-installed` to repeat the journey against the
 same already-installed alpha without another Downloader run or reboot; it
 cannot be combined with `--restore-host-mode`.
 
+When the fixed `USB Video` input is unavailable, `--framebuffer-only` skips
+physical HDMI captures while retaining the authoritative RGB565 checkpoints.
+The receipt records this weaker evidence mode explicitly; it does not prove
+HDMI sink visibility.
+
 ## What it tests
 
 The bounded journey verifies:

@@ -216,6 +216,7 @@ fn dispatch(
                     output,
                     reuse_installed,
                     restore_host_mode,
+                    framebuffer_only,
                 },
         } => {
             let receipt = agent_cli::alpha::execute(
@@ -223,6 +224,7 @@ fn dispatch(
                 output,
                 *reuse_installed,
                 *restore_host_mode,
+                *framebuffer_only,
                 reporter,
             )?;
             println!("{}", receipt.display());

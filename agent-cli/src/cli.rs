@@ -388,6 +388,9 @@ pub enum AlphaCommand {
         /// Restore the pre-test Main selection. By default the MiSTer stays on alpha.
         #[arg(long)]
         restore_host_mode: bool,
+        /// Skip physical USB Video captures and retain authoritative framebuffer evidence only.
+        #[arg(long)]
+        framebuffer_only: bool,
     },
 }
 
@@ -644,6 +647,7 @@ mod tests {
                 "/tmp/evidence",
                 "--reuse-installed",
                 "--restore-host-mode",
+                "--framebuffer-only",
             ])
             .is_ok()
         );

@@ -57,6 +57,7 @@ pub struct CandidateIdentity {
 struct AcceptanceReceipt {
     format: &'static str,
     accepted: bool,
+    evidence_mode: &'static str,
     accepted_at_unix: u64,
     candidate: CandidateIdentity,
     catalog_creation: Value,
@@ -203,6 +204,7 @@ pub fn execute(
     output: &Path,
     reuse_installed: bool,
     restore_host_mode: bool,
+    framebuffer_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<PathBuf> {
     reporter.emit(
@@ -253,8 +255,14 @@ pub fn execute(
             alpha_catalog_start(&activation)?,
         )
     };
-    let acceptance =
-        accept_installed_candidate(&mut device, candidate, catalog_start, output, reporter);
+    let acceptance = accept_installed_candidate(
+        &mut device,
+        candidate,
+        catalog_start,
+        output,
+        framebuffer_only,
+        reporter,
+    );
     let restored = if restore_host_mode {
         device.restore_host_mode(
             original_main.ok_or("alpha acceptance has no host-mode restore target")?,
@@ -403,6 +411,7 @@ fn accept_installed_candidate(
     candidate: CandidateIdentity,
     catalog_start: Value,
     output: &Path,
+    framebuffer_only: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<AcceptanceReceipt> {
     let status = device.status()?;
@@ -431,7 +440,7 @@ fn accept_installed_candidate(
         .ok_or("automation session has no nonce")?
         .to_owned();
     let mut nonce = Some(nonce);
-    let journey = run_ui_journey(device, &mut nonce, output);
+    let journey = run_ui_journey(device, &mut nonce, output, !framebuffer_only);
     let ended = match nonce.as_ref() {
         Some(nonce) => device.end_automation(nonce.clone()),
         None => Ok(()),
@@ -463,6 +472,11 @@ fn accept_installed_candidate(
     Ok(AcceptanceReceipt {
         format: "mister-magik-alpha-hil-v1",
         accepted: true,
+        evidence_mode: if framebuffer_only {
+            "framebuffer-only"
+        } else {
+            "framebuffer-and-usb-video"
+        },
         accepted_at_unix: unix_secs(),
         candidate,
         catalog_creation,
@@ -544,30 +558,47 @@ fn run_ui_journey(
     device: &mut impl AlphaDevice,
     nonce: &mut Option<String>,
     output: &Path,
+    capture_usb_video: bool,
 ) -> AgentResult<(Vec<Value>, Value, Vec<UsbEvidence>)> {
     let rgb_dir = output.join("rgb565");
     let usb_dir = output.join("usb-video");
     fs::create_dir_all(&rgb_dir).map_err(|error| error.to_string())?;
-    fs::create_dir_all(&usb_dir).map_err(|error| error.to_string())?;
+    if capture_usb_video {
+        fs::create_dir_all(&usb_dir).map_err(|error| error.to_string())?;
+    }
     let mut checkpoints = Vec::new();
     let mut usb = Vec::new();
 
     let home = tap(device, nonce, AutomationButton::Home)?;
-    let state = snapshot(device, nonce)?;
+    let state = await_semantic(device, nonce, "menu_id", "menu:root")?;
     require_semantic(&state, "effective_view", "home")?;
     require_bool(&state, "catalog_ready", true)?;
     checkpoints.push(checkpoint(device, nonce, home, "home", &rgb_dir)?);
-    usb.push(capture_usb("home", &usb_dir)?);
+    maybe_capture_usb(capture_usb_video, &mut usb, "home", &usb_dir)?;
 
     select_home_item(device, nonce, "menu:arcade")?;
     let arcade = tap(device, nonce, AutomationButton::A)?;
-    let state = snapshot(device, nonce)?;
-    require_semantic(&state, "effective_view", "arcade")?;
+    let mut state = await_semantic(device, nonce, "effective_view", "arcade")?;
     require_nonzero(&state, "selected_count")?;
     require_nonempty(&state, "selected_game_id")?;
-    let state = await_semantic_not(device, nonce, "composition_state", "navigation-transition")?;
+    state = await_semantic_not(device, nonce, "composition_state", "navigation-transition")?;
     checkpoints.push(checkpoint(device, nonce, arcade, "arcade", &rgb_dir)?);
-    usb.push(capture_usb("arcade", &usb_dir)?);
+    maybe_capture_usb(capture_usb_video, &mut usb, "arcade", &usb_dir)?;
+
+    // `--reuse-installed` intentionally preserves launcher state. Clear any
+    // interrupted search before the directional list-input check; the journey
+    // opens and verifies search explicitly below.
+    if semantic(&state, "search_active").and_then(Value::as_bool) == Some(true) {
+        for _ in 0..64 {
+            let search = snapshot(device, nonce)?;
+            if semantic(&search, "search_active").and_then(Value::as_bool) != Some(true) {
+                break;
+            }
+            tap(device, nonce, AutomationButton::B)?;
+        }
+        state = snapshot(device, nonce)?;
+        require_bool(&state, "search_active", false)?;
+    }
 
     let before_index = semantic(&state, "selected_index")
         .and_then(Value::as_u64)
@@ -575,33 +606,84 @@ fn run_ui_journey(
     let selected_count = semantic(&state, "selected_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let velocity_button = if before_index.saturating_add(1) < selected_count {
-        AutomationButton::Down
+    let (velocity_button, velocity_direction) = if before_index.saturating_add(1) < selected_count {
+        (AutomationButton::Down, "down")
     } else {
-        AutomationButton::Up
+        (AutomationButton::Up, "up")
     };
-    let velocity = action(
-        device,
-        nonce,
-        AutomationAction::Hold {
-            button: velocity_button,
-            duration_ms: 350,
-        },
-    )?;
-    std::thread::sleep(std::time::Duration::from_millis(400));
-    let velocity_settled = action(device, nonce, AutomationAction::ReleaseAll)?;
-    let state = snapshot(device, nonce)?;
-    if semantic(&state, "selected_count")
-        .and_then(Value::as_u64)
-        .is_some_and(|count| count > 1)
-        && semantic(&state, "selected_index").and_then(Value::as_u64) == Some(before_index)
-    {
-        return classified("alpha_ui_assertion_failed", "arcade velocity did not move");
+    let mut velocity_sequence = None;
+    let mut last_velocity_state = None;
+    for _ in 0..3 {
+        let velocity = action(
+            device,
+            nonce,
+            AutomationAction::Hold {
+                button: velocity_button,
+                duration_ms: 800,
+            },
+        )?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let state = snapshot(device, nonce)?;
+        let velocity_settled = action(device, nonce, AutomationAction::ReleaseAll)?;
+        let mut after_count = semantic(&state, "selected_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let mut after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
+        for _ in 0..300 {
+            if after_count <= 1 || after_index != Some(before_index) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let state = snapshot(device, nonce)?;
+            after_count = semantic(&state, "selected_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
+        }
+        if after_count <= 1 || after_index != Some(before_index) {
+            velocity_sequence = Some(velocity.max(velocity_settled));
+            break;
+        }
+        last_velocity_state = Some((after_index, after_count));
     }
+    // A transition-router queue can consume a held edge before it becomes
+    // actionable. Preserve the held-input exercise above, then require one
+    // bounded directional step before treating the launcher as unresponsive.
+    if velocity_sequence.is_none() {
+        for _ in 0..3 {
+            let sequence = tap(device, nonce, velocity_button)?;
+            for _ in 0..100 {
+                let state = snapshot(device, nonce)?;
+                let after_index = semantic(&state, "selected_index").and_then(Value::as_u64);
+                let after_count = semantic(&state, "selected_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if after_count <= 1 || after_index != Some(before_index) {
+                    velocity_sequence = Some(sequence);
+                    break;
+                }
+                last_velocity_state = Some((after_index, after_count));
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if velocity_sequence.is_some() {
+                break;
+            }
+        }
+    }
+    let velocity_sequence = velocity_sequence.ok_or_else(|| {
+        let (after_index, after_count) = last_velocity_state.unwrap_or((None, 0));
+        AgentError::Classified {
+            code: "alpha_ui_assertion_failed",
+            detail: format!(
+                "arcade velocity did not move after bounded input retries: direction={velocity_direction} before_index={before_index} after_index={} before_count={selected_count} after_count={after_count}",
+                after_index.map_or_else(|| "missing".to_string(), |index| index.to_string()),
+            ),
+        }
+    })?;
     checkpoints.push(checkpoint(
         device,
         nonce,
-        velocity.max(velocity_settled),
+        velocity_sequence,
         "arcade-velocity",
         &rgb_dir,
     )?);
@@ -635,7 +717,7 @@ fn run_ui_journey(
         "arcade-return",
         &rgb_dir,
     )?);
-    usb.push(capture_usb("arcade-return", &usb_dir)?);
+    maybe_capture_usb(capture_usb_video, &mut usb, "arcade-return", &usb_dir)?;
 
     tap(device, nonce, AutomationButton::Left)?;
     require_bool(&snapshot(device, nonce)?, "drawer_open", true)?;
@@ -690,7 +772,8 @@ fn run_ui_journey(
     )?);
 
     let returned = tap(device, nonce, AutomationButton::Home)?;
-    require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
+    let state = await_semantic(device, nonce, "menu_id", "menu:root")?;
+    require_semantic(&state, "effective_view", "home")?;
     checkpoints.push(checkpoint(
         device,
         nonce,
@@ -698,7 +781,7 @@ fn run_ui_journey(
         "post-navigation",
         &rgb_dir,
     )?);
-    usb.push(capture_usb("home-restored", &usb_dir)?);
+    maybe_capture_usb(capture_usb_video, &mut usb, "home-restored", &usb_dir)?;
 
     let root = snapshot(device, nonce)?;
     let root_count = semantic(&root, "selected_count")
@@ -752,20 +835,21 @@ fn run_ui_journey(
         &rgb_dir,
     )?);
     tap(device, nonce, AutomationButton::B)?;
-    require_semantic(&snapshot(device, nonce)?, "menu_id", "menu:root")?;
+    await_semantic(device, nonce, "menu_id", "menu:root")?;
     tap(device, nonce, AutomationButton::A)?;
     let restored_nested = snapshot(device, nonce)?;
     require_semantic(&restored_nested, "menu_id", &nested_menu)?;
     require_semantic(&restored_nested, "selected_item_id", &remembered_item)?;
     tap(device, nonce, AutomationButton::B)?;
+    await_semantic(device, nonce, "menu_id", "menu:root")?;
 
     tap(device, nonce, AutomationButton::Up)?;
     let settings = tap(device, nonce, AutomationButton::A)?;
-    require_semantic(&snapshot(device, nonce)?, "effective_view", "settings")?;
+    await_semantic(device, nonce, "effective_view", "settings")?;
     checkpoints.push(checkpoint(device, nonce, settings, "settings", &rgb_dir)?);
     tap(device, nonce, AutomationButton::Down)?;
     tap(device, nonce, AutomationButton::B)?;
-    require_semantic(&snapshot(device, nonce)?, "effective_view", "home")?;
+    await_semantic(device, nonce, "effective_view", "home")?;
 
     Ok((checkpoints, launch_return, usb))
 }
@@ -780,16 +864,61 @@ fn select_home_item(
         .and_then(Value::as_u64)
         .ok_or("home menu has no selected count")?;
     let mut state = initial;
-    for _ in 0..count {
+    let mut move_left = semantic(&state, "selected_index")
+        .and_then(Value::as_u64)
+        .is_some_and(|index| index > 0);
+    for _ in 0..count.saturating_mul(2) {
         if semantic(&state, "selected_item_id").and_then(Value::as_str) == Some(expected_item_id) {
             return Ok(());
         }
-        tap(device, nonce, AutomationButton::Right)?;
-        state = snapshot(device, nonce)?;
+        let index = semantic(&state, "selected_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if (move_left && index == 0) || (!move_left && index.saturating_add(1) >= count) {
+            move_left = !move_left;
+        }
+        let previous = semantic(&state, "selected_item_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        state = tap_until_semantic_change(
+            device,
+            nonce,
+            if move_left {
+                AutomationButton::Left
+            } else {
+                AutomationButton::Right
+            },
+            "selected_item_id",
+            &previous,
+        )?;
     }
     classified(
         "alpha_ui_assertion_failed",
         format!("home menu has no {expected_item_id} item"),
+    )
+}
+
+fn tap_until_semantic_change(
+    device: &mut impl AlphaDevice,
+    nonce: &Option<String>,
+    button: AutomationButton,
+    field: &str,
+    previous: &str,
+) -> AgentResult<Value> {
+    for _ in 0..3 {
+        tap(device, nonce, button)?;
+        for _ in 0..100 {
+            let value = snapshot(device, nonce)?;
+            if semantic(&value, field).and_then(Value::as_str) != Some(previous) {
+                return Ok(value);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    classified(
+        "alpha_ui_assertion_failed",
+        format!("{field} did not change from {previous} after bounded input retries"),
     )
 }
 
@@ -859,10 +988,16 @@ fn await_semantic_not(
     field: &str,
     unexpected: &str,
 ) -> AgentResult<Value> {
+    let mut steady_since = None;
     for _ in 0..300 {
         let value = snapshot(device, nonce)?;
         if semantic(&value, field).and_then(Value::as_str) != Some(unexpected) {
-            return Ok(value);
+            let since = steady_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= std::time::Duration::from_millis(250) {
+                return Ok(value);
+            }
+        } else {
+            steady_since = None;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -966,6 +1101,18 @@ fn capture_usb(label: &str, output: &Path) -> AgentResult<UsbEvidence> {
         height: artifact.height,
         sha256: digest_file(&artifact.path)?,
     })
+}
+
+fn maybe_capture_usb(
+    capture_usb_video: bool,
+    evidence: &mut Vec<UsbEvidence>,
+    label: &str,
+    output: &Path,
+) -> AgentResult<()> {
+    if capture_usb_video {
+        evidence.push(capture_usb(label, output)?);
+    }
+    Ok(())
 }
 
 fn write_receipt_atomically(path: &Path, receipt: &AcceptanceReceipt) -> AgentResult<()> {
