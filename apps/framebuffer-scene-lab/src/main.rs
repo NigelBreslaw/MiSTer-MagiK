@@ -991,7 +991,7 @@ fn run_window(
     use std::time::Instant;
 
     if let SceneSource::CardFlip(duration) = &source {
-        return run_card_flip_mister(*duration, destination);
+        return run_card_flip_mister(*duration, destination, profile);
     }
     let mut renderer = LabScene::start(source, case)?;
     let mut controls =
@@ -1242,7 +1242,11 @@ fn run_window(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> Result<(), String> {
+fn run_card_flip_mister(
+    duration: Duration,
+    destination: Option<(u16, u16)>,
+    profile: bool,
+) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
@@ -1279,6 +1283,22 @@ fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> 
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     let mut latch_drop_count = 0_u16;
+    let mut profile_render_samples_us = Vec::with_capacity(1024);
+    let mut profile_transfer_samples_us = Vec::with_capacity(1024);
+    let profile_cpu_started = process_cpu_time();
+    let mut profile_frames = 0_u64;
+    let mut profile_repeated_presentations = 0_u64;
+    let mut automatic_direction = CardFlipDirection::Reverse;
+    let mut next_automatic_flip = duration + Duration::from_millis(100);
+    if profile {
+        renderer.play(CardFlipDirection::Forward, Duration::ZERO);
+    }
+    #[cfg(feature = "profile")]
+    let profiler = profile.then(cpu_profile::start).transpose()?;
+    #[cfg(not(feature = "profile"))]
+    if profile {
+        return Err("card flip profiling requires a release-device-profile build".into());
+    }
 
     println!(
         "framebuffer-scene-lab scene=card-flip source={}x{} destination={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=neon",
@@ -1304,6 +1324,15 @@ fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> 
         let state = input.poll_state();
         if let Some(direction) = controls.poll(state.button_a, state.button_b) {
             renderer.play(direction, elapsed);
+            next_frame = Instant::now();
+        }
+        if profile && elapsed >= next_automatic_flip {
+            renderer.play(automatic_direction, elapsed);
+            automatic_direction = match automatic_direction {
+                CardFlipDirection::Forward => CardFlipDirection::Reverse,
+                CardFlipDirection::Reverse => CardFlipDirection::Forward,
+            };
+            next_automatic_flip = elapsed + duration + Duration::from_millis(100);
             next_frame = Instant::now();
         }
 
@@ -1335,6 +1364,9 @@ fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> 
                 rendered_frames = rendered_frames.saturating_add(1);
                 render_samples_us.push(render_us);
                 transfer_samples_us.push(transfer_us);
+                profile_render_samples_us.push(render_us);
+                profile_transfer_samples_us.push(transfer_us);
+                profile_frames = profile_frames.saturating_add(1);
             }
             next_frame += FRAME_DURATION;
             if next_frame <= Instant::now() {
@@ -1372,7 +1404,42 @@ fn run_card_flip_mister(duration: Duration, destination: Option<(u16, u16)>) -> 
             rendered_frames = 0;
             render_samples_us.clear();
             transfer_samples_us.clear();
+            profile_repeated_presentations =
+                profile_repeated_presentations.saturating_add(repeated_presentations);
             repeated_presentations = 0;
+        }
+
+        if profile && started.elapsed() >= Duration::from_secs(10) {
+            let seconds = started.elapsed().as_secs_f64();
+            let cpu_percent = process_cpu_time()
+                .saturating_sub(profile_cpu_started)
+                .as_secs_f64()
+                / seconds
+                * 100.0;
+            let (render_average_us, render_p99_us, render_max_us) =
+                sample_summary(&mut profile_render_samples_us);
+            let (transfer_average_us, transfer_p99_us, transfer_max_us) =
+                sample_summary(&mut profile_transfer_samples_us);
+            println!(
+                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} repeated_presentations={} latch_drop_count={}",
+                seconds,
+                profile_frames,
+                profile_frames as f64 / seconds,
+                cpu_percent,
+                render_average_us,
+                render_p99_us,
+                render_max_us,
+                transfer_average_us,
+                transfer_p99_us,
+                transfer_max_us,
+                profile_repeated_presentations,
+                latch_drop_count,
+            );
+            #[cfg(feature = "profile")]
+            if let Some(profiler) = profiler {
+                cpu_profile::finish(profiler)?;
+            }
+            return Ok(());
         }
 
         let wait = if renderer.is_dirty() {
@@ -1592,8 +1659,8 @@ impl Options {
                     .into(),
             );
         }
-        if self.profile && self.case.is_none() {
-            return Err("--profile requires a closed --case".into());
+        if self.profile && self.case.is_none() && self.scene != EffectKind::CardFlip {
+            return Err("--profile requires card-flip or a closed cabinet --case".into());
         }
         if self.scene != EffectKind::CardFlip
             && (self.duration_ms.is_some() || self.direction_requested)
@@ -1623,8 +1690,8 @@ impl Options {
                         "card-flip is self-contained and accepts no recipe or fixture".into(),
                     );
                 }
-                if self.case.is_some() || self.profile {
-                    return Err("card-flip does not accept cabinet case or profile options".into());
+                if self.case.is_some() {
+                    return Err("card-flip does not accept cabinet case options".into());
                 }
             }
         }

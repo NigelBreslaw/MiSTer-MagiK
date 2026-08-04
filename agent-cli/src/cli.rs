@@ -463,6 +463,18 @@ mod tests {
         assert!(
             Cli::try_parse_from([
                 "agent-cli",
+                "device",
+                "scene-lab",
+                "--scene",
+                "card-flip",
+                "--profile",
+                "--attended",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
                 "scene-lab",
                 "capture",
                 "--scene",

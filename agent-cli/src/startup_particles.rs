@@ -351,8 +351,8 @@ pub fn execute_scene_device(
             return Err(format!("unknown closed cabinet case {case:?}").into());
         }
     }
-    if args.profile && args.case.is_none() {
-        return Err("scene-lab --profile requires a closed cabinet --case".into());
+    if args.profile && args.scene != DeviceSceneLabScene::CardFlip && args.case.is_none() {
+        return Err("scene-lab --profile requires card-flip or a closed cabinet --case".into());
     }
     let spec = if args.profile {
         BuildSpec::framebuffer_scene_lab_analysis()
