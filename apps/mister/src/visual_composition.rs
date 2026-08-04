@@ -84,22 +84,28 @@ impl PreviewSurface {
 }
 
 pub fn hdmi_preview_rect(frame_width: usize, frame_height: usize) -> DirtyRect {
-    const CABINET_WIDTH: usize = 336;
-    const CABINET_HEIGHT: usize = 520;
-    const PREVIEW_X: usize = 8;
-    const PREVIEW_Y: usize = 92;
     const PREVIEW_WIDTH: usize = 320;
     const PREVIEW_HEIGHT: usize = 320;
 
-    let right_x = frame_width / 2;
-    let right_width = frame_width.saturating_sub(right_x);
-    let cabinet_x = right_x + right_width.saturating_sub(CABINET_WIDTH) / 2;
-    let cabinet_y = frame_height.saturating_sub(CABINET_HEIGHT) / 2;
+    let list = ArcadeListGeometry::NORMAL;
+    // The list may extend into the nominal right pane. Center in the black
+    // pixels that remain visible between the list, header, and footer.
+    let visible_x0 = (frame_width / 2)
+        .max(list.x.saturating_add(list.width))
+        .min(frame_width);
+    let visible_y0 = list.y.min(frame_height);
+    let visible_width = frame_width.saturating_sub(visible_x0);
+    let visible_height = list.visible_height(frame_height);
+    let preview_width = PREVIEW_WIDTH.min(visible_width);
+    let preview_height = PREVIEW_HEIGHT.min(visible_height);
+    let x0 = visible_x0 + visible_width.saturating_sub(preview_width) / 2;
+    let y0 = visible_y0 + visible_height.saturating_sub(preview_height) / 2;
+
     DirtyRect {
-        x0: (cabinet_x + PREVIEW_X).min(frame_width),
-        y0: (cabinet_y + PREVIEW_Y).min(frame_height),
-        x1: (cabinet_x + PREVIEW_X + PREVIEW_WIDTH).min(frame_width),
-        y1: (cabinet_y + PREVIEW_Y + PREVIEW_HEIGHT).min(frame_height),
+        x0,
+        y0,
+        x1: x0 + preview_width,
+        y1: y0 + preview_height,
     }
 }
 
@@ -506,6 +512,22 @@ fn rgb888_to_rgb565(red: u8, green: u8, blue: u8) -> Rgb565Pixel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdmi_preview_is_centered_in_visible_black_area() {
+        for (frame_width, frame_height, x0, y0, x1, y1) in [
+            (683, 384, 518, 56, 683, 352),
+            (960, 540, 579, 122, 899, 442),
+            (960, 600, 579, 122, 899, 442),
+            (1024, 768, 611, 122, 931, 442),
+            (1280, 720, 800, 122, 1120, 442),
+        ] {
+            assert_eq!(
+                hdmi_preview_rect(frame_width, frame_height),
+                DirtyRect { x0, y0, x1, y1 }
+            );
+        }
+    }
 
     #[test]
     fn preview_frame_scales_rgb565_to_requested_rect() {

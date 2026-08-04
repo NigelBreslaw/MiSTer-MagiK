@@ -22,7 +22,7 @@ use slint::platform::software_renderer::Rgb565Pixel;
 pub(crate) const ARCADE_LIST_X: usize = 8;
 pub(crate) const ARCADE_LIST_Y: usize = 56;
 // Wider than the half-screen pane on purpose: the list can borrow boundary
-// space without covering the centered preview cabinet.
+// space while the preview stays centered in the remaining black area.
 pub(crate) const ARCADE_LIST_W: usize = 510;
 pub(crate) const ARCADE_SEARCH_LIST_W: usize = 464;
 pub(crate) const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
