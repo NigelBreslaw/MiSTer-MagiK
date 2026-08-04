@@ -381,20 +381,27 @@ impl CardFlip {
     /// MiSTer-only hot path. Geometry and buffer lengths are fixed and checked
     /// by `render`, allowing raw contiguous reads/writes without repeated slice
     /// bounds checks in the inner loop.
+    #[cfg_attr(target_arch = "arm", inline(never))]
     fn paint_rows_device(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
         let outline = if progress < u16::MAX / 2 {
             CYAN_BRIGHT
         } else {
             PURPLE
         };
-        let Some(first) = self.columns.iter().position(|column| column.valid) else {
+        let columns = self.columns.as_ptr();
+        let mut first = 0;
+        // SAFETY: `columns` points to the fixed WIDTH-element array owned by
+        // `self`, and both searches are bounded by WIDTH.
+        while first < WIDTH && unsafe { !(*columns.add(first)).valid } {
+            first += 1;
+        }
+        if first == WIDTH {
             return 0;
-        };
-        let last = self
-            .columns
-            .iter()
-            .rposition(|column| column.valid)
-            .unwrap_or(first);
+        }
+        let mut last = WIDTH - 1;
+        while last > first && unsafe { !(*columns.add(last)).valid } {
+            last -= 1;
+        }
         if last - first + 1 < MINIMUM_SPINE_WIDTH {
             return render_spine(destination, outline);
         }
@@ -409,23 +416,28 @@ impl CardFlip {
 
         for y in CARD_Y..CARD_Y + CARD_HEIGHT {
             let mut left = first;
-            while left <= last && !column_contains(self.columns[left], y) {
+            while left <= last && !column_contains_device(unsafe { *columns.add(left) }, y) {
                 left += 1;
             }
             if left > last {
                 continue;
             }
             let mut right = last;
-            while right > left && !column_contains(self.columns[right], y) {
+            while right > left && !column_contains_device(unsafe { *columns.add(right) }, y) {
                 right -= 1;
             }
 
             let mut x = left;
             while x <= right {
-                let column = self.columns[x];
+                // SAFETY: left/right are derived from first/last, which are
+                // bounded indices into the fixed columns array.
+                let column = unsafe { *columns.add(x) };
                 // Card-space fixed-point values stay well inside i32 for the
                 // fixed 960x540 scene, avoiding 64-bit arithmetic on ARMv7.
-                let value = column.source_y_zero_q16 + y as i32 * column.source_y_step_q16;
+                let value = column
+                    .source_y_step_q16
+                    .wrapping_mul(y as i32)
+                    .wrapping_add(column.source_y_zero_q16);
                 let source_y = ((value + (1 << 15)) >> 16) as usize;
                 let border = x < left + OUTLINE_WIDTH
                     || x + OUTLINE_WIDTH > right
@@ -484,6 +496,19 @@ fn column_contains(column: Column, y: usize) -> bool {
     }
     source_y_at(column, y)
         .is_some_and(|source_y| stepped_corner(column.source_x as usize, source_y))
+}
+
+#[inline(always)]
+fn column_contains_device(column: Column, y: usize) -> bool {
+    if !column.valid || y < usize::from(column.top_y) || y > usize::from(column.bottom_y) {
+        return false;
+    }
+    let value = column
+        .source_y_step_q16
+        .wrapping_mul(y as i32)
+        .wrapping_add(column.source_y_zero_q16);
+    let source_y = ((value.wrapping_add(1 << 15)) >> 16) as usize;
+    source_y < CARD_HEIGHT && stepped_corner(column.source_x as usize, source_y)
 }
 
 fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
