@@ -264,7 +264,7 @@ impl CardFlip {
                 (step * FIXED_ONE as f32).round() as i32,
             );
         }
-        self.paint_rows(destination, progress)
+        self.paint_rows_reference(destination, progress)
     }
 
     /// Device path: the pose is reduced to fixed point once; inversion and the
@@ -309,10 +309,10 @@ impl CardFlip {
             self.columns[screen_x] =
                 column(source_x, source_y_zero_q16 as i32, source_y_step_q16 as i32);
         }
-        self.paint_rows(destination, progress)
+        self.paint_rows_device(destination, progress)
     }
 
-    fn paint_rows(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
+    fn paint_rows_reference(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
         let outline = if progress < u16::MAX / 2 {
             CYAN_BRIGHT
         } else {
@@ -377,6 +377,78 @@ impl CardFlip {
         }
         writes
     }
+
+    /// MiSTer-only hot path. Geometry and buffer lengths are fixed and checked
+    /// by `render`, allowing raw contiguous reads/writes without repeated slice
+    /// bounds checks in the inner loop.
+    fn paint_rows_device(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
+        let outline = if progress < u16::MAX / 2 {
+            CYAN_BRIGHT
+        } else {
+            PURPLE
+        };
+        let Some(first) = self.columns.iter().position(|column| column.valid) else {
+            return 0;
+        };
+        let last = self
+            .columns
+            .iter()
+            .rposition(|column| column.valid)
+            .unwrap_or(first);
+        if last - first + 1 < MINIMUM_SPINE_WIDTH {
+            return render_spine(destination, outline);
+        }
+        let face = if progress < u16::MAX / 2 {
+            self.front.as_ptr()
+        } else {
+            self.back.as_ptr()
+        };
+        let mirror = progress >= u16::MAX / 2;
+        let destination = destination.as_mut_ptr();
+        let mut writes = 0;
+
+        for y in CARD_Y..CARD_Y + CARD_HEIGHT {
+            let mut left = first;
+            while left <= last && !column_contains(self.columns[left], y) {
+                left += 1;
+            }
+            if left > last {
+                continue;
+            }
+            let mut right = last;
+            while right > left && !column_contains(self.columns[right], y) {
+                right -= 1;
+            }
+
+            for x in left..=right {
+                let column = self.columns[x];
+                let value = i64::from(column.source_y_zero_q16)
+                    + y as i64 * i64::from(column.source_y_step_q16);
+                let source_y = ((value + FIXED_ONE / 2) >> FIXED_SHIFT) as usize;
+                let border = x < left + OUTLINE_WIDTH
+                    || x + OUTLINE_WIDTH > right
+                    || y < usize::from(column.top_y) + OUTLINE_WIDTH
+                    || y + OUTLINE_WIDTH > usize::from(column.bottom_y);
+                let pixel = if border {
+                    outline
+                } else {
+                    let source_x = if mirror {
+                        CARD_WIDTH - 1 - column.source_x as usize
+                    } else {
+                        column.source_x as usize
+                    };
+                    // SAFETY: source_x/source_y are derived from validated
+                    // card columns and rows and remain inside the fixed face.
+                    unsafe { *face.add(source_y * CARD_WIDTH + source_x) }
+                };
+                // SAFETY: render validated the fixed 960x540 target and the
+                // loop bounds stay inside that plane.
+                unsafe { *destination.add(y * WIDTH + x) = pixel };
+                writes += 1;
+            }
+        }
+        writes
+    }
 }
 
 fn column(source_x: u16, source_y_zero_q16: i32, source_y_step_q16: i32) -> Column {
@@ -418,6 +490,7 @@ fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
     }
 }
 
+#[inline(always)]
 fn source_y_at(column: Column, y: usize) -> Option<usize> {
     if !column.valid {
         return None;
@@ -449,12 +522,14 @@ fn render_spine(destination: &mut [Rgb565Pixel], outline: Rgb565Pixel) -> usize 
     writes
 }
 
+#[inline(always)]
 fn stepped_corner(x: usize, y: usize) -> bool {
     let edge_y = y.min(CARD_HEIGHT - 1 - y);
     let inset = corner_inset(edge_y);
     x >= inset && x < CARD_WIDTH - inset
 }
 
+#[inline(always)]
 const fn corner_inset(edge_y: usize) -> usize {
     match edge_y {
         0 => 6,
