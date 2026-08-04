@@ -6,9 +6,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # Framebuffer scene lab
 
 This is the focused, Slint-free development app for portable production RGB565
-scenes: the MagiK text and arcade-cabinet particle effects plus launcher
-navigation-transition rasterization. The command line selects one concrete
-scene; there is deliberately no demo registry or recipe-family abstraction.
+scenes: the MagiK text and arcade-cabinet particle effects, launcher
+navigation-transition rasterization, and the procedural card flip. The command
+line selects one concrete scene; there is deliberately no demo registry or
+recipe-family abstraction.
 The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
 dependency of this app.
 
@@ -18,6 +19,7 @@ Use the supported host workflow for a macOS preview:
 scripts/agent scene-lab preview --scene magik --recipe RECIPE
 scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
 scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
+scripts/agent scene-lab preview --scene card-flip
 ```
 
 For attended MiSTer sessions, use one of:
@@ -25,6 +27,7 @@ For attended MiSTer sessions, use one of:
 ```text
 scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
+scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
@@ -60,6 +63,14 @@ Navigation fixtures contain generated RGB565 cards and backgrounds, require no
 Slint or catalog, and cycle through forward and reverse directions. They are
 immutable; `--fixture` and `--recipe` are mutually exclusive.
 
+The card flip is self-contained and accepts neither option. Its 258x378 faces
+are drawn in memory from rectangles and 5x7 bitmap glyphs; there are no card
+assets or regeneration step. The macOS preview is a readable scalar reference.
+MiSTer uses a separate row-major fixed-point rasterizer, renders into a cached
+RGB565 frame, and transfers changed frames to scanout with an ARMv7 NEON copy.
+A/Enter flips forward and B/Backspace flips backward on macOS; the MiSTer
+controller uses A and B. Direction changes continue from the current pose.
+
 Create a deterministic capture without opening a window:
 
 ```text
@@ -78,6 +89,16 @@ mister-magik-framebuffer-scene-lab \
   --fixture consoles-system \
   --time-ms 1080 \
   --output transition.ppm
+```
+
+Card checkpoints are recipe-free and can select a direction:
+
+```text
+scripts/agent scene-lab capture \
+  --scene card-flip \
+  --direction forward \
+  --time-ms 220 \
+  --output card-midpoint.ppm
 ```
 
 The engine, palettes, frame hashes, and MiSTer presentation remain RGB565. The

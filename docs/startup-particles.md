@@ -173,8 +173,10 @@ scripts/agent startup-particles preview RECIPE
 scripts/agent scene-lab preview --scene magik --recipe RECIPE
 scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
 scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
+scripts/agent scene-lab preview --scene card-flip
 scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
+scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device startup-particles RECIPE --runtime lab --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
@@ -184,6 +186,11 @@ attended `--runtime lab` path remain thin typed compatibility aliases; the old
 particle-only lab app/binary name is compatibility-only. Particle preview and
 focused-lab modes accept either schema, while Dev-launcher mode rejects cabinet
 recipes. Navigation accepts `--fixture`, never `--recipe`.
+
+`card-flip` is a procedural, self-contained scene. It has no recipe, fixture,
+binary face assets, or generator. macOS supplies the readable reference path;
+MiSTer owns a separate fixed-point renderer and ARMv7 NEON scanout transfer
+under the same geometry, timing, palette, border, and corner contract.
 
 For deterministic visual evidence, the focused binary also supports a headless
 fixed-time capture. See `apps/framebuffer-scene-lab/README.md` for the direct
