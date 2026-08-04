@@ -91,6 +91,19 @@ struct Column {
     source_y_step_q16: i32,
 }
 
+#[derive(Clone, Copy, Default)]
+struct RowSpan {
+    valid: bool,
+    left: u16,
+    right: u16,
+}
+
+impl RowSpan {
+    fn contains(self, x: usize) -> bool {
+        self.valid && x >= usize::from(self.left) && x <= usize::from(self.right)
+    }
+}
+
 pub struct CardFlip {
     duration: Duration,
     progress_q16: u16,
@@ -104,6 +117,8 @@ pub struct CardFlip {
     front: Vec<Rgb565Pixel>,
     back: Vec<Rgb565Pixel>,
     columns: [Column; WIDTH],
+    rows: [RowSpan; HEIGHT],
+    device_initialized: bool,
 }
 
 impl Default for CardFlip {
@@ -128,6 +143,8 @@ impl CardFlip {
             front: build_face(false),
             back: build_face(true),
             columns: [Column::default(); WIDTH],
+            rows: [RowSpan::default(); HEIGHT],
+            device_initialized: false,
         }
     }
 
@@ -261,13 +278,19 @@ impl CardFlip {
                 source_y_step_q16: (step * FIXED_ONE as f32).round() as i32,
             };
         }
+        self.prepare_row_spans();
         self.paint_rows(destination, progress)
     }
 
     /// Device path: the pose is reduced to fixed point once; inversion and the
     /// row-major sampling loop contain integer arithmetic only.
     fn render_device(&mut self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
-        destination.fill(BACKGROUND);
+        if self.device_initialized {
+            clear_card_bounds(destination);
+        } else {
+            destination.fill(BACKGROUND);
+            self.device_initialized = true;
+        }
         self.columns.fill(Column::default());
         let eased = smoothstep_q16(progress);
         let (sine_q16, cosine_q16) = sin_cos_pi_q16(eased);
@@ -305,7 +328,39 @@ impl CardFlip {
                 source_y_step_q16: source_y_step_q16 as i32,
             };
         }
+        self.prepare_row_spans();
         self.paint_rows(destination, progress)
+    }
+
+    fn prepare_row_spans(&mut self) {
+        self.rows.fill(RowSpan::default());
+        let Some(first) = self.columns.iter().position(|column| column.valid) else {
+            return;
+        };
+        let last = self
+            .columns
+            .iter()
+            .rposition(|column| column.valid)
+            .unwrap_or(first);
+        for y in CARD_Y..CARD_Y + CARD_HEIGHT {
+            let mut left = None;
+            let mut right = 0;
+            for x in first..=last {
+                if let Some(source_y) = source_y_at(self.columns[x], y)
+                    && stepped_corner(self.columns[x].source_x as usize, source_y)
+                {
+                    left.get_or_insert(x);
+                    right = x;
+                }
+            }
+            if let Some(left) = left {
+                self.rows[y] = RowSpan {
+                    valid: true,
+                    left: left as u16,
+                    right: right as u16,
+                };
+            }
+        }
     }
 
     fn paint_rows(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
@@ -324,33 +379,16 @@ impl CardFlip {
             &self.back
         };
         let mirror = progress >= u16::MAX / 2;
-        let first = self
-            .columns
-            .iter()
-            .position(|column| column.valid)
-            .unwrap_or(0);
-        let last = self
-            .columns
-            .iter()
-            .rposition(|column| column.valid)
-            .unwrap_or(first);
         let mut writes = 0;
 
         // This is intentionally row-major for contiguous RGB565 destination writes.
-        for y in 0..HEIGHT {
-            let mut row_left = None;
-            let mut row_right = None;
-            for x in first..=last {
-                if let Some(source_y) = source_y_at(self.columns[x], y)
-                    && stepped_corner(self.columns[x].source_x as usize, source_y)
-                {
-                    row_left.get_or_insert(x);
-                    row_right = Some(x);
-                }
-            }
-            let (Some(left), Some(right)) = (row_left, row_right) else {
+        for y in CARD_Y..CARD_Y + CARD_HEIGHT {
+            let span = self.rows[y];
+            if !span.valid {
                 continue;
-            };
+            }
+            let left = usize::from(span.left);
+            let right = usize::from(span.right);
             for x in left..=right {
                 let column = self.columns[x];
                 let Some(source_y) = source_y_at(column, y) else {
@@ -359,9 +397,9 @@ impl CardFlip {
                 if !stepped_corner(column.source_x as usize, source_y) {
                     continue;
                 }
-                let top_edge = source_y_at(column, y.saturating_sub(OUTLINE_WIDTH)).is_none();
+                let top_edge = y < OUTLINE_WIDTH || !self.rows[y - OUTLINE_WIDTH].contains(x);
                 let bottom_edge =
-                    y + OUTLINE_WIDTH >= HEIGHT || source_y_at(column, y + OUTLINE_WIDTH).is_none();
+                    y + OUTLINE_WIDTH >= HEIGHT || !self.rows[y + OUTLINE_WIDTH].contains(x);
                 let border = x < left + OUTLINE_WIDTH
                     || x + OUTLINE_WIDTH > right
                     || top_edge
@@ -381,6 +419,13 @@ impl CardFlip {
             }
         }
         writes
+    }
+}
+
+fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
+    for y in CARD_Y..CARD_Y + CARD_HEIGHT {
+        let start = y * WIDTH + CARD_X;
+        destination[start..start + CARD_WIDTH].fill(BACKGROUND);
     }
 }
 
