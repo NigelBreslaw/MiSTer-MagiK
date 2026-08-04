@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod card_flip;
+#[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
 mod card_flip_neon;
 
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
@@ -491,9 +492,14 @@ impl LabScene {
             Self::Focused(_) => "locked-case".into(),
             Self::Navigation(renderer) => format!("fixture:{}", renderer.fixture().label()),
             Self::CardFlip(renderer) => format!(
-                "{}:{:05}",
+                "{}:{:05}:{}",
                 renderer.direction().label(),
-                renderer.progress_q16()
+                renderer.progress_q16(),
+                if renderer.is_active() {
+                    "moving"
+                } else {
+                    "idle"
+                }
             ),
         }
     }
@@ -532,8 +538,8 @@ fn card_frame_stats(
         cue_start_ms: 0,
         previous_cue_start_ms: 0,
         cue_elapsed_ms: 0,
-        cue_duration_ms: DEFAULT_DURATION.as_millis() as u64,
-        total_ms: DEFAULT_DURATION.as_millis() as u64,
+        cue_duration_ms: card_flip::DEFAULT_DURATION.as_millis() as u64,
+        total_ms: card_flip::DEFAULT_DURATION.as_millis() as u64,
     }
 }
 

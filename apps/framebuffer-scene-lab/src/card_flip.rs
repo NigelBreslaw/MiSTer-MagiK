@@ -135,13 +135,6 @@ impl CardFlip {
         self.duration = duration.max(Duration::from_millis(1));
     }
 
-    pub fn set_raster_path(&mut self, raster_path: RasterPath) {
-        if self.raster_path != raster_path {
-            self.raster_path = raster_path;
-            self.dirty = true;
-        }
-    }
-
     #[must_use]
     pub const fn progress_q16(&self) -> u16 {
         self.progress_q16
