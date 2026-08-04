@@ -8102,6 +8102,11 @@ mod tests {
                 y1: 508,
             }
         );
+        assert_eq!(
+            (hdmi_renderer.selection_rect().y0 - hdmi_renderer.dirty_rect().y0)
+                / ARCADE_ROW_HEIGHT as usize,
+            3
+        );
 
         let crt = crt_240_display();
         let metrics = CrtUiMetrics::for_display(&crt);
@@ -8148,6 +8153,13 @@ mod tests {
                 assert_eq!(
                     visible_height / metrics.game_row_height as usize,
                     expected_full_rows
+                );
+                let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+                renderer.set_geometry_for_render_h(geometry, render_h);
+                assert_eq!(
+                    (renderer.selection_rect().y0 - renderer.dirty_rect().y0)
+                        / metrics.game_row_height as usize,
+                    (expected_full_rows / 2).saturating_sub(1)
                 );
             }
         }

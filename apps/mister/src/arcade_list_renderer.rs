@@ -613,7 +613,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn centered_selection_y() -> usize {
+    fn default_selection_y() -> usize {
         Self::selection_y_for_height(ARCADE_LIST_H, ARCADE_ROW_HEIGHT)
     }
 
@@ -624,7 +624,9 @@ impl ArcadeListRenderer {
     fn selection_y_for_height(height: usize, row_height: i32) -> usize {
         let row_h = row_height.max(1) as usize;
         let visible_rows = (height / row_h).max(1);
-        (visible_rows / 2) * row_h
+        // Keep the selection one row above the geometric midpoint so the
+        // viewport favors upcoming entries without pinning to an edge.
+        (visible_rows / 2).saturating_sub(1) * row_h
     }
 
     fn draw_content_band(
@@ -1506,7 +1508,7 @@ pub(crate) fn for_each_arcade_list_present_segment(
         width,
         viewport_y,
         h,
-        ArcadeListRenderer::centered_selection_y(),
+        ArcadeListRenderer::default_selection_y(),
         ARCADE_LIST_H,
         ARCADE_ROW_HEIGHT as usize,
         ARCADE_HDMI_SELECTION_FRAME_THICKNESS,
@@ -1572,7 +1574,7 @@ pub(crate) fn arcade_list_present_pixels(
     arcade_list_present_pixels_with_geometry(
         update,
         width,
-        ArcadeListRenderer::centered_selection_y(),
+        ArcadeListRenderer::default_selection_y(),
         ARCADE_LIST_H,
         ARCADE_ROW_HEIGHT as usize,
         ARCADE_HDMI_SELECTION_FRAME_THICKNESS,
@@ -1681,7 +1683,7 @@ fn arcade_visible_window_hash(games: ArcadeGameView<'_>, visual_index: f32) -> u
         games.len(),
         arcade_visual_px(visual_index, ARCADE_ROW_HEIGHT, 1),
         ARCADE_ROW_HEIGHT,
-        ArcadeListRenderer::centered_selection_y(),
+        ArcadeListRenderer::default_selection_y(),
         ARCADE_LIST_H,
     ) else {
         return hash;
@@ -2067,7 +2069,7 @@ mod tests {
                 renderer.selection_y(),
                 renderer.visible_height,
             ),
-            Some((42, 57))
+            Some((43, 58))
         );
     }
 
@@ -2501,7 +2503,7 @@ mod tests {
         let rect = renderer.selection_rect();
         assert_eq!(
             rect.y0,
-            ARCADE_LIST_Y + ArcadeListRenderer::centered_selection_y()
+            ARCADE_LIST_Y + ArcadeListRenderer::default_selection_y()
         );
         assert_eq!(rect.y1 - rect.y0, ARCADE_ROW_HEIGHT as usize);
 
@@ -2512,7 +2514,7 @@ mod tests {
         let rect = renderer.selection_rect();
         assert_eq!(
             rect.y0,
-            ARCADE_LIST_Y + ArcadeListRenderer::centered_selection_y()
+            ARCADE_LIST_Y + ArcadeListRenderer::default_selection_y()
         );
     }
 
@@ -2813,7 +2815,7 @@ mod tests {
         }
         renderer.surface_y = 5;
         let x = ARCADE_HDMI_SELECTION_FRAME_THICKNESS;
-        let y = ArcadeListRenderer::centered_selection_y() + ARCADE_HDMI_SELECTION_FRAME_THICKNESS;
+        let y = ArcadeListRenderer::default_selection_y() + ARCADE_HDMI_SELECTION_FRAME_THICKNESS;
         let w = 4;
         let h = 2;
         let src_y = (renderer.surface_y + y) % ARCADE_LIST_H;
