@@ -2534,15 +2534,15 @@ mod tests {
         assert_eq!(
             segments,
             vec![
-                (ArcadeListPresentKind::Normal, 0, 0, ARCADE_LIST_W, 240),
+                (ArcadeListPresentKind::Normal, 0, 0, ARCADE_LIST_W, 192),
                 (
                     ArcadeListPresentKind::Inverted,
                     ARCADE_HDMI_SELECTION_FRAME_THICKNESS,
-                    243,
+                    195,
                     ARCADE_LIST_W - ARCADE_HDMI_SELECTION_FRAME_THICKNESS * 2,
                     42
                 ),
-                (ArcadeListPresentKind::Normal, 0, 288, ARCADE_LIST_W, 192),
+                (ArcadeListPresentKind::Normal, 0, 240, ARCADE_LIST_W, 240),
             ]
         );
 
@@ -2590,8 +2590,9 @@ mod tests {
     #[test]
     fn arcade_present_segments_keep_fixed_selection_aperture_for_partial_bands() {
         let mut segments = Vec::new();
+        let viewport_y = ArcadeListRenderer::default_selection_y() + 10;
 
-        for_each_arcade_list_present_segment(ARCADE_LIST_W, 250, 20, |kind, x, y, w, h| {
+        for_each_arcade_list_present_segment(ARCADE_LIST_W, viewport_y, 20, |kind, x, y, w, h| {
             segments.push((kind, x, y, w, h));
         });
 
@@ -2600,7 +2601,7 @@ mod tests {
             vec![(
                 ArcadeListPresentKind::Inverted,
                 ARCADE_HDMI_SELECTION_FRAME_THICKNESS,
-                250,
+                viewport_y,
                 ARCADE_LIST_W - ARCADE_HDMI_SELECTION_FRAME_THICKNESS * 2,
                 20
             )]
