@@ -56,7 +56,7 @@ fn main() -> Result<(), String> {
             SceneSource::CardFlip(duration),
             options.destination,
             None,
-            false,
+            options.profile,
         );
     }
     if options.scene == EffectKind::NavigationTransition {
