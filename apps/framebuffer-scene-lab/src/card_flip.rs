@@ -420,11 +420,13 @@ impl CardFlip {
                 right -= 1;
             }
 
-            for x in left..=right {
+            let mut x = left;
+            while x <= right {
                 let column = self.columns[x];
-                let value = i64::from(column.source_y_zero_q16)
-                    + y as i64 * i64::from(column.source_y_step_q16);
-                let source_y = ((value + FIXED_ONE / 2) >> FIXED_SHIFT) as usize;
+                // Card-space fixed-point values stay well inside i32 for the
+                // fixed 960x540 scene, avoiding 64-bit arithmetic on ARMv7.
+                let value = column.source_y_zero_q16 + y as i32 * column.source_y_step_q16;
+                let source_y = ((value + (1 << 15)) >> 16) as usize;
                 let border = x < left + OUTLINE_WIDTH
                     || x + OUTLINE_WIDTH > right
                     || y < usize::from(column.top_y) + OUTLINE_WIDTH
@@ -445,6 +447,7 @@ impl CardFlip {
                 // loop bounds stay inside that plane.
                 unsafe { *destination.add(y * WIDTH + x) = pixel };
                 writes += 1;
+                x += 1;
             }
         }
         writes
@@ -484,6 +487,20 @@ fn column_contains(column: Column, y: usize) -> bool {
 }
 
 fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
+    #[cfg(target_arch = "arm")]
+    {
+        crate::card_flip_neon::fill_rect_rgb565(
+            destination,
+            WIDTH,
+            CARD_X,
+            CARD_Y,
+            CARD_WIDTH,
+            CARD_HEIGHT,
+            BACKGROUND,
+        );
+        return;
+    }
+    #[cfg(not(target_arch = "arm"))]
     for y in CARD_Y..CARD_Y + CARD_HEIGHT {
         let start = y * WIDTH + CARD_X;
         destination[start..start + CARD_WIDTH].fill(BACKGROUND);

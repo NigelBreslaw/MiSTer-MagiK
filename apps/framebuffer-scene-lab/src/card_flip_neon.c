@@ -23,6 +23,24 @@ void mister_magik_card_flip_neon_fill(uint16_t *destination, uint16_t value, siz
     }
 }
 
+void mister_magik_card_flip_neon_fill_rect(
+    uint16_t *destination,
+    size_t stride,
+    size_t x,
+    size_t y,
+    size_t width,
+    size_t height,
+    uint16_t value
+) {
+    for (size_t row = 0; row < height; ++row) {
+        mister_magik_card_flip_neon_fill(
+            destination + (y + row) * stride + x,
+            value,
+            width
+        );
+    }
+}
+
 void mister_magik_card_flip_neon_copy(
     uint16_t *destination,
     const uint16_t *source,

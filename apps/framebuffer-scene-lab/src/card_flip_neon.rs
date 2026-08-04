@@ -26,6 +26,45 @@ pub fn fill_rgb565(destination: &mut [Rgb565Pixel], value: Rgb565Pixel) {
     destination.fill(value);
 }
 
+/// Fills a validated rectangle inside a packed RGB565 plane.
+pub fn fill_rect_rgb565(
+    destination: &mut [Rgb565Pixel],
+    stride: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    value: Rgb565Pixel,
+) {
+    assert!(stride > 0 && destination.len().is_multiple_of(stride));
+    assert!(x + width <= stride);
+    assert!(y + height <= destination.len() / stride);
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    #[cfg(target_arch = "arm")]
+    // SAFETY: the assertions above prove every requested row is inside the
+    // packed destination plane; the native function retains no pointer.
+    unsafe {
+        mister_magik_card_flip_neon_fill_rect(
+            destination.as_mut_ptr().cast::<u16>(),
+            stride,
+            x,
+            y,
+            width,
+            height,
+            value.0,
+        );
+    }
+
+    #[cfg(not(target_arch = "arm"))]
+    for row in y..y + height {
+        let start = row * stride + x;
+        destination[start..start + width].fill(value);
+    }
+}
+
 /// Copies one complete contiguous RGB565 plane into an equally sized destination.
 ///
 /// # Panics
@@ -60,6 +99,15 @@ pub fn copy_rgb565(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel]) {
 #[cfg(target_arch = "arm")]
 unsafe extern "C" {
     fn mister_magik_card_flip_neon_fill(destination: *mut u16, value: u16, count: usize);
+    fn mister_magik_card_flip_neon_fill_rect(
+        destination: *mut u16,
+        stride: usize,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        value: u16,
+    );
     fn mister_magik_card_flip_neon_copy(destination: *mut u16, source: *const u16, count: usize);
 }
 
@@ -104,6 +152,22 @@ mod tests {
         assert_eq!(destination, vec![Rgb565Pixel(0xabcd); source.len()]);
         copy_rgb565(&mut destination, &source);
         assert_eq!(destination, source);
+    }
+
+    #[test]
+    fn rectangle_fill_respects_stride_and_bounds() {
+        let mut destination = vec![Rgb565Pixel(0); 8 * 6];
+        fill_rect_rgb565(&mut destination, 8, 2, 1, 4, 3, Rgb565Pixel(0x55aa));
+        for y in 0..6 {
+            for x in 0..8 {
+                let expected = if (1..4).contains(&y) && (2..6).contains(&x) {
+                    Rgb565Pixel(0x55aa)
+                } else {
+                    Rgb565Pixel(0)
+                };
+                assert_eq!(destination[y * 8 + x], expected);
+            }
+        }
     }
 
     #[test]

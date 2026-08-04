@@ -1370,7 +1370,7 @@ fn run_card_flip_mister(
             }
             next_frame += FRAME_DURATION;
             if next_frame <= Instant::now() {
-                next_frame = Instant::now() + FRAME_DURATION;
+                next_frame = Instant::now();
             }
         }
 
