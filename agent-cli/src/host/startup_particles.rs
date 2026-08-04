@@ -32,6 +32,12 @@ const LAUNCHER_START_DEADLINE: Duration = Duration::from_secs(45);
 const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LabDisplayContracts {
+    settings: String,
+    display: String,
+}
+
 pub(super) fn run(
     device: &mut NativeDevice,
     binary: Option<&Path>,
@@ -102,7 +108,7 @@ fn run_lab(
 ) -> Result<()> {
     let has_recipe = recipe.is_some();
     let session = connect_with(&prepared.config.connection, 10)?;
-    let destination = active_lab_destination(&session)?;
+    let display_contracts = active_lab_display_contracts(&session)?;
     if let Err(error) = prepare_lab_files(&session, binary, recipe, scene, fixture) {
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
@@ -129,7 +135,7 @@ fn run_lab(
         .spawn(move || {
             let result = run_remote_lab(
                 &run_config,
-                destination,
+                display_contracts,
                 &scene,
                 has_recipe,
                 fixture.as_deref(),
@@ -204,7 +210,7 @@ fn run_lab(
     combine_results(run_result, safety_result)
 }
 
-fn active_lab_destination(session: &Session) -> Result<(u16, u16)> {
+fn active_lab_display_contracts(session: &Session) -> Result<LabDisplayContracts> {
     let reply = super::exec_checked_output(
         session,
         "query startup particle display mode",
@@ -215,21 +221,34 @@ fn active_lab_destination(session: &Session) -> Result<(u16, u16)> {
         return Err("startup particle lab cannot run during a display transaction".into());
     }
     let active = super::parse_display_reply_active(reply)?;
-    lab_destination_for_mode(&active)
-}
-
-fn lab_destination_for_mode(active: &str) -> Result<(u16, u16)> {
-    if active.starts_with("crt-") {
-        return Err("startup particle lab currently requires a fixed HDMI display mode".into());
+    if active != "custom"
+        && !super::DISPLAY_MATRIX_MODES
+            .iter()
+            .any(|mode| mode.id == active)
+    {
+        return Err(format!("unsupported active display mode {active}").into());
     }
-    super::DISPLAY_MATRIX_MODES
-        .iter()
-        .find(|mode| mode.id == active)
-        .and_then(|mode| mode.output)
-        .ok_or_else(|| {
-            format!("startup particle lab requires a known fixed display mode, found {active}")
-                .into()
-        })
+    let settings = super::exec_checked_output(
+        session,
+        "query startup particle resolved output route",
+        &acknowledged_main_command("mister_magik_settings_get_v1"),
+    )?;
+    let output = settings
+        .stdout
+        .split_ascii_whitespace()
+        .find_map(|field| field.strip_prefix("output="))
+        .ok_or("resolved settings reply omitted output")?;
+    let settings = format!("schema=1&output={output}");
+    if !matches!(
+        output,
+        "hdmi" | "crt-240p60" | "crt-288p50" | "crt-480p60" | "crt-576p50"
+    ) {
+        return Err(format!("unsupported resolved output route {output}").into());
+    }
+    Ok(LabDisplayContracts {
+        settings,
+        display: format!("schema=1&mode={active}"),
+    })
 }
 
 fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<()> {
@@ -583,7 +602,7 @@ const fn cleanup_requires_embedded_ack(recipe_removed: bool, already_embedded: b
 
 fn run_remote_lab(
     config: &super::remote::ConnectionConfig,
-    destination: (u16, u16),
+    display_contracts: LabDisplayContracts,
     scene: &str,
     has_recipe: bool,
     fixture: Option<&str>,
@@ -593,7 +612,14 @@ fn run_remote_lab(
     let session = connect_with(config, 10)?;
     stream_exec(
         &session,
-        &remote_run_lab_command(destination, scene, has_recipe, fixture, case, profile),
+        &remote_run_lab_command(
+            &display_contracts,
+            scene,
+            has_recipe,
+            fixture,
+            case,
+            profile,
+        ),
     )
 }
 
@@ -708,7 +734,7 @@ fn remote_scene_arguments(scene: &str, has_recipe: bool, fixture: Option<&str>) 
 }
 
 fn remote_run_lab_command(
-    destination: (u16, u16),
+    display_contracts: &LabDisplayContracts,
     scene: &str,
     has_recipe: bool,
     fixture: Option<&str>,
@@ -718,14 +744,14 @@ fn remote_run_lab_command(
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {binary} {scene_arguments} {case_argument} {profile_argument} --destination-width {destination_width} --destination-height {destination_height}",
+        "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; MISTER_MAGIK_RUNTIME_SETTINGS_V1={runtime_settings} MISTER_MAGIK_RUNTIME_DISPLAY_V1={runtime_display} {binary} {scene_arguments} {case_argument} {profile_argument}",
         dir = sh(REMOTE_DIR),
         binary = sh(REMOTE_BINARY),
         scene_arguments = remote_scene_arguments(scene, has_recipe, fixture),
         case_argument = case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
         profile_argument = if profile { "--profile" } else { "" },
-        destination_width = destination.0,
-        destination_height = destination.1,
+        runtime_settings = sh(&display_contracts.settings),
+        runtime_display = sh(&display_contracts.display),
     )
 }
 
@@ -754,21 +780,31 @@ fn combine_results(run: Result<()>, cleanup: Result<()>) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn hdmi_contracts() -> LabDisplayContracts {
+        LabDisplayContracts {
+            settings: "schema=1&output=hdmi".into(),
+            display: "schema=1&mode=hdmi-1920x1080p60".into(),
+        }
+    }
+
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run = remote_run_lab_command((1920, 1080), "magik", true, None, None, false);
+        let run = remote_run_lab_command(&hdmi_contracts(), "magik", true, None, None, false);
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
         assert!(!run.contains("/media/fat/mister-magik/mister-magik-fb"));
         assert!(run.contains("--recipe"));
-        assert!(run.contains("--destination-width 1920 --destination-height 1080"));
+        assert!(run.contains("MISTER_MAGIK_RUNTIME_SETTINGS_V1="));
+        assert!(run.contains("MISTER_MAGIK_RUNTIME_DISPLAY_V1="));
+        assert!(!run.contains("--destination-width"));
+        assert!(!run.contains("--destination-height"));
     }
 
     #[test]
     fn navigation_fixture_lab_is_volatile_and_recipe_free() {
         let run = remote_run_lab_command(
-            (1920, 1080),
+            &hdmi_contracts(),
             "navigation-transition",
             false,
             Some("home-arcade"),
@@ -787,7 +823,7 @@ mod tests {
 
     #[test]
     fn card_flip_lab_is_self_contained() {
-        let run = remote_run_lab_command((1920, 1080), "card-flip", false, None, None, false);
+        let run = remote_run_lab_command(&hdmi_contracts(), "card-flip", false, None, None, false);
         assert!(run.contains(&format!("--scene {}", sh("card-flip"))));
         assert!(!run.contains("--recipe"));
         assert!(!run.contains("--fixture"));
@@ -840,12 +876,16 @@ mod tests {
     }
 
     #[test]
-    fn focused_lab_accepts_fixed_hdmi_and_rejects_crt_routes() {
-        assert_eq!(
-            lab_destination_for_mode("hdmi-1920x1080p60").unwrap(),
-            (1920, 1080)
-        );
-        assert!(lab_destination_for_mode("crt-240p60").is_err());
+    fn crt_contracts_are_forwarded_without_lab_geometry() {
+        let contracts = LabDisplayContracts {
+            settings: "schema=1&output=crt-240p60".into(),
+            display: "schema=1&mode=auto".into(),
+        };
+        let run = remote_run_lab_command(&contracts, "card-flip", false, None, None, false);
+        assert!(run.contains("schema=1&output=crt-240p60"));
+        assert!(run.contains("schema=1&mode=auto"));
+        assert!(!run.contains("960"));
+        assert!(!run.contains("540"));
     }
 
     #[test]
