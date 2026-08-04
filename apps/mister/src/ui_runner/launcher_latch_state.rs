@@ -785,11 +785,10 @@ mod tests {
         state.mark_post_success(first);
 
         all_writable(&mut state);
-        state.mark_post_success(
-            state
-                .plan_next(input(None, None, None, None, None))
-                .expect("second plan"),
-        );
+        let second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second plan");
+        state.mark_post_success(second);
 
         all_writable(&mut state);
         let third = state
@@ -817,11 +816,10 @@ mod tests {
         state.mark_post_success(first);
 
         all_writable(&mut state);
-        state.mark_post_success(
-            state
-                .plan_next(input(None, None, None, None, None))
-                .expect("second plan"),
-        );
+        let second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second plan");
+        state.mark_post_success(second);
 
         all_writable(&mut state);
         let third = state
@@ -850,11 +848,10 @@ mod tests {
             .expect("first plan");
         state.mark_post_success(first);
         all_writable(&mut state);
-        state.mark_post_success(
-            state
-                .plan_next(input(None, None, None, None, None))
-                .expect("second plan"),
-        );
+        let second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second plan");
+        state.mark_post_success(second);
         all_writable(&mut state);
 
         let moved = state
@@ -883,11 +880,10 @@ mod tests {
         state.mark_post_success(first);
 
         all_writable(&mut state);
-        state.mark_post_success(
-            state
-                .plan_next(input(None, None, None, None, None))
-                .expect("second plan"),
-        );
+        let second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second plan");
+        state.mark_post_success(second);
 
         all_writable(&mut state);
         let third = state
