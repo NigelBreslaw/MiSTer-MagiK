@@ -44,20 +44,18 @@ impl PreviewSurface {
 }
 
 pub(super) fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
-    const CABINET_W: usize = 336;
-    const CABINET_H: usize = 520;
-    let right_x = ui.render_w() / 2;
-    let right_w = ui.render_w().saturating_sub(right_x);
-    let cabinet_x = right_x + right_w.saturating_sub(CABINET_W) / 2;
-    let cabinet_y = ui.render_h().saturating_sub(CABINET_H) / 2;
-    let x0 = (cabinet_x + ARCADE_PREVIEW_BOX_X).min(ui.render_w());
-    let y0 = (cabinet_y + ARCADE_PREVIEW_BOX_Y).min(ui.render_h());
-    DirtyRect {
-        x0,
-        y0,
-        x1: (cabinet_x + ARCADE_PREVIEW_BOX_X + ARCADE_PREVIEW_BOX_W as usize).min(ui.render_w()),
-        y1: (cabinet_y + ARCADE_PREVIEW_BOX_Y + ARCADE_PREVIEW_BOX_H as usize).min(ui.render_h()),
-    }
+    mister_magik_fb::visual_composition::hdmi_preview_rect(ui.render_w(), ui.render_h())
+}
+
+fn centered_preview_origin(
+    screen: DirtyRect,
+    image_width: isize,
+    image_height: isize,
+) -> (isize, isize) {
+    (
+        screen.x0 as isize + (screen.width() as isize - image_width) / 2,
+        screen.y0 as isize + (screen.rows() as isize - image_height) / 2,
+    )
 }
 
 fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Option<DirtyRect> {
@@ -68,10 +66,8 @@ fn raw_preview_scaled_rect(ui: &UiDisplay, frame: &PreviewRawFrame<'_>) -> Optio
     }
 
     let screen = preview_screen_rect(ui);
-    let image_x =
-        screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - frame.display_w as isize) / 2;
-    let image_y =
-        screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.display_h as isize) / 2;
+    let (image_x, image_y) =
+        centered_preview_origin(screen, frame.display_w as isize, frame.display_h as isize);
     let x0 = screen.x0.max(image_x.max(0) as usize);
     let y0 = screen.y0.max(image_y.max(0) as usize);
     let x1 = screen
@@ -124,11 +120,9 @@ fn sample_preview_rgb(
         && frame.display_w == frame.source_w
         && frame.display_h == frame.source_h
     {
-        let image_x = screen.x0 as isize
-            + (ARCADE_PREVIEW_BOX_W as isize - frame.source_w as isize) / 2
-            + offset_x;
-        let image_y =
-            screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - frame.source_h as isize) / 2;
+        let (image_x, image_y) =
+            centered_preview_origin(screen, frame.source_w as isize, frame.source_h as isize);
+        let image_x = image_x + offset_x;
         let src_x = x as isize - image_x;
         let src_y = y as isize - image_y;
         if src_x < 0
@@ -161,10 +155,8 @@ fn sample_preview_rgb(
     let scaled_h = ((frame.display_h as u64 * scale_num as u64) / scale_den as u64)
         .max(1)
         .min(isize::MAX as u64) as isize;
-    let center_x = screen.x0 as isize + ARCADE_PREVIEW_BOX_W as isize / 2 + offset_x;
-    let center_y = screen.y0 as isize + ARCADE_PREVIEW_BOX_H as isize / 2;
-    let image_x = center_x - scaled_w / 2;
-    let image_y = center_y - scaled_h / 2;
+    let (image_x, image_y) = centered_preview_origin(screen, scaled_w, scaled_h);
+    let image_x = image_x + offset_x;
     let local_x = x as isize - image_x;
     let local_y = y as isize - image_y;
     if local_x < 0 || local_y < 0 || local_x >= scaled_w || local_y >= scaled_h {
@@ -256,6 +248,7 @@ fn raw565_view<'a>(
     if source_w == 0 || source_h == 0 || display_w == 0 || display_h == 0 {
         return None;
     }
+    let (x, y) = centered_preview_origin(screen, display_w as isize, display_h as isize);
     Some(Raw565View {
         pixels,
         stride_pixels,
@@ -263,8 +256,8 @@ fn raw565_view<'a>(
         source_h,
         display_w,
         display_h,
-        x: screen.x0 as isize + (ARCADE_PREVIEW_BOX_W as isize - display_w as isize) / 2 + offset_x,
-        y: screen.y0 as isize + (ARCADE_PREVIEW_BOX_H as isize - display_h as isize) / 2,
+        x: x + offset_x,
+        y,
     })
 }
 
@@ -1786,6 +1779,35 @@ mod tests {
     }
 
     #[test]
+    fn raw_preview_image_is_centered_in_dynamic_hdmi_aperture() {
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &[Rgb565Pixel(0xffff); 4],
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 100,
+            display_h: 80,
+        };
+
+        for (frame_width, frame_height) in
+            [(683, 384), (960, 540), (960, 600), (1024, 768), (1280, 720)]
+        {
+            let ui = UiDisplay::for_framebuffer(frame_width, frame_height);
+            let screen = preview_screen_rect(&ui);
+            let image = raw_preview_scaled_rect(&ui, &frame).expect("preview image rect");
+
+            assert!(image.x0 >= screen.x0);
+            assert!(image.y0 >= screen.y0);
+            assert!(image.x1 <= screen.x1);
+            assert!(image.y1 <= screen.y1);
+            assert!((image.x0 + image.x1).abs_diff(screen.x0 + screen.x1) <= 1);
+            assert!((image.y0 + image.y1).abs_diff(screen.y0 + screen.y1) <= 1);
+        }
+    }
+
+    #[test]
     fn raw_preview_compose_rejects_invalid_frames() {
         let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
         let pixels = [Rgb565Pixel(0xffff); 1];
@@ -1881,7 +1903,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
         let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
 
@@ -1893,10 +1916,9 @@ mod tests {
             0.5,
         );
 
-        let image_x = screen.x0 + (ARCADE_PREVIEW_BOX_W as usize - 2) / 2;
-        let image_y = screen.y0 + (ARCADE_PREVIEW_BOX_H as usize - 2) / 2;
+        let (image_x, image_y) = centered_preview_origin(screen, 2, 2);
         assert_eq!(
-            cached[image_y * ui.render_w() + image_x],
+            cached[image_y as usize * ui.render_w() + image_x as usize],
             blend_565(red, blue, 128)
         );
     }
@@ -2049,7 +2071,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
 
         for alpha in [1, 64, 128, 192, 254] {
@@ -2099,7 +2122,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
         let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
 
@@ -2167,7 +2191,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
         let previous_view = raw565_view(frame.previous.as_ref().unwrap(), screen, 0);
         let current_view = raw565_view(&frame.current, screen, 0);
@@ -2218,7 +2243,8 @@ mod tests {
             previous: None,
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
 
         let sentinel = Rgb565Pixel(0x4208);
@@ -2276,7 +2302,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
         let alpha = 128;
         let sentinel = Rgb565Pixel(0x4208);
@@ -2334,7 +2361,8 @@ mod tests {
             previous: Some(previous),
             current,
             transition_id: 1,
-            duration_divisor: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
         };
         let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
 

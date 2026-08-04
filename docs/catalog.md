@@ -127,10 +127,13 @@ Home navigation predictively schedules bounded background mini-nav loads for
 the highlighted destination (or the default leaf below a highlighted submenu)
 and a small number of nearby, bounded-size siblings. The sibling count and game
 count limits protect Home frame time and memory on the MiSTer. Loaded rows and
-structured launch plans are merged into the live catalog and remain resident. Activating a collection is atomic: the
-launcher stays on the populated source view until the destination has resident
-rows, then changes screen and publishes those rows in one frame. A failed shard
-load is surfaced once on the destination tile and does not retry every frame;
+structured launch plans are merged into the live catalog and remain resident.
+Active lazy hydration is visually silent: destination tiles keep their normal
+ready and focus presentation unless the shard load actually fails. Activating
+a collection is atomic: the launcher stays on the populated source view until
+the destination has resident rows, then changes screen and publishes those rows
+in one frame. A failed shard load is surfaced once on the destination tile and
+does not retry every frame;
 pressing A on that tile explicitly retries within the current catalog generation.
 
 The following numbers are deliberately distinct:

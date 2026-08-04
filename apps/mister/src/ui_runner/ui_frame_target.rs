@@ -260,8 +260,11 @@ pub(super) fn blit_raw_preview_if_needed(
         .is_some();
     let transition_frame = preview.raw_transition_frame();
     let mut trace = transition.update(transition_frame.as_ref(), elapsed);
-    if !raw_dirty && !slint_touched_preview && !trace.active {
-        preview.finish_raw_empty_transition_if_idle();
+    if !raw_dirty
+        && !slint_touched_preview
+        && !trace.active
+        && !preview.presentation_requires_present()
+    {
         return (None, trace);
     }
     let Some(transition_frame) = transition_frame else {

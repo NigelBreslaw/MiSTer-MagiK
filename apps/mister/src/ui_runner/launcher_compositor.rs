@@ -63,6 +63,18 @@ impl<'a> LayerTarget<'a> {
         slint_dirty
     }
 
+    pub(super) fn render_slint_full(
+        &mut self,
+        window: &MisterSoftwareWindow,
+    ) -> (Option<DirtyRect>, bool) {
+        let mut slint_dirty = None;
+        let rendered = window.draw_full_frame_if_needed(|renderer| {
+            let region = self.target.render(renderer, frame_target_geometry(self.ui));
+            slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
+        });
+        (slint_dirty, rendered)
+    }
+
     pub(super) fn render_black(&mut self) -> DirtyRect {
         self.target.cached_565_mut().fill(Rgb565Pixel(0));
         DirtyRect {
@@ -71,6 +83,17 @@ impl<'a> LayerTarget<'a> {
             x1: self.ui.render_w(),
             y1: self.ui.render_h(),
         }
+    }
+
+    pub(super) fn clear_cached_preview(&mut self) -> DirtyRect {
+        let rect = preview_screen_rect(self.ui);
+        let stride = self.ui.render_w();
+        let cached = self.target.cached_565_mut();
+        for y in rect.y0..rect.y1 {
+            let row = y * stride;
+            cached[row + rect.x0..row + rect.x1].fill(Rgb565Pixel(0));
+        }
+        rect
     }
 
     pub(super) fn render_screensaver(
@@ -301,6 +324,23 @@ pub(super) struct LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_cached_preview_blacks_only_the_dynamic_preview_rect() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        let green = Rgb565Pixel(0x07e0);
+        let mut target =
+            UiFrameTarget::cached(FramebufferTargetGeometry::new(ui.render_w(), ui.render_h()));
+        target.cached_565_mut().fill(green);
+
+        let mut layer_target = LayerTarget::new(&mut target, &ui);
+        let rect = layer_target.clear_cached_preview();
+
+        assert_eq!(rect, preview_screen_rect(&ui));
+        let inside = rect.y0 * ui.render_w() + rect.x0;
+        assert_eq!(target.cached_565()[inside], Rgb565Pixel(0));
+        assert_eq!(target.cached_565()[0], green);
+    }
 
     #[test]
     fn screensaver_frame_overwrite_can_restore_launcher_cache_exactly() {

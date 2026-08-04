@@ -8,6 +8,7 @@ pub enum UiCompositionState {
     FullSlint,
     MixedArcade,
     NavigationTransition,
+    NavigationDestination,
     Screensaver,
     ModalFullSlint,
     ModalOverArcade,
@@ -20,6 +21,7 @@ impl UiCompositionState {
             Self::FullSlint => "full-slint",
             Self::MixedArcade => "mixed-arcade",
             Self::NavigationTransition => "navigation-transition",
+            Self::NavigationDestination => "navigation-destination",
             Self::Screensaver => "screensaver",
             Self::ModalFullSlint => "modal-full-slint",
             Self::ModalOverArcade => "modal-over-arcade",
@@ -55,6 +57,9 @@ impl Default for UiCompositionStatus {
 pub struct UiCompositionInput {
     pub screensaver_active: bool,
     pub navigation_transition_active: bool,
+    pub navigation_destination_committed: bool,
+    pub navigation_destination_ready: bool,
+    pub navigation_destination_layers_ready: bool,
     pub return_screen: Option<Screen>,
     pub confirm_visible: bool,
     pub fullscreen_overlay_visible: bool,
@@ -72,6 +77,8 @@ pub struct UiCompositionDecision {
     pub allow_arcade_list_blit: bool,
     pub allow_preview_blit: bool,
     pub transition_owns_full_frame: bool,
+    pub prepare_navigation_destination: bool,
+    pub force_full_slint_raster: bool,
     pub force_full_slint_present: bool,
     pub clear_direct_layers: bool,
     pub recovery_count: u64,
@@ -123,7 +130,7 @@ impl UiCompositionController {
         let recovered_from = (previous == UiCompositionState::Recovering && invariant.is_none())
             .then_some(requested_state);
 
-        let (state, force_full_slint_present, clear_direct_layers) =
+        let (state, force_full_slint_present, force_full_slint_raster, clear_direct_layers) =
             if let Some(invariant) = invariant {
                 self.state = UiCompositionState::Recovering;
                 self.recovery_count = self.recovery_count.saturating_add(1);
@@ -138,7 +145,7 @@ impl UiCompositionController {
                         self.last_invariant_detail
                     ),
                 });
-                (self.state, true, true)
+                (self.state, true, false, true)
             } else {
                 self.state = requested_state;
                 if let Some(to) = recovered_from {
@@ -155,7 +162,14 @@ impl UiCompositionController {
                     || (previous.allows_direct_layers()
                         && (!requested_state.allows_direct_layers()
                             || requested_state == UiCompositionState::ModalOverArcade));
-                (self.state, full_frame, clear_layers)
+                let force_full_raster =
+                    requested_state == UiCompositionState::NavigationDestination;
+                (
+                    self.state,
+                    full_frame || force_full_raster,
+                    force_full_raster,
+                    clear_layers,
+                )
             };
 
         if previous != self.state {
@@ -170,7 +184,13 @@ impl UiCompositionController {
             allow_arcade_list_blit: state == UiCompositionState::MixedArcade,
             allow_preview_blit: state == UiCompositionState::MixedArcade
                 && (!input.preview_cache_exact || input.preview_frame_ready),
-            transition_owns_full_frame: state == UiCompositionState::NavigationTransition,
+            transition_owns_full_frame: matches!(
+                state,
+                UiCompositionState::NavigationTransition
+                    | UiCompositionState::NavigationDestination
+            ),
+            prepare_navigation_destination: state == UiCompositionState::NavigationDestination,
+            force_full_slint_raster,
             force_full_slint_present,
             clear_direct_layers,
             recovery_count: self.recovery_count,
@@ -198,7 +218,14 @@ fn requested_state(input: UiCompositionInput) -> UiCompositionState {
             UiCompositionState::ModalFullSlint
         }
     } else if input.navigation_transition_active {
-        UiCompositionState::NavigationTransition
+        if input.navigation_destination_committed
+            && !input.navigation_destination_ready
+            && input.navigation_destination_layers_ready
+        {
+            UiCompositionState::NavigationDestination
+        } else {
+            UiCompositionState::NavigationTransition
+        }
     } else if input.return_screen == Some(Screen::Arcade) && input.arcade_ready {
         UiCompositionState::MixedArcade
     } else {
@@ -244,6 +271,9 @@ mod tests {
         UiCompositionInput {
             screensaver_active: false,
             navigation_transition_active: false,
+            navigation_destination_committed: false,
+            navigation_destination_ready: false,
+            navigation_destination_layers_ready: false,
             return_screen: Some(screen),
             confirm_visible: false,
             fullscreen_overlay_visible: false,
@@ -316,6 +346,55 @@ mod tests {
         assert!(decision.force_full_slint_present);
         assert!(decision.clear_direct_layers);
         assert_eq!(decision.recovery_count, 0);
+    }
+
+    #[test]
+    fn navigation_destination_preparation_is_an_explicit_state() {
+        let mut controller = UiCompositionController::new();
+
+        let source = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            ..input(Screen::Home)
+        });
+        assert_eq!(source.state, UiCompositionState::NavigationTransition);
+        assert!(!source.prepare_navigation_destination);
+        assert!(!source.force_full_slint_raster);
+
+        let waiting_for_layers = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            navigation_destination_committed: true,
+            ..input(Screen::Arcade)
+        });
+        assert_eq!(
+            waiting_for_layers.state,
+            UiCompositionState::NavigationTransition
+        );
+
+        let preparing = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            navigation_destination_committed: true,
+            navigation_destination_layers_ready: true,
+            ..input(Screen::Arcade)
+        });
+        assert_eq!(preparing.state, UiCompositionState::NavigationDestination);
+        assert!(preparing.transition_owns_full_frame);
+        assert!(preparing.prepare_navigation_destination);
+        assert!(preparing.force_full_slint_raster);
+        assert!(preparing.force_full_slint_present);
+
+        let captured = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            navigation_destination_committed: true,
+            navigation_destination_ready: true,
+            navigation_destination_layers_ready: true,
+            ..input(Screen::Arcade)
+        });
+        assert_eq!(captured.state, UiCompositionState::NavigationTransition);
+        assert!(!captured.prepare_navigation_destination);
+        assert!(!captured.force_full_slint_raster);
+
+        let settled = controller.tick(input(Screen::Arcade));
+        assert_eq!(settled.state, UiCompositionState::MixedArcade);
     }
 
     #[test]

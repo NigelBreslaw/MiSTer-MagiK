@@ -958,74 +958,6 @@ pub(super) fn launcher_clock_text() -> String {
     }
 }
 
-pub(super) fn slint_menu_items(nav: &LauncherNav) -> Rc<VecModel<slint_ui::launcher::MenuItem>> {
-    let rows: Vec<slint_ui::launcher::MenuItem> = nav
-        .current_menu_items()
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            let (scanning, failed, available) = nav.menu_item_catalog_presentation(item);
-            let partial = !scanning
-                && item.kind == crate::launcher_taxonomy::LauncherMenuItemKind::Menu
-                && failed;
-            slint_ui::launcher::MenuItem {
-                id: item.id.clone().into(),
-                label: item.title.clone().into(),
-                subtitle: if scanning {
-                    match item.kind {
-                        crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
-                            let systems = nav.menu_discovered_system_count(&item.id);
-                            format!(
-                                "{systems} system{} found",
-                                if systems == 1 { "" } else { "s" }
-                            )
-                            .into()
-                        }
-                        crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
-                            if available {
-                                format!("{} games available", item.count).into()
-                            } else {
-                                "".into()
-                            }
-                        }
-                    }
-                } else if partial {
-                    "Some items failed".into()
-                } else if failed && available {
-                    format!("Update failed • {} games", item.count).into()
-                } else if failed {
-                    "Load failed — A to retry".into()
-                } else {
-                    format!("{} games", item.count).into()
-                },
-                focused: index == nav.selected,
-                focus_transition_enabled: false,
-                available,
-                node_kind: match item.kind {
-                    crate::launcher_taxonomy::LauncherMenuItemKind::Menu => {
-                        slint_ui::launcher::MenuItemKind::Group
-                    }
-                    crate::launcher_taxonomy::LauncherMenuItemKind::Collection => {
-                        slint_ui::launcher::MenuItemKind::Collection
-                    }
-                },
-                status: if scanning {
-                    slint_ui::launcher::MenuItemStatus::Scanning
-                } else if partial {
-                    slint_ui::launcher::MenuItemStatus::Partial
-                } else if failed && available {
-                    slint_ui::launcher::MenuItemStatus::UpdateFailed
-                } else if failed {
-                    slint_ui::launcher::MenuItemStatus::Failed
-                } else {
-                    slint_ui::launcher::MenuItemStatus::Ready
-                },
-            }
-        })
-        .collect();
-    Rc::new(VecModel::from(rows))
-}
-
 pub(super) fn empty_arcade_catalog(root: &str) -> ArcadeCatalog {
     ArcadeCatalog::new(PathBuf::from(root), Vec::new(), Vec::new())
 }
@@ -1617,6 +1549,72 @@ mod tests {
                 .label,
             "Commodore Amiga"
         );
+    }
+
+    #[test]
+    fn nintendo_menu_keeps_lazy_hydration_tiles_ready() {
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![
+                GameSystemEntry {
+                    id: "nes".into(),
+                    title: "Nintendo Entertainment System".into(),
+                    count: 2,
+                },
+                GameSystemEntry {
+                    id: "snes".into(),
+                    title: "Super Nintendo".into(),
+                    count: 3,
+                },
+                GameSystemEntry {
+                    id: "n64".into(),
+                    title: "Nintendo 64".into(),
+                    count: 4,
+                },
+            ],
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("consoles"));
+        assert!(nav.open_menu("menu:consoles:nintendo"));
+        nav.catalog_system_hydration_started("snes");
+        nav.catalog_system_hydration_started("n64");
+
+        let mut models = LauncherBridgeModels::default();
+        let rows = models.menu_items(&nav, 1);
+
+        assert!(rows.row_count() >= 3);
+        for index in 0..rows.row_count() {
+            let row = rows.row_data(index).expect("Nintendo launcher row");
+            assert_eq!(row.status, slint_ui::launcher::MenuItemStatus::Ready);
+            if !row.focused {
+                assert!(!row.focus_transition_enabled);
+            }
+        }
+
+        nav.catalog_system_hydration_failed("snes");
+        let failed_rows = models.menu_items(&nav, 2);
+        let failed_snes = (0..failed_rows.row_count())
+            .filter_map(|index| failed_rows.row_data(index))
+            .find(|row| row.id.as_str() == "snes")
+            .expect("failed SNES launcher row");
+        assert_eq!(
+            failed_snes.status,
+            slint_ui::launcher::MenuItemStatus::Failed
+        );
+        assert_eq!(failed_snes.subtitle.as_str(), "Load failed — A to retry");
+        assert!(!failed_snes.available);
+
+        nav.catalog_system_hydration_started("snes");
+        let retry_rows = models.menu_items(&nav, 3);
+        let retry_snes = (0..retry_rows.row_count())
+            .filter_map(|index| retry_rows.row_data(index))
+            .find(|row| row.id.as_str() == "snes")
+            .expect("retrying SNES launcher row");
+        assert_eq!(retry_snes.status, slint_ui::launcher::MenuItemStatus::Ready);
+        assert_eq!(retry_snes.subtitle.as_str(), "3 games");
+        assert!(retry_snes.available);
     }
 
     #[test]

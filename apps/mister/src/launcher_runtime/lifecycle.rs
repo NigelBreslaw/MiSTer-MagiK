@@ -653,10 +653,22 @@ impl LauncherLifecycle {
             StartupRevealState::HoldBlack if catalog_ready => {
                 self.mark_reveal_ready("preview_state=not_required", out);
             }
-            // A return never reveals a stale or missing expected preview. The
-            // single five-second return watchdog above owns the diagnosed Home
-            // fallback when exact preview readiness cannot be reached.
-            StartupRevealState::WaitRelevantPreview => {}
+            StartupRevealState::WaitRelevantPreview
+                if self.return_preview_wait_started_at.is_some_and(|started| {
+                    now.saturating_duration_since(started) >= Self::RETURN_PREVIEW_HOLD_TIMEOUT
+                }) =>
+            {
+                out.startup_event(
+                    "return_preview_timeout",
+                    format!(
+                        "elapsed_ms={}",
+                        self.return_preview_wait_started_at
+                            .map(|started| now.saturating_duration_since(started).as_millis())
+                            .unwrap_or(0)
+                    ),
+                );
+                self.mark_reveal_ready("preview_state=return_preview_timeout", out);
+            }
             _ => {}
         }
     }
@@ -1130,8 +1142,10 @@ impl LauncherLifecycle {
                 }
             }
             LauncherLifecycleInput::LaunchRequested { launch_ref } => {
-                if matches!(self.state, LauncherLifecycleState::Idle)
-                    && self.startup_input_enabled()
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::Idle | LauncherLifecycleState::CatalogReady { .. }
+                ) && self.startup_input_enabled()
                 {
                     out.push(LauncherEffect::BeginLoadingFrame {
                         launch_ref: launch_ref.clone(),
@@ -1563,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn return_start_holds_black_if_preview_never_becomes_ready() {
+    fn return_start_reveals_black_if_preview_never_becomes_ready() {
         let now = Instant::now();
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
@@ -1607,14 +1621,15 @@ mod tests {
         );
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::WaitRelevantPreview
+            StartupRevealState::RevealLauncher
         );
-        assert!(!lifecycle.startup_can_present_frame());
-        assert!(!effect_names(&effects).contains(&"launcher_reveal_ready"));
+        assert!(lifecycle.startup_can_present_frame());
+        assert!(effect_names(&effects).contains(&"return_preview_timeout"));
+        assert!(effect_names(&effects).contains(&"launcher_reveal_ready"));
     }
 
     #[test]
-    fn return_preview_short_timeout_never_reveals_stale_content() {
+    fn return_preview_short_timeout_reveals_loading_surface() {
         let now = Instant::now();
         let restored_at = now + Duration::from_secs(1);
         let mut lifecycle = lifecycle();
@@ -1653,7 +1668,12 @@ mod tests {
         );
         assert_eq!(
             lifecycle.startup_status().state,
-            StartupRevealState::WaitRelevantPreview
+            StartupRevealState::RevealLauncher
+        );
+        assert!(lifecycle.startup_can_present_frame());
+        assert_eq!(
+            effect_detail(&effects, "return_preview_timeout"),
+            Some("elapsed_ms=250")
         );
     }
 
@@ -1925,9 +1945,14 @@ mod tests {
     }
 
     #[test]
-    fn launch_during_catalog_validation_is_rejected() {
+    fn launch_during_catalog_validation_uses_published_catalog() {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
+        let now = Instant::now();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        lifecycle.tick_startup_reveal(now, true, &mut effects);
+        lifecycle.note_startup_frame_presented(0, now, &mut effects);
 
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Ready {
@@ -1947,9 +1972,30 @@ mod tests {
 
         assert_eq!(
             lifecycle.state(),
-            &LauncherLifecycleState::CatalogReady {
-                source: CatalogSource::SummaryProjection,
-                validating: true,
+            &LauncherLifecycleState::Launching {
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "validating.mra".to_string()
+                }
+            }
+        );
+        assert!(matches!(
+            effects.as_slice().first(),
+            Some(LauncherEffect::BeginLoadingFrame { launch_ref })
+                if launch_ref == "validating.mra"
+        ));
+
+        effects.clear();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogValidationFinished,
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::Launching {
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "validating.mra".to_string()
+                }
             }
         );
         assert!(effects.as_slice().is_empty());

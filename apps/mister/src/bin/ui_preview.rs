@@ -411,7 +411,7 @@ mod macos {
             launcher_nav.catalog_build_started();
             for system in &catalog.systems {
                 launcher_nav.catalog_system_discovered(&system.id);
-                launcher_nav.catalog_system_ready(&system.id);
+                launcher_nav.catalog_system_update_ready(&system.id);
             }
             launcher_nav.sync_launcher_taxonomy(&catalog);
             launcher_nav.catalog_build_finished(&catalog);
@@ -1712,7 +1712,7 @@ mod macos {
                         self.launcher_nav.catalog_build_started();
                         for system in &self.catalog.systems {
                             self.launcher_nav.catalog_system_discovered(&system.id);
-                            self.launcher_nav.catalog_system_ready(&system.id);
+                            self.launcher_nav.catalog_system_update_ready(&system.id);
                         }
                         self.launcher_nav.sync_launcher_taxonomy(&self.catalog);
                         self.launcher_nav.catalog_build_finished(&self.catalog);
@@ -3410,7 +3410,7 @@ mod macos {
             nav.catalog_build_started();
             for system_id in &fixtures.shell_system_ids {
                 nav.catalog_system_discovered(system_id);
-                nav.catalog_system_ready(system_id);
+                nav.catalog_system_update_ready(system_id);
             }
             nav.sync_launcher_taxonomy(&fixtures.catalog);
             nav.catalog_build_finished(&fixtures.catalog);
