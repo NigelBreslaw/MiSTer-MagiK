@@ -28,6 +28,7 @@ mod cpu_profile;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
+const CARD_FLIP_PROFILE_DURATION: Duration = Duration::from_secs(30);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
@@ -1289,7 +1290,7 @@ fn run_card_flip_mister(
     let mut profile_frames = 0_u64;
     let mut profile_repeated_presentations = 0_u64;
     let mut automatic_direction = CardFlipDirection::Reverse;
-    let mut next_automatic_flip = duration + Duration::from_millis(100);
+    let mut next_automatic_flip = duration;
     if profile {
         renderer.play(CardFlipDirection::Forward, Duration::ZERO);
     }
@@ -1332,7 +1333,7 @@ fn run_card_flip_mister(
                 CardFlipDirection::Forward => CardFlipDirection::Reverse,
                 CardFlipDirection::Reverse => CardFlipDirection::Forward,
             };
-            next_automatic_flip = elapsed + duration + Duration::from_millis(100);
+            next_automatic_flip = elapsed + duration;
             next_frame = Instant::now();
         }
 
@@ -1409,7 +1410,7 @@ fn run_card_flip_mister(
             repeated_presentations = 0;
         }
 
-        if profile && started.elapsed() >= Duration::from_secs(10) {
+        if profile && started.elapsed() >= CARD_FLIP_PROFILE_DURATION {
             let seconds = started.elapsed().as_secs_f64();
             let cpu_percent = process_cpu_time()
                 .saturating_sub(profile_cpu_started)

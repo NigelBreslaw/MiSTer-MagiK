@@ -71,7 +71,7 @@ RGB565 frame, and transfers changed frames to scanout with an ARMv7 NEON copy.
 A/Enter flips forward and B/Backspace flips backward on macOS; the MiSTer
 controller uses A and B. Direction changes continue from the current pose.
 
-Use the closed attended profile to alternate directions for ten seconds and
+Use the closed attended profile to alternate directions continuously for 30 seconds and
 restore the launcher automatically:
 
 ```text
