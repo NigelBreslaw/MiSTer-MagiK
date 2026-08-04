@@ -52,11 +52,6 @@ impl DirtyRect {
             y1: self.y1.max(other.y1),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn area(self) -> usize {
-        self.width() * (self.y1 - self.y0)
-    }
 }
 
 const DIRTY_RECT_LIST_CAP: usize = 32;
