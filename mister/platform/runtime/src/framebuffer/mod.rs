@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod copy;
+pub mod damage;
 #[cfg(feature = "ui")]
 pub mod downsample;
 pub mod format;
