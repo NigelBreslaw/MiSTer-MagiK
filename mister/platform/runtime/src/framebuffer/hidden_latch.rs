@@ -6,6 +6,7 @@
 use crate::fpga::{
     Fpga, LatchedFbufGeometry, LatchedFbufStatus, MAGIK_FBUF_CAPS_MAGIC, MAGIK_FBUF_LATCH_MAGIC,
 };
+use crate::framebuffer::damage::{DirtyRectList, TwoSlotDamageLedger};
 use crate::framebuffer::format::rgb565_stride_bytes;
 use crate::framebuffer::hidden_scanout::{
     HiddenRgb565BufferIndex, HiddenScanoutError, HiddenScanoutFramebuffer,
@@ -13,6 +14,7 @@ use crate::framebuffer::hidden_scanout::{
 use crate::framebuffer::rgb565::Rgb565;
 use crate::framebuffer::route::FramebufferRouteMode;
 use crate::framebuffer::route::LauncherFramebufferRoute;
+use crate::framebuffer::vertical_scale::{Rgb565FrameView, VerticalRect, VerticalRgb565Transform};
 use mister_magik_core::display::ResolvedDisplayPlan;
 use std::io;
 use std::time::{Duration, Instant};
@@ -85,6 +87,14 @@ pub struct HiddenLatchPipelineStats {
     pub status_reads: u64,
     pub poll_reads: u64,
     pub settle_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CachedHiddenLatchCopyStats {
+    pub slot_index: u8,
+    pub rect_count: u32,
+    pub source_bytes: usize,
+    pub destination_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -351,6 +361,188 @@ impl HiddenLatchPresenter {
         self.settle_pending()?.ok_or_else(|| {
             HiddenLatchError::PostNotObserved("posted frame lost pending state".into())
         })
+    }
+}
+
+pub struct CachedHiddenLatchPresenter {
+    raw: HiddenLatchPresenter,
+    ledger: TwoSlotDamageLedger,
+    transform: VerticalRgb565Transform,
+    render_width: usize,
+    render_height: usize,
+    prepared_slot: Option<u8>,
+    poisoned: bool,
+}
+
+impl CachedHiddenLatchPresenter {
+    pub fn open(plan: ResolvedDisplayPlan) -> Result<Self, HiddenLatchError> {
+        let raw = HiddenLatchPresenter::open_for_plan(plan)?;
+        let transform = VerticalRgb565Transform::new(plan.render_w, plan.render_h, plan.fb_h)
+            .map_err(|error| HiddenLatchError::Unsupported(error.into()))?;
+        Ok(Self {
+            raw,
+            ledger: TwoSlotDamageLedger::new(plan.render_w, plan.render_h),
+            transform,
+            render_width: plan.render_w,
+            render_height: plan.render_h,
+            prepared_slot: None,
+            poisoned: false,
+        })
+    }
+
+    #[must_use]
+    pub const fn render_width(&self) -> usize {
+        self.render_width
+    }
+
+    #[must_use]
+    pub const fn render_height(&self) -> usize {
+        self.render_height
+    }
+
+    #[must_use]
+    pub const fn pipeline_stats(&self) -> HiddenLatchPipelineStats {
+        self.raw.pipeline_stats()
+    }
+
+    #[must_use]
+    pub const fn writable_slot_index(&self) -> u8 {
+        self.raw.writable_slot_index()
+    }
+
+    pub fn prepare_cached(
+        &mut self,
+        source: &[Rgb565],
+        damage: &DirtyRectList,
+    ) -> Result<CachedHiddenLatchCopyStats, HiddenLatchError> {
+        self.ensure_healthy()?;
+        if self.prepared_slot.is_some() {
+            return Err(HiddenLatchError::NoWritableSlot(
+                "a cached frame is already prepared".into(),
+            ));
+        }
+        let needed = self.render_width.saturating_mul(self.render_height);
+        if source.len() < needed {
+            return Err(HiddenLatchError::Unsupported(format!(
+                "cached source has {} pixels, need {needed}",
+                source.len()
+            )));
+        }
+        self.ledger.record_damage(damage);
+        let slot_index = self.raw.writable_slot_index();
+        let restore = self.ledger.plan(slot_index);
+        let destination_stride = self.raw.stride_pixels();
+        let destination = self.raw.pixels_mut();
+        let source_view = Rgb565FrameView {
+            pixels: source,
+            width: self.render_width,
+            height: self.render_height,
+            stride_pixels: self.render_width,
+        };
+        let mut destination_bytes = 0usize;
+        for rect in restore.iter() {
+            let copied = match self.transform.copy_rect(
+                source_view,
+                VerticalRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+                destination,
+                destination_stride,
+            ) {
+                Ok(copied) => copied,
+                Err(error) => {
+                    self.ledger.mark_attempt_failed(slot_index);
+                    return Err(HiddenLatchError::Unsupported(error.into()));
+                }
+            };
+            destination_bytes =
+                destination_bytes.saturating_add(copied.map_or(0, |stats| stats.bytes));
+        }
+        self.prepared_slot = Some(slot_index);
+        Ok(CachedHiddenLatchCopyStats {
+            slot_index,
+            rect_count: restore.len() as u32,
+            source_bytes: restore.total_rgb565_bytes(),
+            destination_bytes,
+        })
+    }
+
+    pub fn post_prepared(&mut self) -> Result<HiddenLatchPostReceipt, HiddenLatchError> {
+        self.ensure_healthy()?;
+        let prepared_slot = self.prepared_slot.ok_or_else(|| {
+            HiddenLatchError::NoWritableSlot("no cached frame has been prepared".into())
+        })?;
+        match self.raw.post() {
+            Ok(receipt) if receipt.slot_index == prepared_slot => Ok(receipt),
+            Ok(receipt) => {
+                self.ledger.invalidate_all();
+                self.poisoned = true;
+                Err(HiddenLatchError::PostNotObserved(format!(
+                    "prepared slot {prepared_slot}, posted slot {}",
+                    receipt.slot_index
+                )))
+            }
+            Err(error) => {
+                self.ledger.mark_attempt_failed(prepared_slot);
+                self.poisoned = true;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn settle_pending(
+        &mut self,
+    ) -> Result<Option<HiddenLatchPresentReceipt>, HiddenLatchError> {
+        self.ensure_healthy()?;
+        match self.raw.settle_pending() {
+            Ok(Some(receipt)) => {
+                if self.prepared_slot != Some(receipt.slot_index) {
+                    self.ledger.invalidate_all();
+                    self.poisoned = true;
+                    return Err(HiddenLatchError::PostNotObserved(format!(
+                        "prepared slot {:?}, settled slot {}",
+                        self.prepared_slot, receipt.slot_index
+                    )));
+                }
+                self.ledger.mark_presented(receipt.slot_index);
+                self.prepared_slot = None;
+                Ok(Some(receipt))
+            }
+            Ok(None) => Ok(None),
+            Err(error) => {
+                if let Some(slot_index) = self.prepared_slot {
+                    self.ledger.mark_attempt_failed(slot_index);
+                }
+                self.poisoned = true;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn present_cached(
+        &mut self,
+        source: &[Rgb565],
+        damage: &DirtyRectList,
+    ) -> Result<(CachedHiddenLatchCopyStats, HiddenLatchPresentReceipt), HiddenLatchError> {
+        let copy = self.prepare_cached(source, damage)?;
+        self.post_prepared()?;
+        let present = self.settle_pending()?.ok_or_else(|| {
+            HiddenLatchError::PostNotObserved("posted cached frame lost pending state".into())
+        })?;
+        Ok((copy, present))
+    }
+
+    fn ensure_healthy(&self) -> Result<(), HiddenLatchError> {
+        if self.poisoned {
+            Err(HiddenLatchError::PostNotObserved(
+                "cached presenter requires reopen after ambiguous latch state".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 }
 
