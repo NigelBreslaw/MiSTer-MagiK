@@ -37,6 +37,7 @@ pub enum EffectKind {
     Cabinet,
     Intro,
     NavigationTransition,
+    CardFlip,
 }
 
 impl EffectKind {
@@ -47,6 +48,7 @@ impl EffectKind {
             Self::Cabinet => "cabinet",
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
+            Self::CardFlip => "card-flip",
         }
     }
 
@@ -57,6 +59,7 @@ impl EffectKind {
             "cabinet" => Some(Self::Cabinet),
             "intro" => Some(Self::Intro),
             "navigation-transition" => Some(Self::NavigationTransition),
+            "card-flip" => Some(Self::CardFlip),
             _ => None,
         }
     }
@@ -66,8 +69,8 @@ impl EffectKind {
             Self::Magik => StartupParticleRecipe::Magik,
             Self::Cabinet => StartupParticleRecipe::Cabinet,
             Self::Intro => StartupParticleRecipe::Intro,
-            Self::NavigationTransition => {
-                unreachable!("navigation fixtures do not publish particle recipe status")
+            Self::NavigationTransition | Self::CardFlip => {
+                unreachable!("self-contained scenes do not publish particle recipe status")
             }
         }
     }
@@ -277,8 +280,8 @@ impl EffectRecipe {
             EffectKind::Magik => embedded_magik_recipe().map(Self::Magik),
             EffectKind::Cabinet => embedded_cabinet_recipe().map(Self::Cabinet),
             EffectKind::Intro => embedded_intro_recipe().map(Self::Intro),
-            EffectKind::NavigationTransition => {
-                Err("navigation fixtures do not have embedded particle recipes".into())
+            EffectKind::NavigationTransition | EffectKind::CardFlip => {
+                Err("self-contained scenes do not have embedded particle recipes".into())
             }
         }
     }

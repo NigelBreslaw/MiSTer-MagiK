@@ -1,6 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod card_flip;
+
+use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
 use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
@@ -29,6 +32,31 @@ const CABINET_PARTICLE_STEP: usize = 1_024;
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
+    if options.scene == EffectKind::CardFlip {
+        let duration = options.card_duration();
+        if options.check {
+            let mut renderer = CardFlip::new(CardFlipRasterPath::Reference);
+            renderer.set_duration(duration);
+            println!("framebuffer-scene-lab check passed scene=card-flip");
+            return Ok(());
+        }
+        if let Some(output) = options.output.as_deref() {
+            return render_card_flip_headless(
+                duration,
+                options.direction,
+                options
+                    .time_ms
+                    .expect("option parser requires time with output"),
+                output,
+            );
+        }
+        return run_window(
+            SceneSource::CardFlip(duration),
+            options.destination,
+            None,
+            false,
+        );
+    }
     if options.scene == EffectKind::NavigationTransition {
         let fixture = options
             .fixture
@@ -276,6 +304,7 @@ fn cabinet_case(name: &str) -> Option<CabinetCase> {
 enum SceneSource {
     Particle(PathBuf),
     Navigation(NavigationFixture),
+    CardFlip(Duration),
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
@@ -322,11 +351,37 @@ fn render_navigation_headless(
     Ok(())
 }
 
+fn render_card_flip_headless(
+    duration: Duration,
+    direction: CardFlipDirection,
+    time_ms: u64,
+    output: &Path,
+) -> Result<(), String> {
+    let mut renderer = CardFlip::new(CardFlipRasterPath::Reference);
+    renderer.set_duration(duration);
+    renderer.start_from_endpoint(direction, Duration::ZERO);
+    let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+    let stats = renderer
+        .render(&mut pixels, Duration::from_millis(time_ms))
+        .map_err(str::to_owned)?;
+    write_ppm(output, &pixels)?;
+    println!(
+        "capture={} scene=card-flip direction={} time_ms={} progress_q16={} hash={:016x}",
+        output.display(),
+        direction.label(),
+        time_ms,
+        stats.progress_q16,
+        frame_hash(&pixels)
+    );
+    Ok(())
+}
+
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 enum LabScene {
     Particle(LiveParticleRenderer),
     Focused(FocusedParticleRenderer),
     Navigation(NavigationFixtureScene),
+    CardFlip(CardFlip),
 }
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
@@ -356,6 +411,16 @@ impl LabScene {
             SceneSource::Navigation(fixture) => {
                 Ok(Self::Navigation(NavigationFixtureScene::new(fixture)))
             }
+            SceneSource::CardFlip(duration) => {
+                let raster_path = if cfg!(all(target_os = "linux", target_arch = "arm")) {
+                    CardFlipRasterPath::Device
+                } else {
+                    CardFlipRasterPath::Reference
+                };
+                let mut renderer = CardFlip::new(raster_path);
+                renderer.set_duration(duration);
+                Ok(Self::CardFlip(renderer))
+            }
         }
     }
 
@@ -374,6 +439,10 @@ impl LabScene {
                 renderer.render_buffer(destination, buffer_id, elapsed, next_elapsed)
             }
             Self::Navigation(renderer) => renderer.render(destination, elapsed),
+            Self::CardFlip(renderer) => renderer
+                .render(destination, elapsed)
+                .map(card_frame_stats)
+                .map_err(str::to_owned),
         }
     }
 
@@ -382,7 +451,18 @@ impl LabScene {
             Self::Particle(renderer) => renderer.effect(),
             Self::Focused(renderer) => renderer.kind(),
             Self::Navigation(_) => EffectKind::NavigationTransition,
+            Self::CardFlip(_) => EffectKind::CardFlip,
         }
+    }
+
+    fn play_card(&mut self, direction: CardFlipDirection, at: Duration) {
+        if let Self::CardFlip(renderer) = self {
+            renderer.play(direction, at);
+        }
+    }
+
+    fn card_needs_frame(&self) -> bool {
+        matches!(self, Self::CardFlip(renderer) if renderer.is_dirty())
     }
 
     fn set_cabinet_controls(&mut self, controls: &CabinetLabControls) -> Result<(), String> {
@@ -400,6 +480,7 @@ impl LabScene {
             Self::Particle(renderer) => renderer.generation(),
             Self::Focused(_) => 0,
             Self::Navigation(_) => 0,
+            Self::CardFlip(_) => 0,
         }
     }
 
@@ -408,6 +489,11 @@ impl LabScene {
             Self::Particle(renderer) => format!("{:?}", renderer.status_state()),
             Self::Focused(_) => "locked-case".into(),
             Self::Navigation(renderer) => format!("fixture:{}", renderer.fixture().label()),
+            Self::CardFlip(renderer) => format!(
+                "{}:{:05}",
+                renderer.direction().label(),
+                renderer.progress_q16()
+            ),
         }
     }
 
@@ -416,7 +502,37 @@ impl LabScene {
             Self::Particle(renderer) => renderer.last_error(),
             Self::Focused(_) => None,
             Self::Navigation(_) => None,
+            Self::CardFlip(_) => None,
         }
+    }
+}
+
+fn card_frame_stats(
+    stats: card_flip::RenderStats,
+) -> mister_magik_framebuffer_scene_lab::FrameStats {
+    mister_magik_framebuffer_scene_lab::FrameStats {
+        effect: EffectKind::CardFlip,
+        particles: 0,
+        projected_particles: 0,
+        projection_cohorts: 1,
+        visible: stats.pixel_writes,
+        pixel_writes: stats.pixel_writes,
+        simulation_backend: "none",
+        projection_backend: if cfg!(all(target_os = "linux", target_arch = "arm")) {
+            "armv7-fixed-q16"
+        } else {
+            "reference-f32"
+        },
+        magik_stages: None,
+        cabinet_stages: None,
+        intro_stages: None,
+        cue_id: "card-flip",
+        cue_index: 0,
+        cue_start_ms: 0,
+        previous_cue_start_ms: 0,
+        cue_elapsed_ms: 0,
+        cue_duration_ms: DEFAULT_DURATION.as_millis() as u64,
+        total_ms: DEFAULT_DURATION.as_millis() as u64,
     }
 }
 
@@ -1147,6 +1263,9 @@ struct Options {
     destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
     profile: bool,
+    duration_ms: Option<u64>,
+    direction: CardFlipDirection,
+    direction_requested: bool,
 }
 
 impl Options {
@@ -1161,6 +1280,9 @@ impl Options {
         let mut destination_height = None;
         let mut case = None;
         let mut profile = false;
+        let mut duration_ms = None;
+        let mut direction = CardFlipDirection::Forward;
+        let mut direction_requested = false;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -1169,7 +1291,7 @@ impl Options {
                     scene = EffectKind::parse(&value);
                     if scene.is_none() {
                         return Err(format!(
-                            "invalid scene {value:?}; expected magik, cabinet, intro, or navigation-transition"
+                            "invalid scene {value:?}; expected magik, cabinet, intro, navigation-transition, or card-flip"
                         ));
                     }
                 }
@@ -1210,6 +1332,37 @@ impl Options {
                     })?);
                 }
                 "--profile" => profile = true,
+                "--duration-ms" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--duration-ms requires milliseconds")?;
+                    duration_ms = Some(
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|value| (100..=10_000).contains(value))
+                            .ok_or_else(|| {
+                                format!(
+                                    "invalid --duration-ms value {value:?}; expected 100..=10000"
+                                )
+                            })?,
+                    );
+                }
+                "--direction" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--direction requires forward or reverse")?;
+                    direction = match value.as_str() {
+                        "forward" => CardFlipDirection::Forward,
+                        "reverse" => CardFlipDirection::Reverse,
+                        _ => {
+                            return Err(format!(
+                                "invalid card direction {value:?}; expected forward or reverse"
+                            ));
+                        }
+                    };
+                    direction_requested = true;
+                }
                 "--help" | "-h" => return Err(usage().into()),
                 other => return Err(format!("unknown framebuffer-scene-lab argument {other:?}")),
             }
@@ -1229,6 +1382,9 @@ impl Options {
             destination,
             case,
             profile,
+            duration_ms,
+            direction,
+            direction_requested,
         };
         options.validate()?;
         Ok(options)
@@ -1258,6 +1414,11 @@ impl Options {
         if self.profile && self.case.is_none() {
             return Err("--profile requires a closed --case".into());
         }
+        if self.scene != EffectKind::CardFlip
+            && (self.duration_ms.is_some() || self.direction_requested)
+        {
+            return Err("--duration-ms and --direction are valid only for card-flip".into());
+        }
         match self.scene {
             EffectKind::Magik | EffectKind::Cabinet | EffectKind::Intro => {
                 if self.recipe.is_none() {
@@ -1275,8 +1436,22 @@ impl Options {
                     return Err("navigation-transition does not accept --recipe".into());
                 }
             }
+            EffectKind::CardFlip => {
+                if self.recipe.is_some() || self.fixture.is_some() {
+                    return Err(
+                        "card-flip is self-contained and accepts no recipe or fixture".into(),
+                    );
+                }
+                if self.case.is_some() || self.profile {
+                    return Err("card-flip does not accept cabinet case or profile options".into());
+                }
+            }
         }
         Ok(())
+    }
+
+    fn card_duration(&self) -> Duration {
+        Duration::from_millis(self.duration_ms.unwrap_or(440))
     }
 }
 
@@ -1290,7 +1465,7 @@ fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N] [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -1650,6 +1825,25 @@ mod macos {
                 WindowEvent::KeyboardInput { event, .. }
                     if event.state == ElementState::Pressed && !event.repeat =>
                 {
+                    let card_direction = match event.physical_key {
+                        PhysicalKey::Code(KeyCode::KeyA | KeyCode::Enter) => {
+                            Some(CardFlipDirection::Forward)
+                        }
+                        PhysicalKey::Code(KeyCode::KeyB | KeyCode::Backspace) => {
+                            Some(CardFlipDirection::Reverse)
+                        }
+                        _ => None,
+                    };
+                    if self.renderer.effect() == EffectKind::CardFlip
+                        && let Some(direction) = card_direction
+                    {
+                        self.renderer.play_card(direction, self.epoch.elapsed());
+                        self.next_frame = Instant::now();
+                        if let Some(window) = self.window.as_ref() {
+                            window.request_redraw();
+                        }
+                        return;
+                    }
                     let intro_action = match event.physical_key {
                         PhysicalKey::Code(KeyCode::Space) => Some(IntroAction::Pause),
                         PhysicalKey::Code(KeyCode::ArrowLeft) => Some(IntroAction::ScrubBack),
@@ -1693,6 +1887,10 @@ mod macos {
         }
 
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+            if self.renderer.effect() == EffectKind::CardFlip && !self.renderer.card_needs_frame() {
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
+            }
             let now = Instant::now();
             if now >= self.next_frame {
                 if let Some(window) = self.window.as_ref() {
