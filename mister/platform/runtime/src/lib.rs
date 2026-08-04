@@ -14,6 +14,7 @@ macro_rules! ui_logln {
 }
 
 pub mod boot_analytics;
+pub mod display_plan;
 pub mod display_resolution;
 pub mod fpga;
 pub mod framebuffer;

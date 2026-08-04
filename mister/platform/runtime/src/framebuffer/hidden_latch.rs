@@ -12,6 +12,8 @@ use crate::framebuffer::hidden_scanout::{
 };
 use crate::framebuffer::rgb565::Rgb565;
 use crate::framebuffer::route::FramebufferRouteMode;
+use crate::framebuffer::route::LauncherFramebufferRoute;
+use mister_magik_core::display::ResolvedDisplayPlan;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -110,6 +112,41 @@ pub struct HiddenLatchPresenter {
 impl HiddenLatchPresenter {
     /// Opens the qualified framebuffer-sized route without changing video mode or Main state.
     pub fn open(width: u16, height: u16) -> Result<Self, HiddenLatchError> {
+        Self::open_with_geometry(
+            width,
+            height,
+            LatchedFbufGeometry::new(
+                width,
+                FramebufferRouteMode::framebuffer_sized(width, height),
+                0,
+            ),
+        )
+    }
+
+    pub fn open_for_plan(plan: ResolvedDisplayPlan) -> Result<Self, HiddenLatchError> {
+        let width = u16::try_from(plan.fb_w).map_err(|_| {
+            HiddenLatchError::Unsupported(format!("framebuffer width {} exceeds u16", plan.fb_w))
+        })?;
+        let height = u16::try_from(plan.fb_h).map_err(|_| {
+            HiddenLatchError::Unsupported(format!("framebuffer height {} exceeds u16", plan.fb_h))
+        })?;
+        let route = LauncherFramebufferRoute::for_scan(
+            plan.scan_w,
+            plan.scan_h,
+            plan.output_route.is_crt(),
+        );
+        Self::open_with_geometry(
+            width,
+            height,
+            LatchedFbufGeometry::new_for_route(width, route, 0),
+        )
+    }
+
+    fn open_with_geometry(
+        width: u16,
+        height: u16,
+        geometry: LatchedFbufGeometry,
+    ) -> Result<Self, HiddenLatchError> {
         let stride_bytes = rgb565_stride_bytes(usize::from(width));
         let slot1 = HiddenScanoutFramebuffer::open(
             HiddenRgb565BufferIndex::new(1)?,
@@ -157,11 +194,7 @@ impl HiddenLatchPresenter {
             sequence: 1,
             width,
             height,
-            geometry: LatchedFbufGeometry::new(
-                width,
-                FramebufferRouteMode::framebuffer_sized(width, height),
-                0,
-            ),
+            geometry,
             settle_timeout: DEFAULT_SETTLE_TIMEOUT,
             pending: None,
             pipeline_stats: HiddenLatchPipelineStats::default(),
@@ -236,7 +269,7 @@ impl HiddenLatchPresenter {
     pub fn settle_pending(
         &mut self,
     ) -> Result<Option<HiddenLatchPresentReceipt>, HiddenLatchError> {
-        let Some(pending) = self.pending.take() else {
+        let Some(pending) = self.pending else {
             return Ok(None);
         };
         let started = Instant::now();
@@ -258,6 +291,7 @@ impl HiddenLatchPresenter {
             .pipeline_stats
             .settle_us
             .saturating_add(started.elapsed().as_micros() as u64);
+        self.pending = None;
         self.writable_slot = 1 - self.writable_slot;
         Ok(Some(HiddenLatchPresentReceipt {
             slot_index: pending.slot_index,

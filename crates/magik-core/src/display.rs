@@ -248,6 +248,28 @@ impl ResolvedDisplayPlan {
             FramebufferSizePolicy::Auto,
         ))
     }
+
+    pub fn from_runtime_contracts(
+        runtime_settings: &str,
+        runtime_display: &str,
+        detected: Option<RuntimeDisplayGeometry>,
+    ) -> Option<Self> {
+        let route = ResolvedOutputRoute::from_runtime_settings_v1(runtime_settings)?;
+        if let Some(geometry) = route.progressive_geometry() {
+            return Some(Self::from_geometry(
+                geometry,
+                route,
+                FramebufferSizePolicy::Auto,
+            ));
+        }
+        let mode = runtime_display_mode_v1(runtime_display)?;
+        let geometry = geometry_for_mode_id(mode).or(detected)?;
+        Some(Self::from_geometry(
+            geometry,
+            route,
+            FramebufferSizePolicy::Auto,
+        ))
+    }
 }
 
 pub const fn launcher_framebuffer_size(output_w: usize, output_h: usize) -> (usize, usize) {
@@ -414,6 +436,10 @@ pub fn geometry_for_mode_id(id: &str) -> Option<DisplayGeometry> {
 }
 
 pub fn runtime_display_geometry_v1(value: &str) -> Option<DisplayGeometry> {
+    geometry_for_mode_id(runtime_display_mode_v1(value)?)
+}
+
+pub fn runtime_display_mode_v1(value: &str) -> Option<&str> {
     let mut schema = None;
     let mut mode = None;
     for field in value.split('&') {
@@ -427,7 +453,9 @@ pub fn runtime_display_geometry_v1(value: &str) -> Option<DisplayGeometry> {
     if schema != Some("1") {
         return None;
     }
-    geometry_for_mode_id(mode?)
+    let mode = mode?;
+    route_for_mode_id(mode)?;
+    Some(mode)
 }
 
 pub fn video_mode_geometry(value: &str) -> Option<DisplayGeometry> {
@@ -500,6 +528,35 @@ mod tests {
             assert_eq!((plan.render_w, plan.render_h), (960, 600));
         }
         assert!(ResolvedDisplayPlan::from_mode_or_detected("auto", None).is_none());
+    }
+
+    #[test]
+    fn runtime_contracts_resolve_fixed_dynamic_and_crt_routes() {
+        let detected = Some(DisplayGeometry::new(1920, 1200));
+        let fixed = ResolvedDisplayPlan::from_runtime_contracts(
+            "schema=1&output=hdmi",
+            "schema=1&mode=hdmi-1920x1080p60",
+            detected,
+        )
+        .unwrap();
+        assert_eq!((fixed.render_w, fixed.render_h), (960, 540));
+
+        let automatic = ResolvedDisplayPlan::from_runtime_contracts(
+            "schema=1&output=hdmi",
+            "schema=1&mode=auto",
+            detected,
+        )
+        .unwrap();
+        assert_eq!((automatic.render_w, automatic.render_h), (960, 600));
+
+        let crt = ResolvedDisplayPlan::from_runtime_contracts(
+            "schema=1&output=crt-240p60",
+            "schema=1&mode=auto",
+            Some(DisplayGeometry::new(640, 480)),
+        )
+        .unwrap();
+        assert_eq!((crt.fb_w, crt.fb_h), (640, 240));
+        assert_eq!((crt.render_w, crt.render_h), (640, 480));
     }
 
     #[test]
