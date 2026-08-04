@@ -655,6 +655,83 @@ mod tests {
     }
 
     #[test]
+    fn preview_fade_to_empty_commits_black_before_layer_retirement_in_both_slots() {
+        let preview = rect(1, 0, 4, 2);
+        let mut cached = vec![BASE; WIDTH * HEIGHT];
+        fill_rect(&mut cached, preview, PREVIEW);
+        let mut slot1 = vec![BASE; WIDTH * HEIGHT];
+        let mut slot2 = vec![BASE; WIDTH * HEIGHT];
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        for slot in [&mut slot1, &mut slot2] {
+            all_writable(&mut state);
+            let plan = state
+                .plan_next(input(
+                    Some(full()),
+                    Some(layer(preview, 1)),
+                    Some(preview),
+                    None,
+                    None,
+                ))
+                .expect("initial preview plan");
+            apply_plan(slot, &cached, plan);
+            state.mark_post_success(plan);
+        }
+
+        fill_rect(&mut cached, preview, BASE);
+        all_writable(&mut state);
+        let fading = state
+            .plan_next(input(
+                Some(preview),
+                Some(layer(preview, 2)),
+                Some(preview),
+                None,
+                None,
+            ))
+            .expect("fade-to-empty plan");
+        assert_eq!(fading.preview_redraw, Some(preview));
+        assert!(
+            fading
+                .restore_rects
+                .iter()
+                .all(|restore| restore.intersection(preview).is_none())
+        );
+        apply_plan(&mut slot1, &cached, fading);
+        state.mark_post_success(fading);
+
+        all_writable(&mut state);
+        let final_black = state
+            .plan_next(input(
+                None,
+                Some(layer(preview, 3)),
+                Some(preview),
+                None,
+                None,
+            ))
+            .expect("final black plan");
+        copy_restore(&mut slot2, &cached, final_black);
+        fill_rect(&mut slot2, preview, BASE);
+        state.mark_post_success(final_black);
+
+        all_writable(&mut state);
+        let retire_first = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("first retirement plan");
+        copy_restore(&mut slot1, &cached, retire_first);
+        state.mark_post_success(retire_first);
+
+        all_writable(&mut state);
+        let retire_second = state
+            .plan_next(input(None, None, None, None, None))
+            .expect("second retirement plan");
+        copy_restore(&mut slot2, &cached, retire_second);
+        state.mark_post_success(retire_second);
+
+        assert!(slot1.iter().all(|pixel| *pixel == BASE));
+        assert!(slot2.iter().all(|pixel| *pixel == BASE));
+    }
+
+    #[test]
     fn screensaver_full_frame_replaces_direct_layers_in_both_slots() {
         let preview = rect(1, 0, 4, 2);
         let arcade = rect(2, 1, 4, 3);

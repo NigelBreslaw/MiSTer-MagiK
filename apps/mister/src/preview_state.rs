@@ -319,6 +319,7 @@ pub(crate) struct PreviewState {
     visible_preview_load_source: &'static str,
     previous_image: Option<Arc<PreviewImage>>,
     previous_was_empty: bool,
+    empty_base_commit_pending: bool,
     selection_transition: PreviewSelectionTransition,
     raw_transition_id: u64,
     raw_transition_duration_divisor: u32,
@@ -340,6 +341,41 @@ enum PreviewSelectionTransition {
     #[default]
     InstantOnEntry,
     CrossFade,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreviewPresentationTarget {
+    Image,
+    Empty,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PreviewPresentationState {
+    Preparing,
+    Empty,
+    Loading { retained_image: bool },
+    Visible,
+    Transitioning { target: PreviewPresentationTarget },
+}
+
+impl PreviewPresentationState {
+    pub(crate) const fn owns_direct_layer(self) -> bool {
+        matches!(
+            self,
+            Self::Visible
+                | Self::Loading {
+                    retained_image: true
+                }
+                | Self::Transitioning { .. }
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PreviewPresentationCommit {
+    transition_id: u64,
+    final_target_presented: bool,
+    empty_base_committed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -499,6 +535,7 @@ impl PreviewState {
             visible_preview_load_source: "none",
             previous_image: None,
             previous_was_empty: false,
+            empty_base_commit_pending: false,
             selection_transition: PreviewSelectionTransition::InstantOnEntry,
             raw_transition_id: 0,
             raw_transition_duration_divisor: 1,
@@ -518,6 +555,7 @@ impl PreviewState {
 
     pub(crate) fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
         self.terminal_empty = true;
+        self.empty_base_commit_pending = true;
         if self.selected_mra_path.is_some()
             || self.current_generation != 0
             || self.has_visible_preview
@@ -554,6 +592,9 @@ impl PreviewState {
             bridge.set_arcade_preview_status(PreviewStatus::Empty);
             bridge.set_arcade_preview_title("".into());
             clear_preview_image_bridge(bridge);
+        }
+        if self.empty_base_commit_pending {
+            self.raw_dirty = true;
         }
     }
 
@@ -646,14 +687,76 @@ impl PreviewState {
         self.selected_preview_key = None;
         self.terminal_empty = true;
         self.begin_raw_transition_to_empty(pace);
+        // Empty is not presentation-complete until the cached backing is
+        // black and that update has been confirmed. Keep a renderable empty
+        // frame even when there was no prior image to fade.
+        self.empty_base_commit_pending = true;
+        self.raw_dirty = true;
     }
 
     pub(crate) const fn terminal_empty(&self) -> bool {
         self.terminal_empty
     }
 
-    pub(crate) fn finish_raw_empty_transition_if_idle(&mut self) {
-        if !self.has_visible_preview && self.visible_preview_key.is_empty() && !self.raw_dirty {
+    fn presentation_transition_pending(&self) -> bool {
+        self.previous_image.is_some()
+            || self.previous_was_empty
+            || (self.empty_base_commit_pending && !self.has_visible_preview)
+    }
+
+    pub(crate) fn presentation_state(&self) -> PreviewPresentationState {
+        if self.presentation_transition_pending() {
+            PreviewPresentationState::Transitioning {
+                target: if self.has_visible_preview {
+                    PreviewPresentationTarget::Image
+                } else {
+                    PreviewPresentationTarget::Empty
+                },
+            }
+        } else if self.current_generation != 0 {
+            PreviewPresentationState::Loading {
+                retained_image: self.has_visible_preview,
+            }
+        } else if self.has_visible_preview {
+            PreviewPresentationState::Visible
+        } else if self.terminal_empty {
+            PreviewPresentationState::Empty
+        } else {
+            PreviewPresentationState::Preparing
+        }
+    }
+
+    pub(crate) fn presentation_requires_present(&self) -> bool {
+        matches!(
+            self.presentation_state(),
+            PreviewPresentationState::Transitioning { .. }
+        )
+    }
+
+    pub(crate) const fn empty_base_commit_pending(&self) -> bool {
+        self.empty_base_commit_pending
+    }
+
+    pub(crate) fn presentation_commit(
+        &self,
+        final_target_presented: bool,
+        empty_base_committed: bool,
+    ) -> Option<PreviewPresentationCommit> {
+        (final_target_presented || empty_base_committed).then_some(PreviewPresentationCommit {
+            transition_id: self.raw_transition_id,
+            final_target_presented,
+            empty_base_committed,
+        })
+    }
+
+    pub(crate) fn confirm_presentation(&mut self, commit: PreviewPresentationCommit) {
+        if commit.transition_id != self.raw_transition_id {
+            return;
+        }
+        if commit.empty_base_committed {
+            self.empty_base_commit_pending = false;
+        }
+        if commit.final_target_presented {
             self.previous_image = None;
             self.previous_was_empty = false;
         }
@@ -1017,11 +1120,7 @@ pub(crate) fn request_arcade_preview_window(
     let selected_game = games.get(selected);
     let Some(selected_game) = selected_game else {
         preview.selected_mra_path = None;
-        preview.selected_preview_key = None;
-        preview.terminal_empty = true;
-        preview.current_generation = 0;
-        preview.has_visible_preview = false;
-        preview.visible_preview_key.clear();
+        preview.select_empty_preview(preview_transition_pace(turbo_active));
         preview.window_preview_keys.clear();
         preview.window_shape = None;
         preview.pending_prefetch_keys.clear();
@@ -2386,6 +2485,34 @@ mod tests {
     }
 
     #[test]
+    fn loading_presentation_retains_only_an_existing_image() {
+        let mut preview = PreviewState::new();
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Preparing
+        );
+
+        preview.current_generation = 1;
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Loading {
+                retained_image: false
+            }
+        );
+        assert!(!preview.presentation_state().owns_direct_layer());
+
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "1941.png".into();
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Loading {
+                retained_image: true
+            }
+        );
+        assert!(preview.presentation_state().owns_direct_layer());
+    }
+
+    #[test]
     fn preview_miss_classification_requires_exact_candidate() {
         assert!(!preview_state_is_miss("exact", true));
         assert!(preview_state_is_miss("blank", true));
@@ -2641,6 +2768,119 @@ mod tests {
             .expect("empty preview transition frame");
         assert!(frame.previous.is_some());
         assert!(matches!(frame.current.pixels, PreviewRawPixels::Empty));
+    }
+
+    #[test]
+    fn empty_presentation_retires_only_after_black_base_and_final_frame_confirm() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "1941.png".into(),
+            preview_image(0xf800),
+            &["1941.png".into()],
+            Some("1941.png"),
+        );
+        preview.selected_preview_key = Some("1941.png".into());
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "1941.png".into();
+
+        preview.select_empty_preview(PreviewTransitionPace::Normal);
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Transitioning {
+                target: PreviewPresentationTarget::Empty
+            }
+        );
+        assert!(preview.presentation_state().owns_direct_layer());
+
+        let base_commit = preview
+            .presentation_commit(false, true)
+            .expect("black base commit");
+        preview.confirm_presentation(base_commit);
+        assert!(!preview.empty_base_commit_pending());
+        assert!(preview.presentation_requires_present());
+
+        let final_commit = preview
+            .presentation_commit(true, false)
+            .expect("final black frame commit");
+        assert!(preview.presentation_requires_present());
+        preview.confirm_presentation(final_commit);
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Empty
+        );
+        assert!(!preview.presentation_state().owns_direct_layer());
+    }
+
+    #[test]
+    fn failed_final_black_present_keeps_direct_layer_owned() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "1941.png".into(),
+            preview_image(0xf800),
+            &["1941.png".into()],
+            Some("1941.png"),
+        );
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "1941.png".into();
+        preview.select_empty_preview(PreviewTransitionPace::Normal);
+
+        let _unconfirmed = preview
+            .presentation_commit(true, true)
+            .expect("attempted final present");
+
+        assert!(preview.presentation_requires_present());
+        assert!(preview.presentation_state().owns_direct_layer());
+        assert!(preview.empty_base_commit_pending());
+    }
+
+    #[test]
+    fn turbo_empty_retarget_keeps_half_duration_and_can_retarget_to_image() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "1941.png".into(),
+            preview_image(0xf800),
+            &["1941.png".into(), "next.png".into()],
+            Some("1941.png"),
+        );
+        preview.cache.insert(
+            "next.png".into(),
+            preview_image(0x07e0),
+            &["1941.png".into(), "next.png".into()],
+            Some("1941.png"),
+        );
+        preview.selection_transition = PreviewSelectionTransition::CrossFade;
+        preview.has_visible_preview = true;
+        preview.visible_preview_key = "1941.png".into();
+
+        preview.select_empty_preview(PreviewTransitionPace::Turbo);
+        assert_eq!(
+            preview
+                .raw_transition_frame()
+                .expect("turbo empty frame")
+                .duration_divisor,
+            TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR
+        );
+
+        preview.has_visible_preview = true;
+        preview.begin_raw_transition_to("next.png", PreviewTransitionPace::Turbo);
+        preview.visible_preview_key = "next.png".into();
+        preview.raw_dirty = true;
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Transitioning {
+                target: PreviewPresentationTarget::Image
+            }
+        );
+        assert_eq!(
+            preview
+                .raw_transition_frame()
+                .expect("turbo image frame")
+                .duration_divisor,
+            TURBO_PREVIEW_TRANSITION_DURATION_DIVISOR
+        );
     }
 
     #[test]

@@ -382,6 +382,30 @@ complete new RGB565 base buffer, composes the Arcade list and preview when
 needed, and only then permits the transition destination snapshot. This keeps
 first entry behavior independent of Slint's reused-buffer dirty history.
 
+Screenshot presentation has a separate lifecycle. `Loading` retains the
+currently presented surface: an existing image stays visible, while a request
+started from empty stays black. A transition to `Empty` keeps the direct layer
+owned until black has been written to the cached preview rectangle and the
+final black frame is confirmed active. Only then may the latch restore the
+cached base and retire the layer. Normal transitions use 200 ms; velocity-list
+turbo transitions retain their existing half-duration timing.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Preparing
+    Preparing --> Visible: exact screenshot ready
+    Preparing --> Empty: no screenshot
+    Preparing --> Loading: screenshot pending
+
+    Empty --> Loading: select item with screenshot
+    Visible --> Loading: select item with screenshot
+    Visible --> Transitioning: select item without screenshot
+    Loading --> Transitioning: load resolves
+
+    Transitioning --> Visible: final image frame confirmed
+    Transitioning --> Empty: cached base black + final black confirmed
+```
+
 Slint owns invalidation of the cached base UI. The launcher window adapter's
 pending-redraw state is the scheduler's source of truth, and cheap Settings and
 Screensaver Settings bridge properties are synchronized with change-aware

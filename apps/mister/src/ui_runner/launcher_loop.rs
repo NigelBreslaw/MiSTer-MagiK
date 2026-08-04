@@ -4910,12 +4910,13 @@ pub(super) fn run_launcher_loop(
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
+        let preview_presentation_state = preview.presentation_state();
         let wants_preview = preview_route.allows_preview_work()
             && !screensaver.active
             && direct_preview_requested(
                 nav.screen,
                 memory_guard.active(),
-                preview.raw_transition_frame().is_some(),
+                preview_presentation_state.owns_direct_layer(),
             );
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
@@ -5781,6 +5782,16 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
+        let empty_base_cached_rect = if preview_direct_present_enabled()
+            && preview_route.allows_preview_work()
+            && composition_decision.allow_preview_blit
+            && !memory_guard.active()
+            && preview.empty_base_commit_pending()
+        {
+            Some(layer_target.clear_cached_preview())
+        } else {
+            None
+        };
         let (raw_preview, preview_transition_trace) = if preview_route.allows_preview_work()
             && composition_decision.allow_preview_blit
             && !memory_guard.active()
@@ -5837,7 +5848,12 @@ pub(super) fn run_launcher_loop(
                         preview.raw_frame_status(),
                     );
                     let preview_surface_ready = if !preview_expected || preview.terminal_empty() {
-                        preview_snapshot_ready
+                        if preview_snapshot_ready {
+                            let _ = layer_target.clear_cached_preview();
+                            true
+                        } else {
+                            false
+                        }
                     } else if preview_snapshot_ready {
                         match layer_target.compose_exact_preview(&preview) {
                             Some(RawPreviewPresent::Cached(_)) => true,
@@ -6000,10 +6016,7 @@ pub(super) fn run_launcher_loop(
         };
         let preview_layer_desired =
             should_desire_direct_layer(wants_preview, composition_decision.allow_preview_blit);
-        let preview_desired = if preview_layer_desired
-            && preview_direct_present_enabled()
-            && preview_frame_status == PreviewRawFrameStatus::Ready
-        {
+        let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
             Some(DirectLayerState::new(
                 preview_screen_rect(ui),
                 launcher_preview_version,
@@ -6025,8 +6038,25 @@ pub(super) fn run_launcher_loop(
         };
         let mut cached_damage = DirtyRectList::new();
         cached_damage.push_if_some(base_damage);
+        cached_damage.push_if_some(empty_base_cached_rect);
         cached_damage.push_if_some(raw_preview_cached_rect);
         cached_damage.push_if_some(crt_arcade_cached_rect);
+        let final_preview_target_presented = raw_preview.is_some()
+            && preview.presentation_requires_present()
+            && preview_transition_trace.progress >= 1.0;
+        let cached_empty_target_presented = !preview_direct_present_enabled()
+            && final_preview_target_presented
+            && raw_preview_cached_rect.is_some()
+            && matches!(
+                preview.presentation_state(),
+                PreviewPresentationState::Transitioning {
+                    target: PreviewPresentationTarget::Empty
+                }
+            );
+        let preview_presentation_commit = preview.presentation_commit(
+            final_preview_target_presented,
+            empty_base_cached_rect.is_some() || cached_empty_target_presented,
+        );
         let frame_plan = LauncherFramePlan::new(
             cached_damage,
             preview_desired,
@@ -6538,6 +6568,17 @@ pub(super) fn run_launcher_loop(
             screensaver.active,
             screensaver_frame_visible,
         );
+        let preview_present_confirmed = if latch_trace_flush_deferred {
+            accepted_and_active_confirmed
+        } else {
+            visible_frame_presented
+        };
+        if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
+            preview.confirm_presentation(commit);
+        }
+        if preview.presentation_requires_present() {
+            request_launcher_redraw!();
+        }
         latch_v4_qualification.write_state_if_due(Instant::now());
         frames += 1;
     }
