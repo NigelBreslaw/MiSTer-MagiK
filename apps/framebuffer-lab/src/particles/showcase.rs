@@ -35,8 +35,9 @@ const COMMAND_STYLE_SHIFT: u32 = COMMAND_OFFSET_BITS;
 const COMMAND_NEIGHBOR: u32 = 1 << 23;
 const MAX_SEGMENT_PIXELS: i32 = 12;
 const SEGMENT_CAPACITY: usize = 32_768;
-const FIRE_HEAT_W: usize = 320;
-const FIRE_HEAT_H: usize = 72;
+const REFERENCE_WIDTH: usize = 960;
+const REFERENCE_HEIGHT: usize = 540;
+const FIRE_HEAT_REFERENCE_HEIGHT: usize = 72;
 const FIRE_HEAT_SCALE: usize = 3;
 const METEOR_TRAIL_SAMPLES: usize = 64;
 const METEOR_TRACK_COUNT: usize = 64;
@@ -51,11 +52,7 @@ const FIREWORKS_PALETTE: [Rgb565Pixel; 8] = [
     Rgb565Pixel(0xffdb),
     Rgb565Pixel(0xffff),
 ];
-const FLOCK_GRID_W: usize = 60;
-const FLOCK_GRID_H: usize = 34;
 const FLOCK_CELL_PX: f32 = 16.0;
-const DENSITY_W: usize = 240;
-const DENSITY_H: usize = 135;
 const DENSITY_SCALE: usize = 4;
 const ARCADE_CLOUD: &[u8] = include_bytes!("../../assets/particles/arcade-cabinet.pcloud");
 const PARTICLE_CLOUD_MAGIC: &[u8; 8] = b"PCLOUD1\0";
@@ -418,11 +415,17 @@ pub struct ParticleShowcaseRenderer {
     transition: ParticleShowcaseTransition,
     transition_started_at: Option<Duration>,
     heat: Vec<u8>,
+    heat_width: usize,
+    heat_height: usize,
     density: Vec<u16>,
     density_blur: Vec<u16>,
+    density_width: usize,
+    density_height: usize,
     flock_counts: Vec<u16>,
     flock_vx: Vec<f32>,
     flock_vy: Vec<f32>,
+    flock_grid_width: usize,
+    flock_grid_height: usize,
     flock_last_elapsed: Duration,
     flow_last_elapsed: Duration,
     heat_frame: u64,
@@ -539,12 +542,21 @@ impl ParticleShowcaseRenderer {
         let material_stamps = Vec::with_capacity(16_384);
         let material_strokes = Vec::with_capacity(2_048);
         let transition = ParticleShowcaseTransition::new();
-        let heat = vec![0; FIRE_HEAT_W * FIRE_HEAT_H];
-        let density = vec![0; DENSITY_W * DENSITY_H];
-        let density_blur = vec![0; DENSITY_W * DENSITY_H];
-        let flock_counts = vec![0; FLOCK_GRID_W * FLOCK_GRID_H];
-        let flock_vx = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
-        let flock_vy = vec![0.0; FLOCK_GRID_W * FLOCK_GRID_H];
+        let heat_width = config.width.div_ceil(FIRE_HEAT_SCALE);
+        let heat_height = config
+            .height
+            .saturating_mul(FIRE_HEAT_REFERENCE_HEIGHT)
+            .div_ceil(REFERENCE_HEIGHT);
+        let heat = vec![0; heat_width * heat_height];
+        let density_width = config.width.div_ceil(DENSITY_SCALE);
+        let density_height = config.height.div_ceil(DENSITY_SCALE);
+        let density = vec![0; density_width * density_height];
+        let density_blur = vec![0; density_width * density_height];
+        let flock_grid_width = config.width.div_ceil(FLOCK_CELL_PX as usize);
+        let flock_grid_height = config.height.div_ceil(FLOCK_CELL_PX as usize);
+        let flock_counts = vec![0; flock_grid_width * flock_grid_height];
+        let flock_vx = vec![0.0; flock_grid_width * flock_grid_height];
+        let flock_vy = vec![0.0; flock_grid_width * flock_grid_height];
         let dirty_slots = std::array::from_fn(|_| ParticleShowcaseDirtySlot {
             initialized: false,
             offsets: Vec::with_capacity(PARTICLE_DEMO_MAX_COUNT.saturating_mul(2)),
@@ -626,11 +638,17 @@ impl ParticleShowcaseRenderer {
             transition,
             transition_started_at: None,
             heat,
+            heat_width,
+            heat_height,
             density,
             density_blur,
+            density_width,
+            density_height,
             flock_counts,
             flock_vx,
             flock_vy,
+            flock_grid_width,
+            flock_grid_height,
             flock_last_elapsed: Duration::ZERO,
             flow_last_elapsed: Duration::ZERO,
             heat_frame: u64::MAX,
@@ -1242,11 +1260,13 @@ impl ParticleShowcaseRenderer {
         let spawn_inner = self.param("spawn_inner");
         let spawn_span = self.param("spawn_span");
         let spawn_y_span = self.param("spawn_y_span");
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
             let side = if index & 1 == 0 { -1.0 } else { 1.0 };
-            self.pool.x[index] = 480.0 + side * (spawn_inner + unit01(random) * spawn_span);
-            self.pool.y[index] = 270.0 + unit_signed(random.rotate_left(11)) * spawn_y_span;
+            self.pool.x[index] = center_x + side * (spawn_inner + unit01(random) * spawn_span);
+            self.pool.y[index] = center_y + unit_signed(random.rotate_left(11)) * spawn_y_span;
             let angle = unit_signed(random.rotate_left(21)) * 0.65
                 + if side < 0.0 {
                     0.15
@@ -1279,37 +1299,43 @@ impl ParticleShowcaseRenderer {
         self.flock_counts.fill(0);
         self.flock_vx.fill(0.0);
         self.flock_vy.fill(0.0);
+        let width = self.config.width as f32;
+        let height = self.config.height as f32;
+        let center_x = width * 0.5;
+        let center_y = height * 0.5;
+        let grid_width = self.flock_grid_width;
+        let grid_height = self.flock_grid_height;
         for index in 0..self.pool.active() {
             let cell_x =
-                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_W - 1) as f32) as usize;
+                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (grid_width - 1) as f32) as usize;
             let cell_y =
-                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_H - 1) as f32) as usize;
-            let cell = cell_y * FLOCK_GRID_W + cell_x;
+                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (grid_height - 1) as f32) as usize;
+            let cell = cell_y * grid_width + cell_x;
             self.flock_counts[cell] = self.flock_counts[cell].saturating_add(1);
             self.flock_vx[cell] += self.pool.vx[index];
             self.flock_vy[cell] += self.pool.vy[index];
         }
-        let cavity_x = 480.0 + (elapsed.as_secs_f32() * 0.21).sin() * 58.0;
-        let cavity_y = 270.0;
+        let cavity_x = center_x + (elapsed.as_secs_f32() * 0.21).sin() * 58.0;
+        let cavity_y = center_y;
         let cohort = ((elapsed.as_micros() / 16_667) & 3) as usize;
         for index in 0..self.pool.active() {
             if index & 3 != cohort {
                 self.pool.x[index] =
-                    (self.pool.x[index] + self.pool.vx[index] * dt + 960.0).rem_euclid(960.0);
+                    (self.pool.x[index] + self.pool.vx[index] * dt + width).rem_euclid(width);
                 self.pool.y[index] =
-                    (self.pool.y[index] + self.pool.vy[index] * dt + 540.0).rem_euclid(540.0);
+                    (self.pool.y[index] + self.pool.vy[index] * dt + height).rem_euclid(height);
                 continue;
             }
             let cell_x =
-                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_W - 1) as f32) as usize;
+                (self.pool.x[index] / FLOCK_CELL_PX).clamp(0.0, (grid_width - 1) as f32) as usize;
             let cell_y =
-                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (FLOCK_GRID_H - 1) as f32) as usize;
+                (self.pool.y[index] / FLOCK_CELL_PX).clamp(0.0, (grid_height - 1) as f32) as usize;
             let mut count = 0u32;
             let mut sum_vx = 0.0;
             let mut sum_vy = 0.0;
-            for y in cell_y.saturating_sub(1)..=(cell_y + 1).min(FLOCK_GRID_H - 1) {
-                for x in cell_x.saturating_sub(1)..=(cell_x + 1).min(FLOCK_GRID_W - 1) {
-                    let cell = y * FLOCK_GRID_W + x;
+            for y in cell_y.saturating_sub(1)..=(cell_y + 1).min(grid_height - 1) {
+                for x in cell_x.saturating_sub(1)..=(cell_x + 1).min(grid_width - 1) {
+                    let cell = y * grid_width + x;
                     count += u32::from(self.flock_counts[cell]);
                     sum_vx += self.flock_vx[cell];
                     sum_vy += self.flock_vy[cell];
@@ -1321,12 +1347,10 @@ impl ParticleShowcaseRenderer {
                 self.pool.vy[index] +=
                     (sum_vy / count as f32 - self.pool.vy[index]) * dt * alignment;
             }
-            let left = self.flock_counts[cell_y * FLOCK_GRID_W + cell_x.saturating_sub(1)];
-            let right =
-                self.flock_counts[cell_y * FLOCK_GRID_W + (cell_x + 1).min(FLOCK_GRID_W - 1)];
-            let above = self.flock_counts[cell_y.saturating_sub(1) * FLOCK_GRID_W + cell_x];
-            let below =
-                self.flock_counts[(cell_y + 1).min(FLOCK_GRID_H - 1) * FLOCK_GRID_W + cell_x];
+            let left = self.flock_counts[cell_y * grid_width + cell_x.saturating_sub(1)];
+            let right = self.flock_counts[cell_y * grid_width + (cell_x + 1).min(grid_width - 1)];
+            let above = self.flock_counts[cell_y.saturating_sub(1) * grid_width + cell_x];
+            let below = self.flock_counts[(cell_y + 1).min(grid_height - 1) * grid_width + cell_x];
             self.pool.vx[index] += (f32::from(left) - f32::from(right)) * dt * separation;
             self.pool.vy[index] += (f32::from(above) - f32::from(below)) * dt * separation;
             for chaser in (0..self.pool.active()).step_by(1_024) {
@@ -1348,9 +1372,9 @@ impl ParticleShowcaseRenderer {
                 self.pool.vy[index] += dy * inverse * dt * cavity_force;
             }
             let side = if index & 1 == 0 { -1.0 } else { 1.0 };
-            let target_y = 270.0
+            let target_y = center_y
                 + side
-                    * (self.pool.x[index] - 480.0).abs().sqrt()
+                    * (self.pool.x[index] - center_x).abs().sqrt()
                     * 8.0
                     * (elapsed.as_secs_f32() * 0.09).cos();
             self.pool.vy[index] += (target_y - self.pool.y[index]) * dt * 0.75;
@@ -1362,9 +1386,9 @@ impl ParticleShowcaseRenderer {
             self.pool.vx[index] *= limited;
             self.pool.vy[index] *= limited;
             self.pool.x[index] =
-                (self.pool.x[index] + self.pool.vx[index] * dt + 960.0).rem_euclid(960.0);
+                (self.pool.x[index] + self.pool.vx[index] * dt + width).rem_euclid(width);
             self.pool.y[index] =
-                (self.pool.y[index] + self.pool.vy[index] * dt + 540.0).rem_euclid(540.0);
+                (self.pool.y[index] + self.pool.vy[index] * dt + height).rem_euclid(height);
         }
     }
 
@@ -1426,6 +1450,8 @@ impl ParticleShowcaseRenderer {
         let cool_rate = self.param("cool_rate");
         let bowl_y_base = self.param("bowl_y");
         let bowl_curve = self.param("bowl_curve");
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
@@ -1462,8 +1488,8 @@ impl ParticleShowcaseRenderer {
                 }
                 (local_x, local_y, collided, 2 + usize::from(collided))
             };
-            let screen_x = 480.0 + x;
-            let screen_y = 270.0 + y;
+            let screen_x = center_x + x;
+            let screen_y = center_y + y;
             if !push_screen_command(
                 &mut self.commands,
                 self.config.width,
@@ -1562,14 +1588,16 @@ impl ParticleShowcaseRenderer {
             )
         };
         let arc = (blend * std::f32::consts::PI).sin();
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let source_x = self.pool.previous_x[index];
             let source_y = self.pool.previous_y[index];
             let target_x = self.pool.x[index];
             let target_y = self.pool.y[index];
-            let x = 480.0 + source_x + (target_x - source_x) * blend;
-            let y = 270.0 + source_y + (target_y - source_y) * blend
+            let x = center_x + source_x + (target_x - source_x) * blend;
+            let y = center_y + source_y + (target_y - source_y) * blend
                 - arc * (arc_min + self.pool.age[index] * arc_span);
             if !push_screen_command(
                 &mut self.commands,
@@ -1586,8 +1614,8 @@ impl ParticleShowcaseRenderer {
                 self.material_strokes.push(MaterialStroke {
                     x0: x,
                     y0: y,
-                    x1: 480.0 + target_x,
-                    y1: 270.0 + target_y,
+                    x1: center_x + target_x,
+                    y1: center_y + target_y,
                     start_radius: 1,
                     end_radius: 1,
                     intensity: 6,
@@ -1624,16 +1652,19 @@ impl ParticleShowcaseRenderer {
         let drift_span = self.param("drift_span");
         let corridor_min = self.param("corridor_min");
         let corridor_span = self.param("corridor_span");
+        let width = self.config.width as f32;
+        let center_x = width * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let depth =
                 (self.pool.z[index] + seconds * self.pool.life[index] * depth_rate).rem_euclid(1.0);
             let parallax = parallax_min + depth * parallax_span;
             let drift = seconds * (drift_min + depth * drift_span) * self.pool.life[index];
-            let x = (480.0 + self.pool.x[index] * parallax + drift + 960.0).rem_euclid(960.0);
+            let x = (center_x + self.pool.x[index] * parallax + drift + width).rem_euclid(width);
             let corridor = corridor_min + (1.0 - depth) * corridor_span;
-            let mut y = 270.0 + self.pool.y[index] * parallax;
-            if y > 270.0 - corridor && y < 270.0 + corridor {
+            let mut y = center_y + self.pool.y[index] * parallax;
+            if y > center_y - corridor && y < center_y + corridor {
                 y += if self.pool.y[index].is_sign_negative() {
                     -corridor
                 } else {
@@ -1699,6 +1730,8 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let x_scale = self.config.width as f32 / REFERENCE_WIDTH as f32;
+        let center_y = self.config.height as f32 * 0.5;
         let mut clipped = 0usize;
         for index in (0..self.pool.active()).step_by(2) {
             let lane = self.pool.flags[index];
@@ -1752,8 +1785,8 @@ impl ParticleShowcaseRenderer {
                 &mut self.commands,
                 self.config.width,
                 self.config.height,
-                center + x,
-                270.0 + y,
+                center * x_scale + x,
+                center_y + y,
                 style,
                 index & 127 == 0,
             ) {
@@ -1780,12 +1813,14 @@ impl ParticleShowcaseRenderer {
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let cycle_seconds = self.param("cycle");
         let cycle = seconds.rem_euclid(cycle_seconds) / cycle_seconds;
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
         for parent in 0..3usize {
             let offset = parent as f32 - 1.0;
-            let head_x = 480.0
+            let head_x = center_x
                 + offset * self.param("parent_spacing")
                 + (cycle * std::f32::consts::TAU).sin() * self.param("head_x_amplitude");
-            let head_y = 420.0 - cycle * self.param("head_travel")
+            let head_y = self.config.height as f32 - 120.0 - cycle * self.param("head_travel")
                 + (cycle * std::f32::consts::PI).sin() * (-72.0 - parent as f32 * 18.0);
             let color = palette[3 + parent];
             let mut previous = None;
@@ -1838,8 +1873,8 @@ impl ParticleShowcaseRenderer {
             let random = self.pool.random[index];
             let release = (cycle + self.pool.age[index]).fract();
             let parent_offset = parent as f32 - 1.0;
-            let origin_x = 480.0 + parent_offset * 215.0;
-            let origin_y = 190.0 + parent as f32 * 18.0;
+            let origin_x = center_x + parent_offset * 215.0;
+            let origin_y = center_y - 80.0 + parent as f32 * 18.0;
             let angle = std::f32::consts::TAU * unit01(random.rotate_left(11));
             let speed = 18.0 + unit01(random.rotate_left(21)) * 105.0;
             let x = origin_x + angle.cos() * speed * release;
@@ -1878,6 +1913,10 @@ impl ParticleShowcaseRenderer {
         self.commands.clear();
         self.segments.clear();
         self.density.fill(0);
+        let center_x = self.config.width as f32 * 0.5;
+        let center_y = self.config.height as f32 * 0.5;
+        let density_width = self.density_width;
+        let density_height = self.density_height;
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
         let pulse = self.param("pulse_base")
             + (seconds * self.param("pulse_rate")).sin() * self.param("pulse_amplitude");
@@ -1894,19 +1933,21 @@ impl ParticleShowcaseRenderer {
             if cavity_x * cavity_x + cavity_y * cavity_y < self.param("cavity_radius").powi(2) {
                 continue;
             }
-            let x = ((480.0 + world_x) * 0.25) as i32;
-            let y = ((270.0 + world_y) * 0.25) as i32;
-            if !(1..DENSITY_W as i32 - 1).contains(&x) || !(1..DENSITY_H as i32 - 1).contains(&y) {
+            let x = ((center_x + world_x) / DENSITY_SCALE as f32) as i32;
+            let y = ((center_y + world_y) / DENSITY_SCALE as f32) as i32;
+            if !(1..density_width as i32 - 1).contains(&x)
+                || !(1..density_height as i32 - 1).contains(&y)
+            {
                 continue;
             }
-            let center = y as usize * DENSITY_W + x as usize;
+            let center = y as usize * density_width + x as usize;
             let weight = 6 + u16::from(self.pool.style[index]);
             for (offset, scale) in [
                 (0isize, 4u16),
                 (-1, 2),
                 (1, 2),
-                (-(DENSITY_W as isize), 2),
-                (DENSITY_W as isize, 2),
+                (-(density_width as isize), 2),
+                (density_width as isize, 2),
             ] {
                 let cell = (center as isize + offset) as usize;
                 self.density[cell] = self.density[cell].saturating_add(weight * scale);
@@ -1916,22 +1957,22 @@ impl ParticleShowcaseRenderer {
                     &mut self.commands,
                     self.config.width,
                     self.config.height,
-                    480.0 + world_x,
-                    270.0 + world_y,
+                    center_x + world_x,
+                    center_y + world_y,
                     7,
                     true,
                 );
             }
         }
         self.density_blur.fill(0);
-        for y in 1..DENSITY_H - 1 {
-            for x in 1..DENSITY_W - 1 {
-                let offset = y * DENSITY_W + x;
+        for y in 1..density_height - 1 {
+            for x in 1..density_width - 1 {
+                let offset = y * density_width + x;
                 self.density_blur[offset] = (self.density[offset] * 2
                     + self.density[offset - 1]
                     + self.density[offset + 1]
-                    + self.density[offset - DENSITY_W]
-                    + self.density[offset + DENSITY_W])
+                    + self.density[offset - density_width]
+                    + self.density[offset + density_width])
                     / 6;
             }
         }
@@ -1940,10 +1981,13 @@ impl ParticleShowcaseRenderer {
     }
 
     fn initialize_curl_noise_flow_field(&mut self) {
+        let margin = 24.0;
+        let spawn_width = (self.config.width as f32 - margin * 2.0).max(1.0);
+        let spawn_height = (self.config.height as f32 - margin * 2.0).max(1.0);
         for index in 0..self.pool.active() {
             let random = self.pool.random[index];
-            self.pool.x[index] = 24.0 + unit01(random) * 912.0;
-            self.pool.y[index] = 24.0 + unit01(random.rotate_left(11)) * 492.0;
+            self.pool.x[index] = margin + unit01(random) * spawn_width;
+            self.pool.y[index] = margin + unit01(random.rotate_left(11)) * spawn_height;
             self.pool.age[index] = unit01(random.rotate_left(21));
             self.pool.life[index] = 0.45 + unit01(random.rotate_left(7)) * 0.85;
             self.pool.style[index] = ((random >> 29) & 7) as u8;
@@ -1961,10 +2005,14 @@ impl ParticleShowcaseRenderer {
             return;
         }
         let seconds = elapsed.saturating_sub(self.demo_started_at).as_secs_f32();
+        let width = self.config.width as f32;
+        let height = self.config.height as f32;
+        let center_x = width * 0.5;
+        let center_y = height * 0.5;
         let cohort = ((elapsed.as_micros() / 16_667) & 3) as usize;
         for index in (cohort..self.pool.active()).step_by(4) {
-            let normalized_x = (self.pool.x[index] - 480.0) / self.param("normal_x");
-            let normalized_y = (self.pool.y[index] - 270.0) / self.param("normal_y");
+            let normalized_x = (self.pool.x[index] - center_x) / self.param("normal_x");
+            let normalized_y = (self.pool.y[index] - center_y) / self.param("normal_y");
             let phase = seconds * self.param("phase_rate") + self.pool.age[index] * 9.0;
             let left_dx = normalized_x + self.param("vortex_offset");
             let right_dx = normalized_x - self.param("vortex_offset");
@@ -1982,12 +2030,12 @@ impl ParticleShowcaseRenderer {
             self.pool.vy[index] = vy * self.param("velocity_scale");
             self.pool.x[index] = (self.pool.x[index]
                 + self.pool.vx[index] * dt * self.param("integration_scale")
-                + 960.0)
-                .rem_euclid(960.0);
+                + width)
+                .rem_euclid(width);
             self.pool.y[index] = (self.pool.y[index]
                 + self.pool.vy[index] * dt * self.param("integration_scale")
-                + 540.0)
-                .rem_euclid(540.0);
+                + height)
+                .rem_euclid(height);
         }
     }
 
@@ -3235,9 +3283,11 @@ impl ParticleShowcaseRenderer {
             return;
         }
         self.heat_frame = frame;
-        let bottom = (FIRE_HEAT_H - 1) * FIRE_HEAT_W;
-        for x in 0..FIRE_HEAT_W {
-            let centered = (x as f32 - FIRE_HEAT_W as f32 * 0.5).abs() / (FIRE_HEAT_W as f32 * 0.5);
+        let heat_width = self.heat_width;
+        let heat_height = self.heat_height;
+        let bottom = (heat_height - 1) * heat_width;
+        for x in 0..heat_width {
+            let centered = (x as f32 - heat_width as f32 * 0.5).abs() / (heat_width as f32 * 0.5);
             let envelope = ((1.0 - centered).max(0.0) * 72.0) as u8;
             let hash = xorshift32(
                 (frame as u32)
@@ -3247,13 +3297,13 @@ impl ParticleShowcaseRenderer {
             let flicker = ((hash >> 25) & 0x7f) as u8;
             self.heat[bottom + x] = 150u8.saturating_add(envelope).saturating_add(flicker);
         }
-        for y in 0..FIRE_HEAT_H - 1 {
-            let row = y * FIRE_HEAT_W;
-            let source_row = row + FIRE_HEAT_W;
-            for x in 0..FIRE_HEAT_W {
+        for y in 0..heat_height - 1 {
+            let row = y * heat_width;
+            let source_row = row + heat_width;
+            for x in 0..heat_width {
                 let hash = xorshift32(
                     (frame as u32)
-                        .wrapping_add((y * FIRE_HEAT_W + x) as u32)
+                        .wrapping_add((y * heat_width + x) as u32)
                         .wrapping_mul(0x85eb_ca6b),
                 );
                 let drift = match hash & 3 {
@@ -3261,7 +3311,7 @@ impl ParticleShowcaseRenderer {
                     1 => 1,
                     _ => 0,
                 };
-                let source_x = (x as isize + drift).clamp(0, FIRE_HEAT_W as isize - 1) as usize;
+                let source_x = (x as isize + drift).clamp(0, heat_width as isize - 1) as usize;
                 let cooling = ((hash >> 8) & 7) as u8;
                 self.heat[row + x] = self.heat[source_row + source_x].saturating_sub(cooling);
             }
@@ -3469,9 +3519,9 @@ impl ParticleShowcaseRenderer {
         if self.demo == ParticleDemoKind::LowResolutionDensityBloom {
             destination.fill(Rgb565Pixel(0));
             let mut writes = 0usize;
-            for cell_y in 0..DENSITY_H {
-                for cell_x in 0..DENSITY_W {
-                    let density = self.density[cell_y * DENSITY_W + cell_x];
+            for cell_y in 0..self.density_height {
+                for cell_x in 0..self.density_width {
+                    let density = self.density[cell_y * self.density_width + cell_x];
                     let style = match density {
                         0..=7 => 0,
                         8..=23 => 1,
@@ -3486,9 +3536,13 @@ impl ParticleShowcaseRenderer {
                         continue;
                     }
                     let color = self.palette()[style];
-                    for y in cell_y * DENSITY_SCALE..(cell_y + 1) * DENSITY_SCALE {
+                    for y in cell_y * DENSITY_SCALE
+                        ..((cell_y + 1) * DENSITY_SCALE).min(self.config.height)
+                    {
                         let row = y * self.config.width;
-                        for x in cell_x * DENSITY_SCALE..(cell_x + 1) * DENSITY_SCALE {
+                        for x in cell_x * DENSITY_SCALE
+                            ..((cell_x + 1) * DENSITY_SCALE).min(self.config.width)
+                        {
                             destination[row + x] = color;
                             writes = writes.saturating_add(1);
                         }
@@ -3503,11 +3557,11 @@ impl ParticleShowcaseRenderer {
         let top = self
             .config
             .height
-            .saturating_sub(FIRE_HEAT_H * FIRE_HEAT_SCALE);
+            .saturating_sub(self.heat_height * FIRE_HEAT_SCALE);
         let mut writes = 0usize;
-        for heat_y in 0..FIRE_HEAT_H {
-            for heat_x in 0..FIRE_HEAT_W {
-                let style = usize::from(self.heat[heat_y * FIRE_HEAT_W + heat_x] >> 5).min(7);
+        for heat_y in 0..self.heat_height {
+            for heat_x in 0..self.heat_width {
+                let style = usize::from(self.heat[heat_y * self.heat_width + heat_x] >> 5).min(7);
                 let color = self.palette()[style];
                 let x0 = heat_x * FIRE_HEAT_SCALE;
                 let y0 = top + heat_y * FIRE_HEAT_SCALE;
@@ -3614,9 +3668,21 @@ pub fn request_particle_demo_navigation(delta: i32) {
 
 impl ParticleShowcaseConfig {
     pub fn validate(self) -> Result<Self, String> {
-        if (self.width, self.height) != (960, 540) {
+        let Some(frame_len) = self.width.checked_mul(self.height) else {
             return Err(format!(
-                "particle showcase requires 960x540, received {}x{}",
+                "particle showcase geometry {}x{} overflows its frame length",
+                self.width, self.height
+            ));
+        };
+        if self.width < 16 || self.height < 16 {
+            return Err(format!(
+                "particle showcase geometry must be at least 16x16, received {}x{}",
+                self.width, self.height
+            ));
+        }
+        if frame_len > COMMAND_OFFSET_MASK as usize + 1 {
+            return Err(format!(
+                "particle showcase geometry {}x{} exceeds the packed command offset capacity",
                 self.width, self.height
             ));
         }
@@ -4277,27 +4343,50 @@ mod tests {
     }
 
     #[test]
-    fn showcase_geometry_is_fixed_to_the_direct_renderer() {
+    fn showcase_geometry_accepts_mister_render_sizes() {
+        for (width, height) in [(960, 540), (960, 600), (640, 480), (640, 288)] {
+            assert!(
+                ParticleShowcaseConfig {
+                    width,
+                    height,
+                    seed: 1,
+                    initial_demo: ParticleDemoKind::SolarChrysanthemum,
+                }
+                .validate()
+                .is_ok()
+            );
+        }
         assert!(
             ParticleShowcaseConfig {
-                width: 960,
-                height: 540,
-                seed: 1,
-                initial_demo: ParticleDemoKind::SolarChrysanthemum,
-            }
-            .validate()
-            .is_ok()
-        );
-        assert!(
-            ParticleShowcaseConfig {
-                width: 1280,
-                height: 720,
+                width: 8,
+                height: 8,
                 seed: 1,
                 initial_demo: ParticleDemoKind::SolarChrysanthemum,
             }
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn every_demo_renders_at_dynamic_mister_geometries() {
+        for (width, height) in [(960, 600), (640, 480)] {
+            for demo in ParticleDemoKind::ALL {
+                let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
+                    width,
+                    height,
+                    seed: 827_141_709_451,
+                    initial_demo: demo,
+                })
+                .unwrap();
+                renderer.configure_capture_hud(false);
+                let mut destination = vec![Rgb565Pixel(0); width * height];
+                let stats = renderer
+                    .render(&mut destination, 1, Duration::from_secs(15))
+                    .unwrap();
+                assert_eq!(stats.demo, demo);
+            }
+        }
     }
 
     #[test]
@@ -4413,7 +4502,7 @@ mod tests {
         assert_eq!(first.heat, second.heat);
         assert_eq!(first_destination, second_destination);
         assert!(
-            first_destination[(540 - FIRE_HEAT_H * FIRE_HEAT_SCALE) * 960..]
+            first_destination[(540 - first.heat_height * FIRE_HEAT_SCALE) * 960..]
                 .iter()
                 .any(|pixel| *pixel != Rgb565Pixel(0))
         );

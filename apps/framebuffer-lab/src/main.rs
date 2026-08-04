@@ -22,7 +22,7 @@ fn main() -> Result<(), String> {
     let demo = ParticleDemoKind::parse(&options.demo)
         .ok_or_else(|| format!("unknown particle demo {:?}", options.demo))?;
     if options.check {
-        let _ = renderer(demo, options.family.as_deref(), false)?;
+        let _ = renderer(demo, options.family.as_deref(), false, WIDTH, HEIGHT)?;
         println!("particle-lab check passed demo={}", demo.telemetry_label());
         return Ok(());
     }
@@ -43,10 +43,12 @@ fn renderer(
     demo: ParticleDemoKind,
     family: Option<&Path>,
     live: bool,
+    width: usize,
+    height: usize,
 ) -> Result<ParticleShowcaseRenderer, String> {
     let mut renderer = ParticleShowcaseRenderer::new(ParticleShowcaseConfig {
-        width: WIDTH,
-        height: HEIGHT,
+        width,
+        height,
         seed: SEED,
         initial_demo: demo,
     })?;
@@ -67,7 +69,7 @@ fn render_headless(
     time_ms: u64,
     output: &Path,
 ) -> Result<(), String> {
-    let mut renderer = renderer(demo, family, false)?;
+    let mut renderer = renderer(demo, family, false, WIDTH, HEIGHT)?;
     let mut slots = [
         vec![Rgb565Pixel(0); WIDTH * HEIGHT],
         vec![Rgb565Pixel(0); WIDTH * HEIGHT],
@@ -107,18 +109,36 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), String> {
-    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use mister_magik_mister_runtime::display_plan::detect_runtime_display_plan;
+    use mister_magik_mister_runtime::fpga::Fpga;
+    use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
     use std::time::Instant;
 
-    let mut renderer = renderer(demo, family.as_deref(), true)?;
-    let mut presenter = HiddenLatchPresenter::open(WIDTH as u16, HEIGHT as u16)
-        .map_err(|error| format!("open hidden RGB565 latch presenter: {error}"))?;
-    if presenter.stride_pixels() != WIDTH {
-        return Err(format!(
-            "particle lab requires a packed {WIDTH}-pixel stride, received {}",
-            presenter.stride_pixels()
-        ));
-    }
+    let mut fpga = Fpga::open().map_err(|error| format!("open FPGA display detector: {error}"))?;
+    let runtime = detect_runtime_display_plan(&mut fpga)
+        .map_err(|error| format!("resolve Main display plan: {error}"))?;
+    drop(fpga);
+    let plan = runtime.plan;
+    let width = plan.render_w;
+    let height = plan.render_h;
+    let mut renderer = renderer(demo, family.as_deref(), true, width, height)?;
+    let mut presenter = CachedHiddenLatchPresenter::open(plan)
+        .map_err(|error| format!("open cached RGB565 latch presenter: {error}"))?;
+    let mut render_slots = [
+        vec![Rgb565Pixel(0); width * height],
+        vec![Rgb565Pixel(0); width * height],
+    ];
+    let full_damage = DirtyRectList::from_one(DirtyRect {
+        x0: 0,
+        y0: 0,
+        x1: width,
+        y1: height,
+    });
+    println!(
+        "particle-lab render={}x{} framebuffer={}x{} scan={}x{} output={}x{} format=rgb565",
+        width, height, plan.fb_w, plan.fb_h, plan.scan_w, plan.scan_h, plan.output_w, plan.output_h,
+    );
     let started = Instant::now();
     let mut next_frame = started;
     let mut status_started = started;
@@ -129,9 +149,13 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
             .map_err(|error| format!("settle hidden RGB565 particle frame: {error}"))?;
         let elapsed = Instant::now().saturating_duration_since(started);
         let slot = presenter.writable_slot_index();
-        let stats = renderer.render(presenter.pixels_mut(), slot, elapsed)?;
+        let slot_offset = usize::from(slot - 1);
+        let stats = renderer.render(&mut render_slots[slot_offset], slot, elapsed)?;
+        presenter
+            .prepare_cached(&render_slots[slot_offset], &full_damage)
+            .map_err(|error| format!("prepare hidden RGB565 particle frame: {error}"))?;
         let post = presenter
-            .post()
+            .post_prepared()
             .map_err(|error| format!("post hidden RGB565 particle frame: {error}"))?;
         status_frames = status_frames.saturating_add(1);
         if status_started.elapsed() >= Duration::from_secs(1) {
@@ -297,7 +321,7 @@ mod macos {
 
     impl ParticleLabApplication {
         pub(super) fn new(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<Self, String> {
-            let renderer = renderer(demo, family.as_deref(), true)?;
+            let renderer = renderer(demo, family.as_deref(), true, WIDTH, HEIGHT)?;
             let now = Instant::now();
             Ok(Self {
                 renderer,
