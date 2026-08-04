@@ -457,12 +457,14 @@ impl LabScene {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn play_card(&mut self, direction: CardFlipDirection, at: Duration) {
         if let Self::CardFlip(renderer) = self {
             renderer.play(direction, at);
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn card_needs_frame(&self) -> bool {
         matches!(self, Self::CardFlip(renderer) if renderer.is_dirty())
     }
