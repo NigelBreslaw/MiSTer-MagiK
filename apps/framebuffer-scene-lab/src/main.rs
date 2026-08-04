@@ -53,12 +53,7 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(
-            SceneSource::CardFlip(duration),
-            options.destination,
-            None,
-            options.profile,
-        );
+        return run_window(SceneSource::CardFlip(duration), None, options.profile);
     }
     if options.scene == EffectKind::NavigationTransition {
         let fixture = options
@@ -82,12 +77,7 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(
-            SceneSource::Navigation(fixture),
-            options.destination,
-            None,
-            false,
-        );
+        return run_window(SceneSource::Navigation(fixture), None, false);
     }
     let recipe_path = options
         .recipe
@@ -120,7 +110,6 @@ fn main() -> Result<(), String> {
     }
     run_window(
         SceneSource::Particle(recipe_path.to_path_buf()),
-        options.destination,
         options.case,
         options.profile,
     )
@@ -389,13 +378,17 @@ enum LabScene {
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
 impl LabScene {
-    fn start(source: SceneSource, case: Option<CabinetCase>) -> Result<Self, String> {
+    fn start(
+        source: SceneSource,
+        case: Option<CabinetCase>,
+        width: usize,
+        height: usize,
+    ) -> Result<Self, String> {
         match source {
             SceneSource::Particle(recipe) => {
                 if let Some(case) = case {
                     let selected = read_effect_recipe(&recipe)?;
-                    let mut renderer =
-                        FocusedParticleRenderer::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, selected)?;
+                    let mut renderer = FocusedParticleRenderer::new(width, height, selected)?;
                     renderer.set_cabinet_render_options(CabinetRenderOptions {
                         active_count: case.particles,
                         creative_mode: case.mode,
@@ -404,16 +397,16 @@ impl LabScene {
                     Ok(Self::Focused(renderer))
                 } else {
                     Ok(Self::Particle(LiveParticleRenderer::start(
-                        DEFAULT_WIDTH,
-                        DEFAULT_HEIGHT,
+                        width,
+                        height,
                         recipe.clone(),
                         status_path(&recipe),
                     )?))
                 }
             }
-            SceneSource::Navigation(fixture) => {
-                Ok(Self::Navigation(NavigationFixtureScene::new(fixture)))
-            }
+            SceneSource::Navigation(fixture) => Ok(Self::Navigation(
+                NavigationFixtureScene::new_with_geometry(fixture, width, height),
+            )),
             SceneSource::CardFlip(duration) => {
                 let raster_path = if cfg!(all(target_os = "linux", target_arch = "arm")) {
                     CardFlipRasterPath::Device
@@ -764,8 +757,8 @@ impl CabinetLabControls {
         self.hud.update(self.mode, self.particles);
     }
 
-    fn draw_hud(&self, pixels: &mut [Rgb565Pixel]) {
-        self.hud.draw(pixels);
+    fn draw_hud(&self, pixels: &mut [Rgb565Pixel], width: usize, height: usize) {
+        self.hud.draw(pixels, width, height);
     }
 }
 
@@ -800,14 +793,16 @@ impl CabinetHud {
         draw_hud_text(&mut self.pixels, 6, 23, &count_line, Rgb565Pixel(0x07ff));
     }
 
-    fn draw(&self, destination: &mut [Rgb565Pixel]) {
-        if destination.len() != DEFAULT_WIDTH * DEFAULT_HEIGHT {
+    fn draw(&self, destination: &mut [Rgb565Pixel], width: usize, height: usize) {
+        if destination.len() != width.saturating_mul(height) || width <= HUD_X || height <= HUD_Y {
             return;
         }
-        for row in 0..HUD_HEIGHT {
-            let source = &self.pixels[row * HUD_WIDTH..(row + 1) * HUD_WIDTH];
-            let offset = (HUD_Y + row) * DEFAULT_WIDTH + HUD_X;
-            destination[offset..offset + HUD_WIDTH].copy_from_slice(source);
+        let copy_width = HUD_WIDTH.min(width - HUD_X);
+        let copy_height = HUD_HEIGHT.min(height - HUD_Y);
+        for row in 0..copy_height {
+            let source = &self.pixels[row * HUD_WIDTH..row * HUD_WIDTH + copy_width];
+            let offset = (HUD_Y + row) * width + HUD_X;
+            destination[offset..offset + copy_width].copy_from_slice(source);
         }
     }
 }
@@ -967,7 +962,6 @@ const fn hud_glyph(character: char) -> [u8; 7] {
 #[cfg(target_os = "macos")]
 fn run_window(
     source: SceneSource,
-    _destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
     _profile: bool,
 ) -> Result<(), String> {
@@ -981,44 +975,50 @@ fn run_window(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_window(
-    source: SceneSource,
-    destination: Option<(u16, u16)>,
-    case: Option<CabinetCase>,
-    profile: bool,
-) -> Result<(), String> {
-    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+fn run_window(source: SceneSource, case: Option<CabinetCase>, profile: bool) -> Result<(), String> {
+    use mister_magik_mister_runtime::display_plan::detect_runtime_display_plan;
+    use mister_magik_mister_runtime::fpga::Fpga;
+    use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
+    use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
 
+    let mut fpga = Fpga::open().map_err(|error| format!("open FPGA display detector: {error}"))?;
+    let runtime = detect_runtime_display_plan(&mut fpga)
+        .map_err(|error| format!("resolve Main display plan: {error}"))?;
+    drop(fpga);
+    let plan = runtime.plan;
     if let SceneSource::CardFlip(duration) = &source {
-        return run_card_flip_mister(*duration, destination, profile);
+        return run_card_flip_mister(*duration, plan, profile);
     }
-    let mut renderer = LabScene::start(source, case)?;
+    let mut renderer = LabScene::start(source, case, plan.render_w, plan.render_h)?;
     let mut controls =
         (case.is_none() && renderer.effect() == EffectKind::Cabinet).then(CabinetLabControls::new);
     let mut input = FramebufferLabInput::open();
-    let (destination_width, destination_height) = destination
-        .ok_or("MiSTer startup particle preview requires an explicit scanout destination")?;
-    let mut presenter = HiddenLatchPresenter::open_scaled(
-        DEFAULT_WIDTH as u16,
-        DEFAULT_HEIGHT as u16,
-        destination_width,
-        destination_height,
-    )
-    .map_err(|error| format!("open scaled hidden RGB565 latch presenter: {error}"))?;
-    if presenter.stride_pixels() != DEFAULT_WIDTH {
-        return Err(format!(
-            "framebuffer scene lab requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
-            presenter.stride_pixels()
-        ));
-    }
+    let mut presenter = CachedHiddenLatchPresenter::open(plan)
+        .map_err(|error| format!("open plan-aware hidden RGB565 presenter: {error}"))?;
+    let mut render_slots = [
+        vec![Rgb565Pixel(0); plan.render_w * plan.render_h],
+        vec![Rgb565Pixel(0); plan.render_w * plan.render_h],
+    ];
+    let full_damage = DirtyRectList::from_one(DirtyRect {
+        x0: 0,
+        y0: 0,
+        x1: plan.render_w,
+        y1: plan.render_h,
+    });
     println!(
-        "framebuffer-scene-lab source={}x{} destination={}x{} format=rgb565",
-        presenter.width(),
-        presenter.height(),
-        presenter.destination_width(),
-        presenter.destination_height(),
+        "framebuffer-scene-lab render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} format=rgb565",
+        plan.render_w,
+        plan.render_h,
+        plan.fb_w,
+        plan.fb_h,
+        plan.scan_w,
+        plan.scan_h,
+        plan.output_w,
+        plan.output_h,
+        plan.output_route.label(),
     );
     let started = Instant::now();
     let mut next_frame = started;
@@ -1064,21 +1064,16 @@ fn run_window(
             renderer.set_cabinet_controls(controls)?;
         }
         let writable_slot = presenter.writable_slot_index();
-        let pixels = presenter.pixels_mut();
-        // SAFETY: both pixel types are repr(transparent) wrappers around u16,
-        // have identical length/alignment, and accept every u16 bit pattern.
-        let pixels = unsafe {
-            std::slice::from_raw_parts_mut(pixels.as_mut_ptr().cast::<Rgb565Pixel>(), pixels.len())
-        };
+        let pixels = &mut render_slots[usize::from(writable_slot - 1)];
         let render_started = Instant::now();
         let stats = renderer.render_buffer(
-            &mut *pixels,
+            pixels,
             writable_slot - 1,
             elapsed,
             Some(elapsed.saturating_add(FRAME_DURATION)),
         )?;
         if let Some(controls) = controls.as_ref() {
-            controls.draw_hud(pixels);
+            controls.draw_hud(pixels, plan.render_w, plan.render_h);
         }
         render_samples_us.push(render_started.elapsed().as_micros() as u64);
         if let Some(stages) = stats.magik_stages {
@@ -1114,8 +1109,15 @@ fn run_window(
             worker_wait_samples_us.clear();
             prepared_age_samples_us.clear();
         }
+        // SAFETY: both pixel types are repr(transparent) wrappers around u16,
+        // have identical length/alignment, and accept every u16 bit pattern.
+        let cached =
+            unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565>(), pixels.len()) };
+        presenter
+            .prepare_cached(cached, &full_damage)
+            .map_err(|error| format!("copy cached startup particle frame: {error}"))?;
         let post = presenter
-            .post()
+            .post_prepared()
             .map_err(|error| format!("post hidden RGB565 startup particle frame: {error}"))?;
         status_frames = status_frames.saturating_add(1);
         if let Some(case) = case
@@ -1245,33 +1247,31 @@ fn run_window(
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn run_card_flip_mister(
     duration: Duration,
-    destination: Option<(u16, u16)>,
+    plan: mister_magik_core::display::ResolvedDisplayPlan,
     profile: bool,
 ) -> Result<(), String> {
-    use mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresenter;
+    use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
+    use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
+    use mister_magik_mister_runtime::framebuffer::rgb565::Rgb565;
     use mister_magik_mister_runtime::lab_input::FramebufferLabInput;
     use std::time::Instant;
 
-    let (destination_width, destination_height) =
-        destination.ok_or("MiSTer card flip requires an explicit scanout destination")?;
-    let mut presenter = HiddenLatchPresenter::open_scaled(
-        DEFAULT_WIDTH as u16,
-        DEFAULT_HEIGHT as u16,
-        destination_width,
-        destination_height,
-    )
-    .map_err(|error| format!("open scaled hidden RGB565 card presenter: {error}"))?;
-    if presenter.stride_pixels() != DEFAULT_WIDTH {
-        return Err(format!(
-            "card flip requires a packed {DEFAULT_WIDTH}-pixel stride, received {}",
-            presenter.stride_pixels()
-        ));
-    }
+    let mut presenter = CachedHiddenLatchPresenter::open(plan)
+        .map_err(|error| format!("open plan-aware hidden RGB565 card presenter: {error}"))?;
 
     let mut renderer = CardFlip::new(CardFlipRasterPath::Device);
     renderer.set_duration(duration);
-    let mut staging = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
-    card_flip_neon::fill_rgb565(&mut staging, Rgb565Pixel(0));
+    let mut reference = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+    let mut staging = vec![Rgb565Pixel(0); plan.render_w * plan.render_h];
+    let mut staging_initialized = false;
+    let card_rect = scaled_card_rect(plan.render_w, plan.render_h);
+    let card_damage = DirtyRectList::from_one(DirtyRect {
+        x0: card_rect.0,
+        y0: card_rect.1,
+        x1: card_rect.0 + card_rect.2,
+        y1: card_rect.1 + card_rect.3,
+    });
+    card_flip_neon::fill_rgb565(&mut reference, Rgb565Pixel(0));
     let mut controls = CardFlipLabControls::default();
     let mut input = FramebufferLabInput::open();
     let started = Instant::now();
@@ -1302,11 +1302,18 @@ fn run_card_flip_mister(
     }
 
     println!(
-        "framebuffer-scene-lab scene=card-flip source={}x{} destination={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=neon",
-        presenter.width(),
-        presenter.height(),
-        presenter.destination_width(),
-        presenter.destination_height(),
+        "framebuffer-scene-lab scene=card-flip render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} card={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=dirty-rect",
+        plan.render_w,
+        plan.render_h,
+        plan.fb_w,
+        plan.fb_h,
+        plan.scan_w,
+        plan.scan_h,
+        plan.output_w,
+        plan.output_h,
+        plan.output_route.label(),
+        card_rect.2,
+        card_rect.3,
     );
 
     loop {
@@ -1341,27 +1348,35 @@ fn run_card_flip_mister(
         if renderer.is_dirty() && now >= next_frame {
             let render_started = Instant::now();
             let stats = renderer
-                .render(&mut staging, elapsed)
+                .render(&mut reference, elapsed)
                 .map_err(str::to_owned)?;
             let render_us = render_started.elapsed().as_micros() as u64;
             if stats.changed {
-                let writable_slot = presenter.writable_slot_index();
-                let pixels = presenter.pixels_mut();
+                let transfer_started = Instant::now();
+                if !staging_initialized {
+                    staging.fill(reference[0]);
+                    staging_initialized = true;
+                }
+                scale_card_frame(
+                    &reference,
+                    &mut staging,
+                    plan.render_w,
+                    plan.render_h,
+                    card_rect,
+                );
                 // SAFETY: both RGB565 wrappers are transparent over u16 and
                 // every u16 bit pattern is valid for either representation.
-                let pixels = unsafe {
-                    std::slice::from_raw_parts_mut(
-                        pixels.as_mut_ptr().cast::<Rgb565Pixel>(),
-                        pixels.len(),
-                    )
+                let cached = unsafe {
+                    std::slice::from_raw_parts(staging.as_ptr().cast::<Rgb565>(), staging.len())
                 };
-                let transfer_started = Instant::now();
-                card_flip_neon::copy_rgb565(pixels, &staging);
+                let copy = presenter
+                    .prepare_cached(cached, &card_damage)
+                    .map_err(|error| format!("copy cached card frame: {error}"))?;
                 let transfer_us = transfer_started.elapsed().as_micros() as u64;
                 let post = presenter
-                    .post()
+                    .post_prepared()
                     .map_err(|error| format!("post hidden RGB565 card frame: {error}"))?;
-                debug_assert_eq!(post.slot_index, writable_slot);
+                debug_assert_eq!(post.slot_index, copy.slot_index);
                 rendered_frames = rendered_frames.saturating_add(1);
                 render_samples_us.push(render_us);
                 transfer_samples_us.push(transfer_us);
@@ -1456,6 +1471,43 @@ fn run_card_flip_mister(
     }
 }
 
+fn scaled_card_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let card_height = height.saturating_mul(7).div_ceil(10).min(height);
+    let card_width = card_height
+        .saturating_mul(43)
+        .saturating_add(31)
+        .saturating_div(63)
+        .min(width);
+    (
+        (width - card_width) / 2,
+        (height - card_height) / 2,
+        card_width,
+        card_height,
+    )
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn scale_card_frame(
+    reference: &[Rgb565Pixel],
+    destination: &mut [Rgb565Pixel],
+    destination_width: usize,
+    destination_height: usize,
+    card_rect: (usize, usize, usize, usize),
+) {
+    debug_assert_eq!(reference.len(), DEFAULT_WIDTH * DEFAULT_HEIGHT);
+    debug_assert_eq!(destination.len(), destination_width * destination_height);
+    let (x0, y0, width, height) = card_rect;
+    for y in 0..height {
+        let source_y = card_flip::CARD_Y + y * card_flip::CARD_HEIGHT / height;
+        let source_row = source_y * DEFAULT_WIDTH;
+        let destination_row = (y0 + y) * destination_width;
+        for x in 0..width {
+            let source_x = card_flip::CARD_X + x * card_flip::CARD_WIDTH / width;
+            destination[destination_row + x0 + x] = reference[source_row + source_x];
+        }
+    }
+}
+
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn sample_summary(samples: &mut [u64]) -> (u64, u64, u64) {
     samples.sort_unstable();
@@ -1495,7 +1547,6 @@ fn process_cpu_time() -> Duration {
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
 fn run_window(
     _source: SceneSource,
-    _destination: Option<(u16, u16)>,
     _case: Option<CabinetCase>,
     _profile: bool,
 ) -> Result<(), String> {
@@ -1509,7 +1560,6 @@ struct Options {
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
-    destination: Option<(u16, u16)>,
     case: Option<CabinetCase>,
     profile: bool,
     duration_ms: Option<u64>,
@@ -1525,8 +1575,6 @@ impl Options {
         let mut time_ms = None;
         let mut output = None;
         let mut check = false;
-        let mut destination_width = None;
-        let mut destination_height = None;
         let mut case = None;
         let mut profile = false;
         let mut duration_ms = None;
@@ -1564,14 +1612,6 @@ impl Options {
                 }
                 "--output" => output = arguments.next().map(PathBuf::from),
                 "--check" | "--validate-only" => check = true,
-                "--destination-width" => {
-                    destination_width =
-                        Some(parse_dimension("--destination-width", arguments.next())?);
-                }
-                "--destination-height" => {
-                    destination_height =
-                        Some(parse_dimension("--destination-height", arguments.next())?);
-                }
                 "--case" => {
                     let value = arguments.next().ok_or("--case requires a named case")?;
                     case = Some(cabinet_case(&value).ok_or_else(|| {
@@ -1616,11 +1656,6 @@ impl Options {
                 other => return Err(format!("unknown framebuffer-scene-lab argument {other:?}")),
             }
         }
-        let destination = match (destination_width, destination_height) {
-            (Some(width), Some(height)) => Some((width, height)),
-            (None, None) => None,
-            _ => return Err("scanout destination requires both width and height".into()),
-        };
         let options = Self {
             scene: scene.ok_or("--scene is required")?,
             recipe,
@@ -1628,7 +1663,6 @@ impl Options {
             time_ms,
             output,
             check,
-            destination,
             case,
             profile,
             duration_ms,
@@ -1646,19 +1680,10 @@ impl Options {
         if self.output.is_some() != self.time_ms.is_some() {
             return Err("deterministic capture requires both --time-ms and --output".into());
         }
-        if self.destination.is_some() && (self.check || self.output.is_some()) {
-            return Err("scanout destination is only valid for an interactive preview".into());
-        }
         if self.case.is_some()
-            && (self.scene != EffectKind::Cabinet
-                || self.check
-                || self.output.is_some()
-                || self.destination.is_none())
+            && (self.scene != EffectKind::Cabinet || self.check || self.output.is_some())
         {
-            return Err(
-                "--case requires an interactive cabinet device run with a scanout destination"
-                    .into(),
-            );
+            return Err("--case requires an interactive cabinet device run".into());
         }
         if self.profile && self.case.is_none() && self.scene != EffectKind::CardFlip {
             return Err("--profile requires card-flip or a closed cabinet --case".into());
@@ -1704,17 +1729,8 @@ impl Options {
     }
 }
 
-fn parse_dimension(label: &str, value: Option<String>) -> Result<u16, String> {
-    let value = value.ok_or_else(|| format!("{label} requires pixels"))?;
-    value
-        .parse::<u16>()
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| format!("invalid {label} value {value:?}"))
-}
-
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --destination-width W --destination-height H --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N] [--destination-width W --destination-height H]\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -1878,7 +1894,7 @@ mod macos {
 
     impl ParticleLabApplication {
         pub(super) fn new(source: SceneSource, case: Option<CabinetCase>) -> Result<Self, String> {
-            let renderer = LabScene::start(source, case)?;
+            let renderer = LabScene::start(source, case, DEFAULT_WIDTH, DEFAULT_HEIGHT)?;
             let controls = (case.is_none() && renderer.effect() == EffectKind::Cabinet)
                 .then(CabinetLabControls::new);
             let now = Instant::now();
@@ -2000,7 +2016,7 @@ mod macos {
             }
             self.last_stats = Some(stats);
             if let Some(controls) = self.controls.as_ref() {
-                controls.draw_hud(&mut self.pixels);
+                controls.draw_hud(&mut self.pixels, DEFAULT_WIDTH, DEFAULT_HEIGHT);
             }
             self.render_error = None;
             self.fps_frames = self.fps_frames.saturating_add(1);
@@ -2210,32 +2226,12 @@ mod tests {
         assert_eq!(navigation.fixture, Some(NavigationFixture::HomeArcade));
         assert!(navigation.recipe.is_none());
 
-        let device = Options::parse(
-            [
-                "--scene",
-                "magik",
-                "--recipe",
-                "magik.json",
-                "--destination-width",
-                "1920",
-                "--destination-height",
-                "1080",
-            ]
-            .map(String::from),
-        )
-        .unwrap();
-        assert_eq!(device.destination, Some((1920, 1080)));
-
         let case = Options::parse(
             [
                 "--scene",
                 "cabinet",
                 "--recipe",
                 "cabinet.json",
-                "--destination-width",
-                "1920",
-                "--destination-height",
-                "1080",
                 "--case",
                 "all-72192",
             ]
@@ -2441,7 +2437,7 @@ mod tests {
     fn cabinet_hud_draws_inside_the_top_left_panel() {
         let hud = CabinetHud::new(CabinetDemoMode::MicroJitter, 48_128);
         let mut pixels = vec![Rgb565Pixel(0x1234); DEFAULT_WIDTH * DEFAULT_HEIGHT];
-        hud.draw(&mut pixels);
+        hud.draw(&mut pixels, DEFAULT_WIDTH, DEFAULT_HEIGHT);
         assert_eq!(pixels[HUD_Y * DEFAULT_WIDTH + HUD_X], Rgb565Pixel(0));
         assert!(pixels.contains(&Rgb565Pixel(0xffa0)));
         assert!(pixels.contains(&Rgb565Pixel(0x07ff)));
@@ -2474,5 +2470,11 @@ mod tests {
             }
             assert_eq!(frame_hash(&pixels), expected);
         }
+    }
+
+    #[test]
+    fn card_geometry_tracks_render_height_and_preserves_aspect_ratio() {
+        assert_eq!(scaled_card_rect(960, 600), (336, 90, 287, 420));
+        assert_eq!(scaled_card_rect(640, 480), (205, 72, 229, 336));
     }
 }

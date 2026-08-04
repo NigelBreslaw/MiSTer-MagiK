@@ -122,6 +122,8 @@ impl NavigationFixture {
 
 pub struct NavigationFixtureScene {
     fixture: NavigationFixture,
+    width: usize,
+    height: usize,
     source: Vec<Rgb565Pixel>,
     destination: Vec<Rgb565Pixel>,
     buffers: NavigationTransitionBuffers,
@@ -129,13 +131,19 @@ pub struct NavigationFixtureScene {
 
 impl NavigationFixtureScene {
     pub fn new(fixture: NavigationFixture) -> Self {
-        let source = generated_navigation_snapshot(fixture, false);
-        let destination = generated_navigation_snapshot(fixture, true);
+        Self::new_with_geometry(fixture, DEFAULT_WIDTH, DEFAULT_HEIGHT)
+    }
+
+    pub fn new_with_geometry(fixture: NavigationFixture, width: usize, height: usize) -> Self {
+        let source = generated_navigation_snapshot(fixture, false, width, height);
+        let destination = generated_navigation_snapshot(fixture, true, width, height);
         Self {
             fixture,
+            width,
+            height,
             source,
             destination,
-            buffers: NavigationTransitionBuffers::new(DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            buffers: NavigationTransitionBuffers::new(width, height),
         }
     }
 
@@ -149,11 +157,11 @@ impl NavigationFixtureScene {
         destination: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<FrameStats, String> {
-        if destination.len() != DEFAULT_WIDTH * DEFAULT_HEIGHT {
+        if destination.len() != self.width * self.height {
             return Err(format!(
                 "navigation target has {} pixels, expected {}",
                 destination.len(),
-                DEFAULT_WIDTH * DEFAULT_HEIGHT
+                self.width * self.height
             ));
         }
         let edge = self.fixture.edge();
@@ -176,8 +184,8 @@ impl NavigationFixtureScene {
             NavigationTransitionDirection::Reverse => u16::MAX - forward_progress,
         };
         let geometry = hdmi_navigation_geometry(
-            DEFAULT_WIDTH,
-            DEFAULT_HEIGHT,
+            self.width,
+            self.height,
             1,
             0,
             true,
@@ -191,8 +199,8 @@ impl NavigationFixtureScene {
                 direction,
                 edge,
                 geometry,
-                width: DEFAULT_WIDTH,
-                height: DEFAULT_HEIGHT,
+                width: self.width,
+                height: self.height,
                 source: &self.source,
                 destination: &self.destination,
             },
@@ -231,31 +239,44 @@ impl NavigationFixtureScene {
 fn generated_navigation_snapshot(
     fixture: NavigationFixture,
     destination: bool,
+    width: usize,
+    height: usize,
 ) -> Vec<Rgb565Pixel> {
-    let mut pixels = vec![
-        Rgb565Pixel(if destination { 0x0841 } else { 0x1082 });
-        DEFAULT_WIDTH * DEFAULT_HEIGHT
-    ];
+    let mut pixels = vec![Rgb565Pixel(if destination { 0x0841 } else { 0x1082 }); width * height];
     let seed = fixture.seed().wrapping_add(u16::from(destination) * 0x1111);
-    for y in 0..DEFAULT_HEIGHT {
-        let band = ((y / 24) as u16).wrapping_mul(0x0021);
-        for x in 0..DEFAULT_WIDTH {
-            if (x / 96 + y / 72 + usize::from(destination)) % 7 == 0 {
-                pixels[y * DEFAULT_WIDTH + x] = Rgb565Pixel(seed.wrapping_add(band));
+    let band_height = scale_reference_y(24, height).max(1);
+    let pattern_width = scale_reference_x(96, width).max(1);
+    let pattern_height = scale_reference_y(72, height).max(1);
+    for y in 0..height {
+        let band = ((y / band_height) as u16).wrapping_mul(0x0021);
+        for x in 0..width {
+            if (x / pattern_width + y / pattern_height + usize::from(destination)) % 7 == 0 {
+                pixels[y * width + x] = Rgb565Pixel(seed.wrapping_add(band));
             }
         }
     }
     for card in 0..4 {
-        let x0 = 32 + card * 224;
-        let y0 = if destination { 96 + card * 8 } else { 80 };
+        let x0 = scale_reference_x(32 + card * 224, width);
+        let y0 = scale_reference_y(if destination { 96 + card * 8 } else { 80 }, height);
+        let card_width = scale_reference_x(184, width);
+        let card_height = scale_reference_y(320, height);
+        let bottom_margin = scale_reference_y(32, height);
         let color = seed.wrapping_add((card as u16 + 1) * 0x0841);
-        for y in y0..(y0 + 320).min(DEFAULT_HEIGHT - 32) {
-            let start = y * DEFAULT_WIDTH + x0;
-            let end = y * DEFAULT_WIDTH + (x0 + 184).min(DEFAULT_WIDTH);
+        for y in y0..(y0 + card_height).min(height.saturating_sub(bottom_margin)) {
+            let start = y * width + x0.min(width);
+            let end = y * width + (x0 + card_width).min(width);
             pixels[start..end].fill(Rgb565Pixel(color));
         }
     }
     pixels
+}
+
+const fn scale_reference_x(value: usize, width: usize) -> usize {
+    value.saturating_mul(width) / DEFAULT_WIDTH
+}
+
+const fn scale_reference_y(value: usize, height: usize) -> usize {
+    value.saturating_mul(height) / DEFAULT_HEIGHT
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -917,6 +938,20 @@ mod tests {
     fn navigation_fixture_rejects_malformed_target() {
         let mut scene = NavigationFixtureScene::new(NavigationFixture::HomeArcade);
         assert!(scene.render(&mut [], Duration::ZERO).is_err());
+    }
+
+    #[test]
+    fn navigation_fixture_uses_the_selected_render_geometry() {
+        let width = 960;
+        let height = 600;
+        let mut scene =
+            NavigationFixtureScene::new_with_geometry(NavigationFixture::HomeArcade, width, height);
+        let mut pixels = vec![Rgb565Pixel(0); width * height];
+        let frame = scene
+            .render(&mut pixels, Duration::from_millis(360))
+            .unwrap();
+        assert_eq!(frame.simulation_backend, "forward");
+        assert!(pixels.iter().any(|pixel| pixel.0 != 0));
     }
 
     #[test]
