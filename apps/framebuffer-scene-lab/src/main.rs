@@ -28,6 +28,7 @@ mod cpu_profile;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 const CARD_FLIP_PROFILE_DURATION: Duration = Duration::from_secs(30);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
@@ -1471,6 +1472,7 @@ fn run_card_flip_mister(
     }
 }
 
+#[cfg(any(test, all(target_os = "linux", target_arch = "arm")))]
 fn scaled_card_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let card_height = height.saturating_mul(7).div_ceil(10).min(height);
     let card_width = card_height
