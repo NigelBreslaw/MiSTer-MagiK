@@ -7,6 +7,7 @@
 //! process-control dependencies. Applications provide those capabilities by
 //! implementing [`platform::MagikPlatform`].
 
+pub mod display;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
