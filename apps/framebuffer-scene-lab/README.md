@@ -71,6 +71,19 @@ RGB565 frame, and transfers changed frames to scanout with an ARMv7 NEON copy.
 A/Enter flips forward and B/Backspace flips backward on macOS; the MiSTer
 controller uses A and B. Direction changes continue from the current pose.
 
+Use the closed attended profile to alternate directions for ten seconds and
+restore the launcher automatically:
+
+```text
+scripts/agent device scene-lab --scene card-flip --profile --attended
+```
+
+The 2026-08-04 ARMv7 profile measured 3.372 ms average / 5.312 ms p99 render,
+1.999 ms average / 2.339 ms p99 transfer, zero repeated presentations, and zero
+latch drops over 507 changed frames. The isolated device paint symbol contains
+no calls, software division, wide multiply, or bounds-check branches in its
+generated release assembly.
+
 Create a deterministic capture without opening a window:
 
 ```text
