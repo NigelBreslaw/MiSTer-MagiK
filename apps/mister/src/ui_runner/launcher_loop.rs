@@ -231,7 +231,18 @@ struct PendingNavigationTransition {
     source_state: launcher::NavigationTransitionState,
     source_was_arcade: bool,
     committed: bool,
+    destination_base_rendered: bool,
     status_quiesce_started_at: Option<Instant>,
+}
+
+impl PendingNavigationTransition {
+    fn note_slint_base_rendered(&mut self, rendered: bool) {
+        self.destination_base_rendered |= self.committed && rendered;
+    }
+
+    const fn destination_base_ready(&self) -> bool {
+        self.committed && self.destination_base_rendered
+    }
 }
 
 const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
@@ -1151,6 +1162,14 @@ fn launcher_bridge_sync_plan(
     } else {
         LauncherBridgeSyncPlan::None
     }
+}
+
+const fn launcher_application_input_enabled(
+    startup_intro_active: bool,
+    view_accepts_input: bool,
+    startup_input_enabled: bool,
+) -> bool {
+    !startup_intro_active && view_accepts_input && startup_input_enabled
 }
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
@@ -2948,12 +2967,16 @@ pub(super) fn run_launcher_loop(
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
-        let mut pad_changed_for_input =
-            if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
-                Some(pad.poll_with_debug_labels(setup_active))
-            } else {
-                None
-            };
+        let application_input_enabled_before_updates = launcher_application_input_enabled(
+            startup_intro.is_some(),
+            effective_view.accepts_application_input(),
+            lifecycle.startup_input_enabled(),
+        );
+        let mut pad_changed_for_input = if application_input_enabled_before_updates {
+            Some(pad.poll_with_debug_labels(setup_active))
+        } else {
+            None
+        };
         if let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -3728,15 +3751,20 @@ pub(super) fn run_launcher_loop(
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
         let frame_now = Instant::now();
+        let application_input_enabled = launcher_application_input_enabled(
+            startup_intro.is_some(),
+            effective_view.accepts_application_input(),
+            lifecycle.startup_input_enabled(),
+        );
         let launcher_state = launcher_automation.poll_input(
             ControllerSetupInputSession::new(&pad, &setup).launcher_state(),
-            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+            application_input_enabled,
             setup.is_active(),
             frame_now,
         );
         frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
-        if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
+        if application_input_enabled {
             if setup_active && setup.target_pad_idx >= pad.len() {
                 crate::ui_errln!(
                     "controller setup: pad {} disappeared; closing setup flow",
@@ -3988,6 +4016,7 @@ pub(super) fn run_launcher_loop(
                                 source_state,
                                 source_was_arcade: false,
                                 committed: true,
+                                destination_base_rendered: false,
                                 status_quiesce_started_at: None,
                             });
                             full_bridge_dirty = true;
@@ -4151,6 +4180,7 @@ pub(super) fn run_launcher_loop(
                                             source_state,
                                             source_was_arcade: nav.screen == Screen::Arcade,
                                             committed: false,
+                                            destination_base_rendered: false,
                                             status_quiesce_started_at: None,
                                         });
                                     full_bridge_dirty = true;
@@ -5663,6 +5693,7 @@ pub(super) fn run_launcher_loop(
         screensaver_frame_trace.render_ahead_cancelled = (screensaver_pipeline.is_none()
             && !retiring_screensaver_pipelines.is_empty())
             || (screensaver_direct_pipeline.is_none() && !retiring_direct_pipelines.is_empty());
+        let mut slint_base_rendered = false;
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if screensaver_direct_pipeline.is_some() {
                 Some(DirtyRect {
@@ -5701,14 +5732,17 @@ pub(super) fn run_launcher_loop(
         } else if navigation_snapshot_locked_before_render {
             None
         } else if startup_intro_prepare_live_launcher {
-            layer_target.render_slint_base(&window)
+            let (dirty, rendered) = layer_target.render_slint_base(&window);
+            slint_base_rendered = rendered;
+            dirty
         } else {
-            expand_home_pan_dirty_rect(
-                layer_target.render_slint_base(&window),
-                ui,
-                home_pan_present_active,
-            )
+            let (dirty, rendered) = layer_target.render_slint_base(&window);
+            slint_base_rendered = rendered;
+            expand_home_pan_dirty_rect(dirty, ui, home_pan_present_active)
         };
+        if let Some(pending) = pending_navigation_transition.as_mut() {
+            pending.note_slint_base_rendered(slint_base_rendered);
+        }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
             print_startup_event(
@@ -5802,8 +5836,12 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = true;
             if destination_committed && !navigation_transition.destination_ready() {
-                let mut destination_layers_ready = nav.screen != Screen::Arcade;
-                if nav.screen == Screen::Arcade {
+                let destination_base_ready = pending_navigation_transition
+                    .as_ref()
+                    .is_some_and(PendingNavigationTransition::destination_base_ready);
+                let mut destination_layers_ready =
+                    destination_base_ready && nav.screen != Screen::Arcade;
+                if destination_base_ready && nav.screen == Screen::Arcade {
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
                     let preview_snapshot_ready = navigation_preview_snapshot_ready(
                         preview_expected,
@@ -8031,6 +8069,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn startup_intro_handoff_opens_application_input_only_after_completion() {
+        let states = [
+            launcher_application_input_enabled(true, true, true),
+            launcher_application_input_enabled(false, true, true),
+        ];
+
+        assert_eq!(states, [false, true]);
+        assert!(!launcher_application_input_enabled(false, false, true));
+        assert!(!launcher_application_input_enabled(false, true, false));
+    }
+
     fn crt_240_display() -> UiDisplay {
         let plan = UiDisplayPlan::from_mister_ini_text(
             "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -8286,6 +8336,33 @@ mod tests {
             "empty",
             PreviewRawFrameStatus::Empty,
         ));
+    }
+
+    #[test]
+    fn navigation_destination_waits_for_post_commit_slint_base_render() {
+        let nav = LauncherNav::new();
+        let mut pending = PendingNavigationTransition {
+            event: launcher::LauncherEvent {
+                action: LauncherAction::OpenCollection,
+                path: Some("arcade".to_string()),
+                settings: None,
+            },
+            source_state: nav.navigation_transition_state(),
+            source_was_arcade: false,
+            committed: false,
+            destination_base_rendered: false,
+            status_quiesce_started_at: None,
+        };
+
+        pending.note_slint_base_rendered(true);
+        assert!(!pending.destination_base_ready());
+
+        pending.committed = true;
+        pending.note_slint_base_rendered(false);
+        assert!(!pending.destination_base_ready());
+
+        pending.note_slint_base_rendered(true);
+        assert!(pending.destination_base_ready());
     }
 
     #[test]
