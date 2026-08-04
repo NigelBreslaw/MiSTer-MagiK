@@ -1142,8 +1142,10 @@ impl LauncherLifecycle {
                 }
             }
             LauncherLifecycleInput::LaunchRequested { launch_ref } => {
-                if matches!(self.state, LauncherLifecycleState::Idle)
-                    && self.startup_input_enabled()
+                if matches!(
+                    self.state,
+                    LauncherLifecycleState::Idle | LauncherLifecycleState::CatalogReady { .. }
+                ) && self.startup_input_enabled()
                 {
                     out.push(LauncherEffect::BeginLoadingFrame {
                         launch_ref: launch_ref.clone(),
@@ -1943,9 +1945,14 @@ mod tests {
     }
 
     #[test]
-    fn launch_during_catalog_validation_is_rejected() {
+    fn launch_during_catalog_validation_uses_published_catalog() {
         let mut lifecycle = lifecycle();
         let mut effects = LifecycleEffects::new();
+        let now = Instant::now();
+
+        lifecycle.begin_startup_reveal(StartupMode::WarmCatalog, now, &mut effects);
+        lifecycle.tick_startup_reveal(now, true, &mut effects);
+        lifecycle.note_startup_frame_presented(0, now, &mut effects);
 
         lifecycle.after_boot_splash_presented(
             StartupCatalogState::Ready {
@@ -1965,9 +1972,30 @@ mod tests {
 
         assert_eq!(
             lifecycle.state(),
-            &LauncherLifecycleState::CatalogReady {
-                source: CatalogSource::SummaryProjection,
-                validating: true,
+            &LauncherLifecycleState::Launching {
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "validating.mra".to_string()
+                }
+            }
+        );
+        assert!(matches!(
+            effects.as_slice().first(),
+            Some(LauncherEffect::BeginLoadingFrame { launch_ref })
+                if launch_ref == "validating.mra"
+        ));
+
+        effects.clear();
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogValidationFinished,
+            &mut effects,
+        );
+
+        assert_eq!(
+            lifecycle.state(),
+            &LauncherLifecycleState::Launching {
+                phase: LaunchingPhase::LoadingFramePending {
+                    launch_ref: "validating.mra".to_string()
+                }
             }
         );
         assert!(effects.as_slice().is_empty());
