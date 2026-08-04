@@ -7,6 +7,8 @@
 //! framebuffer from MiSTer.ini's Menu output mode and lets the MiSTer FPGA
 //! scale it to the final HDMI/direct-video rectangle.
 
+#[cfg(test)]
+use mister_magik_core::display::launcher_framebuffer_size;
 pub use mister_magik_core::display::{
     DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute, RuntimeDisplayGeometry, UI_FB_H,
     UI_FB_W,
@@ -15,8 +17,6 @@ use mister_magik_core::display::{
     DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
     runtime_display_geometry_v1, video_mode_geometry,
 };
-#[cfg(test)]
-use mister_magik_core::display::{launcher_framebuffer_size, predefined_video_mode};
 
 const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
