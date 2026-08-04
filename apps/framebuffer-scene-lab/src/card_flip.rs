@@ -89,19 +89,8 @@ struct Column {
     source_x: u16,
     source_y_zero_q16: i32,
     source_y_step_q16: i32,
-}
-
-#[derive(Clone, Copy, Default)]
-struct RowSpan {
-    valid: bool,
-    left: u16,
-    right: u16,
-}
-
-impl RowSpan {
-    fn contains(self, x: usize) -> bool {
-        self.valid && x >= usize::from(self.left) && x <= usize::from(self.right)
-    }
+    top_y: u16,
+    bottom_y: u16,
 }
 
 pub struct CardFlip {
@@ -117,7 +106,6 @@ pub struct CardFlip {
     front: Vec<Rgb565Pixel>,
     back: Vec<Rgb565Pixel>,
     columns: [Column; WIDTH],
-    rows: [RowSpan; HEIGHT],
     device_initialized: bool,
 }
 
@@ -143,7 +131,6 @@ impl CardFlip {
             front: build_face(false),
             back: build_face(true),
             columns: [Column::default(); WIDTH],
-            rows: [RowSpan::default(); HEIGHT],
             device_initialized: false,
         }
     }
@@ -271,14 +258,12 @@ impl CardFlip {
             let source_x = local_from_hinge.round().clamp(0.0, (CARD_WIDTH - 1) as f32) as u16;
             let step = depth / CAMERA as f32;
             let source_zero = -center_y * step + half_height;
-            self.columns[screen_x] = Column {
-                valid: true,
+            self.columns[screen_x] = column(
                 source_x,
-                source_y_zero_q16: (source_zero * FIXED_ONE as f32).round() as i32,
-                source_y_step_q16: (step * FIXED_ONE as f32).round() as i32,
-            };
+                (source_zero * FIXED_ONE as f32).round() as i32,
+                (step * FIXED_ONE as f32).round() as i32,
+            );
         }
-        self.prepare_row_spans();
         self.paint_rows(destination, progress)
     }
 
@@ -321,46 +306,10 @@ impl CardFlip {
             let source_y_step_q16 = depth_q16 / i64::from(CAMERA);
             let source_y_zero_q16 =
                 half_height_q16 - ((center_y_q16 * source_y_step_q16) >> FIXED_SHIFT);
-            self.columns[screen_x] = Column {
-                valid: true,
-                source_x,
-                source_y_zero_q16: source_y_zero_q16 as i32,
-                source_y_step_q16: source_y_step_q16 as i32,
-            };
+            self.columns[screen_x] =
+                column(source_x, source_y_zero_q16 as i32, source_y_step_q16 as i32);
         }
-        self.prepare_row_spans();
         self.paint_rows(destination, progress)
-    }
-
-    fn prepare_row_spans(&mut self) {
-        self.rows.fill(RowSpan::default());
-        let Some(first) = self.columns.iter().position(|column| column.valid) else {
-            return;
-        };
-        let last = self
-            .columns
-            .iter()
-            .rposition(|column| column.valid)
-            .unwrap_or(first);
-        for y in CARD_Y..CARD_Y + CARD_HEIGHT {
-            let mut left = None;
-            let mut right = 0;
-            for x in first..=last {
-                if let Some(source_y) = source_y_at(self.columns[x], y)
-                    && stepped_corner(self.columns[x].source_x as usize, source_y)
-                {
-                    left.get_or_insert(x);
-                    right = x;
-                }
-            }
-            if let Some(left) = left {
-                self.rows[y] = RowSpan {
-                    valid: true,
-                    left: left as u16,
-                    right: right as u16,
-                };
-            }
-        }
     }
 
     fn paint_rows(&self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
@@ -379,16 +328,25 @@ impl CardFlip {
             &self.back
         };
         let mirror = progress >= u16::MAX / 2;
+        let Some(first) = self.columns.iter().position(|column| column.valid) else {
+            return 0;
+        };
+        let last = self
+            .columns
+            .iter()
+            .rposition(|column| column.valid)
+            .unwrap_or(first);
         let mut writes = 0;
 
         // This is intentionally row-major for contiguous RGB565 destination writes.
         for y in CARD_Y..CARD_Y + CARD_HEIGHT {
-            let span = self.rows[y];
-            if !span.valid {
+            let Some(left) = (first..=last).find(|&x| column_contains(self.columns[x], y)) else {
                 continue;
-            }
-            let left = usize::from(span.left);
-            let right = usize::from(span.right);
+            };
+            let right = (left..=last)
+                .rev()
+                .find(|&x| column_contains(self.columns[x], y))
+                .unwrap_or(left);
             for x in left..=right {
                 let column = self.columns[x];
                 let Some(source_y) = source_y_at(column, y) else {
@@ -397,9 +355,8 @@ impl CardFlip {
                 if !stepped_corner(column.source_x as usize, source_y) {
                     continue;
                 }
-                let top_edge = y < OUTLINE_WIDTH || !self.rows[y - OUTLINE_WIDTH].contains(x);
-                let bottom_edge =
-                    y + OUTLINE_WIDTH >= HEIGHT || !self.rows[y + OUTLINE_WIDTH].contains(x);
+                let top_edge = y < usize::from(column.top_y) + OUTLINE_WIDTH;
+                let bottom_edge = y + OUTLINE_WIDTH > usize::from(column.bottom_y);
                 let border = x < left + OUTLINE_WIDTH
                     || x + OUTLINE_WIDTH > right
                     || top_edge
@@ -420,6 +377,38 @@ impl CardFlip {
         }
         writes
     }
+}
+
+fn column(source_x: u16, source_y_zero_q16: i32, source_y_step_q16: i32) -> Column {
+    let step = i64::from(source_y_step_q16).max(1);
+    let zero = i64::from(source_y_zero_q16);
+    let first_value = -FIXED_ONE / 2;
+    let last_value = CARD_HEIGHT as i64 * FIXED_ONE - FIXED_ONE / 2 - 1;
+    let top_y = div_ceil_positive(first_value - zero, step).clamp(0, (HEIGHT - 1) as i64) as u16;
+    let bottom_y = (last_value - zero)
+        .div_euclid(step)
+        .clamp(0, (HEIGHT - 1) as i64) as u16;
+    Column {
+        valid: top_y <= bottom_y,
+        source_x,
+        source_y_zero_q16,
+        source_y_step_q16,
+        top_y,
+        bottom_y,
+    }
+}
+
+fn div_ceil_positive(value: i64, divisor: i64) -> i64 {
+    let quotient = value.div_euclid(divisor);
+    quotient + i64::from(value.rem_euclid(divisor) != 0)
+}
+
+fn column_contains(column: Column, y: usize) -> bool {
+    if !column.valid || y < usize::from(column.top_y) || y > usize::from(column.bottom_y) {
+        return false;
+    }
+    source_y_at(column, y)
+        .is_some_and(|source_y| stepped_corner(column.source_x as usize, source_y))
 }
 
 fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
