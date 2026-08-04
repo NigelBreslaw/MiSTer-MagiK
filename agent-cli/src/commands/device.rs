@@ -95,6 +95,7 @@ pub enum Scene {
 
 #[derive(Debug, Subcommand)]
 pub enum DisplayCommand {
+    RouteStatus,
     Set(DisplaySetArgs),
     Matrix(DisplayMatrixArgs),
 }
@@ -360,7 +361,8 @@ impl DeviceCommand {
             | Self::LiveParticles(_)
             | Self::StartupParticles(_)
             | Self::SceneLab(_) => true,
-            Self::Display { .. } | Self::Crt { .. } => true,
+            Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
+            Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { .. } => false,
             Self::Media { command } => matches!(command, MediaCommand::Download(_)),
@@ -437,6 +439,8 @@ mod tests {
     fn retry_category_is_derived_from_the_typed_command() {
         let status = TestCli::try_parse_from(["test", "status"]).unwrap();
         assert!(!status.command.is_mutation());
+        let route_status = TestCli::try_parse_from(["test", "display", "route-status"]).unwrap();
+        assert!(!route_status.command.is_mutation());
         let reboot = TestCli::try_parse_from(["test", "reboot", "--attended"]).unwrap();
         assert!(reboot.command.is_mutation());
     }

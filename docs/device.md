@@ -21,6 +21,7 @@ scripts/agent device mode set public --attended
 scripts/agent device mode set stock --attended
 scripts/agent device scene launcher --attended
 scripts/agent device capture framebuffer
+scripts/agent device display route-status
 scripts/agent device display set hdmi1280x720p60 --attended
 scripts/agent device display set hdmi1920x1080p60 --attended --keep
 ```
@@ -107,6 +108,13 @@ Production rendering is RGB565. `/dev/fb0` contents alone do not prove HDMI
 visibility. Use Analytics streaming for continuous inspection and
 `scripts/agent device capture framebuffer` for a still, then pair it with attended HDMI evidence
 when making scan-out claims.
+
+`scripts/agent device display route-status` reads the live FPGA video height
+and framebuffer-route parameters through Main's UIO ABI. It requires the
+launcher to remain active with MagiK owning the FPGA, and does not acquire
+display ownership, change the route, restart Main, or reload the RBF. Use it to
+retain the failing state while distinguishing a disabled framebuffer route from
+a fault farther downstream in the FPGA/HDMI path.
 
 Framebuffer capture v2 reads the FPGA-latched hidden RGB565 slot while MagiK
 scan-out slots are available. A latch, status, or slot-mapping failure is

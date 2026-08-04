@@ -321,7 +321,9 @@ impl NativeDevice {
                 | DeviceCommand::Logs
                 | DeviceCommand::Events
                 | DeviceCommand::Diagnostics(_)
-                | DeviceCommand::Display { .. }
+                | DeviceCommand::Display {
+                    command: DisplayCommand::Set(_) | DisplayCommand::Matrix(_),
+                }
                 | DeviceCommand::Crt { .. }
                 | DeviceCommand::Launcher {
                     command: LauncherCommand::Status
@@ -368,6 +370,10 @@ impl NativeDevice {
                     scene_cli(&values)
                 }
                 DeviceCommand::Display { command } => match command {
+                    DisplayCommand::RouteStatus => {
+                        let session = connect(10)?;
+                        display_route_status(&session)
+                    }
                     DisplayCommand::Set(args) => {
                         let mut values = device_strings([args.mode.as_str(), "--attended"]);
                         if args.keep {
@@ -12236,6 +12242,45 @@ fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Re
     Ok(())
 }
 
+fn active_route_status_binary(status: &Value) -> Result<&'static str> {
+    if status.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive") {
+        return Err("display route readback requires an active launcher".into());
+    }
+    if status.get("fpga_owner").and_then(Value::as_str) != Some("magik") {
+        return Err("display route readback requires MagiK to own the FPGA".into());
+    }
+    match status.get("executable_path").and_then(Value::as_str) {
+        Some("/media/fat/MiSTer_MagiKDev") => Ok("/media/fat/mister-magik-dev/mister-magik-fb"),
+        Some("/media/fat/MiSTer_MagiK") => Ok("/media/fat/mister-magik/mister-magik-fb"),
+        Some(path) => {
+            Err(format!("unsupported active Main executable for route readback: {path}").into())
+        }
+        None => Err("active Main status does not identify its executable".into()),
+    }
+}
+
+fn display_route_status(sess: &Session) -> Result<()> {
+    let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
+        .ok_or("active Main status is unavailable for display route readback")?;
+    let status: Value = serde_json::from_str(&status_text)?;
+    let binary = active_route_status_binary(&status)?;
+    for (label, subcommand) in [
+        ("display route readback", "read"),
+        ("latched framebuffer readback", "fpga-latch-report"),
+    ] {
+        let command = remote_subcommand(binary, subcommand, &[]);
+        let out = exec(sess, &command, true)?;
+        print!("{}", out.stdout);
+        if !out.stderr.trim().is_empty() {
+            eprint!("[stderr] {}", out.stderr);
+        }
+        if let Some(error) = exec_failure_message(label, &out) {
+            return Err(error.into());
+        }
+    }
+    Ok(())
+}
+
 fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
         return Err("usage: scripts/agent device catalog inspect".into());
@@ -13847,6 +13892,44 @@ video_mode=14
         assert_eq!(queries.len(), 2);
         assert_eq!(queries[0], "SELECT count(*) FROM game_rows");
         assert_eq!(queries[1], "PRAGMA table_info(launch_plans)");
+    }
+
+    #[test]
+    fn route_status_selects_only_the_active_fpga_owner_runtime() {
+        let dev = json!({
+            "launcher_state": "LauncherActive",
+            "fpga_owner": "magik",
+            "executable_path": "/media/fat/MiSTer_MagiKDev"
+        });
+        assert_eq!(
+            active_route_status_binary(&dev).unwrap(),
+            "/media/fat/mister-magik-dev/mister-magik-fb"
+        );
+
+        let public = json!({
+            "launcher_state": "LauncherActive",
+            "fpga_owner": "magik",
+            "executable_path": "/media/fat/MiSTer_MagiK"
+        });
+        assert_eq!(
+            active_route_status_binary(&public).unwrap(),
+            "/media/fat/mister-magik/mister-magik-fb"
+        );
+
+        for unavailable in [
+            json!({
+                "launcher_state": "LauncherSuspended",
+                "fpga_owner": "magik",
+                "executable_path": "/media/fat/MiSTer_MagiKDev"
+            }),
+            json!({
+                "launcher_state": "LauncherActive",
+                "fpga_owner": "main",
+                "executable_path": "/media/fat/MiSTer_MagiKDev"
+            }),
+        ] {
+            assert!(active_route_status_binary(&unavailable).is_err());
+        }
     }
 
     #[test]
