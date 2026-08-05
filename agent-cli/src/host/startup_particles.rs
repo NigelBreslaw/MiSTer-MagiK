@@ -735,6 +735,7 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
         &cadence_frame_values,
         &profile_frame_values,
     )?;
+    bind_card_assessment_manifest(output_dir, &combined)?;
     let report = card_assessment_report(&combined);
 
     for (name, contents) in [
@@ -765,6 +766,18 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
         )
         .into());
     }
+    Ok(())
+}
+
+fn bind_card_assessment_manifest(output_dir: &Path, summary: &Value) -> Result<()> {
+    let path = output_dir.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    manifest["display_plan"] = summary["cadence_pass"]["display"].clone();
+    manifest["card_geometry"] = summary["cadence_pass"]["card"].clone();
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )?;
     Ok(())
 }
 
@@ -873,6 +886,8 @@ fn summarize_card_assessment(
         "profile_phase_timings": card_phase_summary(profile_frames),
         "cadence_repeat_contexts": card_repeat_contexts(cadence_frames, refresh_period_us),
         "profile_repeat_contexts": card_repeat_contexts(profile_frames, refresh_period_us),
+        "cadence_long_confirmation_gaps": card_long_confirmation_gaps(cadence_frames),
+        "profile_long_confirmation_gaps": card_long_confirmation_gaps(profile_frames),
         "cadence_pre_post_outliers": card_pre_post_outliers(cadence_frames),
         "profile_pre_post_outliers": card_pre_post_outliers(profile_frames),
         "attribution": attribution,
@@ -966,22 +981,218 @@ fn card_pre_post_outliers(frames: &[Value]) -> Vec<Value> {
         .collect()
 }
 
+fn card_long_confirmation_gaps(frames: &[Value]) -> Vec<Value> {
+    let mut ranked = frames
+        .iter()
+        .enumerate()
+        .skip(1)
+        .map(|(index, frame)| (value_u64(frame, "completion_interval_us"), index))
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    ranked
+        .into_iter()
+        .take(20)
+        .map(|(completion_interval_us, index)| {
+            let start = index.saturating_sub(2);
+            let end = (index + 3).min(frames.len());
+            json!({
+                "frame": value_u64(&frames[index], "frame"),
+                "completion_interval_us": completion_interval_us,
+                "context": frames[start..end].to_vec(),
+            })
+        })
+        .collect()
+}
+
+fn timing(summary: &Value, pass: &str, phase: &str, statistic: &str) -> u64 {
+    summary[pass][phase][statistic].as_u64().unwrap_or(0)
+}
+
 fn card_assessment_report(summary: &Value) -> String {
     let cadence = &summary["cadence_pass"]["cadence"];
     let profile = &summary["profile_pass"]["cadence"];
+    let cadence_cpu = summary["cadence_pass"]["process_cpu_pct_of_one_core"]
+        .as_f64()
+        .unwrap_or(0.0);
+    let profile_cpu = summary["profile_pass"]["process_cpu_pct_of_one_core"]
+        .as_f64()
+        .unwrap_or(0.0);
+    let worst_gap = summary["cadence_long_confirmation_gaps"]
+        .as_array()
+        .and_then(|gaps| gaps.first());
+    let worst_gap_frame = worst_gap.map_or(0, |gap| value_u64(gap, "frame"));
+    let worst_gap_us = worst_gap.map_or(0, |gap| value_u64(gap, "completion_interval_us"));
+    let worst_pre_post = summary["cadence_pre_post_outliers"]
+        .as_array()
+        .and_then(|outliers| outliers.first());
+    let worst_pre_post_us =
+        worst_pre_post.map_or(0, |outlier| value_u64(outlier, "pre_post_wall_us"));
+    let worst_pre_post_frame = worst_pre_post
+        .and_then(|outlier| outlier.get("frame"))
+        .map_or(0, |frame| value_u64(frame, "frame"));
+    let worst_pre_post_face = worst_pre_post
+        .and_then(|outlier| outlier.get("frame"))
+        .and_then(|frame| frame.get("face"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let worst_pre_post_progress = worst_pre_post
+        .and_then(|outlier| outlier.get("frame"))
+        .map_or(0, |frame| value_u64(frame, "progress_q16"));
     format!(
-        "# Card-flip cadence and CPU assessment\n\n- Unprofiled physical FPS: {:.3}\n- Unprofiled repeated refreshes: {}\n- Profiled repeated refreshes: {}\n- Unprofiled latch drops: {}\n- Attribution: {}\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl)\n",
+        "# Card-flip cadence and CPU assessment\n\n## Physical cadence authority\n\n- Unprofiled physical FPS: {:.3}\n- Unprofiled repeated refreshes: {}\n- Unprofiled sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled repeated refreshes (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {} (face `{}`, progress {}/65535). Ranked contexts around both categories are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
         cadence
             .get("unique_fps")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
         value_u64(cadence, "repeated_refreshes"),
-        value_u64(profile, "repeated_refreshes"),
+        value_u64(cadence, "sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
+        value_u64(cadence, "completion_failures"),
+        value_u64(profile, "repeated_refreshes"),
         summary
             .get("attribution")
             .and_then(Value::as_str)
             .unwrap_or("unavailable"),
+        cadence_cpu,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "render_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "cadence_phase_timings", "render_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "transfer_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "transfer_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "post_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "cadence_phase_timings", "post_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "settle_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "cadence_phase_timings", "settle_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "post_to_confirm_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "post_to_confirm_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "frame_to_confirm_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "cadence_phase_timings",
+            "frame_to_confirm_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        profile_cpu,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "render_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "profile_phase_timings", "render_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "transfer_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "transfer_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "post_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "profile_phase_timings", "post_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "settle_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(summary, "profile_phase_timings", "settle_wall_us", "p99_us") as f64 / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "post_to_confirm_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "post_to_confirm_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "frame_to_confirm_wall_us",
+            "average_us"
+        ) as f64
+            / 1_000.0,
+        timing(
+            summary,
+            "profile_phase_timings",
+            "frame_to_confirm_wall_us",
+            "p99_us"
+        ) as f64
+            / 1_000.0,
+        worst_gap_us as f64 / 1_000.0,
+        worst_gap_frame,
+        worst_pre_post_us as f64 / 1_000.0,
+        worst_pre_post_frame,
+        worst_pre_post_face,
+        worst_pre_post_progress,
     )
 }
 
@@ -1270,6 +1481,48 @@ mod tests {
             }
         });
         assert!(summarize_card_assessment(cadence, sampled, &[], &[]).is_err());
+    }
+
+    #[test]
+    fn long_confirmation_gaps_are_ranked_with_surrounding_frames() {
+        let frames = [
+            serde_json::json!({"frame": 0, "completion_interval_us": 0}),
+            serde_json::json!({"frame": 1, "completion_interval_us": 16_667}),
+            serde_json::json!({"frame": 2, "completion_interval_us": 33_334}),
+            serde_json::json!({"frame": 3, "completion_interval_us": 16_668}),
+        ];
+        let gaps = card_long_confirmation_gaps(&frames);
+        assert_eq!(gaps[0]["frame"], 2);
+        assert_eq!(gaps[0]["completion_interval_us"], 33_334);
+        assert_eq!(gaps[0]["context"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn assessment_manifest_binds_display_and_card_geometry() {
+        let unique = format!(
+            "mister-magik-card-manifest-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let directory = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("manifest.json"), "{\"git_sha\":\"abc\"}\n").unwrap();
+        let summary = serde_json::json!({
+            "cadence_pass": {
+                "display": {"render_w": 960, "render_h": 600},
+                "card": {"width": 287, "height": 420},
+            }
+        });
+        bind_card_assessment_manifest(&directory, &summary).unwrap();
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest["git_sha"], "abc");
+        assert_eq!(manifest["display_plan"]["render_h"], 600);
+        assert_eq!(manifest["card_geometry"]["height"], 420);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
