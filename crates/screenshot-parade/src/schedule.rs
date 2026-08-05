@@ -1491,7 +1491,7 @@ mod tests {
                 .render_at_presentation_tick(&mut pixels, tick)
                 .unwrap();
             let x = scene.tiles[tile_index].x_fp;
-            assert_eq!(previous_x - x, velocity_fp, "tick={tick}");
+            assert_eq!(x - previous_x, velocity_fp, "tick={tick}");
             previous_x = x;
         }
         assert_eq!(scene.previous_motion_ticks_fp, 16 * TICK_ONE as u64);
@@ -1516,7 +1516,7 @@ mod tests {
         let velocity_fp = scene.tiles[tile_index].velocity_fp;
         let starting_x = scene.tiles[tile_index].x_fp;
         scene.render_at_presentation_tick(&mut pixels, 4).unwrap();
-        assert_eq!(starting_x - scene.tiles[tile_index].x_fp, velocity_fp * 4);
+        assert_eq!(scene.tiles[tile_index].x_fp - starting_x, velocity_fp * 4);
         assert_eq!(scene.previous_motion_ticks_fp, 4 * TICK_ONE as u64);
         assert!(scene.render_at_presentation_tick(&mut pixels, 3).is_err());
         let _ = std::fs::remove_file(path);
