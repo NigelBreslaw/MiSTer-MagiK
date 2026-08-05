@@ -1848,7 +1848,7 @@ mod tests {
                 crate::fpga::MAGIK_FBUF_CAPS_MAGIC,
                 0,
                 mister_magik_latch_contract::decode_capabilities(&[
-                    4,
+                    mister_magik_latch_contract::PROTOCOL_VERSION,
                     mister_magik_latch_contract::REQUIRED_CAPS,
                     1366,
                     768,
@@ -1897,7 +1897,7 @@ mod tests {
         ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
             Some(
                 mister_magik_latch_contract::decode_capabilities(&[
-                    4,
+                    mister_magik_latch_contract::PROTOCOL_VERSION,
                     mister_magik_latch_contract::REQUIRED_CAPS,
                     1366,
                     768,
