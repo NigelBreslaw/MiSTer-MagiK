@@ -258,13 +258,6 @@ impl PresentationTelemetrySnapshot {
     pub const fn pending(self) -> bool {
         self.flags & (1 << 2) != 0
     }
-
-    pub const fn lifetime_invariant_valid(self) -> bool {
-        self.owned_vblank_count
-            == self
-                .presented_vblank_count
-                .wrapping_add(self.repeated_vblank_count)
-    }
 }
 
 impl mister_magik_latch_contract::PresentationTelemetryCounters for PresentationTelemetrySnapshot {
