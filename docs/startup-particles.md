@@ -189,8 +189,11 @@ recipes. Navigation accepts `--fixture`, never `--recipe`.
 
 `card-flip` is a procedural, self-contained scene. It has no recipe, fixture,
 binary face assets, or generator. macOS supplies the readable reference path;
-MiSTer owns a separate fixed-point renderer and ARMv7 NEON scanout transfer
-under the same geometry, timing, palette, border, and corner contract.
+MiSTer owns a separate fixed-point renderer that draws directly at the shared
+resolved display geometry. The shared cached hidden-latch presenter owns slot
+history and dirty-region transfer under the same timing, palette, border, and
+corner contract used by MagiK. Each face repeats the same door-hinge trajectory
+so continuous flips keep one perceived rotation direction.
 
 For deterministic visual evidence, the focused binary also supports a headless
 fixed-time capture. See `apps/framebuffer-scene-lab/README.md` for the direct

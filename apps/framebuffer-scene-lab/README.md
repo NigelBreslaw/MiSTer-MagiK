@@ -42,11 +42,13 @@ only MagiK and watches the fixed volatile
 watches an external recipe.
 
 Before an attended lab suspends the launcher, the host reads Main's confirmed
-fixed HDMI mode and passes that exact destination to the standalone latch
-presenter. The RGB565 source remains 960x540; at 1080p the FPGA scales it to a
-1920x1080 destination. The lab never infers HDMI geometry from core-video
-registers after Main has been suspended. CRT routes remain with the production
-launcher because their direct-video porch offsets are route-specific.
+display state and resolves it through the same MagiK display-plan authority.
+That plan supplies the render, framebuffer, scan, and output geometry to the
+standalone latch presenter. For a 1920x1200 output the canonical RGB565 render
+surface is 960x600; there is no lab-local 960x540 adapter or scaling pass. The
+lab never infers HDMI geometry from core-video registers after Main has been
+suspended. CRT routes retain the shared production vertical transform because
+their direct-video porch offsets are route-specific.
 
 Run a live macOS preview with a validated recipe:
 
@@ -66,10 +68,16 @@ immutable; `--fixture` and `--recipe` are mutually exclusive.
 The card flip is self-contained and accepts neither option. Its 258x378 faces
 are drawn in memory from rectangles and 5x7 bitmap glyphs; there are no card
 assets or regeneration step. The macOS preview is a readable scalar reference.
-MiSTer uses a separate row-major fixed-point rasterizer, renders into a cached
-RGB565 frame, and transfers changed frames to scanout with an ARMv7 NEON copy.
+MiSTer uses a separate row-major fixed-point rasterizer that draws directly into
+the display plan's cached RGB565 render surface. The shared hidden-latch
+presenter copies the resolved card damage rectangle into its two remembered
+slots; only each slot's first use restores the full surface.
 A/Enter flips forward and B/Backspace flips backward on macOS; the MiSTer
-controller uses A and B. Direction changes continue from the current pose.
+controller uses A and B. Each face repeats the same left-to-right door-hinge
+trajectory, so continuous animation keeps the same perceived rotation direction
+instead of bouncing through the previous path. Face endpoints are identical
+across the trajectory reset, and direction changes continue from the current
+progress.
 
 Use the closed attended profile to alternate directions continuously for 30 seconds and
 restore the launcher automatically:
@@ -78,12 +86,29 @@ restore the launcher automatically:
 scripts/agent device scene-lab --scene card-flip --profile --attended
 ```
 
-The 2026-08-04 continuous ARMv7 profile measured 59.571 fps over 30.014 seconds
-and 1,788 changed frames. Render measured 3.507 ms average / 5.387 ms p99;
-transfer measured 2.088 ms average / 2.313 ms p99, with zero repeated
-presentations and zero latch drops. The isolated device paint symbol contains no
-calls, software division, wide multiply, or bounds-check branches in its
-generated release assembly.
+The timing fields are deliberately disjoint. `render` covers projection and
+rasterization, `transfer` covers only `prepare_cached`, `present` runs from the
+latch post through confirmed presentation, and `frame_to_present` runs from
+render start through that same confirmation. `cpu_pct` is whole-process CPU
+time divided by wall time.
+
+Two consecutive 2026-08-05 continuous ARMv7 profiles of commit `e82859c8`
+produced:
+
+- Run 1: 59.510 fps and 41.00% CPU; render 3.790 ms average / 6.343 ms p99,
+  transfer 0.599 / 0.783 ms, present 12.252 / 15.716 ms, and
+  frame-to-present 16.650 / 16.824 ms.
+- Run 2: 59.513 fps and 41.62% CPU; render 3.856 ms average / 6.335 ms p99,
+  transfer 0.619 / 0.822 ms, present 12.163 / 15.710 ms, and
+  frame-to-present 16.648 / 16.821 ms.
+
+Both runs presented 1,787 changed frames with zero repeats and zero latch drops.
+Each reported exactly two full-slot restores; every steady frame was one
+287x420 rectangle (241,080 source bytes and 241,080 destination bytes), for
+432,631,800 bytes per side over the run. The optimized device paint symbol
+contains no calls, software or hardware division, wide multiply, allocation, or
+bounds-check panic paths. Neither `scale_card_frame` nor `scaled_card_rect`
+exists in source or the ARM profile binary.
 
 Create a deterministic capture without opening a window:
 
