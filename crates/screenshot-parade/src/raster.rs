@@ -298,12 +298,6 @@ impl PreparedScreenshotCard {
             apply_depth_cues_linear(&mut styled, speed);
             let coverage = prepare_rounded_coverage(width, height);
             let corner_insets = coverage_corner_insets(&coverage, width, height);
-            let depth = speed
-                .saturating_sub(PARADE_MIN_TILE_SPEED)
-                .min(PARADE_SPEED_COUNT - 1);
-            if depth >= 3 {
-                rim_card_linear(&mut styled, &corner_insets);
-            }
             let phase_started = std::time::Instant::now();
             let premultiplied = premultiply_linear_source(&styled, &coverage);
             let source_opaque_spans = coverage_opaque_spans(&coverage, width, height);
@@ -341,12 +335,6 @@ impl PreparedScreenshotCard {
         let mut image = scale_lanczos3_rgb565_tinted(source, width, height, tint);
         apply_depth_cues(&mut image, speed);
         let corner_insets = prepare_corner_insets(image.width, image.height);
-        let depth = speed
-            .saturating_sub(PARADE_MIN_TILE_SPEED)
-            .min(PARADE_SPEED_COUNT - 1);
-        if depth >= 3 {
-            rim_card(&mut image, &corner_insets);
-        }
         let phase_started = std::time::Instant::now();
         let phases = ParadePhaseSet::prepare_two_tap(&image, profile);
         let phase_us = phase_started.elapsed().as_micros();
@@ -781,67 +769,6 @@ fn apply_depth_cues_linear(image: &mut LinearImage, speed: usize) {
         pixel.r = r.min(65_535) as u16;
         pixel.g = g.min(65_535) as u16;
         pixel.b = b.min(65_535) as u16;
-    }
-}
-
-fn blend_linear(from: LinearRgb, to: LinearRgb, alpha: u8) -> LinearRgb {
-    let alpha = u64::from(alpha);
-    let inverse = 255 - alpha;
-    let blend = |from: u16, to: u16| {
-        ((u64::from(from) * inverse + u64::from(to) * alpha + 127) / 255) as u16
-    };
-    LinearRgb {
-        r: blend(from.r, to.r),
-        g: blend(from.g, to.g),
-        b: blend(from.b, to.b),
-    }
-}
-
-fn rim_card_linear(image: &mut LinearImage, corner_insets: &[u8]) {
-    if image.width == 0 || image.height == 0 {
-        return;
-    }
-    let highlight = LinearRgb {
-        r: srgb8_to_linear16(210),
-        g: srgb8_to_linear16(225),
-        b: srgb8_to_linear16(255),
-    };
-    let shadow = LinearRgb {
-        r: 0,
-        g: 0,
-        b: srgb8_to_linear16(8),
-    };
-    for y in 0..image.height {
-        let inset = corner_insets.get(y).copied().unwrap_or(0) as usize;
-        let end = image.width.saturating_sub(inset);
-        if inset >= end {
-            continue;
-        }
-        let row = y * image.stride;
-        for (offset, alpha) in [48_u8, 24].into_iter().enumerate() {
-            if inset + offset < end {
-                let left = row + inset + offset;
-                image.pixels[left] = blend_linear(image.pixels[left], highlight, alpha);
-            }
-            if end > inset + offset {
-                let right = row + end - 1 - offset;
-                image.pixels[right] =
-                    blend_linear(image.pixels[right], shadow, alpha.saturating_add(8));
-            }
-        }
-        let horizontal_cue = if y < 2 {
-            Some((highlight, [40_u8, 20][y]))
-        } else if image.height - 1 - y < 2 {
-            let edge = image.height - 1 - y;
-            Some((shadow, [56_u8, 28][edge]))
-        } else {
-            None
-        };
-        if let Some((color, alpha)) = horizontal_cue {
-            for pixel in &mut image.pixels[row + inset..row + end] {
-                *pixel = blend_linear(*pixel, color, alpha);
-            }
-        }
     }
 }
 
@@ -1500,45 +1427,6 @@ fn prepare_corner_insets(width: usize, height: usize) -> Vec<u8> {
     insets
 }
 
-fn rim_card(image: &mut ScreenshotImage, corner_insets: &[u8]) {
-    if image.width == 0 || image.height == 0 {
-        return;
-    }
-    let highlight = color565(210, 225, 255);
-    let shadow = color565(0, 0, 8);
-    for y in 0..image.height {
-        let inset = corner_insets.get(y).copied().unwrap_or(0) as usize;
-        let end = image.width.saturating_sub(inset);
-        if inset >= end {
-            continue;
-        }
-        let row = y * image.stride;
-        for (offset, alpha) in [48_u8, 24].into_iter().enumerate() {
-            if inset + offset < end {
-                let left = row + inset + offset;
-                image.pixels[left] = blend_565(image.pixels[left], highlight, alpha);
-            }
-            if end > inset + offset {
-                let right = row + end - 1 - offset;
-                image.pixels[right] = blend_565(image.pixels[right], shadow, alpha + 8);
-            }
-        }
-        let horizontal_cue = if y < 2 {
-            Some((highlight, [40_u8, 20][y]))
-        } else if image.height - 1 - y < 2 {
-            let edge = image.height - 1 - y;
-            Some((shadow, [56_u8, 28][edge]))
-        } else {
-            None
-        };
-        if let Some((color, alpha)) = horizontal_cue {
-            for pixel in &mut image.pixels[row + inset..row + end] {
-                *pixel = blend_565(*pixel, color, alpha);
-            }
-        }
-    }
-}
-
 fn prepare_fractional_shifted(image: &ScreenshotImage, phase_alpha: u8) -> ScreenshotImage {
     debug_assert!(phase_alpha > 0);
     let width = image.width + 1;
@@ -2077,6 +1965,35 @@ mod tests {
         let portrait = test_image(240, 320);
         assert_eq!(scaled_style(&landscape, 5, 540), (160, 120, 255));
         assert_eq!(scaled_style(&portrait, 5, 540), (120, 160, 255));
+    }
+
+    #[test]
+    fn prepared_card_does_not_bake_a_bevel() {
+        let source = ScreenshotImage {
+            pixels: vec![color565(120, 120, 120); 8 * 6],
+            width: 8,
+            height: 6,
+            stride: 8,
+        };
+        for generation in [
+            ScreenshotPhaseGeneration::Rgb565TwoTap,
+            ScreenshotPhaseGeneration::LinearLanczos3,
+        ] {
+            let card = PreparedScreenshotCard::prepare_with_generation(
+                &source,
+                5,
+                135,
+                ScreenshotSamplingProfile::CrtSixteenth,
+                generation,
+            );
+            assert!(
+                card.image
+                    .pixels
+                    .iter()
+                    .all(|pixel| *pixel == card.image.pixels[0]),
+                "{generation:?} decorated the scaled card edge"
+            );
+        }
     }
 
     #[test]

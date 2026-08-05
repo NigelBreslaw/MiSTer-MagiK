@@ -2846,45 +2846,6 @@ fn apply_parade_depth_cues(image: &mut SaverImage, speed: usize) {
     }
 }
 
-fn rim_parade_card(image: &mut SaverImage, corner_insets: &[u8]) {
-    if image.w == 0 || image.h == 0 {
-        return;
-    }
-    let highlight = color565(210, 225, 255);
-    let shadow = color565(0, 0, 8);
-    for y in 0..image.h {
-        let inset = corner_insets.get(y).copied().unwrap_or(0) as usize;
-        let end = image.w.saturating_sub(inset);
-        if inset >= end {
-            continue;
-        }
-        let row = y * image.stride;
-        for (offset, alpha) in [48_u8, 24].into_iter().enumerate() {
-            if inset + offset < end {
-                let left = row + inset + offset;
-                image.pixels[left] = blend_565(image.pixels[left], highlight, alpha);
-            }
-            if end > inset + offset {
-                let right = row + end - 1 - offset;
-                image.pixels[right] = blend_565(image.pixels[right], shadow, alpha + 8);
-            }
-        }
-        let horizontal_cue = if y < 2 {
-            Some((highlight, [40_u8, 20][y]))
-        } else if image.h - 1 - y < 2 {
-            let edge = image.h - 1 - y;
-            Some((shadow, [56_u8, 28][edge]))
-        } else {
-            None
-        };
-        if let Some((color, alpha)) = horizontal_cue {
-            for pixel in &mut image.pixels[row + inset..row + end] {
-                *pixel = blend_565(*pixel, color, alpha);
-            }
-        }
-    }
-}
-
 fn prepare_parade_scaled(
     image: &SaverImage,
     speed: usize,
@@ -2894,12 +2855,6 @@ fn prepare_parade_scaled(
     let mut scaled = scale_lanczos3_rgb565_tinted(image, w, h, tint);
     apply_parade_depth_cues(&mut scaled, speed);
     let corner_insets = prepare_parade_corner_insets(scaled.w, scaled.h);
-    let depth = speed
-        .saturating_sub(PARADE_MIN_TILE_SPEED)
-        .min(PARADE_SPEED_COUNT - 1);
-    if depth >= 3 {
-        rim_parade_card(&mut scaled, &corner_insets);
-    }
     (scaled, corner_insets)
 }
 
@@ -5216,20 +5171,30 @@ mod tests {
     }
 
     #[test]
-    fn parade_card_rim_keeps_the_baked_bevel() {
+    fn parade_card_preparation_does_not_bake_a_bevel() {
         let base = color565(120, 120, 120);
-        let mut image = SaverImage {
+        let image = SaverImage {
             pixels: vec![base; 8 * 6],
             w: 8,
             h: 6,
             stride: 8,
         };
 
-        rim_parade_card(&mut image, &[0; 6]);
+        let (prepared, _) = prepare_parade_scaled(&image, 5, 135);
+        let center_x = prepared.w / 2;
+        let center_y = prepared.h / 2;
+        let interior = prepared.pixels[center_y * prepared.stride + center_x];
 
-        assert_ne!(image.pixels[0], base);
-        assert_ne!(image.pixels[7], base);
-        assert_ne!(image.pixels[5 * 8 + 3], base);
+        assert_eq!(prepared.pixels[center_x], interior);
+        assert_eq!(
+            prepared.pixels[(prepared.h - 1) * prepared.stride + center_x],
+            interior
+        );
+        assert_eq!(prepared.pixels[center_y * prepared.stride], interior);
+        assert_eq!(
+            prepared.pixels[center_y * prepared.stride + prepared.w - 1],
+            interior
+        );
     }
 
     #[test]
