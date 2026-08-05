@@ -1416,13 +1416,15 @@ fn run_window(
     let mut pending_evidence: Option<PendingFrameEvidence> = None;
     let mut rss_samples_kib = Vec::new();
     let mut next_rss_sample = None;
+    let profiler_requested = profile
+        || measurement_evidence
+            .as_ref()
+            .is_some_and(|evidence| evidence.pass.profiler_enabled());
     #[cfg(feature = "profile")]
-    let mut profiler = profile
-        .then(|| cpu_profile::start(cpu_profile::CpuProfileScene::Cabinet))
-        .transpose()?;
+    let mut profiler = None;
     #[cfg(not(feature = "profile"))]
-    if profile {
-        return Err("cabinet profiling requires a release-device-profile build".into());
+    if profiler_requested {
+        return Err("scene profiling requires a release-device-profile build".into());
     }
     loop {
         let settle_started = Instant::now();
@@ -1486,6 +1488,10 @@ fn run_window(
                         pending_evidence = None;
                         rss_samples_kib.clear();
                         next_rss_sample = Some(measured_at);
+                        #[cfg(feature = "profile")]
+                        if profiler_requested {
+                            profiler = Some(cpu_profile::start(renderer.effect().label())?);
+                        }
                         println!(
                             "scene-lab-measurement state=started scene={} seconds={} warmup_seconds={}",
                             renderer.effect().label(),
@@ -1583,7 +1589,7 @@ fn run_window(
             let mut evidence = FrameEvidence::new(
                 renderer.effect().label(),
                 frame_evidence.len() as u64 + 1,
-                profile,
+                profiler_requested,
             );
             evidence.render_wall_us = render_wall_us;
             evidence.render_cpu_us = render_cpu_us;
@@ -1984,8 +1990,7 @@ fn run_card_flip_mister(
                         next_rss_sample = Some(measured_at);
                         #[cfg(feature = "profile")]
                         if profiler_requested {
-                            profiler =
-                                Some(cpu_profile::start(cpu_profile::CpuProfileScene::CardFlip)?);
+                            profiler = Some(cpu_profile::start("card-flip")?);
                         }
                         println!(
                             "card-flip-measurement pass={} state=measuring seconds={} warmup_seconds={} warmup_full_slot_restores={} warmup_unit_flip_streak={}",

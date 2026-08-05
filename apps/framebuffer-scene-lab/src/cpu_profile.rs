@@ -16,13 +16,7 @@ const PROFILE_COMPLETE_ENV: &str = "MISTER_SCENE_LAB_PPROF_COMPLETE";
 pub struct CpuProfiler {
     guard: pprof::ProfilerGuard<'static>,
     hz: i32,
-    scene: CpuProfileScene,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CpuProfileScene {
-    Cabinet,
-    CardFlip,
+    scene: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,16 +58,7 @@ impl ProfileArtifacts {
     }
 }
 
-impl CpuProfileScene {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Cabinet => "cabinet",
-            Self::CardFlip => "card-flip",
-        }
-    }
-}
-
-pub fn start(scene: CpuProfileScene) -> Result<CpuProfiler, String> {
+pub fn start(scene: &'static str) -> Result<CpuProfiler, String> {
     // SAFETY: no profiling timer is active yet; this gives pprof a harmless
     // SIGPROF disposition to restore after its bounded session.
     if unsafe { libc::signal(libc::SIGPROF, libc::SIG_IGN) } == libc::SIG_ERR {
@@ -84,12 +69,12 @@ pub fn start(scene: CpuProfileScene) -> Result<CpuProfiler, String> {
     }
     let hz = 99;
     let guard = pprof::ProfilerGuard::new(hz)
-        .map_err(|error| format!("start {hz} Hz {} CPU profile: {error}", scene.label()))?;
+        .map_err(|error| format!("start {hz} Hz {scene} CPU profile: {error}"))?;
     Ok(CpuProfiler { guard, hz, scene })
 }
 
 pub fn finish(profiler: CpuProfiler) -> Result<CpuProfileSummary, String> {
-    let label = profiler.scene.label();
+    let label = profiler.scene;
     let artifacts = ProfileArtifacts::from_environment()?;
     let report = profiler
         .guard
@@ -167,6 +152,11 @@ pub fn finish(profiler: CpuProfiler) -> Result<CpuProfileSummary, String> {
             .metadata()
             .map_err(|error| format!("stat {}: {error}", artifacts.folded.display()))?
             .len();
+        if summary.svg_bytes == 0 || summary.folded_bytes == 0 {
+            return Err(format!(
+                "{label} CPU profile produced incomplete SVG or folded-stack evidence"
+            ));
+        }
         write_json_atomic(&artifacts.complete, &summary)?;
     }
     Ok(summary)
