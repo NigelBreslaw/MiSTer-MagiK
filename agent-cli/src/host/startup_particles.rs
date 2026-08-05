@@ -1783,6 +1783,52 @@ mod tests {
     }
 
     #[test]
+    fn generic_timed_and_assessed_commands_keep_scene_arguments() {
+        let navigation = remote_run_lab_command(
+            &hdmi_contracts(),
+            "navigation-transition",
+            false,
+            Some("home-arcade"),
+            None,
+            None,
+            Some(5),
+            1,
+            false,
+            false,
+        );
+        assert!(navigation.contains("--seconds 5"));
+        assert!(navigation.contains("--warmup-seconds 1"));
+        assert!(navigation.contains("--assessment-pass cadence"));
+
+        let screenshot = RemoteScreenshotArgs {
+            archive: DEV_SCREENSHOT_ARCHIVE,
+            seed: 7,
+            sampling_profile: "hdmi",
+            fingerprint: "bytes=1 sha256=test".into(),
+        };
+        let assessment = remote_run_lab_command(
+            &hdmi_contracts(),
+            "screenshot-screensaver",
+            false,
+            None,
+            Some(&screenshot),
+            None,
+            Some(90),
+            0,
+            false,
+            true,
+        );
+        assert_eq!(
+            assessment
+                .matches(&format!("--scene {}", sh("screenshot-screensaver")))
+                .count(),
+            2
+        );
+        assert_eq!(assessment.matches("--seconds 90").count(), 2);
+        assert_eq!(assessment.matches("--seed 7").count(), 2);
+    }
+
+    #[test]
     fn card_profile_artifacts_require_samples_svg_and_symbols() {
         let metadata = serde_json::json!({
             "schema": "mister-magik-scene-lab-pprof-v1",

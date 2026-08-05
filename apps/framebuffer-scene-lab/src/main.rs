@@ -2718,15 +2718,9 @@ impl Options {
                         "screenshot-screensaver accepts no recipe or fixture options".into(),
                     );
                 }
-                if self.case.is_some()
-                    || self.profile
-                    || self.assessment_pass.is_some()
-                    || self.duration_ms.is_some()
-                    || self.direction_requested
-                {
+                if self.case.is_some() || self.duration_ms.is_some() || self.direction_requested {
                     return Err(
-                        "screenshot-screensaver rejects cabinet, profile, assessment, and card-only options"
-                            .into(),
+                        "screenshot-screensaver rejects cabinet and card-only options".into(),
                     );
                 }
             }
@@ -2757,7 +2751,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile hdmi|crt]\n  mister-magik-framebuffer-scene-lab --scene SCENE [--seconds N] [--warmup-seconds N]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile hdmi|crt]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
@@ -3503,6 +3497,60 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn bounded_measurement_options_are_generic_and_bounded() {
+        let screenshot = Options::parse(
+            [
+                "--scene",
+                "screenshot-screensaver",
+                "--archive",
+                "screenshots.mmlz4b",
+                "--seconds",
+                "90",
+                "--warmup-seconds",
+                "3",
+                "--assessment-pass",
+                "profile",
+                "--evidence-dir",
+                "/tmp/screenshot-profile",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(screenshot.seconds, Some(90));
+        assert_eq!(screenshot.warmup_seconds, 3);
+
+        let card = Options::parse(
+            [
+                "--scene",
+                "card-flip",
+                "--seconds",
+                "5",
+                "--duration-ms",
+                "700",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(card.card_duration(), Duration::from_millis(700));
+        for arguments in [
+            vec!["--scene", "card-flip", "--seconds", "0"],
+            vec!["--scene", "card-flip", "--seconds", "601"],
+            vec!["--scene", "card-flip", "--warmup-seconds", "1"],
+            vec![
+                "--scene",
+                "card-flip",
+                "--seconds",
+                "1",
+                "--warmup-seconds",
+                "601",
+            ],
+            vec!["--scene", "card-flip", "--profile"],
+        ] {
+            assert!(Options::parse(arguments.into_iter().map(String::from)).is_err());
+        }
     }
 
     #[test]

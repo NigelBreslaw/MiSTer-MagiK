@@ -30,8 +30,10 @@ For attended MiSTer sessions, use one of:
 scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
-scripts/agent device scene-lab --scene card-flip --assess --attended
 scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
@@ -92,21 +94,29 @@ instead of bouncing through the previous path. Face endpoints are identical
 across the trajectory reset, and direction changes continue from the current
 progress.
 
-Use the closed attended assessment to run an authoritative 30-second unprofiled
-cadence pass followed by a separate 30-second 99 Hz CPU-sampled attribution
-pass. Both passes execute the same optimized `release-device` binary, and the
-launcher is restored on every exit path:
+Bounded measurement is a property of the attended device harness, not of a
+particular scene. `--seconds` accepts 1–600. Optional `--warmup-seconds` starts
+after scene readiness and three consecutive unique latch confirmations. A
+plain timed run records authoritative cadence; `--profile` records one 99 Hz
+sampled attribution pass; `--assess` runs an equal-duration unprofiled cadence
+pass followed by the sampled pass. Both assessment passes execute the same
+optimized binary and configuration, and the launcher is restored on every exit
+path:
 
 ```text
-scripts/agent device scene-lab --scene card-flip --assess --attended
+scripts/agent device scene-lab --scene screenshot-screensaver --seconds 90 --assess --attended
+scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --seconds 10 --attended
+scripts/agent device scene-lab --scene card-flip --seconds 30 --profile --attended
 ```
 
-The older single sampled pass remains available when only an interactive CPU
-profile is wanted:
-
-```text
-scripts/agent device scene-lab --scene card-flip --profile --attended
-```
+Every bounded run retains evidence under
+`build/scene-lab/<scene>/<timestamp>/`. Single passes contain `manifest.json`,
+`frames.jsonl`, `summary.json`, and `report.md`; sampled passes also contain the
+profile metadata, folded stacks, and flamegraph. Assessments retain separate
+cadence/profile frame and summary files plus a combined report. Display geometry
+is detected and recorded but never changed. Card-flip keeps its optional
+progress, face, direction, and dirty-region metrics; `--duration-ms` controls
+the animation and remains independent of `--seconds`.
 
 The timing fields are deliberately disjoint. `render` covers projection and
 rasterization, `transfer` covers only `prepare_cached`, `present` runs from the

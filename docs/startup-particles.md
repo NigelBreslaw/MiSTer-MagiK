@@ -181,6 +181,9 @@ scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
+scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
 scripts/agent device startup-particles RECIPE --runtime lab --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
