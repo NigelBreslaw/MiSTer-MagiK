@@ -924,60 +924,46 @@ fn prepare_linear_phase(
     let width = image.width + usize::from(phase != 0);
     let mut pixels = vec![Rgb565Pixel(0); width * image.height];
     let mut coverage = vec![0_u8; width * image.height];
+    let linear_to_srgb = linear_to_srgb_table();
     if phase == 0 {
         for y in 0..image.height {
             for x in 0..image.width {
                 let index = y * image.width + x;
                 coverage[index] = source_coverage[index];
-                pixels[index] = linear_to_rgb565(image.pixels[y * image.stride + x]);
+                pixels[index] =
+                    linear_to_rgb565_with_table(image.pixels[y * image.stride + x], linear_to_srgb);
             }
         }
     } else {
         let weights = fractional_delay_weights(phase);
-        let neon_reconstruction = reconstruct_linear_phase_neon_if_selected(
+        let prepared_with_neon = prepare_linear_phase_neon_if_selected(
             premultiplied_source,
             image.width,
             image.height,
             width,
             weights,
             kernel,
+            linear_to_srgb,
+            &mut pixels,
+            &mut coverage,
         );
-        for y in 0..image.height {
-            for out_x in 0..width {
-                let target = y * width + out_x;
-                let reconstructed = neon_reconstruction.as_ref().map_or_else(
-                    || {
-                        let samples = std::array::from_fn(|tap| {
-                            let source_x = out_x as isize + tap as isize - 3;
-                            if (0..image.width as isize).contains(&source_x) {
-                                let source_x = source_x as usize;
-                                premultiplied_source[y * image.width + source_x]
-                            } else {
-                                [0; 4]
-                            }
-                        });
-                        reconstruct_six_tap_scalar(&samples, weights)
-                    },
-                    |reconstruction| reconstruction[target],
-                );
-                let premultiplied = [reconstructed[0], reconstructed[1], reconstructed[2]];
-                let alpha = reconstructed[3];
-                coverage[target] = ((u32::from(alpha) + 128) / 257).min(255) as u8;
-                if alpha > 0 {
-                    let unpremultiply = |channel: u16| {
-                        if alpha == 65_535 {
-                            channel
+        if !prepared_with_neon {
+            for y in 0..image.height {
+                for out_x in 0..width {
+                    let samples = std::array::from_fn(|tap| {
+                        let source_x = out_x as isize + tap as isize - 3;
+                        if (0..image.width as isize).contains(&source_x) {
+                            let source_x = source_x as usize;
+                            premultiplied_source[y * image.width + source_x]
                         } else {
-                            ((u64::from(channel) * 65_535 + u64::from(alpha) / 2)
-                                / u64::from(alpha))
-                            .min(65_535) as u16
+                            [0; 4]
                         }
-                    };
-                    pixels[target] = linear_to_rgb565(LinearRgb {
-                        r: unpremultiply(premultiplied[0]),
-                        g: unpremultiply(premultiplied[1]),
-                        b: unpremultiply(premultiplied[2]),
                     });
+                    let reconstructed = reconstruct_six_tap_scalar(&samples, weights);
+                    let (pixel, alpha) = linear_phase_pixel(reconstructed, linear_to_srgb);
+                    let target = y * width + out_x;
+                    pixels[target] = pixel;
+                    coverage[target] = alpha;
                 }
             }
         }
@@ -991,6 +977,34 @@ fn prepare_linear_phase(
         },
         coverage: coverage_plane(coverage, width, image.height),
     }
+}
+
+#[inline(always)]
+fn linear_phase_pixel(reconstructed: [u16; 4], linear_to_srgb: &[u8; 4097]) -> (Rgb565Pixel, u8) {
+    let alpha = reconstructed[3];
+    let coverage = ((u32::from(alpha) + 128) / 257).min(255) as u8;
+    if alpha == 0 {
+        return (Rgb565Pixel(0), coverage);
+    }
+    let unpremultiply = |channel: u16| {
+        if alpha == 65_535 {
+            channel
+        } else {
+            ((u64::from(channel) * 65_535 + u64::from(alpha) / 2) / u64::from(alpha)).min(65_535)
+                as u16
+        }
+    };
+    (
+        linear_to_rgb565_with_table(
+            LinearRgb {
+                r: unpremultiply(reconstructed[0]),
+                g: unpremultiply(reconstructed[1]),
+                b: unpremultiply(reconstructed[2]),
+            },
+            linear_to_srgb,
+        ),
+        coverage,
+    )
 }
 
 #[inline(always)]
@@ -1011,38 +1025,51 @@ fn reconstruct_six_tap_scalar(samples: &[[u16; 4]; 6], weights: [i32; 6]) -> [u1
     })
 }
 
-fn reconstruct_linear_phase_neon_if_selected(
+fn prepare_linear_phase_neon_if_selected(
     source: &[[u16; 4]],
     source_width: usize,
     height: usize,
     output_width: usize,
     weights: [i32; 6],
     kernel: LinearPhaseKernel,
-) -> Option<Vec<[u16; 4]>> {
+    linear_to_srgb: &[u8; 4097],
+    pixels: &mut [Rgb565Pixel],
+    coverage: &mut [u8],
+) -> bool {
     if !matches!(kernel, LinearPhaseKernel::Neon) {
-        return None;
+        return false;
     }
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
-        let mut output = vec![[0_u16; 4]; output_width * height];
         // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Both slices describe
-        // the complete source and destination planes passed to the kernel.
+        // the complete source and final destination planes passed to the kernel.
         unsafe {
-            reconstruct_linear_phase_neon(
+            prepare_linear_phase_neon(
                 source,
                 source_width,
                 height,
                 output_width,
                 weights,
-                &mut output,
+                linear_to_srgb,
+                pixels,
+                coverage,
             );
         }
-        return Some(output);
+        return true;
     }
     #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
     {
-        let _ = (source, source_width, height, output_width, weights);
-        None
+        let _ = (
+            source,
+            source_width,
+            height,
+            output_width,
+            weights,
+            linear_to_srgb,
+            pixels,
+            coverage,
+        );
+        false
     }
 }
 
@@ -1069,17 +1096,20 @@ fn validate_neon_phase_kernel() {
             let output_width = source_width + 1;
             for phase in 1..CRT_PHASE_COUNT {
                 let weights = fractional_delay_weights(phase);
-                let mut actual = vec![[0_u16; 4]; output_width * height];
+                let mut actual_pixels = vec![Rgb565Pixel(0); output_width * height];
+                let mut actual_coverage = vec![0_u8; output_width * height];
                 // SAFETY: this validation runs only on the MiSTer ARM target,
                 // whose Cortex-A9 provides NEON, with complete source/output planes.
                 unsafe {
-                    reconstruct_linear_phase_neon(
+                    prepare_linear_phase_neon(
                         &source,
                         source_width,
                         height,
                         output_width,
                         weights,
-                        &mut actual,
+                        linear_to_srgb_table(),
+                        &mut actual_pixels,
+                        &mut actual_coverage,
                     );
                 }
                 let expected = (0..height)
@@ -1094,24 +1124,38 @@ fn validate_neon_phase_kernel() {
                                     [0; 4]
                                 }
                             });
-                            reconstruct_six_tap_scalar(&samples, weights)
+                            linear_phase_pixel(
+                                reconstruct_six_tap_scalar(&samples, weights),
+                                linear_to_srgb_table(),
+                            )
                         })
                     })
                     .collect::<Vec<_>>();
-                assert_eq!(actual, expected, "NEON phase {phase} differs from scalar");
+                let expected_pixels = expected.iter().map(|value| value.0).collect::<Vec<_>>();
+                let expected_coverage = expected.iter().map(|value| value.1).collect::<Vec<_>>();
+                assert_eq!(
+                    actual_pixels, expected_pixels,
+                    "NEON phase {phase} pixels differ from scalar"
+                );
+                assert_eq!(
+                    actual_coverage, expected_coverage,
+                    "NEON phase {phase} coverage differs from scalar"
+                );
             }
         });
     }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-unsafe fn reconstruct_linear_phase_neon(
+unsafe fn prepare_linear_phase_neon(
     source: &[[u16; 4]],
     source_width: usize,
     height: usize,
     output_width: usize,
     weights: [i32; 6],
-    output: &mut [[u16; 4]],
+    linear_to_srgb: &[u8; 4097],
+    pixels: &mut [Rgb565Pixel],
+    coverage: &mut [u8],
 ) {
     unsafe extern "C" {
         fn mister_magik_screenshot_phase_neon(
@@ -1120,12 +1164,14 @@ unsafe fn reconstruct_linear_phase_neon(
             height: usize,
             output_width: usize,
             weights: *const i32,
-            output: *mut u16,
+            linear_to_srgb: *const u8,
+            pixels: *mut u16,
+            coverage: *mut u8,
         );
     }
 
     // SAFETY: callers provide complete, non-overlapping source and output
-    // planes. The C kernel reads six weights and writes four lanes per output.
+    // planes. The C kernel reads six weights and the complete lookup tables.
     unsafe {
         mister_magik_screenshot_phase_neon(
             source.as_ptr().cast(),
@@ -1133,7 +1179,9 @@ unsafe fn reconstruct_linear_phase_neon(
             height,
             output_width,
             weights.as_ptr(),
-            output.as_mut_ptr().cast(),
+            linear_to_srgb.as_ptr(),
+            pixels.as_mut_ptr().cast(),
+            coverage.as_mut_ptr(),
         );
     }
 }
@@ -1821,6 +1869,42 @@ mod tests {
             assert_eq!(scalar.image, neon.image);
             assert_eq!(scalar.coverage.values, neon.coverage.values);
             assert_eq!(scalar.coverage.opaque_spans, neon.coverage.opaque_spans);
+        }
+    }
+
+    #[test]
+    fn corrected_reciprocal_unpremultiply_matches_integer_division() {
+        for alpha in 1_u32..=u32::from(u16::MAX) {
+            let reciprocal = if alpha == 1 {
+                0
+            } else {
+                ((1_u64 << 32) / u64::from(alpha)) as u32
+            };
+            let pseudo_random =
+                alpha.wrapping_mul(40_503).wrapping_add(17_311) & u32::from(u16::MAX);
+            for channel in [
+                0,
+                1,
+                alpha / 4,
+                alpha / 2,
+                alpha.saturating_sub(1),
+                alpha,
+                pseudo_random,
+                u32::from(u16::MAX),
+            ] {
+                let numerator = channel * u32::from(u16::MAX) + alpha / 2;
+                let mut actual = if alpha == 1 {
+                    numerator
+                } else {
+                    let estimate = ((u64::from(numerator) * u64::from(reciprocal)) >> 32) as u32;
+                    let remainder = numerator - estimate * alpha;
+                    estimate + u32::from(remainder >= alpha)
+                };
+                actual = actual.min(u32::from(u16::MAX));
+                let expected =
+                    (u64::from(numerator) / u64::from(alpha)).min(u64::from(u16::MAX)) as u32;
+                assert_eq!(actual, expected, "alpha={alpha} channel={channel}");
+            }
         }
     }
 }
