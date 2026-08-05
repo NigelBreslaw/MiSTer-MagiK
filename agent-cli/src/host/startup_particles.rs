@@ -29,7 +29,7 @@ const DEV_SCREENSHOT_ARCHIVE: &str =
 const REMOTE_LAB_RECIPE: &str = "/tmp/mister-magik/startup-particles/recipe.json";
 const REMOTE_MAGIK_RECIPE: &str = "/tmp/mister-magik/startup-particles/magik.json";
 const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
-const REMOTE_CARD_ASSESSMENT_DIR: &str = "/tmp/mister-magik/card-flip-assessment";
+const REMOTE_SCENE_EVIDENCE_DIR: &str = "/tmp/mister-magik/scene-lab-evidence";
 const DEVELOPMENT_LAUNCHER_ENV: &str = "/media/fat/mister-magik-dev/launcher.env";
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
 const ACK_DEADLINE: Duration = Duration::from_secs(1);
@@ -78,6 +78,7 @@ struct RemoteScreenshotArgs {
     archive: &'static str,
     seed: u64,
     sampling_profile: &'static str,
+    fingerprint: String,
 }
 
 pub(super) fn run(
@@ -152,7 +153,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
     let session = connect_with(&prepared.config.connection, 10)?;
     let display_contracts = active_lab_display_contracts(&session)?;
     let screenshot = if scene == "screenshot-screensaver" {
-        validate_installed_screenshot_archive(&session)?;
+        let fingerprint = validate_installed_screenshot_archive(&session)?;
         Some(RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
@@ -161,6 +162,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             } else {
                 "crt"
             },
+            fingerprint,
         })
     } else {
         None
@@ -176,15 +178,27 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
-    if assess {
+    if seconds.is_some() {
         let Some(output_dir) = output_dir else {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(
-                Err("card assessment output directory is missing".into()),
+                Err("bounded scene-lab output directory is missing".into()),
                 cleanup,
             );
         };
-        if let Err(error) = prepare_card_assessment_output(output_dir, binary) {
+        if let Err(error) = prepare_scene_evidence_output(
+            output_dir,
+            binary,
+            scene,
+            seconds.expect("bounded evidence has a duration"),
+            warmup_seconds,
+            screenshot.as_ref(),
+            recipe,
+            fixture,
+            case,
+            profile,
+            assess,
+        ) {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(Err(error), cleanup);
         }
@@ -458,7 +472,7 @@ fn prepare_lab_files(
     )
 }
 
-fn validate_installed_screenshot_archive(session: &Session) -> Result<()> {
+fn validate_installed_screenshot_archive(session: &Session) -> Result<String> {
     let reply = super::exec_checked_output(
         session,
         "validate installed Dev screenshot archive",
@@ -472,7 +486,7 @@ fn validate_installed_screenshot_archive(session: &Session) -> Result<()> {
         DEV_SCREENSHOT_ARCHIVE,
         reply.stdout.trim()
     );
-    Ok(())
+    Ok(reply.stdout.trim().to_owned())
 }
 
 fn publish_recipe(session: &Session, recipe: &Path, remote_recipe: &str) -> Result<()> {
@@ -721,7 +735,7 @@ fn run_remote_lab(
         output_dir,
     } = request;
     let session = connect_with(config, 10)?;
-    stream_exec(
+    let run_result = stream_exec(
         &session,
         &remote_run_lab_command(
             &display_contracts,
@@ -735,14 +749,23 @@ fn run_remote_lab(
             profile,
             assess,
         ),
-    )?;
-    if assess {
+    );
+    let evidence_result = if seconds.is_some() {
         let output_dir = output_dir
             .as_deref()
-            .ok_or("card assessment output directory is missing")?;
-        retrieve_card_assessment(&session, output_dir)?;
+            .ok_or("bounded scene-lab output directory is missing")?;
+        retrieve_scene_evidence(&session, output_dir, &scene, profile, assess)
+    } else {
+        Ok(())
+    };
+    match (run_result, evidence_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(run), Ok(())) => Err(run),
+        (Ok(()), Err(evidence)) => Err(evidence),
+        (Err(run), Err(evidence)) => {
+            Err(format!("{run}; scene-lab evidence retrieval also failed: {evidence}").into())
+        }
     }
-    Ok(())
 }
 
 fn stream_exec(session: &Session, command: &str) -> Result<()> {
@@ -769,12 +792,25 @@ fn stream_exec(session: &Session, command: &str) -> Result<()> {
     }
 }
 
-fn prepare_card_assessment_output(output_dir: &Path, binary: &Path) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn prepare_scene_evidence_output(
+    output_dir: &Path,
+    binary: &Path,
+    scene: &str,
+    seconds: u64,
+    warmup_seconds: u64,
+    screenshot: Option<&RemoteScreenshotArgs>,
+    recipe: Option<&Path>,
+    fixture: Option<&str>,
+    case: Option<&str>,
+    profile: bool,
+    assess: bool,
+) -> Result<()> {
     fs::create_dir_all(output_dir)?;
     let receipt_path = PathBuf::from(format!("{}.build-receipt.tsv", binary.display()));
     let receipt = fs::read_to_string(&receipt_path).map_err(|error| {
         format!(
-            "read card assessment build receipt {}: {error}",
+            "read scene-lab build receipt {}: {error}",
             receipt_path.display()
         )
     })?;
@@ -782,13 +818,27 @@ fn prepare_card_assessment_output(output_dir: &Path, binary: &Path) -> Result<()
         .split_ascii_whitespace()
         .find_map(|field| field.strip_prefix("source_commit="))
         .filter(|value| !value.is_empty())
-        .ok_or("card assessment build receipt has no source commit")?;
+        .ok_or("scene-lab build receipt has no source commit")?;
     let manifest = json!({
-        "schema": "mister-magik-card-flip-assessment-manifest-v1",
+        "schema": "mister-magik-scene-lab-manifest-v1",
         "git_sha": source_commit,
         "binary_sha256": file_sha256(binary.to_path_buf())?,
         "binary": binary.display().to_string(),
         "build_receipt": receipt.trim(),
+        "scene": scene,
+        "duration_seconds": seconds,
+        "warmup_seconds": warmup_seconds,
+        "profile": profile,
+        "assess": assess,
+        "seed": screenshot.map(|screenshot| screenshot.seed),
+        "screenshot_pack": screenshot.map(|screenshot| json!({
+            "path": screenshot.archive,
+            "fingerprint": screenshot.fingerprint,
+            "sampling_profile": screenshot.sampling_profile,
+        })),
+        "fixture": fixture,
+        "case": case,
+        "recipe_sha256": recipe.map(|path| file_sha256(path.to_path_buf())).transpose()?,
     });
     fs::write(
         output_dir.join("manifest.json"),
@@ -797,10 +847,19 @@ fn prepare_card_assessment_output(output_dir: &Path, binary: &Path) -> Result<()
     Ok(())
 }
 
-fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> {
+fn retrieve_scene_evidence(
+    session: &Session,
+    output_dir: &Path,
+    scene: &str,
+    profile: bool,
+    assess: bool,
+) -> Result<()> {
     fs::create_dir_all(output_dir)?;
-    let cadence_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/cadence");
-    let profile_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/profile");
+    if !assess {
+        return retrieve_single_scene_pass(session, output_dir, scene, profile);
+    }
+    let cadence_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/cadence");
+    let profile_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile");
     let cadence_frames = require_remote_artifact(session, &format!("{cadence_dir}/frames.jsonl"))?;
     let cadence_summary = require_remote_artifact(session, &format!("{cadence_dir}/summary.json"))?;
     let profile_frames = require_remote_artifact(session, &format!("{profile_dir}/frames.jsonl"))?;
@@ -810,24 +869,25 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
     let flamegraph = require_remote_artifact(session, &format!("{profile_dir}/flamegraph.svg"))?;
     let folded = require_remote_artifact(session, &format!("{profile_dir}/stacks.folded"))?;
 
-    validate_card_profile_artifacts(&profile, &flamegraph, &folded)?;
+    validate_scene_profile_artifacts(&profile, &flamegraph, &folded, scene)?;
     let cadence_value: Value = serde_json::from_str(cadence_summary.trim())?;
     let profile_pass_value: Value = serde_json::from_str(profile_pass_summary.trim())?;
-    let cadence_frame_values = parse_card_frames(&cadence_frames)?;
-    let profile_frame_values = parse_card_frames(&profile_frames)?;
-    let combined = summarize_card_assessment(
+    let cadence_frame_values = parse_scene_frames(&cadence_frames)?;
+    let profile_frame_values = parse_scene_frames(&profile_frames)?;
+    let combined = summarize_scene_assessment(
         cadence_value,
         profile_pass_value,
         &cadence_frame_values,
         &profile_frame_values,
     )?;
-    bind_card_assessment_manifest(output_dir, &combined)?;
-    let report = card_assessment_report(&combined);
+    bind_scene_evidence_manifest(output_dir, &combined)?;
+    let report = scene_assessment_report(scene, &combined);
 
     for (name, contents) in [
         ("cadence-frames.jsonl", cadence_frames.as_str()),
         ("cadence-summary.json", cadence_summary.as_str()),
         ("profile-frames.jsonl", profile_frames.as_str()),
+        ("profile-summary.json", profile_pass_summary.as_str()),
         ("profile.json", profile.as_str()),
         ("flamegraph.svg", flamegraph.as_str()),
         ("stacks.folded", folded.as_str()),
@@ -839,7 +899,7 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
         format!("{}\n", serde_json::to_string_pretty(&combined)?),
     )?;
     fs::write(output_dir.join("report.md"), report)?;
-    println!("card-flip assessment evidence: {}", output_dir.display());
+    println!("{scene} assessment evidence: {}", output_dir.display());
 
     let failures = combined
         .get("qualification_failures")
@@ -847,7 +907,7 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
         .map_or(0, Vec::len);
     if failures > 0 {
         return Err(format!(
-            "card-flip cadence assessment found {failures} failure(s); evidence retained at {}",
+            "{scene} cadence assessment found {failures} failure(s); evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -855,7 +915,119 @@ fn retrieve_card_assessment(session: &Session, output_dir: &Path) -> Result<()> 
     Ok(())
 }
 
-fn bind_card_assessment_manifest(output_dir: &Path, summary: &Value) -> Result<()> {
+fn retrieve_single_scene_pass(
+    session: &Session,
+    output_dir: &Path,
+    scene: &str,
+    profiled: bool,
+) -> Result<()> {
+    let frames = require_remote_artifact(
+        session,
+        &format!("{REMOTE_SCENE_EVIDENCE_DIR}/frames.jsonl"),
+    )?;
+    let summary = require_remote_artifact(
+        session,
+        &format!("{REMOTE_SCENE_EVIDENCE_DIR}/summary.json"),
+    )?;
+    let summary_value: Value = serde_json::from_str(summary.trim())?;
+    let frame_values = parse_scene_frames(&frames)?;
+    let cadence = summary_value
+        .get("cadence")
+        .ok_or("scene pass summary has no physical cadence")?;
+    let mut failures = Vec::new();
+    if !profiled {
+        for (kind, field) in [
+            ("repeated-refreshes", "repeated_refreshes"),
+            ("sequence-failures", "sequence_failures"),
+            ("latch-drops", "latch_drop_delta"),
+            ("completion-failures", "completion_failures"),
+        ] {
+            let count = value_u64(cadence, field);
+            if count > 0 {
+                failures.push(json!({"kind": kind, "count": count}));
+            }
+        }
+    }
+    let combined = json!({
+        "schema": "mister-magik-scene-lab-measurement-v1",
+        "scene": scene,
+        "pass": summary_value,
+        "phase_timings": card_phase_summary(&frame_values),
+        "qualification_failures": failures,
+    });
+    let mut manifest: Value = serde_json::from_slice(&fs::read(output_dir.join("manifest.json"))?)?;
+    manifest["display_plan"] = combined["pass"]["display"].clone();
+    manifest["refresh_source"] = combined["pass"]["cadence"]["refresh_period_source"].clone();
+    fs::write(
+        output_dir.join("manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&manifest)?),
+    )?;
+    fs::write(output_dir.join("frames.jsonl"), &frames)?;
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&combined)?),
+    )?;
+    if profiled {
+        let profile = require_remote_artifact(
+            session,
+            &format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile.json"),
+        )?;
+        let flamegraph = require_remote_artifact(
+            session,
+            &format!("{REMOTE_SCENE_EVIDENCE_DIR}/flamegraph.svg"),
+        )?;
+        let folded = require_remote_artifact(
+            session,
+            &format!("{REMOTE_SCENE_EVIDENCE_DIR}/stacks.folded"),
+        )?;
+        validate_scene_profile_artifacts(&profile, &flamegraph, &folded, scene)?;
+        fs::write(output_dir.join("profile.json"), profile)?;
+        fs::write(output_dir.join("flamegraph.svg"), flamegraph)?;
+        fs::write(output_dir.join("stacks.folded"), folded)?;
+    }
+    let report = format!(
+        "# {scene} scene-lab measurement\n\n- Pass: {}\n- Confirmed frames: {}\n- Unique presentation FPS: {:.3}\n- Repeated refreshes: {}\n- Sequence failures: {}\n- Latch drops: {}\n- Completion failures: {}\n- Process CPU: {:.2}%\n- RSS mean / max: {} / {} KiB\n\nArtifacts: `manifest.json`, `frames.jsonl`, `summary.json`{}.\n",
+        if profiled {
+            "99 Hz sampled (attribution only)"
+        } else {
+            "unprofiled cadence authority"
+        },
+        value_u64(cadence, "confirmed_frames"),
+        cadence
+            .get("unique_fps")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        value_u64(cadence, "repeated_refreshes"),
+        value_u64(cadence, "sequence_failures"),
+        value_u64(cadence, "latch_drop_delta"),
+        value_u64(cadence, "completion_failures"),
+        combined["pass"]["process_cpu_pct_of_one_core"]
+            .as_f64()
+            .unwrap_or(0.0),
+        value_u64(&combined["pass"]["rss_kib"], "mean"),
+        value_u64(&combined["pass"]["rss_kib"], "max"),
+        if profiled {
+            ", `profile.json`, `stacks.folded`, and `flamegraph.svg`"
+        } else {
+            ""
+        },
+    );
+    fs::write(output_dir.join("report.md"), report)?;
+    println!("{scene} scene-lab evidence: {}", output_dir.display());
+    if combined["qualification_failures"]
+        .as_array()
+        .is_some_and(|failures| !failures.is_empty())
+    {
+        return Err(format!(
+            "{scene} cadence measurement failed; evidence retained at {}",
+            output_dir.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn bind_scene_evidence_manifest(output_dir: &Path, summary: &Value) -> Result<()> {
     let path = output_dir.join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&path)?)?;
     manifest["display_plan"] = summary["cadence_pass"]["display"].clone();
@@ -870,14 +1042,19 @@ fn bind_card_assessment_manifest(output_dir: &Path, summary: &Value) -> Result<(
 fn require_remote_artifact(session: &Session, path: &str) -> Result<String> {
     remote_read(session, path)
         .filter(|contents| !contents.is_empty())
-        .ok_or_else(|| format!("card assessment artifact is missing: {path}").into())
+        .ok_or_else(|| format!("scene-lab evidence artifact is missing: {path}").into())
 }
 
-fn validate_card_profile_artifacts(profile: &str, flamegraph: &str, folded: &str) -> Result<()> {
+fn validate_scene_profile_artifacts(
+    profile: &str,
+    flamegraph: &str,
+    folded: &str,
+    scene: &str,
+) -> Result<()> {
     let metadata: Value = serde_json::from_str(profile.trim())?;
     if metadata.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-pprof-v1")
         || metadata.get("state").and_then(Value::as_str) != Some("complete")
-        || metadata.get("scene").and_then(Value::as_str) != Some("card-flip")
+        || metadata.get("scene").and_then(Value::as_str) != Some(scene)
         || metadata
             .get("sample_hits")
             .and_then(Value::as_i64)
@@ -889,25 +1066,25 @@ fn validate_card_profile_artifacts(profile: &str, flamegraph: &str, folded: &str
             .unwrap_or(0)
             == 0
     {
-        return Err("card assessment profiler metadata is incomplete".into());
+        return Err("scene-lab profiler metadata is incomplete".into());
     }
     if !flamegraph.contains("<svg") || !flamegraph.contains("</svg>") {
-        return Err("card assessment flamegraph is not a complete SVG".into());
+        return Err("scene-lab flamegraph is not a complete SVG".into());
     }
-    if !folded.contains("card_flip") && !folded.contains("run_card_flip_mister") {
-        return Err("card assessment folded stacks have no resolved card symbols".into());
+    if folded.trim().is_empty() {
+        return Err("scene-lab folded stacks are empty".into());
     }
     Ok(())
 }
 
-fn parse_card_frames(text: &str) -> Result<Vec<Value>> {
+fn parse_scene_frames(text: &str) -> Result<Vec<Value>> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).map_err(Into::into))
         .collect()
 }
 
-fn summarize_card_assessment(
+fn summarize_scene_assessment(
     cadence: Value,
     profile: Value,
     cadence_frames: &[Value],
@@ -915,10 +1092,10 @@ fn summarize_card_assessment(
 ) -> Result<Value> {
     let cadence_physical = cadence
         .get("cadence")
-        .ok_or("card cadence summary has no physical cadence")?;
+        .ok_or("scene cadence summary has no physical cadence")?;
     let profile_physical = profile
         .get("cadence")
-        .ok_or("card profile summary has no physical cadence")?;
+        .ok_or("scene profile summary has no physical cadence")?;
     if cadence_physical
         .get("cadence_authoritative")
         .and_then(Value::as_bool)
@@ -928,13 +1105,13 @@ fn summarize_card_assessment(
             .and_then(Value::as_bool)
             != Some(false)
     {
-        return Err("card assessment pass authority is invalid".into());
+        return Err("scene assessment pass authority is invalid".into());
     }
     let refresh_period_us = cadence_physical
         .get("refresh_period_us")
         .and_then(Value::as_u64)
         .filter(|period| *period > 0)
-        .ok_or("card cadence refresh period is invalid")?;
+        .ok_or("scene cadence refresh period is invalid")?;
     let cadence_repeats = value_u64(cadence_physical, "repeated_refreshes");
     let profile_repeats = value_u64(profile_physical, "repeated_refreshes");
     let mut failures = Vec::new();
@@ -965,7 +1142,7 @@ fn summarize_card_assessment(
         "physical repeats occurred in the unprofiled control; inspect repeat contexts and CPU stacks"
     };
     Ok(json!({
-        "schema": "mister-magik-card-flip-assessment-v1",
+        "schema": "mister-magik-scene-lab-assessment-v1",
         "cadence_pass": cadence,
         "profile_pass": profile,
         "cadence_phase_timings": card_phase_summary(cadence_frames),
@@ -1094,7 +1271,7 @@ fn timing(summary: &Value, pass: &str, phase: &str, statistic: &str) -> u64 {
     summary[pass][phase][statistic].as_u64().unwrap_or(0)
 }
 
-fn card_assessment_report(summary: &Value) -> String {
+fn scene_assessment_report(scene: &str, summary: &Value) -> String {
     let cadence = &summary["cadence_pass"]["cadence"];
     let profile = &summary["profile_pass"]["cadence"];
     let cadence_cpu = summary["cadence_pass"]["process_cpu_pct_of_one_core"]
@@ -1116,16 +1293,8 @@ fn card_assessment_report(summary: &Value) -> String {
     let worst_pre_post_frame = worst_pre_post
         .and_then(|outlier| outlier.get("frame"))
         .map_or(0, |frame| value_u64(frame, "frame"));
-    let worst_pre_post_face = worst_pre_post
-        .and_then(|outlier| outlier.get("frame"))
-        .and_then(|frame| frame.get("face"))
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let worst_pre_post_progress = worst_pre_post
-        .and_then(|outlier| outlier.get("frame"))
-        .map_or(0, |frame| value_u64(frame, "progress_q16"));
     format!(
-        "# Card-flip cadence and CPU assessment\n\n## Physical cadence authority\n\n- Unprofiled physical FPS: {:.3}\n- Unprofiled repeated refreshes: {}\n- Unprofiled sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled repeated refreshes (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {} (face `{}`, progress {}/65535). Ranked contexts around both categories are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
+        "# {scene} cadence and CPU assessment\n\n## Physical cadence authority\n\n- Unprofiled physical FPS: {:.3}\n- Unprofiled repeated refreshes: {}\n- Unprofiled sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled repeated refreshes (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
         cadence
             .get("unique_fps")
             .and_then(Value::as_f64)
@@ -1277,8 +1446,6 @@ fn card_assessment_report(summary: &Value) -> String {
         worst_gap_frame,
         worst_pre_post_us as f64 / 1_000.0,
         worst_pre_post_frame,
-        worst_pre_post_face,
-        worst_pre_post_progress,
     )
 }
 
@@ -1300,7 +1467,7 @@ fn lab_preflight_command() -> String {
         "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-framebuffer-scene-lab >/dev/null 2>&1; {}; rm -rf {} {}; mkdir -p {}",
         safety_clear_checks(),
         sh(REMOTE_DIR),
-        sh(REMOTE_CARD_ASSESSMENT_DIR),
+        sh(REMOTE_SCENE_EVIDENCE_DIR),
         sh(REMOTE_DIR)
     )
 }
@@ -1326,7 +1493,7 @@ fn verify_safety_clear(session: &Session) -> Result<()> {
             "set -eu; {}; test ! -e {}; test ! -e {}",
             safety_clear_checks(),
             sh(REMOTE_DIR),
-            sh(REMOTE_CARD_ASSESSMENT_DIR),
+            sh(REMOTE_SCENE_EVIDENCE_DIR),
         ),
     )
 }
@@ -1338,7 +1505,7 @@ fn remove_volatile_directory(session: &Session) -> Result<()> {
         &format!(
             "rm -rf {} {}",
             sh(REMOTE_DIR),
-            sh(REMOTE_CARD_ASSESSMENT_DIR)
+            sh(REMOTE_SCENE_EVIDENCE_DIR)
         ),
     )
 }
@@ -1402,50 +1569,61 @@ fn remote_run_lab_command(
 ) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
-    let invocation = if assess {
-        let cadence_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/cadence");
-        let profile_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/profile");
-        let bounded = format!(
-            "--seconds {} {}",
-            seconds.expect("assessment duration is validated"),
+    let environment = format!(
+        "MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_MAGIK_RUNTIME_DISPLAY_V1={}",
+        sh(&display_contracts.settings),
+        sh(&display_contracts.display),
+    );
+    let scene_arguments = format!(
+        "{} {}",
+        remote_scene_arguments(scene, has_recipe, fixture, screenshot),
+        case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
+    );
+    let bounded = seconds.map(|seconds| {
+        format!(
+            "--seconds {seconds} {}",
             if warmup_seconds == 0 {
                 String::new()
             } else {
                 format!("--warmup-seconds {warmup_seconds}")
             },
-        );
+        )
+    });
+    let invocation = if assess {
+        let cadence_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/cadence");
+        let profile_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile");
         format!(
-            "rm -rf {assessment}; mkdir -p {cadence} {profile}; {environment} {binary} --scene card-flip {bounded} --assessment-pass cadence --evidence-dir {cadence}; MISTER_SCENE_LAB_PPROF_OUT={svg} MISTER_SCENE_LAB_PPROF_FOLDED_OUT={folded} MISTER_SCENE_LAB_PPROF_COMPLETE={complete} {environment} {binary} --scene card-flip {bounded} --assessment-pass profile --evidence-dir {profile}",
-            assessment = sh(REMOTE_CARD_ASSESSMENT_DIR),
+            "rm -rf {assessment}; mkdir -p {cadence} {profile}; {environment} {binary} {scene_arguments} {bounded} --assessment-pass cadence --evidence-dir {cadence}; MISTER_SCENE_LAB_PPROF_OUT={svg} MISTER_SCENE_LAB_PPROF_FOLDED_OUT={folded} MISTER_SCENE_LAB_PPROF_COMPLETE={complete} {environment} {binary} {scene_arguments} {bounded} --assessment-pass profile --evidence-dir {profile}",
+            assessment = sh(REMOTE_SCENE_EVIDENCE_DIR),
             cadence = sh(&cadence_dir),
             profile = sh(&profile_dir),
-            environment = format!(
-                "MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_MAGIK_RUNTIME_DISPLAY_V1={}",
-                sh(&display_contracts.settings),
-                sh(&display_contracts.display),
-            ),
+            environment = environment,
             binary = sh(REMOTE_BINARY),
+            scene_arguments = scene_arguments,
             svg = sh(&format!("{profile_dir}/flamegraph.svg")),
             folded = sh(&format!("{profile_dir}/stacks.folded")),
             complete = sh(&format!("{profile_dir}/profile.json")),
-            bounded = bounded,
+            bounded = bounded.expect("assessment duration is validated"),
+        )
+    } else if let Some(bounded) = bounded {
+        let profiler_environment = if profile {
+            format!(
+                "MISTER_SCENE_LAB_PPROF_OUT={} MISTER_SCENE_LAB_PPROF_FOLDED_OUT={} MISTER_SCENE_LAB_PPROF_COMPLETE={} ",
+                sh(&format!("{REMOTE_SCENE_EVIDENCE_DIR}/flamegraph.svg")),
+                sh(&format!("{REMOTE_SCENE_EVIDENCE_DIR}/stacks.folded")),
+                sh(&format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile.json")),
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "rm -rf {evidence}; mkdir -p {evidence}; {profiler_environment}{environment} {binary} {scene_arguments} {bounded} --assessment-pass {pass} --evidence-dir {evidence}",
+            evidence = sh(REMOTE_SCENE_EVIDENCE_DIR),
+            binary = sh(REMOTE_BINARY),
+            pass = if profile { "profile" } else { "cadence" },
         )
     } else {
-        format!(
-            "MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_MAGIK_RUNTIME_DISPLAY_V1={} {} {} {} {} {} {} {}",
-            sh(&display_contracts.settings),
-            sh(&display_contracts.display),
-            sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, has_recipe, fixture, screenshot),
-            case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
-            seconds.map_or_else(String::new, |seconds| format!("--seconds {seconds}")),
-            if warmup_seconds == 0 {
-                String::new()
-            } else {
-                format!("--warmup-seconds {warmup_seconds}")
-            },
-            if profile { "--profile" } else { "" },
-        )
+        format!("{} {} {}", environment, sh(REMOTE_BINARY), scene_arguments,)
     };
     format!(
         "suspended=0; cleanup() {{ rc=$?; trap - EXIT HUP INT TERM; resume_rc=0; if test \"$suspended\" = 1; then {resume} || resume_rc=$?; fi; rm -rf {dir}; if test \"$rc\" -ne 0; then exit \"$rc\"; fi; exit \"$resume_rc\"; }}; trap cleanup EXIT HUP INT TERM; set -eu; {suspend}; suspended=1; {invocation}",
@@ -1561,6 +1739,7 @@ mod tests {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 0x1234,
             sampling_profile: "crt",
+            fingerprint: "bytes=1 sha256=test".into(),
         };
         let run = remote_run_lab_command(
             &hdmi_contracts(),
@@ -1600,7 +1779,7 @@ mod tests {
         assert!(run.contains("--assessment-pass profile"));
         assert!(run.contains("MISTER_SCENE_LAB_PPROF_OUT="));
         assert_eq!(run.matches(REMOTE_BINARY).count(), 2);
-        assert!(run.contains(REMOTE_CARD_ASSESSMENT_DIR));
+        assert!(run.contains(REMOTE_SCENE_EVIDENCE_DIR));
     }
 
     #[test]
@@ -1614,15 +1793,21 @@ mod tests {
         })
         .to_string();
         assert!(
-            validate_card_profile_artifacts(
+            validate_scene_profile_artifacts(
                 &metadata,
                 "<svg><g></g></svg>",
-                "thread;run_card_flip_mister 10\n"
+                "thread;run_card_flip_mister 10\n",
+                "card-flip",
             )
             .is_ok()
         );
-        assert!(validate_card_profile_artifacts(&metadata, "not-svg", "card_flip 1").is_err());
-        assert!(validate_card_profile_artifacts(&metadata, "<svg></svg>", "unresolved 1").is_err());
+        assert!(
+            validate_scene_profile_artifacts(&metadata, "not-svg", "card_flip 1", "card-flip")
+                .is_err()
+        );
+        assert!(
+            validate_scene_profile_artifacts(&metadata, "<svg></svg>", "", "card-flip").is_err()
+        );
     }
 
     #[test]
@@ -1645,7 +1830,7 @@ mod tests {
                 "repeated_refreshes": 0,
             }
         });
-        assert!(summarize_card_assessment(cadence, sampled, &[], &[]).is_err());
+        assert!(summarize_scene_assessment(cadence, sampled, &[], &[]).is_err());
     }
 
     #[test]
@@ -1681,7 +1866,7 @@ mod tests {
                 "card": {"width": 287, "height": 420},
             }
         });
-        bind_card_assessment_manifest(&directory, &summary).unwrap();
+        bind_scene_evidence_manifest(&directory, &summary).unwrap();
         let manifest: Value =
             serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["git_sha"], "abc");
@@ -1692,14 +1877,14 @@ mod tests {
 
     #[test]
     fn volatile_cleanup_includes_card_assessment_artifacts() {
-        assert!(lab_preflight_command().contains(REMOTE_CARD_ASSESSMENT_DIR));
+        assert!(lab_preflight_command().contains(REMOTE_SCENE_EVIDENCE_DIR));
         assert!(
             format!(
                 "rm -rf {} {}",
                 sh(REMOTE_DIR),
-                sh(REMOTE_CARD_ASSESSMENT_DIR)
+                sh(REMOTE_SCENE_EVIDENCE_DIR)
             )
-            .contains(REMOTE_CARD_ASSESSMENT_DIR)
+            .contains(REMOTE_SCENE_EVIDENCE_DIR)
         );
     }
 

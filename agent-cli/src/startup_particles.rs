@@ -412,19 +412,20 @@ pub fn execute_scene_device(
     if args.assess && args.profile {
         return Err("scene-lab --assess cannot be combined with --profile".into());
     }
-    let spec = if args.profile && !args.assess {
+    let spec = if args.profile || args.assess {
         BuildSpec::framebuffer_scene_lab_analysis()
     } else {
         BuildSpec::framebuffer_scene_lab_device()
     };
     execute(repository, &spec, reporter)?;
-    let output_dir = args.assess.then(|| {
+    let output_dir = args.seconds.map(|_| {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock must be after Unix epoch")
             .as_secs();
         repository
-            .join("build/scene-lab/card-flip")
+            .join("build/scene-lab")
+            .join(args.scene.as_str())
             .join(timestamp.to_string())
     });
     crate::commands::device::run_scene_lab(
