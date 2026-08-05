@@ -398,9 +398,6 @@ pub fn execute_scene_device(
     if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.replacement_mode.is_some() {
         return Err("scene-lab --replacement-mode is valid only for screenshot-screensaver".into());
     }
-    if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.copy_experiment {
-        return Err("scene-lab --copy-experiment is valid only for screenshot-screensaver".into());
-    }
     if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.seed.is_some() {
         return Err("scene-lab --seed is valid only for screenshot-screensaver".into());
     }
@@ -423,16 +420,6 @@ pub fn execute_scene_device(
     }
     if args.assess && args.profile {
         return Err("scene-lab --assess cannot be combined with --profile".into());
-    }
-    if args.copy_experiment {
-        if args.seconds != Some(45) {
-            return Err("scene-lab --copy-experiment requires --seconds 45".into());
-        }
-        if args.profile || args.assess {
-            return Err(
-                "scene-lab --copy-experiment cannot be combined with --profile or --assess".into(),
-            );
-        }
     }
     let spec = if args.profile || args.assess {
         BuildSpec::framebuffer_scene_lab_analysis()

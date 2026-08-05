@@ -6,8 +6,6 @@ mod card_assessment;
 mod card_flip;
 mod card_flip_neon;
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-mod hidden_copy_neon;
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod vsync_observer;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -91,132 +89,6 @@ struct PendingFrameEvidence {
     post_completed: std::time::Instant,
     pipeline_before:
         mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPipelineStats,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-const HIDDEN_COPY_BLOCK_DURATION: Duration = Duration::from_secs(15);
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-#[derive(Default)]
-struct HiddenCopyBlockSamples {
-    copy_us: Vec<u64>,
-    publish_us: Vec<u64>,
-    combined_us: Vec<u64>,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct HiddenCopyExperiment {
-    blocks: [HiddenCopyBlockSamples; 3],
-    bytes_per_frame: usize,
-    neon_crc_verified: bool,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-impl HiddenCopyExperiment {
-    fn new() -> Self {
-        Self {
-            blocks: std::array::from_fn(|_| HiddenCopyBlockSamples::default()),
-            bytes_per_frame: 0,
-            neon_crc_verified: false,
-        }
-    }
-
-    fn block_index(elapsed: Duration) -> usize {
-        (elapsed.as_secs() / HIDDEN_COPY_BLOCK_DURATION.as_secs()).min(2) as usize
-    }
-
-    fn record(
-        &mut self,
-        block: usize,
-        bytes_per_frame: usize,
-        copy_us: u64,
-        publish_us: u64,
-        combined_us: u64,
-    ) {
-        self.bytes_per_frame = bytes_per_frame;
-        self.blocks[block].copy_us.push(copy_us);
-        self.blocks[block].publish_us.push(publish_us);
-        self.blocks[block].combined_us.push(combined_us);
-    }
-
-    fn print(&mut self) {
-        for (index, block) in self.blocks.iter_mut().enumerate() {
-            let copy = HiddenCopyDistribution::from_samples(&mut block.copy_us);
-            let publish = HiddenCopyDistribution::from_samples(&mut block.publish_us);
-            let combined = HiddenCopyDistribution::from_samples(&mut block.combined_us);
-            let (label, kernel) = match index {
-                0 => ("libc-a", "libc"),
-                1 => ("neon", "neon"),
-                _ => ("libc-b", "libc"),
-            };
-            let useful_mb_s = if combined.average_us == 0 {
-                0.0
-            } else {
-                self.bytes_per_frame as f64 / combined.average_us as f64
-            };
-            println!(
-                "hidden-copy-experiment block={label} kernel={kernel} samples={} bytes_per_frame={} copy_avg_us={} copy_p50_us={} copy_p95_us={} copy_p99_us={} copy_max_us={} publish_avg_us={} publish_p50_us={} publish_p95_us={} publish_p99_us={} publish_max_us={} combined_avg_us={} combined_p50_us={} combined_p95_us={} combined_p99_us={} combined_max_us={} useful_mb_s={useful_mb_s:.2}",
-                copy.samples,
-                self.bytes_per_frame,
-                copy.average_us,
-                copy.p50_us,
-                copy.p95_us,
-                copy.p99_us,
-                copy.maximum_us,
-                publish.average_us,
-                publish.p50_us,
-                publish.p95_us,
-                publish.p99_us,
-                publish.maximum_us,
-                combined.average_us,
-                combined.p50_us,
-                combined.p95_us,
-                combined.p99_us,
-                combined.maximum_us,
-            );
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct HiddenCopyDistribution {
-    samples: usize,
-    average_us: u64,
-    p50_us: u64,
-    p95_us: u64,
-    p99_us: u64,
-    maximum_us: u64,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-impl HiddenCopyDistribution {
-    fn from_samples(samples: &mut [u64]) -> Self {
-        samples.sort_unstable();
-        let percentile = |percent: usize| {
-            samples
-                .get(
-                    samples
-                        .len()
-                        .saturating_mul(percent)
-                        .div_ceil(100)
-                        .saturating_sub(1),
-                )
-                .copied()
-                .unwrap_or_default()
-        };
-        Self {
-            samples: samples.len(),
-            average_us: samples
-                .iter()
-                .sum::<u64>()
-                .checked_div(samples.len() as u64)
-                .unwrap_or_default(),
-            p50_us: percentile(50),
-            p95_us: percentile(95),
-            p99_us: percentile(99),
-            maximum_us: samples.last().copied().unwrap_or_default(),
-        }
-    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -452,7 +324,6 @@ fn main() -> Result<(), String> {
             options.profile,
             options.measurement_evidence(),
             options.bounded_run(),
-            options.copy_experiment,
         );
     }
     if options.scene == EffectKind::CardFlip {
@@ -479,7 +350,6 @@ fn main() -> Result<(), String> {
             options.profile,
             options.measurement_evidence(),
             options.bounded_run(),
-            options.copy_experiment,
         );
     }
     if options.scene == EffectKind::NavigationTransition {
@@ -510,7 +380,6 @@ fn main() -> Result<(), String> {
             options.profile,
             options.measurement_evidence(),
             options.bounded_run(),
-            options.copy_experiment,
         );
     }
     let recipe_path = options
@@ -548,7 +417,6 @@ fn main() -> Result<(), String> {
         options.profile,
         options.measurement_evidence(),
         options.bounded_run(),
-        options.copy_experiment,
     )
 }
 
@@ -1570,7 +1438,6 @@ fn run_window(
     _profile: bool,
     _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
-    _copy_experiment: bool,
 ) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
@@ -1588,7 +1455,6 @@ fn run_window(
     profile: bool,
     measurement_evidence: Option<MeasurementEvidence>,
     bounded: Option<BoundedRun>,
-    copy_experiment: bool,
 ) -> Result<(), String> {
     use mister_magik_mister_runtime::display_plan::detect_runtime_display_plan;
     use mister_magik_mister_runtime::fpga::Fpga;
@@ -1664,7 +1530,6 @@ fn run_window(
     let mut rss_samples_kib = Vec::new();
     let mut next_rss_sample = None;
     let mut vsync_observer = None;
-    let mut hidden_copy_experiment = copy_experiment.then(HiddenCopyExperiment::new);
     let profiler_requested = profile
         || measurement_evidence
             .as_ref()
@@ -1841,31 +1706,11 @@ fn run_window(
         // have identical length/alignment, and accept every u16 bit pattern.
         let cached =
             unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565>(), pixels.len()) };
-        let copy_experiment_block =
-            measurement_started.map(|started| HiddenCopyExperiment::block_index(started.elapsed()));
-        let verify_neon_copy = hidden_copy_experiment
-            .as_ref()
-            .is_some_and(|experiment| !experiment.neon_crc_verified)
-            && measurement_started.is_none();
-        let use_neon_copy = copy_experiment_block == Some(1) || verify_neon_copy;
-        let source_crc = verify_neon_copy.then(|| hidden_copy_neon::crc32_rgb565(cached));
-        let mut destination_crc = None;
         let transfer_started = Instant::now();
         let transfer_cpu_started = process_cpu_time();
-        let copy = if use_neon_copy {
-            presenter
-                .prepare_cached_full_with(cached, |destination, source| {
-                    hidden_copy_neon::copy_rgb565(destination, source);
-                    if verify_neon_copy {
-                        destination_crc = Some(hidden_copy_neon::crc32_rgb565(destination));
-                    }
-                })
-                .map_err(|error| format!("NEON-copy cached frame to hidden slot: {error}"))?
-        } else {
-            presenter
-                .prepare_cached(cached, &full_damage)
-                .map_err(|error| format!("copy cached startup particle frame: {error}"))?
-        };
+        let copy = presenter
+            .prepare_cached(cached, &full_damage)
+            .map_err(|error| format!("copy cached startup particle frame: {error}"))?;
         let transfer_wall_us = transfer_started.elapsed().as_micros() as u64;
         let transfer_cpu_us = process_cpu_time()
             .saturating_sub(transfer_cpu_started)
@@ -1876,34 +1721,9 @@ fn run_window(
             .post_prepared()
             .map_err(|error| format!("post hidden RGB565 startup particle frame: {error}"))?;
         let post_wall_us = post_started.elapsed().as_micros() as u64;
-        let combined_wall_us = transfer_started.elapsed().as_micros() as u64;
         let post_cpu_us = process_cpu_time()
             .saturating_sub(post_cpu_started)
             .as_micros() as u64;
-        if verify_neon_copy {
-            let source_crc = source_crc.expect("CRC verification has a source CRC");
-            let destination_crc = destination_crc.expect("CRC verification has a destination CRC");
-            if source_crc != destination_crc {
-                return Err(format!(
-                    "NEON hidden-slot copy CRC mismatch: source={source_crc:08x} destination={destination_crc:08x}"
-                ));
-            }
-            if let Some(experiment) = hidden_copy_experiment.as_mut() {
-                experiment.neon_crc_verified = true;
-            }
-            println!("hidden-copy-crc kernel=neon crc32={source_crc:08x} valid=true",);
-        }
-        if let (Some(block), Some(experiment)) =
-            (copy_experiment_block, hidden_copy_experiment.as_mut())
-        {
-            experiment.record(
-                block,
-                copy.destination_bytes,
-                transfer_wall_us,
-                post_wall_us,
-                combined_wall_us,
-            );
-        }
         if measurement_started.is_some() {
             let mut evidence = FrameEvidence::new(
                 renderer.effect().label(),
@@ -2066,9 +1886,6 @@ fn run_window(
                 cadence.max_completion_interval_us,
                 cadence.unique_fps,
             );
-            if let Some(experiment) = hidden_copy_experiment.as_mut() {
-                experiment.print();
-            }
             if let Some(evidence) = measurement_evidence.as_ref() {
                 write_measurement_evidence(
                     evidence,
@@ -2898,7 +2715,6 @@ fn run_window(
     _profile: bool,
     _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
-    _copy_experiment: bool,
 ) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
@@ -2916,7 +2732,6 @@ struct Options {
     phase_generation_requested: bool,
     replacement_mode: ScreenshotParadeReplacementMode,
     replacement_mode_requested: bool,
-    copy_experiment: bool,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
@@ -2944,7 +2759,6 @@ impl Options {
         let mut phase_generation_requested = false;
         let mut replacement_mode = ScreenshotParadeReplacementMode::Prepare;
         let mut replacement_mode_requested = false;
-        let mut copy_experiment = false;
         let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
@@ -3025,7 +2839,6 @@ impl Options {
                     };
                     replacement_mode_requested = true;
                 }
-                "--copy-experiment" => copy_experiment = true,
                 "--fixture" => {
                     let value = arguments.next().ok_or("--fixture requires a name")?;
                     fixture = NavigationFixture::parse(&value);
@@ -3141,7 +2954,6 @@ impl Options {
             phase_generation_requested,
             replacement_mode,
             replacement_mode_requested,
-            copy_experiment,
             time_ms,
             output,
             check,
@@ -3196,11 +3008,10 @@ impl Options {
                 || self.seed_requested
                 || self.sampling_profile_requested
                 || self.phase_generation_requested
-                || self.replacement_mode_requested
-                || self.copy_experiment)
+                || self.replacement_mode_requested)
         {
             return Err(
-                "--archive, --seed, --sampling-profile, --phase-generation, --replacement-mode, and --copy-experiment are valid only for screenshot-screensaver".into(),
+                "--archive, --seed, --sampling-profile, --phase-generation, and --replacement-mode are valid only for screenshot-screensaver".into(),
             );
         }
         match self.scene {
@@ -3244,14 +3055,6 @@ impl Options {
                         "screenshot-screensaver rejects cabinet and card-only options".into(),
                     );
                 }
-                if self.copy_experiment {
-                    if self.seconds != Some(45) {
-                        return Err("--copy-experiment requires --seconds 45".into());
-                    }
-                    if self.profile {
-                        return Err("--copy-experiment cannot be combined with --profile".into());
-                    }
-                }
             }
         }
         Ok(())
@@ -3280,7 +3083,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth] [--phase-generation two-tap|linear-lanczos3|linear-lanczos3-neon] [--replacement-mode prepare|recycle] [--copy-experiment --seconds 45]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth] [--phase-generation two-tap|linear-lanczos3] [--replacement-mode prepare|recycle]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {

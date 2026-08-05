@@ -53,7 +53,6 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) sampling_profile: Option<&'static str>,
     pub(crate) phase_generation: Option<&'static str>,
     pub(crate) replacement_mode: Option<&'static str>,
-    pub(crate) copy_experiment: bool,
     pub(crate) case: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
     pub(crate) warmup_seconds: u64,
@@ -84,7 +83,6 @@ struct RemoteScreenshotArgs {
     sampling_profile: &'static str,
     phase_generation: &'static str,
     replacement_mode: &'static str,
-    copy_experiment: bool,
     fingerprint: String,
 }
 
@@ -118,7 +116,6 @@ pub(super) fn run(
                     sampling_profile: None,
                     phase_generation: None,
                     replacement_mode: None,
-                    copy_experiment: false,
                     case: None,
                     seconds: None,
                     warmup_seconds: 0,
@@ -156,7 +153,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         sampling_profile,
         phase_generation,
         replacement_mode,
-        copy_experiment,
         case,
         seconds,
         warmup_seconds,
@@ -175,7 +171,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             sampling_profile: sampling_profile.unwrap_or("sixteenth"),
             phase_generation: phase_generation.unwrap_or("linear-lanczos3"),
             replacement_mode: replacement_mode.unwrap_or("prepare"),
-            copy_experiment,
             fingerprint,
         })
     } else {
@@ -481,7 +476,7 @@ fn prepare_lab_files(
         &format!(
             "{} --check {}",
             sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, recipe.is_some(), fixture, screenshot, false)
+            remote_scene_arguments(scene, recipe.is_some(), fixture, screenshot)
         ),
     )
 }
@@ -851,7 +846,6 @@ fn prepare_scene_evidence_output(
             "sampling_profile": screenshot.sampling_profile,
             "phase_generation": screenshot.phase_generation,
             "replacement_mode": screenshot.replacement_mode,
-            "copy_experiment": screenshot.copy_experiment,
         })),
         "fixture": fixture,
         "case": case,
@@ -1689,14 +1683,13 @@ fn remote_scene_arguments(
     has_recipe: bool,
     fixture: Option<&str>,
     screenshot: Option<&RemoteScreenshotArgs>,
-    include_copy_experiment: bool,
 ) -> String {
     if has_recipe {
         format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE))
     } else if let Some(fixture) = fixture {
         format!("--scene {} --fixture {}", sh(scene), sh(fixture))
     } else if let Some(screenshot) = screenshot {
-        let mut arguments = format!(
+        format!(
             "--scene {} --archive {} --seed {} --sampling-profile {} --phase-generation {} --replacement-mode {}",
             sh(scene),
             sh(screenshot.archive),
@@ -1704,11 +1697,7 @@ fn remote_scene_arguments(
             sh(screenshot.sampling_profile),
             sh(screenshot.phase_generation),
             sh(screenshot.replacement_mode)
-        );
-        if include_copy_experiment && screenshot.copy_experiment {
-            arguments.push_str(" --copy-experiment");
-        }
-        arguments
+        )
     } else {
         format!("--scene {}", sh(scene))
     }
@@ -1736,7 +1725,7 @@ fn remote_run_lab_command(
     );
     let scene_arguments = format!(
         "{} {}",
-        remote_scene_arguments(scene, has_recipe, fixture, screenshot, true),
+        remote_scene_arguments(scene, has_recipe, fixture, screenshot),
         case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
     );
     let bounded = seconds.map(|seconds| {
@@ -1930,7 +1919,6 @@ mod tests {
             sampling_profile: "crt",
             phase_generation: "linear-lanczos3",
             replacement_mode: "recycle",
-            copy_experiment: true,
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let run = remote_run_lab_command(
@@ -1950,7 +1938,6 @@ mod tests {
         assert!(run.contains(&format!("--sampling-profile {}", sh("crt"))));
         assert!(run.contains(&format!("--phase-generation {}", sh("linear-lanczos3"))));
         assert!(run.contains(&format!("--replacement-mode {}", sh("recycle"))));
-        assert!(run.contains("--copy-experiment"));
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -2001,7 +1988,6 @@ mod tests {
             sampling_profile: "hdmi",
             phase_generation: "two-tap",
             replacement_mode: "prepare",
-            copy_experiment: false,
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let assessment = remote_run_lab_command(

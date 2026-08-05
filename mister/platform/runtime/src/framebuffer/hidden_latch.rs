@@ -432,31 +432,6 @@ impl CachedHiddenLatchPresenter {
         source: &[Rgb565],
         damage: &DirtyRectList,
     ) -> Result<CachedHiddenLatchCopyStats, HiddenLatchError> {
-        self.prepare_cached_impl(source, damage, None)
-    }
-
-    /// Lab-only full-frame path used to compare copy kernels against the exact
-    /// production write-combined mapping and latch publication sequence.
-    pub fn prepare_cached_full_with(
-        &mut self,
-        source: &[Rgb565],
-        mut copy: impl FnMut(&mut [Rgb565], &[Rgb565]),
-    ) -> Result<CachedHiddenLatchCopyStats, HiddenLatchError> {
-        let damage = DirtyRectList::from_one(DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.render_width,
-            y1: self.render_height,
-        });
-        self.prepare_cached_impl(source, &damage, Some(&mut copy))
-    }
-
-    fn prepare_cached_impl(
-        &mut self,
-        source: &[Rgb565],
-        damage: &DirtyRectList,
-        mut full_copy: Option<&mut dyn FnMut(&mut [Rgb565], &[Rgb565])>,
-    ) -> Result<CachedHiddenLatchCopyStats, HiddenLatchError> {
         self.ensure_healthy()?;
         if self.prepared_slot.is_some() {
             return Err(HiddenLatchError::NoWritableSlot(
@@ -484,42 +459,27 @@ impl CachedHiddenLatchPresenter {
         };
         let mut destination_bytes = 0usize;
         let mut destination_rect_count = 0_u32;
-        if let Some(copy) = full_copy.as_mut() {
-            if !full_restore
-                || self.transform.source_height() != self.transform.destination_height()
-                || destination_stride != self.render_width
-            {
-                self.ledger.mark_attempt_failed(slot_index);
-                return Err(HiddenLatchError::Unsupported(
-                    "experimental copy requires one identity full-frame restore".into(),
-                ));
-            }
-            copy(&mut destination[..needed], &source[..needed]);
-            destination_rect_count = 1;
-            destination_bytes = needed * std::mem::size_of::<Rgb565>();
-        } else {
-            for rect in restore.iter() {
-                let copied = match self.transform.copy_rect(
-                    source_view,
-                    VerticalRect {
-                        x0: rect.x0,
-                        y0: rect.y0,
-                        x1: rect.x1,
-                        y1: rect.y1,
-                    },
-                    destination,
-                    destination_stride,
-                ) {
-                    Ok(copied) => copied,
-                    Err(error) => {
-                        self.ledger.mark_attempt_failed(slot_index);
-                        return Err(HiddenLatchError::Unsupported(error.into()));
-                    }
-                };
-                if let Some(copied) = copied {
-                    destination_rect_count = destination_rect_count.saturating_add(1);
-                    destination_bytes = destination_bytes.saturating_add(copied.bytes);
+        for rect in restore.iter() {
+            let copied = match self.transform.copy_rect(
+                source_view,
+                VerticalRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+                destination,
+                destination_stride,
+            ) {
+                Ok(copied) => copied,
+                Err(error) => {
+                    self.ledger.mark_attempt_failed(slot_index);
+                    return Err(HiddenLatchError::Unsupported(error.into()));
                 }
+            };
+            if let Some(copied) = copied {
+                destination_rect_count = destination_rect_count.saturating_add(1);
+                destination_bytes = destination_bytes.saturating_add(copied.bytes);
             }
         }
         self.prepared_slot = Some(slot_index);
