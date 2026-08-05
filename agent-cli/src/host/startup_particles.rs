@@ -178,7 +178,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
-    if seconds.is_some() {
+    if let Some(seconds) = seconds {
         let Some(output_dir) = output_dir else {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(
@@ -190,7 +190,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             output_dir,
             binary,
             scene,
-            seconds.expect("bounded evidence has a duration"),
+            seconds,
             warmup_seconds,
             screenshot.as_ref(),
             recipe,
