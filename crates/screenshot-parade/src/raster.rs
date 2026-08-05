@@ -1049,123 +1049,42 @@ fn prepare_linear_phase(
     }
 }
 
-fn coverage_mass_and_moment(values: &[u8]) -> (u64, u64) {
+fn coverage_mass_and_moment(values: &[u8], stride: usize) -> (u64, u64) {
     values
         .iter()
         .enumerate()
-        .fold((0_u64, 0_u64), |(mass, moment), (x, coverage)| {
+        .fold((0_u64, 0_u64), |(mass, moment), (index, coverage)| {
             let coverage = u64::from(*coverage);
-            (mass + coverage, moment + coverage * x as u64)
+            (mass + coverage, moment + coverage * (index % stride) as u64)
         })
 }
 
-fn nearest_adjustable_edge(values: &[u8], desired_x: i128, add: bool) -> Option<usize> {
-    let first = values.iter().position(|coverage| *coverage > 0)?;
-    let last = values.iter().rposition(|coverage| *coverage > 0)?;
+fn row_edge_candidates(row: &[u8], add: bool) -> Vec<usize> {
+    let Some(first) = row.iter().position(|coverage| *coverage > 0) else {
+        return Vec::new();
+    };
+    let last = row
+        .iter()
+        .rposition(|coverage| *coverage > 0)
+        .unwrap_or(first);
     let candidates = if add {
         [
             first.saturating_sub(1),
             first,
             last,
-            (last + 1).min(values.len() - 1),
+            (last + 1).min(row.len() - 1),
         ]
     } else {
         [first, first, last, last]
     };
-    candidates
-        .into_iter()
-        .filter(|x| {
-            if add {
-                values[*x] < 255
-            } else {
-                values[*x] > 0
-            }
-        })
-        .min_by_key(|x| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs())
-}
-
-fn stabilize_coverage_row(source: &[u8], phase: usize, shifted: &mut [u8]) {
-    let (target_mass, source_moment) = coverage_mass_and_moment(source);
-    if target_mass == 0 {
-        shifted.fill(0);
-        return;
-    }
-    let target_moment = (u128::from(source_moment) * CRT_PHASE_COUNT as u128
-        + u128::from(target_mass) * phase as u128
-        + (CRT_PHASE_COUNT / 2) as u128)
-        / CRT_PHASE_COUNT as u128;
-    let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
-    let (mut mass, mut moment) = coverage_mass_and_moment(shifted);
-
-    while mass != target_mass {
-        let add = mass < target_mass;
-        let amount_needed = mass.abs_diff(target_mass);
-        let moment_needed = if add {
-            i128::from(target_moment) - i128::from(moment)
-        } else {
-            i128::from(moment) - i128::from(target_moment)
-        };
-        let desired_x =
-            (moment_needed / i128::from(amount_needed)).clamp(0, shifted.len() as i128 - 1);
-        let x = nearest_adjustable_edge(shifted, desired_x, add)
-            .expect("phase coverage row always has an adjustable edge");
-        let capacity = if add {
-            u64::from(255 - shifted[x])
-        } else {
-            u64::from(shifted[x])
-        };
-        let amount = amount_needed.min(capacity);
-        if add {
-            shifted[x] += amount as u8;
-            mass += amount;
-            moment += amount * x as u64;
-        } else {
-            shifted[x] -= amount as u8;
-            mass -= amount;
-            moment -= amount * x as u64;
+    let mut result = Vec::with_capacity(4);
+    for x in candidates {
+        let adjustable = if add { row[x] < 255 } else { row[x] > 0 };
+        if adjustable && !result.contains(&x) {
+            result.push(x);
         }
     }
-
-    while moment != target_moment {
-        let move_right = moment < target_moment;
-        let needed = moment.abs_diff(target_moment);
-        let mut moved = false;
-        if move_right {
-            for x in (0..shifted.len() - 1).rev() {
-                let amount = needed
-                    .min(u64::from(shifted[x]))
-                    .min(u64::from(255 - shifted[x + 1]));
-                if amount > 0 {
-                    shifted[x] -= amount as u8;
-                    shifted[x + 1] += amount as u8;
-                    moment += amount;
-                    moved = true;
-                    break;
-                }
-            }
-        } else {
-            for x in 1..shifted.len() {
-                let amount = needed
-                    .min(u64::from(shifted[x]))
-                    .min(u64::from(255 - shifted[x - 1]));
-                if amount > 0 {
-                    shifted[x] -= amount as u8;
-                    shifted[x - 1] += amount as u8;
-                    moment -= amount;
-                    moved = true;
-                    break;
-                }
-            }
-        }
-        assert!(
-            moved,
-            "phase coverage row cannot reach its translation target"
-        );
-    }
-    debug_assert_eq!(
-        coverage_mass_and_moment(shifted),
-        (target_mass, target_moment)
-    );
+    result
 }
 
 fn stabilize_phase_coverage(
@@ -1178,13 +1097,91 @@ fn stabilize_phase_coverage(
     let stride = source_width + 1;
     debug_assert_eq!(source.len(), source_width * height);
     debug_assert_eq!(shifted.len(), stride * height);
-    for y in 0..height {
-        stabilize_coverage_row(
-            &source[y * source_width..(y + 1) * source_width],
-            phase,
-            &mut shifted[y * stride..(y + 1) * stride],
-        );
+    let (target_mass, source_moment) = coverage_mass_and_moment(source, source_width);
+    if target_mass == 0 {
+        shifted.fill(0);
+        return;
     }
+    let target_moment = (u128::from(source_moment) * CRT_PHASE_COUNT as u128
+        + u128::from(target_mass) * phase as u128
+        + (CRT_PHASE_COUNT / 2) as u128)
+        / CRT_PHASE_COUNT as u128;
+    let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
+    let (mut mass, mut moment) = coverage_mass_and_moment(shifted, stride);
+
+    while mass != target_mass {
+        let add = mass < target_mass;
+        let amount_needed = mass.abs_diff(target_mass);
+        let moment_needed = if add {
+            i128::from(target_moment) - i128::from(moment)
+        } else {
+            i128::from(moment) - i128::from(target_moment)
+        };
+        let desired_x = (moment_needed / i128::from(amount_needed)).clamp(0, stride as i128 - 1);
+        let mut candidates = (0..height)
+            .flat_map(|y| {
+                row_edge_candidates(&shifted[y * stride..(y + 1) * stride], add)
+                    .into_iter()
+                    .map(move |x| (y * stride + x, x))
+            })
+            .collect::<Vec<_>>();
+        candidates
+            .sort_by_key(|(_, x)| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs());
+        let mut adjusted = false;
+        for (index, x) in candidates {
+            if mass == target_mass {
+                break;
+            }
+            if add && shifted[index] < 255 {
+                shifted[index] += 1;
+                mass += 1;
+                moment += x as u64;
+                adjusted = true;
+            } else if !add && shifted[index] > 0 {
+                shifted[index] -= 1;
+                mass -= 1;
+                moment -= x as u64;
+                adjusted = true;
+            }
+        }
+        assert!(adjusted, "phase coverage has no adjustable edge");
+    }
+
+    while moment != target_moment {
+        let move_right = moment < target_moment;
+        let mut adjusted = false;
+        for y in 0..height {
+            let row = &mut shifted[y * stride..(y + 1) * stride];
+            let candidate = if move_right {
+                (0..stride - 1)
+                    .rev()
+                    .find(|x| row[*x] > 0 && row[*x + 1] < 255)
+                    .map(|x| (x, x + 1))
+            } else {
+                (1..stride)
+                    .find(|x| row[*x] > 0 && row[*x - 1] < 255)
+                    .map(|x| (x, x - 1))
+            };
+            if let Some((from, to)) = candidate {
+                row[from] -= 1;
+                row[to] += 1;
+                if move_right {
+                    moment += 1;
+                } else {
+                    moment -= 1;
+                }
+                adjusted = true;
+                if moment == target_moment {
+                    break;
+                }
+            }
+        }
+        assert!(adjusted, "phase coverage moment cannot reach target");
+    }
+    debug_assert_eq!(
+        coverage_mass_and_moment(shifted, stride),
+        (target_mass, target_moment)
+    );
 }
 
 #[inline(always)]
