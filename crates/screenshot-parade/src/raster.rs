@@ -1129,7 +1129,26 @@ fn prepare_linear_phase_neon_if_selected(
     }
     #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
     {
-        let _ = (request, pixels, coverage);
+        let LinearPhaseNeonRequest {
+            source,
+            source_width,
+            height,
+            output_width,
+            weights,
+            source_opaque_spans,
+            linear_to_srgb,
+        } = request;
+        let _ = (
+            source,
+            source_width,
+            height,
+            output_width,
+            weights,
+            source_opaque_spans,
+            linear_to_srgb,
+            pixels,
+            coverage,
+        );
         false
     }
 }
