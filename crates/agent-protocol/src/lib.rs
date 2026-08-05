@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 11 installs the rolling alpha release through the local acceptance workflow.
-pub const AGENT_VERSION: u64 = 11;
+// Version 12 reads authoritative presentation telemetry from latch protocol v5.
+pub const AGENT_VERSION: u64 = 12;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
