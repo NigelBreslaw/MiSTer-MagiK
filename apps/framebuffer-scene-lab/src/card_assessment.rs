@@ -7,6 +7,102 @@ use serde::Serialize;
 
 pub const FRAME_EVIDENCE_SCHEMA: &str = "mister-magik-scene-lab-frame-v2";
 pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v2";
+pub const VSYNC_EVENT_SCHEMA: &str = "mister-magik-scene-lab-vsync-event-v1";
+pub const VSYNC_SUMMARY_SCHEMA: &str = "mister-magik-scene-lab-vsync-summary-v1";
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct VsyncEvent {
+    pub schema: &'static str,
+    pub ordinal: u64,
+    pub status: &'static str,
+    pub monotonic_us: u64,
+    pub wait_us: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct VsyncObserverSummary {
+    pub schema: &'static str,
+    pub events: usize,
+    pub hits: usize,
+    pub timeouts: usize,
+    pub errors: usize,
+    pub observed_intervals: usize,
+    pub elapsed_us: u64,
+    pub interval_min_us: u64,
+    pub interval_average_us: u64,
+    pub interval_p50_us: u64,
+    pub interval_p99_us: u64,
+    pub interval_max_us: u64,
+    pub observed_hz: f64,
+}
+
+#[must_use]
+pub fn summarize_vsync_observer(events: &[VsyncEvent]) -> VsyncObserverSummary {
+    let hits = events
+        .iter()
+        .filter(|event| event.status == "hit")
+        .collect::<Vec<_>>();
+    let mut intervals = hits
+        .windows(2)
+        .filter_map(|pair| {
+            pair[1]
+                .monotonic_us
+                .checked_sub(pair[0].monotonic_us)
+                .filter(|interval| *interval > 0)
+        })
+        .collect::<Vec<_>>();
+    intervals.sort_unstable();
+    let elapsed_us = hits
+        .first()
+        .zip(hits.last())
+        .and_then(|(first, last)| last.monotonic_us.checked_sub(first.monotonic_us))
+        .unwrap_or(0);
+    let interval_average_us = intervals
+        .iter()
+        .copied()
+        .sum::<u64>()
+        .checked_div(intervals.len() as u64)
+        .unwrap_or(0);
+    let percentile = |percent: usize| {
+        intervals
+            .get(
+                intervals
+                    .len()
+                    .saturating_mul(percent)
+                    .div_ceil(100)
+                    .saturating_sub(1),
+            )
+            .copied()
+            .unwrap_or(0)
+    };
+    VsyncObserverSummary {
+        schema: VSYNC_SUMMARY_SCHEMA,
+        events: events.len(),
+        hits: hits.len(),
+        timeouts: events
+            .iter()
+            .filter(|event| event.status == "timeout")
+            .count(),
+        errors: events
+            .iter()
+            .filter(|event| event.status == "error")
+            .count(),
+        observed_intervals: intervals.len(),
+        elapsed_us,
+        interval_min_us: intervals.first().copied().unwrap_or(0),
+        interval_average_us,
+        interval_p50_us: percentile(50),
+        interval_p99_us: percentile(99),
+        interval_max_us: intervals.last().copied().unwrap_or(0),
+        observed_hz: if elapsed_us == 0 {
+            0.0
+        } else {
+            intervals.len() as f64 * 1_000_000.0 / elapsed_us as f64
+        },
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FrameEvidence {
@@ -247,6 +343,46 @@ const fn next_sequence(sequence: u16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vsync(ordinal: u64, monotonic_us: u64) -> VsyncEvent {
+        VsyncEvent {
+            schema: VSYNC_EVENT_SCHEMA,
+            ordinal,
+            status: "hit",
+            monotonic_us,
+            wait_us: 0,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn vsync_summary_uses_raw_hit_intervals() {
+        let mut events = vec![
+            vsync(1, 100_000),
+            vsync(2, 116_600),
+            vsync(3, 133_300),
+            vsync(4, 150_100),
+        ];
+        events.push(VsyncEvent {
+            schema: VSYNC_EVENT_SCHEMA,
+            ordinal: 5,
+            status: "timeout",
+            monotonic_us: 151_000,
+            wait_us: 1_000,
+            message: None,
+        });
+        let summary = summarize_vsync_observer(&events);
+        assert_eq!(summary.events, 5);
+        assert_eq!(summary.hits, 4);
+        assert_eq!(summary.timeouts, 1);
+        assert_eq!(summary.errors, 0);
+        assert_eq!(summary.observed_intervals, 3);
+        assert_eq!(summary.elapsed_us, 50_100);
+        assert_eq!(summary.interval_min_us, 16_600);
+        assert_eq!(summary.interval_p50_us, 16_700);
+        assert_eq!(summary.interval_p99_us, 16_800);
+        assert_eq!(summary.interval_max_us, 16_800);
+    }
 
     fn frame(id: u64, completion_us: u64, sequence: u16, flips: u16) -> FrameEvidence {
         let mut frame = FrameEvidence::new("test", id, false);

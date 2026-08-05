@@ -872,8 +872,10 @@ fn retrieve_scene_evidence(
     let cadence_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/cadence");
     let profile_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile");
     let cadence_frames = require_remote_artifact(session, &format!("{cadence_dir}/frames.jsonl"))?;
+    let cadence_vsync = require_remote_artifact(session, &format!("{cadence_dir}/vsync.jsonl"))?;
     let cadence_summary = require_remote_artifact(session, &format!("{cadence_dir}/summary.json"))?;
     let profile_frames = require_remote_artifact(session, &format!("{profile_dir}/frames.jsonl"))?;
+    let profile_vsync = require_remote_artifact(session, &format!("{profile_dir}/vsync.jsonl"))?;
     let profile_pass_summary =
         require_remote_artifact(session, &format!("{profile_dir}/summary.json"))?;
     let profile = require_remote_artifact(session, &format!("{profile_dir}/profile.json"))?;
@@ -885,6 +887,8 @@ fn retrieve_scene_evidence(
     let profile_pass_value: Value = serde_json::from_str(profile_pass_summary.trim())?;
     let cadence_frame_values = parse_scene_frames(&cadence_frames)?;
     let profile_frame_values = parse_scene_frames(&profile_frames)?;
+    parse_vsync_events(&cadence_vsync)?;
+    parse_vsync_events(&profile_vsync)?;
     let combined = summarize_scene_assessment(
         cadence_value,
         profile_pass_value,
@@ -896,8 +900,10 @@ fn retrieve_scene_evidence(
 
     for (name, contents) in [
         ("cadence-frames.jsonl", cadence_frames.as_str()),
+        ("cadence-vsync.jsonl", cadence_vsync.as_str()),
         ("cadence-summary.json", cadence_summary.as_str()),
         ("profile-frames.jsonl", profile_frames.as_str()),
+        ("profile-vsync.jsonl", profile_vsync.as_str()),
         ("profile-summary.json", profile_pass_summary.as_str()),
         ("profile.json", profile.as_str()),
         ("flamegraph.svg", flamegraph.as_str()),
@@ -937,12 +943,15 @@ fn retrieve_single_scene_pass(
         session,
         &format!("{REMOTE_SCENE_EVIDENCE_DIR}/frames.jsonl"),
     )?;
+    let vsync =
+        require_remote_artifact(session, &format!("{REMOTE_SCENE_EVIDENCE_DIR}/vsync.jsonl"))?;
     let summary = require_remote_artifact(
         session,
         &format!("{REMOTE_SCENE_EVIDENCE_DIR}/summary.json"),
     )?;
     let summary_value: Value = serde_json::from_str(summary.trim())?;
     let frame_values = parse_scene_frames(&frames)?;
+    parse_vsync_events(&vsync)?;
     let cadence = validated_scene_cadence(&summary_value)?;
     let mut failures = Vec::new();
     if !profiled {
@@ -976,6 +985,7 @@ fn retrieve_single_scene_pass(
         format!("{}\n", serde_json::to_string_pretty(&manifest)?),
     )?;
     fs::write(output_dir.join("frames.jsonl"), &frames)?;
+    fs::write(output_dir.join("vsync.jsonl"), &vsync)?;
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&combined)?),
@@ -999,7 +1009,7 @@ fn retrieve_single_scene_pass(
         fs::write(output_dir.join("stacks.folded"), folded)?;
     }
     let report = format!(
-        "# {scene} scene-lab measurement\n\n- Result: {}\n- Pass: {}\n- Confirmed frames: {}\n- Unique presentation FPS: {:.3}\n- Dropped frames: {}\n- Confirmation sequence failures: {}\n- Latch drops: {}\n- Completion failures: {}\n- Process CPU: {:.2}%\n- RSS mean / max: {} / {} KiB\n\nArtifacts: `manifest.json`, `frames.jsonl`, `summary.json`{}.\n",
+        "# {scene} scene-lab measurement\n\n- Result: {}\n- Pass: {}\n- Confirmed frames: {}\n- Unique presentation FPS: {:.3}\n- Dropped frames: {}\n- Confirmation sequence failures: {}\n- Latch drops: {}\n- Completion failures: {}\n- Independent vblank observer: {} hits at {:.3} Hz; p99 / max interval {:.3} / {:.3} ms\n- Process CPU: {:.2}%\n- RSS mean / max: {} / {} KiB\n\nArtifacts: `manifest.json`, `frames.jsonl`, `vsync.jsonl`, `summary.json`{}.\n",
         if profiled {
             "Attribution only".to_string()
         } else {
@@ -1024,6 +1034,12 @@ fn retrieve_single_scene_pass(
         value_u64(cadence, "confirmation_sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
         value_u64(cadence, "completion_failures"),
+        value_u64(&combined["pass"]["vsync_observer"], "hits"),
+        combined["pass"]["vsync_observer"]["observed_hz"]
+            .as_f64()
+            .unwrap_or(0.0),
+        value_u64(&combined["pass"]["vsync_observer"], "interval_p99_us") as f64 / 1_000.0,
+        value_u64(&combined["pass"]["vsync_observer"], "interval_max_us") as f64 / 1_000.0,
         combined["pass"]["process_cpu_pct_of_one_core"]
             .as_f64()
             .unwrap_or(0.0),
@@ -1113,6 +1129,25 @@ fn parse_scene_frames(text: &str) -> Result<Vec<Value>> {
         }
     }
     Ok(frames)
+}
+
+fn parse_vsync_events(text: &str) -> Result<Vec<Value>> {
+    let events = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).map_err(Into::into))
+        .collect::<Result<Vec<Value>>>()?;
+    if events.is_empty() {
+        return Err("scene-lab independent vsync evidence is empty".into());
+    }
+    for event in &events {
+        if event.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-scene-lab-vsync-event-v1")
+        {
+            return Err("scene-lab independent vsync evidence has the wrong schema".into());
+        }
+    }
+    Ok(events)
 }
 
 fn validated_scene_cadence(summary: &Value) -> Result<&Value> {
@@ -1331,6 +1366,7 @@ fn timing(summary: &Value, pass: &str, phase: &str, statistic: &str) -> u64 {
 fn scene_assessment_report(scene: &str, summary: &Value) -> String {
     let cadence = &summary["cadence_pass"]["cadence"];
     let profile = &summary["profile_pass"]["cadence"];
+    let vsync = &summary["cadence_pass"]["vsync_observer"];
     let cadence_cpu = summary["cadence_pass"]["process_cpu_pct_of_one_core"]
         .as_f64()
         .unwrap_or(0.0);
@@ -1351,7 +1387,7 @@ fn scene_assessment_report(scene: &str, summary: &Value) -> String {
         .and_then(|outlier| outlier.get("frame"))
         .map_or(0, |frame| value_u64(frame, "frame"));
     format!(
-        "# {scene} cadence and CPU assessment\n\n## Physical cadence authority\n\n- Result: {}\n- Unprofiled physical FPS: {:.3}\n- Unprofiled dropped frames: {}\n- Unprofiled confirmation sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled dropped frames (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
+        "# {scene} cadence and CPU assessment\n\n## Cadence evidence\n\n- Result: {}\n- Unprofiled confirmed-presentation FPS: {:.3}\n- Unprofiled dropped frames under the existing estimator: {}\n- Unprofiled confirmation sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Independent vblank observer: {} hits at {:.3} Hz\n- Independent vblank interval min / p50 / p99 / max: {:.3} / {:.3} / {:.3} / {:.3} ms\n- Independent vblank observer timeouts / errors: {} / {}\n- Profiled estimated dropped frames (attribution only): {}\n- Attribution: {}\n\nThe independent observer is a separate blocking `FBIO_WAITFORVSYNC` stream and does not pace rendering. The existing confirmation estimator remains the qualification rule for this experiment; the raw observer stream is retained so the two clocks can be compared without rounding away timing detail. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Cadence vblanks](cadence-vsync.jsonl) · [Profile frames](profile-frames.jsonl) · [Profile vblanks](profile-vsync.jsonl) · [Machine summary](summary.json)\n",
         if value_u64(cadence, "dropped_frames") == 0 {
             "PASS — 0 dropped frames".to_string()
         } else {
@@ -1368,6 +1404,17 @@ fn scene_assessment_report(scene: &str, summary: &Value) -> String {
         value_u64(cadence, "confirmation_sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
         value_u64(cadence, "completion_failures"),
+        value_u64(vsync, "hits"),
+        vsync
+            .get("observed_hz")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        value_u64(vsync, "interval_min_us") as f64 / 1_000.0,
+        value_u64(vsync, "interval_p50_us") as f64 / 1_000.0,
+        value_u64(vsync, "interval_p99_us") as f64 / 1_000.0,
+        value_u64(vsync, "interval_max_us") as f64 / 1_000.0,
+        value_u64(vsync, "timeouts"),
+        value_u64(vsync, "errors"),
         value_u64(profile, "dropped_frames"),
         summary
             .get("attribution")

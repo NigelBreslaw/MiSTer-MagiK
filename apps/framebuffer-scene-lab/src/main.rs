@@ -5,11 +5,13 @@
 mod card_assessment;
 mod card_flip;
 mod card_flip_neon;
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+mod vsync_observer;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use card_assessment::{
     CardFrameDetails, FrameEvidence, ScreenshotFrameDetails, confirmation_sequence_is_contiguous,
-    summarize_cadence,
+    summarize_cadence, summarize_vsync_observer,
 };
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
@@ -146,6 +148,7 @@ fn finish_frame_evidence(
 fn write_measurement_evidence(
     assessment: &MeasurementEvidence,
     frames: &[FrameEvidence],
+    vsync_events: &[card_assessment::VsyncEvent],
     cadence: &card_assessment::CadenceSummary,
     plan: mister_magik_core::display::ResolvedDisplayPlan,
     scene: &'static str,
@@ -167,6 +170,14 @@ fn write_measurement_evidence(
     }
     std::fs::write(&frames_path, frame_bytes)
         .map_err(|error| format!("write {}: {error}", frames_path.display()))?;
+    let vsync_path = assessment.evidence_dir.join("vsync.jsonl");
+    let mut vsync_bytes = Vec::with_capacity(vsync_events.len().saturating_mul(160));
+    for event in vsync_events {
+        serde_json::to_writer(&mut vsync_bytes, event).map_err(|error| error.to_string())?;
+        vsync_bytes.push(b'\n');
+    }
+    std::fs::write(&vsync_path, vsync_bytes)
+        .map_err(|error| format!("write {}: {error}", vsync_path.display()))?;
     let screenshot_frames = frames
         .iter()
         .filter_map(|frame| frame.screenshot.as_ref())
@@ -239,6 +250,7 @@ fn write_measurement_evidence(
             "max": rss_samples_kib.iter().copied().max().unwrap_or(0),
         },
         "cadence": cadence,
+        "vsync_observer": summarize_vsync_observer(vsync_events),
         "screenshot": screenshot_summary,
     });
     let summary_path = assessment.evidence_dir.join("summary.json");
@@ -1504,6 +1516,7 @@ fn run_window(
     let mut pending_evidence: Option<PendingFrameEvidence> = None;
     let mut rss_samples_kib = Vec::new();
     let mut next_rss_sample = None;
+    let mut vsync_observer = None;
     let profiler_requested = profile
         || measurement_evidence
             .as_ref()
@@ -1579,6 +1592,9 @@ fn run_window(
                         pending_evidence = None;
                         rss_samples_kib.clear();
                         next_rss_sample = Some(measured_at);
+                        if measurement_evidence.is_some() {
+                            vsync_observer = Some(vsync_observer::VsyncObserver::start()?);
+                        }
                         #[cfg(feature = "profile")]
                         if profiler_requested {
                             profiler = Some(cpu_profile::start(renderer.effect().label())?);
@@ -1751,10 +1767,18 @@ fn run_window(
                 );
                 frame_evidence.push(evidence);
             }
+            if let Some(observer) = vsync_observer.as_ref() {
+                observer.request_stop();
+            }
             #[cfg(feature = "profile")]
             if let Some(active_profiler) = profiler.take() {
                 cpu_profile::finish(active_profiler)?;
             }
+            let vsync_events = vsync_observer
+                .take()
+                .map(vsync_observer::VsyncObserver::finish)
+                .transpose()?
+                .unwrap_or_default();
             let measured_started =
                 measurement_started.expect("bounded scene completes only after measurement begins");
             let seconds = measured_started.elapsed().as_secs_f64();
@@ -1792,6 +1816,7 @@ fn run_window(
                 write_measurement_evidence(
                     evidence,
                     &frame_evidence,
+                    &vsync_events,
                     &cadence,
                     plan,
                     renderer.effect().label(),
@@ -2024,6 +2049,7 @@ fn run_card_flip_mister(
     let mut warmup_started = None;
     let mut rss_samples_kib = Vec::new();
     let mut next_rss_sample = None;
+    let mut vsync_observer = None;
     let mut automatic_direction = CardFlipDirection::Reverse;
     let mut next_automatic_flip = duration;
     if bounded_run {
@@ -2110,6 +2136,9 @@ fn run_card_flip_mister(
                         profile_full_slot_restores = 0;
                         rss_samples_kib.clear();
                         next_rss_sample = Some(measured_at);
+                        if assessment.is_some() {
+                            vsync_observer = Some(vsync_observer::VsyncObserver::start()?);
+                        }
                         #[cfg(feature = "profile")]
                         if profiler_requested {
                             profiler = Some(cpu_profile::start("card-flip")?);
@@ -2380,6 +2409,9 @@ fn run_card_flip_mister(
                     profile_frame_evidence.push(evidence);
                 }
             }
+            if let Some(observer) = vsync_observer.as_ref() {
+                observer.request_stop();
+            }
             let measured_started = measurement_started
                 .expect("bounded card run completes only after measurement begins");
             let seconds = measured_started.elapsed().as_secs_f64();
@@ -2392,6 +2424,11 @@ fn run_card_flip_mister(
             if let Some(active_profiler) = profiler.take() {
                 cpu_profile::finish(active_profiler)?;
             }
+            let vsync_events = vsync_observer
+                .take()
+                .map(vsync_observer::VsyncObserver::finish)
+                .transpose()?
+                .unwrap_or_default();
             let (frame_to_present_average_us, frame_to_present_p99_us, frame_to_present_max_us) =
                 sample_summary(&mut profile_frame_to_present_samples_us);
             let (render_average_us, render_p99_us, render_max_us) =
@@ -2459,6 +2496,7 @@ fn run_card_flip_mister(
                 write_measurement_evidence(
                     assessment,
                     &profile_frame_evidence,
+                    &vsync_events,
                     &cadence,
                     plan,
                     "card-flip",
