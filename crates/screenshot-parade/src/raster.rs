@@ -286,9 +286,11 @@ impl PreparedScreenshotCard {
                 rim_card_linear(&mut styled, &corner_insets);
             }
             let phase_started = std::time::Instant::now();
-            let base = prepare_linear_phase(&styled, &coverage, 0);
-            let shifted =
-                std::array::from_fn(|index| prepare_linear_phase(&styled, &coverage, index + 1));
+            let premultiplied = premultiply_linear_source(&styled, &coverage);
+            let base = prepare_linear_phase(&styled, &coverage, &premultiplied, 0);
+            let shifted = std::array::from_fn(|index| {
+                prepare_linear_phase(&styled, &coverage, &premultiplied, index + 1)
+            });
             let phase_us = phase_started.elapsed().as_micros();
             return (
                 Self {
@@ -867,9 +869,34 @@ fn fractional_delay_weights(phase: usize) -> [i32; 6] {
     weights
 }
 
+fn premultiply_linear_source(image: &LinearImage, coverage: &[u8]) -> Vec<[u16; 4]> {
+    image
+        .pixels
+        .iter()
+        .zip(coverage)
+        .map(|(pixel, coverage)| {
+            let alpha = u16::from(*coverage) * 257;
+            let premultiply = |channel: u16| {
+                if alpha == 65_535 {
+                    channel
+                } else {
+                    ((u64::from(channel) * u64::from(alpha) + 32_767) / 65_535) as u16
+                }
+            };
+            [
+                premultiply(pixel.r),
+                premultiply(pixel.g),
+                premultiply(pixel.b),
+                alpha,
+            ]
+        })
+        .collect()
+}
+
 fn prepare_linear_phase(
     image: &LinearImage,
     source_coverage: &[u8],
+    premultiplied_source: &[[u16; 4]],
     phase: usize,
 ) -> PreparedLinearPhase {
     let width = image.width + usize::from(phase != 0);
@@ -892,23 +919,12 @@ fn prepare_linear_phase(
                 let mut maxima = [0_u16; 4];
                 for (tap, weight) in weights.into_iter().enumerate() {
                     let source_x = out_x as isize + tap as isize - 3;
-                    let (pixel, alpha) = if (0..image.width as isize).contains(&source_x) {
+                    let samples = if (0..image.width as isize).contains(&source_x) {
                         let source_x = source_x as usize;
-                        let pixel = image.pixels[y * image.stride + source_x];
-                        let alpha = u16::from(source_coverage[y * image.width + source_x]) * 257;
-                        (pixel, alpha)
+                        premultiplied_source[y * image.width + source_x]
                     } else {
-                        (LinearRgb::default(), 0)
+                        [0; 4]
                     };
-                    let premultiply = |channel: u16| {
-                        ((u64::from(channel) * u64::from(alpha) + 32_767) / 65_535) as u16
-                    };
-                    let samples = [
-                        premultiply(pixel.r),
-                        premultiply(pixel.g),
-                        premultiply(pixel.b),
-                        alpha,
-                    ];
                     for channel in 0..4 {
                         sums[channel] += i64::from(samples[channel]) * i64::from(weight);
                         minima[channel] = minima[channel].min(samples[channel]);
@@ -925,8 +941,13 @@ fn prepare_linear_phase(
                 coverage[target] = ((u32::from(alpha) + 128) / 257).min(255) as u8;
                 if alpha > 0 {
                     let unpremultiply = |channel: u16| {
-                        ((u64::from(channel) * 65_535 + u64::from(alpha) / 2) / u64::from(alpha))
+                        if alpha == 65_535 {
+                            channel
+                        } else {
+                            ((u64::from(channel) * 65_535 + u64::from(alpha) / 2)
+                                / u64::from(alpha))
                             .min(65_535) as u16
+                        }
                     };
                     pixels[target] = linear_to_rgb565(LinearRgb {
                         r: unpremultiply(premultiplied[0]),
