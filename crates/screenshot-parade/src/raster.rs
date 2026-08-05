@@ -187,11 +187,7 @@ impl PreparedScreenshotCard {
 
     #[must_use]
     pub fn max_corner_inset(&self) -> usize {
-        self.corner_insets
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or_default() as usize
+        self.corner_insets.iter().copied().max().unwrap_or_default() as usize
     }
 
     #[must_use]
@@ -249,9 +245,7 @@ struct LanczosFilter {
 }
 
 fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
-    Rgb565Pixel(
-        (u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3),
-    )
+    Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3))
 }
 
 fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -291,11 +285,7 @@ pub(crate) fn depth_style(speed: usize, screen_height: usize) -> (usize, usize, 
     )
 }
 
-fn scaled_style(
-    image: &ScreenshotImage,
-    speed: usize,
-    screen_height: usize,
-) -> (usize, usize, u8) {
+fn scaled_style(image: &ScreenshotImage, speed: usize, screen_height: usize) -> (usize, usize, u8) {
     let (box_width, box_height, tint) = depth_style(speed, screen_height);
     if image.width * box_height > image.height * box_width {
         (
@@ -334,9 +324,7 @@ fn lanczos_filters(source_len: usize, target_len: usize) -> Vec<LanczosFilter> {
             let first = (center - support).ceil() as isize;
             let last = (center + support).floor() as isize;
             let start = first.max(0) as usize;
-            let end = last
-                .min(source_len as isize - 1)
-                .max(first.max(0)) as usize;
+            let end = last.min(source_len as isize - 1).max(first.max(0)) as usize;
             let float_weights = (start..=end)
                 .map(|source| lanczos3((source as f64 - center) * filter_scale) * filter_scale)
                 .collect::<Vec<_>>();
@@ -406,12 +394,12 @@ fn scale_lanczos3_rgb565_tinted(
                 b += i32::try_from(pixel & 0xff).unwrap_or_default() * weight;
             }
             let tint = i32::from(tint);
-            let r = (((((r + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127)
-                / 255) as u8;
-            let g = (((((g + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127)
-                / 255) as u8;
-            let b = (((((b + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127)
-                / 255) as u8;
+            let r =
+                (((((r + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
+            let g =
+                (((((g + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
+            let b =
+                (((((b + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
             pixels[target_y * out_width + target_x] = color565(r, g, b);
         }
     }
@@ -522,6 +510,7 @@ fn prepare_fractional_shifted(image: &ScreenshotImage, phase_alpha: u8) -> Scree
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blit_half_phase(
     dst: &mut [Rgb565Pixel],
     screen_width: usize,
@@ -581,6 +570,7 @@ fn quantize_phase(x_fp: i64) -> QuantizedPhase {
     QuantizedPhase { x, phase }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn blit_sixteenth_phase(
     dst: &mut [Rgb565Pixel],
     screen_width: usize,
@@ -669,8 +659,8 @@ fn blit_fractional(
         if copy_x1 > copy_x0 {
             let source_x0 = (copy_x0 as isize - x) as usize;
             dst[target_row + copy_x0..target_row + copy_x1].copy_from_slice(
-                &shifted.pixels[shifted_row + source_x0
-                    ..shifted_row + source_x0 + copy_x1 - copy_x0],
+                &shifted.pixels
+                    [shifted_row + source_x0..shifted_row + source_x0 + copy_x1 - copy_x0],
             );
         }
         let right = x + source_end as isize;
@@ -804,8 +794,10 @@ mod tests {
             2,
         );
         assert!(frame[..2 * 32].iter().all(|pixel| *pixel == background));
-        assert!(frame[(2 + card.height()) * 32..]
-            .iter()
-            .all(|pixel| *pixel == background));
+        assert!(
+            frame[(2 + card.height()) * 32..]
+                .iter()
+                .all(|pixel| *pixel == background)
+        );
     }
 }

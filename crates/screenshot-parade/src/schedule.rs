@@ -1,10 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::raster::{depth_style, PreparedScreenshotCard};
-use crate::{
-    PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotSamplingProfile,
-};
+use crate::raster::{PreparedScreenshotCard, depth_style};
+use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotSamplingProfile};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneError, SceneGeometry,
@@ -50,7 +48,10 @@ impl std::fmt::Debug for ScreenshotParadeConfig {
             .field("seed", &self.seed)
             .field("sampling_profile", &self.sampling_profile)
             .field("startup", &self.startup)
-            .field("worker_start", &self.worker_start.as_ref().map(|_| "callback"))
+            .field(
+                "worker_start",
+                &self.worker_start.as_ref().map(|_| "callback"),
+            )
             .finish()
     }
 }
@@ -148,10 +149,7 @@ struct Rect {
 
 impl Rect {
     fn contains(self, other: Self) -> bool {
-        self.x0 <= other.x0
-            && self.y0 <= other.y0
-            && self.x1 >= other.x1
-            && self.y1 >= other.y1
+        self.x0 <= other.x0 && self.y0 <= other.y0 && self.x1 >= other.x1 && self.y1 >= other.y1
     }
 }
 
@@ -453,8 +451,8 @@ impl ScreenshotParade {
                     break;
                 };
                 let frames_until_exit = phase + rank as u64 * interval_frames;
-                let x_fp = width as i64 * PARADE_SUBPIXEL_ONE
-                    - frames_until_exit as i64 * velocity_fp;
+                let x_fp =
+                    width as i64 * PARADE_SUBPIXEL_ONE - frames_until_exit as i64 * velocity_fp;
                 let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
                 let y = self
                     .random_tile_y(
@@ -606,7 +604,10 @@ impl ScreenshotParade {
             else {
                 continue;
             };
-            let next = self.tiles[tile_index].next.take().expect("ready card checked");
+            let next = self.tiles[tile_index]
+                .next
+                .take()
+                .expect("ready card checked");
             let x = -(next.raster.width() as isize);
             let Some(y) = self.random_tile_y(
                 x,
@@ -629,11 +630,7 @@ impl ScreenshotParade {
             let interval = self.jittered_interval(self.layers[layer_index].interval_frames);
             self.layers[layer_index].next_spawn_frame = nominal_frame + interval;
             self.layers[layer_index].spawn_count += 1;
-            let layer_tile_count = self
-                .tiles
-                .iter()
-                .filter(|tile| tile.layer == speed)
-                .count();
+            let layer_tile_count = self.tiles.iter().filter(|tile| tile.layer == speed).count();
             let has_waiting_tile = self.tiles.iter().any(|tile| {
                 tile.layer == speed
                     && !tile.active
@@ -796,26 +793,12 @@ impl ScreenshotParade {
         let span = (max_y - min_y + 1).max(1) as usize;
         for _ in 0..64 {
             let y = min_y + self.random_below(span) as isize;
-            if self.placement_is_clear(
-                x,
-                y,
-                tile_width,
-                tile_height,
-                speed,
-                replacing_tile,
-            ) {
+            if self.placement_is_clear(x, y, tile_width, tile_height, speed, replacing_tile) {
                 return Some(y);
             }
         }
         (min_y..=max_y).find(|y| {
-            self.placement_is_clear(
-                x,
-                *y,
-                tile_width,
-                tile_height,
-                speed,
-                replacing_tile,
-            )
+            self.placement_is_clear(x, *y, tile_width, tile_height, speed, replacing_tile)
         })
     }
 
@@ -859,12 +842,9 @@ impl ScreenshotParade {
         for &tile_index in self.draw_order.iter().rev() {
             let tile = &self.tiles[tile_index];
             let profile = self.sampling_profile.for_layer(tile.layer);
-            let Some(draw_bounds) = tile_draw_bounds(
-                tile,
-                profile,
-                self.geometry.width(),
-                self.geometry.height(),
-            ) else {
+            let Some(draw_bounds) =
+                tile_draw_bounds(tile, profile, self.geometry.width(), self.geometry.height())
+            else {
                 continue;
             };
             if self
@@ -876,12 +856,9 @@ impl ScreenshotParade {
                 continue;
             }
             self.visible_draw_order.push(tile_index);
-            if let Some(opaque_bounds) = tile_opaque_bounds(
-                tile,
-                profile,
-                self.geometry.width(),
-                self.geometry.height(),
-            ) {
+            if let Some(opaque_bounds) =
+                tile_opaque_bounds(tile, profile, self.geometry.width(), self.geometry.height())
+            {
                 self.depth_coverage.push(opaque_bounds);
             }
         }
@@ -900,7 +877,10 @@ impl ScreenshotParade {
     }
 
     fn sixteenth_phase_layer_mask(&self) -> u8 {
-        if matches!(self.sampling_profile, ScreenshotSamplingProfile::CrtSixteenth) {
+        if matches!(
+            self.sampling_profile,
+            ScreenshotSamplingProfile::CrtSixteenth
+        ) {
             (1_u8 << SPEED_COUNT) - 1
         } else {
             1
@@ -1087,8 +1067,7 @@ fn horizontal_star_position(
         .saturating_mul(speed_numerator)
         .saturating_mul(SUBPIXEL_ONE)
         / (STAR_SPEED_DENOMINATOR * TICK_ONE as u64);
-    let position =
-        (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
+    let position = (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
     (
         (position / SUBPIXEL_ONE) as usize,
         (position % SUBPIXEL_ONE) as u8,
@@ -1201,9 +1180,7 @@ fn tile_opaque_bounds(
 }
 
 fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
-    Rgb565Pixel(
-        (u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3),
-    )
+    Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3))
 }
 
 fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -1354,12 +1331,7 @@ mod tests {
             std::process::id()
         ));
         write_archive(&path, 220);
-        let mut scene = prepared_scene(
-            &path,
-            320,
-            180,
-            ScreenshotSamplingProfile::HdmiLegacyHalf,
-        );
+        let mut scene = prepared_scene(&path, 320, 180, ScreenshotSamplingProfile::HdmiLegacyHalf);
         let mut pixels = vec![Rgb565Pixel(0); 320 * 180];
         scene
             .render_at(&mut pixels, Duration::from_secs(1))
