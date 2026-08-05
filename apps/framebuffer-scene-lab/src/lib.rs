@@ -305,7 +305,9 @@ impl EffectRecipe {
             EffectKind::Magik => embedded_magik_recipe().map(Self::Magik),
             EffectKind::Cabinet => embedded_cabinet_recipe().map(Self::Cabinet),
             EffectKind::Intro => embedded_intro_recipe().map(Self::Intro),
-            EffectKind::NavigationTransition | EffectKind::CardFlip => {
+            EffectKind::NavigationTransition
+            | EffectKind::CardFlip
+            | EffectKind::ScreenshotScreensaver => {
                 Err("self-contained scenes do not have embedded particle recipes".into())
             }
         }
