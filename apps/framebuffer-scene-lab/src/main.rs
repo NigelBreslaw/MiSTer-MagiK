@@ -764,6 +764,7 @@ impl LabScene {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     fn measurement_ready(&self) -> bool {
         match self {
             Self::Screenshot(renderer) => renderer.is_ready(),
