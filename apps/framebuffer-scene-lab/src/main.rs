@@ -1041,7 +1041,9 @@ fn run_window(source: SceneSource, case: Option<CabinetCase>, profile: bool) -> 
     let mut repeated_presentations = 0_u64;
     let mut latch_drop_count = 0_u16;
     #[cfg(feature = "profile")]
-    let profiler = profile.then(cpu_profile::start).transpose()?;
+    let profiler = profile
+        .then(|| cpu_profile::start(cpu_profile::CpuProfileScene::Cabinet))
+        .transpose()?;
     #[cfg(not(feature = "profile"))]
     if profile {
         return Err("cabinet profiling requires a release-device-profile build".into());
@@ -1291,20 +1293,32 @@ fn run_card_flip_mister(
     let profile_cpu_started = process_cpu_time();
     let mut profile_frames = 0_u64;
     let mut profile_repeated_presentations = 0_u64;
+    let mut transfer_source_rects = 0_u64;
+    let mut transfer_destination_rects = 0_u64;
+    let mut transfer_source_bytes = 0_u64;
+    let mut transfer_destination_bytes = 0_u64;
+    let mut full_slot_restores = 0_u64;
+    let mut profile_transfer_source_rects = 0_u64;
+    let mut profile_transfer_destination_rects = 0_u64;
+    let mut profile_transfer_source_bytes = 0_u64;
+    let mut profile_transfer_destination_bytes = 0_u64;
+    let mut profile_full_slot_restores = 0_u64;
     let mut automatic_direction = CardFlipDirection::Reverse;
     let mut next_automatic_flip = duration;
     if profile {
         renderer.play(CardFlipDirection::Forward, Duration::ZERO);
     }
     #[cfg(feature = "profile")]
-    let profiler = profile.then(cpu_profile::start).transpose()?;
+    let profiler = profile
+        .then(|| cpu_profile::start(cpu_profile::CpuProfileScene::CardFlip))
+        .transpose()?;
     #[cfg(not(feature = "profile"))]
     if profile {
         return Err("card flip profiling requires a release-device-profile build".into());
     }
 
     println!(
-        "framebuffer-scene-lab scene=card-flip render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} card={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=dirty-rect",
+        "framebuffer-scene-lab scene=card-flip render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} card={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=cached-prepare-only",
         plan.render_w,
         plan.render_h,
         plan.fb_w,
@@ -1373,6 +1387,26 @@ fn run_card_flip_mister(
                 transfer_samples_us.push(transfer_us);
                 profile_render_samples_us.push(render_us);
                 profile_transfer_samples_us.push(transfer_us);
+                transfer_source_rects =
+                    transfer_source_rects.saturating_add(u64::from(copy.source_rect_count));
+                transfer_destination_rects = transfer_destination_rects
+                    .saturating_add(u64::from(copy.destination_rect_count));
+                transfer_source_bytes =
+                    transfer_source_bytes.saturating_add(copy.source_bytes as u64);
+                transfer_destination_bytes =
+                    transfer_destination_bytes.saturating_add(copy.destination_bytes as u64);
+                full_slot_restores =
+                    full_slot_restores.saturating_add(u64::from(copy.full_restore));
+                profile_transfer_source_rects =
+                    profile_transfer_source_rects.saturating_add(u64::from(copy.source_rect_count));
+                profile_transfer_destination_rects = profile_transfer_destination_rects
+                    .saturating_add(u64::from(copy.destination_rect_count));
+                profile_transfer_source_bytes =
+                    profile_transfer_source_bytes.saturating_add(copy.source_bytes as u64);
+                profile_transfer_destination_bytes = profile_transfer_destination_bytes
+                    .saturating_add(copy.destination_bytes as u64);
+                profile_full_slot_restores =
+                    profile_full_slot_restores.saturating_add(u64::from(copy.full_restore));
                 profile_frames = profile_frames.saturating_add(1);
             }
             next_frame += FRAME_DURATION;
@@ -1390,7 +1424,7 @@ fn run_card_flip_mister(
             let (transfer_average_us, transfer_p99_us, transfer_max_us) =
                 sample_summary(&mut transfer_samples_us);
             println!(
-                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} repeated_presentations={} latch_drop_count={}",
+                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
                 rendered_frames,
                 rendered_frames as f64 / seconds,
                 cpu_percent,
@@ -1403,6 +1437,11 @@ fn run_card_flip_mister(
                 transfer_average_us,
                 transfer_p99_us,
                 transfer_max_us,
+                transfer_source_rects,
+                transfer_destination_rects,
+                transfer_source_bytes,
+                transfer_destination_bytes,
+                full_slot_restores,
                 repeated_presentations,
                 latch_drop_count,
             );
@@ -1411,6 +1450,11 @@ fn run_card_flip_mister(
             rendered_frames = 0;
             render_samples_us.clear();
             transfer_samples_us.clear();
+            transfer_source_rects = 0;
+            transfer_destination_rects = 0;
+            transfer_source_bytes = 0;
+            transfer_destination_bytes = 0;
+            full_slot_restores = 0;
             profile_repeated_presentations =
                 profile_repeated_presentations.saturating_add(repeated_presentations);
             repeated_presentations = 0;
@@ -1428,7 +1472,7 @@ fn run_card_flip_mister(
             let (transfer_average_us, transfer_p99_us, transfer_max_us) =
                 sample_summary(&mut profile_transfer_samples_us);
             println!(
-                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} repeated_presentations={} latch_drop_count={}",
+                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
                 seconds,
                 profile_frames,
                 profile_frames as f64 / seconds,
@@ -1439,7 +1483,12 @@ fn run_card_flip_mister(
                 transfer_average_us,
                 transfer_p99_us,
                 transfer_max_us,
-                profile_repeated_presentations,
+                profile_transfer_source_rects,
+                profile_transfer_destination_rects,
+                profile_transfer_source_bytes,
+                profile_transfer_destination_bytes,
+                profile_full_slot_restores,
+                profile_repeated_presentations.saturating_add(repeated_presentations),
                 latch_drop_count,
             );
             #[cfg(feature = "profile")]

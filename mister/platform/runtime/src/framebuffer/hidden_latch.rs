@@ -92,9 +92,11 @@ pub struct HiddenLatchPipelineStats {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CachedHiddenLatchCopyStats {
     pub slot_index: u8,
-    pub rect_count: u32,
+    pub source_rect_count: u32,
+    pub destination_rect_count: u32,
     pub source_bytes: usize,
     pub destination_bytes: usize,
+    pub full_restore: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -431,6 +433,7 @@ impl CachedHiddenLatchPresenter {
         self.ledger.record_damage(damage);
         let slot_index = self.raw.writable_slot_index();
         let restore = self.ledger.plan(slot_index);
+        let full_restore = is_full_restore(&restore, self.render_width, self.render_height);
         let destination_stride = self.raw.stride_pixels();
         let destination = self.raw.pixels_mut();
         let source_view = Rgb565FrameView {
@@ -440,6 +443,7 @@ impl CachedHiddenLatchPresenter {
             stride_pixels: self.render_width,
         };
         let mut destination_bytes = 0usize;
+        let mut destination_rect_count = 0_u32;
         for rect in restore.iter() {
             let copied = match self.transform.copy_rect(
                 source_view,
@@ -458,15 +462,19 @@ impl CachedHiddenLatchPresenter {
                     return Err(HiddenLatchError::Unsupported(error.into()));
                 }
             };
-            destination_bytes =
-                destination_bytes.saturating_add(copied.map_or(0, |stats| stats.bytes));
+            if let Some(copied) = copied {
+                destination_rect_count = destination_rect_count.saturating_add(1);
+                destination_bytes = destination_bytes.saturating_add(copied.bytes);
+            }
         }
         self.prepared_slot = Some(slot_index);
         Ok(CachedHiddenLatchCopyStats {
             slot_index,
-            rect_count: restore.len() as u32,
+            source_rect_count: restore.len() as u32,
+            destination_rect_count,
             source_bytes: restore.total_rgb565_bytes(),
             destination_bytes,
+            full_restore,
         })
     }
 
@@ -544,6 +552,17 @@ impl CachedHiddenLatchPresenter {
             Ok(())
         }
     }
+}
+
+fn is_full_restore(restore: &DirtyRectList, width: usize, height: usize) -> bool {
+    restore.len() == 1
+        && restore.get(0)
+            == Some(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: width,
+                y1: height,
+            })
 }
 
 fn scaled_geometry(
@@ -692,6 +711,30 @@ mod tests {
     fn sequence_never_uses_zero() {
         assert_eq!(next_sequence(1), 2);
         assert_eq!(next_sequence(u16::MAX), 1);
+    }
+
+    #[test]
+    fn full_restore_requires_one_exact_surface_rectangle() {
+        assert!(is_full_restore(
+            &DirtyRectList::from_one(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 960,
+                y1: 600,
+            }),
+            960,
+            600,
+        ));
+        assert!(!is_full_restore(
+            &DirtyRectList::from_one(DirtyRect {
+                x0: 336,
+                y0: 90,
+                x1: 623,
+                y1: 510,
+            }),
+            960,
+            600,
+        ));
     }
 
     #[test]
