@@ -51,6 +51,8 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
     pub(crate) case: Option<&'a str>,
+    pub(crate) seconds: Option<u64>,
+    pub(crate) warmup_seconds: u64,
     pub(crate) profile: bool,
     pub(crate) assess: bool,
     pub(crate) output_dir: Option<&'a Path>,
@@ -64,6 +66,8 @@ struct RemoteLabRequest {
     fixture: Option<String>,
     screenshot: Option<RemoteScreenshotArgs>,
     case: Option<String>,
+    seconds: Option<u64>,
+    warmup_seconds: u64,
     profile: bool,
     assess: bool,
     output_dir: Option<PathBuf>,
@@ -104,6 +108,8 @@ pub(super) fn run(
                     fixture: None,
                     seed: None,
                     case: None,
+                    seconds: None,
+                    warmup_seconds: 0,
                     profile: false,
                     assess: false,
                     output_dir: None,
@@ -136,6 +142,8 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         fixture,
         seed,
         case,
+        seconds,
+        warmup_seconds,
         profile,
         assess,
         output_dir,
@@ -211,6 +219,8 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     fixture,
                     screenshot,
                     case,
+                    seconds,
+                    warmup_seconds,
                     profile,
                     assess,
                     output_dir,
@@ -704,6 +714,8 @@ fn run_remote_lab(
         fixture,
         screenshot,
         case,
+        seconds,
+        warmup_seconds,
         profile,
         assess,
         output_dir,
@@ -718,6 +730,8 @@ fn run_remote_lab(
             fixture.as_deref(),
             screenshot.as_ref(),
             case.as_deref(),
+            seconds,
+            warmup_seconds,
             profile,
             assess,
         ),
@@ -1381,6 +1395,8 @@ fn remote_run_lab_command(
     fixture: Option<&str>,
     screenshot: Option<&RemoteScreenshotArgs>,
     case: Option<&str>,
+    seconds: Option<u64>,
+    warmup_seconds: u64,
     profile: bool,
     assess: bool,
 ) -> String {
@@ -1389,8 +1405,17 @@ fn remote_run_lab_command(
     let invocation = if assess {
         let cadence_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/cadence");
         let profile_dir = format!("{REMOTE_CARD_ASSESSMENT_DIR}/profile");
+        let bounded = format!(
+            "--seconds {} {}",
+            seconds.expect("assessment duration is validated"),
+            if warmup_seconds == 0 {
+                String::new()
+            } else {
+                format!("--warmup-seconds {warmup_seconds}")
+            },
+        );
         format!(
-            "rm -rf {assessment}; mkdir -p {cadence} {profile}; {environment} {binary} --scene card-flip --assessment-pass cadence --evidence-dir {cadence}; MISTER_SCENE_LAB_PPROF_OUT={svg} MISTER_SCENE_LAB_PPROF_FOLDED_OUT={folded} MISTER_SCENE_LAB_PPROF_COMPLETE={complete} {environment} {binary} --scene card-flip --assessment-pass profile --evidence-dir {profile}",
+            "rm -rf {assessment}; mkdir -p {cadence} {profile}; {environment} {binary} --scene card-flip {bounded} --assessment-pass cadence --evidence-dir {cadence}; MISTER_SCENE_LAB_PPROF_OUT={svg} MISTER_SCENE_LAB_PPROF_FOLDED_OUT={folded} MISTER_SCENE_LAB_PPROF_COMPLETE={complete} {environment} {binary} --scene card-flip {bounded} --assessment-pass profile --evidence-dir {profile}",
             assessment = sh(REMOTE_CARD_ASSESSMENT_DIR),
             cadence = sh(&cadence_dir),
             profile = sh(&profile_dir),
@@ -1403,15 +1428,22 @@ fn remote_run_lab_command(
             svg = sh(&format!("{profile_dir}/flamegraph.svg")),
             folded = sh(&format!("{profile_dir}/stacks.folded")),
             complete = sh(&format!("{profile_dir}/profile.json")),
+            bounded = bounded,
         )
     } else {
         format!(
-            "MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_MAGIK_RUNTIME_DISPLAY_V1={} {} {} {} {}",
+            "MISTER_MAGIK_RUNTIME_SETTINGS_V1={} MISTER_MAGIK_RUNTIME_DISPLAY_V1={} {} {} {} {} {} {} {}",
             sh(&display_contracts.settings),
             sh(&display_contracts.display),
             sh(REMOTE_BINARY),
             remote_scene_arguments(scene, has_recipe, fixture, screenshot),
             case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
+            seconds.map_or_else(String::new, |seconds| format!("--seconds {seconds}")),
+            if warmup_seconds == 0 {
+                String::new()
+            } else {
+                format!("--warmup-seconds {warmup_seconds}")
+            },
             if profile { "--profile" } else { "" },
         )
     };
@@ -1462,6 +1494,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            0,
             false,
             false,
         );
@@ -1485,6 +1519,8 @@ mod tests {
             Some("home-arcade"),
             None,
             None,
+            None,
+            0,
             false,
             false,
         );
@@ -1507,6 +1543,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            0,
             false,
             false,
         );
@@ -1531,6 +1569,8 @@ mod tests {
             None,
             Some(&screenshot),
             None,
+            None,
+            0,
             false,
             false,
         );
@@ -1551,6 +1591,8 @@ mod tests {
             None,
             None,
             None,
+            Some(30),
+            0,
             false,
             true,
         );
@@ -1718,6 +1760,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            0,
             false,
             false,
         );

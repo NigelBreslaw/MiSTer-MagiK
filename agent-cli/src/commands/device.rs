@@ -223,6 +223,10 @@ pub struct SceneLabArgs {
     pub(crate) seed: Option<String>,
     #[arg(long)]
     pub(crate) case: Option<String>,
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
+    pub(crate) seconds: Option<u64>,
+    #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=600))]
+    pub(crate) warmup_seconds: u64,
     #[arg(long)]
     pub(crate) profile: bool,
     #[arg(long)]
@@ -352,6 +356,8 @@ pub fn run_scene_lab(
             fixture: args.fixture.as_deref(),
             seed,
             case: args.case.as_deref(),
+            seconds: args.seconds,
+            warmup_seconds: args.warmup_seconds,
             profile: args.profile,
             assess: args.assess,
             output_dir,

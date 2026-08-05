@@ -399,6 +399,15 @@ pub fn execute_scene_device(
         if !CABINET_CASES.contains(&case) {
             return Err(format!("unknown closed cabinet case {case:?}").into());
         }
+        if args.seconds.is_none() {
+            return Err("scene-lab --case requires --seconds".into());
+        }
+    }
+    if args.warmup_seconds > 0 && args.seconds.is_none() {
+        return Err("scene-lab --warmup-seconds requires --seconds".into());
+    }
+    if (args.profile || args.assess) && args.seconds.is_none() {
+        return Err("scene-lab --profile and --assess require --seconds".into());
     }
     if args.profile && args.scene != DeviceSceneLabScene::CardFlip && args.case.is_none() {
         return Err("scene-lab --profile requires card-flip or a closed cabinet --case".into());
