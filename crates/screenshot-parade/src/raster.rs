@@ -1030,6 +1030,8 @@ fn prepare_linear_phase(
                 }
             }
         }
+        coverage =
+            shape_preserving_shifted_coverage(source_coverage, image.width, image.height, phase);
         stabilize_phase_coverage(
             source_coverage,
             image.width,
@@ -1047,6 +1049,36 @@ fn prepare_linear_phase(
         },
         coverage: coverage_plane(coverage, width, image.height),
     }
+}
+
+fn shape_preserving_shifted_coverage(
+    source: &[u8],
+    source_width: usize,
+    height: usize,
+    phase: usize,
+) -> Vec<u8> {
+    let stride = source_width + 1;
+    let mut shifted = vec![0_u8; stride * height];
+    for y in 0..height {
+        let source_row = &source[y * source_width..(y + 1) * source_width];
+        let shifted_row = &mut shifted[y * stride..(y + 1) * stride];
+        let mut remainder = 0_u32;
+        for x in 0..stride {
+            let left = x
+                .checked_sub(1)
+                .and_then(|source_x| source_row.get(source_x))
+                .copied()
+                .unwrap_or(0);
+            let right = source_row.get(x).copied().unwrap_or(0);
+            let numerator = u32::from(left) * phase as u32
+                + u32::from(right) * (CRT_PHASE_COUNT - phase) as u32
+                + remainder;
+            shifted_row[x] = (numerator / CRT_PHASE_COUNT as u32) as u8;
+            remainder = numerator % CRT_PHASE_COUNT as u32;
+        }
+        debug_assert_eq!(remainder, 0);
+    }
+    shifted
 }
 
 fn coverage_mass_and_moment(values: &[u8], stride: usize) -> (u64, u64) {
