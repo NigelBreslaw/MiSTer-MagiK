@@ -106,27 +106,27 @@ confirmation intervals and wrapping latch flip-counter deltas. A
 sequence failures, latch drops, and completion failures are separate results.
 The sampled pass can attribute a failure but can never qualify cadence.
 
-Two consecutive 2026-08-05 assessments of commit `131b0471`, using the same
+Two consecutive 2026-08-05 assessments of commit `0e335037`, using the same
 optimized ARMv7 binary hash in all four passes, produced:
 
 | Run | Pass | Physical FPS | CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | Unprofiled authority | 59.950 | 42.75% | 3.981 / 6.261 ms | 0.631 / 0.733 ms | 0.097 / 0.154 ms | 9.725 / 13.433 ms | 11.829 / 15.544 ms | 16.569 / 16.811 ms |
-| 1 | 99 Hz attribution | 59.950 | 44.19% | 4.129 / 6.405 ms | 0.660 / 0.814 ms | 0.099 / 0.186 ms | 9.639 / 13.404 ms | 11.732 / 15.515 ms | 16.641 / 16.817 ms |
-| 2 | Unprofiled authority | 59.949 | 40.54% | 3.760 / 6.223 ms | 0.599 / 0.722 ms | 0.090 / 0.142 ms | 10.064 / 13.564 ms | 12.163 / 15.660 ms | 16.641 / 16.829 ms |
-| 2 | 99 Hz attribution | 59.950 | 44.36% | 4.119 / 6.421 ms | 0.663 / 0.831 ms | 0.100 / 0.161 ms | 9.644 / 13.423 ms | 11.737 / 15.544 ms | 16.640 / 16.824 ms |
+| 1 | Unprofiled authority | 59.950 | 40.72% | 3.770 / 6.221 ms | 0.601 / 0.718 ms | 0.089 / 0.145 ms | 10.057 / 13.571 ms | 12.156 / 15.664 ms | 16.645 / 16.824 ms |
+| 1 | 99 Hz attribution | 59.950 | 44.04% | 4.101 / 6.415 ms | 0.661 / 0.822 ms | 0.099 / 0.158 ms | 9.667 / 13.391 ms | 11.761 / 15.489 ms | 16.643 / 16.813 ms |
+| 2 | Unprofiled authority | 59.949 | 41.58% | 3.873 / 6.256 ms | 0.620 / 0.741 ms | 0.092 / 0.178 ms | 9.929 / 13.513 ms | 12.028 / 15.621 ms | 16.643 / 16.811 ms |
+| 2 | 99 Hz attribution | 59.950 | 43.40% | 4.042 / 6.411 ms | 0.649 / 0.811 ms | 0.095 / 0.156 ms | 9.735 / 13.411 ms | 11.834 / 15.501 ms | 16.641 / 16.816 ms |
 
 Each unprofiled authority recorded 1,800 confirmed frames, 1,799 expected
 refresh intervals, and 1,799 unique latch flips. Both had zero physical repeated
 refreshes, zero sequence failures, zero latch drops, zero completion failures,
-and no long confirmation intervals. The largest confirmation gaps were 17.356
-ms and 17.149 ms, still one 60 Hz refresh interval. Consequently, the earlier
+and no long confirmation intervals. The largest confirmation gaps were 16.878
+ms and 16.898 ms, still one 60 Hz refresh interval. Consequently, the earlier
 59.5 FPS aggregate was not evidence of physical frame skipping.
 
-The two sampled runs collected 1,401 and 1,405 stack samples. Respectively, 561
-and 532 resolved into `CardFlip::paint_rows_device`, while 570 and 628 resolved
+The two sampled runs collected 1,428 and 1,328 stack samples. Respectively, 552
+and 535 resolved into `CardFlip::paint_rows_device`, while 605 and 513 resolved
 into the shared latch settle path, including expected sleeping and status
-polling. Only 2 and 6 samples reached `prepare_cached`, and 11 and 5 reached
+polling. Only 3 and 6 samples reached `prepare_cached`, and 10 and 8 reached
 `post_prepared`. The matched render wall/CPU time identifies the rasterizer as
 the real active CPU cost; the much larger settle wall time than settle CPU time
 is expected vblank waiting rather than an over-budget renderer stall.
