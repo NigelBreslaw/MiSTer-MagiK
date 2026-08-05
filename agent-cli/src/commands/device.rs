@@ -336,16 +336,16 @@ pub fn run_scene_lab(
 ) -> AgentResult<()> {
     let mut device = crate::device::DeviceClient::default();
     device.mutate(|device| {
-        device.run_scene_lab(
+        device.run_scene_lab(crate::host::SceneLabRequest {
             binary,
-            args.scene,
-            args.recipe.as_deref(),
-            args.fixture.as_deref(),
-            args.case.as_deref(),
-            args.profile,
-            args.assess,
+            scene: args.scene.as_str(),
+            recipe: args.recipe.as_deref(),
+            fixture: args.fixture.as_deref(),
+            case: args.case.as_deref(),
+            profile: args.profile,
+            assess: args.assess,
             output_dir,
-        )
+        })
     })
 }
 

@@ -31,6 +31,8 @@ mod platform_deploy;
 mod remote;
 mod startup_particles;
 
+pub(crate) use startup_particles::SceneLabRequest;
+
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
     agent_telemetry_for_duration, agent_telemetry_for_particle_trial,
@@ -295,18 +297,9 @@ impl NativeDevice {
 
     pub(crate) fn run_scene_lab(
         &mut self,
-        binary: &Path,
-        scene: crate::commands::device::SceneLabScene,
-        recipe: Option<&Path>,
-        fixture: Option<&str>,
-        case: Option<&str>,
-        profile: bool,
-        assess: bool,
-        output_dir: Option<&Path>,
+        request: startup_particles::SceneLabRequest<'_>,
     ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run_scene_lab(
-            self, binary, scene, recipe, fixture, case, profile, assess, output_dir,
-        )
+        startup_particles::run_scene_lab(self, request)
     }
 
     pub(crate) fn run_operator(

@@ -10,7 +10,7 @@ use super::{
     device_failure, exec_checked, file_sha256, install_prepared_device_environment, remote_read,
     restart_launcher_with_one_shot_env, wait_launcher_ready,
 };
-use crate::commands::device::{SceneLabScene, StartupParticleRuntime};
+use crate::commands::device::StartupParticleRuntime;
 use serde_json::Value;
 use serde_json::json;
 use ssh2::{ExtendedData, Session};
@@ -41,6 +41,30 @@ pub(super) struct LabDisplayContracts {
     pub(super) display: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SceneLabRequest<'a> {
+    pub(crate) binary: &'a Path,
+    pub(crate) scene: &'a str,
+    pub(crate) recipe: Option<&'a Path>,
+    pub(crate) fixture: Option<&'a str>,
+    pub(crate) case: Option<&'a str>,
+    pub(crate) profile: bool,
+    pub(crate) assess: bool,
+    pub(crate) output_dir: Option<&'a Path>,
+}
+
+#[derive(Debug)]
+struct RemoteLabRequest {
+    display_contracts: LabDisplayContracts,
+    scene: String,
+    has_recipe: bool,
+    fixture: Option<String>,
+    case: Option<String>,
+    profile: bool,
+    assess: bool,
+    output_dir: Option<PathBuf>,
+}
+
 pub(super) fn run(
     device: &mut NativeDevice,
     binary: Option<&Path>,
@@ -58,16 +82,20 @@ pub(super) fn run(
             let scene = local_recipe_scene(recipe).map_err(device_failure)?;
             run_lab(
                 &prepared,
-                binary.ok_or_else(|| {
-                    DeviceFailure::InvalidRequest("lab runtime requires a built lab binary".into())
-                })?,
-                Some(recipe),
-                scene,
-                None,
-                None,
-                false,
-                false,
-                None,
+                SceneLabRequest {
+                    binary: binary.ok_or_else(|| {
+                        DeviceFailure::InvalidRequest(
+                            "lab runtime requires a built lab binary".into(),
+                        )
+                    })?,
+                    scene,
+                    recipe: Some(recipe),
+                    fixture: None,
+                    case: None,
+                    profile: false,
+                    assess: false,
+                    output_dir: None,
+                },
             )
         }
         StartupParticleRuntime::DevLauncher => run_dev_launcher(&prepared, recipe),
@@ -77,46 +105,28 @@ pub(super) fn run(
 
 pub(super) fn run_scene_lab(
     device: &mut NativeDevice,
-    binary: &Path,
-    scene: SceneLabScene,
-    recipe: Option<&Path>,
-    fixture: Option<&str>,
-    case: Option<&str>,
-    profile: bool,
-    assess: bool,
-    output_dir: Option<&Path>,
+    request: SceneLabRequest<'_>,
 ) -> std::result::Result<(), DeviceFailure> {
-    validate_local_input(binary, "framebuffer scene lab binary").map_err(device_failure)?;
-    if let Some(recipe) = recipe {
+    validate_local_input(request.binary, "framebuffer scene lab binary").map_err(device_failure)?;
+    if let Some(recipe) = request.recipe {
         validate_local_input(recipe, "framebuffer scene recipe").map_err(device_failure)?;
     }
     let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
     install_prepared_device_environment(&prepared.config);
-    run_lab(
-        &prepared,
+    run_lab(&prepared, request).map_err(device_failure)
+}
+
+fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Result<()> {
+    let SceneLabRequest {
         binary,
+        scene,
         recipe,
-        scene.as_str(),
         fixture,
         case,
         profile,
         assess,
         output_dir,
-    )
-    .map_err(device_failure)
-}
-
-fn run_lab(
-    prepared: &super::PreparedDevice,
-    binary: &Path,
-    recipe: Option<&Path>,
-    scene: &str,
-    fixture: Option<&str>,
-    case: Option<&str>,
-    profile: bool,
-    assess: bool,
-    output_dir: Option<&Path>,
-) -> Result<()> {
+    } = request;
     let has_recipe = recipe.is_some();
     let session = connect_with(&prepared.config.connection, 10)?;
     let display_contracts = active_lab_display_contracts(&session)?;
@@ -160,14 +170,16 @@ fn run_lab(
         .spawn(move || {
             let result = run_remote_lab(
                 &run_config,
-                display_contracts,
-                &scene,
-                has_recipe,
-                fixture.as_deref(),
-                case.as_deref(),
-                profile,
-                assess,
-                output_dir.as_deref(),
+                RemoteLabRequest {
+                    display_contracts,
+                    scene,
+                    has_recipe,
+                    fixture,
+                    case,
+                    profile,
+                    assess,
+                    output_dir,
+                },
             )
             .map_err(|error| error.to_string());
             let _ = finished_tx.send(result);
@@ -630,30 +642,35 @@ const fn cleanup_requires_embedded_ack(recipe_removed: bool, already_embedded: b
 
 fn run_remote_lab(
     config: &super::remote::ConnectionConfig,
-    display_contracts: LabDisplayContracts,
-    scene: &str,
-    has_recipe: bool,
-    fixture: Option<&str>,
-    case: Option<&str>,
-    profile: bool,
-    assess: bool,
-    output_dir: Option<&Path>,
+    request: RemoteLabRequest,
 ) -> Result<()> {
+    let RemoteLabRequest {
+        display_contracts,
+        scene,
+        has_recipe,
+        fixture,
+        case,
+        profile,
+        assess,
+        output_dir,
+    } = request;
     let session = connect_with(config, 10)?;
     stream_exec(
         &session,
         &remote_run_lab_command(
             &display_contracts,
-            scene,
+            &scene,
             has_recipe,
-            fixture,
-            case,
+            fixture.as_deref(),
+            case.as_deref(),
             profile,
             assess,
         ),
     )?;
     if assess {
-        let output_dir = output_dir.ok_or("card assessment output directory is missing")?;
+        let output_dir = output_dir
+            .as_deref()
+            .ok_or("card assessment output directory is missing")?;
         retrieve_card_assessment(&session, output_dir)?;
     }
     Ok(())
@@ -973,7 +990,7 @@ fn card_pre_post_outliers(frames: &[Value]) -> Vec<Value> {
             (pre_post_us, frame.clone())
         })
         .collect::<Vec<_>>();
-    ranked.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    ranked.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
     ranked
         .into_iter()
         .take(20)
@@ -988,7 +1005,7 @@ fn card_long_confirmation_gaps(frames: &[Value]) -> Vec<Value> {
         .skip(1)
         .map(|(index, frame)| (value_u64(frame, "completion_interval_us"), index))
         .collect::<Vec<_>>();
-    ranked.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    ranked.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
     ranked
         .into_iter()
         .take(20)
