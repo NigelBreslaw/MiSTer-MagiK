@@ -228,6 +228,8 @@ pub struct SceneLabArgs {
     #[arg(long, value_enum)]
     pub(crate) replacement_mode: Option<SceneLabReplacementMode>,
     #[arg(long)]
+    pub(crate) copy_experiment: bool,
+    #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
     pub(crate) seconds: Option<u64>,
@@ -413,6 +415,7 @@ pub fn run_scene_lab(
             sampling_profile: args.sampling_profile.map(SceneLabSamplingProfile::as_str),
             phase_generation: args.phase_generation.map(SceneLabPhaseGeneration::as_str),
             replacement_mode: args.replacement_mode.map(SceneLabReplacementMode::as_str),
+            copy_experiment: args.copy_experiment,
             case: args.case.as_deref(),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,
