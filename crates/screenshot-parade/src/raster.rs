@@ -122,7 +122,7 @@ impl ParadePhaseSet {
 
     fn linear_phase(&self, phase: usize) -> Option<LinearPhaseRef<'_>> {
         let Self::SixteenthLinear {
-            base_coverage,
+            base_coverage: _,
             shifted,
         } = self
         else {
