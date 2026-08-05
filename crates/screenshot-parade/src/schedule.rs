@@ -1476,7 +1476,7 @@ mod tests {
             std::process::id()
         ));
         write_archive(&path, 220);
-        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::HdmiSixteenth);
+        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::CrtSixteenth);
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
         scene.render_at_presentation_tick(&mut pixels, 0).unwrap();
         let tile_index = scene
@@ -1505,7 +1505,7 @@ mod tests {
             std::process::id()
         ));
         write_archive(&path, 220);
-        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::HdmiSixteenth);
+        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::CrtSixteenth);
         let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
         scene.render_at_presentation_tick(&mut pixels, 0).unwrap();
         let tile_index = scene

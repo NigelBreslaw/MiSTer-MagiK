@@ -997,14 +997,16 @@ fn prepare_linear_phase(
     } else {
         let weights = fractional_delay_weights(phase);
         let prepared_with_neon = prepare_linear_phase_neon_if_selected(
-            premultiplied_source,
-            image.width,
-            image.height,
-            width,
-            weights,
-            source_opaque_spans,
+            LinearPhaseNeonRequest {
+                source: premultiplied_source,
+                source_width: image.width,
+                height: image.height,
+                output_width: width,
+                weights,
+                source_opaque_spans,
+                linear_to_srgb,
+            },
             kernel,
-            linear_to_srgb,
             &mut pixels,
             &mut coverage,
         );
@@ -1086,15 +1088,20 @@ fn reconstruct_six_tap_scalar(samples: &[[u16; 4]; 6], weights: [i32; 6]) -> [u1
     })
 }
 
-fn prepare_linear_phase_neon_if_selected(
-    source: &[[u16; 4]],
+#[derive(Clone, Copy)]
+struct LinearPhaseNeonRequest<'a> {
+    source: &'a [[u16; 4]],
     source_width: usize,
     height: usize,
     output_width: usize,
     weights: [i32; 6],
-    source_opaque_spans: &[OpaqueSpan],
+    source_opaque_spans: &'a [OpaqueSpan],
+    linear_to_srgb: &'a [u8; 4097],
+}
+
+fn prepare_linear_phase_neon_if_selected(
+    request: LinearPhaseNeonRequest<'_>,
     kernel: LinearPhaseKernel,
-    linear_to_srgb: &[u8; 4097],
     pixels: &mut [Rgb565Pixel],
     coverage: &mut [u8],
 ) -> bool {
@@ -1107,13 +1114,13 @@ fn prepare_linear_phase_neon_if_selected(
         // the complete source and final destination planes passed to the kernel.
         unsafe {
             prepare_linear_phase_neon(
-                source,
-                source_width,
-                height,
-                output_width,
-                weights,
-                source_opaque_spans,
-                linear_to_srgb,
+                request.source,
+                request.source_width,
+                request.height,
+                request.output_width,
+                request.weights,
+                request.source_opaque_spans,
+                request.linear_to_srgb,
                 pixels,
                 coverage,
             );
@@ -1122,17 +1129,7 @@ fn prepare_linear_phase_neon_if_selected(
     }
     #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
     {
-        let _ = (
-            source,
-            source_width,
-            height,
-            output_width,
-            weights,
-            source_opaque_spans,
-            linear_to_srgb,
-            pixels,
-            coverage,
-        );
+        let _ = (request, pixels, coverage);
         false
     }
 }
