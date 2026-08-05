@@ -308,6 +308,163 @@ impl PresentationTelemetry {
     }
 }
 
+pub trait PresentationTelemetryCounters: Copy {
+    fn owned_vblank_count(self) -> u32;
+    fn presented_vblank_count(self) -> u32;
+    fn repeated_vblank_count(self) -> u32;
+    fn ownership_loss_count(self) -> u32;
+    fn magik_ownership(self) -> bool;
+    fn pending(self) -> bool;
+
+    fn lifetime_invariant_valid(self) -> bool {
+        self.owned_vblank_count()
+            == self
+                .presented_vblank_count()
+                .wrapping_add(self.repeated_vblank_count())
+    }
+}
+
+impl PresentationTelemetryCounters for PresentationTelemetry {
+    fn owned_vblank_count(self) -> u32 {
+        self.owned_vblank_count
+    }
+
+    fn presented_vblank_count(self) -> u32 {
+        self.presented_vblank_count
+    }
+
+    fn repeated_vblank_count(self) -> u32 {
+        self.repeated_vblank_count
+    }
+
+    fn ownership_loss_count(self) -> u32 {
+        self.ownership_loss_count
+    }
+
+    fn magik_ownership(self) -> bool {
+        self.magik_ownership()
+    }
+
+    fn pending(self) -> bool {
+        self.pending()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentationTelemetryDelta {
+    pub elapsed_us: u64,
+    pub owned_vblank_delta: u32,
+    pub presented_vblank_delta: u32,
+    pub repeated_vblank_delta: u32,
+    pub ownership_loss_delta: u32,
+    pub maximum_plausible_vblanks: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresentationTelemetryValidationError {
+    InvalidTiming,
+    LifetimeInvariant,
+    DeltaInvariant,
+    Implausible {
+        owned_vblank_delta: u32,
+        maximum_plausible_vblanks: u64,
+    },
+    EndpointsNotOwnedAndSettled,
+    OwnershipLoss {
+        count: u32,
+    },
+}
+
+impl std::fmt::Display for PresentationTelemetryValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidTiming => formatter.write_str(
+                "presentation telemetry requires non-zero elapsed time and refresh period",
+            ),
+            Self::LifetimeInvariant => {
+                formatter.write_str("FPGA presentation telemetry lifetime invariant failed")
+            }
+            Self::DeltaInvariant => {
+                formatter.write_str("FPGA presentation telemetry delta invariant failed")
+            }
+            Self::Implausible {
+                owned_vblank_delta,
+                maximum_plausible_vblanks,
+            } => write!(
+                formatter,
+                "FPGA presentation telemetry delta is implausible: owned={owned_vblank_delta} maximum={maximum_plausible_vblanks}"
+            ),
+            Self::EndpointsNotOwnedAndSettled => formatter
+                .write_str("FPGA presentation telemetry endpoints are not owned and settled"),
+            Self::OwnershipLoss { count } => write!(
+                formatter,
+                "FPGA presentation ownership changed during measurement: losses={count}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PresentationTelemetryValidationError {}
+
+pub fn validate_presentation_telemetry_window<T: PresentationTelemetryCounters>(
+    start: T,
+    end: T,
+    elapsed_us: u64,
+    refresh_period_us: u64,
+) -> Result<PresentationTelemetryDelta, PresentationTelemetryValidationError> {
+    if elapsed_us == 0 || refresh_period_us == 0 {
+        return Err(PresentationTelemetryValidationError::InvalidTiming);
+    }
+    if !start.lifetime_invariant_valid() || !end.lifetime_invariant_valid() {
+        return Err(PresentationTelemetryValidationError::LifetimeInvariant);
+    }
+    let owned_vblank_delta = end
+        .owned_vblank_count()
+        .wrapping_sub(start.owned_vblank_count());
+    let presented_vblank_delta = end
+        .presented_vblank_count()
+        .wrapping_sub(start.presented_vblank_count());
+    let repeated_vblank_delta = end
+        .repeated_vblank_count()
+        .wrapping_sub(start.repeated_vblank_count());
+    let ownership_loss_delta = end
+        .ownership_loss_count()
+        .wrapping_sub(start.ownership_loss_count());
+    if owned_vblank_delta != presented_vblank_delta.wrapping_add(repeated_vblank_delta) {
+        return Err(PresentationTelemetryValidationError::DeltaInvariant);
+    }
+    let maximum_plausible_vblanks = elapsed_us.div_ceil(refresh_period_us).saturating_add(2);
+    if [
+        owned_vblank_delta,
+        presented_vblank_delta,
+        repeated_vblank_delta,
+    ]
+    .into_iter()
+    .any(|count| u64::from(count) > maximum_plausible_vblanks)
+    {
+        return Err(PresentationTelemetryValidationError::Implausible {
+            owned_vblank_delta,
+            maximum_plausible_vblanks,
+        });
+    }
+    if !start.magik_ownership() || !end.magik_ownership() || start.pending() || end.pending() {
+        return Err(PresentationTelemetryValidationError::EndpointsNotOwnedAndSettled);
+    }
+    if ownership_loss_delta != 0 {
+        return Err(PresentationTelemetryValidationError::OwnershipLoss {
+            count: ownership_loss_delta,
+        });
+    }
+    Ok(PresentationTelemetryDelta {
+        elapsed_us,
+        owned_vblank_delta,
+        presented_vblank_delta,
+        repeated_vblank_delta,
+        ownership_loss_delta,
+        maximum_plausible_vblanks,
+    })
+}
+
 pub fn decode_presentation_telemetry(words: &[u16]) -> Result<PresentationTelemetry, String> {
     if words.len() != V5_PRESENTATION_TELEMETRY_WORDS {
         return Err(format!(
@@ -606,6 +763,61 @@ mod tests {
         words[10] ^= 1;
         assert!(decode_presentation_telemetry(&words).is_err());
         assert!(decode_presentation_telemetry(&words[..10]).is_err());
+    }
+
+    fn telemetry(
+        owned_vblank_count: u32,
+        presented_vblank_count: u32,
+        repeated_vblank_count: u32,
+        ownership_loss_count: u32,
+    ) -> PresentationTelemetry {
+        PresentationTelemetry {
+            owned_vblank_count,
+            presented_vblank_count,
+            repeated_vblank_count,
+            ownership_loss_count,
+            active_sequence: 42,
+            flags: (1 << STATUS_MAGIK_OWNERSHIP) as u16,
+            crc: 0,
+        }
+    }
+
+    #[test]
+    fn presentation_telemetry_window_handles_wrap_and_repeats() {
+        let delta = validate_presentation_telemetry_window(
+            telemetry(u32::MAX - 1, u32::MAX - 1, 0, 7),
+            telemetry(1, 0, 1, 7),
+            50_001,
+            16_667,
+        )
+        .unwrap();
+        assert_eq!(delta.owned_vblank_delta, 3);
+        assert_eq!(delta.presented_vblank_delta, 2);
+        assert_eq!(delta.repeated_vblank_delta, 1);
+        assert_eq!(delta.ownership_loss_delta, 0);
+    }
+
+    #[test]
+    fn presentation_telemetry_window_rejects_invalid_authority() {
+        let valid = telemetry(10, 9, 1, 0);
+        let mut invalid = telemetry(11, 9, 2, 0);
+        invalid.flags |= (1 << STATUS_PENDING) as u16;
+        assert_eq!(
+            validate_presentation_telemetry_window(valid, invalid, 16_667, 16_667),
+            Err(PresentationTelemetryValidationError::EndpointsNotOwnedAndSettled)
+        );
+
+        let lost = telemetry(11, 10, 1, 1);
+        assert_eq!(
+            validate_presentation_telemetry_window(valid, lost, 16_667, 16_667),
+            Err(PresentationTelemetryValidationError::OwnershipLoss { count: 1 })
+        );
+
+        let broken = telemetry(11, 9, 1, 0);
+        assert_eq!(
+            validate_presentation_telemetry_window(valid, broken, 16_667, 16_667),
+            Err(PresentationTelemetryValidationError::LifetimeInvariant)
+        );
     }
 
     #[test]

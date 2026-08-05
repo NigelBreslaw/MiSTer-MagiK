@@ -27,6 +27,7 @@ required-features = ["asset-tools"]
 [dependencies]
 mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["reader"] }
 mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
+mister-magik-latch-contract = { path = "../../mister/platform/contracts/latch" }
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-particles = { path = "../../crates/particles" }
 mister-magik-screenshot-parade = { path = "../../crates/screenshot-parade" }

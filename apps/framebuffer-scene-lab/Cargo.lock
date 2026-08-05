@@ -868,6 +868,7 @@ dependencies = [
  "mister-magik-catalog",
  "mister-magik-core",
  "mister-magik-framebuffer-scenes",
+ "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "mister-magik-particles",
  "mister-magik-screenshot-parade",

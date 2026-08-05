@@ -267,6 +267,32 @@ impl PresentationTelemetrySnapshot {
     }
 }
 
+impl mister_magik_latch_contract::PresentationTelemetryCounters for PresentationTelemetrySnapshot {
+    fn owned_vblank_count(self) -> u32 {
+        self.owned_vblank_count
+    }
+
+    fn presented_vblank_count(self) -> u32 {
+        self.presented_vblank_count
+    }
+
+    fn repeated_vblank_count(self) -> u32 {
+        self.repeated_vblank_count
+    }
+
+    fn ownership_loss_count(self) -> u32 {
+        self.ownership_loss_count
+    }
+
+    fn magik_ownership(self) -> bool {
+        self.magik_ownership()
+    }
+
+    fn pending(self) -> bool {
+        self.pending()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PresentationTelemetrySummary {
     pub schema: &'static str,
@@ -290,66 +316,27 @@ pub fn summarize_presentation_telemetry(
     elapsed_us: u64,
     refresh_period_us: u64,
 ) -> Result<PresentationTelemetrySummary, String> {
-    if elapsed_us == 0 || refresh_period_us == 0 {
-        return Err(
-            "presentation telemetry requires non-zero elapsed time and refresh period".into(),
-        );
-    }
-    let owned_vblank_delta = end
-        .owned_vblank_count
-        .wrapping_sub(start.owned_vblank_count);
-    let presented_vblank_delta = end
-        .presented_vblank_count
-        .wrapping_sub(start.presented_vblank_count);
-    let repeated_vblank_delta = end
-        .repeated_vblank_count
-        .wrapping_sub(start.repeated_vblank_count);
-    let ownership_loss_delta = end
-        .ownership_loss_count
-        .wrapping_sub(start.ownership_loss_count);
-    let maximum_plausible_vblanks = elapsed_us.div_ceil(refresh_period_us).saturating_add(2);
-    let lifetime_invariant_valid =
-        start.lifetime_invariant_valid() && end.lifetime_invariant_valid();
-    let delta_invariant_valid =
-        owned_vblank_delta == presented_vblank_delta.wrapping_add(repeated_vblank_delta);
-    let plausible = u64::from(owned_vblank_delta) <= maximum_plausible_vblanks
-        && u64::from(presented_vblank_delta) <= maximum_plausible_vblanks
-        && u64::from(repeated_vblank_delta) <= maximum_plausible_vblanks;
-    let endpoints_owned_and_settled =
-        start.magik_ownership() && end.magik_ownership() && !start.pending() && !end.pending();
-    if !lifetime_invariant_valid {
-        return Err("FPGA presentation telemetry lifetime invariant failed".into());
-    }
-    if !delta_invariant_valid {
-        return Err("FPGA presentation telemetry delta invariant failed".into());
-    }
-    if !plausible {
-        return Err(format!(
-            "FPGA presentation telemetry delta is implausible: owned={owned_vblank_delta} maximum={maximum_plausible_vblanks}"
-        ));
-    }
-    if !endpoints_owned_and_settled {
-        return Err("FPGA presentation telemetry endpoints are not owned and settled".into());
-    }
-    if ownership_loss_delta != 0 {
-        return Err(format!(
-            "FPGA presentation ownership changed during measurement: losses={ownership_loss_delta}"
-        ));
-    }
+    let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
+        start,
+        end,
+        elapsed_us,
+        refresh_period_us,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(PresentationTelemetrySummary {
         schema: PRESENTATION_TELEMETRY_SCHEMA,
         start,
         end,
-        elapsed_us,
-        owned_vblank_delta,
-        presented_vblank_delta,
-        repeated_vblank_delta,
-        ownership_loss_delta,
-        maximum_plausible_vblanks,
-        lifetime_invariant_valid,
-        delta_invariant_valid,
-        plausible,
-        endpoints_owned_and_settled,
+        elapsed_us: delta.elapsed_us,
+        owned_vblank_delta: delta.owned_vblank_delta,
+        presented_vblank_delta: delta.presented_vblank_delta,
+        repeated_vblank_delta: delta.repeated_vblank_delta,
+        ownership_loss_delta: delta.ownership_loss_delta,
+        maximum_plausible_vblanks: delta.maximum_plausible_vblanks,
+        lifetime_invariant_valid: true,
+        delta_invariant_valid: true,
+        plausible: true,
+        endpoints_owned_and_settled: true,
     })
 }
 
