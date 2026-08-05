@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 const REMOTE_DIR: &str = "/tmp/mister-magik/startup-particles";
 const REMOTE_BINARY: &str =
     "/tmp/mister-magik/startup-particles/mister-magik-framebuffer-scene-lab";
+const DEV_SCREENSHOT_ARCHIVE: &str =
+    "/media/fat/mister-magik-dev/assets/arcade-screenshots-320x320.mmlz4b";
 const REMOTE_LAB_RECIPE: &str = "/tmp/mister-magik/startup-particles/recipe.json";
 const REMOTE_MAGIK_RECIPE: &str = "/tmp/mister-magik/startup-particles/magik.json";
 const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
@@ -47,6 +49,7 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) scene: &'a str,
     pub(crate) recipe: Option<&'a Path>,
     pub(crate) fixture: Option<&'a str>,
+    pub(crate) seed: Option<u64>,
     pub(crate) case: Option<&'a str>,
     pub(crate) profile: bool,
     pub(crate) assess: bool,
@@ -59,10 +62,18 @@ struct RemoteLabRequest {
     scene: String,
     has_recipe: bool,
     fixture: Option<String>,
+    screenshot: Option<RemoteScreenshotArgs>,
     case: Option<String>,
     profile: bool,
     assess: bool,
     output_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct RemoteScreenshotArgs {
+    archive: &'static str,
+    seed: u64,
+    sampling_profile: &'static str,
 }
 
 pub(super) fn run(
@@ -91,6 +102,7 @@ pub(super) fn run(
                     scene,
                     recipe: Some(recipe),
                     fixture: None,
+                    seed: None,
                     case: None,
                     profile: false,
                     assess: false,
@@ -122,6 +134,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         scene,
         recipe,
         fixture,
+        seed,
         case,
         profile,
         assess,
@@ -130,7 +143,28 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
     let has_recipe = recipe.is_some();
     let session = connect_with(&prepared.config.connection, 10)?;
     let display_contracts = active_lab_display_contracts(&session)?;
-    if let Err(error) = prepare_lab_files(&session, binary, recipe, scene, fixture) {
+    let screenshot = if scene == "screenshot-screensaver" {
+        validate_installed_screenshot_archive(&session)?;
+        Some(RemoteScreenshotArgs {
+            archive: DEV_SCREENSHOT_ARCHIVE,
+            seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
+            sampling_profile: if display_contracts.settings.contains("output=hdmi") {
+                "hdmi"
+            } else {
+                "crt"
+            },
+        })
+    } else {
+        None
+    };
+    if let Err(error) = prepare_lab_files(
+        &session,
+        binary,
+        recipe,
+        scene,
+        fixture,
+        screenshot.as_ref(),
+    ) {
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
@@ -175,6 +209,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     scene,
                     has_recipe,
                     fixture,
+                    screenshot,
                     case,
                     profile,
                     assess,
@@ -382,6 +417,7 @@ fn prepare_lab_files(
     recipe: Option<&Path>,
     scene: &str,
     fixture: Option<&str>,
+    screenshot: Option<&RemoteScreenshotArgs>,
 ) -> Result<()> {
     exec_checked(
         session,
@@ -407,9 +443,26 @@ fn prepare_lab_files(
         &format!(
             "{} --check {}",
             sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, recipe.is_some(), fixture)
+            remote_scene_arguments(scene, recipe.is_some(), fixture, screenshot)
         ),
     )
+}
+
+fn validate_installed_screenshot_archive(session: &Session) -> Result<()> {
+    let reply = super::exec_checked_output(
+        session,
+        "validate installed Dev screenshot archive",
+        &format!(
+            "set -eu; test -f {path}; test -r {path}; bytes=$(wc -c < {path}); hash=$(sha256sum {path} | awk '{{print $1}}'); test \"$bytes\" -gt 0; printf 'bytes=%s sha256=%s\\n' \"$bytes\" \"$hash\"",
+            path = sh(DEV_SCREENSHOT_ARCHIVE),
+        ),
+    )?;
+    println!(
+        "installed screenshot archive path={} {}",
+        DEV_SCREENSHOT_ARCHIVE,
+        reply.stdout.trim()
+    );
+    Ok(())
 }
 
 fn publish_recipe(session: &Session, recipe: &Path, remote_recipe: &str) -> Result<()> {
@@ -649,6 +702,7 @@ fn run_remote_lab(
         scene,
         has_recipe,
         fixture,
+        screenshot,
         case,
         profile,
         assess,
@@ -662,6 +716,7 @@ fn run_remote_lab(
             &scene,
             has_recipe,
             fixture.as_deref(),
+            screenshot.as_ref(),
             case.as_deref(),
             profile,
             assess,
@@ -1295,21 +1350,36 @@ fn remote_publish_lab_command(binary_hash: &str, recipe_hash: Option<&str>) -> S
     )
 }
 
-fn remote_scene_arguments(scene: &str, has_recipe: bool, fixture: Option<&str>) -> String {
+fn remote_scene_arguments(
+    scene: &str,
+    has_recipe: bool,
+    fixture: Option<&str>,
+    screenshot: Option<&RemoteScreenshotArgs>,
+) -> String {
     if has_recipe {
         format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE))
     } else if let Some(fixture) = fixture {
         format!("--scene {} --fixture {}", sh(scene), sh(fixture))
+    } else if let Some(screenshot) = screenshot {
+        format!(
+            "--scene {} --archive {} --seed {} --sampling-profile {}",
+            sh(scene),
+            sh(screenshot.archive),
+            screenshot.seed,
+            sh(screenshot.sampling_profile)
+        )
     } else {
         format!("--scene {}", sh(scene))
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn remote_run_lab_command(
     display_contracts: &LabDisplayContracts,
     scene: &str,
     has_recipe: bool,
     fixture: Option<&str>,
+    screenshot: Option<&RemoteScreenshotArgs>,
     case: Option<&str>,
     profile: bool,
     assess: bool,
@@ -1340,7 +1410,7 @@ fn remote_run_lab_command(
             sh(&display_contracts.settings),
             sh(&display_contracts.display),
             sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, has_recipe, fixture),
+            remote_scene_arguments(scene, has_recipe, fixture, screenshot),
             case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
             if profile { "--profile" } else { "" },
         )
@@ -1385,8 +1455,16 @@ mod tests {
 
     #[test]
     fn lab_is_volatile_and_restores_main() {
-        let run =
-            remote_run_lab_command(&hdmi_contracts(), "magik", true, None, None, false, false);
+        let run = remote_run_lab_command(
+            &hdmi_contracts(),
+            "magik",
+            true,
+            None,
+            None,
+            None,
+            false,
+            false,
+        );
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -1405,6 +1483,7 @@ mod tests {
             "navigation-transition",
             false,
             Some("home-arcade"),
+            None,
             None,
             false,
             false,
@@ -1427,6 +1506,7 @@ mod tests {
             false,
             None,
             None,
+            None,
             false,
             false,
         );
@@ -1438,11 +1518,37 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_lab_uses_installed_pack_seed_and_route_profile() {
+        let screenshot = RemoteScreenshotArgs {
+            archive: DEV_SCREENSHOT_ARCHIVE,
+            seed: 0x1234,
+            sampling_profile: "crt",
+        };
+        let run = remote_run_lab_command(
+            &hdmi_contracts(),
+            "screenshot-screensaver",
+            false,
+            None,
+            Some(&screenshot),
+            None,
+            false,
+            false,
+        );
+        assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
+        assert!(run.contains("--seed 4660"));
+        assert!(run.contains(&format!("--sampling-profile {}", sh("crt"))));
+        assert!(!run.contains("--recipe"));
+        assert!(run.contains("mister_magik_suspend"));
+        assert!(run.contains("mister_magik_resume"));
+    }
+
+    #[test]
     fn card_flip_assessment_runs_two_passes_with_fixed_artifacts() {
         let run = remote_run_lab_command(
             &hdmi_contracts(),
             "card-flip",
             false,
+            None,
             None,
             None,
             false,
@@ -1605,7 +1711,16 @@ mod tests {
             settings: "schema=1&output=crt-240p60".into(),
             display: "schema=1&mode=auto".into(),
         };
-        let run = remote_run_lab_command(&contracts, "card-flip", false, None, None, false, false);
+        let run = remote_run_lab_command(
+            &contracts,
+            "card-flip",
+            false,
+            None,
+            None,
+            None,
+            false,
+            false,
+        );
         assert!(run.contains("schema=1&output=crt-240p60"));
         assert!(run.contains("schema=1&mode=auto"));
         assert!(!run.contains("960"));

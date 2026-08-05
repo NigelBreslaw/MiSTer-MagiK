@@ -220,6 +220,8 @@ pub struct SceneLabArgs {
     #[arg(long)]
     pub(crate) fixture: Option<String>,
     #[arg(long)]
+    pub(crate) seed: Option<String>,
+    #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long)]
     pub(crate) profile: bool,
@@ -236,6 +238,7 @@ pub enum SceneLabScene {
     Intro,
     NavigationTransition,
     CardFlip,
+    ScreenshotScreensaver,
 }
 
 impl SceneLabScene {
@@ -246,6 +249,7 @@ impl SceneLabScene {
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
             Self::CardFlip => "card-flip",
+            Self::ScreenshotScreensaver => "screenshot-screensaver",
         }
     }
 }
@@ -334,6 +338,11 @@ pub fn run_scene_lab(
     binary: &Path,
     output_dir: Option<&Path>,
 ) -> AgentResult<()> {
+    let seed = args
+        .seed
+        .as_deref()
+        .map(crate::startup_particles::parse_screenshot_seed)
+        .transpose()?;
     let mut device = crate::device::DeviceClient::default();
     device.mutate(|device| {
         device.run_scene_lab(crate::host::SceneLabRequest {
@@ -341,6 +350,7 @@ pub fn run_scene_lab(
             scene: args.scene.as_str(),
             recipe: args.recipe.as_deref(),
             fixture: args.fixture.as_deref(),
+            seed,
             case: args.case.as_deref(),
             profile: args.profile,
             assess: args.assess,

@@ -83,6 +83,10 @@ pub struct SceneCaptureArgs {
     scene: SceneLabScene,
     #[arg(long)]
     recipe: Option<PathBuf>,
+    #[arg(long)]
+    archive: Option<PathBuf>,
+    #[arg(long)]
+    seed: Option<String>,
     #[arg(long, value_enum)]
     direction: Option<CardFlipDirection>,
     #[arg(long)]
@@ -98,6 +102,7 @@ pub enum SceneLabScene {
     Intro,
     NavigationTransition,
     CardFlip,
+    ScreenshotScreensaver,
 }
 
 impl SceneLabScene {
@@ -108,6 +113,7 @@ impl SceneLabScene {
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
             Self::CardFlip => "card-flip",
+            Self::ScreenshotScreensaver => "screenshot-screensaver",
         }
     }
 }
@@ -134,6 +140,10 @@ pub struct ScenePreviewArgs {
     scene: SceneLabScene,
     #[arg(long)]
     recipe: Option<PathBuf>,
+    #[arg(long)]
+    archive: Option<PathBuf>,
+    #[arg(long)]
+    seed: Option<String>,
     #[arg(long)]
     fixture: Option<String>,
 }
@@ -180,10 +190,32 @@ fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> 
             return Err("scene-lab capture does not yet accept navigation fixtures".into());
         }
         SceneLabScene::CardFlip => {
-            if args.recipe.is_some() {
-                return Err("card-flip does not accept --recipe".into());
+            if args.recipe.is_some() || args.archive.is_some() || args.seed.is_some() {
+                return Err("card-flip does not accept recipe, archive, or seed options".into());
             }
         }
+        SceneLabScene::ScreenshotScreensaver => {
+            if args.recipe.is_some() || args.direction.is_some() {
+                return Err(
+                    "screenshot-screensaver does not accept recipe or direction options".into(),
+                );
+            }
+            let archive = args
+                .archive
+                .as_deref()
+                .ok_or("screenshot-screensaver capture requires --archive")?;
+            if !archive.is_file() {
+                return Err(format!("screenshot archive is missing: {}", archive.display()).into());
+            }
+            if let Some(seed) = args.seed.as_deref() {
+                parse_screenshot_seed(seed)?;
+            }
+        }
+    }
+    if args.scene != SceneLabScene::ScreenshotScreensaver
+        && (args.archive.is_some() || args.seed.is_some())
+    {
+        return Err("--archive and --seed are valid only for screenshot-screensaver".into());
     }
     let lab = repository.join(LAB_DIR);
     let mut build = Command::new("cargo");
@@ -214,6 +246,12 @@ fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> 
     capture.args(["--scene", args.scene.label()]);
     if let Some(recipe) = args.recipe.as_deref() {
         capture.arg("--recipe").arg(recipe);
+    }
+    if let Some(archive) = args.archive.as_deref() {
+        capture.arg("--archive").arg(archive);
+    }
+    if let Some(seed) = args.seed.as_deref() {
+        capture.arg("--seed").arg(seed);
     }
     if args.scene == SceneLabScene::CardFlip {
         capture
@@ -342,6 +380,17 @@ pub fn execute_scene_device(
                 return Err("card-flip does not accept --recipe or --fixture".into());
             }
         }
+        DeviceSceneLabScene::ScreenshotScreensaver => {
+            if args.recipe.is_some() || args.fixture.is_some() {
+                return Err("screenshot-screensaver does not accept --recipe or --fixture".into());
+            }
+            if let Some(seed) = args.seed.as_deref() {
+                parse_screenshot_seed(seed)?;
+            }
+        }
+    }
+    if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.seed.is_some() {
+        return Err("scene-lab --seed is valid only for screenshot-screensaver".into());
     }
     if let Some(case) = args.case.as_deref() {
         if args.scene != DeviceSceneLabScene::Cabinet {
@@ -387,10 +436,15 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
         return Err("startup particle preview is available only on macOS".into());
     }
     let scene = recipe_scene(&args.recipe)?;
-    run_preview(repository, scene, Some(&args.recipe), None)
+    run_preview(repository, scene, Some(&args.recipe), None, None, None)
 }
 
 fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> {
+    if args.scene != SceneLabScene::ScreenshotScreensaver
+        && (args.archive.is_some() || args.seed.is_some())
+    {
+        return Err("--archive and --seed are valid only for screenshot-screensaver".into());
+    }
     match args.scene {
         SceneLabScene::Magik | SceneLabScene::Cabinet | SceneLabScene::Intro => {
             let recipe = args
@@ -408,7 +462,7 @@ fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> 
                 )
                 .into());
             }
-            run_preview(repository, actual, Some(recipe), None)
+            run_preview(repository, actual, Some(recipe), None, None, None)
         }
         SceneLabScene::NavigationTransition => {
             if args.recipe.is_some() {
@@ -419,13 +473,45 @@ fn scene_preview(repository: &Path, args: &ScenePreviewArgs) -> AgentResult<()> 
                 .as_deref()
                 .ok_or("navigation-transition requires --fixture")?;
             validate_navigation_fixture(fixture)?;
-            run_preview(repository, args.scene.label(), None, Some(fixture))
+            run_preview(
+                repository,
+                args.scene.label(),
+                None,
+                Some(fixture),
+                None,
+                None,
+            )
         }
         SceneLabScene::CardFlip => {
             if args.recipe.is_some() || args.fixture.is_some() {
                 return Err("card-flip does not accept --recipe or --fixture".into());
             }
-            run_preview(repository, args.scene.label(), None, None)
+            run_preview(repository, args.scene.label(), None, None, None, None)
+        }
+        SceneLabScene::ScreenshotScreensaver => {
+            if args.recipe.is_some() || args.fixture.is_some() {
+                return Err(
+                    "screenshot-screensaver does not accept recipe or fixture options".into(),
+                );
+            }
+            let archive = args
+                .archive
+                .as_deref()
+                .ok_or("screenshot-screensaver preview requires --archive")?;
+            if !archive.is_file() {
+                return Err(format!("screenshot archive is missing: {}", archive.display()).into());
+            }
+            if let Some(seed) = args.seed.as_deref() {
+                parse_screenshot_seed(seed)?;
+            }
+            run_preview(
+                repository,
+                args.scene.label(),
+                None,
+                None,
+                Some(archive),
+                args.seed.as_deref(),
+            )
         }
     }
 }
@@ -441,11 +527,25 @@ fn validate_navigation_fixture(fixture: &str) -> AgentResult<()> {
     }
 }
 
+pub(crate) fn parse_screenshot_seed(value: &str) -> AgentResult<u64> {
+    let value = value.trim();
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map_or_else(
+            || value.parse::<u64>(),
+            |digits| u64::from_str_radix(digits, 16),
+        )
+        .map_err(|_| format!("invalid screenshot seed {value:?}").into())
+}
+
 fn run_preview(
     repository: &Path,
     scene: &str,
     recipe: Option<&Path>,
     fixture: Option<&str>,
+    archive: Option<&Path>,
+    seed: Option<&str>,
 ) -> AgentResult<()> {
     if !cfg!(target_os = "macos") {
         return Err("framebuffer scene preview is available only on macOS".into());
@@ -477,6 +577,12 @@ fn run_preview(
     }
     if let Some(fixture) = fixture {
         preview.arg("--fixture").arg(fixture);
+    }
+    if let Some(archive) = archive {
+        preview.arg("--archive").arg(archive);
+    }
+    if let Some(seed) = seed {
+        preview.arg("--seed").arg(seed);
     }
     let status = preview
         .status()
