@@ -80,6 +80,9 @@ impl VerticalRgb565Transform {
         if destination_y >= self.destination_height {
             return None;
         }
+        if self.source_height == self.destination_height {
+            return Some(destination_y);
+        }
         let numerator =
             (destination_y.checked_mul(2)?.checked_add(1)?).checked_mul(self.source_height)?;
         Some((numerator / (self.destination_height * 2)).min(self.source_height - 1))
@@ -87,6 +90,9 @@ impl VerticalRgb565Transform {
 
     pub fn destination_rect_for_source(self, source_rect: VerticalRect) -> Option<VerticalRect> {
         let source_rect = self.valid_source_rect(source_rect)?;
+        if self.source_height == self.destination_height {
+            return Some(source_rect);
+        }
         let first_destination_y = (0..self.destination_height).find(|&y| {
             self.source_row_for_destination(y)
                 .is_some_and(|sy| sy >= source_rect.y0 && sy < source_rect.y1)
@@ -129,6 +135,33 @@ impl VerticalRgb565Transform {
         let Some(destination_rect) = self.destination_rect_for_source(source_rect) else {
             return Ok(None);
         };
+
+        if self.source_height == self.destination_height {
+            if source_rect.x0 == 0
+                && source_rect.x1 == self.width
+                && source.stride_pixels == self.width
+                && destination_stride == self.width
+            {
+                let source_start = source_rect.y0 * source.stride_pixels;
+                let destination_start = source_rect.y0 * destination_stride;
+                let pixel_count = source_rect.width() * source_rect.rows();
+                destination[destination_start..destination_start + pixel_count]
+                    .copy_from_slice(&source.pixels[source_start..source_start + pixel_count]);
+            } else {
+                for y in source_rect.y0..source_rect.y1 {
+                    let source_offset = y * source.stride_pixels + source_rect.x0;
+                    let destination_offset = y * destination_stride + source_rect.x0;
+                    destination[destination_offset..destination_offset + source_rect.width()]
+                        .copy_from_slice(
+                            &source.pixels[source_offset..source_offset + source_rect.width()],
+                        );
+                }
+            }
+            return Ok(Some(VerticalCopyStats {
+                destination_rect,
+                bytes: source_rect.width() * source_rect.rows() * 2,
+            }));
+        }
 
         for destination_y in destination_rect.y0..destination_rect.y1 {
             let source_y = self
@@ -237,6 +270,82 @@ mod tests {
         assert_eq!(
             transform.destination_rect_for_source(rect(0, 1, 640, 1)),
             Some(rect(0, 0, 640, 1))
+        );
+    }
+
+    #[test]
+    fn identity_mapping_preserves_rows_and_rectangles() {
+        let transform = VerticalRgb565Transform::new(4, 4, 4).unwrap();
+        for y in 0..4 {
+            assert_eq!(transform.source_row_for_destination(y), Some(y));
+        }
+        assert_eq!(transform.source_row_for_destination(4), None);
+        assert_eq!(
+            transform.destination_rect_for_source(rect(1, 1, 2, 2)),
+            Some(rect(1, 1, 2, 2))
+        );
+    }
+
+    #[test]
+    fn identity_dense_full_width_band_is_copied_exactly() {
+        let source = (0_u16..16).collect::<Vec<_>>();
+        let view = Rgb565FrameView {
+            pixels: &source,
+            width: 4,
+            height: 4,
+            stride_pixels: 4,
+        };
+        let mut destination = [99_u16; 16];
+        let stats = VerticalRgb565Transform::new(4, 4, 4)
+            .unwrap()
+            .copy_rect(view, rect(0, 1, 4, 2), &mut destination, 4)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            stats,
+            VerticalCopyStats {
+                destination_rect: rect(0, 1, 4, 2),
+                bytes: 16,
+            }
+        );
+        assert_eq!(
+            destination,
+            [99, 99, 99, 99, 4, 5, 6, 7, 8, 9, 10, 11, 99, 99, 99, 99]
+        );
+    }
+
+    #[test]
+    fn identity_partial_copy_preserves_pixels_and_padded_strides() {
+        let source = [
+            0, 1, 2, 3, 90, 91, 10, 11, 12, 13, 92, 93, 20, 21, 22, 23, 94, 95, 30, 31, 32, 33, 96,
+            97,
+        ];
+        let view = Rgb565FrameView {
+            pixels: &source,
+            width: 4,
+            height: 4,
+            stride_pixels: 6,
+        };
+        let mut destination = [7; 24];
+        let stats = VerticalRgb565Transform::new(4, 4, 4)
+            .unwrap()
+            .copy_rect(view, rect(1, 1, 2, 2), &mut destination, 6)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            stats,
+            VerticalCopyStats {
+                destination_rect: rect(1, 1, 2, 2),
+                bytes: 8,
+            }
+        );
+        assert_eq!(
+            destination,
+            [
+                7, 7, 7, 7, 7, 7, 7, 11, 12, 7, 7, 7, 7, 21, 22, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            ]
         );
     }
 
