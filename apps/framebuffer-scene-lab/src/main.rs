@@ -1263,19 +1263,17 @@ fn run_card_flip_mister(
     let mut presenter = CachedHiddenLatchPresenter::open(plan)
         .map_err(|error| format!("open plan-aware hidden RGB565 card presenter: {error}"))?;
 
-    let mut renderer = CardFlip::new(CardFlipRasterPath::Device);
+    let mut renderer = CardFlip::new_device(plan.render_w, plan.render_h)
+        .map_err(|error| format!("resolve card geometry: {error}"))?;
     renderer.set_duration(duration);
-    let mut reference = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
     let mut staging = vec![Rgb565Pixel(0); plan.render_w * plan.render_h];
-    let mut staging_initialized = false;
-    let card_rect = scaled_card_rect(plan.render_w, plan.render_h);
+    let geometry = renderer.geometry();
     let card_damage = DirtyRectList::from_one(DirtyRect {
-        x0: card_rect.0,
-        y0: card_rect.1,
-        x1: card_rect.0 + card_rect.2,
-        y1: card_rect.1 + card_rect.3,
+        x0: geometry.card_x,
+        y0: geometry.card_y,
+        x1: geometry.card_x + geometry.card_width,
+        y1: geometry.card_y + geometry.card_height,
     });
-    card_flip_neon::fill_rgb565(&mut reference, Rgb565Pixel(0));
     let mut controls = CardFlipLabControls::default();
     let mut input = FramebufferLabInput::open();
     let started = Instant::now();
@@ -1316,8 +1314,8 @@ fn run_card_flip_mister(
         plan.output_w,
         plan.output_h,
         plan.output_route.label(),
-        card_rect.2,
-        card_rect.3,
+        geometry.card_width,
+        geometry.card_height,
     );
 
     loop {
@@ -1352,27 +1350,16 @@ fn run_card_flip_mister(
         if renderer.is_dirty() && now >= next_frame {
             let render_started = Instant::now();
             let stats = renderer
-                .render(&mut reference, elapsed)
+                .render(&mut staging, elapsed)
                 .map_err(str::to_owned)?;
             let render_us = render_started.elapsed().as_micros() as u64;
             if stats.changed {
-                let transfer_started = Instant::now();
-                if !staging_initialized {
-                    staging.fill(reference[0]);
-                    staging_initialized = true;
-                }
-                scale_card_frame(
-                    &reference,
-                    &mut staging,
-                    plan.render_w,
-                    plan.render_h,
-                    card_rect,
-                );
                 // SAFETY: both RGB565 wrappers are transparent over u16 and
                 // every u16 bit pattern is valid for either representation.
                 let cached = unsafe {
                     std::slice::from_raw_parts(staging.as_ptr().cast::<Rgb565>(), staging.len())
                 };
+                let transfer_started = Instant::now();
                 let copy = presenter
                     .prepare_cached(cached, &card_damage)
                     .map_err(|error| format!("copy cached card frame: {error}"))?;
@@ -1476,43 +1463,6 @@ fn run_card_flip_mister(
 }
 
 #[cfg(any(test, all(target_os = "linux", target_arch = "arm")))]
-fn scaled_card_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let card_height = height.saturating_mul(7).div_ceil(10).min(height);
-    let card_width = card_height
-        .saturating_mul(43)
-        .saturating_add(31)
-        .saturating_div(63)
-        .min(width);
-    (
-        (width - card_width) / 2,
-        (height - card_height) / 2,
-        card_width,
-        card_height,
-    )
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn scale_card_frame(
-    reference: &[Rgb565Pixel],
-    destination: &mut [Rgb565Pixel],
-    destination_width: usize,
-    destination_height: usize,
-    card_rect: (usize, usize, usize, usize),
-) {
-    debug_assert_eq!(reference.len(), DEFAULT_WIDTH * DEFAULT_HEIGHT);
-    debug_assert_eq!(destination.len(), destination_width * destination_height);
-    let (x0, y0, width, height) = card_rect;
-    for y in 0..height {
-        let source_y = card_flip::CARD_Y + y * card_flip::CARD_HEIGHT / height;
-        let source_row = source_y * DEFAULT_WIDTH;
-        let destination_row = (y0 + y) * destination_width;
-        for x in 0..width {
-            let source_x = card_flip::CARD_X + x * card_flip::CARD_WIDTH / width;
-            destination[destination_row + x0 + x] = reference[source_row + source_x];
-        }
-    }
-}
-
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn sample_summary(samples: &mut [u64]) -> (u64, u64, u64) {
     samples.sort_unstable();
@@ -2475,11 +2425,5 @@ mod tests {
             }
             assert_eq!(frame_hash(&pixels), expected);
         }
-    }
-
-    #[test]
-    fn card_geometry_tracks_render_height_and_preserves_aspect_ratio() {
-        assert_eq!(scaled_card_rect(960, 600), (336, 90, 287, 420));
-        assert_eq!(scaled_card_rect(640, 480), (205, 72, 229, 336));
     }
 }

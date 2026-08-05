@@ -73,17 +73,21 @@ impl CardGeometry {
             .and_then(|value| value.checked_add(31))
             .ok_or("card flip width overflow")?
             .checked_div(63)
-            .ok_or("card flip aspect ratio is invalid")?
-            .min(surface_width);
+            .ok_or("card flip aspect ratio is invalid")?;
+        if card_width > surface_width {
+            return Err("card flip surface is too narrow for a 43:63 card");
+        }
         if card_width < 2 * OUTLINE_WIDTH + 1 || card_height < 2 * OUTLINE_WIDTH + 1 {
             return Err("card flip surface is too small for its outline");
         }
+        let target_x_span = card_width.saturating_sub(1).max(1) as i64;
+        let target_y_span = card_height.saturating_sub(1).max(1) as i64;
         let source_x_scale_q16 =
-            ((CARD_WIDTH - 1) as i64 * FIXED_ONE) / (card_width.saturating_sub(1).max(1) as i64);
+            ((CARD_WIDTH - 1) as i64 * FIXED_ONE + target_x_span / 2) / target_x_span;
         let source_y_scale_q16 =
-            ((CARD_HEIGHT - 1) as i64 * FIXED_ONE) / (card_height.saturating_sub(1).max(1) as i64);
-        let camera = ((i64::from(CAMERA) * card_width as i64 + CARD_WIDTH as i64 / 2)
-            / CARD_WIDTH as i64)
+            ((CARD_HEIGHT - 1) as i64 * FIXED_ONE + target_y_span / 2) / target_y_span;
+        let camera = ((i64::from(CAMERA) * target_x_span + (CARD_WIDTH - 1) as i64 / 2)
+            / (CARD_WIDTH - 1) as i64)
             .max(1) as i32;
         let spine_width = (MINIMUM_SPINE_WIDTH * card_width)
             .div_ceil(CARD_WIDTH)
@@ -185,7 +189,7 @@ pub struct CardFlip {
     raster_path: RasterPath,
     front: Vec<Rgb565Pixel>,
     back: Vec<Rgb565Pixel>,
-    columns: [Column; WIDTH],
+    columns: Vec<Column>,
     device_initialized: bool,
 }
 
@@ -198,8 +202,17 @@ impl Default for CardFlip {
 impl CardFlip {
     #[must_use]
     pub fn new(raster_path: RasterPath) -> Self {
+        Self::with_geometry(raster_path, CardGeometry::reference())
+    }
+
+    pub fn new_device(surface_width: usize, surface_height: usize) -> Result<Self, &'static str> {
+        let geometry = CardGeometry::for_surface(surface_width, surface_height)?;
+        Ok(Self::with_geometry(RasterPath::Device, geometry))
+    }
+
+    fn with_geometry(raster_path: RasterPath, geometry: CardGeometry) -> Self {
         Self {
-            geometry: CardGeometry::reference(),
+            geometry,
             duration: DEFAULT_DURATION,
             progress_q16: 0,
             start_progress_q16: 0,
@@ -211,7 +224,13 @@ impl CardFlip {
             raster_path,
             front: build_face(false),
             back: build_face(true),
-            columns: [Column::default(); WIDTH],
+            columns: vec![
+                Column::default();
+                match raster_path {
+                    RasterPath::Reference => geometry.surface_width,
+                    RasterPath::Device => geometry.card_width,
+                }
+            ],
             device_initialized: false,
         }
     }
@@ -266,8 +285,8 @@ impl CardFlip {
         destination: &mut [Rgb565Pixel],
         now: Duration,
     ) -> Result<RenderStats, &'static str> {
-        if destination.len() != WIDTH * HEIGHT {
-            return Err("card flip requires an exact 960x540 RGB565 target");
+        if destination.len() != self.geometry.surface_width * self.geometry.surface_height {
+            return Err("card flip target does not match its configured geometry");
         }
         self.advance(now);
         let dirty = self.dirty;
@@ -348,6 +367,7 @@ impl CardFlip {
                 source_x,
                 (source_zero * FIXED_ONE as f32).round() as i32,
                 (step * FIXED_ONE as f32).round() as i32,
+                HEIGHT,
             );
         }
         self.paint_rows_reference(destination, progress)
@@ -357,29 +377,30 @@ impl CardFlip {
     /// row-major sampling loop contain integer arithmetic only.
     fn render_device(&mut self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
         if self.device_initialized {
-            clear_card_bounds(destination);
+            clear_card_bounds(destination, self.geometry);
         } else {
-            destination.fill(BACKGROUND);
+            crate::card_flip_neon::fill_rgb565(destination, BACKGROUND);
             self.device_initialized = true;
         }
         self.columns.fill(Column::default());
+        let geometry = self.geometry;
         let eased = smoothstep_q16(progress);
         let (sine_q16, cosine_q16) = sin_cos_pi_q16(eased);
-        let anchor_q16 = (CARD_X as i64 * FIXED_ONE) + (CARD_WIDTH - 1) as i64 * i64::from(eased);
-        let center_y_q16 = (CARD_Y as i64 * FIXED_ONE) + (CARD_HEIGHT - 1) as i64 * FIXED_ONE / 2;
-        let half_height_q16 = (CARD_HEIGHT - 1) as i64 * FIXED_ONE / 2;
-        let camera_q16 = i64::from(CAMERA) * FIXED_ONE;
+        let anchor_q16 = (geometry.card_width - 1) as i64 * i64::from(eased);
+        let target_center_y_q16 = (geometry.card_height - 1) as i64 * FIXED_ONE / 2;
+        let source_half_height_q16 = (CARD_HEIGHT - 1) as i64 * FIXED_ONE / 2;
+        let camera_q16 = i64::from(geometry.camera) * FIXED_ONE;
 
-        for screen_x in 0..WIDTH {
+        for screen_x in 0..geometry.card_width {
             let offset_q16 = screen_x as i64 * FIXED_ONE - anchor_q16;
             let denominator_q16 =
-                i64::from(CAMERA) * cosine_q16 - ((offset_q16 * sine_q16) >> FIXED_SHIFT);
+                i64::from(geometry.camera) * cosine_q16 - ((offset_q16 * sine_q16) >> FIXED_SHIFT);
             if denominator_q16.abs() < 4 {
                 continue;
             }
             let local_from_hinge_q16 = offset_q16 * camera_q16 / denominator_q16;
             if local_from_hinge_q16 < -FIXED_ONE / 2
-                || local_from_hinge_q16 > CARD_WIDTH as i64 * FIXED_ONE - FIXED_ONE / 2
+                || local_from_hinge_q16 > geometry.card_width as i64 * FIXED_ONE - FIXED_ONE / 2
             {
                 continue;
             }
@@ -387,13 +408,19 @@ impl CardFlip {
             if depth_q16 <= 0 {
                 continue;
             }
-            let source_x = ((local_from_hinge_q16 + FIXED_ONE / 2) >> FIXED_SHIFT)
+            let source_x_q16 = (local_from_hinge_q16 * geometry.source_x_scale_q16) >> FIXED_SHIFT;
+            let source_x = ((source_x_q16 + FIXED_ONE / 2) >> FIXED_SHIFT)
                 .clamp(0, (CARD_WIDTH - 1) as i64) as u16;
-            let source_y_step_q16 = depth_q16 / i64::from(CAMERA);
+            let perspective_q16 = depth_q16 / i64::from(geometry.camera);
+            let source_y_step_q16 = (perspective_q16 * geometry.source_y_scale_q16) >> FIXED_SHIFT;
             let source_y_zero_q16 =
-                half_height_q16 - ((center_y_q16 * source_y_step_q16) >> FIXED_SHIFT);
-            self.columns[screen_x] =
-                column(source_x, source_y_zero_q16 as i32, source_y_step_q16 as i32);
+                source_half_height_q16 - ((target_center_y_q16 * source_y_step_q16) >> FIXED_SHIFT);
+            self.columns[screen_x] = column(
+                source_x,
+                source_y_zero_q16 as i32,
+                source_y_step_q16 as i32,
+                geometry.card_height,
+            );
         }
         self.paint_rows_device(destination, progress)
     }
@@ -406,7 +433,7 @@ impl CardFlip {
         };
         let valid_width = self.columns.iter().filter(|column| column.valid).count();
         if valid_width < MINIMUM_SPINE_WIDTH {
-            return render_spine(destination, outline);
+            return render_spine(destination, self.geometry, outline);
         }
         let face = if progress < u16::MAX / 2 {
             &self.front
@@ -476,20 +503,21 @@ impl CardFlip {
         };
         let columns = self.columns.as_ptr();
         let mut first = 0;
-        // SAFETY: `columns` points to the fixed WIDTH-element array owned by
-        // `self`, and both searches are bounded by WIDTH.
-        while first < WIDTH && unsafe { !(*columns.add(first)).valid } {
+        let geometry = self.geometry;
+        // SAFETY: `columns` points to the card-width workspace owned by `self`,
+        // and both searches are bounded by that configured width.
+        while first < geometry.card_width && unsafe { !(*columns.add(first)).valid } {
             first += 1;
         }
-        if first == WIDTH {
-            return render_spine(destination, outline);
+        if first == geometry.card_width {
+            return render_spine(destination, geometry, outline);
         }
-        let mut last = WIDTH - 1;
+        let mut last = geometry.card_width - 1;
         while last > first && unsafe { !(*columns.add(last)).valid } {
             last -= 1;
         }
-        if last - first + 1 < MINIMUM_SPINE_WIDTH {
-            return render_spine(destination, outline);
+        if last - first + 1 < geometry.spine_width {
+            return render_spine(destination, geometry, outline);
         }
         let face = if progress < u16::MAX / 2 {
             self.front.as_ptr()
@@ -500,7 +528,7 @@ impl CardFlip {
         let destination = destination.as_mut_ptr();
         let mut writes = 0;
 
-        for y in CARD_Y..CARD_Y + CARD_HEIGHT {
+        for y in 0..geometry.card_height {
             let mut left = first;
             while left <= last && !column_contains_device(unsafe { *columns.add(left) }, y) {
                 left += 1;
@@ -518,8 +546,8 @@ impl CardFlip {
                 // SAFETY: left/right are derived from first/last, which are
                 // bounded indices into the fixed columns array.
                 let column = unsafe { *columns.add(x) };
-                // Card-space fixed-point values stay well inside i32 for the
-                // fixed 960x540 scene, avoiding 64-bit arithmetic on ARMv7.
+                // Card-local fixed-point values stay well inside i32 for
+                // supported MagiK render plans, avoiding 64-bit row math.
                 let value = column
                     .source_y_step_q16
                     .wrapping_mul(y as i32)
@@ -541,9 +569,11 @@ impl CardFlip {
                     // card columns and rows and remain inside the fixed face.
                     unsafe { *face.add(source_y * CARD_WIDTH + source_x) }
                 };
-                // SAFETY: render validated the fixed 960x540 target and the
-                // loop bounds stay inside that plane.
-                unsafe { *destination.add(y * WIDTH + x) = pixel };
+                let destination_index =
+                    (geometry.card_y + y) * geometry.surface_width + geometry.card_x + x;
+                // SAFETY: construction proved that the card rectangle is
+                // inside the configured surface, and render validated its size.
+                unsafe { *destination.add(destination_index) = pixel };
                 writes += 1;
                 x += 1;
             }
@@ -552,15 +582,21 @@ impl CardFlip {
     }
 }
 
-fn column(source_x: u16, source_y_zero_q16: i32, source_y_step_q16: i32) -> Column {
+fn column(
+    source_x: u16,
+    source_y_zero_q16: i32,
+    source_y_step_q16: i32,
+    coordinate_height: usize,
+) -> Column {
     let step = i64::from(source_y_step_q16).max(1);
     let zero = i64::from(source_y_zero_q16);
     let first_value = -FIXED_ONE / 2;
     let last_value = CARD_HEIGHT as i64 * FIXED_ONE - FIXED_ONE / 2 - 1;
-    let top_y = div_ceil_positive(first_value - zero, step).clamp(0, (HEIGHT - 1) as i64) as u16;
+    let top_y =
+        div_ceil_positive(first_value - zero, step).clamp(0, (coordinate_height - 1) as i64) as u16;
     let bottom_y = (last_value - zero)
         .div_euclid(step)
-        .clamp(0, (HEIGHT - 1) as i64) as u16;
+        .clamp(0, (coordinate_height - 1) as i64) as u16;
     Column {
         valid: top_y <= bottom_y,
         source_x,
@@ -597,24 +633,24 @@ fn column_contains_device(column: Column, y: usize) -> bool {
     source_y < CARD_HEIGHT && stepped_corner(column.source_x as usize, source_y)
 }
 
-fn clear_card_bounds(destination: &mut [Rgb565Pixel]) {
+fn clear_card_bounds(destination: &mut [Rgb565Pixel], geometry: CardGeometry) {
     #[cfg(target_arch = "arm")]
     {
         crate::card_flip_neon::fill_rect_rgb565(
             destination,
-            WIDTH,
-            CARD_X,
-            CARD_Y,
-            CARD_WIDTH,
-            CARD_HEIGHT,
+            geometry.surface_width,
+            geometry.card_x,
+            geometry.card_y,
+            geometry.card_width,
+            geometry.card_height,
             BACKGROUND,
         );
         return;
     }
     #[cfg(not(target_arch = "arm"))]
-    for y in CARD_Y..CARD_Y + CARD_HEIGHT {
-        let start = y * WIDTH + CARD_X;
-        destination[start..start + CARD_WIDTH].fill(BACKGROUND);
+    for y in geometry.card_y..geometry.card_y + geometry.card_height {
+        let start = y * geometry.surface_width + geometry.card_x;
+        destination[start..start + geometry.card_width].fill(BACKGROUND);
     }
 }
 
@@ -631,17 +667,28 @@ fn source_y_at(column: Column, y: usize) -> Option<usize> {
         .then_some(rounded as usize)
 }
 
-fn render_spine(destination: &mut [Rgb565Pixel], outline: Rgb565Pixel) -> usize {
-    let x0 = WIDTH / 2 - MINIMUM_SPINE_WIDTH / 2;
+fn render_spine(
+    destination: &mut [Rgb565Pixel],
+    geometry: CardGeometry,
+    outline: Rgb565Pixel,
+) -> usize {
+    let x0 = geometry.card_x + geometry.card_width / 2 - geometry.spine_width / 2;
     let mut writes = 0;
-    for y in CARD_Y..CARD_Y + CARD_HEIGHT {
-        let inset = corner_inset(y - CARD_Y);
-        let inset = inset.min((MINIMUM_SPINE_WIDTH - 1) / 2);
-        for x in x0 + inset..x0 + MINIMUM_SPINE_WIDTH - inset {
+    for local_y in 0..geometry.card_height {
+        let source_y = ((local_y as i64 * geometry.source_y_scale_q16 + FIXED_ONE / 2)
+            >> FIXED_SHIFT)
+            .clamp(0, (CARD_HEIGHT - 1) as i64) as usize;
+        let source_edge_y = source_y.min(CARD_HEIGHT - 1 - source_y);
+        let inset = (corner_inset(source_edge_y) * geometry.card_width)
+            .div_ceil(CARD_WIDTH)
+            .min((geometry.spine_width - 1) / 2);
+        let y = geometry.card_y + local_y;
+        for x in x0 + inset..x0 + geometry.spine_width - inset {
             let edge = x < x0 + OUTLINE_WIDTH
-                || x >= x0 + MINIMUM_SPINE_WIDTH - OUTLINE_WIDTH
-                || !(CARD_Y + OUTLINE_WIDTH..CARD_Y + CARD_HEIGHT - OUTLINE_WIDTH).contains(&y);
-            destination[y * WIDTH + x] = if edge { outline } else { PURPLE_DARK };
+                || x >= x0 + geometry.spine_width - OUTLINE_WIDTH
+                || local_y < OUTLINE_WIDTH
+                || local_y >= geometry.card_height - OUTLINE_WIDTH;
+            destination[y * geometry.surface_width + x] = if edge { outline } else { PURPLE_DARK };
             writes += 1;
         }
     }
@@ -830,8 +877,8 @@ mod tests {
                 card_height: 420,
                 camera: 512,
                 spine_width: 14,
-                source_x_scale_q16: 58_890,
-                source_y_scale_q16: 58_966,
+                source_x_scale_q16: 58_891,
+                source_y_scale_q16: 58_967,
             }
         );
         let crt = CardGeometry::for_surface(640, 480).unwrap();
@@ -859,13 +906,21 @@ mod tests {
     }
 
     fn non_background_bounds(pixels: &[Rgb565Pixel]) -> (usize, usize, usize, usize) {
-        let mut min_x = WIDTH;
-        let mut min_y = HEIGHT;
+        non_background_bounds_for(pixels, WIDTH, HEIGHT)
+    }
+
+    fn non_background_bounds_for(
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> (usize, usize, usize, usize) {
+        let mut min_x = width;
+        let mut min_y = height;
         let mut max_x = 0;
         let mut max_y = 0;
-        for y in 0..HEIGHT {
-            for x in 0..WIDTH {
-                if pixels[y * WIDTH + x] != BACKGROUND {
+        for y in 0..height {
+            for x in 0..width {
+                if pixels[y * width + x] != BACKGROUND {
                     min_x = min_x.min(x);
                     min_y = min_y.min(y);
                     max_x = max_x.max(x);
@@ -874,6 +929,120 @@ mod tests {
             }
         }
         (min_x, min_y, max_x, max_y)
+    }
+
+    fn native_frame(
+        scene: &mut CardFlip,
+        geometry: CardGeometry,
+        at: Duration,
+    ) -> Vec<Rgb565Pixel> {
+        let mut pixels = vec![BACKGROUND; geometry.surface_width * geometry.surface_height];
+        scene.render(&mut pixels, at).unwrap();
+        pixels
+    }
+
+    #[test]
+    fn native_endpoints_use_resolved_geometry() {
+        let geometry = CardGeometry::for_surface(960, 600).unwrap();
+        let mut scene = CardFlip::new_device(960, 600).unwrap();
+        assert_eq!(scene.geometry(), geometry);
+        assert_eq!(
+            non_background_bounds_for(
+                &native_frame(&mut scene, geometry, Duration::ZERO),
+                geometry.surface_width,
+                geometry.surface_height,
+            ),
+            (
+                geometry.card_x,
+                geometry.card_y,
+                geometry.card_x + geometry.card_width - 1,
+                geometry.card_y + geometry.card_height - 1,
+            )
+        );
+        scene.start_from_endpoint(Direction::Reverse, Duration::ZERO);
+        assert_eq!(
+            non_background_bounds_for(
+                &native_frame(&mut scene, geometry, Duration::ZERO),
+                geometry.surface_width,
+                geometry.surface_height,
+            ),
+            (
+                geometry.card_x,
+                geometry.card_y,
+                geometry.card_x + geometry.card_width - 1,
+                geometry.card_y + geometry.card_height - 1,
+            )
+        );
+    }
+
+    #[test]
+    fn native_midpoint_scales_the_pixel_spine() {
+        let geometry = CardGeometry::for_surface(960, 600).unwrap();
+        let mut scene = CardFlip::new_device(960, 600).unwrap();
+        scene.start_from_endpoint(Direction::Forward, Duration::ZERO);
+        let pixels = native_frame(&mut scene, geometry, DEFAULT_DURATION / 2);
+        let bounds =
+            non_background_bounds_for(&pixels, geometry.surface_width, geometry.surface_height);
+        assert_eq!(bounds.2 - bounds.0 + 1, geometry.spine_width);
+        assert_eq!(bounds.3 - bounds.1 + 1, geometry.card_height);
+    }
+
+    #[test]
+    fn native_endpoint_keeps_two_pixel_outline_and_stepped_corners() {
+        let geometry = CardGeometry::for_surface(960, 600).unwrap();
+        let mut scene = CardFlip::new_device(960, 600).unwrap();
+        let pixels = native_frame(&mut scene, geometry, Duration::ZERO);
+        let row = geometry.card_y + 7;
+        let start = row * geometry.surface_width + geometry.card_x;
+        assert_eq!(
+            pixels[geometry.card_y * geometry.surface_width + geometry.card_x],
+            BACKGROUND
+        );
+        assert_eq!(
+            pixels[geometry.card_y * geometry.surface_width + geometry.card_x + 7],
+            CYAN_BRIGHT
+        );
+        assert_eq!(pixels[start], CYAN_BRIGHT);
+        assert_eq!(pixels[start + 1], CYAN_BRIGHT);
+        assert_ne!(pixels[start + 2], CYAN_BRIGHT);
+    }
+
+    #[test]
+    fn native_projection_sweep_stays_inside_face_and_surface() {
+        let geometry = CardGeometry::for_surface(960, 600).unwrap();
+        let mut scene = CardFlip::new_device(960, 600).unwrap();
+        let mut pixels = vec![BACKGROUND; geometry.surface_width * geometry.surface_height];
+        scene.start_from_endpoint(Direction::Forward, Duration::ZERO);
+        for milliseconds in (0..=440).step_by(11) {
+            scene
+                .render(&mut pixels, Duration::from_millis(milliseconds))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn native_render_preserves_pixels_outside_card_damage() {
+        let geometry = CardGeometry::for_surface(960, 600).unwrap();
+        let mut scene = CardFlip::new_device(960, 600).unwrap();
+        let mut pixels = vec![BACKGROUND; geometry.surface_width * geometry.surface_height];
+        scene.render(&mut pixels, Duration::ZERO).unwrap();
+        pixels[0] = Rgb565Pixel(0x55aa);
+        scene.play(Direction::Forward, Duration::ZERO);
+        scene
+            .render(&mut pixels, Duration::from_millis(16))
+            .unwrap();
+        assert_eq!(pixels[0], Rgb565Pixel(0x55aa));
+    }
+
+    #[test]
+    fn native_geometry_has_no_reference_width_dependency() {
+        for (width, height) in [(1_024, 768), (1_280, 720)] {
+            let geometry = CardGeometry::for_surface(width, height).unwrap();
+            let mut scene = CardFlip::new_device(width, height).unwrap();
+            let pixels = native_frame(&mut scene, geometry, Duration::ZERO);
+            assert_eq!(pixels.len(), width * height);
+            assert_eq!(scene.columns.len(), geometry.card_width);
+        }
     }
 
     #[test]
