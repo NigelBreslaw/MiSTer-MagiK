@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod card_flip;
-#[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
 mod card_flip_neon;
 
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};

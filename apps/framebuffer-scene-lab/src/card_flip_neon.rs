@@ -27,6 +27,7 @@ pub fn fill_rgb565(destination: &mut [Rgb565Pixel], value: Rgb565Pixel) {
 }
 
 /// Fills a validated rectangle inside a packed RGB565 plane.
+#[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
 pub fn fill_rect_rgb565(
     destination: &mut [Rgb565Pixel],
     stride: usize,

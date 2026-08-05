@@ -56,6 +56,7 @@ impl CardGeometry {
         }
     }
 
+    #[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
     pub fn for_surface(surface_width: usize, surface_height: usize) -> Result<Self, &'static str> {
         if surface_width == 0 || surface_height == 0 {
             return Err("card flip surface dimensions must be non-zero");
@@ -205,6 +206,7 @@ impl CardFlip {
         Self::with_geometry(raster_path, CardGeometry::reference())
     }
 
+    #[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
     pub fn new_device(surface_width: usize, surface_height: usize) -> Result<Self, &'static str> {
         let geometry = CardGeometry::for_surface(surface_width, surface_height)?;
         Ok(Self::with_geometry(RasterPath::Device, geometry))
@@ -236,6 +238,7 @@ impl CardFlip {
     }
 
     #[must_use]
+    #[cfg(any(all(target_os = "linux", target_arch = "arm"), test))]
     pub const fn geometry(&self) -> CardGeometry {
         self.geometry
     }
