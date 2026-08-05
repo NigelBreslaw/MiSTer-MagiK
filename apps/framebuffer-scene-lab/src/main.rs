@@ -7,7 +7,9 @@ mod card_flip;
 mod card_flip_neon;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-use card_assessment::{CardFrameDetails, FrameEvidence, summarize_cadence};
+use card_assessment::{
+    CardFrameDetails, FrameEvidence, confirmation_sequence_is_contiguous, summarize_cadence,
+};
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
 use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
@@ -125,9 +127,9 @@ fn finish_frame_evidence(
     pending.frame.post_delta = previous
         .map(|frame| receipt.post_count.wrapping_sub(frame.post_count))
         .unwrap_or(0);
-    pending.frame.drop_count = receipt.drop_count;
-    pending.frame.drop_delta = previous
-        .map(|frame| receipt.drop_count.wrapping_sub(frame.drop_count))
+    pending.frame.latch_drop_count = receipt.drop_count;
+    pending.frame.latch_drop_delta = previous
+        .map(|frame| receipt.drop_count.wrapping_sub(frame.latch_drop_count))
         .unwrap_or(0);
     pending.frame.status_reads = pipeline_after
         .status_reads
@@ -164,7 +166,7 @@ fn write_measurement_evidence(
     std::fs::write(&frames_path, frame_bytes)
         .map_err(|error| format!("write {}: {error}", frames_path.display()))?;
     let summary = serde_json::json!({
-        "schema": "mister-magik-scene-lab-measurement-pass-v1",
+        "schema": "mister-magik-scene-lab-measurement-pass-v2",
         "scene": scene,
         "pass": assessment.pass.label(),
         "profiler_enabled": assessment.pass.profiler_enabled(),
@@ -1403,7 +1405,7 @@ fn run_window(
     let mut worker_wait_samples_us = Vec::with_capacity(64);
     let mut prepared_age_samples_us = Vec::with_capacity(64);
     let mut last_sequence = None;
-    let mut repeated_presentations = 0_u64;
+    let mut confirmation_sequence_failures = 0_u64;
     let mut latch_drop_count = 0_u16;
     let mut warmup_last_flip_count = None;
     let mut warmup_unit_flip_streak = 0_u8;
@@ -1437,8 +1439,10 @@ fn run_window(
             .saturating_sub(settle_cpu_started)
             .as_micros() as u64;
         if let Some(receipt) = settled {
-            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
-                repeated_presentations = repeated_presentations.saturating_add(1);
+            if last_sequence.is_some_and(|sequence| {
+                !confirmation_sequence_is_contiguous(sequence, receipt.sequence)
+            }) {
+                confirmation_sequence_failures = confirmation_sequence_failures.saturating_add(1);
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
@@ -1483,7 +1487,7 @@ fn run_window(
                         raster_samples_us.clear();
                         worker_wait_samples_us.clear();
                         prepared_age_samples_us.clear();
-                        repeated_presentations = 0;
+                        confirmation_sequence_failures = 0;
                         frame_evidence.clear();
                         pending_evidence = None;
                         rss_samples_kib.clear();
@@ -1631,8 +1635,10 @@ fn run_window(
             let settle_cpu_us = process_cpu_time()
                 .saturating_sub(settle_cpu_started)
                 .as_micros() as u64;
-            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
-                repeated_presentations = repeated_presentations.saturating_add(1);
+            if last_sequence.is_some_and(|sequence| {
+                !confirmation_sequence_is_contiguous(sequence, receipt.sequence)
+            }) {
+                confirmation_sequence_failures = confirmation_sequence_failures.saturating_add(1);
             }
             latch_drop_count = receipt.drop_count;
             if let Some(pending) = pending_evidence.take() {
@@ -1667,7 +1673,7 @@ fn run_window(
             let cadence =
                 summarize_cadence(&frame_evidence, refresh_period_us, refresh_period_source)?;
             println!(
-                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} repeated_refreshes={} sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 renderer.effect().label(),
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
@@ -1675,8 +1681,8 @@ fn run_window(
                 cadence.confirmed_frames,
                 cadence.expected_refresh_intervals,
                 cadence.unique_latch_flips,
-                cadence.repeated_refreshes,
-                cadence.sequence_failures,
+                cadence.dropped_frames,
+                cadence.confirmation_sequence_failures,
                 cadence.latch_drop_delta,
                 cadence.completion_failures,
                 cadence.long_completion_intervals,
@@ -1709,7 +1715,7 @@ fn run_window(
                 let (prepared_age_average_us, prepared_age_p99_us, _) =
                     sample_summary(&mut prepared_age_samples_us);
                 println!(
-                    "cabinet-case name={} particles={} projected_particles={} projection_cohorts={} visible={} pixel_writes={} mode={} seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} clear_avg_us={} clear_p99_us={} projection_avg_us={} projection_p99_us={} ordering_avg_us={} ordering_p99_us={} raster_avg_us={} raster_p99_us={} worker_wait_avg_us={} worker_wait_p99_us={} prepared_age_avg_us={} prepared_age_p99_us={} repeated_presentations={} projection_backend={}",
+                    "cabinet-case name={} particles={} projected_particles={} projection_cohorts={} visible={} pixel_writes={} mode={} seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} clear_avg_us={} clear_p99_us={} projection_avg_us={} projection_p99_us={} ordering_avg_us={} ordering_p99_us={} raster_avg_us={} raster_p99_us={} worker_wait_avg_us={} worker_wait_p99_us={} prepared_age_avg_us={} prepared_age_p99_us={} confirmation_sequence_failures={} projection_backend={}",
                     case.name,
                     case.particles,
                     stats.projected_particles,
@@ -1736,17 +1742,17 @@ fn run_window(
                     worker_wait_p99_us,
                     prepared_age_average_us,
                     prepared_age_p99_us,
-                    repeated_presentations,
+                    confirmation_sequence_failures,
                     stats.projection_backend,
                 );
             } else {
                 println!(
-                    "scene-lab-measurement state=complete scene={} seconds={:.3} frames={} cpu_pct={:.2} repeated_presentations={} latch_drop_count={} rss_mean_kib={} rss_max_kib={}",
+                    "scene-lab-measurement state=complete scene={} seconds={:.3} frames={} cpu_pct={:.2} confirmation_sequence_failures={} latch_drop_count={} rss_mean_kib={} rss_max_kib={}",
                     renderer.effect().label(),
                     seconds,
                     status_frames,
                     cpu_percent,
-                    repeated_presentations,
+                    confirmation_sequence_failures,
                     latch_drop_count,
                     rss_samples_kib
                         .iter()
@@ -1780,7 +1786,7 @@ fn run_window(
                 )
             };
             println!(
-                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} repeated_presentations={} latch_drop_count={} latch_status_reads={} latch_poll_reads={} latch_settle_us={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} confirmation_sequence_failures={} latch_drop_count={} latch_status_reads={} latch_poll_reads={} latch_settle_us={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.state_label(),
@@ -1799,7 +1805,7 @@ fn run_window(
                 stats.projection_backend,
                 post.slot_index,
                 post.sequence,
-                repeated_presentations,
+                confirmation_sequence_failures,
                 latch_drop_count,
                 presenter.pipeline_stats().status_reads,
                 presenter.pipeline_stats().poll_reads,
@@ -1817,7 +1823,7 @@ fn run_window(
             raster_samples_us.clear();
             worker_wait_samples_us.clear();
             prepared_age_samples_us.clear();
-            repeated_presentations = 0;
+            confirmation_sequence_failures = 0;
         }
         next_frame += FRAME_DURATION;
         if let Some(remaining) = next_frame.checked_duration_since(Instant::now()) {
@@ -1870,7 +1876,7 @@ fn run_card_flip_mister(
     let mut pending_frame_started: Option<Instant> = None;
     let mut pending_present_started: Option<Instant> = None;
     let mut last_sequence = None;
-    let mut repeated_presentations = 0_u64;
+    let mut confirmation_sequence_failures = 0_u64;
     let mut latch_drop_count = 0_u16;
     let mut profile_frame_to_present_samples_us = Vec::with_capacity(2048);
     let mut profile_render_samples_us = Vec::with_capacity(2048);
@@ -1878,7 +1884,7 @@ fn run_card_flip_mister(
     let mut profile_present_samples_us = Vec::with_capacity(2048);
     let profile_cpu_started = process_cpu_time();
     let mut profile_frames = 0_u64;
-    let mut profile_repeated_presentations = 0_u64;
+    let mut profile_confirmation_sequence_failures = 0_u64;
     let mut transfer_source_rects = 0_u64;
     let mut transfer_destination_rects = 0_u64;
     let mut transfer_source_bytes = 0_u64;
@@ -1952,8 +1958,10 @@ fn run_card_flip_mister(
                 frame_to_present_samples_us.push(frame_to_present_us);
                 profile_frame_to_present_samples_us.push(frame_to_present_us);
             }
-            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
-                repeated_presentations = repeated_presentations.saturating_add(1);
+            if last_sequence.is_some_and(|sequence| {
+                !confirmation_sequence_is_contiguous(sequence, receipt.sequence)
+            }) {
+                confirmation_sequence_failures = confirmation_sequence_failures.saturating_add(1);
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
@@ -1980,7 +1988,7 @@ fn run_card_flip_mister(
                         profile_present_samples_us.clear();
                         profile_frame_evidence.clear();
                         profile_frames = 0;
-                        profile_repeated_presentations = 0;
+                        profile_confirmation_sequence_failures = 0;
                         profile_transfer_source_rects = 0;
                         profile_transfer_destination_rects = 0;
                         profile_transfer_source_bytes = 0;
@@ -2169,7 +2177,7 @@ fn run_card_flip_mister(
             let (present_average_us, present_p99_us, present_max_us) =
                 sample_summary(&mut present_samples_us);
             println!(
-                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
+                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} confirmation_sequence_failures={} latch_drop_count={}",
                 rendered_frames,
                 rendered_frames as f64 / seconds,
                 cpu_percent,
@@ -2194,7 +2202,7 @@ fn run_card_flip_mister(
                 transfer_source_bytes,
                 transfer_destination_bytes,
                 full_slot_restores,
-                repeated_presentations,
+                confirmation_sequence_failures,
                 latch_drop_count,
             );
             status_started = Instant::now();
@@ -2209,9 +2217,9 @@ fn run_card_flip_mister(
             transfer_source_bytes = 0;
             transfer_destination_bytes = 0;
             full_slot_restores = 0;
-            profile_repeated_presentations =
-                profile_repeated_presentations.saturating_add(repeated_presentations);
-            repeated_presentations = 0;
+            profile_confirmation_sequence_failures = profile_confirmation_sequence_failures
+                .saturating_add(confirmation_sequence_failures);
+            confirmation_sequence_failures = 0;
         }
 
         if bounded_run
@@ -2239,8 +2247,11 @@ fn run_card_flip_mister(
                     frame_to_present_samples_us.push(frame_to_present_us);
                     profile_frame_to_present_samples_us.push(frame_to_present_us);
                 }
-                if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
-                    repeated_presentations = repeated_presentations.saturating_add(1);
+                if last_sequence.is_some_and(|sequence| {
+                    !confirmation_sequence_is_contiguous(sequence, receipt.sequence)
+                }) {
+                    confirmation_sequence_failures =
+                        confirmation_sequence_failures.saturating_add(1);
                 }
                 latch_drop_count = receipt.drop_count;
                 if let Some(pending) = pending_card_evidence.take() {
@@ -2276,7 +2287,7 @@ fn run_card_flip_mister(
             let (present_average_us, present_p99_us, present_max_us) =
                 sample_summary(&mut profile_present_samples_us);
             println!(
-                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
+                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} confirmation_sequence_failures={} latch_drop_count={}",
                 seconds,
                 profile_frames,
                 profile_frames as f64 / seconds,
@@ -2299,7 +2310,8 @@ fn run_card_flip_mister(
                 profile_transfer_source_bytes,
                 profile_transfer_destination_bytes,
                 profile_full_slot_restores,
-                profile_repeated_presentations.saturating_add(repeated_presentations),
+                profile_confirmation_sequence_failures
+                    .saturating_add(confirmation_sequence_failures),
                 latch_drop_count,
             );
             let (refresh_period_us, refresh_period_source) = plan
@@ -2314,15 +2326,15 @@ fn run_card_flip_mister(
                 refresh_period_source,
             )?;
             println!(
-                "card-flip-cadence profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} repeated_refreshes={} sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "card-flip-cadence profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
                 cadence.refresh_period_us,
                 cadence.confirmed_frames,
                 cadence.expected_refresh_intervals,
                 cadence.unique_latch_flips,
-                cadence.repeated_refreshes,
-                cadence.sequence_failures,
+                cadence.dropped_frames,
+                cadence.confirmation_sequence_failures,
                 cadence.latch_drop_delta,
                 cadence.completion_failures,
                 cadence.long_completion_intervals,

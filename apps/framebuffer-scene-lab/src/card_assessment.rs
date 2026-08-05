@@ -5,8 +5,8 @@
 
 use serde::Serialize;
 
-pub const FRAME_EVIDENCE_SCHEMA: &str = "mister-magik-scene-lab-frame-v1";
-pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v1";
+pub const FRAME_EVIDENCE_SCHEMA: &str = "mister-magik-scene-lab-frame-v2";
+pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v2";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FrameEvidence {
@@ -34,8 +34,8 @@ pub struct FrameEvidence {
     pub flip_delta: u16,
     pub post_count: u16,
     pub post_delta: u16,
-    pub drop_count: u16,
-    pub drop_delta: u16,
+    pub latch_drop_count: u16,
+    pub latch_drop_delta: u16,
     pub status_reads: u64,
     pub poll_reads: u64,
     pub source_rect_count: u32,
@@ -84,8 +84,8 @@ impl FrameEvidence {
             flip_delta: 0,
             post_count: 0,
             post_delta: 0,
-            drop_count: 0,
-            drop_delta: 0,
+            latch_drop_count: 0,
+            latch_drop_delta: 0,
             status_reads: 0,
             poll_reads: 0,
             source_rect_count: 0,
@@ -109,8 +109,8 @@ pub struct CadenceSummary {
     pub elapsed_us: u64,
     pub expected_refresh_intervals: u64,
     pub unique_latch_flips: u64,
-    pub repeated_refreshes: u64,
-    pub sequence_failures: u64,
+    pub dropped_frames: u64,
+    pub confirmation_sequence_failures: u64,
     pub latch_drop_delta: u64,
     pub completion_failures: u64,
     pub long_completion_intervals: u64,
@@ -151,8 +151,8 @@ pub fn summarize_cadence(
 
     let mut expected_refresh_intervals = 0_u64;
     let mut unique_latch_flips = 0_u64;
-    let mut repeated_refreshes = 0_u64;
-    let mut sequence_failures = 0_u64;
+    let mut dropped_frames = 0_u64;
+    let mut confirmation_sequence_failures = 0_u64;
     let mut latch_drop_delta = 0_u64;
     let mut completion_failures = 0_u64;
     let mut long_completion_intervals = 0_u64;
@@ -181,15 +181,17 @@ pub fn summarize_cadence(
         if flips > expected {
             completion_failures = completion_failures.saturating_add(1);
         } else {
-            repeated_refreshes = repeated_refreshes.saturating_add(expected.saturating_sub(flips));
+            dropped_frames = dropped_frames.saturating_add(expected.saturating_sub(flips));
         }
         expected_refresh_intervals = expected_refresh_intervals.saturating_add(expected);
         unique_latch_flips = unique_latch_flips.saturating_add(flips);
-        sequence_failures = sequence_failures.saturating_add(u64::from(
-            current.sequence != next_sequence(previous.sequence),
+        confirmation_sequence_failures = confirmation_sequence_failures.saturating_add(u64::from(
+            !confirmation_sequence_is_contiguous(previous.sequence, current.sequence),
         ));
         latch_drop_delta = latch_drop_delta.saturating_add(u64::from(
-            current.drop_count.wrapping_sub(previous.drop_count),
+            current
+                .latch_drop_count
+                .wrapping_sub(previous.latch_drop_count),
         ));
         long_completion_intervals =
             long_completion_intervals.saturating_add(u64::from(interval_us > long_limit_us));
@@ -205,8 +207,8 @@ pub fn summarize_cadence(
         elapsed_us,
         expected_refresh_intervals,
         unique_latch_flips,
-        repeated_refreshes,
-        sequence_failures,
+        dropped_frames,
+        confirmation_sequence_failures,
         latch_drop_delta,
         completion_failures,
         long_completion_intervals,
@@ -214,6 +216,11 @@ pub fn summarize_cadence(
         unique_fps: unique_latch_flips as f64 * 1_000_000.0 / elapsed_us as f64,
         cadence_authoritative: !profiler_enabled,
     })
+}
+
+#[must_use]
+pub const fn confirmation_sequence_is_contiguous(previous: u16, current: u16) -> bool {
+    current == next_sequence(previous)
 }
 
 const fn next_sequence(sequence: u16) -> u16 {
@@ -234,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_fifty_and_sixty_hertz_have_no_repeats() {
+    fn exact_fifty_and_sixty_hertz_have_no_dropped_frames() {
         for period_us in [16_667, 20_000] {
             let frames = (0..10)
                 .map(|index| {
@@ -247,20 +254,20 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let summary = summarize_cadence(&frames, period_us, "test").unwrap();
-            assert_eq!(summary.repeated_refreshes, 0);
+            assert_eq!(summary.dropped_frames, 0);
             assert_eq!(summary.unique_latch_flips, 9);
         }
     }
 
     #[test]
-    fn detects_repeated_refresh_without_latch_drop() {
+    fn detects_dropped_frame_without_latch_drop() {
         let frames = [
             frame(1, 1_000_000, 1, 10),
             frame(2, 1_016_667, 2, 11),
             frame(3, 1_050_001, 3, 12),
         ];
         let summary = summarize_cadence(&frames, 16_667, "test").unwrap();
-        assert_eq!(summary.repeated_refreshes, 1);
+        assert_eq!(summary.dropped_frames, 1);
         assert_eq!(summary.latch_drop_delta, 0);
         assert_eq!(summary.long_completion_intervals, 1);
     }
@@ -274,8 +281,15 @@ mod tests {
         let summary = summarize_cadence(&frames, 16_667, "test").unwrap();
         assert_eq!(summary.expected_refresh_intervals, 2);
         assert_eq!(summary.unique_latch_flips, 2);
-        assert_eq!(summary.repeated_refreshes, 0);
-        assert_eq!(summary.sequence_failures, 0);
+        assert_eq!(summary.dropped_frames, 0);
+        assert_eq!(summary.confirmation_sequence_failures, 0);
+    }
+
+    #[test]
+    fn confirmation_sequences_accept_wrap_and_reject_gaps() {
+        assert!(confirmation_sequence_is_contiguous(u16::MAX, 1));
+        assert!(!confirmation_sequence_is_contiguous(41, 41));
+        assert!(!confirmation_sequence_is_contiguous(41, 43));
     }
 
     #[test]
