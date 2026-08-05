@@ -148,6 +148,14 @@ impl Direction {
     }
 }
 
+#[inline(always)]
+const fn pose_progress(progress: u16, direction: Direction) -> u16 {
+    match direction {
+        Direction::Forward => progress,
+        Direction::Reverse => u16::MAX - progress,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RasterPath {
     Reference,
@@ -167,7 +175,7 @@ pub struct RenderStats {
     pub pixel_writes: usize,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Column {
     valid: bool,
     source_x: u16,
@@ -340,15 +348,11 @@ impl CardFlip {
     fn render_reference(&mut self, destination: &mut [Rgb565Pixel], progress: u16) -> usize {
         destination.fill(BACKGROUND);
         self.columns.fill(Column::default());
-        let phase = f32::from(progress) / PROGRESS_MAX as f32;
+        let pose_progress = pose_progress(progress, self.direction);
+        let phase = f32::from(pose_progress) / PROGRESS_MAX as f32;
         let eased = smoothstep(phase);
         let angle = eased * std::f32::consts::PI;
-        // Back-to-front is the second half of the same rotation (pi..2pi),
-        // not a reversal back through the first half (pi..0).
-        let sine = match self.direction {
-            Direction::Forward => angle.sin(),
-            Direction::Reverse => -angle.sin(),
-        };
+        let sine = angle.sin();
         let cosine = angle.cos();
         let anchor = CARD_X as f32 + (CARD_WIDTH - 1) as f32 * eased;
         let center_y = CARD_Y as f32 + (CARD_HEIGHT - 1) as f32 * 0.5;
@@ -392,12 +396,9 @@ impl CardFlip {
         }
         self.columns.fill(Column::default());
         let geometry = self.geometry;
-        let eased = smoothstep_q16(progress);
+        let pose_progress = pose_progress(progress, self.direction);
+        let eased = smoothstep_q16(pose_progress);
         let (sine_q16, cosine_q16) = sin_cos_pi_q16(eased);
-        let sine_q16 = match self.direction {
-            Direction::Forward => sine_q16,
-            Direction::Reverse => -sine_q16,
-        };
         let anchor_q16 = (geometry.card_width - 1) as i64 * i64::from(eased);
         let target_center_y_q16 = (geometry.card_height - 1) as i64 * FIXED_ONE / 2;
         let source_half_height_q16 = (CARD_HEIGHT - 1) as i64 * FIXED_ONE / 2;
@@ -452,7 +453,7 @@ impl CardFlip {
         } else {
             &self.back
         };
-        let mirror = progress >= u16::MAX / 2;
+        let mirror = pose_progress(progress, self.direction) >= u16::MAX / 2;
         let Some(first) = self.columns.iter().position(|column| column.valid) else {
             return 0;
         };
@@ -536,7 +537,7 @@ impl CardFlip {
         } else {
             self.back.as_ptr()
         };
-        let mirror = progress >= u16::MAX / 2;
+        let mirror = pose_progress(progress, self.direction) >= u16::MAX / 2;
         let destination = destination.as_mut_ptr();
         let mut writes = 0;
 
@@ -1084,6 +1085,26 @@ mod tests {
     }
 
     #[test]
+    fn repeated_hinge_halves_have_seamless_face_endpoints() {
+        for path in [RasterPath::Reference, RasterPath::Device] {
+            let mut front_to_back = CardFlip::new(path);
+            front_to_back.start_from_endpoint(Direction::Forward, Duration::ZERO);
+            let completed_back = frame(&mut front_to_back, DEFAULT_DURATION);
+
+            let mut back_to_front = CardFlip::new(path);
+            back_to_front.start_from_endpoint(Direction::Reverse, Duration::ZERO);
+            let starting_back = frame(&mut back_to_front, Duration::ZERO);
+            assert_eq!(completed_back, starting_back);
+
+            let completed_front = frame(&mut back_to_front, DEFAULT_DURATION);
+            let mut next_front_to_back = CardFlip::new(path);
+            next_front_to_back.start_from_endpoint(Direction::Forward, Duration::ZERO);
+            let starting_front = frame(&mut next_front_to_back, Duration::ZERO);
+            assert_eq!(completed_front, starting_front);
+        }
+    }
+
+    #[test]
     fn endpoint_border_is_two_pixels_with_six_pixel_steps() {
         let mut scene = CardFlip::new(RasterPath::Device);
         let pixels = frame(&mut scene, Duration::ZERO);
@@ -1137,20 +1158,19 @@ mod tests {
     }
 
     #[test]
-    fn back_to_front_uses_the_second_half_of_the_rotation() {
+    fn each_face_repeats_the_same_hinge_trajectory() {
         let at = DEFAULT_DURATION / 4;
-        let mut continuing = CardFlip::new(RasterPath::Device);
-        continuing.start_from_endpoint(Direction::Reverse, Duration::ZERO);
-        let continuing_pixels = frame(&mut continuing, at);
+        let mut front_half = CardFlip::new(RasterPath::Device);
+        front_half.start_from_endpoint(Direction::Forward, Duration::ZERO);
+        let front_pixels = frame(&mut front_half, at);
+        let front_columns = front_half.columns.clone();
 
-        let mut retracing = CardFlip::new(RasterPath::Device);
-        retracing.start_from_endpoint(Direction::Reverse, Duration::ZERO);
-        retracing.advance(at);
-        retracing.direction = Direction::Forward;
-        let retracing_pixels = frame(&mut retracing, at);
+        let mut back_half = CardFlip::new(RasterPath::Device);
+        back_half.start_from_endpoint(Direction::Reverse, Duration::ZERO);
+        let back_pixels = frame(&mut back_half, at);
 
-        assert_eq!(continuing.progress_q16(), retracing.progress_q16());
-        assert_ne!(continuing_pixels, retracing_pixels);
+        assert_eq!(front_columns, back_half.columns);
+        assert_ne!(front_pixels, back_pixels);
     }
 
     #[test]
