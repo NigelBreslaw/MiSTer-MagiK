@@ -221,6 +221,8 @@ pub struct SceneLabArgs {
     pub(crate) fixture: Option<String>,
     #[arg(long)]
     pub(crate) seed: Option<String>,
+    #[arg(long, value_enum)]
+    pub(crate) sampling_profile: Option<SceneLabSamplingProfile>,
     #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
@@ -233,6 +235,23 @@ pub struct SceneLabArgs {
     pub(crate) assess: bool,
     #[arg(long, required = true)]
     attended: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SceneLabSamplingProfile {
+    #[value(alias = "hdmi")]
+    LegacyHalf,
+    #[value(alias = "crt")]
+    Sixteenth,
+}
+
+impl SceneLabSamplingProfile {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyHalf => "legacy-half",
+            Self::Sixteenth => "sixteenth",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -355,6 +374,7 @@ pub fn run_scene_lab(
             recipe: args.recipe.as_deref(),
             fixture: args.fixture.as_deref(),
             seed,
+            sampling_profile: args.sampling_profile.map(SceneLabSamplingProfile::as_str),
             case: args.case.as_deref(),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,

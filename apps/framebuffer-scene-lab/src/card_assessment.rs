@@ -47,6 +47,8 @@ pub struct FrameEvidence {
     pub visible_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub card: Option<CardFrameDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<ScreenshotFrameDetails>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -54,6 +56,16 @@ pub struct CardFrameDetails {
     pub progress_q16: u16,
     pub face: &'static str,
     pub direction: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ScreenshotFrameDetails {
+    pub raster_held_cards: usize,
+    pub raster_moved_cards: usize,
+    pub raster_hold_layer_mask: u8,
+    pub raster_visible_layer_mask: u8,
+    pub sixteenth_phase_layer_mask: u8,
+    pub phase_bank_resident_bytes: usize,
 }
 
 impl FrameEvidence {
@@ -95,6 +107,7 @@ impl FrameEvidence {
             full_restore: false,
             visible_count: None,
             card: None,
+            screenshot: None,
         }
     }
 }

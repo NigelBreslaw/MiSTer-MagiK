@@ -2503,18 +2503,14 @@ enum ParadeSamplingProfile {
 }
 
 impl ParadeSamplingProfile {
-    const fn for_crt_output(crt_output: bool) -> Self {
-        if crt_output {
-            Self::CrtSixteenth
-        } else {
-            Self::LegacyHalf
-        }
+    const fn for_crt_output(_crt_output: bool) -> Self {
+        Self::CrtSixteenth
     }
 
     const fn label(self) -> &'static str {
         match self {
             Self::LegacyHalf => "legacy-half",
-            Self::CrtSixteenth => "crt-16",
+            Self::CrtSixteenth => "sixteenth",
         }
     }
 
@@ -2536,9 +2532,9 @@ impl ParadeSamplingProfile {
 
     const fn layer_evidence(self) -> &'static str {
         if matches!(self, Self::CrtSixteenth) {
-            "1:crt-16,2:crt-16,3:crt-16,4:crt-16,5:crt-16"
+            "1:sixteenth,2:sixteenth,3:sixteenth,4:sixteenth,5:sixteenth"
         } else {
-            "1:crt-16,2:legacy-half,3:legacy-half,4:legacy-half,5:legacy-half"
+            "1:sixteenth,2:legacy-half,3:legacy-half,4:legacy-half,5:legacy-half"
         }
     }
 }
@@ -4857,10 +4853,10 @@ mod tests {
     }
 
     #[test]
-    fn sampling_profile_is_selected_only_by_the_output_route() {
+    fn production_sampling_profile_uses_sixteenth_phases_on_every_output() {
         assert_eq!(
             ParadeSamplingProfile::for_crt_output(false),
-            ParadeSamplingProfile::LegacyHalf
+            ParadeSamplingProfile::CrtSixteenth
         );
         assert_eq!(
             ParadeSamplingProfile::for_crt_output(true),

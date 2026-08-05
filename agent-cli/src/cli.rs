@@ -530,6 +530,26 @@ mod tests {
     }
 
     #[test]
+    fn screenshot_scene_lab_accepts_semantic_profiles_and_compatibility_aliases() {
+        for profile in ["legacy-half", "sixteenth", "hdmi", "crt"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "device",
+                    "scene-lab",
+                    "--scene",
+                    "screenshot-screensaver",
+                    "--sampling-profile",
+                    profile,
+                    "--attended",
+                ])
+                .is_ok(),
+                "profile={profile}",
+            );
+        }
+    }
+
+    #[test]
     fn compile_time_commands_require_closed_targets_and_explicit_paths() {
         assert!(
             Cli::try_parse_from([

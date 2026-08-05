@@ -228,6 +228,7 @@ impl NavigationFixtureScene {
             magik_stages: None,
             cabinet_stages: None,
             intro_stages: None,
+            screenshot: None,
             cue_id: "navigation-transition",
             cue_index: 0,
             cue_start_ms: 0,
@@ -365,6 +366,7 @@ pub struct FrameStats {
     pub magik_stages: Option<MagikStageTimings>,
     pub cabinet_stages: Option<CabinetStageTimings>,
     pub intro_stages: Option<IntroStageTimings>,
+    pub screenshot: Option<ScreenshotFrameStats>,
     pub cue_id: &'static str,
     pub cue_index: usize,
     pub cue_start_ms: u64,
@@ -372,6 +374,16 @@ pub struct FrameStats {
     pub cue_elapsed_ms: u64,
     pub cue_duration_ms: u64,
     pub total_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScreenshotFrameStats {
+    pub raster_held_cards: usize,
+    pub raster_moved_cards: usize,
+    pub raster_hold_layer_mask: u8,
+    pub raster_visible_layer_mask: u8,
+    pub sixteenth_phase_layer_mask: u8,
+    pub phase_bank_resident_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -528,6 +540,7 @@ impl FocusedParticleRenderer {
                     magik_stages: None,
                     cabinet_stages: Some(stats.stages),
                     intro_stages: None,
+                    screenshot: None,
                     cue_id: "cabinet",
                     cue_index: 0,
                     cue_start_ms: 0,
@@ -563,6 +576,7 @@ impl FocusedParticleRenderer {
                     magik_stages: None,
                     cabinet_stages: None,
                     intro_stages: Some(stats.stages),
+                    screenshot: None,
                     cue_id: stats.cue_id,
                     cue_index: stats.cue_index,
                     cue_start_ms: stats.cue_start_ms,
@@ -627,6 +641,7 @@ fn magik_frame_stats(stats: MagikSceneStats) -> FrameStats {
         }),
         cabinet_stages: None,
         intro_stages: None,
+        screenshot: None,
         cue_id: "magik",
         cue_index: 0,
         cue_start_ms: 0,

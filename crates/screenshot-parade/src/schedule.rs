@@ -1303,6 +1303,15 @@ mod tests {
     }
 
     #[test]
+    fn supported_framebuffer_velocities_land_on_the_sixteenth_phase_lattice() {
+        for width in [960, 640] {
+            for layer_index in 0..SPEED_COUNT {
+                assert_eq!(card_velocity_fp(layer_index, width) % 16, 0);
+            }
+        }
+    }
+
+    #[test]
     fn prepared_frames_are_deterministic_for_hdmi_and_crt_geometry() {
         let path = std::env::temp_dir().join(format!(
             "screenshot-parade-schedule-{}.mmlz4b",

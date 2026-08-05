@@ -8,7 +8,8 @@ mod card_flip_neon;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use card_assessment::{
-    CardFrameDetails, FrameEvidence, confirmation_sequence_is_contiguous, summarize_cadence,
+    CardFrameDetails, FrameEvidence, ScreenshotFrameDetails, confirmation_sequence_is_contiguous,
+    summarize_cadence,
 };
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
@@ -165,6 +166,39 @@ fn write_measurement_evidence(
     }
     std::fs::write(&frames_path, frame_bytes)
         .map_err(|error| format!("write {}: {error}", frames_path.display()))?;
+    let screenshot_frames = frames
+        .iter()
+        .filter_map(|frame| frame.screenshot.as_ref())
+        .collect::<Vec<_>>();
+    let screenshot_summary = (!screenshot_frames.is_empty()).then(|| {
+        serde_json::json!({
+            "samples": screenshot_frames.len(),
+            "phase_bank_resident_bytes": screenshot_frames
+                .iter()
+                .map(|frame| frame.phase_bank_resident_bytes)
+                .max()
+                .unwrap_or(0),
+            "max_raster_held_cards": screenshot_frames
+                .iter()
+                .map(|frame| frame.raster_held_cards)
+                .max()
+                .unwrap_or(0),
+            "max_raster_moved_cards": screenshot_frames
+                .iter()
+                .map(|frame| frame.raster_moved_cards)
+                .max()
+                .unwrap_or(0),
+            "raster_hold_layer_mask": screenshot_frames
+                .iter()
+                .fold(0_u8, |mask, frame| mask | frame.raster_hold_layer_mask),
+            "raster_visible_layer_mask": screenshot_frames
+                .iter()
+                .fold(0_u8, |mask, frame| mask | frame.raster_visible_layer_mask),
+            "sixteenth_phase_layer_mask": screenshot_frames
+                .iter()
+                .fold(0_u8, |mask, frame| mask | frame.sixteenth_phase_layer_mask),
+        })
+    });
     let summary = serde_json::json!({
         "schema": "mister-magik-scene-lab-measurement-pass-v2",
         "scene": scene,
@@ -195,6 +229,7 @@ fn write_measurement_evidence(
             "max": rss_samples_kib.iter().copied().max().unwrap_or(0),
         },
         "cadence": cadence,
+        "screenshot": screenshot_summary,
     });
     let summary_path = assessment.evidence_dir.join("summary.json");
     let mut summary_bytes =
@@ -860,6 +895,14 @@ fn screenshot_frame_stats(
         magik_stages: None,
         cabinet_stages: None,
         intro_stages: None,
+        screenshot: Some(mister_magik_framebuffer_scene_lab::ScreenshotFrameStats {
+            raster_held_cards: stats.raster_held_cards,
+            raster_moved_cards: stats.raster_moved_cards,
+            raster_hold_layer_mask: stats.raster_hold_layer_mask,
+            raster_visible_layer_mask: stats.raster_visible_layer_mask,
+            sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
+            phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
+        }),
         cue_id: "screenshot-screensaver",
         cue_index: 0,
         cue_start_ms: 0,
@@ -889,6 +932,7 @@ fn card_frame_stats(
         magik_stages: None,
         cabinet_stages: None,
         intro_stages: None,
+        screenshot: None,
         cue_id: "card-flip",
         cue_index: 0,
         cue_start_ms: 0,
@@ -1607,6 +1651,14 @@ fn run_window(
             evidence.destination_bytes = copy.destination_bytes;
             evidence.full_restore = copy.full_restore;
             evidence.visible_count = Some(stats.visible);
+            evidence.screenshot = stats.screenshot.map(|screenshot| ScreenshotFrameDetails {
+                raster_held_cards: screenshot.raster_held_cards,
+                raster_moved_cards: screenshot.raster_moved_cards,
+                raster_hold_layer_mask: screenshot.raster_hold_layer_mask,
+                raster_visible_layer_mask: screenshot.raster_visible_layer_mask,
+                sixteenth_phase_layer_mask: screenshot.sixteenth_phase_layer_mask,
+                phase_bank_resident_bytes: screenshot.phase_bank_resident_bytes,
+            });
             pending_evidence = Some(PendingFrameEvidence {
                 frame: evidence,
                 frame_started: render_started,
@@ -1778,6 +1830,20 @@ fn run_window(
                 sample_summary(&mut projection_samples_us);
             let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
             let error = renderer.last_error().unwrap_or("none");
+            let screenshot_metrics = stats.screenshot.map_or_else(
+                || "screenshot_metrics=not_applicable".to_owned(),
+                |screenshot| {
+                    format!(
+                        "screenshot_held={} screenshot_moved={} screenshot_hold_mask=0b{:05b} screenshot_visible_mask=0b{:05b} screenshot_sixteenth_mask=0b{:05b} screenshot_phase_bank_bytes={}",
+                        screenshot.raster_held_cards,
+                        screenshot.raster_moved_cards,
+                        screenshot.raster_hold_layer_mask,
+                        screenshot.raster_visible_layer_mask,
+                        screenshot.sixteenth_phase_layer_mask,
+                        screenshot.phase_bank_resident_bytes,
+                    )
+                },
+            );
             let stage_metrics = if clear_samples_us.is_empty() {
                 "scene_stages=not_applicable".to_owned()
             } else {
@@ -1786,7 +1852,7 @@ fn run_window(
                 )
             };
             println!(
-                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} confirmation_sequence_failures={} latch_drop_count={} latch_status_reads={} latch_poll_reads={} latch_settle_us={} reload_error={}",
+                "framebuffer-scene-lab effect={} generation={} state={} cue={} cue_elapsed_ms={} total_ms={} particles={} fps={:.1} cpu_pct={:.1} render_avg_us={} render_p99_us={} render_max_us={} {} {} visible={} simulation_backend={} projection_backend={} slot={} sequence={} confirmation_sequence_failures={} latch_drop_count={} latch_status_reads={} latch_poll_reads={} latch_settle_us={} reload_error={}",
                 stats.effect.label(),
                 renderer.generation(),
                 renderer.state_label(),
@@ -1800,6 +1866,7 @@ fn run_window(
                 render_p99_us,
                 render_max_us,
                 stage_metrics,
+                screenshot_metrics,
                 stats.visible,
                 stats.simulation_backend,
                 stats.projection_backend,
@@ -2514,13 +2581,13 @@ impl Options {
                 "--sampling-profile" => {
                     let value = arguments
                         .next()
-                        .ok_or("--sampling-profile requires hdmi or crt")?;
+                        .ok_or("--sampling-profile requires legacy-half or sixteenth")?;
                     sampling_profile = match value.as_str() {
-                        "hdmi" => ScreenshotSamplingProfile::HdmiLegacyHalf,
-                        "crt" => ScreenshotSamplingProfile::CrtSixteenth,
+                        "legacy-half" | "hdmi" => ScreenshotSamplingProfile::HdmiLegacyHalf,
+                        "sixteenth" | "crt" => ScreenshotSamplingProfile::CrtSixteenth,
                         _ => {
                             return Err(format!(
-                                "invalid sampling profile {value:?}; expected hdmi or crt"
+                                "invalid sampling profile {value:?}; expected legacy-half or sixteenth"
                             ));
                         }
                     };
@@ -2763,7 +2830,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile hdmi|crt]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
@@ -3350,29 +3417,33 @@ mod tests {
             PathBuf::from("/tmp/card-assessment")
         );
 
-        let screenshot = Options::parse(
-            [
-                "--scene",
-                "screenshot-screensaver",
-                "--archive",
-                "screenshots.mmlz4b",
-                "--seed",
-                "0x1234",
-                "--sampling-profile",
-                "crt",
-            ]
-            .map(String::from),
-        )
-        .unwrap();
-        assert_eq!(
-            screenshot.archive,
-            Some(PathBuf::from("screenshots.mmlz4b"))
-        );
-        assert_eq!(screenshot.seed, 0x1234);
-        assert_eq!(
-            screenshot.sampling_profile,
-            ScreenshotSamplingProfile::CrtSixteenth
-        );
+        for (profile, expected) in [
+            ("legacy-half", ScreenshotSamplingProfile::HdmiLegacyHalf),
+            ("hdmi", ScreenshotSamplingProfile::HdmiLegacyHalf),
+            ("sixteenth", ScreenshotSamplingProfile::CrtSixteenth),
+            ("crt", ScreenshotSamplingProfile::CrtSixteenth),
+        ] {
+            let screenshot = Options::parse(
+                [
+                    "--scene",
+                    "screenshot-screensaver",
+                    "--archive",
+                    "screenshots.mmlz4b",
+                    "--seed",
+                    "0x1234",
+                    "--sampling-profile",
+                    profile,
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            assert_eq!(
+                screenshot.archive,
+                Some(PathBuf::from("screenshots.mmlz4b"))
+            );
+            assert_eq!(screenshot.seed, 0x1234);
+            assert_eq!(screenshot.sampling_profile, expected, "profile={profile}");
+        }
     }
 
     #[test]

@@ -50,6 +50,7 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) recipe: Option<&'a Path>,
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
+    pub(crate) sampling_profile: Option<&'static str>,
     pub(crate) case: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
     pub(crate) warmup_seconds: u64,
@@ -108,6 +109,7 @@ pub(super) fn run(
                     recipe: Some(recipe),
                     fixture: None,
                     seed: None,
+                    sampling_profile: None,
                     case: None,
                     seconds: None,
                     warmup_seconds: 0,
@@ -142,6 +144,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         recipe,
         fixture,
         seed,
+        sampling_profile,
         case,
         seconds,
         warmup_seconds,
@@ -157,11 +160,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         Some(RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
-            sampling_profile: if display_contracts.settings.contains("output=hdmi") {
-                "hdmi"
-            } else {
-                "crt"
-            },
+            sampling_profile: sampling_profile.unwrap_or("sixteenth"),
             fingerprint,
         })
     } else {
