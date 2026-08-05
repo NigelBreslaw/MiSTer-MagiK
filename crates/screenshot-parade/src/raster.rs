@@ -596,11 +596,6 @@ fn srgb8_to_linear16(value: u8) -> u16 {
     srgb_to_linear_table()[usize::from(value)]
 }
 
-fn linear16_to_srgb8(value: u16) -> u8 {
-    let index = (usize::from(value) + 8).min(65_535) >> 4;
-    linear_to_srgb_table()[index.min(4096)]
-}
-
 fn rgb565_to_linear(pixel: Rgb565Pixel) -> LinearRgb {
     rgb565_to_linear_with_table(pixel, srgb_to_linear_table())
 }
