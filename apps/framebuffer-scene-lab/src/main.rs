@@ -1,9 +1,13 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#[cfg(any(test, all(target_os = "linux", target_arch = "arm")))]
+mod card_assessment;
 mod card_flip;
 mod card_flip_neon;
 
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+use card_assessment::{CardFlipFrameEvidence, summarize_cadence};
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
 use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
@@ -32,6 +36,70 @@ const CARD_FLIP_PROFILE_DURATION: Duration = Duration::from_secs(30);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+struct PendingCardEvidence {
+    frame: CardFlipFrameEvidence,
+    frame_started: std::time::Instant,
+    frame_cpu_started: Duration,
+    post_completed: std::time::Instant,
+    pipeline_before:
+        mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPipelineStats,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn finish_card_evidence(
+    mut pending: PendingCardEvidence,
+    receipt: mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresentReceipt,
+    pipeline_after: mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPipelineStats,
+    settle_wall_us: u64,
+    settle_cpu_us: u64,
+    previous: Option<&CardFlipFrameEvidence>,
+) -> CardFlipFrameEvidence {
+    let completed_at = std::time::Instant::now();
+    pending.frame.settle_wall_us = settle_wall_us;
+    pending.frame.settle_cpu_us = settle_cpu_us;
+    pending.frame.post_to_confirm_wall_us = completed_at
+        .duration_since(pending.post_completed)
+        .as_micros() as u64;
+    pending.frame.frame_to_confirm_wall_us = completed_at
+        .duration_since(pending.frame_started)
+        .as_micros() as u64;
+    pending.frame.process_cpu_us = process_cpu_time()
+        .saturating_sub(pending.frame_cpu_started)
+        .as_micros() as u64;
+    pending.frame.completion_monotonic_us = monotonic_time_us();
+    pending.frame.completion_interval_us = previous.map_or(0, |frame| {
+        pending
+            .frame
+            .completion_monotonic_us
+            .saturating_sub(frame.completion_monotonic_us)
+    });
+    pending.frame.slot_index = receipt.slot_index;
+    pending.frame.sequence = receipt.sequence;
+    pending.frame.sequence_delta = previous
+        .map(|frame| receipt.sequence.wrapping_sub(frame.sequence))
+        .unwrap_or(0);
+    pending.frame.flip_count = receipt.flip_count;
+    pending.frame.flip_delta = previous
+        .map(|frame| receipt.flip_count.wrapping_sub(frame.flip_count))
+        .unwrap_or(0);
+    pending.frame.post_count = receipt.post_count;
+    pending.frame.post_delta = previous
+        .map(|frame| receipt.post_count.wrapping_sub(frame.post_count))
+        .unwrap_or(0);
+    pending.frame.drop_count = receipt.drop_count;
+    pending.frame.drop_delta = previous
+        .map(|frame| receipt.drop_count.wrapping_sub(frame.drop_count))
+        .unwrap_or(0);
+    pending.frame.status_reads = pipeline_after
+        .status_reads
+        .saturating_sub(pending.pipeline_before.status_reads);
+    pending.frame.poll_reads = pipeline_after
+        .poll_reads
+        .saturating_sub(pending.pipeline_before.poll_reads);
+    pending.frame
+}
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
@@ -1308,6 +1376,8 @@ fn run_card_flip_mister(
     let mut profile_transfer_source_bytes = 0_u64;
     let mut profile_transfer_destination_bytes = 0_u64;
     let mut profile_full_slot_restores = 0_u64;
+    let mut profile_frame_evidence = Vec::with_capacity(2048);
+    let mut pending_card_evidence: Option<PendingCardEvidence> = None;
     let mut automatic_direction = CardFlipDirection::Reverse;
     let mut next_automatic_flip = duration;
     if profile {
@@ -1338,10 +1408,16 @@ fn run_card_flip_mister(
     );
 
     loop {
-        if let Some(receipt) = presenter
+        let settle_started = Instant::now();
+        let settle_cpu_started = process_cpu_time();
+        let settled = presenter
             .settle_pending()
-            .map_err(|error| format!("settle hidden RGB565 card frame: {error}"))?
-        {
+            .map_err(|error| format!("settle hidden RGB565 card frame: {error}"))?;
+        let settle_wall_us = settle_started.elapsed().as_micros() as u64;
+        let settle_cpu_us = process_cpu_time()
+            .saturating_sub(settle_cpu_started)
+            .as_micros() as u64;
+        if let Some(receipt) = settled {
             if let Some(present_started) = pending_present_started.take() {
                 let present_us = present_started.elapsed().as_micros() as u64;
                 present_samples_us.push(present_us);
@@ -1357,6 +1433,17 @@ fn run_card_flip_mister(
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
+            if let Some(pending) = pending_card_evidence.take() {
+                let evidence = finish_card_evidence(
+                    pending,
+                    receipt,
+                    presenter.pipeline_stats(),
+                    settle_wall_us,
+                    settle_cpu_us,
+                    profile_frame_evidence.last(),
+                );
+                profile_frame_evidence.push(evidence);
+            }
         }
 
         let elapsed = started.elapsed();
@@ -1378,11 +1465,16 @@ fn run_card_flip_mister(
         let now = Instant::now();
         if renderer.is_dirty() && now >= next_frame {
             let frame_started = Instant::now();
+            let frame_cpu_started = process_cpu_time();
             let render_started = frame_started;
+            let render_cpu_started = frame_cpu_started;
             let stats = renderer
                 .render(&mut staging, elapsed)
                 .map_err(str::to_owned)?;
             let render_us = render_started.elapsed().as_micros() as u64;
+            let render_cpu_us = process_cpu_time()
+                .saturating_sub(render_cpu_started)
+                .as_micros() as u64;
             if stats.changed {
                 // SAFETY: both RGB565 wrappers are transparent over u16 and
                 // every u16 bit pattern is valid for either representation.
@@ -1390,17 +1482,56 @@ fn run_card_flip_mister(
                     std::slice::from_raw_parts(staging.as_ptr().cast::<Rgb565>(), staging.len())
                 };
                 let transfer_started = Instant::now();
+                let transfer_cpu_started = process_cpu_time();
                 let copy = presenter
                     .prepare_cached(cached, &card_damage)
                     .map_err(|error| format!("copy cached card frame: {error}"))?;
                 let transfer_us = transfer_started.elapsed().as_micros() as u64;
+                let transfer_cpu_us = process_cpu_time()
+                    .saturating_sub(transfer_cpu_started)
+                    .as_micros() as u64;
                 let present_started = Instant::now();
+                let post_cpu_started = process_cpu_time();
                 let post = presenter
                     .post_prepared()
                     .map_err(|error| format!("post hidden RGB565 card frame: {error}"))?;
+                let post_wall_us = present_started.elapsed().as_micros() as u64;
+                let post_cpu_us = process_cpu_time()
+                    .saturating_sub(post_cpu_started)
+                    .as_micros() as u64;
+                let post_completed = Instant::now();
                 pending_frame_started = Some(frame_started);
                 pending_present_started = Some(present_started);
                 debug_assert_eq!(post.slot_index, copy.slot_index);
+                if profile {
+                    let mut evidence =
+                        CardFlipFrameEvidence::new(profile_frames.saturating_add(1), true);
+                    evidence.progress_q16 = stats.progress_q16;
+                    evidence.face = if stats.progress_q16 < u16::MAX / 2 {
+                        "front"
+                    } else {
+                        "back"
+                    };
+                    evidence.direction = stats.direction.label();
+                    evidence.render_wall_us = render_us;
+                    evidence.render_cpu_us = render_cpu_us;
+                    evidence.transfer_wall_us = transfer_us;
+                    evidence.transfer_cpu_us = transfer_cpu_us;
+                    evidence.post_wall_us = post_wall_us;
+                    evidence.post_cpu_us = post_cpu_us;
+                    evidence.source_rect_count = copy.source_rect_count;
+                    evidence.destination_rect_count = copy.destination_rect_count;
+                    evidence.source_bytes = copy.source_bytes;
+                    evidence.destination_bytes = copy.destination_bytes;
+                    evidence.full_restore = copy.full_restore;
+                    pending_card_evidence = Some(PendingCardEvidence {
+                        frame: evidence,
+                        frame_started,
+                        frame_cpu_started,
+                        post_completed,
+                        pipeline_before: presenter.pipeline_stats(),
+                    });
+                }
                 rendered_frames = rendered_frames.saturating_add(1);
                 render_samples_us.push(render_us);
                 transfer_samples_us.push(transfer_us);
@@ -1493,10 +1624,16 @@ fn run_card_flip_mister(
         }
 
         if profile && started.elapsed() >= CARD_FLIP_PROFILE_DURATION {
-            if let Some(receipt) = presenter
+            let settle_started = Instant::now();
+            let settle_cpu_started = process_cpu_time();
+            let settled = presenter
                 .settle_pending()
-                .map_err(|error| format!("settle final hidden RGB565 card frame: {error}"))?
-            {
+                .map_err(|error| format!("settle final hidden RGB565 card frame: {error}"))?;
+            let settle_wall_us = settle_started.elapsed().as_micros() as u64;
+            let settle_cpu_us = process_cpu_time()
+                .saturating_sub(settle_cpu_started)
+                .as_micros() as u64;
+            if let Some(receipt) = settled {
                 if let Some(present_started) = pending_present_started.take() {
                     let present_us = present_started.elapsed().as_micros() as u64;
                     present_samples_us.push(present_us);
@@ -1511,6 +1648,17 @@ fn run_card_flip_mister(
                     repeated_presentations = repeated_presentations.saturating_add(1);
                 }
                 latch_drop_count = receipt.drop_count;
+                if let Some(pending) = pending_card_evidence.take() {
+                    let evidence = finish_card_evidence(
+                        pending,
+                        receipt,
+                        presenter.pipeline_stats(),
+                        settle_wall_us,
+                        settle_cpu_us,
+                        profile_frame_evidence.last(),
+                    );
+                    profile_frame_evidence.push(evidence);
+                }
             }
             let seconds = started.elapsed().as_secs_f64();
             let cpu_percent = process_cpu_time()
@@ -1552,6 +1700,33 @@ fn run_card_flip_mister(
                 profile_full_slot_restores,
                 profile_repeated_presentations.saturating_add(repeated_presentations),
                 latch_drop_count,
+            );
+            let (refresh_period_us, refresh_period_source) = plan
+                .output_route
+                .nominal_period_us()
+                .map_or((16_667, "hdmi-60hz-contract"), |period| {
+                    (period, "resolved-output-route")
+                });
+            let cadence = summarize_cadence(
+                &profile_frame_evidence,
+                refresh_period_us,
+                refresh_period_source,
+            )?;
+            println!(
+                "card-flip-cadence profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} repeated_refreshes={} sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                cadence.profiler_enabled,
+                cadence.cadence_authoritative,
+                cadence.refresh_period_us,
+                cadence.confirmed_frames,
+                cadence.expected_refresh_intervals,
+                cadence.unique_latch_flips,
+                cadence.repeated_refreshes,
+                cadence.sequence_failures,
+                cadence.latch_drop_delta,
+                cadence.completion_failures,
+                cadence.long_completion_intervals,
+                cadence.max_completion_interval_us,
+                cadence.unique_fps,
             );
             #[cfg(feature = "profile")]
             if let Some(profiler) = profiler {
@@ -1608,6 +1783,22 @@ fn process_cpu_time() -> Duration {
     // SAFETY: the successful call above initialized every field.
     let value = unsafe { value.assume_init() };
     Duration::new(value.tv_sec as u64, value.tv_nsec as u32)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn monotonic_time_us() -> u64 {
+    let mut value = std::mem::MaybeUninit::<libc::timespec>::uninit();
+    // SAFETY: clock_gettime initializes the supplied timespec on success and
+    // CLOCK_MONOTONIC is a process-independent monotonic clock.
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, value.as_mut_ptr()) };
+    if result != 0 {
+        return 0;
+    }
+    // SAFETY: the successful call above initialized every field.
+    let value = unsafe { value.assume_init() };
+    (value.tv_sec as u64)
+        .saturating_mul(1_000_000)
+        .saturating_add(value.tv_nsec as u64 / 1_000)
 }
 
 #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_arch = "arm"))))]
