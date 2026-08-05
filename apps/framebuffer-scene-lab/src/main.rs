@@ -43,6 +43,7 @@ enum CardAssessmentPass {
     Profile,
 }
 
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 impl CardAssessmentPass {
     const fn label(self) -> &'static str {
         match self {
@@ -57,6 +58,7 @@ impl CardAssessmentPass {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 struct CardAssessment {
     pass: CardAssessmentPass,
     evidence_dir: PathBuf,
