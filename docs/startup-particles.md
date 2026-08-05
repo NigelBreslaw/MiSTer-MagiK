@@ -156,6 +156,7 @@ an acknowledgement by itself.
 | macOS focused lab | Watches the selected MagiK or cabinet file and writes `status.json` beside it. |
 | Attended MiSTer focused lab | Watches the volatile recipe used for the session; accepts MagiK or cabinet. Uses the Dev framebuffer/latch lifecycle, scales its 960x540 RGB565 source to Main's confirmed fixed HDMI output rectangle in the FPGA, and restores the launcher on exit. CRT routing remains production-owned. |
 | Navigation fixture lab | Uses an immutable generated `home-arcade`, `home-consoles`, or `consoles-system` RGB565 fixture and cycles forward/reverse. It opens no recipe, Slint snapshot, or catalog. |
+| Screenshot screensaver lab | Shares the production screenshot parade renderer. macOS preview/capture reads an explicit archive; the attended MiSTer workflow validates and reads the installed Dev Arcade screenshot pack without uploading it. Production retains pack discovery, lifecycle, render-ahead, and latch presentation ownership. |
 | `MiSTer_MagiKDev` launcher | Watches only `/tmp/mister-magik/startup-particles/magik.json`; acknowledges through `/tmp/mister-magik/startup-particles/status.json`. Only MagiK is accepted. |
 | Public `MiSTer_MagiK` launcher | Uses validated embedded particle defaults, including the cold-catalog intro. It does not construct a watcher and never opens or polls the Dev recipe path. |
 
@@ -174,9 +175,12 @@ scripts/agent scene-lab preview --scene magik --recipe RECIPE
 scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
 scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
 scripts/agent scene-lab preview --scene card-flip
+scripts/agent scene-lab preview --scene screenshot-screensaver --archive FILE [--seed SEED]
+scripts/agent scene-lab capture --scene screenshot-screensaver --archive FILE [--seed SEED] --time-ms N --output FILE
 scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
+scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
 scripts/agent device startup-particles RECIPE --runtime lab --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
@@ -249,10 +253,12 @@ only sequential packed-colour reads while rasterizing.
 
 Changing shared scene rendering, recipes, or the focused lab must not compile
 Slint or the rest of `apps/mister`. The focused lab depends directly on
-`crates/framebuffer-scenes` and `crates/particles`; only its ARM target adds the
+`crates/framebuffer-scenes`, `crates/particles`, and
+`crates/screenshot-parade`; only its ARM target adds the
 narrow framebuffer runtime dependency needed by the attended latch presenter.
-Neither shared crate contains Main, latch, framebuffer ioctl, `/dev/fb0`,
-catalog, device-layout, or presentation dependencies.
+The screenshot crate reads the resident catalog archive but contains no Slint,
+Main, latch, framebuffer ioctl, `/dev/fb0`, device-layout, or presentation
+dependencies.
 
 The macOS measurements used the same machine and five-sample method. Moving the
 edit boundary out of the full application made cold and no-op builds much
@@ -264,12 +270,14 @@ stay below one second.
 | Shared MagiK renderer | 9.701 s | 0.184 s | 2.894 s |
 | Shared navigation rasterizer | 8.924 s | 0.181 s | 3.143 s |
 | Lab host | 8.867 s | 0.184 s | 0.776 s |
+| Shared screenshot parade | qualification recorded separately | target ≤ 0.500 s | target ≤ 4.000 s |
 
 Use the repository-owned measurement inputs explicitly:
 
 ```text
 scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-magik --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
 scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-navigation --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
+scripts/agent compile-time measure framebuffer-scene-lab-macos --edit shared-screenshot-parade --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
 scripts/agent compile-time measure framebuffer-scene-lab-macos --edit lab-host --target-dir NEW_ABSOLUTE_PATH --output NEW_JSON_PATH
 ```
 

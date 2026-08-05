@@ -15,6 +15,7 @@ const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
     "crates/magik-core",
     "crates/media-contract",
     "crates/particles",
+    "crates/screenshot-parade",
     "mister/platform/contracts/latch",
     "mister/platform/contracts/scanout",
     "mister/platform/runtime",
@@ -526,6 +527,7 @@ fn add_path_operations(
         || path == Path::new("apps/mister/src/preview_state.rs")
         || path == Path::new("apps/mister/src/visual_composition.rs")
         || path == Path::new("apps/mister/src/ui_runner/launcher_screensaver.rs")
+        || path.starts_with("crates/screenshot-parade")
         || path.starts_with("apps/mister/ui")
         || path.starts_with("apps/mister/ui-generated")
     {
@@ -951,6 +953,27 @@ fn add_path_operations(
     add_crate(path, "crates/magik-core", "magik-core", out);
     add_crate(path, "crates/framebuffer-scenes", "framebuffer-scenes", out);
     add_crate(path, "crates/particles", "particles", out);
+    add_crate(path, "crates/screenshot-parade", "screenshot-parade", out);
+    if path.starts_with("crates/screenshot-parade") {
+        add_crate(
+            Path::new("apps/framebuffer-scene-lab"),
+            "apps/framebuffer-scene-lab",
+            "framebuffer-scene-lab",
+            out,
+        );
+        for id in [
+            "framebuffer-scene-lab.format",
+            "framebuffer-scene-lab.tests",
+            "framebuffer-scene-lab.clippy",
+        ] {
+            if let Some(operation) = out.get_mut(id) {
+                operation.inputs.push("crates/screenshot-parade".into());
+            }
+        }
+        let mut operation = diff_check();
+        operation.inputs.push(default_input.clone());
+        merge_operation(out, operation, conflicts);
+    }
     if path.starts_with("apps/startup-particle-lab") {
         add_crate(
             Path::new("apps/framebuffer-scene-lab"),
@@ -1372,6 +1395,41 @@ mod tests {
                 .args
                 .iter()
                 .any(|argument| argument.contains("apps/mister/Cargo.toml"))
+        }));
+    }
+
+    #[test]
+    fn screenshot_parade_changes_select_crate_lab_and_application_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["crates/screenshot-parade/src/schedule.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<BTreeSet<_>>();
+        for expected in [
+            "screenshot-parade.clippy",
+            "screenshot-parade.format",
+            "screenshot-parade.tests",
+            "framebuffer-scene-lab.clippy",
+            "framebuffer-scene-lab.format",
+            "framebuffer-scene-lab.tests",
+            "app.preview-ui-tests",
+            "app.ui-preview-binary",
+            "app.ui-preview-tests",
+        ] {
+            assert!(ids.contains(expected), "missing {expected}");
+        }
+        assert!(plan.operations.iter().all(|operation| {
+            !operation.id.starts_with("framebuffer-scene-lab.")
+                || operation
+                    .inputs
+                    .contains(&"crates/screenshot-parade".into())
         }));
     }
 

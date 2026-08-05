@@ -7,7 +7,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 This is the focused, Slint-free development app for portable production RGB565
 scenes: the MagiK text and arcade-cabinet particle effects, launcher
-navigation-transition rasterization, and the procedural card flip. The command
+navigation-transition rasterization, the procedural card flip, and the
+production screenshot parade. The command
 line selects one concrete scene; there is deliberately no demo registry or
 recipe-family abstraction.
 The separate 36-demo `apps/framebuffer-lab` remains unchanged and is not a
@@ -20,6 +21,7 @@ scripts/agent scene-lab preview --scene magik --recipe RECIPE
 scripts/agent scene-lab preview --scene cabinet --recipe RECIPE
 scripts/agent scene-lab preview --scene navigation-transition --fixture home-arcade
 scripts/agent scene-lab preview --scene card-flip
+scripts/agent scene-lab preview --scene screenshot-screensaver --archive FILE [--seed SEED]
 ```
 
 For attended MiSTer sessions, use one of:
@@ -29,6 +31,7 @@ scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device scene-lab --scene card-flip --assess --attended
+scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
@@ -41,6 +44,15 @@ Dev launcher accepts
 only MagiK and watches the fixed volatile
 `/tmp/mister-magik/startup-particles/magik.json` path. The public launcher never
 watches an external recipe.
+
+The screenshot scene accepts `--archive` and optional decimal or `0x` seed on
+macOS. Interactive preview streams decoded/scaled cards; `--check` and fixed-time
+PPM capture fully prepare the population for deterministic pixels. The attended
+MiSTer command resolves the installed Dev Arcade screenshot pack before
+suspending Main and never uploads that pack. The shared crate owns RGB565
+rasterization and scheduling; the production launcher still owns asset-path
+selection, cancellation, thread policy, render-ahead, telemetry presentation,
+and latch lifecycle.
 
 Before an attended lab suspends the launcher, the host reads Main's confirmed
 display state and resolves it through the same MagiK display-plan authority.
@@ -165,6 +177,17 @@ scripts/agent scene-lab capture \
   --direction forward \
   --time-ms 220 \
   --output card-midpoint.ppm
+```
+
+Screenshot checkpoints use the prepared startup path:
+
+```text
+scripts/agent scene-lab capture \
+  --scene screenshot-screensaver \
+  --archive path/to/arcade-screenshots-320x320.mmlz4b \
+  --seed 0x4d6167694b54696c \
+  --time-ms 2000 \
+  --output screenshot-parade.ppm
 ```
 
 The engine, palettes, frame hashes, and MiSTer presentation remain RGB565. The

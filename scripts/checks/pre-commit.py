@@ -83,6 +83,11 @@ CRATE_FORMATTERS = (
         "crates/framebuffer-scenes/Cargo.toml",
     ),
     (
+        "screenshot-parade.format",
+        "crates/screenshot-parade",
+        "crates/screenshot-parade/Cargo.toml",
+    ),
+    (
         "latch-contract.format",
         "mister/platform/contracts/latch",
         "mister/platform/contracts/latch/Cargo.toml",

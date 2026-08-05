@@ -37,6 +37,7 @@ pub enum CompileTimeEdit {
     #[default]
     SharedMagik,
     SharedNavigation,
+    SharedScreenshotParade,
     LabHost,
 }
 
@@ -45,6 +46,7 @@ impl CompileTimeEdit {
         match self {
             Self::SharedMagik => "shared-magik",
             Self::SharedNavigation => "shared-navigation",
+            Self::SharedScreenshotParade => "shared-screenshot-parade",
             Self::LabHost => "lab-host",
         }
     }
@@ -294,6 +296,9 @@ impl CompileTimeTarget {
             Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => Ok(match edit {
                 CompileTimeEdit::SharedMagik => "crates/particles/src/magik.rs",
                 CompileTimeEdit::SharedNavigation => "crates/framebuffer-scenes/src/navigation.rs",
+                CompileTimeEdit::SharedScreenshotParade => {
+                    "crates/screenshot-parade/src/schedule.rs"
+                }
                 CompileTimeEdit::LabHost => "apps/framebuffer-scene-lab/src/main.rs",
             }),
         }
@@ -601,6 +606,12 @@ mod tests {
         assert_eq!(
             target.source_path(CompileTimeEdit::LabHost).unwrap(),
             "apps/framebuffer-scene-lab/src/main.rs"
+        );
+        assert_eq!(
+            target
+                .source_path(CompileTimeEdit::SharedScreenshotParade)
+                .unwrap(),
+            "crates/screenshot-parade/src/schedule.rs"
         );
     }
 
