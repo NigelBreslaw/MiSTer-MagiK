@@ -1059,19 +1059,29 @@ fn coverage_mass_and_moment(values: &[u8]) -> (u64, u64) {
         })
 }
 
-fn nearest_adjustable_pixel(values: &[u8], desired_x: i128, add: bool) -> Option<usize> {
-    values
-        .iter()
-        .enumerate()
-        .filter(|(_, coverage)| {
+fn nearest_adjustable_edge(values: &[u8], desired_x: i128, add: bool) -> Option<usize> {
+    let first = values.iter().position(|coverage| *coverage > 0)?;
+    let last = values.iter().rposition(|coverage| *coverage > 0)?;
+    let candidates = if add {
+        [
+            first.saturating_sub(1),
+            first,
+            last,
+            (last + 1).min(values.len() - 1),
+        ]
+    } else {
+        [first, first, last, last]
+    };
+    candidates
+        .into_iter()
+        .filter(|x| {
             if add {
-                **coverage < 255
+                values[*x] < 255
             } else {
-                **coverage > 0
+                values[*x] > 0
             }
         })
-        .min_by_key(|(x, _)| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs())
-        .map(|(x, _)| x)
+        .min_by_key(|x| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs())
 }
 
 fn stabilize_coverage_row(source: &[u8], phase: usize, shifted: &mut [u8]) {
@@ -1097,8 +1107,8 @@ fn stabilize_coverage_row(source: &[u8], phase: usize, shifted: &mut [u8]) {
         };
         let desired_x =
             (moment_needed / i128::from(amount_needed)).clamp(0, shifted.len() as i128 - 1);
-        let x = nearest_adjustable_pixel(shifted, desired_x, add)
-            .expect("phase coverage row always has an adjustable pixel");
+        let x = nearest_adjustable_edge(shifted, desired_x, add)
+            .expect("phase coverage row always has an adjustable edge");
         let capacity = if add {
             u64::from(255 - shifted[x])
         } else {
