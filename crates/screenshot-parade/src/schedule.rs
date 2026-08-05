@@ -1482,7 +1482,10 @@ mod tests {
         let tile_index = scene
             .tiles
             .iter()
-            .position(|tile| tile.active && tile.x_fp > tile.velocity_fp * 16)
+            .position(|tile| {
+                tile.active
+                    && tile.x_fp.saturating_add(tile.velocity_fp * 16) < 960 * PARADE_SUBPIXEL_ONE
+            })
             .unwrap();
         let velocity_fp = scene.tiles[tile_index].velocity_fp;
         let mut previous_x = scene.tiles[tile_index].x_fp;
@@ -1511,7 +1514,10 @@ mod tests {
         let tile_index = scene
             .tiles
             .iter()
-            .position(|tile| tile.active && tile.x_fp > tile.velocity_fp * 16)
+            .position(|tile| {
+                tile.active
+                    && tile.x_fp.saturating_add(tile.velocity_fp * 16) < 960 * PARADE_SUBPIXEL_ONE
+            })
             .unwrap();
         let velocity_fp = scene.tiles[tile_index].velocity_fp;
         let starting_x = scene.tiles[tile_index].x_fp;

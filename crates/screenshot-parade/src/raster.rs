@@ -1049,78 +1049,113 @@ fn prepare_linear_phase(
     }
 }
 
-fn coverage_mass_and_moment(values: &[u8], stride: usize, height: usize) -> (u64, u64) {
-    let mut mass = 0_u64;
-    let mut moment = 0_u64;
-    for y in 0..height {
-        for x in 0..stride {
-            let coverage = u64::from(values[y * stride + x]);
-            mass += coverage;
-            moment += coverage * x as u64;
-        }
-    }
-    (mass, moment)
+fn coverage_mass_and_moment(values: &[u8]) -> (u64, u64) {
+    values
+        .iter()
+        .enumerate()
+        .fold((0_u64, 0_u64), |(mass, moment), (x, coverage)| {
+            let coverage = u64::from(*coverage);
+            (mass + coverage, moment + coverage * x as u64)
+        })
 }
 
-fn coverage_column_mass(values: &[u8], stride: usize, height: usize, x: usize) -> u64 {
-    (0..height).map(|y| u64::from(values[y * stride + x])).sum()
-}
-
-fn add_coverage_to_column(
-    values: &mut [u8],
-    stride: usize,
-    height: usize,
-    x: usize,
-    mut amount: u64,
-) {
-    for y in 0..height {
-        let value = &mut values[y * stride + x];
-        let added = amount.min(u64::from(255 - *value));
-        *value += added as u8;
-        amount -= added;
-        if amount == 0 {
-            return;
-        }
-    }
-    debug_assert_eq!(amount, 0);
-}
-
-fn remove_coverage_from_column(
-    values: &mut [u8],
-    stride: usize,
-    height: usize,
-    x: usize,
-    mut amount: u64,
-) {
-    for y in 0..height {
-        let value = &mut values[y * stride + x];
-        let removed = amount.min(u64::from(*value));
-        *value -= removed as u8;
-        amount -= removed;
-        if amount == 0 {
-            return;
-        }
-    }
-    debug_assert_eq!(amount, 0);
-}
-
-fn nearest_adjustable_column(
-    values: &[u8],
-    stride: usize,
-    height: usize,
-    desired_x: i128,
-    add: bool,
-) -> Option<usize> {
-    (0..stride)
-        .filter(|x| {
-            let mass = coverage_column_mass(values, stride, height, *x);
+fn nearest_adjustable_pixel(values: &[u8], desired_x: i128, add: bool) -> Option<usize> {
+    values
+        .iter()
+        .enumerate()
+        .filter(|(_, coverage)| {
             if add {
-                mass < (height * 255) as u64
+                **coverage < 255
             } else {
-                mass > 0
+                **coverage > 0
             }
         })
-        .min_by_key(|x| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs())
+        .min_by_key(|(x, _)| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs())
+        .map(|(x, _)| x)
+}
+
+fn stabilize_coverage_row(source: &[u8], phase: usize, shifted: &mut [u8]) {
+    let (target_mass, source_moment) = coverage_mass_and_moment(source);
+    if target_mass == 0 {
+        shifted.fill(0);
+        return;
+    }
+    let target_moment = (u128::from(source_moment) * CRT_PHASE_COUNT as u128
+        + u128::from(target_mass) * phase as u128
+        + (CRT_PHASE_COUNT / 2) as u128)
+        / CRT_PHASE_COUNT as u128;
+    let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
+    let (mut mass, mut moment) = coverage_mass_and_moment(shifted);
+
+    while mass != target_mass {
+        let add = mass < target_mass;
+        let amount_needed = mass.abs_diff(target_mass);
+        let moment_needed = if add {
+            i128::from(target_moment) - i128::from(moment)
+        } else {
+            i128::from(moment) - i128::from(target_moment)
+        };
+        let desired_x =
+            (moment_needed / i128::from(amount_needed)).clamp(0, shifted.len() as i128 - 1);
+        let x = nearest_adjustable_pixel(shifted, desired_x, add)
+            .expect("phase coverage row always has an adjustable pixel");
+        let capacity = if add {
+            u64::from(255 - shifted[x])
+        } else {
+            u64::from(shifted[x])
+        };
+        let amount = amount_needed.min(capacity);
+        if add {
+            shifted[x] += amount as u8;
+            mass += amount;
+            moment += amount * x as u64;
+        } else {
+            shifted[x] -= amount as u8;
+            mass -= amount;
+            moment -= amount * x as u64;
+        }
+    }
+
+    while moment != target_moment {
+        let move_right = moment < target_moment;
+        let needed = moment.abs_diff(target_moment);
+        let mut moved = false;
+        if move_right {
+            for x in (0..shifted.len() - 1).rev() {
+                let amount = needed
+                    .min(u64::from(shifted[x]))
+                    .min(u64::from(255 - shifted[x + 1]));
+                if amount > 0 {
+                    shifted[x] -= amount as u8;
+                    shifted[x + 1] += amount as u8;
+                    moment += amount;
+                    moved = true;
+                    break;
+                }
+            }
+        } else {
+            for x in 1..shifted.len() {
+                let amount = needed
+                    .min(u64::from(shifted[x]))
+                    .min(u64::from(255 - shifted[x - 1]));
+                if amount > 0 {
+                    shifted[x] -= amount as u8;
+                    shifted[x - 1] += amount as u8;
+                    moment -= amount;
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        assert!(
+            moved,
+            "phase coverage row cannot reach its translation target"
+        );
+    }
+    debug_assert_eq!(
+        coverage_mass_and_moment(shifted),
+        (target_mass, target_moment)
+    );
 }
 
 fn stabilize_phase_coverage(
@@ -1133,87 +1168,13 @@ fn stabilize_phase_coverage(
     let stride = source_width + 1;
     debug_assert_eq!(source.len(), source_width * height);
     debug_assert_eq!(shifted.len(), stride * height);
-    let (target_mass, source_moment) = coverage_mass_and_moment(source, source_width, height);
-    if target_mass == 0 {
-        shifted.fill(0);
-        return;
-    }
-    let target_moment = (u128::from(source_moment) * CRT_PHASE_COUNT as u128
-        + u128::from(target_mass) * phase as u128
-        + (CRT_PHASE_COUNT / 2) as u128)
-        / CRT_PHASE_COUNT as u128;
-    let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
-    let (mut mass, mut moment) = coverage_mass_and_moment(shifted, stride, height);
-
-    while mass != target_mass {
-        let add = mass < target_mass;
-        let amount_needed = mass.abs_diff(target_mass);
-        let moment_needed = if add {
-            i128::from(target_moment) - i128::from(moment)
-        } else {
-            i128::from(moment) - i128::from(target_moment)
-        };
-        let desired_x = (moment_needed / i128::from(amount_needed)).clamp(0, stride as i128 - 1);
-        let x = nearest_adjustable_column(shifted, stride, height, desired_x, add)
-            .expect("phase coverage always has an adjustable column");
-        let column_mass = coverage_column_mass(shifted, stride, height, x);
-        let capacity = if add {
-            (height * 255) as u64 - column_mass
-        } else {
-            column_mass
-        };
-        let amount = amount_needed.min(capacity);
-        if add {
-            add_coverage_to_column(shifted, stride, height, x, amount);
-            mass += amount;
-            moment += amount * x as u64;
-        } else {
-            remove_coverage_from_column(shifted, stride, height, x, amount);
-            mass -= amount;
-            moment -= amount * x as u64;
-        }
-    }
-
-    while moment != target_moment {
-        let move_right = moment < target_moment;
-        let needed = moment.abs_diff(target_moment);
-        let mut moved = false;
-        if move_right {
-            for x in (0..stride - 1).rev() {
-                let donor = coverage_column_mass(shifted, stride, height, x);
-                let receiver = coverage_column_mass(shifted, stride, height, x + 1);
-                let amount = needed.min(donor).min((height * 255) as u64 - receiver);
-                if amount > 0 {
-                    remove_coverage_from_column(shifted, stride, height, x, amount);
-                    add_coverage_to_column(shifted, stride, height, x + 1, amount);
-                    moment += amount;
-                    moved = true;
-                    break;
-                }
-            }
-        } else {
-            for x in 1..stride {
-                let donor = coverage_column_mass(shifted, stride, height, x);
-                let receiver = coverage_column_mass(shifted, stride, height, x - 1);
-                let amount = needed.min(donor).min((height * 255) as u64 - receiver);
-                if amount > 0 {
-                    remove_coverage_from_column(shifted, stride, height, x, amount);
-                    add_coverage_to_column(shifted, stride, height, x - 1, amount);
-                    moment -= amount;
-                    moved = true;
-                    break;
-                }
-            }
-        }
-        assert!(
-            moved,
-            "phase coverage moment cannot reach its translation target"
+    for y in 0..height {
+        stabilize_coverage_row(
+            &source[y * source_width..(y + 1) * source_width],
+            phase,
+            &mut shifted[y * stride..(y + 1) * stride],
         );
     }
-    debug_assert_eq!(
-        coverage_mass_and_moment(shifted, stride, height),
-        (target_mass, target_moment)
-    );
 }
 
 #[inline(always)]
