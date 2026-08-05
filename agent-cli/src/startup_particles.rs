@@ -409,12 +409,6 @@ pub fn execute_scene_device(
     if (args.profile || args.assess) && args.seconds.is_none() {
         return Err("scene-lab --profile and --assess require --seconds".into());
     }
-    if args.profile && args.scene != DeviceSceneLabScene::CardFlip && args.case.is_none() {
-        return Err("scene-lab --profile requires card-flip or a closed cabinet --case".into());
-    }
-    if args.assess && args.scene != DeviceSceneLabScene::CardFlip {
-        return Err("scene-lab --assess requires card-flip".into());
-    }
     if args.assess && args.profile {
         return Err("scene-lab --assess cannot be combined with --profile".into());
     }

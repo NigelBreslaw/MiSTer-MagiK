@@ -49,13 +49,13 @@ struct BoundedRun {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CardAssessmentPass {
+enum MeasurementPass {
     Cadence,
     Profile,
 }
 
 #[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
-impl CardAssessmentPass {
+impl MeasurementPass {
     const fn label(self) -> &'static str {
         match self {
             Self::Cadence => "cadence",
@@ -70,13 +70,13 @@ impl CardAssessmentPass {
 
 #[derive(Clone, Debug)]
 #[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
-struct CardAssessment {
-    pass: CardAssessmentPass,
+struct MeasurementEvidence {
+    pass: MeasurementPass,
     evidence_dir: PathBuf,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct PendingCardEvidence {
+struct PendingFrameEvidence {
     frame: FrameEvidence,
     frame_started: std::time::Instant,
     frame_cpu_started: Duration,
@@ -86,8 +86,8 @@ struct PendingCardEvidence {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn finish_card_evidence(
-    mut pending: PendingCardEvidence,
+fn finish_frame_evidence(
+    mut pending: PendingFrameEvidence,
     receipt: mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPresentReceipt,
     pipeline_after: mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPipelineStats,
     settle_wall_us: u64,
@@ -140,17 +140,19 @@ fn finish_card_evidence(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn write_card_assessment_evidence(
-    assessment: &CardAssessment,
+fn write_measurement_evidence(
+    assessment: &MeasurementEvidence,
     frames: &[FrameEvidence],
     cadence: &card_assessment::CadenceSummary,
     plan: mister_magik_core::display::ResolvedDisplayPlan,
-    geometry: card_flip::CardGeometry,
+    scene: &'static str,
+    card_geometry: Option<card_flip::CardGeometry>,
     process_cpu_pct: f64,
+    rss_samples_kib: &[u64],
 ) -> Result<(), String> {
     std::fs::create_dir_all(&assessment.evidence_dir).map_err(|error| {
         format!(
-            "create card assessment directory {}: {error}",
+            "create scene measurement directory {}: {error}",
             assessment.evidence_dir.display()
         )
     })?;
@@ -163,7 +165,8 @@ fn write_card_assessment_evidence(
     std::fs::write(&frames_path, frame_bytes)
         .map_err(|error| format!("write {}: {error}", frames_path.display()))?;
     let summary = serde_json::json!({
-        "schema": "mister-magik-card-flip-assessment-pass-v1",
+        "schema": "mister-magik-scene-lab-measurement-pass-v1",
+        "scene": scene,
         "pass": assessment.pass.label(),
         "profiler_enabled": assessment.pass.profiler_enabled(),
         "process_cpu_pct_of_one_core": process_cpu_pct,
@@ -178,11 +181,17 @@ fn write_card_assessment_evidence(
             "output_h": plan.output_h,
             "route": plan.output_route.label(),
         },
-        "card": {
+        "card": card_geometry.map(|geometry| serde_json::json!({
             "x": geometry.card_x,
             "y": geometry.card_y,
             "width": geometry.card_width,
             "height": geometry.card_height,
+        })),
+        "rss_kib": {
+            "samples": rss_samples_kib.len(),
+            "mean": rss_samples_kib.iter().copied().sum::<u64>()
+                .checked_div(rss_samples_kib.len() as u64).unwrap_or(0),
+            "max": rss_samples_kib.iter().copied().max().unwrap_or(0),
         },
         "cadence": cadence,
     });
@@ -237,8 +246,8 @@ fn main() -> Result<(), String> {
                 sampling_profile: options.sampling_profile,
             },
             None,
-            false,
-            None,
+            options.profile,
+            options.measurement_evidence(),
             options.bounded_run(),
         );
     }
@@ -264,7 +273,7 @@ fn main() -> Result<(), String> {
             SceneSource::CardFlip(duration),
             None,
             options.profile,
-            options.card_assessment(),
+            options.measurement_evidence(),
             options.bounded_run(),
         );
     }
@@ -293,8 +302,8 @@ fn main() -> Result<(), String> {
         return run_window(
             SceneSource::Navigation(fixture),
             None,
-            false,
-            None,
+            options.profile,
+            options.measurement_evidence(),
             options.bounded_run(),
         );
     }
@@ -331,7 +340,7 @@ fn main() -> Result<(), String> {
         SceneSource::Particle(recipe_path.to_path_buf()),
         options.case,
         options.profile,
-        None,
+        options.measurement_evidence(),
         options.bounded_run(),
     )
 }
@@ -1316,7 +1325,7 @@ fn run_window(
     source: SceneSource,
     case: Option<CabinetCase>,
     _profile: bool,
-    _card_assessment: Option<CardAssessment>,
+    _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
 ) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
@@ -1333,7 +1342,7 @@ fn run_window(
     source: SceneSource,
     case: Option<CabinetCase>,
     profile: bool,
-    card_assessment: Option<CardAssessment>,
+    measurement_evidence: Option<MeasurementEvidence>,
     bounded: Option<BoundedRun>,
 ) -> Result<(), String> {
     use mister_magik_mister_runtime::display_plan::detect_runtime_display_plan;
@@ -1350,7 +1359,7 @@ fn run_window(
     drop(fpga);
     let plan = runtime.plan;
     if let SceneSource::CardFlip(duration) = &source {
-        return run_card_flip_mister(*duration, plan, profile, card_assessment, bounded);
+        return run_card_flip_mister(*duration, plan, profile, measurement_evidence, bounded);
     }
     let mut renderer = LabScene::start(source, case, plan.render_w, plan.render_h)?;
     let mut controls =
@@ -1400,8 +1409,15 @@ fn run_window(
     let mut warmup_unit_flip_streak = 0_u8;
     let mut warmup_started = None;
     let mut measurement_started = None;
+    let mut measurement_cpu_started = Duration::ZERO;
+    let mut frame_evidence = Vec::with_capacity(bounded.map_or(0, |run| {
+        run.duration.as_secs() as usize * FRAME_RATE as usize + 4
+    }));
+    let mut pending_evidence: Option<PendingFrameEvidence> = None;
+    let mut rss_samples_kib = Vec::new();
+    let mut next_rss_sample = None;
     #[cfg(feature = "profile")]
-    let profiler = profile
+    let mut profiler = profile
         .then(|| cpu_profile::start(cpu_profile::CpuProfileScene::Cabinet))
         .transpose()?;
     #[cfg(not(feature = "profile"))]
@@ -1409,15 +1425,32 @@ fn run_window(
         return Err("cabinet profiling requires a release-device-profile build".into());
     }
     loop {
-        if let Some(receipt) = presenter
+        let settle_started = Instant::now();
+        let settle_cpu_started = process_cpu_time();
+        let settled = presenter
             .settle_pending()
-            .map_err(|error| format!("settle hidden RGB565 startup particle frame: {error}"))?
-        {
+            .map_err(|error| format!("settle hidden RGB565 startup particle frame: {error}"))?;
+        let settle_wall_us = settle_started.elapsed().as_micros() as u64;
+        let settle_cpu_us = process_cpu_time()
+            .saturating_sub(settle_cpu_started)
+            .as_micros() as u64;
+        if let Some(receipt) = settled {
             if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
                 repeated_presentations = repeated_presentations.saturating_add(1);
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
+            if let Some(pending) = pending_evidence.take() {
+                let evidence = finish_frame_evidence(
+                    pending,
+                    receipt,
+                    presenter.pipeline_stats(),
+                    settle_wall_us,
+                    settle_cpu_us,
+                    frame_evidence.last(),
+                );
+                frame_evidence.push(evidence);
+            }
             if let Some(bounded) = bounded
                 && measurement_started.is_none()
                 && renderer.measurement_ready()
@@ -1437,7 +1470,8 @@ fn run_window(
                         let measured_at = Instant::now();
                         measurement_started = Some(measured_at);
                         status_started = measured_at;
-                        cpu_started = process_cpu_time();
+                        measurement_cpu_started = process_cpu_time();
+                        cpu_started = measurement_cpu_started;
                         status_frames = 0;
                         render_samples_us.clear();
                         clear_samples_us.clear();
@@ -1448,6 +1482,10 @@ fn run_window(
                         worker_wait_samples_us.clear();
                         prepared_age_samples_us.clear();
                         repeated_presentations = 0;
+                        frame_evidence.clear();
+                        pending_evidence = None;
+                        rss_samples_kib.clear();
+                        next_rss_sample = Some(measured_at);
                         println!(
                             "scene-lab-measurement state=started scene={} seconds={} warmup_seconds={}",
                             renderer.effect().label(),
@@ -1471,6 +1509,7 @@ fn run_window(
         let writable_slot = presenter.writable_slot_index();
         let pixels = &mut render_slots[usize::from(writable_slot - 1)];
         let render_started = Instant::now();
+        let render_cpu_started = process_cpu_time();
         let stats = renderer.render_buffer(
             pixels,
             writable_slot - 1,
@@ -1480,7 +1519,11 @@ fn run_window(
         if let Some(controls) = controls.as_ref() {
             controls.draw_hud(pixels, plan.render_w, plan.render_h);
         }
-        render_samples_us.push(render_started.elapsed().as_micros() as u64);
+        let render_wall_us = render_started.elapsed().as_micros() as u64;
+        let render_cpu_us = process_cpu_time()
+            .saturating_sub(render_cpu_started)
+            .as_micros() as u64;
+        render_samples_us.push(render_wall_us);
         if let Some(stages) = stats.magik_stages {
             clear_samples_us.push(stages.clear_us);
             simulation_samples_us.push(stages.simulation_us);
@@ -1518,83 +1561,196 @@ fn run_window(
         // have identical length/alignment, and accept every u16 bit pattern.
         let cached =
             unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<Rgb565>(), pixels.len()) };
-        presenter
+        let transfer_started = Instant::now();
+        let transfer_cpu_started = process_cpu_time();
+        let copy = presenter
             .prepare_cached(cached, &full_damage)
             .map_err(|error| format!("copy cached startup particle frame: {error}"))?;
+        let transfer_wall_us = transfer_started.elapsed().as_micros() as u64;
+        let transfer_cpu_us = process_cpu_time()
+            .saturating_sub(transfer_cpu_started)
+            .as_micros() as u64;
+        let post_started = Instant::now();
+        let post_cpu_started = process_cpu_time();
         let post = presenter
             .post_prepared()
             .map_err(|error| format!("post hidden RGB565 startup particle frame: {error}"))?;
-        status_frames = status_frames.saturating_add(1);
-        if let Some(case) = case
-            && bounded.is_some_and(|bounded| {
-                measurement_started.is_some_and(|started| started.elapsed() >= bounded.duration)
-            })
-        {
-            #[cfg(feature = "profile")]
-            if let Some(profiler) = profiler {
-                cpu_profile::finish(profiler)?;
-            }
-            let seconds = started.elapsed().as_secs_f64();
-            let cpu_now = process_cpu_time();
-            let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
-            let (render_average_us, render_p99_us, render_max_us) =
-                sample_summary(&mut render_samples_us);
-            let (clear_average_us, clear_p99_us, _) = sample_summary(&mut clear_samples_us);
-            let (projection_average_us, projection_p99_us, _) =
-                sample_summary(&mut projection_samples_us);
-            let (ordering_average_us, ordering_p99_us, _) =
-                sample_summary(&mut ordering_samples_us);
-            let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
-            let (worker_wait_average_us, worker_wait_p99_us, _) =
-                sample_summary(&mut worker_wait_samples_us);
-            let (prepared_age_average_us, prepared_age_p99_us, _) =
-                sample_summary(&mut prepared_age_samples_us);
-            println!(
-                "cabinet-case name={} particles={} projected_particles={} projection_cohorts={} visible={} pixel_writes={} mode={} seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} clear_avg_us={} clear_p99_us={} projection_avg_us={} projection_p99_us={} ordering_avg_us={} ordering_p99_us={} raster_avg_us={} raster_p99_us={} worker_wait_avg_us={} worker_wait_p99_us={} prepared_age_avg_us={} prepared_age_p99_us={} repeated_presentations={} projection_backend={}",
-                case.name,
-                case.particles,
-                stats.projected_particles,
-                stats.projection_cohorts,
-                stats.visible,
-                stats.pixel_writes,
-                case.mode.label(),
-                seconds,
-                status_frames,
-                status_frames as f64 / seconds,
-                cpu_percent,
-                render_average_us,
-                render_p99_us,
-                render_max_us,
-                clear_average_us,
-                clear_p99_us,
-                projection_average_us,
-                projection_p99_us,
-                ordering_average_us,
-                ordering_p99_us,
-                raster_average_us,
-                raster_p99_us,
-                worker_wait_average_us,
-                worker_wait_p99_us,
-                prepared_age_average_us,
-                prepared_age_p99_us,
-                repeated_presentations,
-                stats.projection_backend,
-            );
-            return Ok(());
-        }
-        if case.is_none()
-            && bounded.is_some_and(|bounded| {
-                measurement_started.is_some_and(|started| started.elapsed() >= bounded.duration)
-            })
-        {
-            println!(
-                "scene-lab-measurement state=complete scene={} seconds={} frames={} repeated_presentations={} latch_drop_count={}",
+        let post_wall_us = post_started.elapsed().as_micros() as u64;
+        let post_cpu_us = process_cpu_time()
+            .saturating_sub(post_cpu_started)
+            .as_micros() as u64;
+        if measurement_started.is_some() {
+            let mut evidence = FrameEvidence::new(
                 renderer.effect().label(),
-                measurement_started.map_or(0.0, |started| started.elapsed().as_secs_f64()),
-                status_frames,
-                repeated_presentations,
-                latch_drop_count,
+                frame_evidence.len() as u64 + 1,
+                profile,
             );
+            evidence.render_wall_us = render_wall_us;
+            evidence.render_cpu_us = render_cpu_us;
+            evidence.transfer_wall_us = transfer_wall_us;
+            evidence.transfer_cpu_us = transfer_cpu_us;
+            evidence.post_wall_us = post_wall_us;
+            evidence.post_cpu_us = post_cpu_us;
+            evidence.source_rect_count = copy.source_rect_count;
+            evidence.destination_rect_count = copy.destination_rect_count;
+            evidence.source_bytes = copy.source_bytes;
+            evidence.destination_bytes = copy.destination_bytes;
+            evidence.full_restore = copy.full_restore;
+            evidence.visible_count = Some(stats.visible);
+            pending_evidence = Some(PendingFrameEvidence {
+                frame: evidence,
+                frame_started: render_started,
+                frame_cpu_started: render_cpu_started,
+                post_completed: Instant::now(),
+                pipeline_before: presenter.pipeline_stats(),
+            });
+        }
+        if next_rss_sample.is_some_and(|sample_at| Instant::now() >= sample_at) {
+            if let Some(rss_kib) = process_rss_kib() {
+                rss_samples_kib.push(rss_kib);
+            }
+            next_rss_sample = Some(Instant::now() + Duration::from_secs(1));
+        }
+        status_frames = status_frames.saturating_add(1);
+        if bounded.is_some_and(|bounded| {
+            measurement_started.is_some_and(|started| started.elapsed() >= bounded.duration)
+        }) {
+            let settle_started = Instant::now();
+            let settle_cpu_started = process_cpu_time();
+            let receipt = presenter
+                .settle_pending()
+                .map_err(|error| format!("settle final hidden RGB565 scene frame: {error}"))?
+                .ok_or("final scene presentation did not produce a latch confirmation")?;
+            let settle_wall_us = settle_started.elapsed().as_micros() as u64;
+            let settle_cpu_us = process_cpu_time()
+                .saturating_sub(settle_cpu_started)
+                .as_micros() as u64;
+            if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
+                repeated_presentations = repeated_presentations.saturating_add(1);
+            }
+            latch_drop_count = receipt.drop_count;
+            if let Some(pending) = pending_evidence.take() {
+                let evidence = finish_frame_evidence(
+                    pending,
+                    receipt,
+                    presenter.pipeline_stats(),
+                    settle_wall_us,
+                    settle_cpu_us,
+                    frame_evidence.last(),
+                );
+                frame_evidence.push(evidence);
+            }
+            #[cfg(feature = "profile")]
+            if let Some(active_profiler) = profiler.take() {
+                cpu_profile::finish(active_profiler)?;
+            }
+            let measured_started =
+                measurement_started.expect("bounded scene completes only after measurement begins");
+            let seconds = measured_started.elapsed().as_secs_f64();
+            let cpu_percent = process_cpu_time()
+                .saturating_sub(measurement_cpu_started)
+                .as_secs_f64()
+                / seconds
+                * 100.0;
+            let (refresh_period_us, refresh_period_source) = plan
+                .output_route
+                .nominal_period_us()
+                .map_or((16_667, "hdmi-60hz-contract"), |period| {
+                    (period, "resolved-output-route")
+                });
+            let cadence =
+                summarize_cadence(&frame_evidence, refresh_period_us, refresh_period_source)?;
+            println!(
+                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} repeated_refreshes={} sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                renderer.effect().label(),
+                cadence.profiler_enabled,
+                cadence.cadence_authoritative,
+                cadence.refresh_period_us,
+                cadence.confirmed_frames,
+                cadence.expected_refresh_intervals,
+                cadence.unique_latch_flips,
+                cadence.repeated_refreshes,
+                cadence.sequence_failures,
+                cadence.latch_drop_delta,
+                cadence.completion_failures,
+                cadence.long_completion_intervals,
+                cadence.max_completion_interval_us,
+                cadence.unique_fps,
+            );
+            if let Some(evidence) = measurement_evidence.as_ref() {
+                write_measurement_evidence(
+                    evidence,
+                    &frame_evidence,
+                    &cadence,
+                    plan,
+                    renderer.effect().label(),
+                    None,
+                    cpu_percent,
+                    &rss_samples_kib,
+                )?;
+            }
+            if let Some(case) = case {
+                let (render_average_us, render_p99_us, render_max_us) =
+                    sample_summary(&mut render_samples_us);
+                let (clear_average_us, clear_p99_us, _) = sample_summary(&mut clear_samples_us);
+                let (projection_average_us, projection_p99_us, _) =
+                    sample_summary(&mut projection_samples_us);
+                let (ordering_average_us, ordering_p99_us, _) =
+                    sample_summary(&mut ordering_samples_us);
+                let (raster_average_us, raster_p99_us, _) = sample_summary(&mut raster_samples_us);
+                let (worker_wait_average_us, worker_wait_p99_us, _) =
+                    sample_summary(&mut worker_wait_samples_us);
+                let (prepared_age_average_us, prepared_age_p99_us, _) =
+                    sample_summary(&mut prepared_age_samples_us);
+                println!(
+                    "cabinet-case name={} particles={} projected_particles={} projection_cohorts={} visible={} pixel_writes={} mode={} seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} clear_avg_us={} clear_p99_us={} projection_avg_us={} projection_p99_us={} ordering_avg_us={} ordering_p99_us={} raster_avg_us={} raster_p99_us={} worker_wait_avg_us={} worker_wait_p99_us={} prepared_age_avg_us={} prepared_age_p99_us={} repeated_presentations={} projection_backend={}",
+                    case.name,
+                    case.particles,
+                    stats.projected_particles,
+                    stats.projection_cohorts,
+                    stats.visible,
+                    stats.pixel_writes,
+                    case.mode.label(),
+                    seconds,
+                    status_frames,
+                    status_frames as f64 / seconds,
+                    cpu_percent,
+                    render_average_us,
+                    render_p99_us,
+                    render_max_us,
+                    clear_average_us,
+                    clear_p99_us,
+                    projection_average_us,
+                    projection_p99_us,
+                    ordering_average_us,
+                    ordering_p99_us,
+                    raster_average_us,
+                    raster_p99_us,
+                    worker_wait_average_us,
+                    worker_wait_p99_us,
+                    prepared_age_average_us,
+                    prepared_age_p99_us,
+                    repeated_presentations,
+                    stats.projection_backend,
+                );
+            } else {
+                println!(
+                    "scene-lab-measurement state=complete scene={} seconds={:.3} frames={} cpu_pct={:.2} repeated_presentations={} latch_drop_count={} rss_mean_kib={} rss_max_kib={}",
+                    renderer.effect().label(),
+                    seconds,
+                    status_frames,
+                    cpu_percent,
+                    repeated_presentations,
+                    latch_drop_count,
+                    rss_samples_kib
+                        .iter()
+                        .copied()
+                        .sum::<u64>()
+                        .checked_div(rss_samples_kib.len() as u64)
+                        .unwrap_or(0),
+                    rss_samples_kib.iter().copied().max().unwrap_or(0),
+                );
+            }
             return Ok(());
         }
         if case.is_none() && status_started.elapsed() >= Duration::from_secs(1) {
@@ -1671,7 +1827,7 @@ fn run_card_flip_mister(
     duration: Duration,
     plan: mister_magik_core::display::ResolvedDisplayPlan,
     profile: bool,
-    assessment: Option<CardAssessment>,
+    assessment: Option<MeasurementEvidence>,
     bounded: Option<BoundedRun>,
 ) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
@@ -1728,8 +1884,7 @@ fn run_card_flip_mister(
     let mut profile_transfer_destination_bytes = 0_u64;
     let mut profile_full_slot_restores = 0_u64;
     let mut profile_frame_evidence = Vec::with_capacity(2048);
-    let mut pending_card_evidence: Option<PendingCardEvidence> = None;
-    let assessment_active = assessment.is_some();
+    let mut pending_card_evidence: Option<PendingFrameEvidence> = None;
     let profiler_requested = profile
         || assessment
             .as_ref()
@@ -1741,6 +1896,8 @@ fn run_card_flip_mister(
     let mut warmup_last_flip_count = None;
     let mut warmup_unit_flip_streak = 0_u8;
     let mut warmup_started = None;
+    let mut rss_samples_kib = Vec::new();
+    let mut next_rss_sample = None;
     let mut automatic_direction = CardFlipDirection::Reverse;
     let mut next_automatic_flip = duration;
     if bounded_run {
@@ -1823,6 +1980,8 @@ fn run_card_flip_mister(
                         profile_transfer_source_bytes = 0;
                         profile_transfer_destination_bytes = 0;
                         profile_full_slot_restores = 0;
+                        rss_samples_kib.clear();
+                        next_rss_sample = Some(measured_at);
                         #[cfg(feature = "profile")]
                         if profiler_requested {
                             profiler =
@@ -1844,7 +2003,7 @@ fn run_card_flip_mister(
                 }
             }
             if let Some(pending) = pending_card_evidence.take() {
-                let evidence = finish_card_evidence(
+                let evidence = finish_frame_evidence(
                     pending,
                     receipt,
                     presenter.pipeline_stats(),
@@ -1913,7 +2072,7 @@ fn run_card_flip_mister(
                 pending_frame_started = Some(frame_started);
                 pending_present_started = Some(present_started);
                 debug_assert_eq!(post.slot_index, copy.slot_index);
-                if assessment_active && measurement_started.is_none() && copy.full_restore {
+                if bounded_run && measurement_started.is_none() && copy.full_restore {
                     warmup_full_slot_restores = warmup_full_slot_restores.saturating_add(1);
                 }
                 if measurement_started.is_some() {
@@ -1942,7 +2101,7 @@ fn run_card_flip_mister(
                     evidence.source_bytes = copy.source_bytes;
                     evidence.destination_bytes = copy.destination_bytes;
                     evidence.full_restore = copy.full_restore;
-                    pending_card_evidence = Some(PendingCardEvidence {
+                    pending_card_evidence = Some(PendingFrameEvidence {
                         frame: evidence,
                         frame_started,
                         frame_cpu_started,
@@ -1983,6 +2142,13 @@ fn run_card_flip_mister(
             if next_frame <= Instant::now() {
                 next_frame = Instant::now();
             }
+        }
+
+        if next_rss_sample.is_some_and(|sample_at| Instant::now() >= sample_at) {
+            if let Some(rss_kib) = process_rss_kib() {
+                rss_samples_kib.push(rss_kib);
+            }
+            next_rss_sample = Some(Instant::now() + Duration::from_secs(1));
         }
 
         if status_started.elapsed() >= Duration::from_secs(1) {
@@ -2073,7 +2239,7 @@ fn run_card_flip_mister(
                 }
                 latch_drop_count = receipt.drop_count;
                 if let Some(pending) = pending_card_evidence.take() {
-                    let evidence = finish_card_evidence(
+                    let evidence = finish_frame_evidence(
                         pending,
                         receipt,
                         presenter.pipeline_stats(),
@@ -2159,13 +2325,15 @@ fn run_card_flip_mister(
                 cadence.unique_fps,
             );
             if let Some(assessment) = assessment.as_ref() {
-                write_card_assessment_evidence(
+                write_measurement_evidence(
                     assessment,
                     &profile_frame_evidence,
                     &cadence,
                     plan,
-                    geometry,
+                    "card-flip",
+                    Some(geometry),
                     cpu_percent,
+                    &rss_samples_kib,
                 )?;
                 println!(
                     "card-flip-assessment pass={} state=complete evidence_dir={}",
@@ -2227,6 +2395,15 @@ fn process_cpu_time() -> Duration {
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn process_rss_kib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?.trim();
+        value.split_ascii_whitespace().next()?.parse().ok()
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn monotonic_time_us() -> u64 {
     let mut value = std::mem::MaybeUninit::<libc::timespec>::uninit();
     // SAFETY: clock_gettime initializes the supplied timespec on success and
@@ -2247,7 +2424,7 @@ fn run_window(
     _source: SceneSource,
     _case: Option<CabinetCase>,
     _profile: bool,
-    _card_assessment: Option<CardAssessment>,
+    _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
 ) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
@@ -2269,7 +2446,7 @@ struct Options {
     seconds: Option<u64>,
     warmup_seconds: u64,
     profile: bool,
-    assessment_pass: Option<CardAssessmentPass>,
+    assessment_pass: Option<MeasurementPass>,
     evidence_dir: Option<PathBuf>,
     duration_ms: Option<u64>,
     direction: CardFlipDirection,
@@ -2389,8 +2566,8 @@ impl Options {
                         .next()
                         .ok_or("--assessment-pass requires cadence or profile")?;
                     assessment_pass = Some(match value.as_str() {
-                        "cadence" => CardAssessmentPass::Cadence,
-                        "profile" => CardAssessmentPass::Profile,
+                        "cadence" => MeasurementPass::Cadence,
+                        "profile" => MeasurementPass::Profile,
                         _ => {
                             return Err(format!(
                                 "invalid assessment pass {value:?}; expected cadence or profile"
@@ -2481,23 +2658,11 @@ impl Options {
         if (self.profile || self.assessment_pass.is_some()) && self.seconds.is_none() {
             return Err("profiling and assessment require --seconds".into());
         }
-        if self.profile && self.case.is_none() && self.scene != EffectKind::CardFlip {
-            return Err("--profile requires card-flip or a closed cabinet --case".into());
-        }
         if self.assessment_pass.is_some() != self.evidence_dir.is_some() {
-            return Err(
-                "card assessment requires both --assessment-pass and --evidence-dir".into(),
-            );
+            return Err("measurement requires both --assessment-pass and --evidence-dir".into());
         }
-        if self.assessment_pass.is_some()
-            && (self.scene != EffectKind::CardFlip
-                || self.profile
-                || self.check
-                || self.output.is_some())
-        {
-            return Err(
-                "--assessment-pass requires an interactive card-flip run without --profile".into(),
-            );
+        if self.assessment_pass.is_some() && (self.profile || self.check || self.output.is_some()) {
+            return Err("--assessment-pass requires an interactive run without --profile".into());
         }
         if self.scene != EffectKind::CardFlip
             && (self.duration_ms.is_some() || self.direction_requested)
@@ -2575,8 +2740,8 @@ impl Options {
         })
     }
 
-    fn card_assessment(&self) -> Option<CardAssessment> {
-        self.assessment_pass.map(|pass| CardAssessment {
+    fn measurement_evidence(&self) -> Option<MeasurementEvidence> {
+        self.assessment_pass.map(|pass| MeasurementEvidence {
             pass,
             evidence_dir: self
                 .evidence_dir
@@ -3167,8 +3332,8 @@ mod tests {
             .map(String::from),
         )
         .unwrap();
-        let assessment = assessment.card_assessment().unwrap();
-        assert_eq!(assessment.pass, CardAssessmentPass::Cadence);
+        let assessment = assessment.measurement_evidence().unwrap();
+        assert_eq!(assessment.pass, MeasurementPass::Cadence);
         assert_eq!(
             assessment.evidence_dir,
             PathBuf::from("/tmp/card-assessment")
