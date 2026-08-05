@@ -794,16 +794,12 @@ jobs:
           main_sha="$(cached "$MAIN_CHANGED" "$MAIN_CACHE_HIT" "$MAIN_CACHE_HEAD_SHA" "$MAIN_REVISION" main head_sha)"
           fpga_sha="$(cached "$FPGA_CHANGED" "$FPGA_CACHE_HIT" "$FPGA_CACHE_HEAD_SHA" "$GITHUB_SHA" fpga head_sha)"
           kernel_sha="$(cached "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT" "$KERNEL_CACHE_HEAD_SHA" "$GITHUB_SHA" kernel head_sha)"
-          main_workflow="$(origin "$MAIN_CHANGED" platform-bundle.yml main workflow)"
-          fpga_workflow="$(origin "$FPGA_CHANGED" platform-bundle.yml fpga workflow)"
-          kernel_workflow="$(origin "$KERNEL_CHANGED" platform-bundle.yml kernel workflow)"
           source() { if [ "$1" != true ]; then echo reused-from-latest-release; elif [ "$2" = true ]; then echo reused-from-actions-cache; else echo built-in-current-run; fi; }
           scripts/agent ci platform-bundle create \
             --main-dir build/platform-input/main --fpga-dir build/platform-input/fpga --scanout-dir build/platform-input/scanout \
             --main-id "$MAIN_ID" --fpga-id "$FPGA_ID" --kernel-id "$KERNEL_ID" \
             --main-run-id "$main_run" --fpga-run-id "$fpga_run" --kernel-run-id "$kernel_run" \
             --main-head-sha "$main_sha" --fpga-head-sha "$fpga_sha" --kernel-head-sha "$kernel_sha" \
-            --main-workflow "$main_workflow" --fpga-workflow "$fpga_workflow" --kernel-workflow "$kernel_workflow" \
             --main-source "$(source "$MAIN_CHANGED" "$MAIN_CACHE_HIT")" --fpga-source "$(source "$FPGA_CHANGED" "$FPGA_CACHE_HIT")" --kernel-source "$(source "$KERNEL_CHANGED" "$KERNEL_CACHE_HIT")" \
             --release-version "$NEXT_VERSION" --output build/platform-bundle
           created=$SECONDS
