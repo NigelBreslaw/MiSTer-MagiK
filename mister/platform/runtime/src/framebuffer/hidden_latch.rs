@@ -6,7 +6,7 @@
 use crate::fpga::{
     Fpga, LatchedFbufGeometry, LatchedFbufStatus, MAGIK_FBUF_CAPS_MAGIC, MAGIK_FBUF_LATCH_MAGIC,
 };
-use crate::framebuffer::damage::{DirtyRectList, TwoSlotDamageLedger};
+use crate::framebuffer::damage::{DirtyRect, DirtyRectList, TwoSlotDamageLedger};
 use crate::framebuffer::format::rgb565_stride_bytes;
 use crate::framebuffer::hidden_scanout::{
     HiddenRgb565BufferIndex, HiddenScanoutError, HiddenScanoutFramebuffer,
