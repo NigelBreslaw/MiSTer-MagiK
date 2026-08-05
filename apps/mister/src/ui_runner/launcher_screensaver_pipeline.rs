@@ -442,11 +442,12 @@ fn run_direct_render_ahead_worker(
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         let trace = render_and_publish_direct_target(target, |pixels| {
-            let trace = renderer.render_at_hidden_slot(
+            let trace = renderer.render_at_hidden_slot_presentation_tick(
                 pixels,
                 width,
                 height,
                 grant.slot_index,
+                motion_tick,
                 Duration::from_micros(elapsed_us),
                 Some(next_elapsed),
             );
@@ -551,10 +552,11 @@ fn run_render_ahead_worker(
         );
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
-        let trace = renderer.render_at(
+        let trace = renderer.render_at_presentation_tick(
             &mut pixels,
             width,
             height,
+            motion_tick,
             Duration::from_micros(elapsed_us),
         );
         let frame = RenderedScreensaverFrame {

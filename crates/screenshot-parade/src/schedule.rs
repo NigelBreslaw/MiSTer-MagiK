@@ -323,6 +323,31 @@ impl ScreenshotParade {
         pixels: &mut [Rgb565Pixel],
         elapsed: Duration,
     ) -> Result<ScreenshotParadeStats, String> {
+        if elapsed < self.last_elapsed {
+            return Err("screenshot parade elapsed time must be monotonic".to_owned());
+        }
+        let motion_ticks_fp = tick_delta_fp(elapsed) as u64;
+        let stats = self.render_at_motion_ticks(pixels, motion_ticks_fp)?;
+        self.last_elapsed = elapsed;
+        Ok(stats)
+    }
+
+    pub fn render_at_presentation_tick(
+        &mut self,
+        pixels: &mut [Rgb565Pixel],
+        presentation_tick: u64,
+    ) -> Result<ScreenshotParadeStats, String> {
+        let motion_ticks_fp = presentation_tick
+            .checked_mul(TICK_ONE as u64)
+            .ok_or_else(|| "screenshot parade presentation tick overflowed".to_owned())?;
+        self.render_at_motion_ticks(pixels, motion_ticks_fp)
+    }
+
+    fn render_at_motion_ticks(
+        &mut self,
+        pixels: &mut [Rgb565Pixel],
+        motion_ticks_fp: u64,
+    ) -> Result<ScreenshotParadeStats, String> {
         if pixels.len() != self.geometry.len() {
             return Err(format!(
                 "screenshot parade target has {} pixels, expected {}",
@@ -330,13 +355,12 @@ impl ScreenshotParade {
                 self.geometry.len()
             ));
         }
-        if elapsed < self.last_elapsed {
-            return Err("screenshot parade elapsed time must be monotonic".to_owned());
+        if motion_ticks_fp < self.previous_motion_ticks_fp {
+            return Err("screenshot parade motion clock must be monotonic".to_owned());
         }
-        let motion_ticks_fp = tick_delta_fp(elapsed) as u64;
-        let delta = motion_ticks_fp.saturating_sub(self.previous_motion_ticks_fp) as i64;
+        let delta = i64::try_from(motion_ticks_fp - self.previous_motion_ticks_fp)
+            .map_err(|_| "screenshot parade motion clock step overflowed".to_owned())?;
         self.previous_motion_ticks_fp = motion_ticks_fp;
-        self.last_elapsed = elapsed;
         let width = self.geometry.width();
         let height = self.geometry.height();
 
@@ -1378,6 +1402,59 @@ mod tests {
                 .render_at(&mut pixels, Duration::from_millis(999))
                 .is_err()
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn presentation_ticks_advance_by_exact_sixtieths() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-presentation-clock-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::HdmiSixteenth);
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        scene.render_at_presentation_tick(&mut pixels, 0).unwrap();
+        let tile_index = scene
+            .tiles
+            .iter()
+            .position(|tile| tile.active && tile.x_fp > tile.velocity_fp * 16)
+            .unwrap();
+        let velocity_fp = scene.tiles[tile_index].velocity_fp;
+        let mut previous_x = scene.tiles[tile_index].x_fp;
+        for tick in 1..=16 {
+            scene
+                .render_at_presentation_tick(&mut pixels, tick)
+                .unwrap();
+            let x = scene.tiles[tile_index].x_fp;
+            assert_eq!(previous_x - x, velocity_fp, "tick={tick}");
+            previous_x = x;
+        }
+        assert_eq!(scene.previous_motion_ticks_fp, 16 * TICK_ONE as u64);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn presentation_tick_skips_advance_every_confirmed_interval() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-presentation-skip-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        let mut scene = prepared_scene(&path, 960, 540, ScreenshotSamplingProfile::HdmiSixteenth);
+        let mut pixels = vec![Rgb565Pixel(0); 960 * 540];
+        scene.render_at_presentation_tick(&mut pixels, 0).unwrap();
+        let tile_index = scene
+            .tiles
+            .iter()
+            .position(|tile| tile.active && tile.x_fp > tile.velocity_fp * 16)
+            .unwrap();
+        let velocity_fp = scene.tiles[tile_index].velocity_fp;
+        let starting_x = scene.tiles[tile_index].x_fp;
+        scene.render_at_presentation_tick(&mut pixels, 4).unwrap();
+        assert_eq!(starting_x - scene.tiles[tile_index].x_fp, velocity_fp * 4);
+        assert_eq!(scene.previous_motion_ticks_fp, 4 * TICK_ONE as u64);
+        assert!(scene.render_at_presentation_tick(&mut pixels, 3).is_err());
         let _ = std::fs::remove_file(path);
     }
 }

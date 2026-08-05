@@ -771,6 +771,7 @@ impl LabScene {
         buffer_id: u8,
         elapsed: Duration,
         next_elapsed: Option<Duration>,
+        presentation_tick: Option<u64>,
     ) -> Result<mister_magik_framebuffer_scene_lab::FrameStats, String> {
         let pixel_count = destination.len();
         match self {
@@ -785,9 +786,13 @@ impl LabScene {
                 .render(destination, elapsed)
                 .map(card_frame_stats)
                 .map_err(str::to_owned),
-            Self::Screenshot(renderer) => renderer
-                .render_at(destination, elapsed)
-                .map(|stats| screenshot_frame_stats(stats, pixel_count)),
+            Self::Screenshot(renderer) => {
+                let stats = match presentation_tick {
+                    Some(tick) => renderer.render_at_presentation_tick(destination, tick),
+                    None => renderer.render_at(destination, elapsed),
+                }?;
+                Ok(screenshot_frame_stats(stats, pixel_count))
+            }
         }
     }
 
@@ -1440,6 +1445,7 @@ fn run_window(
     let mut status_started = started;
     let mut cpu_started = process_cpu_time();
     let mut status_frames = 0_u64;
+    let mut presentation_tick = 0_u64;
     let mut render_samples_us = Vec::with_capacity(64);
     let mut clear_samples_us = Vec::with_capacity(64);
     let mut simulation_samples_us = Vec::with_capacity(64);
@@ -1501,6 +1507,7 @@ fn run_window(
                 );
                 frame_evidence.push(evidence);
             }
+            presentation_tick = presentation_tick.saturating_add(1);
             if let Some(bounded) = bounded
                 && measurement_started.is_none()
                 && renderer.measurement_ready()
@@ -1569,6 +1576,7 @@ fn run_window(
             writable_slot - 1,
             elapsed,
             Some(elapsed.saturating_add(FRAME_DURATION)),
+            Some(presentation_tick),
         )?;
         if let Some(controls) = controls.as_ref() {
             controls.draw_hud(pixels, plan.render_w, plan.render_h);
@@ -3115,6 +3123,7 @@ mod macos {
                 0,
                 elapsed,
                 Some(elapsed.saturating_add(FRAME_DURATION)),
+                None,
             ) {
                 Ok(stats) => stats,
                 Err(error) => {

@@ -603,6 +603,25 @@ impl LauncherScreensaver {
         self.render_at_target(dst, w, h, None, elapsed)
     }
 
+    pub fn render_at_presentation_tick(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        presentation_tick: u64,
+        fallback_elapsed: Duration,
+    ) -> ScreensaverFrameTrace {
+        self.render_at_target_with_lookahead(
+            dst,
+            w,
+            h,
+            None,
+            fallback_elapsed,
+            None,
+            Some(presentation_tick),
+        )
+    }
+
     pub fn render_at_hidden_slot(
         &mut self,
         dst: &mut [Rgb565Pixel],
@@ -612,7 +631,36 @@ impl LauncherScreensaver {
         elapsed: Duration,
         next_elapsed: Option<Duration>,
     ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(dst, w, h, Some(hidden_slot), elapsed, next_elapsed)
+        self.render_at_target_with_lookahead(
+            dst,
+            w,
+            h,
+            Some(hidden_slot),
+            elapsed,
+            next_elapsed,
+            None,
+        )
+    }
+
+    pub fn render_at_hidden_slot_presentation_tick(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+        hidden_slot: u8,
+        presentation_tick: u64,
+        fallback_elapsed: Duration,
+        next_elapsed: Option<Duration>,
+    ) -> ScreensaverFrameTrace {
+        self.render_at_target_with_lookahead(
+            dst,
+            w,
+            h,
+            Some(hidden_slot),
+            fallback_elapsed,
+            next_elapsed,
+            Some(presentation_tick),
+        )
     }
 
     fn render_at_target(
@@ -623,7 +671,7 @@ impl LauncherScreensaver {
         hidden_slot: Option<u8>,
         elapsed: Duration,
     ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(dst, w, h, hidden_slot, elapsed, None)
+        self.render_at_target_with_lookahead(dst, w, h, hidden_slot, elapsed, None, None)
     }
 
     fn render_at_target_with_lookahead(
@@ -634,6 +682,7 @@ impl LauncherScreensaver {
         hidden_slot: Option<u8>,
         elapsed: Duration,
         next_elapsed: Option<Duration>,
+        presentation_tick: Option<u64>,
     ) -> ScreensaverFrameTrace {
         if let Some(particle) = self.particle.as_mut() {
             let particle_elapsed = if let Some(reload) = self.particle_reload.as_mut() {
@@ -704,7 +753,13 @@ impl LauncherScreensaver {
         self.poll_archive(w, h);
         let archive_poll_us = archive_poll_start.elapsed().as_micros();
         let mut trace = if let Some(parade) = self.parade.as_mut() {
-            match parade.render_at(slint_rgb565_as_shared_mut(dst), elapsed) {
+            let render_result = match presentation_tick {
+                Some(tick) => {
+                    parade.render_at_presentation_tick(slint_rgb565_as_shared_mut(dst), tick)
+                }
+                None => parade.render_at(slint_rgb565_as_shared_mut(dst), elapsed),
+            };
+            match render_result {
                 Ok(stats) => {
                     if parade.is_ready() {
                         if let Some(started) = self.startup_started_at.take() {
