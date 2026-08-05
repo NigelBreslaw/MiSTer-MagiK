@@ -1286,8 +1286,8 @@ fn run_card_flip_mister(
     let mut render_samples_us = Vec::with_capacity(128);
     let mut transfer_samples_us = Vec::with_capacity(128);
     let mut present_samples_us = Vec::with_capacity(128);
-    let mut pending_frame_started = None;
-    let mut pending_present_started = None;
+    let mut pending_frame_started: Option<Instant> = None;
+    let mut pending_present_started: Option<Instant> = None;
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     let mut latch_drop_count = 0_u16;
