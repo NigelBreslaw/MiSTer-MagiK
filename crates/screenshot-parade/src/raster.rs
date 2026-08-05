@@ -3,7 +3,7 @@
 
 use mister_magik_catalog::preview_worker::PreviewPixels;
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const PARADE_SUBPIXEL_ONE: i64 = 256;
 const PARADE_MIN_TILE_SPEED: usize = 1;
@@ -173,6 +173,7 @@ impl ParadePhaseSet {
     }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct OpaqueSpan {
     start: u16,
@@ -210,7 +211,7 @@ struct LinearPhaseRef<'a> {
     coverage: &'a CoveragePlane,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LinearRgb {
     r: u16,
     g: u16,
@@ -305,9 +306,24 @@ impl PreparedScreenshotCard {
             }
             let phase_started = std::time::Instant::now();
             let premultiplied = premultiply_linear_source(&styled, &coverage);
-            let base = prepare_linear_phase(&styled, &coverage, &premultiplied, 0, kernel);
+            let source_opaque_spans = coverage_opaque_spans(&coverage, width, height);
+            let base = prepare_linear_phase(
+                &styled,
+                &coverage,
+                &source_opaque_spans,
+                &premultiplied,
+                0,
+                kernel,
+            );
             let shifted = std::array::from_fn(|index| {
-                prepare_linear_phase(&styled, &coverage, &premultiplied, index + 1, kernel)
+                prepare_linear_phase(
+                    &styled,
+                    &coverage,
+                    &source_opaque_spans,
+                    &premultiplied,
+                    index + 1,
+                    kernel,
+                )
             });
             let phase_us = phase_started.elapsed().as_micros();
             return (
@@ -483,11 +499,27 @@ fn lanczos3(value: f64) -> f64 {
     (pi_value.sin() / pi_value) * ((pi_value / LANCZOS_RADIUS).sin() / (pi_value / LANCZOS_RADIUS))
 }
 
-fn lanczos_filters(source_len: usize, target_len: usize) -> Vec<LanczosFilter> {
+fn lanczos_filters(source_len: usize, target_len: usize) -> Arc<[LanczosFilter]> {
+    type FilterCache = Vec<(usize, usize, Arc<[LanczosFilter]>)>;
+    static CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
+
+    let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    {
+        let entries = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, _, filters)) = entries
+            .iter()
+            .find(|(source, target, _)| *source == source_len && *target == target_len)
+        {
+            return Arc::clone(filters);
+        }
+    }
+
     let scale = target_len as f64 / source_len as f64;
     let filter_scale = scale.min(1.0);
     let support = LANCZOS_RADIUS / filter_scale;
-    (0..target_len)
+    let filters = (0..target_len)
         .map(|target| {
             let center = (target as f64 + 0.5) / scale - 0.5;
             let first = (center - support).ceil() as isize;
@@ -508,7 +540,19 @@ fn lanczos_filters(source_len: usize, target_len: usize) -> Vec<LanczosFilter> {
                 (i32::from(weights[center_tap]) + LANCZOS_WEIGHT_ONE - fixed_sum) as i16;
             LanczosFilter { start, weights }
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .into();
+    let mut entries = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, _, cached)) = entries
+        .iter()
+        .find(|(source, target, _)| *source == source_len && *target == target_len)
+    {
+        return Arc::clone(cached);
+    }
+    entries.push((source_len, target_len, Arc::clone(&filters)));
+    filters
 }
 
 fn scale_lanczos3_rgb565_tinted(
@@ -614,10 +658,6 @@ fn srgb8_to_linear16(value: u8) -> u16 {
     srgb_to_linear_table()[usize::from(value)]
 }
 
-fn rgb565_to_linear(pixel: Rgb565Pixel) -> LinearRgb {
-    rgb565_to_linear_with_table(pixel, srgb_to_linear_table())
-}
-
 fn rgb565_to_linear_with_table(pixel: Rgb565Pixel, srgb_to_linear: &[u16; 256]) -> LinearRgb {
     let packed = pixel.0;
     let r = (((packed >> 11) & 0x1f) * 255 / 31) as u8;
@@ -654,14 +694,24 @@ fn scale_lanczos3_linear_tinted(
     }
     let x_filters = lanczos_filters(image.width, out_width);
     let y_filters = lanczos_filters(image.height, out_height);
+    let srgb_to_linear = srgb_to_linear_table();
+    let mut linear_source = vec![LinearRgb::default(); image.width * image.height];
+    for y in 0..image.height {
+        let source_row = y * image.stride;
+        let linear_row = y * image.width;
+        for x in 0..image.width {
+            linear_source[linear_row + x] =
+                rgb565_to_linear_with_table(image.pixels[source_row + x], srgb_to_linear);
+        }
+    }
     let mut horizontal = vec![LinearRgb::default(); out_width * image.height];
     for source_y in 0..image.height {
-        let source_row = source_y * image.stride;
+        let source_row = source_y * image.width;
         let target_row = source_y * out_width;
         for (target_x, filter) in x_filters.iter().enumerate() {
             let mut channels = [0_i64; 3];
             for (tap, weight) in filter.weights.iter().enumerate() {
-                let pixel = rgb565_to_linear(image.pixels[source_row + filter.start + tap]);
+                let pixel = linear_source[source_row + filter.start + tap];
                 let weight = i64::from(*weight);
                 channels[0] += i64::from(pixel.r) * weight;
                 channels[1] += i64::from(pixel.g) * weight;
@@ -800,9 +850,18 @@ fn prepare_rounded_coverage(width: usize, height: usize) -> Vec<u8> {
         return Vec::new();
     }
     let radius = (width.min(height) / 10).clamp(2, 10) as f64;
-    let mut coverage = vec![0_u8; width * height];
+    let radius_pixels = radius as usize;
+    let mut coverage = vec![255_u8; width * height];
     for y in 0..height {
+        let in_corner_y = y < radius_pixels || y >= height.saturating_sub(radius_pixels);
+        if !in_corner_y {
+            continue;
+        }
         for x in 0..width {
+            let in_corner_x = x < radius_pixels || x >= width.saturating_sub(radius_pixels);
+            if !in_corner_x {
+                continue;
+            }
             let mut inside = 0usize;
             for sample_y in 0..COVERAGE_SAMPLES_PER_AXIS {
                 let py = y as f64 + (sample_y as f64 + 0.5) / COVERAGE_SAMPLES_PER_AXIS as f64;
@@ -852,8 +911,8 @@ fn coverage_corner_insets(coverage: &[u8], width: usize, height: usize) -> Vec<u
         .collect()
 }
 
-fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlane {
-    let opaque_spans = (0..height)
+fn coverage_opaque_spans(values: &[u8], stride: usize, height: usize) -> Vec<OpaqueSpan> {
+    (0..height)
         .map(|y| {
             let row = &values[y * stride..(y + 1) * stride];
             let start = row.iter().position(|value| *value == 255).unwrap_or(0);
@@ -866,7 +925,11 @@ fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlan
                 end: end.min(usize::from(u16::MAX)) as u16,
             }
         })
-        .collect();
+        .collect()
+}
+
+fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlane {
+    let opaque_spans = coverage_opaque_spans(&values, stride, height);
     CoveragePlane {
         values,
         opaque_spans,
@@ -913,6 +976,7 @@ fn premultiply_linear_source(image: &LinearImage, coverage: &[u8]) -> Vec<[u16; 
 fn prepare_linear_phase(
     image: &LinearImage,
     source_coverage: &[u8],
+    source_opaque_spans: &[OpaqueSpan],
     premultiplied_source: &[[u16; 4]],
     phase: usize,
     kernel: LinearPhaseKernel,
@@ -938,6 +1002,7 @@ fn prepare_linear_phase(
             image.height,
             width,
             weights,
+            source_opaque_spans,
             kernel,
             linear_to_srgb,
             &mut pixels,
@@ -1027,6 +1092,7 @@ fn prepare_linear_phase_neon_if_selected(
     height: usize,
     output_width: usize,
     weights: [i32; 6],
+    source_opaque_spans: &[OpaqueSpan],
     kernel: LinearPhaseKernel,
     linear_to_srgb: &[u8; 4097],
     pixels: &mut [Rgb565Pixel],
@@ -1046,6 +1112,7 @@ fn prepare_linear_phase_neon_if_selected(
                 height,
                 output_width,
                 weights,
+                source_opaque_spans,
                 linear_to_srgb,
                 pixels,
                 coverage,
@@ -1061,6 +1128,7 @@ fn prepare_linear_phase_neon_if_selected(
             height,
             output_width,
             weights,
+            source_opaque_spans,
             linear_to_srgb,
             pixels,
             coverage,
@@ -1090,54 +1158,73 @@ fn validate_neon_phase_kernel() {
                 })
                 .collect::<Vec<_>>();
             let output_width = source_width + 1;
-            for phase in 1..CRT_PHASE_COUNT {
-                let weights = fractional_delay_weights(phase);
-                let mut actual_pixels = vec![Rgb565Pixel(0); output_width * height];
-                let mut actual_coverage = vec![0_u8; output_width * height];
-                // SAFETY: this validation runs only on the MiSTer ARM target,
-                // whose Cortex-A9 provides NEON, with complete source/output planes.
-                unsafe {
-                    prepare_linear_phase_neon(
-                        &source,
-                        source_width,
-                        height,
-                        output_width,
-                        weights,
-                        linear_to_srgb_table(),
-                        &mut actual_pixels,
-                        &mut actual_coverage,
+            let validate = |source: &[[u16; 4]], source_opaque_spans: &[OpaqueSpan]| {
+                for phase in 1..CRT_PHASE_COUNT {
+                    let weights = fractional_delay_weights(phase);
+                    let mut actual_pixels = vec![Rgb565Pixel(0); output_width * height];
+                    let mut actual_coverage = vec![0_u8; output_width * height];
+                    // SAFETY: this validation runs only on the MiSTer ARM target,
+                    // whose Cortex-A9 provides NEON, with complete source/output planes.
+                    unsafe {
+                        prepare_linear_phase_neon(
+                            source,
+                            source_width,
+                            height,
+                            output_width,
+                            weights,
+                            source_opaque_spans,
+                            linear_to_srgb_table(),
+                            &mut actual_pixels,
+                            &mut actual_coverage,
+                        );
+                    }
+                    let expected = (0..height)
+                        .flat_map(|y| {
+                            (0..output_width).map(move |out_x| {
+                                let samples = std::array::from_fn(|tap| {
+                                    let source_x = out_x as isize + tap as isize - 3;
+                                    if (0..source_width as isize).contains(&source_x) {
+                                        source[y * source_width + source_x as usize]
+                                    } else {
+                                        [0; 4]
+                                    }
+                                });
+                                linear_phase_pixel(
+                                    reconstruct_six_tap_scalar(&samples, weights),
+                                    linear_to_srgb_table(),
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let expected_pixels = expected.iter().map(|value| value.0).collect::<Vec<_>>();
+                    let expected_coverage =
+                        expected.iter().map(|value| value.1).collect::<Vec<_>>();
+                    assert_eq!(
+                        actual_pixels, expected_pixels,
+                        "NEON phase {phase} pixels differ from scalar"
+                    );
+                    assert_eq!(
+                        actual_coverage, expected_coverage,
+                        "NEON phase {phase} coverage differs from scalar"
                     );
                 }
-                let expected = (0..height)
-                    .flat_map(|y| {
-                        let source = &source;
-                        (0..output_width).map(move |out_x| {
-                            let samples = std::array::from_fn(|tap| {
-                                let source_x = out_x as isize + tap as isize - 3;
-                                if (0..source_width as isize).contains(&source_x) {
-                                    source[y * source_width + source_x as usize]
-                                } else {
-                                    [0; 4]
-                                }
-                            });
-                            linear_phase_pixel(
-                                reconstruct_six_tap_scalar(&samples, weights),
-                                linear_to_srgb_table(),
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let expected_pixels = expected.iter().map(|value| value.0).collect::<Vec<_>>();
-                let expected_coverage = expected.iter().map(|value| value.1).collect::<Vec<_>>();
-                assert_eq!(
-                    actual_pixels, expected_pixels,
-                    "NEON phase {phase} pixels differ from scalar"
-                );
-                assert_eq!(
-                    actual_coverage, expected_coverage,
-                    "NEON phase {phase} coverage differs from scalar"
-                );
-            }
+            };
+            validate(&source, &vec![OpaqueSpan::default(); height]);
+
+            let opaque_source = source
+                .iter()
+                .map(|pixel| [pixel[0], pixel[1], pixel[2], u16::MAX])
+                .collect::<Vec<_>>();
+            validate(
+                &opaque_source,
+                &vec![
+                    OpaqueSpan {
+                        start: 0,
+                        end: source_width as u16,
+                    };
+                    height
+                ],
+            );
         });
     }
 }
@@ -1149,10 +1236,12 @@ unsafe fn prepare_linear_phase_neon(
     height: usize,
     output_width: usize,
     weights: [i32; 6],
+    source_opaque_spans: &[OpaqueSpan],
     linear_to_srgb: &[u8; 4097],
     pixels: &mut [Rgb565Pixel],
     coverage: &mut [u8],
 ) {
+    debug_assert_eq!(source_opaque_spans.len(), height);
     unsafe extern "C" {
         fn mister_magik_screenshot_phase_neon(
             source: *const u16,
@@ -1160,6 +1249,7 @@ unsafe fn prepare_linear_phase_neon(
             height: usize,
             output_width: usize,
             weights: *const i32,
+            source_opaque_spans: *const OpaqueSpan,
             linear_to_srgb: *const u8,
             pixels: *mut u16,
             coverage: *mut u8,
@@ -1175,6 +1265,7 @@ unsafe fn prepare_linear_phase_neon(
             height,
             output_width,
             weights.as_ptr(),
+            source_opaque_spans.as_ptr(),
             linear_to_srgb.as_ptr(),
             pixels.as_mut_ptr().cast(),
             coverage.as_mut_ptr(),
@@ -1661,6 +1752,133 @@ mod tests {
             energy += previous.unsigned_abs() as u64;
         }
         energy
+    }
+
+    fn rounded_coverage_reference(width: usize, height: usize) -> Vec<u8> {
+        if width == 0 || height == 0 {
+            return Vec::new();
+        }
+        let radius = (width.min(height) / 10).clamp(2, 10) as f64;
+        let mut coverage = vec![0_u8; width * height];
+        for y in 0..height {
+            for x in 0..width {
+                let mut inside = 0_usize;
+                for sample_y in 0..COVERAGE_SAMPLES_PER_AXIS {
+                    let py = y as f64 + (sample_y as f64 + 0.5) / COVERAGE_SAMPLES_PER_AXIS as f64;
+                    for sample_x in 0..COVERAGE_SAMPLES_PER_AXIS {
+                        let px =
+                            x as f64 + (sample_x as f64 + 0.5) / COVERAGE_SAMPLES_PER_AXIS as f64;
+                        let corner_x = if px < radius {
+                            Some(radius)
+                        } else if px > width as f64 - radius {
+                            Some(width as f64 - radius)
+                        } else {
+                            None
+                        };
+                        let corner_y = if py < radius {
+                            Some(radius)
+                        } else if py > height as f64 - radius {
+                            Some(height as f64 - radius)
+                        } else {
+                            None
+                        };
+                        let sample_inside = match (corner_x, corner_y) {
+                            (Some(center_x), Some(center_y)) => {
+                                let dx = px - center_x;
+                                let dy = py - center_y;
+                                dx * dx + dy * dy <= radius * radius
+                            }
+                            _ => true,
+                        };
+                        inside += usize::from(sample_inside);
+                    }
+                }
+                coverage[y * width + x] =
+                    ((inside * 255 + COVERAGE_SAMPLE_COUNT / 2) / COVERAGE_SAMPLE_COUNT) as u8;
+            }
+        }
+        coverage
+    }
+
+    fn scale_linear_repeated_decode_reference(
+        image: &ScreenshotImage,
+        out_width: usize,
+        out_height: usize,
+        tint: u8,
+    ) -> LinearImage {
+        let x_filters = lanczos_filters(image.width, out_width);
+        let y_filters = lanczos_filters(image.height, out_height);
+        let mut horizontal = vec![LinearRgb::default(); out_width * image.height];
+        for source_y in 0..image.height {
+            let source_row = source_y * image.stride;
+            let target_row = source_y * out_width;
+            for (target_x, filter) in x_filters.iter().enumerate() {
+                let mut channels = [0_i64; 3];
+                for (tap, weight) in filter.weights.iter().enumerate() {
+                    let pixel = rgb565_to_linear_with_table(
+                        image.pixels[source_row + filter.start + tap],
+                        srgb_to_linear_table(),
+                    );
+                    let weight = i64::from(*weight);
+                    channels[0] += i64::from(pixel.r) * weight;
+                    channels[1] += i64::from(pixel.g) * weight;
+                    channels[2] += i64::from(pixel.b) * weight;
+                }
+                horizontal[target_row + target_x] = LinearRgb {
+                    r: fixed_channel(channels[0]),
+                    g: fixed_channel(channels[1]),
+                    b: fixed_channel(channels[2]),
+                };
+            }
+        }
+        let tint = u64::from(srgb8_to_linear16(tint));
+        let mut pixels = vec![LinearRgb::default(); out_width * out_height];
+        for (target_y, filter) in y_filters.iter().enumerate() {
+            for target_x in 0..out_width {
+                let mut channels = [0_i64; 3];
+                for (tap, weight) in filter.weights.iter().enumerate() {
+                    let pixel = horizontal[(filter.start + tap) * out_width + target_x];
+                    let weight = i64::from(*weight);
+                    channels[0] += i64::from(pixel.r) * weight;
+                    channels[1] += i64::from(pixel.g) * weight;
+                    channels[2] += i64::from(pixel.b) * weight;
+                }
+                let tinted = |value: i64| {
+                    let value = u64::from(fixed_channel(value));
+                    ((value * tint + 32_767) / 65_535).min(65_535) as u16
+                };
+                pixels[target_y * out_width + target_x] = LinearRgb {
+                    r: tinted(channels[0]),
+                    g: tinted(channels[1]),
+                    b: tinted(channels[2]),
+                };
+            }
+        }
+        LinearImage {
+            pixels,
+            width: out_width,
+            height: out_height,
+            stride: out_width,
+        }
+    }
+
+    #[test]
+    fn rounded_corner_shortcut_is_exact() {
+        for (width, height) in [(1, 1), (4, 3), (32, 24), (160, 120), (160, 160)] {
+            assert_eq!(
+                prepare_rounded_coverage(width, height),
+                rounded_coverage_reference(width, height),
+                "coverage differs at {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn predecoded_linear_scaling_is_exact() {
+        let source = test_image(23, 17);
+        let actual = scale_lanczos3_linear_tinted(&source, 11, 9, 198);
+        let expected = scale_linear_repeated_decode_reference(&source, 11, 9, 198);
+        assert_eq!(actual.pixels, expected.pixels);
     }
 
     #[test]

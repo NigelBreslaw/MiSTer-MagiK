@@ -112,6 +112,41 @@ static inline void write_phase_pixel(
         ((uint16_t)(g >> 2) << 5) | (uint16_t)(b >> 3));
 }
 
+static inline void write_opaque_phase_pixel(
+    uint16x4_t reconstructed,
+    const uint8_t *restrict linear_to_srgb,
+    uint16_t *restrict pixel,
+    uint8_t *restrict coverage
+) {
+    const uint8_t r = linear_to_srgb8(
+        vget_lane_u16(reconstructed, 0), linear_to_srgb
+    );
+    const uint8_t g = linear_to_srgb8(
+        vget_lane_u16(reconstructed, 1), linear_to_srgb
+    );
+    const uint8_t b = linear_to_srgb8(
+        vget_lane_u16(reconstructed, 2), linear_to_srgb
+    );
+    *pixel = (uint16_t)(((uint16_t)(r >> 3) << 11) |
+        ((uint16_t)(g >> 2) << 5) | (uint16_t)(b >> 3));
+    *coverage = UINT8_MAX;
+}
+
+static inline uint16x4_t reconstruct_interior_pixel(
+    const uint16_t *restrict input,
+    const int32_t *restrict weights
+) {
+    return reconstruct_six_tap(
+        vld1_u16(input),
+        vld1_u16(input + 4),
+        vld1_u16(input + 8),
+        vld1_u16(input + 12),
+        vld1_u16(input + 16),
+        vld1_u16(input + 20),
+        weights
+    );
+}
+
 static inline uint16x4_t load_or_zero(
     const uint16_t *restrict row_source,
     size_t source_width,
@@ -156,6 +191,7 @@ void mister_magik_screenshot_phase_neon(
     size_t height,
     size_t output_width,
     const int32_t *restrict weights,
+    const uint16_t *restrict source_opaque_spans,
     const uint8_t *restrict linear_to_srgb,
     uint16_t *restrict pixels,
     uint8_t *restrict coverage
@@ -167,6 +203,22 @@ void mister_magik_screenshot_phase_neon(
         const uint16_t *row_source = source + y * source_width * 4;
         uint16_t *row_pixels = pixels + y * output_width;
         uint8_t *row_coverage = coverage + y * output_width;
+        const size_t source_opaque_start = source_opaque_spans[y * 2];
+        const size_t source_opaque_end = source_opaque_spans[y * 2 + 1];
+        size_t opaque_start = source_opaque_start + 3;
+        size_t opaque_end = source_opaque_end > 2 ? source_opaque_end - 2 : 0;
+        if (opaque_start < interior_start) {
+            opaque_start = interior_start;
+        }
+        if (opaque_start > interior_end) {
+            opaque_start = interior_end;
+        }
+        if (opaque_end < opaque_start) {
+            opaque_end = opaque_start;
+        }
+        if (opaque_end > interior_end) {
+            opaque_end = interior_end;
+        }
         size_t output_x = 0;
 
         for (; output_x < interior_start; ++output_x) {
@@ -180,7 +232,16 @@ void mister_magik_screenshot_phase_neon(
                 row_coverage + output_x
             );
         }
-        for (; output_x + 1 < interior_end; output_x += 2) {
+        for (; output_x < opaque_start; ++output_x) {
+            const uint16_t *input = row_source + (output_x - 3) * 4;
+            write_phase_pixel(
+                reconstruct_interior_pixel(input, weights),
+                linear_to_srgb,
+                row_pixels + output_x,
+                row_coverage + output_x
+            );
+        }
+        for (; output_x + 1 < opaque_end; output_x += 2) {
             const uint16_t *input = row_source + (output_x - 3) * 4;
             const uint16x4_t value0 = vld1_u16(input);
             const uint16x4_t value1 = vld1_u16(input + 4);
@@ -189,7 +250,7 @@ void mister_magik_screenshot_phase_neon(
             const uint16x4_t value4 = vld1_u16(input + 16);
             const uint16x4_t value5 = vld1_u16(input + 20);
             const uint16x4_t value6 = vld1_u16(input + 24);
-            write_phase_pixel(
+            write_opaque_phase_pixel(
                 reconstruct_six_tap(
                     value0, value1, value2, value3, value4, value5, weights
                 ),
@@ -197,7 +258,7 @@ void mister_magik_screenshot_phase_neon(
                 row_pixels + output_x,
                 row_coverage + output_x
             );
-            write_phase_pixel(
+            write_opaque_phase_pixel(
                 reconstruct_six_tap(
                     value1, value2, value3, value4, value5, value6, weights
                 ),
@@ -206,23 +267,24 @@ void mister_magik_screenshot_phase_neon(
                 row_coverage + output_x + 1
             );
         }
-        if (output_x < interior_end) {
+        if (output_x < opaque_end) {
             const uint16_t *input = row_source + (output_x - 3) * 4;
-            write_phase_pixel(
-                reconstruct_six_tap(
-                    vld1_u16(input),
-                    vld1_u16(input + 4),
-                    vld1_u16(input + 8),
-                    vld1_u16(input + 12),
-                    vld1_u16(input + 16),
-                    vld1_u16(input + 20),
-                    weights
-                ),
+            write_opaque_phase_pixel(
+                reconstruct_interior_pixel(input, weights),
                 linear_to_srgb,
                 row_pixels + output_x,
                 row_coverage + output_x
             );
             ++output_x;
+        }
+        for (; output_x < interior_end; ++output_x) {
+            const uint16_t *input = row_source + (output_x - 3) * 4;
+            write_phase_pixel(
+                reconstruct_interior_pixel(input, weights),
+                linear_to_srgb,
+                row_pixels + output_x,
+                row_coverage + output_x
+            );
         }
         for (; output_x < output_width; ++output_x) {
             reconstruct_edge_pixel(
