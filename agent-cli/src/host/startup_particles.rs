@@ -820,7 +820,7 @@ fn prepare_scene_evidence_output(
         .filter(|value| !value.is_empty())
         .ok_or("scene-lab build receipt has no source commit")?;
     let manifest = json!({
-        "schema": "mister-magik-scene-lab-manifest-v1",
+        "schema": "mister-magik-scene-lab-manifest-v2",
         "git_sha": source_commit,
         "binary_sha256": file_sha256(binary.to_path_buf())?,
         "binary": binary.display().to_string(),
@@ -906,8 +906,9 @@ fn retrieve_scene_evidence(
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
     if failures > 0 {
+        let dropped_frames = required_u64(&combined["cadence_pass"]["cadence"], "dropped_frames")?;
         return Err(format!(
-            "{scene} cadence assessment found {failures} failure(s); evidence retained at {}",
+            "{scene} cadence assessment FAIL — {dropped_frames} dropped frames and {failures} total failure(s); evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -931,25 +932,26 @@ fn retrieve_single_scene_pass(
     )?;
     let summary_value: Value = serde_json::from_str(summary.trim())?;
     let frame_values = parse_scene_frames(&frames)?;
-    let cadence = summary_value
-        .get("cadence")
-        .ok_or("scene pass summary has no physical cadence")?;
+    let cadence = validated_scene_cadence(&summary_value)?;
     let mut failures = Vec::new();
     if !profiled {
         for (kind, field) in [
-            ("repeated-refreshes", "repeated_refreshes"),
-            ("sequence-failures", "sequence_failures"),
+            ("dropped-frames", "dropped_frames"),
+            (
+                "confirmation-sequence-failures",
+                "confirmation_sequence_failures",
+            ),
             ("latch-drops", "latch_drop_delta"),
             ("completion-failures", "completion_failures"),
         ] {
-            let count = value_u64(cadence, field);
+            let count = required_u64(cadence, field)?;
             if count > 0 {
                 failures.push(json!({"kind": kind, "count": count}));
             }
         }
     }
     let combined = json!({
-        "schema": "mister-magik-scene-lab-measurement-v1",
+        "schema": "mister-magik-scene-lab-measurement-v2",
         "scene": scene,
         "pass": summary_value,
         "phase_timings": card_phase_summary(&frame_values),
@@ -986,7 +988,17 @@ fn retrieve_single_scene_pass(
         fs::write(output_dir.join("stacks.folded"), folded)?;
     }
     let report = format!(
-        "# {scene} scene-lab measurement\n\n- Pass: {}\n- Confirmed frames: {}\n- Unique presentation FPS: {:.3}\n- Repeated refreshes: {}\n- Sequence failures: {}\n- Latch drops: {}\n- Completion failures: {}\n- Process CPU: {:.2}%\n- RSS mean / max: {} / {} KiB\n\nArtifacts: `manifest.json`, `frames.jsonl`, `summary.json`{}.\n",
+        "# {scene} scene-lab measurement\n\n- Result: {}\n- Pass: {}\n- Confirmed frames: {}\n- Unique presentation FPS: {:.3}\n- Dropped frames: {}\n- Confirmation sequence failures: {}\n- Latch drops: {}\n- Completion failures: {}\n- Process CPU: {:.2}%\n- RSS mean / max: {} / {} KiB\n\nArtifacts: `manifest.json`, `frames.jsonl`, `summary.json`{}.\n",
+        if profiled {
+            "Attribution only".to_string()
+        } else {
+            let dropped_frames = required_u64(cadence, "dropped_frames")?;
+            if dropped_frames == 0 {
+                "PASS — 0 dropped frames".to_string()
+            } else {
+                format!("FAIL — {dropped_frames} dropped frames")
+            }
+        },
         if profiled {
             "99 Hz sampled (attribution only)"
         } else {
@@ -997,8 +1009,8 @@ fn retrieve_single_scene_pass(
             .get("unique_fps")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
-        value_u64(cadence, "repeated_refreshes"),
-        value_u64(cadence, "sequence_failures"),
+        value_u64(cadence, "dropped_frames"),
+        value_u64(cadence, "confirmation_sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
         value_u64(cadence, "completion_failures"),
         combined["pass"]["process_cpu_pct_of_one_core"]
@@ -1018,8 +1030,9 @@ fn retrieve_single_scene_pass(
         .as_array()
         .is_some_and(|failures| !failures.is_empty())
     {
+        let dropped_frames = required_u64(cadence, "dropped_frames")?;
         return Err(format!(
-            "{scene} cadence measurement failed; evidence retained at {}",
+            "{scene} cadence measurement FAIL — {dropped_frames} dropped frames; evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -1078,10 +1091,40 @@ fn validate_scene_profile_artifacts(
 }
 
 fn parse_scene_frames(text: &str) -> Result<Vec<Value>> {
-    text.lines()
+    let frames = text
+        .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).map_err(Into::into))
-        .collect()
+        .collect::<Result<Vec<Value>>>()?;
+    for frame in &frames {
+        if frame.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-frame-v2") {
+            return Err("scene-lab frame evidence has the wrong schema".into());
+        }
+    }
+    Ok(frames)
+}
+
+fn validated_scene_cadence(summary: &Value) -> Result<&Value> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-scene-lab-measurement-pass-v2")
+    {
+        return Err("scene-lab measurement pass has the wrong schema".into());
+    }
+    let cadence = summary
+        .get("cadence")
+        .ok_or("scene pass summary has no physical cadence")?;
+    if cadence.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-cadence-v2") {
+        return Err("scene-lab cadence evidence has the wrong schema".into());
+    }
+    for field in [
+        "dropped_frames",
+        "confirmation_sequence_failures",
+        "latch_drop_delta",
+        "completion_failures",
+    ] {
+        required_u64(cadence, field)?;
+    }
+    Ok(cadence)
 }
 
 fn summarize_scene_assessment(
@@ -1090,12 +1133,8 @@ fn summarize_scene_assessment(
     cadence_frames: &[Value],
     profile_frames: &[Value],
 ) -> Result<Value> {
-    let cadence_physical = cadence
-        .get("cadence")
-        .ok_or("scene cadence summary has no physical cadence")?;
-    let profile_physical = profile
-        .get("cadence")
-        .ok_or("scene profile summary has no physical cadence")?;
+    let cadence_physical = validated_scene_cadence(&cadence)?;
+    let profile_physical = validated_scene_cadence(&profile)?;
     if cadence_physical
         .get("cadence_authoritative")
         .and_then(Value::as_bool)
@@ -1112,43 +1151,43 @@ fn summarize_scene_assessment(
         .and_then(Value::as_u64)
         .filter(|period| *period > 0)
         .ok_or("scene cadence refresh period is invalid")?;
-    let cadence_repeats = value_u64(cadence_physical, "repeated_refreshes");
-    let profile_repeats = value_u64(profile_physical, "repeated_refreshes");
+    let cadence_dropped_frames = required_u64(cadence_physical, "dropped_frames")?;
+    let profile_dropped_frames = required_u64(profile_physical, "dropped_frames")?;
     let mut failures = Vec::new();
     for (kind, count) in [
-        ("repeated-refreshes", cadence_repeats),
+        ("dropped-frames", cadence_dropped_frames),
         (
-            "sequence-failures",
-            value_u64(cadence_physical, "sequence_failures"),
+            "confirmation-sequence-failures",
+            required_u64(cadence_physical, "confirmation_sequence_failures")?,
         ),
         (
             "latch-drops",
-            value_u64(cadence_physical, "latch_drop_delta"),
+            required_u64(cadence_physical, "latch_drop_delta")?,
         ),
         (
             "completion-failures",
-            value_u64(cadence_physical, "completion_failures"),
+            required_u64(cadence_physical, "completion_failures")?,
         ),
     ] {
         if count > 0 {
             failures.push(json!({"kind": kind, "count": count}));
         }
     }
-    let attribution = if cadence_repeats == 0 && profile_repeats == 0 {
-        "no physical repeated refreshes observed in either pass"
-    } else if cadence_repeats == 0 {
-        "repeats occurred only with SIGPROF enabled; sampling overhead is the likely cause"
+    let attribution = if cadence_dropped_frames == 0 && profile_dropped_frames == 0 {
+        "no dropped frames observed in either pass"
+    } else if cadence_dropped_frames == 0 {
+        "dropped frames occurred only with SIGPROF enabled; sampling overhead is the likely cause"
     } else {
-        "physical repeats occurred in the unprofiled control; inspect repeat contexts and CPU stacks"
+        "dropped frames occurred in the unprofiled control; inspect dropped-frame contexts and CPU stacks"
     };
     Ok(json!({
-        "schema": "mister-magik-scene-lab-assessment-v1",
+        "schema": "mister-magik-scene-lab-assessment-v2",
         "cadence_pass": cadence,
         "profile_pass": profile,
         "cadence_phase_timings": card_phase_summary(cadence_frames),
         "profile_phase_timings": card_phase_summary(profile_frames),
-        "cadence_repeat_contexts": card_repeat_contexts(cadence_frames, refresh_period_us),
-        "profile_repeat_contexts": card_repeat_contexts(profile_frames, refresh_period_us),
+        "cadence_dropped_frame_contexts": dropped_frame_contexts(cadence_frames, refresh_period_us),
+        "profile_dropped_frame_contexts": dropped_frame_contexts(profile_frames, refresh_period_us),
         "cadence_long_confirmation_gaps": card_long_confirmation_gaps(cadence_frames),
         "profile_long_confirmation_gaps": card_long_confirmation_gaps(profile_frames),
         "cadence_pre_post_outliers": card_pre_post_outliers(cadence_frames),
@@ -1160,6 +1199,13 @@ fn summarize_scene_assessment(
 
 fn value_u64(value: &Value, field: &str) -> u64 {
     value.get(field).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn required_u64(value: &Value, field: &str) -> Result<u64> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("scene-lab evidence has no valid {field}").into())
 }
 
 fn card_phase_summary(frames: &[Value]) -> Value {
@@ -1199,7 +1245,7 @@ fn card_phase_summary(frames: &[Value]) -> Value {
     Value::Object(summaries)
 }
 
-fn card_repeat_contexts(frames: &[Value], refresh_period_us: u64) -> Vec<Value> {
+fn dropped_frame_contexts(frames: &[Value], refresh_period_us: u64) -> Vec<Value> {
     frames
         .iter()
         .enumerate()
@@ -1294,16 +1340,24 @@ fn scene_assessment_report(scene: &str, summary: &Value) -> String {
         .and_then(|outlier| outlier.get("frame"))
         .map_or(0, |frame| value_u64(frame, "frame"));
     format!(
-        "# {scene} cadence and CPU assessment\n\n## Physical cadence authority\n\n- Unprofiled physical FPS: {:.3}\n- Unprofiled repeated refreshes: {}\n- Unprofiled sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled repeated refreshes (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
+        "# {scene} cadence and CPU assessment\n\n## Physical cadence authority\n\n- Result: {}\n- Unprofiled physical FPS: {:.3}\n- Unprofiled dropped frames: {}\n- Unprofiled confirmation sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Profiled dropped frames (attribution only): {}\n- Attribution: {}\n\nThe unprofiled confirmation stream is the cadence authority. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Profile frames](profile-frames.jsonl) · [Machine summary](summary.json)\n",
+        if value_u64(cadence, "dropped_frames") == 0 {
+            "PASS — 0 dropped frames".to_string()
+        } else {
+            format!(
+                "FAIL — {} dropped frames",
+                value_u64(cadence, "dropped_frames")
+            )
+        },
         cadence
             .get("unique_fps")
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
-        value_u64(cadence, "repeated_refreshes"),
-        value_u64(cadence, "sequence_failures"),
+        value_u64(cadence, "dropped_frames"),
+        value_u64(cadence, "confirmation_sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
         value_u64(cadence, "completion_failures"),
-        value_u64(profile, "repeated_refreshes"),
+        value_u64(profile, "dropped_frames"),
         summary
             .get("attribution")
             .and_then(Value::as_str)
@@ -1656,6 +1710,22 @@ fn combine_results(run: Result<()>, cleanup: Result<()>) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn scene_pass(authoritative: bool, dropped_frames: u64) -> Value {
+        serde_json::json!({
+            "schema": "mister-magik-scene-lab-measurement-pass-v2",
+            "cadence": {
+                "schema": "mister-magik-scene-lab-cadence-v2",
+                "cadence_authoritative": authoritative,
+                "refresh_period_us": 16_667,
+                "dropped_frames": dropped_frames,
+                "confirmation_sequence_failures": 0,
+                "latch_drop_delta": 0,
+                "completion_failures": 0,
+                "unique_fps": 60.0,
+            }
+        })
+    }
+
     fn hdmi_contracts() -> LabDisplayContracts {
         LabDisplayContracts {
             settings: "schema=1&output=hdmi".into(),
@@ -1858,25 +1928,53 @@ mod tests {
 
     #[test]
     fn sampled_card_pass_cannot_be_cadence_authority() {
-        let cadence = serde_json::json!({
-            "cadence": {
-                "cadence_authoritative": true,
-                "refresh_period_us": 16_667,
-                "repeated_refreshes": 0,
-                "sequence_failures": 0,
-                "latch_drop_delta": 0,
-                "completion_failures": 0,
-                "unique_fps": 60.0,
-            }
-        });
-        let sampled = serde_json::json!({
-            "cadence": {
-                "cadence_authoritative": true,
-                "refresh_period_us": 16_667,
-                "repeated_refreshes": 0,
-            }
-        });
+        let cadence = scene_pass(true, 0);
+        let sampled = scene_pass(true, 0);
         assert!(summarize_scene_assessment(cadence, sampled, &[], &[]).is_err());
+    }
+
+    #[test]
+    fn authoritative_dropped_frames_fail_while_profile_drops_are_attribution_only() {
+        let failed =
+            summarize_scene_assessment(scene_pass(true, 1), scene_pass(false, 0), &[], &[])
+                .unwrap();
+        assert_eq!(
+            failed["qualification_failures"][0]["kind"],
+            "dropped-frames"
+        );
+        assert_eq!(failed["qualification_failures"][0]["count"], 1);
+
+        let attributed =
+            summarize_scene_assessment(scene_pass(true, 0), scene_pass(false, 1), &[], &[])
+                .unwrap();
+        assert_eq!(attributed["qualification_failures"], serde_json::json!([]));
+        assert!(
+            attributed["attribution"]
+                .as_str()
+                .unwrap()
+                .contains("SIGPROF")
+        );
+    }
+
+    #[test]
+    fn old_or_missing_dropped_frame_evidence_is_rejected() {
+        let mut old = scene_pass(true, 0);
+        old["schema"] = serde_json::json!("mister-magik-scene-lab-measurement-pass-v1");
+        assert!(validated_scene_cadence(&old).is_err());
+
+        let mut missing = scene_pass(true, 0);
+        missing["cadence"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dropped_frames");
+        missing["cadence"]["repeated_refreshes"] = serde_json::json!(0);
+        assert!(validated_scene_cadence(&missing).is_err());
+
+        let old_frame = serde_json::json!({
+            "schema": "mister-magik-scene-lab-frame-v1",
+            "frame": 1,
+        });
+        assert!(parse_scene_frames(&old_frame.to_string()).is_err());
     }
 
     #[test]
