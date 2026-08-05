@@ -1,0 +1,31 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "mister-magik-screenshot-parade"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Portable screenshot parade renderer for MiSTer MagiK"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+mister-magik-catalog = { path = "../catalog", default-features = false, features = ["reader"] }
+mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+panic = "abort"
+
+[profile.release-device]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
