@@ -132,13 +132,25 @@ impl PreparedScreenshotCard {
         screen_height: usize,
         profile: ScreenshotSamplingProfile,
     ) -> Self {
+        Self::prepare_timed(source, speed, screen_height, profile).0
+    }
+
+    pub(crate) fn prepare_timed(
+        source: &ScreenshotImage,
+        speed: usize,
+        screen_height: usize,
+        profile: ScreenshotSamplingProfile,
+    ) -> (Self, u128) {
         if source.width == 0 || source.height == 0 {
             let image = ScreenshotImage::empty();
-            return Self {
-                phases: ParadePhaseSet::prepare(&image, profile),
-                image,
-                corner_insets: Vec::new(),
-            };
+            return (
+                Self {
+                    phases: ParadePhaseSet::prepare(&image, profile),
+                    image,
+                    corner_insets: Vec::new(),
+                },
+                0,
+            );
         }
         let (width, height, tint) = scaled_style(source, speed, screen_height);
         let mut image = scale_lanczos3_rgb565_tinted(source, width, height, tint);
@@ -150,12 +162,17 @@ impl PreparedScreenshotCard {
         if depth >= 3 {
             rim_card(&mut image, &corner_insets);
         }
+        let phase_started = std::time::Instant::now();
         let phases = ParadePhaseSet::prepare(&image, profile);
-        Self {
-            image,
-            phases,
-            corner_insets,
-        }
+        let phase_us = phase_started.elapsed().as_micros();
+        (
+            Self {
+                image,
+                phases,
+                corner_insets,
+            },
+            phase_us,
+        )
     }
 
     #[must_use]
@@ -179,7 +196,17 @@ impl PreparedScreenshotCard {
 
     #[must_use]
     pub fn resident_bytes(&self) -> usize {
-        self.image.pixels.len() * size_of::<Rgb565Pixel>() + self.phases.resident_bytes()
+        self.image_resident_bytes() + self.phase_resident_bytes()
+    }
+
+    #[must_use]
+    pub fn image_resident_bytes(&self) -> usize {
+        self.image.pixels.len() * size_of::<Rgb565Pixel>()
+    }
+
+    #[must_use]
+    pub fn phase_resident_bytes(&self) -> usize {
+        self.phases.resident_bytes()
     }
 
     pub fn blit(

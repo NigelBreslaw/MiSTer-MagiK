@@ -10,10 +10,15 @@ use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
+use mister_magik_framebuffer_scenes::{Rgb565Pixel as SharedRgb565Pixel, SceneGeometry};
 use mister_magik_particles::recipes::{embedded_magik_recipe, parse_magik_recipe};
 use mister_magik_particles::reload::{
     LastGoodRecipeFile, ReloadAction, StartupParticleRecipe, StartupParticleStatus,
     publish_startup_particle_status,
+};
+use mister_magik_screenshot_parade::{
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,
+    ScreenshotSamplingProfile,
 };
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
@@ -249,7 +254,9 @@ struct ScreensaverRenderState {
 }
 
 pub struct LauncherScreensaver {
-    parade: ParadeState,
+    parade: Option<ScreenshotParade>,
+    parade_seed: u64,
+    parade_sampling_profile: ParadeSamplingProfile,
     particle: Option<ParticleRenderer>,
     particle_reload: Option<MagikRecipeReload>,
     archive_rx: Option<Receiver<ArchiveLoadResult>>,
@@ -257,7 +264,6 @@ pub struct LauncherScreensaver {
     startup_started_at: Option<Instant>,
     frame: u64,
     motion_started_at: Instant,
-    motion_ticks_fp: u64,
 }
 
 struct MagikRecipeReload {
@@ -447,6 +453,86 @@ pub struct ScreensaverFrameTrace {
     pub(super) particle_renderer_scratch_bytes: usize,
 }
 
+fn shared_sampling_profile(profile: ParadeSamplingProfile) -> ScreenshotSamplingProfile {
+    match profile {
+        ParadeSamplingProfile::LegacyHalf => ScreenshotSamplingProfile::HdmiLegacyHalf,
+        ParadeSamplingProfile::CrtSixteenth => ScreenshotSamplingProfile::CrtSixteenth,
+    }
+}
+
+fn shared_parade_trace(
+    stats: ScreenshotParadeStats,
+    profile: ParadeSamplingProfile,
+) -> ScreensaverFrameTrace {
+    ScreensaverFrameTrace {
+        card_adopt_us: stats.card_adopt_us,
+        cards_adopted: stats.cards_adopted,
+        parade_advance_us: stats.parade_advance_us,
+        background_us: stats.background_us,
+        draw_order_us: stats.draw_order_us,
+        tile_blit_us: stats.tile_blit_us,
+        cards_drawn: stats.cards_drawn,
+        cards_culled: stats.cards_culled,
+        sampling_profile: profile.layer_evidence(),
+        raster_held_cards: stats.raster_held_cards,
+        raster_moved_cards: stats.raster_moved_cards,
+        raster_hold_layer_mask: stats.raster_hold_layer_mask,
+        raster_visible_layer_mask: stats.raster_visible_layer_mask,
+        sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
+        phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
+        ..ScreensaverFrameTrace::default()
+    }
+}
+
+fn log_shared_parade_stats(parade: &ScreenshotParade, profile: ParadeSamplingProfile) {
+    let stats = parade.stats();
+    let scale_average_us = stats.scale_total_us / u128::from(stats.scale_count.max(1));
+    let phase_average_us = stats.phase_total_us / u128::from(stats.phase_count.max(1));
+    crate::ui_logln!(
+        "screensaver_lanczos sampling={} scales={} total_us={} average_us={} max_us={} phase_prepares={} phase_total_us={} phase_average_us={} phase_max_us={} queue_max={} queue_bound={} worker_connected=true phase_cache_bytes={}",
+        profile.label(),
+        stats.scale_count,
+        stats.scale_total_us,
+        scale_average_us,
+        stats.scale_max_us,
+        stats.phase_count,
+        stats.phase_total_us,
+        phase_average_us,
+        stats.phase_max_us,
+        stats.queue_max,
+        parade.queue_bound(),
+        stats.phase_bank_resident_bytes + stats.image_cache_resident_bytes
+    );
+    crate::ui_logln!(
+        "screensaver_archive_runtime entries={} decodes={} failures={} unique_keys={} queue_depth={} queue_max={}",
+        parade.asset_count(),
+        stats.decode_successes,
+        stats.decode_failures,
+        stats.unique_decoded,
+        stats.queue_depth,
+        stats.queue_max
+    );
+}
+
+fn slint_rgb565_as_shared_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
+    assert_eq!(
+        std::mem::size_of::<Rgb565Pixel>(),
+        std::mem::size_of::<SharedRgb565Pixel>()
+    );
+    assert_eq!(
+        std::mem::align_of::<Rgb565Pixel>(),
+        std::mem::align_of::<SharedRgb565Pixel>()
+    );
+    // SAFETY: both RGB565 pixel types are transparent `u16` wrappers with equal
+    // size/alignment, and the mutable slice retains the input slice's lifetime.
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            destination.as_mut_ptr().cast::<SharedRgb565Pixel>(),
+            destination.len(),
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct ParadeAdvanceTrace {
     card_adopt_us: u128,
@@ -462,8 +548,11 @@ impl LauncherScreensaver {
         sampling_profile: ParadeSamplingProfile,
     ) -> Self {
         let now = Instant::now();
+        let parade_seed = random_seed();
         Self {
-            parade: ParadeState::new_with_profile(random_seed(), sampling_profile),
+            parade: None,
+            parade_seed,
+            parade_sampling_profile: sampling_profile,
             particle: None,
             particle_reload: None,
             archive_rx: Some(archive_rx),
@@ -471,7 +560,6 @@ impl LauncherScreensaver {
             startup_started_at,
             frame: 0,
             motion_started_at: now,
-            motion_ticks_fp: 0,
         }
     }
 
@@ -482,7 +570,9 @@ impl LauncherScreensaver {
     ) -> Self {
         let now = Instant::now();
         Self {
-            parade: ParadeState::new_with_profile(random_seed(), ParadeSamplingProfile::LegacyHalf),
+            parade: None,
+            parade_seed: random_seed(),
+            parade_sampling_profile: ParadeSamplingProfile::LegacyHalf,
             particle: Some(renderer),
             particle_reload,
             archive_rx: None,
@@ -490,7 +580,6 @@ impl LauncherScreensaver {
             startup_started_at: None,
             frame: 0,
             motion_started_at: now,
-            motion_ticks_fp: 0,
         }
     }
 
@@ -611,26 +700,39 @@ impl LauncherScreensaver {
                 }
             };
         }
-        let next_motion_ticks_fp = (parade_tick_delta_fp(elapsed) as u64).max(self.motion_ticks_fp);
-        let tick_delta_fp = next_motion_ticks_fp
-            .saturating_sub(self.motion_ticks_fp)
-            .min(i64::MAX as u64) as i64;
-        self.motion_ticks_fp = next_motion_ticks_fp;
         let archive_poll_start = Instant::now();
         self.poll_archive(w, h);
         let archive_poll_us = archive_poll_start.elapsed().as_micros();
-        let mut trace = render_archive_parade(
-            dst,
-            &mut self.parade,
-            w,
-            h,
-            self.motion_ticks_fp,
-            tick_delta_fp,
-        );
+        let mut trace = if let Some(parade) = self.parade.as_mut() {
+            match parade.render_at(slint_rgb565_as_shared_mut(dst), elapsed) {
+                Ok(stats) => {
+                    if parade.is_ready() {
+                        if let Some(started) = self.startup_started_at.take() {
+                            crate::ui_logln!(
+                                "screensaver_startup_timing milestone=first_card_ready elapsed_us={} layer={}",
+                                started.elapsed().as_micros(),
+                                parade.first_ready_layer().unwrap_or_default()
+                            );
+                        }
+                    }
+                    shared_parade_trace(stats, self.parade_sampling_profile)
+                }
+                Err(error) => {
+                    dst.fill(Rgb565Pixel(0));
+                    crate::ui_errln!("screenshot parade render failed: {error}");
+                    ScreensaverFrameTrace::default()
+                }
+            }
+        } else {
+            dst.fill(Rgb565Pixel(0));
+            ScreensaverFrameTrace::default()
+        };
         trace.renderer = "parade";
         trace.archive_poll_us = archive_poll_us;
         if self.frame > 0 && self.frame % 600 == 0 {
-            self.parade.log_scaler_stats();
+            if let Some(parade) = self.parade.as_ref() {
+                log_shared_parade_stats(parade, self.parade_sampling_profile);
+            }
         }
         self.frame = self.frame.wrapping_add(1);
         trace
@@ -659,13 +761,32 @@ impl LauncherScreensaver {
                     loaded.open_us,
                     loaded.open_us
                 );
-                let mut parade = ParadeState::new_with_archive(
-                    random_seed(),
+                let geometry = match SceneGeometry::new(w, h, w) {
+                    Ok(geometry) => geometry,
+                    Err(error) => {
+                        crate::ui_errln!("screensaver geometry failed: {error}");
+                        self.archive_rx = None;
+                        return;
+                    }
+                };
+                let worker_start = Arc::new(|| {
+                    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                        mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+                    );
+                });
+                match ScreenshotParade::new(
                     loaded.archive,
-                    self.parade.sampling_profile,
-                );
-                parade.begin_archive_streaming(loaded.asset_keys, w, h, self.startup_started_at);
-                self.parade = parade;
+                    ScreenshotParadeConfig {
+                        geometry,
+                        seed: self.parade_seed,
+                        sampling_profile: shared_sampling_profile(self.parade_sampling_profile),
+                        startup: ScreenshotParadeStartup::Streaming,
+                        worker_start: Some(worker_start),
+                    },
+                ) {
+                    Ok(parade) => self.parade = Some(parade),
+                    Err(error) => crate::ui_errln!("screensaver initialization failed: {error}"),
+                }
                 self.archive_rx = None;
             }
             Ok(Err(error)) => {
@@ -683,7 +804,7 @@ impl LauncherScreensaver {
         if self.particle.is_some() {
             return true;
         }
-        self.parade.tiles.iter().any(|tile| tile.active)
+        self.parade.as_ref().is_some_and(ScreenshotParade::is_ready)
     }
 
     pub fn is_loading_archive(&self) -> bool {
@@ -697,11 +818,15 @@ impl LauncherScreensaver {
         if self.particle.is_some() {
             return 0;
         }
-        self.parade.tiles.iter().filter(|tile| tile.active).count()
+        self.parade
+            .as_ref()
+            .map_or(0, ScreenshotParade::active_card_count)
     }
 
     pub fn has_pending_card_work(&self) -> bool {
-        self.parade.scale_queue_depth > 0
+        self.parade
+            .as_ref()
+            .is_some_and(ScreenshotParade::has_pending_work)
     }
 
     pub fn requires_direct_hidden(&self) -> bool {
@@ -724,13 +849,24 @@ impl LauncherScreensaver {
         crt_output: bool,
     ) -> Result<Self, String> {
         let archive = preview_worker::ResidentPreviewArchive::open(path)?;
-        let asset_keys = archive.asset_keys().to_vec();
         let sampling_profile = ParadeSamplingProfile::for_crt_output(crt_output);
-        let mut parade = ParadeState::new_with_archive(seed, archive, sampling_profile);
-        parade.begin_archive_streaming(asset_keys, width, height, None);
+        let geometry =
+            SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+        let parade = ScreenshotParade::new(
+            archive,
+            ScreenshotParadeConfig {
+                geometry,
+                seed,
+                sampling_profile: shared_sampling_profile(sampling_profile),
+                startup: ScreenshotParadeStartup::Streaming,
+                worker_start: None,
+            },
+        )?;
         let now = Instant::now();
         Ok(Self {
-            parade,
+            parade: Some(parade),
+            parade_seed: seed,
+            parade_sampling_profile: sampling_profile,
             particle: None,
             particle_reload: None,
             archive_rx: None,
@@ -738,7 +874,6 @@ impl LauncherScreensaver {
             startup_started_at: None,
             frame: 0,
             motion_started_at: now,
-            motion_ticks_fp: 0,
         })
     }
 }
@@ -2832,6 +2967,7 @@ impl ParadeState {
         Self::new_with_source(seed, motion, sampling_profile, None)
     }
 
+    #[cfg(test)]
     fn new_with_archive(
         seed: u64,
         archive: preview_worker::ResidentPreviewArchive,
@@ -2945,6 +3081,7 @@ impl ParadeState {
         }
     }
 
+    #[cfg(test)]
     fn ensure_archive_initialized_cancellable(
         &mut self,
         asset_keys: Vec<String>,
@@ -3023,6 +3160,7 @@ impl ParadeState {
         true
     }
 
+    #[cfg(test)]
     fn begin_archive_streaming(
         &mut self,
         asset_keys: Vec<String>,
@@ -3935,6 +4073,7 @@ fn render_parade(
     }
 }
 
+#[cfg(test)]
 fn render_archive_parade(
     dst: &mut [Rgb565Pixel],
     state: &mut ParadeState,
@@ -4273,6 +4412,100 @@ mod tests {
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&pixels);
         std::fs::write(path, bytes).expect("write production screensaver archive fixture");
+    }
+
+    fn write_parade_archive(path: &std::path::Path, count: usize) {
+        let names = (0..count)
+            .map(|index| format!("fixture-{index:03}.rgb565"))
+            .collect::<Vec<_>>();
+        let header_len = 8 + 4;
+        let entry_len = |name: &str| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let index_len = header_len + names.iter().map(|name| entry_len(name)).sum::<usize>();
+        let mut offset = index_len as u64;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MMPX2B1\0");
+        bytes.extend_from_slice(&(count as u32).to_le_bytes());
+        for name in &names {
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&4_u32.to_le_bytes());
+            bytes.extend_from_slice(&4_u32.to_le_bytes());
+            bytes.extend_from_slice(&8_u32.to_le_bytes());
+            bytes.extend_from_slice(&32_u32.to_le_bytes());
+            bytes.push(1);
+            bytes.extend_from_slice(&32_u32.to_le_bytes());
+            bytes.extend_from_slice(&offset.to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            offset += 32;
+        }
+        for image in 0..count {
+            for pixel in 0..16_u16 {
+                let value = (image as u16).wrapping_mul(97).wrapping_add(pixel * 31);
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        std::fs::write(path, bytes).expect("write screenshot parade archive fixture");
+    }
+
+    #[test]
+    fn shared_parade_matches_private_renderer_at_fixed_seeds_and_times() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-shared-parade-parity-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_parade_archive(&path, 220);
+        let seed = 0x4d61_6769_4b54_696c;
+        for (width, height, profile) in [
+            (960, 540, ParadeSamplingProfile::LegacyHalf),
+            (640, 480, ParadeSamplingProfile::CrtSixteenth),
+        ] {
+            let archive = preview_worker::ResidentPreviewArchive::open(&path).unwrap();
+            let keys = archive.asset_keys().to_vec();
+            let mut private = ParadeState::new_with_archive(seed, archive, profile);
+            assert!(private.ensure_archive_initialized_cancellable(
+                keys,
+                width,
+                height,
+                &AtomicBool::new(false)
+            ));
+            let archive = preview_worker::ResidentPreviewArchive::open(&path).unwrap();
+            let geometry = SceneGeometry::new(width, height, width).unwrap();
+            let mut shared = ScreenshotParade::new(
+                archive,
+                ScreenshotParadeConfig {
+                    geometry,
+                    seed,
+                    sampling_profile: shared_sampling_profile(profile),
+                    startup: ScreenshotParadeStartup::Prepared,
+                    worker_start: None,
+                },
+            )
+            .unwrap();
+            let mut private_pixels = vec![Rgb565Pixel(0); width * height];
+            let mut shared_pixels = vec![SharedRgb565Pixel(0); width * height];
+            let mut previous_ticks = 0_u64;
+            for milliseconds in [0_u64, 17, 33, 250, 1_000] {
+                let elapsed = Duration::from_millis(milliseconds);
+                let ticks = parade_tick_delta_fp(elapsed) as u64;
+                let _ = render_archive_parade(
+                    &mut private_pixels,
+                    &mut private,
+                    width,
+                    height,
+                    ticks,
+                    ticks.saturating_sub(previous_ticks) as i64,
+                );
+                shared.render_at(&mut shared_pixels, elapsed).unwrap();
+                assert!(
+                    private_pixels
+                        .iter()
+                        .zip(&shared_pixels)
+                        .all(|(private, shared)| private.0 == shared.0),
+                    "parade pixels differ at {width}x{height} time={milliseconds}ms"
+                );
+                previous_ticks = ticks;
+            }
+        }
+        let _ = std::fs::remove_file(path);
     }
 
     fn test_images(count: usize) -> Vec<SaverImage> {

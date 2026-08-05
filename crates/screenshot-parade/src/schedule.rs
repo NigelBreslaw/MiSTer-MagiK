@@ -71,9 +71,13 @@ pub struct ScreenshotParadeStats {
     pub raster_visible_layer_mask: u8,
     pub sixteenth_phase_layer_mask: u8,
     pub phase_bank_resident_bytes: usize,
+    pub image_cache_resident_bytes: usize,
     pub scale_count: u64,
     pub scale_total_us: u128,
     pub scale_max_us: u128,
+    pub phase_count: u64,
+    pub phase_total_us: u128,
+    pub phase_max_us: u128,
     pub decode_successes: u64,
     pub decode_failures: u64,
     pub unique_decoded: usize,
@@ -95,6 +99,7 @@ struct PreparedCard {
     image_index: usize,
     raster: PreparedScreenshotCard,
     scale_us: u128,
+    phase_us: u128,
 }
 
 struct Tile {
@@ -168,6 +173,9 @@ pub struct ScreenshotParade {
     scale_count: u64,
     scale_total_us: u128,
     scale_max_us: u128,
+    phase_count: u64,
+    phase_total_us: u128,
+    phase_max_us: u128,
     decode_successes: u64,
     decode_failures: u64,
     scale_tx: Sender<ScaleJob>,
@@ -225,6 +233,9 @@ impl ScreenshotParade {
             scale_count: 0,
             scale_total_us: 0,
             scale_max_us: 0,
+            phase_count: 0,
+            phase_total_us: 0,
+            phase_max_us: 0,
             decode_successes: 0,
             decode_failures: 0,
             scale_tx,
@@ -277,8 +288,26 @@ impl ScreenshotParade {
     }
 
     #[must_use]
+    pub fn active_card_count(&self) -> usize {
+        self.tiles.iter().filter(|tile| tile.active).count()
+    }
+
+    #[must_use]
+    pub fn first_ready_layer(&self) -> Option<usize> {
+        self.tiles
+            .iter()
+            .find(|tile| tile.active)
+            .map(|tile| tile.layer)
+    }
+
+    #[must_use]
     pub const fn compressed_bytes(&self) -> usize {
         self.compressed_bytes
+    }
+
+    #[must_use]
+    pub fn queue_bound(&self) -> usize {
+        self.layer_targets.iter().sum()
     }
 
     #[must_use]
@@ -361,9 +390,13 @@ impl ScreenshotParade {
             raster_visible_layer_mask,
             sixteenth_phase_layer_mask: self.sixteenth_phase_layer_mask(),
             phase_bank_resident_bytes: self.phase_bank_resident_bytes(),
+            image_cache_resident_bytes: self.image_cache_resident_bytes(),
             scale_count: self.scale_count,
             scale_total_us: self.scale_total_us,
             scale_max_us: self.scale_max_us,
+            phase_count: self.phase_count,
+            phase_total_us: self.phase_total_us,
+            phase_max_us: self.phase_max_us,
             decode_successes: self.decode_successes,
             decode_failures: self.decode_failures,
             unique_decoded: self.unique_decoded.len(),
@@ -714,6 +747,9 @@ impl ScreenshotParade {
         self.scale_count += 1;
         self.scale_total_us += card.scale_us;
         self.scale_max_us = self.scale_max_us.max(card.scale_us);
+        self.phase_count += 1;
+        self.phase_total_us += card.phase_us;
+        self.phase_max_us = self.phase_max_us.max(card.phase_us);
         self.decode_successes += 1;
         self.unique_decoded.insert(card.image_index);
     }
@@ -875,11 +911,24 @@ impl ScreenshotParade {
         self.tiles
             .iter()
             .map(|tile| {
-                tile.raster.resident_bytes()
+                tile.raster.phase_resident_bytes()
                     + tile
                         .next
                         .as_ref()
-                        .map_or(0, |next| next.raster.resident_bytes())
+                        .map_or(0, |next| next.raster.phase_resident_bytes())
+            })
+            .sum()
+    }
+
+    fn image_cache_resident_bytes(&self) -> usize {
+        self.tiles
+            .iter()
+            .map(|tile| {
+                tile.raster.image_resident_bytes()
+                    + tile
+                        .next
+                        .as_ref()
+                        .map_or(0, |next| next.raster.image_resident_bytes())
             })
             .sum()
     }
@@ -918,7 +967,7 @@ fn run_scale_worker(
         let started = Instant::now();
         let card = archive.load_pixels_at(job.image_index).map(|pixels| {
             let source = ScreenshotImage::from_preview(pixels);
-            let raster = PreparedScreenshotCard::prepare(
+            let (raster, phase_us) = PreparedScreenshotCard::prepare_timed(
                 &source,
                 job.speed,
                 job.screen_height,
@@ -928,6 +977,7 @@ fn run_scale_worker(
                 image_index: job.image_index,
                 raster,
                 scale_us: started.elapsed().as_micros(),
+                phase_us,
             }
         });
         if results
