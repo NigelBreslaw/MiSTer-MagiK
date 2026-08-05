@@ -70,7 +70,7 @@ impl PreparedStartupIntro {
             completed: false,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
-            skipped_refreshes: 0,
+            dropped_frames: 0,
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
@@ -95,7 +95,7 @@ pub(super) struct StartupIntroSession {
     completed: bool,
     confirmed_frames: u64,
     expected_refresh_intervals: u64,
-    skipped_refreshes: u64,
+    dropped_frames: u64,
     pacing_failures: u64,
     max_confirmation_gap_us: u64,
     last_confirmed_at: Option<Instant>,
@@ -114,7 +114,7 @@ pub(super) struct StartupIntroCadence {
     pub(super) confirmed_frames: u64,
     pub(super) cabinet_wait_frames: u64,
     pub(super) expected_refresh_intervals: u64,
-    pub(super) skipped_refreshes: u64,
+    pub(super) dropped_frames: u64,
     pub(super) pacing_failures: u64,
     pub(super) max_confirmation_gap_us: u64,
 }
@@ -266,9 +266,9 @@ impl StartupIntroSession {
     }
 
     /// Advances only after the latch reports this sequence active at the
-    /// physical scanout boundary. Latch protocol drops and missed refreshes
-    /// are deliberately separate signals: a healthy latch may still repeat a
-    /// frame when rendering takes longer than one refresh interval.
+    /// physical scanout boundary. Latch protocol drops and dropped frames are
+    /// deliberately separate signals: a healthy latch may still miss a
+    /// presentation deadline when rendering takes longer than one refresh.
     pub(super) fn note_confirmed_present(
         &mut self,
         confirmed_at: Instant,
@@ -291,8 +291,8 @@ impl StartupIntroSession {
             let expected = expected_refresh_intervals(gap_us, refresh_period_us);
             self.expected_refresh_intervals =
                 self.expected_refresh_intervals.saturating_add(expected);
-            self.skipped_refreshes = self
-                .skipped_refreshes
+            self.dropped_frames = self
+                .dropped_frames
                 .saturating_add(expected.saturating_sub(1));
         }
         let refresh_period = Duration::from_micros(self.refresh_period_us);
@@ -315,7 +315,7 @@ impl StartupIntroSession {
             confirmed_frames: self.confirmed_frames,
             cabinet_wait_frames: self.waiting_frames,
             expected_refresh_intervals: self.expected_refresh_intervals,
-            skipped_refreshes: self.skipped_refreshes,
+            dropped_frames: self.dropped_frames,
             pacing_failures: self.pacing_failures,
             max_confirmation_gap_us: self.max_confirmation_gap_us,
         }
@@ -437,7 +437,7 @@ mod tests {
             completed: false,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
-            skipped_refreshes: 0,
+            dropped_frames: 0,
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
@@ -596,16 +596,16 @@ mod tests {
         let (exact_session, exact) = run(None);
         assert_eq!(exact.confirmed_frames, 1_200);
         assert_eq!(exact.expected_refresh_intervals, 1_199);
-        assert_eq!(exact.skipped_refreshes, 0);
+        assert_eq!(exact.dropped_frames, 0);
         assert_eq!(exact.pacing_failures, 0);
         assert_eq!(exact_session.elapsed(), FINAL_ELAPSED);
 
-        let (skipped_session, skipped) = run(Some(600));
-        assert_eq!(skipped.confirmed_frames, 1_200);
-        assert_eq!(skipped.expected_refresh_intervals, 1_200);
-        assert_eq!(skipped.skipped_refreshes, 1);
-        assert_eq!(skipped.pacing_failures, 0);
-        assert_eq!(skipped_session.elapsed(), FINAL_ELAPSED);
+        let (dropped_session, dropped) = run(Some(600));
+        assert_eq!(dropped.confirmed_frames, 1_200);
+        assert_eq!(dropped.expected_refresh_intervals, 1_200);
+        assert_eq!(dropped.dropped_frames, 1);
+        assert_eq!(dropped.pacing_failures, 0);
+        assert_eq!(dropped_session.elapsed(), FINAL_ELAPSED);
     }
 
     #[test]

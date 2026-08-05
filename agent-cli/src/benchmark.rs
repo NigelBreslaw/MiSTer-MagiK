@@ -823,7 +823,7 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
         != Some(true)
     {
         return Err(format!(
-            "startup intro skipped physical refreshes; cadence={}",
+            "startup intro failed dropped-frame qualification; cadence={}",
             summary
                 .pointer("/startup_intro/cadence")
                 .cloned()
@@ -1058,18 +1058,18 @@ mod tests {
         empty["catalog"]["systems"] = json!([]);
         assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
 
-        let mut skipped = json!({
+        let mut dropped = json!({
             "scenario": "catalog-lifecycle",
             "catalog": {"valid": true, "systems": [{"system": "arcade"}]},
             "startup_intro": {
-                "cadence": {"qualified": false, "skipped_refreshes": 1},
-                "latch_protocol": {"qualified": true, "drop_delta": 0}
+                "cadence": {"qualified": false, "dropped_frames": 1},
+                "latch_protocol": {"qualified": true, "latch_drop_delta": 0}
             }
         });
-        assert!(evaluate_catalog_lifecycle_summary(&skipped).is_err());
-        skipped["startup_intro"]["cadence"]["qualified"] = json!(true);
-        skipped["startup_intro"]["latch_protocol"]["qualified"] = json!(false);
-        assert!(evaluate_catalog_lifecycle_summary(&skipped).is_err());
+        assert!(evaluate_catalog_lifecycle_summary(&dropped).is_err());
+        dropped["startup_intro"]["cadence"]["qualified"] = json!(true);
+        dropped["startup_intro"]["latch_protocol"]["qualified"] = json!(false);
+        assert!(evaluate_catalog_lifecycle_summary(&dropped).is_err());
     }
 
     #[test]

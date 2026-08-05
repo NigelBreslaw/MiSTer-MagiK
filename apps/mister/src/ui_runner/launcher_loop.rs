@@ -6552,11 +6552,11 @@ pub(super) fn run_launcher_loop(
                         start,
                         "startup_intro_completed",
                         format!(
-                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} skipped_refreshes={} pacing_failures={} max_confirmation_gap_us={}",
+                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} dropped_frames={} pacing_failures={} max_confirmation_gap_us={}",
                             cadence.confirmed_frames,
                             cadence.cabinet_wait_frames,
                             cadence.expected_refresh_intervals,
-                            cadence.skipped_refreshes,
+                            cadence.dropped_frames,
                             cadence.pacing_failures,
                             cadence.max_confirmation_gap_us,
                         ),

@@ -4426,7 +4426,7 @@ fn profile_installed_catalog_lifecycle(
             format!("{}\n", serde_json::to_string_pretty(&final_status)?),
         )?;
         Ok(json!({
-            "schema": "mister-magik-installed-benchmark-v1",
+            "schema": "mister-magik-installed-benchmark-v2",
             "scenario": "catalog-lifecycle",
             "elapsed_ms": complete_ms,
             "timing": {
@@ -6214,7 +6214,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         .ok_or("startup intro telemetry has no physical refresh period")?;
     let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
     let physical_refresh = physical_refresh_summary(0, &selected, refresh_period_us)?;
-    let skipped_refreshes = physical_refresh
+    let dropped_frames = physical_refresh
         .get("repeated_refreshes")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
@@ -6270,7 +6270,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         .unwrap_or(f64::INFINITY);
     let cabinet_wait_frames = selected.len().saturating_sub(expected_intro_frames);
     let cadence_qualified = selected.len() >= expected_intro_frames
-        && skipped_refreshes == 0
+        && dropped_frames == 0
         && long_completion_intervals == 0
         && frame_id_gaps == 0
         && pacing_failures == 0
@@ -6279,7 +6279,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         latch_drop_delta == 0 && latch_completion_failures == 0 && sequence_gaps == 0;
 
     Ok(json!({
-        "schema": "mister-magik-startup-intro-qualification-v2",
+        "schema": "mister-magik-startup-intro-qualification-v3",
         "route": output_route,
         "framebuffer": {
             "width": framebuffer_width,
@@ -6297,7 +6297,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         "cabinet_wait_frames": cabinet_wait_frames,
         "cadence": {
             "qualified": cadence_qualified,
-            "skipped_refreshes": skipped_refreshes,
+            "dropped_frames": dropped_frames,
             "frame_id_gaps": frame_id_gaps,
             "pacing_failures": pacing_failures,
             "long_completion_intervals": long_completion_intervals,
@@ -6305,7 +6305,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         },
         "latch_protocol": {
             "qualified": latch_qualified,
-            "drop_delta": latch_drop_delta,
+            "latch_drop_delta": latch_drop_delta,
             "completion_failures": latch_completion_failures,
             "sequence_gaps": sequence_gaps,
             "extra_completion_status_reads": extra_completion_status_reads,
@@ -6331,8 +6331,8 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .pointer("/startup_intro/cadence/qualified")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let skipped_refreshes = summary
-        .pointer("/startup_intro/cadence/skipped_refreshes")
+    let dropped_frames = summary
+        .pointer("/startup_intro/cadence/dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
     let cabinet_wait_frames = summary
@@ -6376,7 +6376,7 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let latch_drop_delta = summary
-        .pointer("/startup_intro/latch_protocol/drop_delta")
+        .pointer("/startup_intro/latch_protocol/latch_drop_delta")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
     let result = if cadence_qualified && latch_qualified {
@@ -6385,8 +6385,13 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         "failed"
     };
     let mut report = format!(
-        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Route: {intro_route}\n- Framebuffer: {framebuffer_width}x{framebuffer_height}\n- Particle density: {particle_density}\n- Logical elapsed: {intro_elapsed_ms} ms\n- Expected/captured frames: {expected_frames}/{captured_frames}\n- Cadence qualified: {cadence_qualified}\n- Skipped refreshes: {skipped_refreshes}\n- Cabinet wait frames: {cabinet_wait_frames}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: a zero latch-drop delta does not imply zero skipped refreshes.\n\n## Systems\n\n",
-        systems.len()
+        "# Catalog Lifecycle Benchmark\n\n- Result: {result}\n- Elapsed: {elapsed_ms} ms\n- Total games: {total_games}\n- Systems: {}\n\n## Startup intro\n\n- Route: {intro_route}\n- Framebuffer: {framebuffer_width}x{framebuffer_height}\n- Particle density: {particle_density}\n- Logical elapsed: {intro_elapsed_ms} ms\n- Expected/captured frames: {expected_frames}/{captured_frames}\n- Cadence result: {}\n- Cadence qualified: {cadence_qualified}\n- Dropped frames: {dropped_frames}\n- Cabinet wait frames: {cabinet_wait_frames}\n- Unique physical FPS: {unique_fps:.6}\n- Latch protocol qualified: {latch_qualified}\n- Latch drop delta: {latch_drop_delta}\n\nThese are independent gates: zero latch drops do not imply zero dropped frames.\n\n## Systems\n\n",
+        systems.len(),
+        if dropped_frames == 0 {
+            "PASS — 0 dropped frames".to_string()
+        } else {
+            format!("FAIL — {dropped_frames} dropped frames")
+        }
     );
     for system in systems {
         report.push_str(&format!(
@@ -16543,7 +16548,7 @@ H: Handlers=event3 js0"#
         assert_eq!(passing_50["cadence"]["qualified"], true);
         assert_eq!(passing_50["latch_protocol"]["qualified"], true);
 
-        let skipped = summarize_startup_intro_telemetry(
+        let dropped = summarize_startup_intro_telemetry(
             &telemetry(
                 "crt-288p50",
                 640,
@@ -16553,10 +16558,10 @@ H: Handlers=event3 js0"#
             &display("crt-288p50", 640, 288),
         )
         .unwrap();
-        assert_eq!(skipped["cadence"]["qualified"], false);
-        assert_eq!(skipped["cadence"]["skipped_refreshes"], 1);
-        assert_eq!(skipped["latch_protocol"]["qualified"], true);
-        assert_eq!(skipped["latch_protocol"]["drop_delta"], 0);
+        assert_eq!(dropped["cadence"]["qualified"], false);
+        assert_eq!(dropped["cadence"]["dropped_frames"], 1);
+        assert_eq!(dropped["latch_protocol"]["qualified"], true);
+        assert_eq!(dropped["latch_protocol"]["latch_drop_delta"], 0);
 
         for failure in ["pacing", "confirmation", "drop"] {
             let failed = summarize_startup_intro_telemetry(
