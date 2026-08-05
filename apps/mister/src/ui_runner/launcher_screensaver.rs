@@ -2481,6 +2481,11 @@ const PARADE_COMPACT_LAYER_TARGETS: [usize; 5] = [25, 18, 15, 12, 9];
 // and leaves one slower whole-pixel speed for the star field.
 const PARADE_LAYER_SPEEDS: [usize; 5] = [2, 3, 4, 5, 6];
 const PARADE_REFERENCE_HEIGHT: usize = 540;
+// Preserve edge-to-edge travel time at every geometry, using velocities that
+// are 25% slower than the former 1920x1080 reference behavior.
+const PARADE_REFERENCE_WIDTH: usize = 1920;
+const PARADE_CARD_SPEED_NUMERATOR: i64 = 3;
+const PARADE_CARD_SPEED_DENOMINATOR: i64 = 4;
 const PARADE_MAX_CARD_ADOPTIONS_PER_FRAME: usize = 1;
 const PARADE_REFERENCE_HZ: u64 = 60;
 const PARADE_TICK_ONE: i64 = 1 << 16;
@@ -2563,20 +2568,24 @@ impl ParadeMotion {
         }
     }
 
-    fn card_velocity_fp(self, layer_idx: usize, screen_h: usize) -> i64 {
-        let reference = match self {
-            Self::Integer => PARADE_LAYER_SPEEDS[layer_idx] as i64 * PARADE_SUBPIXEL_ONE,
-            Self::Subpixel => (layer_idx as i64 + 1) * PARADE_SUBPIXEL_ONE / 2,
+    fn card_velocity_fp(self, layer_idx: usize, screen_w: usize) -> i64 {
+        let reference_1080p = match self {
+            Self::Integer => PARADE_LAYER_SPEEDS[layer_idx] as i64 * PARADE_SUBPIXEL_ONE * 2,
+            Self::Subpixel => (layer_idx as i64 + 1) * PARADE_SUBPIXEL_ONE,
         };
-        scale_parade_velocity(reference, screen_h)
+        scale_parade_velocity(reference_1080p, screen_w)
     }
 }
 
-fn scale_parade_velocity(reference_fp: i64, screen_h: usize) -> i64 {
-    reference_fp
-        .saturating_mul(screen_h as i64)
-        .saturating_add((PARADE_REFERENCE_HEIGHT / 2) as i64)
-        .checked_div(PARADE_REFERENCE_HEIGHT as i64)
+fn scale_parade_velocity(reference_1080p_fp: i64, screen_w: usize) -> i64 {
+    let slowed_reference = reference_1080p_fp
+        .saturating_mul(PARADE_CARD_SPEED_NUMERATOR)
+        .checked_div(PARADE_CARD_SPEED_DENOMINATOR)
+        .unwrap_or(1);
+    slowed_reference
+        .saturating_mul(screen_w as i64)
+        .saturating_add((PARADE_REFERENCE_WIDTH / 2) as i64)
+        .checked_div(PARADE_REFERENCE_WIDTH as i64)
         .unwrap_or(1)
         .max(1)
 }
@@ -3102,7 +3111,7 @@ impl ParadeState {
         }
         for (layer_idx, target) in self.layer_targets.into_iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx, h);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, w);
             let (tile_w, _, _) = parade_depth_style(speed, h);
             let interval_frames = parade_layer_interval_frames(w, tile_w, velocity_fp, target);
             let phase = self.random_below(interval_frames as usize) as u64;
@@ -3183,7 +3192,7 @@ impl ParadeState {
         }
         for layer_idx in (0..PARADE_SPEED_COUNT).rev() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx, screen_h);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, screen_w);
             let (tile_w, _, _) = parade_depth_style(speed, screen_h);
             let interval_frames = parade_layer_interval_frames(
                 screen_w,
@@ -3218,7 +3227,7 @@ impl ParadeState {
             y: 0,
             layer: speed,
             speed,
-            velocity_fp: self.motion.card_velocity_fp(layer_idx, self.screen_h),
+            velocity_fp: self.motion.card_velocity_fp(layer_idx, self.screen_w),
             velocity_remainder: 0,
             image_idx: usize::MAX,
             scaled,
@@ -3309,7 +3318,7 @@ impl ParadeState {
         self.image_count = image_count;
         for (layer_idx, target) in self.layer_targets.into_iter().enumerate() {
             let speed = PARADE_MIN_TILE_SPEED + layer_idx;
-            let velocity_fp = self.motion.card_velocity_fp(layer_idx, h);
+            let velocity_fp = self.motion.card_velocity_fp(layer_idx, w);
             let (tile_w, _, _) = parade_depth_style(speed, h);
             let interval_frames = parade_layer_interval_frames(w, tile_w, velocity_fp, target);
             let phase = self.random_below(interval_frames as usize) as u64;
@@ -3809,7 +3818,7 @@ impl ParadeState {
                 "screensaver_parade_layer motion={} layer={} velocity_px={:.2} size={}x{} target={} interval_ms={} spawns={} average_active={:.2}",
                 self.motion.label(),
                 speed,
-                self.motion.card_velocity_fp(layer_idx, self.screen_h) as f64
+                self.motion.card_velocity_fp(layer_idx, self.screen_w) as f64
                     / PARADE_SUBPIXEL_ONE as f64,
                 w,
                 h,
@@ -4877,9 +4886,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_half_reports_the_known_720p_slow_layer_holds() {
+    fn legacy_half_reports_the_known_720_pixel_wide_slow_layer_holds() {
         let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(0, 720);
-        assert_eq!(velocity_fp, 171);
+        assert_eq!(velocity_fp, 72);
         let mut x_fp = 0;
         let mut previous = parade_raster_phase_key(ParadeSamplingProfile::LegacyHalf, x_fp);
         let mut held = 0;
@@ -4889,11 +4898,11 @@ mod tests {
             held += usize::from(current == previous);
             previous = current;
         }
-        assert_eq!(held, 20);
+        assert_eq!(held, 41);
     }
 
     #[test]
-    fn sixteenth_phases_move_the_720p_slow_layer_every_frame() {
+    fn sixteenth_phases_move_the_720_pixel_wide_slow_layer_every_frame() {
         let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(0, 720);
         let profile = ParadeSamplingProfile::LegacyHalf.for_layer(PARADE_MIN_TILE_SPEED);
         let mut x_fp = 0;
@@ -5166,7 +5175,7 @@ mod tests {
     fn both_motion_modes_advance_every_card_on_every_frame() {
         for motion in [ParadeMotion::Integer, ParadeMotion::Subpixel] {
             for layer_idx in 0..PARADE_SPEED_COUNT {
-                let velocity = motion.card_velocity_fp(layer_idx, PARADE_REFERENCE_HEIGHT);
+                let velocity = motion.card_velocity_fp(layer_idx, PARADE_REFERENCE_WIDTH);
                 assert!(velocity > 0);
                 let positions = (0..4).map(|frame| frame * velocity).collect::<Vec<_>>();
                 assert!(positions.windows(2).all(|pair| pair[0] != pair[1]));
@@ -5175,29 +5184,26 @@ mod tests {
     }
 
     #[test]
-    fn parade_velocity_uses_the_required_framebuffer_height_ratios() {
-        let reference = PARADE_REFERENCE_HEIGHT as i64 * PARADE_SUBPIXEL_ONE;
-        for (height, numerator, denominator) in [
-            (240, 4, 9),
-            (288, 8, 15),
-            (384, 32, 45),
-            (480, 8, 9),
-            (540, 1, 1),
-            (600, 10, 9),
-            (768, 64, 45),
+    fn parade_velocity_uses_the_slowed_1080p_width_ratios() {
+        let reference_1080p = 4 * PARADE_SUBPIXEL_ONE;
+        for (width, expected) in [
+            (320, PARADE_SUBPIXEL_ONE / 2),
+            (640, PARADE_SUBPIXEL_ONE),
+            (960, PARADE_SUBPIXEL_ONE * 3 / 2),
+            (1280, PARADE_SUBPIXEL_ONE * 2),
+            (1440, PARADE_SUBPIXEL_ONE * 9 / 4),
+            (1920, PARADE_SUBPIXEL_ONE * 3),
         ] {
-            let scaled = scale_parade_velocity(reference, height);
-            assert_eq!(scaled, height as i64 * PARADE_SUBPIXEL_ONE);
             assert_eq!(
-                scaled * denominator,
-                reference * numerator,
-                "incorrect motion ratio at {height}p"
+                scale_parade_velocity(reference_1080p, width),
+                expected,
+                "incorrect motion ratio at {width}px wide"
             );
         }
     }
 
-    fn one_second_card_travel(refresh_hz: u64, screen_h: usize) -> (i64, i64, u64) {
-        let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(3, screen_h);
+    fn one_second_card_travel(refresh_hz: u64, screen_w: usize) -> (i64, i64, u64) {
+        let velocity_fp = ParadeMotion::Subpixel.card_velocity_fp(3, screen_w);
         let mut x_fp = 0_i64;
         let mut remainder = 0_i64;
         let mut previous_ticks = 0_u64;
@@ -5217,16 +5223,18 @@ mod tests {
 
     #[test]
     fn parade_motion_is_identical_after_one_second_at_50_and_60_hz() {
-        for height in [240, 288, 384, 480, 540, 600, 768] {
-            let at_50_hz = one_second_card_travel(50, height);
-            let at_60_hz = one_second_card_travel(60, height);
-            assert_eq!(at_50_hz, at_60_hz, "card travel differs at {height}p");
+        for width in [320, 640, 720, 960, 1280, 1440, 1920] {
+            let at_50_hz = one_second_card_travel(50, width);
+            let at_60_hz = one_second_card_travel(60, width);
+            assert_eq!(at_50_hz, at_60_hz, "card travel differs at {width}px wide");
 
-            let star_at_50_hz = horizontal_star_position(3, 4_096, height, at_50_hz.2);
-            let star_at_60_hz = horizontal_star_position(3, 4_096, height, at_60_hz.2);
+            let star_at_50_hz =
+                horizontal_star_position(3, 4_096, PARADE_REFERENCE_HEIGHT, at_50_hz.2);
+            let star_at_60_hz =
+                horizontal_star_position(3, 4_096, PARADE_REFERENCE_HEIGHT, at_60_hz.2);
             assert_eq!(
                 star_at_50_hz, star_at_60_hz,
-                "star travel differs at {height}p"
+                "star travel differs at {width}px wide"
             );
         }
     }

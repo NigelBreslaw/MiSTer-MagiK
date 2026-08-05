@@ -16,6 +16,11 @@ use std::time::{Duration, Instant};
 const WIDE_LAYER_TARGETS: [usize; 5] = [33, 24, 20, 16, 12];
 const COMPACT_LAYER_TARGETS: [usize; 5] = [25, 18, 15, 12, 9];
 const REFERENCE_HEIGHT: usize = 540;
+// Preserve edge-to-edge travel time at every geometry, using velocities that
+// are 25% slower than the former 1920x1080 reference behavior.
+const REFERENCE_WIDTH: usize = 1920;
+const CARD_SPEED_NUMERATOR: i64 = 3;
+const CARD_SPEED_DENOMINATOR: i64 = 4;
 const MAX_CARD_ADOPTIONS_PER_FRAME: usize = 1;
 const REFERENCE_HZ: u64 = 60;
 const TICK_ONE: i64 = 1 << 16;
@@ -409,7 +414,7 @@ impl ScreenshotParade {
         let height = self.geometry.height();
         for layer_index in (0..SPEED_COUNT).rev() {
             let speed = MIN_TILE_SPEED + layer_index;
-            let velocity_fp = card_velocity_fp(layer_index, height);
+            let velocity_fp = card_velocity_fp(layer_index, width);
             let (tile_width, _, _) = depth_style(speed, height);
             let interval_frames = layer_interval_frames(
                 width,
@@ -434,7 +439,7 @@ impl ScreenshotParade {
         let height = self.geometry.height();
         for (layer_index, target) in self.layer_targets.into_iter().enumerate() {
             let speed = MIN_TILE_SPEED + layer_index;
-            let velocity_fp = card_velocity_fp(layer_index, height);
+            let velocity_fp = card_velocity_fp(layer_index, width);
             let (tile_width, _, _) = depth_style(speed, height);
             let interval_frames = layer_interval_frames(width, tile_width, velocity_fp, target);
             let phase = self.random_below(interval_frames as usize) as u64;
@@ -540,7 +545,7 @@ impl ScreenshotParade {
             y: 0,
             layer: speed,
             speed,
-            velocity_fp: card_velocity_fp(layer_index, self.geometry.height()),
+            velocity_fp: card_velocity_fp(layer_index, self.geometry.width()),
             velocity_remainder: 0,
             image_index: usize::MAX,
             raster,
@@ -990,12 +995,16 @@ fn scale_dimension(reference: usize, screen_height: usize) -> usize {
         .max(1)
 }
 
-fn card_velocity_fp(layer_index: usize, screen_height: usize) -> i64 {
-    let reference = (layer_index as i64 + 1) * PARADE_SUBPIXEL_ONE / 2;
-    reference
-        .saturating_mul(screen_height as i64)
-        .saturating_add((REFERENCE_HEIGHT / 2) as i64)
-        .checked_div(REFERENCE_HEIGHT as i64)
+fn card_velocity_fp(layer_index: usize, screen_width: usize) -> i64 {
+    let reference_1080p = (layer_index as i64 + 1) * PARADE_SUBPIXEL_ONE;
+    let slowed_reference = reference_1080p
+        .saturating_mul(CARD_SPEED_NUMERATOR)
+        .checked_div(CARD_SPEED_DENOMINATOR)
+        .unwrap_or(1);
+    slowed_reference
+        .saturating_mul(screen_width as i64)
+        .saturating_add((REFERENCE_WIDTH / 2) as i64)
+        .checked_div(REFERENCE_WIDTH as i64)
         .unwrap_or(1)
         .max(1)
 }
@@ -1272,6 +1281,25 @@ mod tests {
             },
         )
         .expect("prepare screenshot parade")
+    }
+
+    #[test]
+    fn card_velocities_use_the_slowed_1080p_reference() {
+        for layer_index in 0..SPEED_COUNT {
+            assert_eq!(
+                card_velocity_fp(layer_index, REFERENCE_WIDTH),
+                (layer_index as i64 + 1) * 3 * PARADE_SUBPIXEL_ONE / 4
+            );
+        }
+    }
+
+    #[test]
+    fn card_velocities_scale_only_with_framebuffer_width() {
+        for layer_index in 0..SPEED_COUNT {
+            let reference = card_velocity_fp(layer_index, REFERENCE_WIDTH);
+            assert_eq!(card_velocity_fp(layer_index, 960) * 2, reference);
+            assert_eq!(card_velocity_fp(layer_index, 640) * 3, reference);
+        }
     }
 
     #[test]
