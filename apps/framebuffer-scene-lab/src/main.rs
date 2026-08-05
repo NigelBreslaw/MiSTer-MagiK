@@ -192,8 +192,18 @@ fn write_measurement_evidence(
                 .unwrap_or(0),
             "scale_count_start": screenshot_frames.first().map_or(0, |frame| frame.scale_count),
             "scale_count_end": screenshot_frames.last().map_or(0, |frame| frame.scale_count),
+            "scale_total_us_start": screenshot_frames.first().map_or(0, |frame| frame.scale_total_us),
+            "scale_total_us_end": screenshot_frames.last().map_or(0, |frame| frame.scale_total_us),
+            "scale_total_us_delta": screenshot_frames.last().map_or(0, |frame| frame.scale_total_us)
+                .saturating_sub(screenshot_frames.first().map_or(0, |frame| frame.scale_total_us)),
+            "scale_max_us": screenshot_frames.iter().map(|frame| frame.scale_max_us).max().unwrap_or(0),
             "phase_count_start": screenshot_frames.first().map_or(0, |frame| frame.phase_count),
             "phase_count_end": screenshot_frames.last().map_or(0, |frame| frame.phase_count),
+            "phase_total_us_start": screenshot_frames.first().map_or(0, |frame| frame.phase_total_us),
+            "phase_total_us_end": screenshot_frames.last().map_or(0, |frame| frame.phase_total_us),
+            "phase_total_us_delta": screenshot_frames.last().map_or(0, |frame| frame.phase_total_us)
+                .saturating_sub(screenshot_frames.first().map_or(0, |frame| frame.phase_total_us)),
+            "phase_max_us": screenshot_frames.iter().map(|frame| frame.phase_max_us).max().unwrap_or(0),
             "max_preparation_queue_depth": screenshot_frames
                 .iter()
                 .map(|frame| frame.preparation_queue_depth)
@@ -953,7 +963,11 @@ fn screenshot_frame_stats(
             sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
             phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
             scale_count: stats.scale_count,
+            scale_total_us: stats.scale_total_us.min(u128::from(u64::MAX)) as u64,
+            scale_max_us: stats.scale_max_us.min(u128::from(u64::MAX)) as u64,
             phase_count: stats.phase_count,
+            phase_total_us: stats.phase_total_us.min(u128::from(u64::MAX)) as u64,
+            phase_max_us: stats.phase_max_us.min(u128::from(u64::MAX)) as u64,
             preparation_queue_depth: stats.queue_depth,
         }),
         cue_id: "screenshot-screensaver",
@@ -1719,7 +1733,11 @@ fn run_window(
                 sixteenth_phase_layer_mask: screenshot.sixteenth_phase_layer_mask,
                 phase_bank_resident_bytes: screenshot.phase_bank_resident_bytes,
                 scale_count: screenshot.scale_count,
+                scale_total_us: screenshot.scale_total_us,
+                scale_max_us: screenshot.scale_max_us,
                 phase_count: screenshot.phase_count,
+                phase_total_us: screenshot.phase_total_us,
+                phase_max_us: screenshot.phase_max_us,
                 preparation_queue_depth: screenshot.preparation_queue_depth,
             });
             pending_evidence = Some(PendingFrameEvidence {
@@ -2689,13 +2707,16 @@ impl Options {
                 "--phase-generation" => {
                     let value = arguments
                         .next()
-                        .ok_or("--phase-generation requires two-tap or linear-lanczos3")?;
+                        .ok_or(
+                            "--phase-generation requires two-tap, linear-lanczos3, or linear-lanczos3-neon",
+                        )?;
                     phase_generation = match value.as_str() {
                         "two-tap" => ScreenshotPhaseGeneration::Rgb565TwoTap,
                         "linear-lanczos3" => ScreenshotPhaseGeneration::LinearLanczos3,
+                        "linear-lanczos3-neon" => ScreenshotPhaseGeneration::LinearLanczos3Neon,
                         _ => {
                             return Err(format!(
-                                "invalid phase generation {value:?}; expected two-tap or linear-lanczos3"
+                                "invalid phase generation {value:?}; expected two-tap, linear-lanczos3, or linear-lanczos3-neon"
                             ));
                         }
                     };
@@ -3596,6 +3617,24 @@ mod tests {
         assert_eq!(
             two_tap.phase_generation,
             ScreenshotPhaseGeneration::Rgb565TwoTap
+        );
+        let neon = Options::parse(
+            [
+                "--scene",
+                "screenshot-screensaver",
+                "--archive",
+                "screenshots.mmlz4b",
+                "--sampling-profile",
+                "sixteenth",
+                "--phase-generation",
+                "linear-lanczos3-neon",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            neon.phase_generation,
+            ScreenshotPhaseGeneration::LinearLanczos3Neon
         );
     }
 

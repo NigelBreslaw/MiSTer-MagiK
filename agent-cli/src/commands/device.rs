@@ -262,6 +262,7 @@ impl SceneLabSamplingProfile {
 pub enum SceneLabPhaseGeneration {
     TwoTap,
     LinearLanczos3,
+    LinearLanczos3Neon,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -284,6 +285,7 @@ impl SceneLabPhaseGeneration {
         match self {
             Self::TwoTap => "two-tap",
             Self::LinearLanczos3 => "linear-lanczos3",
+            Self::LinearLanczos3Neon => "linear-lanczos3-neon",
         }
     }
 }

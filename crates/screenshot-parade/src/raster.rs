@@ -27,6 +27,13 @@ pub enum ScreenshotSamplingProfile {
 pub enum ScreenshotPhaseGeneration {
     Rgb565TwoTap,
     LinearLanczos3,
+    LinearLanczos3Neon,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LinearPhaseKernel {
+    Scalar,
+    Neon,
 }
 
 impl ScreenshotSamplingProfile {
@@ -272,9 +279,20 @@ impl PreparedScreenshotCard {
             );
         }
         let (width, height, tint) = scaled_style(source, speed, screen_height);
-        if matches!(phase_generation, ScreenshotPhaseGeneration::LinearLanczos3)
-            && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
+        if matches!(
+            phase_generation,
+            ScreenshotPhaseGeneration::LinearLanczos3
+                | ScreenshotPhaseGeneration::LinearLanczos3Neon
+        ) && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
         {
+            let kernel = match phase_generation {
+                ScreenshotPhaseGeneration::LinearLanczos3Neon => LinearPhaseKernel::Neon,
+                ScreenshotPhaseGeneration::LinearLanczos3
+                | ScreenshotPhaseGeneration::Rgb565TwoTap => LinearPhaseKernel::Scalar,
+            };
+            if matches!(kernel, LinearPhaseKernel::Neon) {
+                validate_neon_phase_kernel();
+            }
             let mut styled = scale_lanczos3_linear_tinted(source, width, height, tint);
             apply_depth_cues_linear(&mut styled, speed);
             let coverage = prepare_rounded_coverage(width, height);
@@ -287,9 +305,9 @@ impl PreparedScreenshotCard {
             }
             let phase_started = std::time::Instant::now();
             let premultiplied = premultiply_linear_source(&styled, &coverage);
-            let base = prepare_linear_phase(&styled, &coverage, &premultiplied, 0);
+            let base = prepare_linear_phase(&styled, &coverage, &premultiplied, 0, kernel);
             let shifted = std::array::from_fn(|index| {
-                prepare_linear_phase(&styled, &coverage, &premultiplied, index + 1)
+                prepare_linear_phase(&styled, &coverage, &premultiplied, index + 1, kernel)
             });
             let phase_us = phase_started.elapsed().as_micros();
             return (
@@ -901,6 +919,7 @@ fn prepare_linear_phase(
     source_coverage: &[u8],
     premultiplied_source: &[[u16; 4]],
     phase: usize,
+    kernel: LinearPhaseKernel,
 ) -> PreparedLinearPhase {
     let width = image.width + usize::from(phase != 0);
     let mut pixels = vec![Rgb565Pixel(0); width * image.height];
@@ -915,32 +934,34 @@ fn prepare_linear_phase(
         }
     } else {
         let weights = fractional_delay_weights(phase);
+        let neon_reconstruction = reconstruct_linear_phase_neon_if_selected(
+            premultiplied_source,
+            image.width,
+            image.height,
+            width,
+            weights,
+            kernel,
+        );
         for y in 0..image.height {
             for out_x in 0..width {
-                let mut sums = [0_i64; 4];
-                let mut minima = [u16::MAX; 4];
-                let mut maxima = [0_u16; 4];
-                for (tap, weight) in weights.into_iter().enumerate() {
-                    let source_x = out_x as isize + tap as isize - 3;
-                    let samples = if (0..image.width as isize).contains(&source_x) {
-                        let source_x = source_x as usize;
-                        premultiplied_source[y * image.width + source_x]
-                    } else {
-                        [0; 4]
-                    };
-                    for channel in 0..4 {
-                        sums[channel] += i64::from(samples[channel]) * i64::from(weight);
-                        minima[channel] = minima[channel].min(samples[channel]);
-                        maxima[channel] = maxima[channel].max(samples[channel]);
-                    }
-                }
-                let reconstruct = |channel: usize| {
-                    let value = (sums[channel] + i64::from(LANCZOS_WEIGHT_ONE / 2)) >> 14;
-                    value.clamp(i64::from(minima[channel]), i64::from(maxima[channel])) as u16
-                };
-                let premultiplied = [reconstruct(0), reconstruct(1), reconstruct(2)];
-                let alpha = reconstruct(3);
                 let target = y * width + out_x;
+                let reconstructed = neon_reconstruction.as_ref().map_or_else(
+                    || {
+                        let samples = std::array::from_fn(|tap| {
+                            let source_x = out_x as isize + tap as isize - 3;
+                            if (0..image.width as isize).contains(&source_x) {
+                                let source_x = source_x as usize;
+                                premultiplied_source[y * image.width + source_x]
+                            } else {
+                                [0; 4]
+                            }
+                        });
+                        reconstruct_six_tap_scalar(&samples, weights)
+                    },
+                    |reconstruction| reconstruction[target],
+                );
+                let premultiplied = [reconstructed[0], reconstructed[1], reconstructed[2]];
+                let alpha = reconstructed[3];
                 coverage[target] = ((u32::from(alpha) + 128) / 257).min(255) as u8;
                 if alpha > 0 {
                     let unpremultiply = |channel: u16| {
@@ -969,6 +990,174 @@ fn prepare_linear_phase(
             stride: width,
         },
         coverage: coverage_plane(coverage, width, image.height),
+    }
+}
+
+#[inline(always)]
+fn reconstruct_six_tap_scalar(samples: &[[u16; 4]; 6], weights: [i32; 6]) -> [u16; 4] {
+    let mut sums = [0_i32; 4];
+    let mut minima = [u16::MAX; 4];
+    let mut maxima = [0_u16; 4];
+    for (sample, weight) in samples.iter().zip(weights) {
+        for channel in 0..4 {
+            sums[channel] += i32::from(sample[channel]) * weight;
+            minima[channel] = minima[channel].min(sample[channel]);
+            maxima[channel] = maxima[channel].max(sample[channel]);
+        }
+    }
+    std::array::from_fn(|channel| {
+        let value = (i64::from(sums[channel]) + i64::from(LANCZOS_WEIGHT_ONE / 2)) >> 14;
+        value.clamp(i64::from(minima[channel]), i64::from(maxima[channel])) as u16
+    })
+}
+
+fn reconstruct_linear_phase_neon_if_selected(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    output_width: usize,
+    weights: [i32; 6],
+    kernel: LinearPhaseKernel,
+) -> Option<Vec<[u16; 4]>> {
+    if !matches!(kernel, LinearPhaseKernel::Neon) {
+        return None;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        let mut output = vec![[0_u16; 4]; output_width * height];
+        // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Both slices describe
+        // the complete source and destination planes passed to the kernel.
+        unsafe {
+            reconstruct_linear_phase_neon(
+                source,
+                source_width,
+                height,
+                output_width,
+                weights,
+                &mut output,
+            );
+        }
+        return Some(output);
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (source, source_width, height, output_width, weights);
+        None
+    }
+}
+
+fn validate_neon_phase_kernel() {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        use std::sync::OnceLock;
+
+        static VALIDATED: OnceLock<()> = OnceLock::new();
+        VALIDATED.get_or_init(|| {
+            let source_width = 9;
+            let height = 2;
+            let source = (0..source_width * height)
+                .map(|index| {
+                    let value = index as u16;
+                    [
+                        value.wrapping_mul(3_641),
+                        value.wrapping_mul(7_919).wrapping_add(65_535),
+                        value.wrapping_mul(13_337).wrapping_add(257),
+                        value.wrapping_mul(4_093),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let output_width = source_width + 1;
+            for phase in 1..CRT_PHASE_COUNT {
+                let weights = fractional_delay_weights(phase);
+                let mut actual = vec![[0_u16; 4]; output_width * height];
+                // SAFETY: this validation runs only on the MiSTer ARM target,
+                // whose Cortex-A9 provides NEON, with complete source/output planes.
+                unsafe {
+                    reconstruct_linear_phase_neon(
+                        &source,
+                        source_width,
+                        height,
+                        output_width,
+                        weights,
+                        &mut actual,
+                    );
+                }
+                let expected = (0..height)
+                    .flat_map(|y| {
+                        let source = &source;
+                        (0..output_width).map(move |out_x| {
+                            let samples = std::array::from_fn(|tap| {
+                                let source_x = out_x as isize + tap as isize - 3;
+                                if (0..source_width as isize).contains(&source_x) {
+                                    source[y * source_width + source_x as usize]
+                                } else {
+                                    [0; 4]
+                                }
+                            });
+                            reconstruct_six_tap_scalar(&samples, weights)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, expected, "NEON phase {phase} differs from scalar");
+            }
+        });
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+#[target_feature(enable = "neon")]
+unsafe fn reconstruct_linear_phase_neon(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    output_width: usize,
+    weights: [i32; 6],
+    output: &mut [[u16; 4]],
+) {
+    use core::arch::arm::{
+        int32x4_t, uint16x4_t, vdup_n_u16, vdupq_n_s32, vld1_u16, vmax_u16, vmin_u16, vmlaq_n_s32,
+        vmovl_u16, vreinterpretq_s32_u32, vst1_s32, vst1_u16,
+    };
+
+    // The largest possible sum of absolute six-tap weights is 25,288,
+    // keeping every 16-bit sample accumulation within signed 32-bit range.
+    for y in 0..height {
+        for out_x in 0..output_width {
+            let mut sums: int32x4_t = unsafe { vdupq_n_s32(0) };
+            let mut minima: uint16x4_t = unsafe { vdup_n_u16(u16::MAX) };
+            let mut maxima: uint16x4_t = unsafe { vdup_n_u16(0) };
+            for (tap, weight) in weights.into_iter().enumerate() {
+                let source_x = out_x as isize + tap as isize - 3;
+                let sample = if (0..source_width as isize).contains(&source_x) {
+                    &source[y * source_width + source_x as usize]
+                } else {
+                    &[0_u16; 4]
+                };
+                // SAFETY: sample always refers to an in-bounds four-lane array.
+                let values = unsafe { vld1_u16(sample.as_ptr()) };
+                minima = unsafe { vmin_u16(minima, values) };
+                maxima = unsafe { vmax_u16(maxima, values) };
+                let wide = unsafe { vreinterpretq_s32_u32(vmovl_u16(values)) };
+                sums = unsafe { vmlaq_n_s32(sums, wide, weight) };
+            }
+            let mut sum_lanes = [0_i32; 4];
+            let mut minimum_lanes = [0_u16; 4];
+            let mut maximum_lanes = [0_u16; 4];
+            // SAFETY: each destination has exactly the lane count written.
+            unsafe {
+                vst1_s32(sum_lanes.as_mut_ptr(), sums);
+                vst1_u16(minimum_lanes.as_mut_ptr(), minima);
+                vst1_u16(maximum_lanes.as_mut_ptr(), maxima);
+            }
+            output[y * output_width + out_x] = std::array::from_fn(|channel| {
+                let value =
+                    (i64::from(sum_lanes[channel]) + i64::from(LANCZOS_WEIGHT_ONE / 2)) >> 14;
+                value.clamp(
+                    i64::from(minimum_lanes[channel]),
+                    i64::from(maximum_lanes[channel]),
+                ) as u16
+            });
+        }
     }
 }
 
@@ -1629,6 +1818,32 @@ mod tests {
             assert_eq!(first.image, second.image);
             assert_eq!(first.coverage.values, second.coverage.values);
             assert_eq!(first.coverage.opaque_spans, second.coverage.opaque_spans);
+        }
+    }
+
+    #[test]
+    fn neon_linear_lanczos_backend_is_pixel_identical_to_scalar() {
+        let source = test_image(32, 24);
+        let prepare = |generation| {
+            PreparedScreenshotCard::prepare_with_generation(
+                &source,
+                4,
+                270,
+                ScreenshotSamplingProfile::CrtSixteenth,
+                generation,
+            )
+        };
+        let scalar = prepare(ScreenshotPhaseGeneration::LinearLanczos3);
+        let neon = prepare(ScreenshotPhaseGeneration::LinearLanczos3Neon);
+        assert_eq!(scalar.image, neon.image);
+        let (scalar_base, scalar_shifted) = linear_phases(&scalar);
+        let (neon_base, neon_shifted) = linear_phases(&neon);
+        assert_eq!(scalar_base.values, neon_base.values);
+        assert_eq!(scalar_base.opaque_spans, neon_base.opaque_spans);
+        for (scalar, neon) in scalar_shifted.iter().zip(neon_shifted) {
+            assert_eq!(scalar.image, neon.image);
+            assert_eq!(scalar.coverage.values, neon.coverage.values);
+            assert_eq!(scalar.coverage.opaque_spans, neon.coverage.opaque_spans);
         }
     }
 }

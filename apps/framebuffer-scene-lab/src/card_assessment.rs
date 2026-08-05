@@ -163,7 +163,11 @@ pub struct ScreenshotFrameDetails {
     pub sixteenth_phase_layer_mask: u8,
     pub phase_bank_resident_bytes: usize,
     pub scale_count: u64,
+    pub scale_total_us: u64,
+    pub scale_max_us: u64,
     pub phase_count: u64,
+    pub phase_total_us: u64,
+    pub phase_max_us: u64,
     pub preparation_queue_depth: usize,
 }
 
