@@ -223,6 +223,8 @@ pub struct SceneLabArgs {
     pub(crate) seed: Option<String>,
     #[arg(long, value_enum)]
     pub(crate) sampling_profile: Option<SceneLabSamplingProfile>,
+    #[arg(long, value_enum)]
+    pub(crate) phase_generation: Option<SceneLabPhaseGeneration>,
     #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
@@ -250,6 +252,21 @@ impl SceneLabSamplingProfile {
         match self {
             Self::LegacyHalf => "legacy-half",
             Self::Sixteenth => "sixteenth",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SceneLabPhaseGeneration {
+    TwoTap,
+    LinearLanczos3,
+}
+
+impl SceneLabPhaseGeneration {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::TwoTap => "two-tap",
+            Self::LinearLanczos3 => "linear-lanczos3",
         }
     }
 }
@@ -375,6 +392,7 @@ pub fn run_scene_lab(
             fixture: args.fixture.as_deref(),
             seed,
             sampling_profile: args.sampling_profile.map(SceneLabSamplingProfile::as_str),
+            phase_generation: args.phase_generation.map(SceneLabPhaseGeneration::as_str),
             case: args.case.as_deref(),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,

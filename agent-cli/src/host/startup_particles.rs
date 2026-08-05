@@ -51,6 +51,7 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
     pub(crate) sampling_profile: Option<&'static str>,
+    pub(crate) phase_generation: Option<&'static str>,
     pub(crate) case: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
     pub(crate) warmup_seconds: u64,
@@ -79,6 +80,7 @@ struct RemoteScreenshotArgs {
     archive: &'static str,
     seed: u64,
     sampling_profile: &'static str,
+    phase_generation: &'static str,
     fingerprint: String,
 }
 
@@ -110,6 +112,7 @@ pub(super) fn run(
                     fixture: None,
                     seed: None,
                     sampling_profile: None,
+                    phase_generation: None,
                     case: None,
                     seconds: None,
                     warmup_seconds: 0,
@@ -145,6 +148,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         fixture,
         seed,
         sampling_profile,
+        phase_generation,
         case,
         seconds,
         warmup_seconds,
@@ -161,6 +165,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
             sampling_profile: sampling_profile.unwrap_or("sixteenth"),
+            phase_generation: phase_generation.unwrap_or("linear-lanczos3"),
             fingerprint,
         })
     } else {
@@ -834,6 +839,7 @@ fn prepare_scene_evidence_output(
             "path": screenshot.archive,
             "fingerprint": screenshot.fingerprint,
             "sampling_profile": screenshot.sampling_profile,
+            "phase_generation": screenshot.phase_generation,
         })),
         "fixture": fixture,
         "case": case,
@@ -1596,11 +1602,12 @@ fn remote_scene_arguments(
         format!("--scene {} --fixture {}", sh(scene), sh(fixture))
     } else if let Some(screenshot) = screenshot {
         format!(
-            "--scene {} --archive {} --seed {} --sampling-profile {}",
+            "--scene {} --archive {} --seed {} --sampling-profile {} --phase-generation {}",
             sh(scene),
             sh(screenshot.archive),
             screenshot.seed,
-            sh(screenshot.sampling_profile)
+            sh(screenshot.sampling_profile),
+            sh(screenshot.phase_generation)
         )
     } else {
         format!("--scene {}", sh(scene))
@@ -1808,6 +1815,7 @@ mod tests {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 0x1234,
             sampling_profile: "crt",
+            phase_generation: "linear-lanczos3",
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let run = remote_run_lab_command(
@@ -1825,6 +1833,7 @@ mod tests {
         assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
         assert!(run.contains("--seed 4660"));
         assert!(run.contains(&format!("--sampling-profile {}", sh("crt"))));
+        assert!(run.contains(&format!("--phase-generation {}", sh("linear-lanczos3"))));
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -1873,6 +1882,7 @@ mod tests {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 7,
             sampling_profile: "hdmi",
+            phase_generation: "two-tap",
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let assessment = remote_run_lab_command(

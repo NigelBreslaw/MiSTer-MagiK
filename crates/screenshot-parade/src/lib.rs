@@ -7,7 +7,8 @@ mod raster;
 mod schedule;
 
 pub use raster::{
-    PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotSamplingProfile,
+    PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotPhaseGeneration,
+    ScreenshotSamplingProfile,
 };
 pub use schedule::{
     ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,

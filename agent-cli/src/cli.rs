@@ -547,6 +547,22 @@ mod tests {
                 "profile={profile}",
             );
         }
+        for generation in ["two-tap", "linear-lanczos3"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "device",
+                    "scene-lab",
+                    "--scene",
+                    "screenshot-screensaver",
+                    "--phase-generation",
+                    generation,
+                    "--attended",
+                ])
+                .is_ok(),
+                "generation={generation}",
+            );
+        }
     }
 
     #[test]

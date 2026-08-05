@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::raster::{PreparedScreenshotCard, depth_style};
-use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotSamplingProfile};
+use crate::{
+    PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotPhaseGeneration, ScreenshotSamplingProfile,
+};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
 use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneError, SceneGeometry,
@@ -41,6 +43,7 @@ pub struct ScreenshotParadeConfig {
     pub geometry: SceneGeometry,
     pub seed: u64,
     pub sampling_profile: ScreenshotSamplingProfile,
+    pub phase_generation: ScreenshotPhaseGeneration,
     pub startup: ScreenshotParadeStartup,
     pub worker_start: Option<WorkerStartCallback>,
 }
@@ -52,6 +55,7 @@ impl std::fmt::Debug for ScreenshotParadeConfig {
             .field("geometry", &self.geometry)
             .field("seed", &self.seed)
             .field("sampling_profile", &self.sampling_profile)
+            .field("phase_generation", &self.phase_generation)
             .field("startup", &self.startup)
             .field(
                 "worker_start",
@@ -135,6 +139,7 @@ struct ScaleJob {
     image_index: usize,
     speed: usize,
     sampling_profile: ScreenshotSamplingProfile,
+    phase_generation: ScreenshotPhaseGeneration,
     screen_height: usize,
 }
 
@@ -144,7 +149,7 @@ struct ScaleResult {
     card: Result<PreparedCard, String>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Rect {
     x0: usize,
     y0: usize,
@@ -162,6 +167,7 @@ pub struct ScreenshotParade {
     geometry: SceneGeometry,
     startup: ScreenshotParadeStartup,
     sampling_profile: ScreenshotSamplingProfile,
+    phase_generation: ScreenshotPhaseGeneration,
     tiles: Vec<Tile>,
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
@@ -222,6 +228,7 @@ impl ScreenshotParade {
             geometry: config.geometry,
             startup: config.startup,
             sampling_profile: config.sampling_profile,
+            phase_generation: config.phase_generation,
             tiles: Vec::new(),
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
@@ -716,6 +723,7 @@ impl ScreenshotParade {
                 image_index,
                 speed,
                 sampling_profile: self.sampling_profile.for_layer(speed),
+                phase_generation: self.phase_generation,
                 screen_height: self.geometry.height(),
             })
             .map_err(|_| "screenshot parade scale worker disconnected".to_owned())?;
@@ -981,6 +989,7 @@ fn run_scale_worker(
                 job.speed,
                 job.screen_height,
                 job.sampling_profile,
+                job.phase_generation,
             );
             PreparedCard {
                 image_index: job.image_index,
@@ -1129,34 +1138,6 @@ fn raster_phase_key(profile: ScreenshotSamplingProfile, x_fp: i64) -> i64 {
     }
 }
 
-fn tile_origin_and_width(
-    profile: ScreenshotSamplingProfile,
-    x_fp: i64,
-    width: usize,
-) -> (isize, usize, bool) {
-    match profile {
-        ScreenshotSamplingProfile::HdmiLegacyHalf => {
-            let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
-            match x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) {
-                0 => (x, width, false),
-                128 => (x, width.saturating_add(1), true),
-                fraction if fraction < 128 => (x, width, false),
-                _ => (x.saturating_add(1), width, false),
-            }
-        }
-        ScreenshotSamplingProfile::CrtSixteenth => {
-            let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE);
-            let mut phase = (fraction + 8) / 16;
-            let mut x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
-            if phase == 16 {
-                x += 1;
-                phase = 0;
-            }
-            (x, width.saturating_add(usize::from(phase != 0)), phase != 0)
-        }
-    }
-}
-
 fn clipped_rect(
     x: isize,
     y: isize,
@@ -1178,11 +1159,12 @@ fn clipped_rect(
 
 fn tile_draw_bounds(
     tile: &Tile,
-    profile: ScreenshotSamplingProfile,
+    _profile: ScreenshotSamplingProfile,
     screen_width: usize,
     screen_height: usize,
 ) -> Option<Rect> {
-    let (x, width, _) = tile_origin_and_width(profile, tile.x_fp, tile.raster.width());
+    let x = tile.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+    let width = tile.raster.width().saturating_add(1);
     clipped_rect(
         x,
         tile.y,
@@ -1195,12 +1177,12 @@ fn tile_draw_bounds(
 
 fn tile_opaque_bounds(
     tile: &Tile,
-    profile: ScreenshotSamplingProfile,
+    _profile: ScreenshotSamplingProfile,
     screen_width: usize,
     screen_height: usize,
 ) -> Option<Rect> {
-    let (x, _, fractional) = tile_origin_and_width(profile, tile.x_fp, tile.raster.width());
-    let inset = tile.raster.max_corner_inset() + usize::from(fractional);
+    let x = tile.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+    let inset = tile.raster.max_corner_inset().saturating_add(1);
     let width = tile.raster.width().saturating_sub(inset.saturating_mul(2));
     clipped_rect(
         x.saturating_add(inset as isize),
@@ -1300,6 +1282,7 @@ mod tests {
                 geometry: SceneGeometry::new(width, height, width).unwrap(),
                 seed: 0x4d61_6769_4b54_696c,
                 sampling_profile: profile,
+                phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
                 startup: ScreenshotParadeStartup::Prepared,
                 worker_start: None,
             },
@@ -1374,6 +1357,7 @@ mod tests {
                 geometry: SceneGeometry::new(320, 180, 320).unwrap(),
                 seed: 7,
                 sampling_profile: ScreenshotSamplingProfile::HdmiLegacyHalf,
+                phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
                 startup: ScreenshotParadeStartup::Streaming,
                 worker_start: None,
             },
@@ -1456,5 +1440,54 @@ mod tests {
         assert_eq!(scene.previous_motion_ticks_fp, 4 * TICK_ONE as u64);
         assert!(scene.render_at_presentation_tick(&mut pixels, 3).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn culling_bounds_are_conservative_and_phase_independent() {
+        let raster = PreparedScreenshotCard::prepare_with_generation(
+            &ScreenshotImage {
+                pixels: vec![Rgb565Pixel(0xffff); 32 * 24],
+                width: 32,
+                height: 24,
+                stride: 32,
+            },
+            5,
+            135,
+            ScreenshotSamplingProfile::CrtSixteenth,
+            ScreenshotPhaseGeneration::LinearLanczos3,
+        );
+        let mut tile = Tile {
+            x_fp: 20 * PARADE_SUBPIXEL_ONE,
+            y: 10,
+            layer: 5,
+            speed: 5,
+            velocity_fp: PARADE_SUBPIXEL_ONE,
+            velocity_remainder: 0,
+            image_index: 0,
+            raster,
+            active: true,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
+            next: None,
+            pending_image_index: None,
+        };
+        let expected_draw =
+            tile_draw_bounds(&tile, ScreenshotSamplingProfile::CrtSixteenth, 320, 180);
+        let expected_opaque =
+            tile_opaque_bounds(&tile, ScreenshotSamplingProfile::CrtSixteenth, 320, 180);
+        for fraction in [8, 16, 128, 240, 255] {
+            tile.x_fp = 20 * PARADE_SUBPIXEL_ONE + fraction;
+            assert_eq!(
+                tile_draw_bounds(&tile, ScreenshotSamplingProfile::CrtSixteenth, 320, 180,),
+                expected_draw
+            );
+            assert_eq!(
+                tile_opaque_bounds(&tile, ScreenshotSamplingProfile::CrtSixteenth, 320, 180,),
+                expected_opaque
+            );
+        }
+        let draw = expected_draw.unwrap();
+        assert_eq!(draw.x0, 20);
+        assert_eq!(draw.x1 - draw.x0, tile.raster.width() + 1);
     }
 }

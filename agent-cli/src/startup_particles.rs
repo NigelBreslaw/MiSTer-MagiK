@@ -392,6 +392,9 @@ pub fn execute_scene_device(
     if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.sampling_profile.is_some() {
         return Err("scene-lab --sampling-profile is valid only for screenshot-screensaver".into());
     }
+    if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.phase_generation.is_some() {
+        return Err("scene-lab --phase-generation is valid only for screenshot-screensaver".into());
+    }
     if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.seed.is_some() {
         return Err("scene-lab --seed is valid only for screenshot-screensaver".into());
     }
