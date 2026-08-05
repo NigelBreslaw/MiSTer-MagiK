@@ -88,13 +88,6 @@ impl CardFlipFrameEvidence {
             full_restore: false,
         }
     }
-
-    #[must_use]
-    pub const fn pre_post_wall_us(&self) -> u64 {
-        self.render_wall_us
-            .saturating_add(self.transfer_wall_us)
-            .saturating_add(self.post_wall_us)
-    }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
