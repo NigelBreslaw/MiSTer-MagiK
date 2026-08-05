@@ -4540,7 +4540,10 @@ mod tests {
                     geometry,
                     seed,
                     sampling_profile: shared_sampling_profile(profile),
-                    phase_generation: ScreenshotPhaseGeneration::LinearLanczos3Neon,
+                    // This is a migration-parity fixture for the retired private
+                    // two-tap rasterizer. Production high-precision reconstruction
+                    // has separate scalar/NEON identity coverage in the shared crate.
+                    phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
                     startup: ScreenshotParadeStartup::Prepared,
                     replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                     worker_start: None,
