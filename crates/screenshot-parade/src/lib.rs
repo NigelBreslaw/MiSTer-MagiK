@@ -11,6 +11,6 @@ pub use raster::{
     ScreenshotSamplingProfile,
 };
 pub use schedule::{
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,
-    WorkerStartCallback,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
+    ScreenshotParadeStartup, ScreenshotParadeStats, WorkerStartCallback,
 };

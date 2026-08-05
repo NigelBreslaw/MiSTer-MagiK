@@ -563,6 +563,22 @@ mod tests {
                 "generation={generation}",
             );
         }
+        for replacement_mode in ["prepare", "recycle"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "device",
+                    "scene-lab",
+                    "--scene",
+                    "screenshot-screensaver",
+                    "--replacement-mode",
+                    replacement_mode,
+                    "--attended",
+                ])
+                .is_ok(),
+                "replacement_mode={replacement_mode}",
+            );
+        }
     }
 
     #[test]

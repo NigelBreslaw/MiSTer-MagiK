@@ -38,6 +38,12 @@ pub enum ScreenshotParadeStartup {
     Prepared,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScreenshotParadeReplacementMode {
+    Prepare,
+    Recycle,
+}
+
 #[derive(Clone)]
 pub struct ScreenshotParadeConfig {
     pub geometry: SceneGeometry,
@@ -45,6 +51,7 @@ pub struct ScreenshotParadeConfig {
     pub sampling_profile: ScreenshotSamplingProfile,
     pub phase_generation: ScreenshotPhaseGeneration,
     pub startup: ScreenshotParadeStartup,
+    pub replacement_mode: ScreenshotParadeReplacementMode,
     pub worker_start: Option<WorkerStartCallback>,
 }
 
@@ -57,6 +64,7 @@ impl std::fmt::Debug for ScreenshotParadeConfig {
             .field("sampling_profile", &self.sampling_profile)
             .field("phase_generation", &self.phase_generation)
             .field("startup", &self.startup)
+            .field("replacement_mode", &self.replacement_mode)
             .field(
                 "worker_start",
                 &self.worker_start.as_ref().map(|_| "callback"),
@@ -166,6 +174,7 @@ impl Rect {
 pub struct ScreenshotParade {
     geometry: SceneGeometry,
     startup: ScreenshotParadeStartup,
+    replacement_mode: ScreenshotParadeReplacementMode,
     sampling_profile: ScreenshotSamplingProfile,
     phase_generation: ScreenshotPhaseGeneration,
     tiles: Vec<Tile>,
@@ -206,6 +215,14 @@ impl ScreenshotParade {
     ) -> Result<Self, String> {
         let width = config.geometry.width();
         let height = config.geometry.height();
+        if matches!(config.startup, ScreenshotParadeStartup::Streaming)
+            && matches!(
+                config.replacement_mode,
+                ScreenshotParadeReplacementMode::Recycle
+            )
+        {
+            return Err("screenshot parade recycling requires prepared startup".to_owned());
+        }
         let asset_keys = archive.asset_keys().to_vec();
         if asset_keys.is_empty() {
             return Err("screenshot archive contains no RGB565 assets".to_owned());
@@ -227,6 +244,7 @@ impl ScreenshotParade {
         let mut parade = Self {
             geometry: config.geometry,
             startup: config.startup,
+            replacement_mode: config.replacement_mode,
             sampling_profile: config.sampling_profile,
             phase_generation: config.phase_generation,
             tiles: Vec::new(),
@@ -527,8 +545,13 @@ impl ScreenshotParade {
         if self.tiles.is_empty() {
             return Err("screenshot archive did not yield a renderable card".to_owned());
         }
-        for tile_index in 0..self.tiles.len() {
-            self.queue_successor(tile_index);
+        if matches!(
+            self.replacement_mode,
+            ScreenshotParadeReplacementMode::Prepare
+        ) {
+            for tile_index in 0..self.tiles.len() {
+                self.queue_successor(tile_index);
+            }
         }
         Ok(())
     }
@@ -626,7 +649,10 @@ impl ScreenshotParade {
             }
         }
         for tile_index in exited {
-            self.queue_successor(tile_index);
+            match self.replacement_mode {
+                ScreenshotParadeReplacementMode::Prepare => self.queue_successor(tile_index),
+                ScreenshotParadeReplacementMode::Recycle => self.recycle_tile(tile_index),
+            }
         }
         for layer_index in 0..SPEED_COUNT {
             if nominal_frame < self.layers[layer_index].next_spawn_frame {
@@ -709,6 +735,23 @@ impl ScreenshotParade {
             self.scale_worker_connected = false;
             self.tiles[tile_index].pending_image_index = None;
         }
+    }
+
+    fn recycle_tile(&mut self, tile_index: usize) {
+        let tile = &self.tiles[tile_index];
+        let x = -(tile.raster.width() as isize);
+        let width = tile.raster.width();
+        let height = tile.raster.height();
+        let speed = tile.speed;
+        let fallback_y = tile.y;
+        let y = self
+            .random_tile_y(x, width, height, speed, tile_index)
+            .unwrap_or(fallback_y);
+        let tile = &mut self.tiles[tile_index];
+        tile.x_fp = x as i64 * PARADE_SUBPIXEL_ONE;
+        tile.y = y;
+        tile.active = true;
+        tile.velocity_remainder = 0;
     }
 
     fn send_scale_job(
@@ -1284,6 +1327,7 @@ mod tests {
                 sampling_profile: profile,
                 phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
                 startup: ScreenshotParadeStartup::Prepared,
+                replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
             },
         )
@@ -1359,6 +1403,7 @@ mod tests {
                 sampling_profile: ScreenshotSamplingProfile::HdmiLegacyHalf,
                 phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
                 startup: ScreenshotParadeStartup::Streaming,
+                replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
             },
         )
@@ -1366,6 +1411,41 @@ mod tests {
         assert!(!scene.is_ready());
         assert!(scene.has_pending_work());
         assert_eq!(scene.tiles.len(), SPEED_COUNT);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn recycled_prepared_scene_keeps_card_load_without_replacement_work() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-recycle-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        let archive = ResidentPreviewArchive::open(&path).unwrap();
+        let mut scene = ScreenshotParade::new(
+            archive,
+            ScreenshotParadeConfig {
+                geometry: SceneGeometry::new(320, 180, 320).unwrap(),
+                seed: 7,
+                sampling_profile: ScreenshotSamplingProfile::CrtSixteenth,
+                phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
+                startup: ScreenshotParadeStartup::Prepared,
+                replacement_mode: ScreenshotParadeReplacementMode::Recycle,
+                worker_start: None,
+            },
+        )
+        .unwrap();
+        let active_before = scene.active_card_count();
+        let mut pixels = vec![Rgb565Pixel(0); 320 * 180];
+        let initial = scene.render_at_presentation_tick(&mut pixels, 0).unwrap();
+        let advanced = scene
+            .render_at_presentation_tick(&mut pixels, 5_000)
+            .unwrap();
+        assert_eq!(scene.active_card_count(), active_before);
+        assert!(!scene.has_pending_work());
+        assert_eq!(initial.scale_count, advanced.scale_count);
+        assert_eq!(initial.phase_count, advanced.phase_count);
+        assert_eq!(advanced.queue_depth, 0);
         let _ = std::fs::remove_file(path);
     }
 

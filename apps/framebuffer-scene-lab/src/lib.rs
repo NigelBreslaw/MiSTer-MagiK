@@ -384,6 +384,9 @@ pub struct ScreenshotFrameStats {
     pub raster_visible_layer_mask: u8,
     pub sixteenth_phase_layer_mask: u8,
     pub phase_bank_resident_bytes: usize,
+    pub scale_count: u64,
+    pub phase_count: u64,
+    pub preparation_queue_depth: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

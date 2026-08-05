@@ -225,6 +225,8 @@ pub struct SceneLabArgs {
     pub(crate) sampling_profile: Option<SceneLabSamplingProfile>,
     #[arg(long, value_enum)]
     pub(crate) phase_generation: Option<SceneLabPhaseGeneration>,
+    #[arg(long, value_enum)]
+    pub(crate) replacement_mode: Option<SceneLabReplacementMode>,
     #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
@@ -260,6 +262,21 @@ impl SceneLabSamplingProfile {
 pub enum SceneLabPhaseGeneration {
     TwoTap,
     LinearLanczos3,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SceneLabReplacementMode {
+    Prepare,
+    Recycle,
+}
+
+impl SceneLabReplacementMode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::Recycle => "recycle",
+        }
+    }
 }
 
 impl SceneLabPhaseGeneration {
@@ -393,6 +410,7 @@ pub fn run_scene_lab(
             seed,
             sampling_profile: args.sampling_profile.map(SceneLabSamplingProfile::as_str),
             phase_generation: args.phase_generation.map(SceneLabPhaseGeneration::as_str),
+            replacement_mode: args.replacement_mode.map(SceneLabReplacementMode::as_str),
             case: args.case.as_deref(),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,

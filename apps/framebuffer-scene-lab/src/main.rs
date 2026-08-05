@@ -25,8 +25,9 @@ use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
 };
 use mister_magik_screenshot_parade::{
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,
-    ScreenshotPhaseGeneration, ScreenshotSamplingProfile,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
+    ScreenshotParadeStartup, ScreenshotParadeStats, ScreenshotPhaseGeneration,
+    ScreenshotSamplingProfile,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -178,6 +179,15 @@ fn write_measurement_evidence(
                 .map(|frame| frame.phase_bank_resident_bytes)
                 .max()
                 .unwrap_or(0),
+            "scale_count_start": screenshot_frames.first().map_or(0, |frame| frame.scale_count),
+            "scale_count_end": screenshot_frames.last().map_or(0, |frame| frame.scale_count),
+            "phase_count_start": screenshot_frames.first().map_or(0, |frame| frame.phase_count),
+            "phase_count_end": screenshot_frames.last().map_or(0, |frame| frame.phase_count),
+            "max_preparation_queue_depth": screenshot_frames
+                .iter()
+                .map(|frame| frame.preparation_queue_depth)
+                .max()
+                .unwrap_or(0),
             "max_raster_held_cards": screenshot_frames
                 .iter()
                 .map(|frame| frame.raster_held_cards)
@@ -252,6 +262,7 @@ fn main() -> Result<(), String> {
                 options.seed,
                 options.sampling_profile,
                 options.phase_generation,
+                options.replacement_mode,
                 ScreenshotParadeStartup::Prepared,
                 DEFAULT_WIDTH,
                 DEFAULT_HEIGHT,
@@ -271,6 +282,7 @@ fn main() -> Result<(), String> {
                 options.seed,
                 options.sampling_profile,
                 options.phase_generation,
+                options.replacement_mode,
                 options
                     .time_ms
                     .expect("option parser requires time with output"),
@@ -283,6 +295,7 @@ fn main() -> Result<(), String> {
                 seed: options.seed,
                 sampling_profile: options.sampling_profile,
                 phase_generation: options.phase_generation,
+                replacement_mode: options.replacement_mode,
             },
             None,
             options.profile,
@@ -571,6 +584,7 @@ enum SceneSource {
         seed: u64,
         sampling_profile: ScreenshotSamplingProfile,
         phase_generation: ScreenshotPhaseGeneration,
+        replacement_mode: ScreenshotParadeReplacementMode,
     },
 }
 
@@ -579,6 +593,7 @@ fn screenshot_scene(
     seed: u64,
     sampling_profile: ScreenshotSamplingProfile,
     phase_generation: ScreenshotPhaseGeneration,
+    replacement_mode: ScreenshotParadeReplacementMode,
     startup: ScreenshotParadeStartup,
     width: usize,
     height: usize,
@@ -593,6 +608,7 @@ fn screenshot_scene(
             sampling_profile,
             phase_generation,
             startup,
+            replacement_mode,
             worker_start: None,
         },
     )
@@ -603,6 +619,7 @@ fn render_screenshot_headless(
     seed: u64,
     sampling_profile: ScreenshotSamplingProfile,
     phase_generation: ScreenshotPhaseGeneration,
+    replacement_mode: ScreenshotParadeReplacementMode,
     time_ms: u64,
     output: &Path,
 ) -> Result<(), String> {
@@ -611,6 +628,7 @@ fn render_screenshot_headless(
         seed,
         sampling_profile,
         phase_generation,
+        replacement_mode,
         ScreenshotParadeStartup::Prepared,
         DEFAULT_WIDTH,
         DEFAULT_HEIGHT,
@@ -761,12 +779,17 @@ impl LabScene {
                 seed,
                 sampling_profile,
                 phase_generation,
+                replacement_mode,
             } => screenshot_scene(
                 &archive,
                 seed,
                 sampling_profile,
                 phase_generation,
-                ScreenshotParadeStartup::Streaming,
+                replacement_mode,
+                match replacement_mode {
+                    ScreenshotParadeReplacementMode::Prepare => ScreenshotParadeStartup::Streaming,
+                    ScreenshotParadeReplacementMode::Recycle => ScreenshotParadeStartup::Prepared,
+                },
                 width,
                 height,
             )
@@ -917,6 +940,9 @@ fn screenshot_frame_stats(
             raster_visible_layer_mask: stats.raster_visible_layer_mask,
             sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
             phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
+            scale_count: stats.scale_count,
+            phase_count: stats.phase_count,
+            preparation_queue_depth: stats.queue_depth,
         }),
         cue_id: "screenshot-screensaver",
         cue_index: 0,
@@ -1676,6 +1702,9 @@ fn run_window(
                 raster_visible_layer_mask: screenshot.raster_visible_layer_mask,
                 sixteenth_phase_layer_mask: screenshot.sixteenth_phase_layer_mask,
                 phase_bank_resident_bytes: screenshot.phase_bank_resident_bytes,
+                scale_count: screenshot.scale_count,
+                phase_count: screenshot.phase_count,
+                preparation_queue_depth: screenshot.preparation_queue_depth,
             });
             pending_evidence = Some(PendingFrameEvidence {
                 frame: evidence,
@@ -2543,6 +2572,8 @@ struct Options {
     sampling_profile_requested: bool,
     phase_generation: ScreenshotPhaseGeneration,
     phase_generation_requested: bool,
+    replacement_mode: ScreenshotParadeReplacementMode,
+    replacement_mode_requested: bool,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
@@ -2568,6 +2599,8 @@ impl Options {
         let mut sampling_profile_requested = false;
         let mut phase_generation = ScreenshotPhaseGeneration::LinearLanczos3;
         let mut phase_generation_requested = false;
+        let mut replacement_mode = ScreenshotParadeReplacementMode::Prepare;
+        let mut replacement_mode_requested = false;
         let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
@@ -2629,6 +2662,21 @@ impl Options {
                         }
                     };
                     phase_generation_requested = true;
+                }
+                "--replacement-mode" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--replacement-mode requires prepare or recycle")?;
+                    replacement_mode = match value.as_str() {
+                        "prepare" => ScreenshotParadeReplacementMode::Prepare,
+                        "recycle" => ScreenshotParadeReplacementMode::Recycle,
+                        _ => {
+                            return Err(format!(
+                                "invalid replacement mode {value:?}; expected prepare or recycle"
+                            ));
+                        }
+                    };
+                    replacement_mode_requested = true;
                 }
                 "--fixture" => {
                     let value = arguments.next().ok_or("--fixture requires a name")?;
@@ -2743,6 +2791,8 @@ impl Options {
             sampling_profile_requested,
             phase_generation,
             phase_generation_requested,
+            replacement_mode,
+            replacement_mode_requested,
             time_ms,
             output,
             check,
@@ -2796,10 +2846,11 @@ impl Options {
             && (self.archive.is_some()
                 || self.seed_requested
                 || self.sampling_profile_requested
-                || self.phase_generation_requested)
+                || self.phase_generation_requested
+                || self.replacement_mode_requested)
         {
             return Err(
-                "--archive, --seed, --sampling-profile, and --phase-generation are valid only for screenshot-screensaver".into(),
+                "--archive, --seed, --sampling-profile, --phase-generation, and --replacement-mode are valid only for screenshot-screensaver".into(),
             );
         }
         match self.scene {
@@ -2871,7 +2922,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth] [--phase-generation two-tap|linear-lanczos3]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth] [--phase-generation two-tap|linear-lanczos3] [--replacement-mode prepare|recycle]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
