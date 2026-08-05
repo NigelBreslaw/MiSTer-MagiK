@@ -645,7 +645,7 @@ enum LabScene {
     Focused(FocusedParticleRenderer),
     Navigation(NavigationFixtureScene),
     CardFlip(Box<CardFlip>),
-    Screenshot(ScreenshotParade),
+    Screenshot(Box<ScreenshotParade>),
 }
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
@@ -701,6 +701,7 @@ impl LabScene {
                 width,
                 height,
             )
+            .map(Box::new)
             .map(Self::Screenshot),
         }
     }
