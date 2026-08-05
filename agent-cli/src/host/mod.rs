@@ -6215,7 +6215,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
     let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
     let physical_refresh = physical_refresh_summary(0, &selected, refresh_period_us)?;
     let dropped_frames = physical_refresh
-        .get("repeated_refreshes")
+        .get("dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
     let long_completion_intervals = physical_refresh
@@ -6534,10 +6534,10 @@ fn profile_installed_particles(
         }
     };
     let schema = match run {
-        ParticleBenchmarkRun::Complete => "mister-magik-particle-benchmark-v1",
-        ParticleBenchmarkRun::Capacity => "mister-magik-particle-capacity-benchmark-v1",
-        ParticleBenchmarkRun::Demo40k => "mister-magik-particle-demo-40k-v1",
-        ParticleBenchmarkRun::Step => "mister-magik-particle-step-v1",
+        ParticleBenchmarkRun::Complete => "mister-magik-particle-benchmark-v2",
+        ParticleBenchmarkRun::Capacity => "mister-magik-particle-capacity-benchmark-v2",
+        ParticleBenchmarkRun::Demo40k => "mister-magik-particle-demo-40k-v2",
+        ParticleBenchmarkRun::Step => "mister-magik-particle-step-v2",
     };
     let summary = json!({
         "schema": schema,
@@ -6674,7 +6674,7 @@ fn profile_installed_particle_cpu(
         }
     };
     let summary = json!({
-        "schema": "mister-magik-particle-cpu-profile-v1",
+        "schema": "mister-magik-particle-cpu-profile-v2",
         "display": {
             "benchmark_mode": benchmark_mode.id,
             "framebuffer": "960x540",
@@ -7115,12 +7115,12 @@ fn summarize_particle_trial_for_renderer(
         }));
     }
     if physical
-        .get("repeated_refreshes")
+        .get("dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX)
         != 0
     {
-        failures.push(json!({"kind": "repeated-refresh"}));
+        failures.push(json!({"kind": "dropped-frames"}));
     }
     if physical
         .get("long_completion_intervals")
@@ -7642,8 +7642,33 @@ fn persist_and_qualify_particle_benchmark(
         }
     };
     if failed {
+        let dropped_frames = match run {
+            ParticleBenchmarkRun::Complete => ["capacity", "visual"]
+                .into_iter()
+                .map(|preset| {
+                    summary
+                        .pointer(&format!(
+                            "/presets/{preset}/confirmation/physical_refresh/dropped_frames"
+                        ))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                })
+                .sum(),
+            ParticleBenchmarkRun::Capacity => summary
+                .pointer("/presets/capacity/confirmation/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            ParticleBenchmarkRun::Demo40k => summary
+                .pointer("/demo/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            ParticleBenchmarkRun::Step => summary
+                .pointer("/step/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        };
         return Err(format!(
-            "particle benchmark did not qualify; evidence retained at {}",
+            "particle benchmark FAIL — {dropped_frames} dropped frames; evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -7659,7 +7684,22 @@ fn particle_benchmark_report(summary: &Value) -> String {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let mut report = format!(
-            "# {title}\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset/demo: {preset}\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Repeated refreshes: {}\n- Process CPU: {:.2}% of one core\n- Update+projection CPU: {:.2}% of one core\n- Clear+raster CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Preparation wait mean / P99 / max: {:.2} / {} / {} us\n- Prepared-frame age mean / P99 / max: {:.2} / {} / {} us\n- Worker wake latency mean / P99 / max: {:.2} / {} / {} us\n- Lookahead mismatch recomputes: {}\n- Preparation queue depth mean / max: {:.2} / {}\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Preparation wait | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+            "# {title}\n\n- Result: {}\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset/demo: {preset}\n- Particles: {}\n- Duration: {} seconds\n- Qualified: {}\n- Unique FPS: {:.6}\n- Dropped frames: {}\n- Process CPU: {:.2}% of one core\n- Update+projection CPU: {:.2}% of one core\n- Clear+raster CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- Preparation wait mean / P99 / max: {:.2} / {} / {} us\n- Prepared-frame age mean / P99 / max: {:.2} / {} / {} us\n- Worker wake latency mean / P99 / max: {:.2} / {} / {} us\n- Lookahead mismatch recomputes: {}\n- Preparation queue depth mean / max: {:.2} / {}\n- P99 render wall: {} us\n- Maximum render wall: {} us\n\n## Phase means\n\n| Phase | Simulation wall | Simulation CPU | Projection wall | Projection CPU | Preparation wait | Clear wall | Raster wall | Render wall |\n|---|---:|---:|---:|---:|---:|---:|---:|---:|\n",
+            if demo
+                .pointer("/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                == 0
+            {
+                "PASS — 0 dropped frames".to_string()
+            } else {
+                format!(
+                    "FAIL — {} dropped frames",
+                    demo.pointer("/physical_refresh/dropped_frames")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX)
+                )
+            },
             demo.get("count").and_then(Value::as_u64).unwrap_or(0),
             demo.get("duration_secs")
                 .and_then(Value::as_u64)
@@ -7670,7 +7710,7 @@ fn particle_benchmark_report(summary: &Value) -> String {
             demo.pointer("/physical_refresh/unique_fps")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
-            demo.pointer("/physical_refresh/repeated_refreshes")
+            demo.pointer("/physical_refresh/dropped_frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
             demo.pointer("/cpu/process_pct_of_one_core")
@@ -7751,7 +7791,22 @@ fn particle_benchmark_report(summary: &Value) -> String {
     }
     if let Some(step) = summary.get("step").filter(|step| !step.is_null()) {
         return format!(
-            "# Particle Optimisation Trial\n\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: capacity\n- Particles: {}\n- Qualified: {}\n- Unique FPS: {:.6}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- P99 render wall: {} us\n- Maximum render wall: {} us\n",
+            "# Particle Optimisation Trial\n\n- Result: {}\n- Geometry: 960x540 RGB565\n- Presentation: direct hidden-slot latch\n- Preset: capacity\n- Particles: {}\n- Qualified: {}\n- Unique FPS: {:.6}\n- Dropped frames: {}\n- Process CPU: {:.2}% of one core\n- Renderer CPU: {:.2}% of one core\n- P99 render wall: {} us\n- Maximum render wall: {} us\n",
+            if step
+                .pointer("/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                == 0
+            {
+                "PASS — 0 dropped frames".to_string()
+            } else {
+                format!(
+                    "FAIL — {} dropped frames",
+                    step.pointer("/physical_refresh/dropped_frames")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX)
+                )
+            },
             step.get("count").and_then(Value::as_u64).unwrap_or(0),
             step.get("qualified")
                 .and_then(Value::as_bool)
@@ -7759,6 +7814,9 @@ fn particle_benchmark_report(summary: &Value) -> String {
             step.pointer("/physical_refresh/unique_fps")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            step.pointer("/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX),
             step.pointer("/cpu/process_pct_of_one_core")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
@@ -7799,8 +7857,14 @@ fn particle_benchmark_report(summary: &Value) -> String {
             .pointer(&format!("/presets/{preset}/memory/renderer_scratch_bytes"))
             .and_then(Value::as_u64)
             .unwrap_or(0);
+        let dropped_frames = summary
+            .pointer(&format!(
+                "/presets/{preset}/confirmation/physical_refresh/dropped_frames"
+            ))
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX);
         report.push_str(&format!(
-            "- {preset}: {count} particles; first failing count: {first_fail}; simulation memory: {simulation_bytes} bytes; renderer scratch: {scratch_bytes} bytes\n"
+            "- {preset}: {count} particles; dropped frames: {dropped_frames}; first failing count: {first_fail}; simulation memory: {simulation_bytes} bytes; renderer scratch: {scratch_bytes} bytes\n"
         ));
     }
     report
@@ -7942,7 +8006,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     let benchmark_ini = benchmark_ini.ok_or("benchmark mode INI evidence is unavailable")?;
     let benchmark_ini_sha256 = encode_hex(&Sha256::digest(benchmark_ini.as_bytes()));
     let summary = json!({
-        "schema": "mister-magik-installed-screensaver-benchmark-v4",
+        "schema": "mister-magik-installed-screensaver-benchmark-v5",
         "benchmark_contract": {
             "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
             "startup_frames_are_informational": true,
@@ -7993,8 +8057,19 @@ fn persist_and_qualify_screensaver_benchmark(output_dir: &Path, summary: &Value)
         })
         .sum::<usize>();
     if qualification_failures > 0 {
+        let dropped_frames = summary
+            .get("runs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|run| {
+                run.pointer("/steady_state/physical_refresh/dropped_frames")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            })
+            .sum::<u64>();
         return Err(format!(
-            "screensaver benchmark failed {qualification_failures} qualification gate(s); evidence retained at {}",
+            "screensaver benchmark FAIL — {dropped_frames} dropped frames and {qualification_failures} total qualification gate(s); evidence retained at {}",
             output_dir.display()
         )
         .into());
@@ -8974,7 +9049,7 @@ fn physical_refresh_summary(
         .collect::<Vec<_>>();
     let unique_latch_flips = latch_flip_deltas.iter().sum::<u64>();
     let expected_refresh_intervals = expected_intervals.iter().sum::<u64>();
-    let repeated_refreshes = expected_intervals
+    let dropped_frames = expected_intervals
         .iter()
         .zip(&latch_flip_deltas)
         .map(|(expected, flips)| expected.saturating_sub(*flips))
@@ -8991,7 +9066,7 @@ fn physical_refresh_summary(
         "elapsed_us": elapsed_us,
         "expected_refresh_intervals": expected_refresh_intervals,
         "unique_latch_flips": unique_latch_flips,
-        "repeated_refreshes": repeated_refreshes,
+        "dropped_frames": dropped_frames,
         "unique_fps": unique_latch_flips as f64 * 1_000_000.0 / elapsed_us as f64,
         "max_completion_interval_us": intervals
             .iter()
@@ -9512,14 +9587,14 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
             "count": presentation_failures,
         }));
     }
-    let repeated_refreshes = run
-        .pointer("/steady_state/physical_refresh/repeated_refreshes")
+    let dropped_frames = run
+        .pointer("/steady_state/physical_refresh/dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
-    if repeated_refreshes > 0 {
+    if dropped_frames > 0 {
         failures.push(json!({
-            "kind": "repeated-refreshes",
-            "count": repeated_refreshes,
+            "kind": "dropped-frames",
+            "count": dropped_frames,
         }));
     }
     let long_completion_intervals = run
@@ -9627,9 +9702,9 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     )?;
     writeln!(
         report,
-        "| Run | Profile frames | Submitted FPS | Unique FPS | Repeats | Long gaps | Presentation failures | P99 work | Max wall |"
+        "| Run | Result | Profile frames | Submitted FPS | Unique FPS | Dropped frames | Long gaps | Presentation failures | P99 work | Max wall |"
     )?;
-    writeln!(report, "|---:|---:|---:|---:|---:|---:|---:|---:|---:|")?;
+    writeln!(report, "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")?;
     let runs = summary
         .get("runs")
         .and_then(Value::as_array)
@@ -9637,8 +9712,23 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     for run in runs {
         writeln!(
             report,
-            "| {} | {} | {:.2} | {:.2} | {} | {} | {} | {} us | {} us |",
+            "| {} | {} | {} | {:.2} | {:.2} | {} | {} | {} | {} us | {} us |",
             frame_u64(run, "run"),
+            if run
+                .pointer("/steady_state/physical_refresh/dropped_frames")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                == 0
+            {
+                "PASS — 0 dropped frames".to_string()
+            } else {
+                format!(
+                    "FAIL — {} dropped frames",
+                    run.pointer("/steady_state/physical_refresh/dropped_frames")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(u64::MAX)
+                )
+            },
             run.pointer("/measurement_window/frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
@@ -9648,7 +9738,7 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             run.pointer("/steady_state/physical_refresh/unique_fps")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
-            run.pointer("/steady_state/physical_refresh/repeated_refreshes")
+            run.pointer("/steady_state/physical_refresh/dropped_frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
             run.pointer("/steady_state/physical_refresh/long_completion_intervals")
@@ -15894,12 +15984,22 @@ H: Handlers=event3 js0"#
         assert!(report.contains("Render-ahead pipeline"));
         assert!(report.contains("Normalized CPU utilization"));
         assert!(report.contains("Qualification"));
-        let mut repeated = summary.clone();
-        repeated["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(1);
+        let mut dropped = summary.clone();
+        dropped["steady_state"]["physical_refresh"]["dropped_frames"] = json!(1);
         assert!(
-            screensaver_qualification_failures(&repeated)
+            screensaver_qualification_failures(&dropped)
                 .iter()
-                .any(|failure| failure["kind"] == "repeated-refreshes")
+                .any(|failure| failure["kind"] == "dropped-frames")
+        );
+        let mut missing = summary.clone();
+        missing["steady_state"]["physical_refresh"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dropped_frames");
+        assert!(
+            screensaver_qualification_failures(&missing)
+                .iter()
+                .any(|failure| failure["kind"] == "dropped-frames")
         );
         let mut reused = summary.clone();
         reused["render_ahead"]["reused_frames"] = json!(1);
@@ -16044,7 +16144,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn physical_refresh_summary_detects_repeats_despite_contiguous_submissions() {
+    fn physical_refresh_summary_detects_dropped_frames_despite_contiguous_submissions() {
         let frames = [
             physical_frame(100, 1_000_000, 100),
             physical_frame(101, 1_016_667, 101),
@@ -16053,7 +16153,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 2);
-        assert_eq!(summary["repeated_refreshes"], 1);
+        assert_eq!(summary["dropped_frames"], 1);
         assert_eq!(
             summary["long_completion_intervals"]
                 .as_array()
@@ -16074,7 +16174,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 3);
-        assert_eq!(summary["repeated_refreshes"], 0);
+        assert_eq!(summary["dropped_frames"], 0);
         assert_eq!(summary["long_completion_intervals"], json!([]));
     }
 
@@ -16092,7 +16192,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_662).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 1_826);
         assert_eq!(summary["unique_latch_flips"], 1_826);
-        assert_eq!(summary["repeated_refreshes"], 0);
+        assert_eq!(summary["dropped_frames"], 0);
         assert_eq!(summary["long_completion_intervals"], json!([]));
     }
 
@@ -16125,7 +16225,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 2);
-        assert_eq!(summary["repeated_refreshes"], 1);
+        assert_eq!(summary["dropped_frames"], 1);
     }
 
     fn particle_evidence_frame(index: u64, render_wall_us: u64) -> Value {
@@ -16320,6 +16420,32 @@ H: Handlers=event3 js0"#
                 .any(|failure| {
                     failure.get("kind").and_then(Value::as_str) == Some("render-deadline")
                 })
+        );
+
+        let mut dropped_telemetry = particle_telemetry(10_000);
+        let frames = dropped_telemetry[0]["launcher"]["frame_budget"]["recent_frames"]
+            .as_array_mut()
+            .unwrap();
+        for frame in &mut frames[300..] {
+            frame["completion_monotonic_us"] =
+                json!(frame["completion_monotonic_us"].as_u64().unwrap() + 16_667);
+        }
+        let dropped = summarize_particle_trial(
+            "capacity",
+            65_536,
+            12,
+            "search",
+            "telemetry.jsonl",
+            &dropped_telemetry,
+        );
+        assert_eq!(dropped["qualified"], false);
+        assert_eq!(dropped["physical_refresh"]["dropped_frames"], 1);
+        assert!(
+            dropped["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure["kind"] == "dropped-frames")
         );
     }
 

@@ -499,7 +499,7 @@ fn execute_particle_profile(
     let detail = device.profile(BenchmarkProfile::ParticleCpu, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v2")
     {
         return Err("particle CPU profile summary has the wrong schema".into());
     }
@@ -573,7 +573,7 @@ fn execute_particle_capacity(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-particle-capacity-benchmark-v1")
+        != Some("mister-magik-particle-capacity-benchmark-v2")
         || summary
             .pointer("/presets/capacity/confirmation/qualified")
             .and_then(Value::as_bool)
@@ -599,7 +599,7 @@ fn execute_particle_demo_40k(
     let detail = device.profile(BenchmarkProfile::ParticleDemo40k, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v2")
         || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
     {
         return Err("fixed 40,960-particle visual trial did not qualify".into());
@@ -622,7 +622,7 @@ fn execute_particle_step(
     let detail = device.profile(BenchmarkProfile::ParticleStep, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v2")
         || summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
     {
         return Err("fixed particle optimisation trial did not qualify".into());
@@ -651,7 +651,7 @@ fn emit_benchmark_result(
 }
 
 fn evaluate_particle_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-benchmark-v1") {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-benchmark-v2") {
         return Err("particle benchmark summary has the wrong schema".into());
     }
     for preset in ["capacity", "visual"] {
@@ -804,8 +804,19 @@ fn execute_catalog_lifecycle(
 }
 
 fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-installed-benchmark-v2")
+    {
+        return Err("catalog lifecycle benchmark summary has the wrong schema".into());
+    }
     if summary.get("scenario").and_then(Value::as_str) != Some("catalog-lifecycle") {
         return Err("catalog lifecycle benchmark summary has the wrong scenario".into());
+    }
+    if summary
+        .pointer("/startup_intro/schema")
+        .and_then(Value::as_str)
+        != Some("mister-magik-startup-intro-qualification-v3")
+    {
+        return Err("startup intro qualification has the wrong schema".into());
     }
     if summary.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true) {
         return Err("catalog lifecycle benchmark did not produce a valid catalog".into());
@@ -817,13 +828,18 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
     if systems.is_empty() {
         return Err("catalog lifecycle benchmark produced no systems".into());
     }
-    if summary
-        .pointer("/startup_intro/cadence/qualified")
-        .and_then(Value::as_bool)
-        != Some(true)
+    let dropped_frames = summary
+        .pointer("/startup_intro/cadence/dropped_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    if dropped_frames > 0
+        || summary
+            .pointer("/startup_intro/cadence/qualified")
+            .and_then(Value::as_bool)
+            != Some(true)
     {
         return Err(format!(
-            "startup intro failed dropped-frame qualification; cadence={}",
+            "startup intro FAIL — {dropped_frames} dropped frames; cadence={}",
             summary
                 .pointer("/startup_intro/cadence")
                 .cloned()
@@ -849,6 +865,11 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn evaluate_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-installed-screensaver-benchmark-v5")
+    {
+        return Err("screensaver benchmark summary has the wrong schema".into());
+    }
     let runs = summary
         .get("runs")
         .and_then(Value::as_array)
@@ -882,7 +903,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         .get("refresh_hz")
         .and_then(Value::as_f64)
         .unwrap_or(f64::INFINITY);
-    let repeats = u64_field(physical, "repeated_refreshes", u64::MAX);
+    let dropped_frames = u64_field(physical, "dropped_frames", u64::MAX);
     let long_gaps = physical
         .get("long_completion_intervals")
         .and_then(Value::as_array)
@@ -899,7 +920,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(usize::MAX);
-    let drops = u64_field(run, "latch_drop_delta", u64::MAX);
+    let latch_drops = u64_field(run, "latch_drop_delta", u64::MAX);
     let misses = u64_field(steady, "vsync_misses", u64::MAX);
     let errors = u64_field(run, "present_errors", u64::MAX);
     let status = run
@@ -914,11 +935,11 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let status_submitted = u64_field(status, "final_submitted_sequence", 0);
     let status_written = u64_field(status, "final_written_sequence", 0);
     if unique_fps < refresh_hz - 0.1
-        || repeats != 0
+        || dropped_frames != 0
         || long_gaps != 0
         || frames == 0
         || presentation_failures != 0
-        || drops != 0
+        || latch_drops != 0
         || misses != 0
         || errors != 0
         || status_mode != "async"
@@ -928,7 +949,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         || status_written != status_submitted
     {
         return Err(format!(
-            "screensaver profile run {id} failed after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} repeated_refreshes={repeats} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={drops} vsync_misses={misses} present_errors={errors} status_mode={status_mode} status_enqueue_p99_us={status_enqueue_p99} status_worker_errors={status_worker_errors} status_sequences={status_submitted}/{status_written}"
+            "screensaver profile run {id} FAIL — {dropped_frames} dropped frames after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={latch_drops} vsync_misses={misses} present_errors={errors} status_mode={status_mode} status_enqueue_p99_us={status_enqueue_p99} status_worker_errors={status_worker_errors} status_sequences={status_submitted}/{status_written}"
         )
         .into());
     }
@@ -963,7 +984,7 @@ mod tests {
                 "physical_refresh": {
                     "refresh_hz": 60.0,
                     "unique_fps": 60.0,
-                    "repeated_refreshes": 0,
+                    "dropped_frames": 0,
                     "long_completion_intervals": []
                 }
             },
@@ -981,14 +1002,33 @@ mod tests {
 
     #[test]
     fn installed_screensaver_requires_exactly_one_passing_run() {
-        assert!(evaluate_summary(&json!({"runs": [passing_run(1)]})).is_ok());
-        assert!(evaluate_summary(&json!({"runs": [passing_run(1), passing_run(2)]})).is_err());
+        assert!(
+            evaluate_summary(&json!({
+                "schema": "mister-magik-installed-screensaver-benchmark-v5",
+                "runs": [passing_run(1)]
+            }))
+            .is_ok()
+        );
+        assert!(
+            evaluate_summary(&json!({
+                "schema": "mister-magik-installed-screensaver-benchmark-v5",
+                "runs": [passing_run(1), passing_run(2)]
+            }))
+            .is_err()
+        );
+        assert!(
+            evaluate_summary(&json!({
+                "schema": "mister-magik-installed-screensaver-benchmark-v4",
+                "runs": [passing_run(1)]
+            }))
+            .is_err()
+        );
     }
 
     #[test]
     fn particle_benchmark_requires_both_confirmed_presets() {
         let mut summary = json!({
-            "schema": "mister-magik-particle-benchmark-v1",
+            "schema": "mister-magik-particle-benchmark-v2",
             "presets": {
                 "capacity": {
                     "confirmed_count": 131_072,
@@ -1010,9 +1050,9 @@ mod tests {
         let mut slow = passing_run(1);
         slow["steady_state"]["physical_refresh"]["unique_fps"] = json!(40.0);
         assert!(evaluate_run(&slow).is_err());
-        let mut dropped = passing_run(1);
-        dropped["latch_drop_delta"] = json!(1);
-        assert!(evaluate_run(&dropped).is_err());
+        let mut latch_dropped = passing_run(1);
+        latch_dropped["latch_drop_delta"] = json!(1);
+        assert!(evaluate_run(&latch_dropped).is_err());
         let mut late_start = passing_run(1);
         late_start["startup"]["max_wall_us"] = json!(5_000_000);
         assert!(evaluate_run(&late_start).is_ok());
@@ -1023,9 +1063,16 @@ mod tests {
         presentation_failure["steady_state"]["presentation_failures"] =
             json!([{"frame": 42, "kind": "sequence-gap"}]);
         assert!(evaluate_run(&presentation_failure).is_err());
-        let mut repeated = passing_run(1);
-        repeated["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(1);
-        assert!(evaluate_run(&repeated).is_err());
+        let mut dropped = passing_run(1);
+        dropped["steady_state"]["physical_refresh"]["dropped_frames"] = json!(1);
+        assert!(evaluate_run(&dropped).is_err());
+        let mut legacy = passing_run(1);
+        legacy["steady_state"]["physical_refresh"]
+            .as_object_mut()
+            .unwrap()
+            .remove("dropped_frames");
+        legacy["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(0);
+        assert!(evaluate_run(&legacy).is_err());
         let mut long_gap = passing_run(1);
         long_gap["steady_state"]["physical_refresh"]["long_completion_intervals"] =
             json!([{"frame": 42, "interval_us": 33_334}]);
@@ -1038,13 +1085,15 @@ mod tests {
     #[test]
     fn catalog_lifecycle_requires_a_valid_nonempty_catalog() {
         let passing = json!({
+            "schema": "mister-magik-installed-benchmark-v2",
             "scenario": "catalog-lifecycle",
             "catalog": {
                 "valid": true,
                 "systems": [{"system": "atari2600", "games": 2}]
             },
             "startup_intro": {
-                "cadence": {"qualified": true},
+                "schema": "mister-magik-startup-intro-qualification-v3",
+                "cadence": {"qualified": true, "dropped_frames": 0},
                 "latch_protocol": {"qualified": true}
             }
         });
@@ -1059,9 +1108,11 @@ mod tests {
         assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
 
         let mut dropped = json!({
+            "schema": "mister-magik-installed-benchmark-v2",
             "scenario": "catalog-lifecycle",
             "catalog": {"valid": true, "systems": [{"system": "arcade"}]},
             "startup_intro": {
+                "schema": "mister-magik-startup-intro-qualification-v3",
                 "cadence": {"qualified": false, "dropped_frames": 1},
                 "latch_protocol": {"qualified": true, "latch_drop_delta": 0}
             }
