@@ -27,6 +27,7 @@ lz4_flex = "0.14.0"
 mister-magik-agent-protocol = { path = "../crates/agent-protocol" }
 mister-magik-catalog = { path = "../crates/catalog" }
 mister-magik-ini = { path = "../crates/mister-ini" }
+mister-magik-latch-contract = { path = "../mister/platform/contracts/latch" }
 mister-magik-media-contract = { path = "../crates/media-contract", default-features = false }
 quick-xml = "0.41"
 serde = { version = "1", features = ["derive"] }

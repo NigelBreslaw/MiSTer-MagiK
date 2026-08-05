@@ -499,7 +499,7 @@ fn execute_particle_profile(
     let detail = device.profile(BenchmarkProfile::ParticleCpu, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v2")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v3")
     {
         return Err("particle CPU profile summary has the wrong schema".into());
     }
@@ -511,6 +511,22 @@ fn execute_particle_profile(
             <= 0
         {
             return Err(format!("particle CPU profile produced no {preset} samples").into());
+        }
+        if summary
+            .pointer(&format!("/presets/{preset}/timing/qualified"))
+            .and_then(Value::as_bool)
+            != Some(true)
+            || summary
+                .pointer(&format!(
+                    "/presets/{preset}/timing/physical_refresh/presentation_telemetry/schema"
+                ))
+                .and_then(Value::as_str)
+                != Some("mister-magik-frame-evidence-v5")
+        {
+            return Err(format!(
+                "particle CPU profile has no authoritative {preset} cadence evidence"
+            )
+            .into());
         }
     }
     reporter.emit(
@@ -578,6 +594,12 @@ fn execute_particle_capacity(
             .pointer("/presets/capacity/confirmation/qualified")
             .and_then(Value::as_bool)
             != Some(true)
+        || summary
+            .pointer(
+                "/presets/capacity/confirmation/physical_refresh/presentation_telemetry/schema",
+            )
+            .and_then(Value::as_str)
+            != Some("mister-magik-frame-evidence-v5")
     {
         return Err("particle capacity benchmark did not confirm a ceiling".into());
     }
@@ -601,6 +623,10 @@ fn execute_particle_demo_40k(
     device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v2")
         || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
+        || summary
+            .pointer("/demo/physical_refresh/presentation_telemetry/schema")
+            .and_then(Value::as_str)
+            != Some("mister-magik-frame-evidence-v5")
     {
         return Err("fixed 40,960-particle visual trial did not qualify".into());
     }
@@ -624,6 +650,10 @@ fn execute_particle_step(
     device.verify_health()?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v2")
         || summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
+        || summary
+            .pointer("/step/physical_refresh/presentation_telemetry/schema")
+            .and_then(Value::as_str)
+            != Some("mister-magik-frame-evidence-v5")
     {
         return Err("fixed particle optimisation trial did not qualify".into());
     }
@@ -663,6 +693,10 @@ fn evaluate_particle_summary(summary: &Value) -> AgentResult<()> {
                 .pointer("/confirmation/qualified")
                 .and_then(Value::as_bool)
                 != Some(true)
+            || result
+                .pointer("/confirmation/physical_refresh/presentation_telemetry/schema")
+                .and_then(Value::as_str)
+                != Some("mister-magik-frame-evidence-v5")
         {
             return Err(format!("particle benchmark did not confirm the {preset} ceiling").into());
         }
@@ -804,7 +838,7 @@ fn execute_catalog_lifecycle(
 }
 
 fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-installed-benchmark-v2")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-installed-benchmark-v3")
     {
         return Err("catalog lifecycle benchmark summary has the wrong schema".into());
     }
@@ -879,7 +913,7 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
 
 fn evaluate_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-installed-screensaver-benchmark-v5")
+        != Some("mister-magik-installed-screensaver-benchmark-v6")
     {
         return Err("screensaver benchmark summary has the wrong schema".into());
     }
@@ -917,11 +951,12 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         .and_then(Value::as_f64)
         .unwrap_or(f64::INFINITY);
     let dropped_frames = u64_field(physical, "dropped_frames", u64::MAX);
-    let long_gaps = physical
-        .get("long_completion_intervals")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(usize::MAX);
+    let authoritative = physical.get("source").and_then(Value::as_str)
+        == Some("fpga-owned-vblank-telemetry")
+        && physical
+            .pointer("/presentation_telemetry/schema")
+            .and_then(Value::as_str)
+            == Some("mister-magik-frame-evidence-v5");
     let frames = u64_field(steady, "frames", 0);
     let p99_work = u64_field(steady, "p99_work_us", u64::MAX);
     let p99_wall = u64_field(steady, "p99_wall_us", u64::MAX);
@@ -947,9 +982,9 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
     let status_worker_errors = u64_field(status, "worker_errors", u64::MAX);
     let status_submitted = u64_field(status, "final_submitted_sequence", 0);
     let status_written = u64_field(status, "final_written_sequence", 0);
-    if unique_fps < refresh_hz - 0.1
+    if !authoritative
+        || unique_fps < refresh_hz - 0.1
         || dropped_frames != 0
-        || long_gaps != 0
         || frames == 0
         || presentation_failures != 0
         || latch_drops != 0
@@ -962,7 +997,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         || status_written != status_submitted
     {
         return Err(format!(
-            "screensaver profile run {id} FAIL — {dropped_frames} dropped frames after warm-up: frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} long_completion_gaps={long_gaps} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={latch_drops} vsync_misses={misses} present_errors={errors} status_mode={status_mode} status_enqueue_p99_us={status_enqueue_p99} status_worker_errors={status_worker_errors} status_sequences={status_submitted}/{status_written}"
+            "screensaver profile run {id} FAIL — {dropped_frames} dropped frames after warm-up: authoritative={authoritative} frames={frames} unique_fps={unique_fps:.2}/{refresh_hz:.2} presentation_failures={presentation_failures} timing_overruns={over_budget} p99_work_us={p99_work} p99_wall_us={p99_wall} max_wall_us={max_wall} refresh_period_us={refresh} latch_drops={latch_drops} vsync_misses={misses} present_errors={errors} status_mode={status_mode} status_enqueue_p99_us={status_enqueue_p99} status_worker_errors={status_worker_errors} status_sequences={status_submitted}/{status_written}"
         )
         .into());
     }
@@ -995,10 +1030,16 @@ mod tests {
                 "vsync_misses": 0,
                 "presentation_failures": [],
                 "physical_refresh": {
+                    "source": "fpga-owned-vblank-telemetry",
                     "refresh_hz": 60.0,
                     "unique_fps": 60.0,
                     "dropped_frames": 0,
-                    "long_completion_intervals": []
+                    "presentation_telemetry": {
+                        "schema": "mister-magik-frame-evidence-v5"
+                    },
+                    "software_refresh_diagnostics": {
+                        "long_completion_intervals": []
+                    }
                 }
             },
             "latch_drop_delta": 0,
@@ -1017,21 +1058,21 @@ mod tests {
     fn installed_screensaver_requires_exactly_one_passing_run() {
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v5",
+                "schema": "mister-magik-installed-screensaver-benchmark-v6",
                 "runs": [passing_run(1)]
             }))
             .is_ok()
         );
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v5",
+                "schema": "mister-magik-installed-screensaver-benchmark-v6",
                 "runs": [passing_run(1), passing_run(2)]
             }))
             .is_err()
         );
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v4",
+                "schema": "mister-magik-installed-screensaver-benchmark-v5",
                 "runs": [passing_run(1)]
             }))
             .is_err()
@@ -1045,11 +1086,21 @@ mod tests {
             "presets": {
                 "capacity": {
                     "confirmed_count": 131_072,
-                    "confirmation": {"qualified": true}
+                    "confirmation": {
+                        "qualified": true,
+                        "physical_refresh": {"presentation_telemetry": {
+                            "schema": "mister-magik-frame-evidence-v5"
+                        }}
+                    }
                 },
                 "visual": {
                     "confirmed_count": 65_536,
-                    "confirmation": {"qualified": true}
+                    "confirmation": {
+                        "qualified": true,
+                        "physical_refresh": {"presentation_telemetry": {
+                            "schema": "mister-magik-frame-evidence-v5"
+                        }}
+                    }
                 }
             }
         });
@@ -1088,9 +1139,9 @@ mod tests {
         legacy["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(0);
         assert!(evaluate_run(&legacy).is_err());
         let mut long_gap = passing_run(1);
-        long_gap["steady_state"]["physical_refresh"]["long_completion_intervals"] =
+        long_gap["steady_state"]["physical_refresh"]["software_refresh_diagnostics"]["long_completion_intervals"] =
             json!([{"frame": 42, "interval_us": 33_334}]);
-        assert!(evaluate_run(&long_gap).is_err());
+        assert!(evaluate_run(&long_gap).is_ok());
         let mut blocking_status = passing_run(1);
         blocking_status["status_publishing"]["enqueue_p99_us"] = json!(250);
         assert!(evaluate_run(&blocking_status).is_err());
@@ -1099,7 +1150,7 @@ mod tests {
     #[test]
     fn catalog_lifecycle_requires_a_valid_nonempty_catalog() {
         let passing = json!({
-            "schema": "mister-magik-installed-benchmark-v2",
+            "schema": "mister-magik-installed-benchmark-v3",
             "scenario": "catalog-lifecycle",
             "catalog": {
                 "valid": true,
@@ -1118,6 +1169,10 @@ mod tests {
         });
         assert!(evaluate_catalog_lifecycle_summary(&passing).is_ok());
 
+        let mut legacy_installed = passing.clone();
+        legacy_installed["schema"] = json!("mister-magik-installed-benchmark-v2");
+        assert!(evaluate_catalog_lifecycle_summary(&legacy_installed).is_err());
+
         let mut legacy = passing.clone();
         legacy["startup_intro"]["schema"] = json!("mister-magik-startup-intro-qualification-v3");
         assert!(evaluate_catalog_lifecycle_summary(&legacy).is_err());
@@ -1131,7 +1186,7 @@ mod tests {
         assert!(evaluate_catalog_lifecycle_summary(&empty).is_err());
 
         let mut dropped = json!({
-            "schema": "mister-magik-installed-benchmark-v2",
+            "schema": "mister-magik-installed-benchmark-v3",
             "scenario": "catalog-lifecycle",
             "catalog": {"valid": true, "systems": [{"system": "arcade"}]},
             "startup_intro": {

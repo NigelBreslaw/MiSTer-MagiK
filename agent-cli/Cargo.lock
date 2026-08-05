@@ -21,6 +21,7 @@ dependencies = [
  "mister-magik-agent-protocol",
  "mister-magik-catalog",
  "mister-magik-ini",
+ "mister-magik-latch-contract",
  "mister-magik-media-contract",
  "objc2",
  "objc2-av-foundation",
@@ -569,6 +570,10 @@ dependencies = [
 
 [[package]]
 name = "mister-magik-ini"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-latch-contract"
 version = "0.1.0"
 
 [[package]]

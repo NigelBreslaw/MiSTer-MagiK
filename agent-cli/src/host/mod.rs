@@ -4426,7 +4426,7 @@ fn profile_installed_catalog_lifecycle(
             format!("{}\n", serde_json::to_string_pretty(&final_status)?),
         )?;
         Ok(json!({
-            "schema": "mister-magik-installed-benchmark-v2",
+            "schema": "mister-magik-installed-benchmark-v3",
             "scenario": "catalog-lifecycle",
             "elapsed_ms": complete_ms,
             "timing": {
@@ -6238,17 +6238,11 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         .ok_or("startup intro telemetry has no physical refresh period")?;
     let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
     let mut software_refresh_diagnostics =
-        physical_refresh_summary(0, &selected, refresh_period_us)?;
+        software_refresh_diagnostics(0, &selected, refresh_period_us)?;
     let software_estimated_dropped_frames = software_refresh_diagnostics
-        .get("dropped_frames")
+        .get("software_estimated_dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
-    software_refresh_diagnostics["software_estimated_dropped_frames"] =
-        json!(software_estimated_dropped_frames);
-    software_refresh_diagnostics
-        .as_object_mut()
-        .expect("physical refresh summary is an object")
-        .remove("dropped_frames");
     let long_completion_intervals = software_refresh_diagnostics
         .get("long_completion_intervals")
         .and_then(Value::as_array)
@@ -6291,14 +6285,6 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         .iter()
         .map(|frame| frame_u64(frame, "main_present_completion_poll_count").saturating_sub(1))
         .sum::<u64>();
-    let unique_fps = software_refresh_diagnostics
-        .get("unique_fps")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
-    let refresh_hz = software_refresh_diagnostics
-        .get("refresh_hz")
-        .and_then(Value::as_f64)
-        .unwrap_or(f64::INFINITY);
     let cabinet_wait_frames = selected.len().saturating_sub(expected_intro_frames);
     let cadence_qualified = dropped_frames == 0
         && presentation_telemetry
@@ -6708,7 +6694,7 @@ fn profile_installed_particle_cpu(
         }
     };
     let summary = json!({
-        "schema": "mister-magik-particle-cpu-profile-v2",
+        "schema": "mister-magik-particle-cpu-profile-v3",
         "display": {
             "benchmark_mode": benchmark_mode.id,
             "framebuffer": "960x540",
@@ -7121,12 +7107,11 @@ fn summarize_particle_trial_for_renderer(
     refresh_periods.sort_unstable();
     let refresh_period_us = median_u64(&refresh_periods).unwrap_or(16_667);
     let physical = if steady.len() >= 2 {
-        match physical_refresh_summary(0, steady, refresh_period_us) {
+        match authoritative_physical_refresh(0, telemetry, steady, refresh_period_us) {
             Ok(summary) => summary,
             Err(error) => {
-                failures.push(
-                    json!({"kind": "physical-refresh-evidence", "detail": error.to_string()}),
-                );
+                failures
+                    .push(json!({"kind": "fpga-cadence-evidence", "detail": error.to_string()}));
                 Value::Null
             }
         }
@@ -7155,13 +7140,6 @@ fn summarize_particle_trial_for_renderer(
         != 0
     {
         failures.push(json!({"kind": "dropped-frames"}));
-    }
-    if physical
-        .get("long_completion_intervals")
-        .and_then(Value::as_array)
-        .is_none_or(|intervals| !intervals.is_empty())
-    {
-        failures.push(json!({"kind": "long-completion-gap"}));
     }
     let phases = steady
         .iter()
@@ -8040,7 +8018,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     let benchmark_ini = benchmark_ini.ok_or("benchmark mode INI evidence is unavailable")?;
     let benchmark_ini_sha256 = encode_hex(&Sha256::digest(benchmark_ini.as_bytes()));
     let summary = json!({
-        "schema": "mister-magik-installed-screensaver-benchmark-v5",
+        "schema": "mister-magik-installed-screensaver-benchmark-v6",
         "benchmark_contract": {
             "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
             "startup_frames_are_informational": true,
@@ -8754,7 +8732,8 @@ fn summarize_screensaver_telemetry(
         .filter(|duration| *duration > 0.0)
         .ok_or_else(|| format!("screensaver profile run {run} has no valid duration"))?;
     let submitted_fps = steady.len() as f64 / profile_duration_secs;
-    let physical_refresh = physical_refresh_summary(run, steady, refresh_period_us)?;
+    let physical_refresh =
+        authoritative_physical_refresh(run, telemetry, steady, refresh_period_us)?;
     let work_signal = steady
         .iter()
         .map(|frame| frame_work_us(frame) as f64)
@@ -9018,7 +8997,168 @@ fn mean_f64(values: &[f64]) -> f64 {
     }
 }
 
-fn physical_refresh_summary(
+#[derive(Clone, Copy)]
+struct HostPresentationTelemetrySnapshot {
+    captured_monotonic_us: u64,
+    owned_vblank_count: u32,
+    presented_vblank_count: u32,
+    repeated_vblank_count: u32,
+    ownership_loss_count: u32,
+    magik_ownership: bool,
+    pending: bool,
+}
+
+impl mister_magik_latch_contract::PresentationTelemetryCounters
+    for HostPresentationTelemetrySnapshot
+{
+    fn owned_vblank_count(self) -> u32 {
+        self.owned_vblank_count
+    }
+
+    fn presented_vblank_count(self) -> u32 {
+        self.presented_vblank_count
+    }
+
+    fn repeated_vblank_count(self) -> u32 {
+        self.repeated_vblank_count
+    }
+
+    fn ownership_loss_count(self) -> u32 {
+        self.ownership_loss_count
+    }
+
+    fn magik_ownership(self) -> bool {
+        self.magik_ownership
+    }
+
+    fn pending(self) -> bool {
+        self.pending
+    }
+}
+
+fn parse_host_presentation_snapshot(sample: &Value) -> Option<HostPresentationTelemetrySnapshot> {
+    let telemetry = sample.get("presentation")?;
+    if telemetry.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-presentation-telemetry-snapshot-v1")
+        || telemetry.get("source").and_then(Value::as_str) != Some("fpga-owned-vblank-telemetry")
+        || telemetry.get("available").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    Some(HostPresentationTelemetrySnapshot {
+        captured_monotonic_us: telemetry.get("captured_monotonic_us")?.as_u64()?,
+        owned_vblank_count: u32::try_from(telemetry.get("owned_vblank_count")?.as_u64()?).ok()?,
+        presented_vblank_count: u32::try_from(telemetry.get("presented_vblank_count")?.as_u64()?)
+            .ok()?,
+        repeated_vblank_count: u32::try_from(telemetry.get("repeated_vblank_count")?.as_u64()?)
+            .ok()?,
+        ownership_loss_count: u32::try_from(telemetry.get("ownership_loss_count")?.as_u64()?)
+            .ok()?,
+        magik_ownership: telemetry.get("magik_ownership")?.as_bool()?,
+        pending: telemetry.get("pending")?.as_bool()?,
+    })
+}
+
+fn authoritative_presentation_window(
+    run: usize,
+    samples: &[Value],
+    first_completion_us: u64,
+    last_completion_us: u64,
+    refresh_period_us: u64,
+) -> Result<Value> {
+    let snapshots = samples
+        .iter()
+        .filter_map(parse_host_presentation_snapshot)
+        .filter(|snapshot| {
+            snapshot.captured_monotonic_us >= first_completion_us
+                && snapshot.captured_monotonic_us <= last_completion_us
+        })
+        .collect::<Vec<_>>();
+    let start = snapshots.first().copied().ok_or_else(|| {
+        format!("FPGA cadence run {run} has no settled snapshot inside the measurement window")
+    })?;
+    let end = snapshots.last().copied().ok_or_else(|| {
+        format!("FPGA cadence run {run} has no final snapshot inside the measurement window")
+    })?;
+    let elapsed_us = end
+        .captured_monotonic_us
+        .checked_sub(start.captured_monotonic_us)
+        .filter(|elapsed| *elapsed > 0)
+        .ok_or_else(|| format!("FPGA cadence run {run} has insufficient snapshot separation"))?;
+    let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
+        start,
+        end,
+        elapsed_us,
+        refresh_period_us,
+    )
+    .map_err(|error| format!("FPGA cadence run {run} is invalid: {error}"))?;
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v5",
+        "source": "fpga-owned-vblank-telemetry",
+        "available": true,
+        "elapsed_us": delta.elapsed_us,
+        "owned_vblank_delta": delta.owned_vblank_delta,
+        "presented_vblank_delta": delta.presented_vblank_delta,
+        "repeated_vblank_delta": delta.repeated_vblank_delta,
+        "ownership_loss_delta": delta.ownership_loss_delta,
+        "dropped_frames": delta.repeated_vblank_delta,
+        "start_captured_monotonic_us": start.captured_monotonic_us,
+        "end_captured_monotonic_us": end.captured_monotonic_us,
+    }))
+}
+
+fn authoritative_physical_refresh(
+    run: usize,
+    samples: &[Value],
+    frames: &[&Value],
+    refresh_period_us: u64,
+) -> Result<Value> {
+    let first_completion_us = frames
+        .first()
+        .and_then(|frame| frame.get("completion_monotonic_us"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| format!("FPGA cadence run {run} has no first completion timestamp"))?;
+    let last_completion_us = frames
+        .last()
+        .and_then(|frame| frame.get("completion_monotonic_us"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value > first_completion_us)
+        .ok_or_else(|| format!("FPGA cadence run {run} has no final completion timestamp"))?;
+    let presentation_telemetry = authoritative_presentation_window(
+        run,
+        samples,
+        first_completion_us,
+        last_completion_us,
+        refresh_period_us,
+    )?;
+    let elapsed_us = presentation_telemetry["elapsed_us"]
+        .as_u64()
+        .ok_or("FPGA cadence evidence has no elapsed time")?;
+    let presented = presentation_telemetry["presented_vblank_delta"]
+        .as_u64()
+        .ok_or("FPGA cadence evidence has no presented-vblank delta")?;
+    let dropped_frames = presentation_telemetry["repeated_vblank_delta"]
+        .as_u64()
+        .ok_or("FPGA cadence evidence has no repeated-vblank delta")?;
+    Ok(json!({
+        "source": "fpga-owned-vblank-telemetry",
+        "refresh_period_us": refresh_period_us,
+        "refresh_hz": 1_000_000.0 / refresh_period_us as f64,
+        "elapsed_us": elapsed_us,
+        "unique_latch_flips": presented,
+        "dropped_frames": dropped_frames,
+        "unique_fps": presented as f64 * 1_000_000.0 / elapsed_us as f64,
+        "presentation_telemetry": presentation_telemetry,
+        "software_refresh_diagnostics": software_refresh_diagnostics(
+            run,
+            frames,
+            refresh_period_us,
+        )?,
+    }))
+}
+
+fn software_refresh_diagnostics(
     run: usize,
     frames: &[&Value],
     refresh_period_us: u64,
@@ -9100,7 +9240,7 @@ fn physical_refresh_summary(
         "elapsed_us": elapsed_us,
         "expected_refresh_intervals": expected_refresh_intervals,
         "unique_latch_flips": unique_latch_flips,
-        "dropped_frames": dropped_frames,
+        "software_estimated_dropped_frames": dropped_frames,
         "unique_fps": unique_latch_flips as f64 * 1_000_000.0 / elapsed_us as f64,
         "max_completion_interval_us": intervals
             .iter()
@@ -9631,15 +9771,16 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
             "count": dropped_frames,
         }));
     }
-    let long_completion_intervals = run
-        .pointer("/steady_state/physical_refresh/long_completion_intervals")
-        .and_then(Value::as_array)
-        .map_or(usize::MAX, Vec::len);
-    if long_completion_intervals > 0 {
-        failures.push(json!({
-            "kind": "long-completion-intervals",
-            "count": long_completion_intervals,
-        }));
+    if run
+        .pointer("/steady_state/physical_refresh/source")
+        .and_then(Value::as_str)
+        != Some("fpga-owned-vblank-telemetry")
+        || run
+            .pointer("/steady_state/physical_refresh/presentation_telemetry/schema")
+            .and_then(Value::as_str)
+            != Some("mister-magik-frame-evidence-v5")
+    {
+        failures.push(json!({"kind": "authoritative-fpga-cadence-missing"}));
     }
     for (kind, pointer) in [
         ("render-ahead-starvation", "/render_ahead/starvation_count"),
@@ -9775,7 +9916,9 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
             run.pointer("/steady_state/physical_refresh/dropped_frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
-            run.pointer("/steady_state/physical_refresh/long_completion_intervals")
+            run.pointer(
+                "/steady_state/physical_refresh/software_refresh_diagnostics/long_completion_intervals",
+            )
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len),
             run.pointer("/steady_state/presentation_failures")
@@ -15951,7 +16094,7 @@ H: Handlers=event3 js0"#
             frame["status_worker_errors"] = json!(0);
             frame
         };
-        let telemetry = [json!({
+        let mut telemetry = vec![json!({
             "launcher": {
                 "screensaver_profile_state": "active",
                 "status_publish_mode": "async",
@@ -15976,8 +16119,25 @@ H: Handlers=event3 js0"#
                         frame(6, 99_000)
                     ]
                 }
+            },
+            "presentation": {
+                "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                "source": "fpga-owned-vblank-telemetry",
+                "available": true,
+                "captured_monotonic_us": 70_000,
+                "owned_vblank_count": 100,
+                "presented_vblank_count": 100,
+                "repeated_vblank_count": 0,
+                "ownership_loss_count": 0,
+                "magik_ownership": true,
+                "pending": false
             }
         })];
+        let mut final_sample = telemetry[0].clone();
+        final_sample["presentation"]["captured_monotonic_us"] = json!(80_000);
+        final_sample["presentation"]["owned_vblank_count"] = json!(101);
+        final_sample["presentation"]["presented_vblank_count"] = json!(101);
+        telemetry.push(final_sample);
         let summary = summarize_screensaver_telemetry(
             1,
             &telemetry,
@@ -16174,11 +16334,11 @@ H: Handlers=event3 js0"#
 
     fn physical_summary(frames: &[Value], period_us: u64) -> Result<Value> {
         let references = frames.iter().collect::<Vec<_>>();
-        physical_refresh_summary(1, &references, period_us)
+        software_refresh_diagnostics(1, &references, period_us)
     }
 
     #[test]
-    fn physical_refresh_summary_detects_dropped_frames_despite_contiguous_submissions() {
+    fn software_refresh_diagnostics_detects_timing_gap() {
         let frames = [
             physical_frame(100, 1_000_000, 100),
             physical_frame(101, 1_016_667, 101),
@@ -16187,7 +16347,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 2);
-        assert_eq!(summary["dropped_frames"], 1);
+        assert_eq!(summary["software_estimated_dropped_frames"], 1);
         assert_eq!(
             summary["long_completion_intervals"]
                 .as_array()
@@ -16198,7 +16358,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn physical_refresh_summary_accepts_exact_sixty_hz_and_counter_wrap() {
+    fn software_refresh_diagnostics_accepts_exact_sixty_hz_and_counter_wrap() {
         let frames = [
             physical_frame(1, 1_000_000, u16::MAX - 1),
             physical_frame(2, 1_016_667, u16::MAX),
@@ -16208,12 +16368,12 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 3);
-        assert_eq!(summary["dropped_frames"], 0);
+        assert_eq!(summary["software_estimated_dropped_frames"], 0);
         assert_eq!(summary["long_completion_intervals"], json!([]));
     }
 
     #[test]
-    fn physical_refresh_summary_does_not_accumulate_nominal_clock_error() {
+    fn software_refresh_diagnostics_does_not_accumulate_nominal_clock_error() {
         let frames = (0..1_827)
             .map(|index| {
                 physical_frame(
@@ -16226,18 +16386,18 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_662).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 1_826);
         assert_eq!(summary["unique_latch_flips"], 1_826);
-        assert_eq!(summary["dropped_frames"], 0);
+        assert_eq!(summary["software_estimated_dropped_frames"], 0);
         assert_eq!(summary["long_completion_intervals"], json!([]));
     }
 
     #[test]
-    fn physical_refresh_summary_rejects_missing_timestamps() {
+    fn software_refresh_diagnostics_rejects_missing_timestamps() {
         let frames = [physical_frame(1, 1_000_000, 1), physical_frame(2, 0, 2)];
         assert!(physical_summary(&frames, 16_667).is_err());
     }
 
     #[test]
-    fn physical_refresh_summary_records_long_intervals() {
+    fn software_refresh_diagnostics_records_long_intervals() {
         let frames = [
             physical_frame(1, 1_000_000, 1),
             physical_frame(2, 1_025_001, 2),
@@ -16250,7 +16410,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn physical_refresh_summary_exposes_pending_zero_then_two_flip_pattern() {
+    fn software_refresh_diagnostics_exposes_pending_zero_then_two_flip_pattern() {
         let frames = [
             physical_frame(953, 1_000_000, 3416),
             physical_frame(954, 1_016_667, 3416),
@@ -16259,7 +16419,7 @@ H: Handlers=event3 js0"#
         let summary = physical_summary(&frames, 16_667).unwrap();
         assert_eq!(summary["expected_refresh_intervals"], 3);
         assert_eq!(summary["unique_latch_flips"], 2);
-        assert_eq!(summary["dropped_frames"], 1);
+        assert_eq!(summary["software_estimated_dropped_frames"], 1);
     }
 
     fn particle_evidence_frame(index: u64, render_wall_us: u64) -> Value {
@@ -16393,12 +16553,29 @@ H: Handlers=event3 js0"#
         let frames = (0..604)
             .map(|index| particle_evidence_frame(index, render_wall_us))
             .collect::<Vec<_>>();
-        vec![json!({
+        let first = json!({
             "launcher": {
                 "present_backend": "fpga-vblank-latch-hidden",
                 "frame_budget": {"recent_frames": frames}
+            },
+            "presentation": {
+                "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                "source": "fpga-owned-vblank-telemetry",
+                "available": true,
+                "captured_monotonic_us": 100_000,
+                "owned_vblank_count": 100,
+                "presented_vblank_count": 100,
+                "repeated_vblank_count": 0,
+                "ownership_loss_count": 0,
+                "magik_ownership": true,
+                "pending": false
             }
-        })]
+        });
+        let mut last = first.clone();
+        last["presentation"]["captured_monotonic_us"] = json!(9_000_000);
+        last["presentation"]["owned_vblank_count"] = json!(634);
+        last["presentation"]["presented_vblank_count"] = json!(634);
+        vec![first, last]
     }
 
     #[test]
@@ -16457,13 +16634,8 @@ H: Handlers=event3 js0"#
         );
 
         let mut dropped_telemetry = particle_telemetry(10_000);
-        let frames = dropped_telemetry[0]["launcher"]["frame_budget"]["recent_frames"]
-            .as_array_mut()
-            .unwrap();
-        for frame in &mut frames[300..] {
-            frame["completion_monotonic_us"] =
-                json!(frame["completion_monotonic_us"].as_u64().unwrap() + 16_667);
-        }
+        dropped_telemetry[1]["presentation"]["presented_vblank_count"] = json!(633);
+        dropped_telemetry[1]["presentation"]["repeated_vblank_count"] = json!(1);
         let dropped = summarize_particle_trial(
             "capacity",
             65_536,
