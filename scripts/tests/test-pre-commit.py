@@ -166,6 +166,28 @@ class PreCommitTests(unittest.TestCase):
         marked = self.repository.gate()
         self.assertEqual(marked.returncode, 0, marked.stderr)
 
+    def test_software_and_latch_counters_cannot_populate_dropped_frames(self) -> None:
+        # dropped-frame-legacy-fixture: rejection coverage
+        latch_assignment = "fn invalid(latch_drop_count: u64) { let dropped_frames = latch_drop_count; }\n"
+        self.repository.stage(
+            "apps/mister/src/lib.rs",
+            latch_assignment,
+        )
+        result = self.repository.gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("software_frame_drop_authority", result.stderr)
+
+        self.repository.run("git", "reset", "-q")
+        # dropped-frame-legacy-fixture: rejection coverage
+        software_assignment = "fn invalid(software_estimated: u64) { let dropped_frames = software_estimated; }\n"
+        self.repository.stage(
+            "apps/mister/src/lib.rs",
+            software_assignment,
+        )
+        result = self.repository.gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("software_frame_drop_authority", result.stderr)
+
     def test_whitespace_shell_and_formatter_failures_are_actionable(self) -> None:
         self.repository.stage("README.md", "trailing space \n")
         result = self.repository.gate()

@@ -110,8 +110,9 @@ external-direct post count as `ceil(20 seconds / measured refresh period)`, plus
 any reported spinning-cabinet wait frames before the live launcher is ready.
 This applies to HDMI and to `crt-240p60`, `crt-288p50`, `crt-480p60`, and
 `crt-576p50`. All must sustain the resolved physical refresh within the ordinary
-tolerance, zero dropped frames, zero pacing failures, and independently
-zero latch-protocol drops or completion failures. Catalog coordinator and walker
+tolerance and zero FPGA repeated-vblank drops, with latch-protocol drops and
+completion failures gated independently. Pacing and completion timing remain
+diagnostic. Catalog coordinator and walker
 affinity must remain on CPU0. The run also requires a snapshot milestone before
 the launcher morph begins and a pixel-identical 20-second frame/cache handoff.
 A qualification record includes the resolved route, native framebuffer
@@ -274,15 +275,13 @@ timings are recorded as startup evidence but never fail the benchmark. A
 screensaver may take several frames to become visible without creating a
 user-visible defect.
 
-Steady state begins on the fourth active screensaver frame. The benchmark uses
-the median nonzero measured refresh period and completion timestamps to count
-the physical refresh intervals in that window. Wrapping latch flip-counter
-deltas count unique presentations. Unique presentation FPS must remain within
-0.1 FPS of the measured refresh rate, with zero dropped frames, no completion gap
-over 1.5 refresh periods, incomplete latch, sequence mismatch, non-unit flip,
-presentation error, latch drop, or final pacing miss. Submitted FPS, wall-time
-overruns, P99, and maximum timings remain diagnostic evidence; contiguous
-submitted sequences alone do not prove unique physical refreshes.
+Steady state begins on the fourth active screensaver frame. Versioned agent
+telemetry brackets that window with settled protocol-v5 `0x5c` snapshots.
+After wrap-safe invariant, ownership, endpoint, and plausibility validation,
+the repeated-vblank delta is `dropped_frames` and must be zero. Latch rejection,
+completion, sequence, and flip counters remain independent protocol evidence.
+Completion gaps, submitted FPS, wall-time overruns, P99, maximum timings, and
+the software drop estimate remain diagnostic attribution only.
 
 This distinction is intentional. Do not tighten startup timing because of a
 slow first render, asset loading, allocation, profiler startup, or other

@@ -64,8 +64,9 @@ the FPGA latch did not reject or supersede a post. Protocol-v5 owned-vblank
 telemetry independently classifies every MagiK-owned refresh as a presentation
 or repeat. Runtime and benchmark evidence therefore reports the hardware
 `dropped_frames` count separately from latch protocol drops and fails if either
-axis is nonzero; completion timestamps and the Linux vblank observer remain
-attribution signals.
+axis is nonzero. Counter wrap, ownership, settled endpoints, lifetime/delta
+invariants, and plausibility must validate before the count is authoritative;
+completion timestamps and the Linux vblank observer remain attribution signals.
 
 The final handoff is derived only from the production launcher's live frame:
 

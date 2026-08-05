@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import sys
 from typing import NoReturn, Sequence
@@ -156,6 +157,15 @@ DEPRECATED_DROPPED_FRAME_TERMS = (
     "repeated_" + "presentations",
     "repeated-" + "refreshes",
 )
+SOFTWARE_REFRESH_HELPER = "physical_" + "refresh_summary"
+FORBIDDEN_DROPPED_FRAME_SOURCES = (
+    "latch_drop",
+    "software_estimated",
+    "expected_refresh_intervals",
+    "completion_monotonic",
+    SOFTWARE_REFRESH_HELPER,
+)
+DROP_ASSIGNMENT = re.compile(r"(?:dropped_frames\s*=|[\"']dropped_frames[\"']\s*:)")
 
 
 class GateError(Exception):
@@ -331,6 +341,19 @@ def check_dropped_frame_terminology(repository: Path, paths: Sequence[str]) -> N
                 if term in line:
                     raise GateError(
                         f"deprecated_dropped_frame_term: {path}:{line_number}: {term}"
+                    )
+            if value.suffix.lower() in {".py", ".rs", ".slint", ".ts"}:
+                if SOFTWARE_REFRESH_HELPER in line:
+                    raise GateError(
+                        f"software_frame_drop_authority: {path}:{line_number}: "
+                        f"{SOFTWARE_REFRESH_HELPER}"
+                    )
+                if DROP_ASSIGNMENT.search(line) and any(
+                    source in line for source in FORBIDDEN_DROPPED_FRAME_SOURCES
+                ):
+                    raise GateError(
+                        f"software_frame_drop_authority: {path}:{line_number}: "
+                        "dropped_frames must come from validated FPGA repeated-vblank evidence"
                     )
 
 

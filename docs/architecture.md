@@ -234,17 +234,18 @@ conversion:
   `fpga-latch-report` magic for passive commands `0x58`/`0x59`, production-ready
   exact protocol-v5 capabilities `0x03ff` and CAPS CRC from `0x59`, SET support derived
   from that exact profile without a side-effecting `0x57` probe, and advancing latch
-  `flip_count`/`post_count` while the launcher runs. The JSON
+  `flip_count`/`post_count` while the launcher runs. Protocol-v5 command `0x5c`
+  supplies owned, presented, repeated, and ownership-loss vblank counters. The JSON
   `composition_state` describes UI composition, not the final present backend.
   For `/dev/fb0`, userspace wall/loop cadence is the visual proof because the
   copy happens after vblank. On the latch path, protocol proof comes from posts
   completing before deadline, alternating hidden buffers, consistent sampled
   flip counters, valid status CRC, and passive `drop_count=0` with unchanged
-  `reject_count`. Motion cadence is a separate TV-visible gate derived from
-  confirmed completion timestamps and flip progression: every physical refresh
-  must receive a newly confirmed frame. A zero latch drop count never proves
-  zero dropped frames. Linux wake jitter after the vblank wait is reported
-  separately as scheduler timing.
+  `reject_count`. Motion cadence is a separate TV-visible gate: validated
+  `repeated_vblank_count` deltas are the sole source of `dropped_frames`, and
+  every authoritative window requires zero repeats. A zero latch drop count
+  never proves zero dropped frames. Completion timestamps, flip progression,
+  and Linux wake jitter are reported separately as software diagnostics.
   A protocol-v5 rejection also snapshots passive
   `0x5a` receiver context:
   reject count/reason, expected and observed word indices, observed command,

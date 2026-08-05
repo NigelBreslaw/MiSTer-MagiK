@@ -21,8 +21,9 @@ ordering source of truth.
   same frame when Arcade remains active.
 - Keep scanout cadence and latch protocol health as separate gates. A zero
   latch drop count does not prove that every physical refresh received a new
-  frame; use confirmed completion timestamps and flip progression to count
-  dropped frames. Every authoritative animation window requires exactly zero.
+  frame. Only a validated protocol-v5 `repeated_vblank_count` delta may populate
+  `dropped_frames`; completion timing remains diagnostic. Every authoritative
+  animation window requires exactly zero FPGA repeats.
 - Tests should exercise event/state sequences, not only helper predicates.
 
 ## Assurance
