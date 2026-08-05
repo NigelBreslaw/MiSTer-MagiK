@@ -1,0 +1,1324 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use crate::raster::{depth_style, PreparedScreenshotCard};
+use crate::{
+    PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotSamplingProfile,
+};
+use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
+use mister_magik_framebuffer_scenes::{
+    FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneError, SceneGeometry,
+    SceneTarget,
+};
+use std::collections::HashSet;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::time::{Duration, Instant};
+
+const WIDE_LAYER_TARGETS: [usize; 5] = [33, 24, 20, 16, 12];
+const COMPACT_LAYER_TARGETS: [usize; 5] = [25, 18, 15, 12, 9];
+const REFERENCE_HEIGHT: usize = 540;
+const MAX_CARD_ADOPTIONS_PER_FRAME: usize = 1;
+const REFERENCE_HZ: u64 = 60;
+const TICK_ONE: i64 = 1 << 16;
+const MIN_TILE_SPEED: usize = 1;
+const SPEED_COUNT: usize = 5;
+const REFERENCE_PLACEMENT_GAP: usize = 18;
+
+pub type WorkerStartCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScreenshotParadeStartup {
+    Streaming,
+    Prepared,
+}
+
+#[derive(Clone)]
+pub struct ScreenshotParadeConfig {
+    pub geometry: SceneGeometry,
+    pub seed: u64,
+    pub sampling_profile: ScreenshotSamplingProfile,
+    pub startup: ScreenshotParadeStartup,
+    pub worker_start: Option<WorkerStartCallback>,
+}
+
+impl std::fmt::Debug for ScreenshotParadeConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ScreenshotParadeConfig")
+            .field("geometry", &self.geometry)
+            .field("seed", &self.seed)
+            .field("sampling_profile", &self.sampling_profile)
+            .field("startup", &self.startup)
+            .field("worker_start", &self.worker_start.as_ref().map(|_| "callback"))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScreenshotParadeStats {
+    pub card_adopt_us: u128,
+    pub cards_adopted: usize,
+    pub parade_advance_us: u128,
+    pub background_us: u128,
+    pub draw_order_us: u128,
+    pub tile_blit_us: u128,
+    pub cards_drawn: usize,
+    pub cards_culled: usize,
+    pub raster_held_cards: usize,
+    pub raster_moved_cards: usize,
+    pub raster_hold_layer_mask: u8,
+    pub raster_visible_layer_mask: u8,
+    pub sixteenth_phase_layer_mask: u8,
+    pub phase_bank_resident_bytes: usize,
+    pub scale_count: u64,
+    pub scale_total_us: u128,
+    pub scale_max_us: u128,
+    pub decode_successes: u64,
+    pub decode_failures: u64,
+    pub unique_decoded: usize,
+    pub queue_depth: usize,
+    pub queue_max: usize,
+}
+
+#[derive(Clone, Copy)]
+struct LayerSchedule {
+    next_spawn_frame: u64,
+    interval_frames: u64,
+    spawn_count: u64,
+    active_sum: u64,
+    sample_count: u64,
+}
+
+#[derive(Clone)]
+struct PreparedCard {
+    image_index: usize,
+    raster: PreparedScreenshotCard,
+    scale_us: u128,
+}
+
+struct Tile {
+    x_fp: i64,
+    y: isize,
+    layer: usize,
+    speed: usize,
+    velocity_fp: i64,
+    velocity_remainder: i64,
+    image_index: usize,
+    raster: PreparedScreenshotCard,
+    active: bool,
+    raster_held_this_frame: bool,
+    raster_moved_this_frame: bool,
+    next: Option<PreparedCard>,
+    pending_image_index: Option<usize>,
+}
+
+impl Tile {
+    fn x(&self) -> isize {
+        self.x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize
+    }
+}
+
+struct ScaleJob {
+    tile_index: usize,
+    image_index: usize,
+    speed: usize,
+    sampling_profile: ScreenshotSamplingProfile,
+    screen_height: usize,
+}
+
+struct ScaleResult {
+    tile_index: usize,
+    image_index: usize,
+    card: Result<PreparedCard, String>,
+}
+
+#[derive(Clone, Copy)]
+struct Rect {
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+}
+
+impl Rect {
+    fn contains(self, other: Self) -> bool {
+        self.x0 <= other.x0
+            && self.y0 <= other.y0
+            && self.x1 >= other.x1
+            && self.y1 >= other.y1
+    }
+}
+
+pub struct ScreenshotParade {
+    geometry: SceneGeometry,
+    startup: ScreenshotParadeStartup,
+    sampling_profile: ScreenshotSamplingProfile,
+    tiles: Vec<Tile>,
+    draw_order: Vec<usize>,
+    visible_draw_order: Vec<usize>,
+    depth_coverage: Vec<Rect>,
+    deck: Vec<usize>,
+    cursor: usize,
+    rng: u64,
+    asset_keys: Vec<String>,
+    compressed_bytes: usize,
+    failed_images: HashSet<usize>,
+    unique_decoded: HashSet<usize>,
+    scale_count: u64,
+    scale_total_us: u128,
+    scale_max_us: u128,
+    decode_successes: u64,
+    decode_failures: u64,
+    scale_tx: Sender<ScaleJob>,
+    scale_rx: Receiver<ScaleResult>,
+    scale_worker_connected: bool,
+    scale_queue_depth: usize,
+    scale_queue_max: usize,
+    layer_targets: [usize; SPEED_COUNT],
+    layers: [LayerSchedule; SPEED_COUNT],
+    previous_motion_ticks_fp: u64,
+    last_elapsed: Duration,
+    stats: ScreenshotParadeStats,
+}
+
+impl ScreenshotParade {
+    pub fn new(
+        archive: ResidentPreviewArchive,
+        config: ScreenshotParadeConfig,
+    ) -> Result<Self, String> {
+        let width = config.geometry.width();
+        let height = config.geometry.height();
+        let asset_keys = archive.asset_keys().to_vec();
+        if asset_keys.is_empty() {
+            return Err("screenshot archive contains no RGB565 assets".to_owned());
+        }
+        let compressed_bytes = archive.compressed_bytes();
+        let (scale_tx, job_rx) = mpsc::channel::<ScaleJob>();
+        let (result_tx, scale_rx) = mpsc::channel::<ScaleResult>();
+        let worker_start = config.worker_start.clone();
+        std::thread::Builder::new()
+            .name("screenshot-parade-scale".to_owned())
+            .spawn(move || {
+                if let Some(callback) = worker_start {
+                    callback();
+                }
+                run_scale_worker(archive, job_rx, result_tx);
+            })
+            .map_err(|error| format!("spawn screenshot parade scale worker: {error}"))?;
+        let layer_targets = layer_targets(width, height);
+        let mut parade = Self {
+            geometry: config.geometry,
+            startup: config.startup,
+            sampling_profile: config.sampling_profile,
+            tiles: Vec::new(),
+            draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
+            visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
+            depth_coverage: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
+            deck: (0..asset_keys.len()).collect(),
+            cursor: 0,
+            rng: config.seed,
+            asset_keys,
+            compressed_bytes,
+            failed_images: HashSet::new(),
+            unique_decoded: HashSet::new(),
+            scale_count: 0,
+            scale_total_us: 0,
+            scale_max_us: 0,
+            decode_successes: 0,
+            decode_failures: 0,
+            scale_tx,
+            scale_rx,
+            scale_worker_connected: true,
+            scale_queue_depth: 0,
+            scale_queue_max: 0,
+            layer_targets,
+            layers: [LayerSchedule {
+                next_spawn_frame: 0,
+                interval_frames: 1,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
+            }; SPEED_COUNT],
+            previous_motion_ticks_fp: 0,
+            last_elapsed: Duration::ZERO,
+            stats: ScreenshotParadeStats::default(),
+        };
+        shuffle(&mut parade.deck, &mut parade.rng);
+        match config.startup {
+            ScreenshotParadeStartup::Streaming => parade.begin_streaming(),
+            ScreenshotParadeStartup::Prepared => parade.prepare_initial_population()?,
+        }
+        Ok(parade)
+    }
+
+    #[must_use]
+    pub const fn startup(&self) -> ScreenshotParadeStartup {
+        self.startup
+    }
+
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.tiles.iter().any(|tile| tile.active)
+    }
+
+    #[must_use]
+    pub fn has_pending_work(&self) -> bool {
+        self.scale_queue_depth > 0
+            || self
+                .tiles
+                .iter()
+                .any(|tile| tile.pending_image_index.is_some())
+    }
+
+    #[must_use]
+    pub fn asset_count(&self) -> usize {
+        self.asset_keys.len()
+    }
+
+    #[must_use]
+    pub const fn compressed_bytes(&self) -> usize {
+        self.compressed_bytes
+    }
+
+    #[must_use]
+    pub const fn stats(&self) -> ScreenshotParadeStats {
+        self.stats
+    }
+
+    pub fn render_at(
+        &mut self,
+        pixels: &mut [Rgb565Pixel],
+        elapsed: Duration,
+    ) -> Result<ScreenshotParadeStats, String> {
+        if pixels.len() != self.geometry.len() {
+            return Err(format!(
+                "screenshot parade target has {} pixels, expected {}",
+                pixels.len(),
+                self.geometry.len()
+            ));
+        }
+        if elapsed < self.last_elapsed {
+            return Err("screenshot parade elapsed time must be monotonic".to_owned());
+        }
+        let motion_ticks_fp = tick_delta_fp(elapsed) as u64;
+        let delta = motion_ticks_fp.saturating_sub(self.previous_motion_ticks_fp) as i64;
+        self.previous_motion_ticks_fp = motion_ticks_fp;
+        self.last_elapsed = elapsed;
+        let width = self.geometry.width();
+        let height = self.geometry.height();
+
+        let background_start = Instant::now();
+        render_background(pixels, width, height, motion_ticks_fp);
+        let background_us = background_start.elapsed().as_micros();
+        let (card_adopt_us, cards_adopted, parade_advance_us) =
+            self.advance(motion_ticks_fp, delta);
+        let draw_order_start = Instant::now();
+        self.prepare_draw_order();
+        let cards_culled = self.prepare_visible_draw_order();
+        let draw_order_us = draw_order_start.elapsed().as_micros();
+
+        let mut raster_held_cards = 0;
+        let mut raster_moved_cards = 0;
+        let mut raster_hold_layer_mask = 0_u8;
+        let mut raster_visible_layer_mask = 0_u8;
+        for &tile_index in &self.visible_draw_order {
+            let tile = &self.tiles[tile_index];
+            let layer_index = tile.layer.saturating_sub(MIN_TILE_SPEED);
+            if layer_index < u8::BITS as usize {
+                raster_visible_layer_mask |= 1_u8 << layer_index;
+                if tile.raster_held_this_frame {
+                    raster_hold_layer_mask |= 1_u8 << layer_index;
+                }
+            }
+            raster_held_cards += usize::from(tile.raster_held_this_frame);
+            raster_moved_cards += usize::from(tile.raster_moved_this_frame);
+        }
+        let tile_blit_start = Instant::now();
+        for &tile_index in &self.visible_draw_order {
+            let tile = &self.tiles[tile_index];
+            tile.raster.blit(
+                pixels,
+                width,
+                height,
+                self.sampling_profile.for_layer(tile.layer),
+                tile.x_fp,
+                tile.y,
+            );
+        }
+        self.stats = ScreenshotParadeStats {
+            card_adopt_us,
+            cards_adopted,
+            parade_advance_us,
+            background_us,
+            draw_order_us,
+            tile_blit_us: tile_blit_start.elapsed().as_micros(),
+            cards_drawn: self.visible_draw_order.len(),
+            cards_culled,
+            raster_held_cards,
+            raster_moved_cards,
+            raster_hold_layer_mask,
+            raster_visible_layer_mask,
+            sixteenth_phase_layer_mask: self.sixteenth_phase_layer_mask(),
+            phase_bank_resident_bytes: self.phase_bank_resident_bytes(),
+            scale_count: self.scale_count,
+            scale_total_us: self.scale_total_us,
+            scale_max_us: self.scale_max_us,
+            decode_successes: self.decode_successes,
+            decode_failures: self.decode_failures,
+            unique_decoded: self.unique_decoded.len(),
+            queue_depth: self.scale_queue_depth,
+            queue_max: self.scale_queue_max,
+        };
+        Ok(self.stats)
+    }
+
+    fn begin_streaming(&mut self) {
+        let width = self.geometry.width();
+        let height = self.geometry.height();
+        for layer_index in (0..SPEED_COUNT).rev() {
+            let speed = MIN_TILE_SPEED + layer_index;
+            let velocity_fp = card_velocity_fp(layer_index, height);
+            let (tile_width, _, _) = depth_style(speed, height);
+            let interval_frames = layer_interval_frames(
+                width,
+                tile_width,
+                velocity_fp,
+                self.layer_targets[layer_index],
+            );
+            self.layers[layer_index] = LayerSchedule {
+                next_spawn_frame: layer_index as u64 * 12,
+                interval_frames,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
+            };
+            let tile_index = self.push_empty_tile(layer_index);
+            self.queue_successor(tile_index);
+        }
+    }
+
+    fn prepare_initial_population(&mut self) -> Result<(), String> {
+        let width = self.geometry.width();
+        let height = self.geometry.height();
+        for (layer_index, target) in self.layer_targets.into_iter().enumerate() {
+            let speed = MIN_TILE_SPEED + layer_index;
+            let velocity_fp = card_velocity_fp(layer_index, height);
+            let (tile_width, _, _) = depth_style(speed, height);
+            let interval_frames = layer_interval_frames(width, tile_width, velocity_fp, target);
+            let phase = self.random_below(interval_frames as usize) as u64;
+            self.layers[layer_index] = LayerSchedule {
+                next_spawn_frame: phase,
+                interval_frames,
+                spawn_count: 0,
+                active_sum: 0,
+                sample_count: 0,
+            };
+            for rank in 0..target {
+                let tile_index = self.tiles.len();
+                let Some(card) = self.prepare_archive_card(tile_index, speed)? else {
+                    break;
+                };
+                let frames_until_exit = phase + rank as u64 * interval_frames;
+                let x_fp = width as i64 * PARADE_SUBPIXEL_ONE
+                    - frames_until_exit as i64 * velocity_fp;
+                let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+                let y = self
+                    .random_tile_y(
+                        x,
+                        card.raster.width(),
+                        card.raster.height(),
+                        speed,
+                        tile_index,
+                    )
+                    .unwrap_or(-(card.raster.height() as isize * 2 / 3));
+                let active = self.placement_is_clear(
+                    x,
+                    y,
+                    card.raster.width(),
+                    card.raster.height(),
+                    speed,
+                    tile_index,
+                );
+                self.tiles.push(Tile {
+                    x_fp,
+                    y,
+                    layer: speed,
+                    speed,
+                    velocity_fp,
+                    velocity_remainder: 0,
+                    image_index: card.image_index,
+                    raster: card.raster,
+                    active,
+                    raster_held_this_frame: false,
+                    raster_moved_this_frame: false,
+                    next: None,
+                    pending_image_index: None,
+                });
+            }
+        }
+        if self.tiles.is_empty() {
+            return Err("screenshot archive did not yield a renderable card".to_owned());
+        }
+        for tile_index in 0..self.tiles.len() {
+            self.queue_successor(tile_index);
+        }
+        Ok(())
+    }
+
+    fn prepare_archive_card(
+        &mut self,
+        tile_index: usize,
+        speed: usize,
+    ) -> Result<Option<PreparedCard>, String> {
+        for _ in 0..self.asset_keys.len() {
+            let Some(image_index) = self.next_image_for(tile_index) else {
+                return Ok(None);
+            };
+            self.send_scale_job(tile_index, image_index, speed)?;
+            let result = self
+                .scale_rx
+                .recv()
+                .map_err(|_| "screenshot parade scale worker disconnected".to_owned())?;
+            self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
+            match result.card {
+                Ok(card) => {
+                    self.record_card(&card);
+                    return Ok(Some(card));
+                }
+                Err(_) => {
+                    self.decode_failures += 1;
+                    self.failed_images.insert(result.image_index);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn push_empty_tile(&mut self, layer_index: usize) -> usize {
+        let speed = MIN_TILE_SPEED + layer_index;
+        let raster = PreparedScreenshotCard::prepare(
+            &ScreenshotImage::empty(),
+            speed,
+            self.geometry.height(),
+            self.sampling_profile.for_layer(speed),
+        );
+        let tile_index = self.tiles.len();
+        self.tiles.push(Tile {
+            x_fp: 0,
+            y: 0,
+            layer: speed,
+            speed,
+            velocity_fp: card_velocity_fp(layer_index, self.geometry.height()),
+            velocity_remainder: 0,
+            image_index: usize::MAX,
+            raster,
+            active: false,
+            raster_held_this_frame: false,
+            raster_moved_this_frame: false,
+            next: None,
+            pending_image_index: None,
+        });
+        tile_index
+    }
+
+    fn advance(&mut self, motion_ticks_fp: u64, tick_delta: i64) -> (u128, usize, u128) {
+        let nominal_frame = motion_ticks_fp / TICK_ONE as u64;
+        let adopt_start = Instant::now();
+        let cards_adopted = self.collect_scaled_cards(MAX_CARD_ADOPTIONS_PER_FRAME);
+        let card_adopt_us = adopt_start.elapsed().as_micros();
+        let advance_start = Instant::now();
+        let mut exited = Vec::new();
+        for tile_index in 0..self.tiles.len() {
+            if self.tiles[tile_index].active {
+                let profile = self
+                    .sampling_profile
+                    .for_layer(self.tiles[tile_index].layer);
+                let tile = &mut self.tiles[tile_index];
+                tile.raster_held_this_frame = false;
+                tile.raster_moved_this_frame = false;
+                let previous_x_fp = tile.x_fp;
+                let previous_phase = raster_phase_key(profile, tile.x_fp);
+                let motion = tile
+                    .velocity_fp
+                    .saturating_mul(tick_delta)
+                    .saturating_add(tile.velocity_remainder);
+                tile.x_fp = tile.x_fp.saturating_add(motion / TICK_ONE);
+                tile.velocity_remainder = motion % TICK_ONE;
+                if tile.x_fp != previous_x_fp {
+                    if raster_phase_key(profile, tile.x_fp) == previous_phase {
+                        tile.raster_held_this_frame = true;
+                    } else {
+                        tile.raster_moved_this_frame = true;
+                    }
+                }
+                if tile.x() >= self.geometry.width() as isize {
+                    tile.active = false;
+                    exited.push(tile_index);
+                }
+            }
+        }
+        for tile_index in exited {
+            self.queue_successor(tile_index);
+        }
+        for layer_index in 0..SPEED_COUNT {
+            if nominal_frame < self.layers[layer_index].next_spawn_frame {
+                continue;
+            }
+            let speed = MIN_TILE_SPEED + layer_index;
+            let Some(tile_index) = self
+                .tiles
+                .iter()
+                .position(|tile| tile.layer == speed && !tile.active && tile.next.is_some())
+            else {
+                continue;
+            };
+            let next = self.tiles[tile_index].next.take().expect("ready card checked");
+            let x = -(next.raster.width() as isize);
+            let Some(y) = self.random_tile_y(
+                x,
+                next.raster.width(),
+                next.raster.height(),
+                speed,
+                tile_index,
+            ) else {
+                self.tiles[tile_index].next = Some(next);
+                self.layers[layer_index].next_spawn_frame = nominal_frame + 1;
+                continue;
+            };
+            let tile = &mut self.tiles[tile_index];
+            tile.x_fp = x as i64 * PARADE_SUBPIXEL_ONE;
+            tile.y = y;
+            tile.image_index = next.image_index;
+            tile.raster = next.raster;
+            tile.active = true;
+            tile.velocity_remainder = 0;
+            let interval = self.jittered_interval(self.layers[layer_index].interval_frames);
+            self.layers[layer_index].next_spawn_frame = nominal_frame + interval;
+            self.layers[layer_index].spawn_count += 1;
+            let layer_tile_count = self
+                .tiles
+                .iter()
+                .filter(|tile| tile.layer == speed)
+                .count();
+            let has_waiting_tile = self.tiles.iter().any(|tile| {
+                tile.layer == speed
+                    && !tile.active
+                    && (tile.next.is_some() || tile.pending_image_index.is_some())
+            });
+            if layer_tile_count < self.layer_targets[layer_index] && !has_waiting_tile {
+                let new_tile_index = self.push_empty_tile(layer_index);
+                self.queue_successor(new_tile_index);
+            }
+        }
+        for layer_index in 0..SPEED_COUNT {
+            let speed = MIN_TILE_SPEED + layer_index;
+            let active = self
+                .tiles
+                .iter()
+                .filter(|tile| tile.active && tile.layer == speed)
+                .count() as u64;
+            self.layers[layer_index].active_sum += active;
+            self.layers[layer_index].sample_count += 1;
+        }
+        (
+            card_adopt_us,
+            cards_adopted,
+            advance_start.elapsed().as_micros(),
+        )
+    }
+
+    fn queue_successor(&mut self, tile_index: usize) {
+        if self.tiles[tile_index].next.is_some()
+            || self.tiles[tile_index].pending_image_index.is_some()
+        {
+            return;
+        }
+        let Some(image_index) = self.next_image_for(tile_index) else {
+            return;
+        };
+        let speed = self.tiles[tile_index].speed;
+        self.tiles[tile_index].pending_image_index = Some(image_index);
+        if self.send_scale_job(tile_index, image_index, speed).is_err() {
+            self.scale_worker_connected = false;
+            self.tiles[tile_index].pending_image_index = None;
+        }
+    }
+
+    fn send_scale_job(
+        &mut self,
+        tile_index: usize,
+        image_index: usize,
+        speed: usize,
+    ) -> Result<(), String> {
+        self.scale_tx
+            .send(ScaleJob {
+                tile_index,
+                image_index,
+                speed,
+                sampling_profile: self.sampling_profile.for_layer(speed),
+                screen_height: self.geometry.height(),
+            })
+            .map_err(|_| "screenshot parade scale worker disconnected".to_owned())?;
+        self.scale_queue_depth += 1;
+        self.scale_queue_max = self.scale_queue_max.max(self.scale_queue_depth);
+        Ok(())
+    }
+
+    fn collect_scaled_cards(&mut self, limit: usize) -> usize {
+        let mut failed_tiles = Vec::new();
+        let mut collected = 0;
+        while collected < limit {
+            match self.scale_rx.try_recv() {
+                Ok(result) => {
+                    collected += 1;
+                    self.scale_queue_depth = self.scale_queue_depth.saturating_sub(1);
+                    match result.card {
+                        Ok(card) => {
+                            self.record_card(&card);
+                            if let Some(tile) = self.tiles.get_mut(result.tile_index) {
+                                tile.pending_image_index = None;
+                                tile.next = Some(card);
+                            }
+                        }
+                        Err(_) => {
+                            self.decode_failures += 1;
+                            self.failed_images.insert(result.image_index);
+                            if let Some(tile) = self.tiles.get_mut(result.tile_index) {
+                                tile.pending_image_index = None;
+                            }
+                            failed_tiles.push(result.tile_index);
+                        }
+                    }
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.scale_worker_connected = false;
+                    break;
+                }
+            }
+        }
+        if !self.scale_worker_connected {
+            self.scale_queue_depth = 0;
+            for tile in &mut self.tiles {
+                tile.pending_image_index = None;
+            }
+        }
+        for tile_index in failed_tiles {
+            self.queue_successor(tile_index);
+        }
+        collected
+    }
+
+    fn record_card(&mut self, card: &PreparedCard) {
+        self.scale_count += 1;
+        self.scale_total_us += card.scale_us;
+        self.scale_max_us = self.scale_max_us.max(card.scale_us);
+        self.decode_successes += 1;
+        self.unique_decoded.insert(card.image_index);
+    }
+
+    fn next_image_for(&mut self, replacing_tile: usize) -> Option<usize> {
+        if self.deck.is_empty() {
+            return None;
+        }
+        for _ in 0..self.deck.len() {
+            if self.cursor == self.deck.len() {
+                shuffle(&mut self.deck, &mut self.rng);
+                self.cursor = 0;
+            }
+            let candidate = self.deck[self.cursor];
+            self.cursor += 1;
+            if self.failed_images.contains(&candidate) {
+                continue;
+            }
+            let already_visible = self.tiles.iter().enumerate().any(|(index, tile)| {
+                (index != replacing_tile && tile.active && tile.image_index == candidate)
+                    || tile
+                        .next
+                        .as_ref()
+                        .is_some_and(|next| next.image_index == candidate)
+                    || tile.pending_image_index == Some(candidate)
+            });
+            if !already_visible {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    fn random_tile_y(
+        &mut self,
+        x: isize,
+        tile_width: usize,
+        tile_height: usize,
+        speed: usize,
+        replacing_tile: usize,
+    ) -> Option<isize> {
+        let min_y = -(tile_height as isize * 2 / 3);
+        let max_y = self.geometry.height() as isize - tile_height as isize / 3;
+        let span = (max_y - min_y + 1).max(1) as usize;
+        for _ in 0..64 {
+            let y = min_y + self.random_below(span) as isize;
+            if self.placement_is_clear(
+                x,
+                y,
+                tile_width,
+                tile_height,
+                speed,
+                replacing_tile,
+            ) {
+                return Some(y);
+            }
+        }
+        (min_y..=max_y).find(|y| {
+            self.placement_is_clear(
+                x,
+                *y,
+                tile_width,
+                tile_height,
+                speed,
+                replacing_tile,
+            )
+        })
+    }
+
+    fn placement_is_clear(
+        &self,
+        x: isize,
+        y: isize,
+        tile_width: usize,
+        tile_height: usize,
+        speed: usize,
+        replacing_tile: usize,
+    ) -> bool {
+        let gap = scale_dimension(REFERENCE_PLACEMENT_GAP, self.geometry.height()) as isize;
+        self.tiles.iter().enumerate().all(|(index, tile)| {
+            if index == replacing_tile || !tile.active || tile.layer != speed {
+                return true;
+            }
+            x + tile_width as isize + gap <= tile.x()
+                || tile.x() + tile.raster.width() as isize + gap <= x
+                || y + tile_height as isize + gap <= tile.y
+                || tile.y + tile.raster.height() as isize + gap <= y
+        })
+    }
+
+    fn prepare_draw_order(&mut self) {
+        self.draw_order.clear();
+        for layer_index in 0..SPEED_COUNT {
+            let speed = MIN_TILE_SPEED + layer_index;
+            for (tile_index, tile) in self.tiles.iter().enumerate() {
+                if tile.active && tile.layer == speed {
+                    self.draw_order.push(tile_index);
+                }
+            }
+        }
+    }
+
+    fn prepare_visible_draw_order(&mut self) -> usize {
+        self.visible_draw_order.clear();
+        self.depth_coverage.clear();
+        let mut culled = 0;
+        for &tile_index in self.draw_order.iter().rev() {
+            let tile = &self.tiles[tile_index];
+            let profile = self.sampling_profile.for_layer(tile.layer);
+            let Some(draw_bounds) = tile_draw_bounds(
+                tile,
+                profile,
+                self.geometry.width(),
+                self.geometry.height(),
+            ) else {
+                continue;
+            };
+            if self
+                .depth_coverage
+                .iter()
+                .any(|coverage| coverage.contains(draw_bounds))
+            {
+                culled += 1;
+                continue;
+            }
+            self.visible_draw_order.push(tile_index);
+            if let Some(opaque_bounds) = tile_opaque_bounds(
+                tile,
+                profile,
+                self.geometry.width(),
+                self.geometry.height(),
+            ) {
+                self.depth_coverage.push(opaque_bounds);
+            }
+        }
+        self.visible_draw_order.reverse();
+        culled
+    }
+
+    fn jittered_interval(&mut self, base: u64) -> u64 {
+        let variance = (base / 8).max(1);
+        let offset = self.random_below((variance * 2 + 1) as usize) as i64 - variance as i64;
+        (base as i64 + offset).max(1) as u64
+    }
+
+    fn random_below(&mut self, upper: usize) -> usize {
+        advance_rng(&mut self.rng) as usize % upper.max(1)
+    }
+
+    fn sixteenth_phase_layer_mask(&self) -> u8 {
+        if matches!(self.sampling_profile, ScreenshotSamplingProfile::CrtSixteenth) {
+            (1_u8 << SPEED_COUNT) - 1
+        } else {
+            1
+        }
+    }
+
+    fn phase_bank_resident_bytes(&self) -> usize {
+        self.tiles
+            .iter()
+            .map(|tile| {
+                tile.raster.resident_bytes()
+                    + tile
+                        .next
+                        .as_ref()
+                        .map_or(0, |next| next.raster.resident_bytes())
+            })
+            .sum()
+    }
+}
+
+impl FramebufferScene for ScreenshotParade {
+    type Stats = ScreenshotParadeStats;
+
+    fn geometry(&self) -> SceneGeometry {
+        self.geometry
+    }
+
+    fn render(
+        &mut self,
+        target: SceneTarget<'_>,
+        clock: SceneClock,
+    ) -> Result<Self::Stats, SceneError> {
+        if target.geometry() != self.geometry {
+            return Err(SceneError::Render(
+                "screenshot parade target geometry changed".to_owned(),
+            ));
+        }
+        self.render_at(target.into_pixels(), clock.elapsed)
+            .map_err(SceneError::Render)
+    }
+
+    fn invalidate_buffer(&mut self, _buffer: SceneBufferId) {}
+}
+
+fn run_scale_worker(
+    mut archive: ResidentPreviewArchive,
+    jobs: Receiver<ScaleJob>,
+    results: Sender<ScaleResult>,
+) {
+    while let Ok(job) = jobs.recv() {
+        let started = Instant::now();
+        let card = archive.load_pixels_at(job.image_index).map(|pixels| {
+            let source = ScreenshotImage::from_preview(pixels);
+            let raster = PreparedScreenshotCard::prepare(
+                &source,
+                job.speed,
+                job.screen_height,
+                job.sampling_profile,
+            );
+            PreparedCard {
+                image_index: job.image_index,
+                raster,
+                scale_us: started.elapsed().as_micros(),
+            }
+        });
+        if results
+            .send(ScaleResult {
+                tile_index: job.tile_index,
+                image_index: job.image_index,
+                card,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+fn layer_targets(width: usize, height: usize) -> [usize; SPEED_COUNT] {
+    if width.saturating_mul(3) <= height.saturating_mul(4) {
+        COMPACT_LAYER_TARGETS
+    } else {
+        WIDE_LAYER_TARGETS
+    }
+}
+
+fn scale_dimension(reference: usize, screen_height: usize) -> usize {
+    reference
+        .saturating_mul(screen_height)
+        .saturating_add(REFERENCE_HEIGHT / 2)
+        .checked_div(REFERENCE_HEIGHT)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn card_velocity_fp(layer_index: usize, screen_height: usize) -> i64 {
+    let reference = (layer_index as i64 + 1) * PARADE_SUBPIXEL_ONE / 2;
+    reference
+        .saturating_mul(screen_height as i64)
+        .saturating_add((REFERENCE_HEIGHT / 2) as i64)
+        .checked_div(REFERENCE_HEIGHT as i64)
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn tick_delta_fp(elapsed: Duration) -> i64 {
+    let ticks = elapsed
+        .as_nanos()
+        .saturating_mul(u128::from(REFERENCE_HZ))
+        .saturating_mul(TICK_ONE as u128)
+        / 1_000_000_000_u128;
+    ticks.min(i64::MAX as u128) as i64
+}
+
+fn layer_interval_frames(
+    screen_width: usize,
+    tile_width: usize,
+    velocity_fp: i64,
+    target_count: usize,
+) -> u64 {
+    let travel_fp = (screen_width + tile_width) as i64 * PARADE_SUBPIXEL_ONE;
+    let velocity_fp = velocity_fp.max(1);
+    let travel_frames = ((travel_fp + velocity_fp - 1) / velocity_fp) as usize;
+    (travel_frames / target_count.max(1)).max(1) as u64
+}
+
+fn render_background(
+    pixels: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    motion_ticks_fp: u64,
+) {
+    pixels.fill(color565(0, 0, 10));
+    for star in 0..210_usize {
+        let layer = star & 3;
+        let (x, fraction) = horizontal_star_position(star, width, height, motion_ticks_fp);
+        let y = (star
+            .wrapping_mul(83)
+            .wrapping_add(star.wrapping_mul(star) * 7))
+            % height;
+        let brightness = [70, 110, 170, 235][layer];
+        let color = color565(brightness / 2, brightness, 255);
+        let row = y * width;
+        pixels[row + x] = blend_565(pixels[row + x], color, 255 - fraction);
+        if fraction > 0 {
+            let next_x = (x + 1) % width;
+            pixels[row + next_x] = blend_565(pixels[row + next_x], color, fraction);
+        }
+    }
+}
+
+fn horizontal_star_position(
+    star: usize,
+    width: usize,
+    screen_height: usize,
+    motion_ticks_fp: u64,
+) -> (usize, u8) {
+    const STAR_SPEED_DENOMINATOR: u64 = 16;
+    const SUBPIXEL_ONE: u64 = 256;
+    let speed_numerator = MIN_TILE_SPEED as u64 * ((star & 3) + 1) as u64;
+    let start_x = (star
+        .wrapping_mul(197)
+        .wrapping_add(star.wrapping_mul(star) * 13))
+        % width;
+    let scaled_ticks_fp = motion_ticks_fp
+        .saturating_mul(screen_height as u64)
+        .saturating_add((REFERENCE_HEIGHT / 2) as u64)
+        / REFERENCE_HEIGHT as u64;
+    let travel = scaled_ticks_fp
+        .saturating_mul(speed_numerator)
+        .saturating_mul(SUBPIXEL_ONE)
+        / (STAR_SPEED_DENOMINATOR * TICK_ONE as u64);
+    let position =
+        (start_x as u64 * SUBPIXEL_ONE + travel) % (width as u64 * SUBPIXEL_ONE);
+    (
+        (position / SUBPIXEL_ONE) as usize,
+        (position % SUBPIXEL_ONE) as u8,
+    )
+}
+
+fn raster_phase_key(profile: ScreenshotSamplingProfile, x_fp: i64) -> i64 {
+    let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE);
+    let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE);
+    match profile {
+        ScreenshotSamplingProfile::HdmiLegacyHalf => match fraction {
+            0 => x * 16,
+            128 => x * 16 + 8,
+            fraction if fraction < 128 => x * 16,
+            _ => (x + 1) * 16,
+        },
+        ScreenshotSamplingProfile::CrtSixteenth => {
+            let mut phase = (fraction + 8) / 16;
+            let mut origin = x;
+            if phase == 16 {
+                origin += 1;
+                phase = 0;
+            }
+            origin * 16 + phase
+        }
+    }
+}
+
+fn tile_origin_and_width(
+    profile: ScreenshotSamplingProfile,
+    x_fp: i64,
+    width: usize,
+) -> (isize, usize, bool) {
+    match profile {
+        ScreenshotSamplingProfile::HdmiLegacyHalf => {
+            let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+            match x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) {
+                0 => (x, width, false),
+                128 => (x, width.saturating_add(1), true),
+                fraction if fraction < 128 => (x, width, false),
+                _ => (x.saturating_add(1), width, false),
+            }
+        }
+        ScreenshotSamplingProfile::CrtSixteenth => {
+            let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE);
+            let mut phase = (fraction + 8) / 16;
+            let mut x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
+            if phase == 16 {
+                x += 1;
+                phase = 0;
+            }
+            (x, width.saturating_add(usize::from(phase != 0)), phase != 0)
+        }
+    }
+}
+
+fn clipped_rect(
+    x: isize,
+    y: isize,
+    width: usize,
+    height: usize,
+    screen_width: usize,
+    screen_height: usize,
+) -> Option<Rect> {
+    let x0 = x.clamp(0, screen_width as isize) as usize;
+    let y0 = y.clamp(0, screen_height as isize) as usize;
+    let x1 = x
+        .saturating_add(width as isize)
+        .clamp(0, screen_width as isize) as usize;
+    let y1 = y
+        .saturating_add(height as isize)
+        .clamp(0, screen_height as isize) as usize;
+    (x1 > x0 && y1 > y0).then_some(Rect { x0, y0, x1, y1 })
+}
+
+fn tile_draw_bounds(
+    tile: &Tile,
+    profile: ScreenshotSamplingProfile,
+    screen_width: usize,
+    screen_height: usize,
+) -> Option<Rect> {
+    let (x, width, _) = tile_origin_and_width(profile, tile.x_fp, tile.raster.width());
+    clipped_rect(
+        x,
+        tile.y,
+        width,
+        tile.raster.height(),
+        screen_width,
+        screen_height,
+    )
+}
+
+fn tile_opaque_bounds(
+    tile: &Tile,
+    profile: ScreenshotSamplingProfile,
+    screen_width: usize,
+    screen_height: usize,
+) -> Option<Rect> {
+    let (x, _, fractional) = tile_origin_and_width(profile, tile.x_fp, tile.raster.width());
+    let inset = tile.raster.max_corner_inset() + usize::from(fractional);
+    let width = tile.raster.width().saturating_sub(inset.saturating_mul(2));
+    clipped_rect(
+        x.saturating_add(inset as isize),
+        tile.y,
+        width,
+        tile.raster.height(),
+        screen_width,
+        screen_height,
+    )
+}
+
+fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
+    Rgb565Pixel(
+        (u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3),
+    )
+}
+
+fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
+    let from = u32::from(from.0);
+    let to = u32::from(to.0);
+    let alpha = ((u32::from(alpha) + 4) >> 3).min(32);
+    if alpha == 0 {
+        return Rgb565Pixel(from as u16);
+    }
+    if alpha >= 32 {
+        return Rgb565Pixel(to as u16);
+    }
+    let inverse = 32 - alpha;
+    let rb = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
+    let g = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
+    Rgb565Pixel((rb | g) as u16)
+}
+
+fn shuffle<T>(values: &mut [T], rng: &mut u64) {
+    for index in (1..values.len()).rev() {
+        let other = advance_rng(rng) as usize % (index + 1);
+        values.swap(index, other);
+    }
+}
+
+fn advance_rng(rng: &mut u64) -> u64 {
+    *rng ^= *rng << 13;
+    *rng ^= *rng >> 7;
+    *rng ^= *rng << 17;
+    *rng
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn write_archive(path: &Path, count: usize) {
+        let names = (0..count)
+            .map(|index| format!("fixture-{index:03}.rgb565"))
+            .collect::<Vec<_>>();
+        let header_len = 8 + 4;
+        let entry_len = |name: &str| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let index_len = header_len + names.iter().map(|name| entry_len(name)).sum::<usize>();
+        let mut offset = index_len as u64;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MMPX2B1\0");
+        bytes.extend_from_slice(&(count as u32).to_le_bytes());
+        for name in &names {
+            let width = 4_u32;
+            let height = 4_u32;
+            let stride_bytes = 8_u32;
+            let data_len = 32_u32;
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&width.to_le_bytes());
+            bytes.extend_from_slice(&height.to_le_bytes());
+            bytes.extend_from_slice(&stride_bytes.to_le_bytes());
+            bytes.extend_from_slice(&data_len.to_le_bytes());
+            bytes.push(1);
+            bytes.extend_from_slice(&data_len.to_le_bytes());
+            bytes.extend_from_slice(&offset.to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            offset += u64::from(data_len);
+        }
+        for index in 0..count {
+            for pixel in 0..16_u16 {
+                let value = (index as u16).wrapping_mul(97).wrapping_add(pixel * 31);
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        std::fs::write(path, bytes).expect("write screenshot parade fixture");
+    }
+
+    fn prepared_scene(
+        path: &Path,
+        width: usize,
+        height: usize,
+        profile: ScreenshotSamplingProfile,
+    ) -> ScreenshotParade {
+        let archive = ResidentPreviewArchive::open(path).expect("open fixture archive");
+        ScreenshotParade::new(
+            archive,
+            ScreenshotParadeConfig {
+                geometry: SceneGeometry::new(width, height, width).unwrap(),
+                seed: 0x4d61_6769_4b54_696c,
+                sampling_profile: profile,
+                startup: ScreenshotParadeStartup::Prepared,
+                worker_start: None,
+            },
+        )
+        .expect("prepare screenshot parade")
+    }
+
+    #[test]
+    fn prepared_frames_are_deterministic_for_hdmi_and_crt_geometry() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-schedule-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        for (width, height, profile) in [
+            (960, 540, ScreenshotSamplingProfile::HdmiLegacyHalf),
+            (640, 480, ScreenshotSamplingProfile::CrtSixteenth),
+        ] {
+            let mut first = prepared_scene(&path, width, height, profile);
+            let mut second = prepared_scene(&path, width, height, profile);
+            let mut first_pixels = vec![Rgb565Pixel(0); width * height];
+            let mut second_pixels = vec![Rgb565Pixel(0); width * height];
+            for milliseconds in [0_u64, 17, 250, 1_000, 2_000] {
+                let elapsed = Duration::from_millis(milliseconds);
+                first.render_at(&mut first_pixels, elapsed).unwrap();
+                second.render_at(&mut second_pixels, elapsed).unwrap();
+                assert_eq!(first_pixels, second_pixels, "time={milliseconds}");
+            }
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn streaming_starts_empty_and_reports_pending_work() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-streaming-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 16);
+        let archive = ResidentPreviewArchive::open(&path).unwrap();
+        let scene = ScreenshotParade::new(
+            archive,
+            ScreenshotParadeConfig {
+                geometry: SceneGeometry::new(320, 180, 320).unwrap(),
+                seed: 7,
+                sampling_profile: ScreenshotSamplingProfile::HdmiLegacyHalf,
+                startup: ScreenshotParadeStartup::Streaming,
+                worker_start: None,
+            },
+        )
+        .unwrap();
+        assert!(!scene.is_ready());
+        assert!(scene.has_pending_work());
+        assert_eq!(scene.tiles.len(), SPEED_COUNT);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn elapsed_time_must_be_monotonic() {
+        let path = std::env::temp_dir().join(format!(
+            "screenshot-parade-clock-{}.mmlz4b",
+            std::process::id()
+        ));
+        write_archive(&path, 220);
+        let mut scene = prepared_scene(
+            &path,
+            320,
+            180,
+            ScreenshotSamplingProfile::HdmiLegacyHalf,
+        );
+        let mut pixels = vec![Rgb565Pixel(0); 320 * 180];
+        scene
+            .render_at(&mut pixels, Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            scene
+                .render_at(&mut pixels, Duration::from_millis(999))
+                .is_err()
+        );
+        let _ = std::fs::remove_file(path);
+    }
+}

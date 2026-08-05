@@ -4,7 +4,12 @@
 //! Slint-free screenshot parade rendering shared by production and scene labs.
 
 mod raster;
+mod schedule;
 
 pub use raster::{
     PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotSamplingProfile,
+};
+pub use schedule::{
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,
+    WorkerStartCallback,
 };

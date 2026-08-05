@@ -132,6 +132,14 @@ impl PreparedScreenshotCard {
         screen_height: usize,
         profile: ScreenshotSamplingProfile,
     ) -> Self {
+        if source.width == 0 || source.height == 0 {
+            let image = ScreenshotImage::empty();
+            return Self {
+                phases: ParadePhaseSet::prepare(&image, profile),
+                image,
+                corner_insets: Vec::new(),
+            };
+        }
         let (width, height, tint) = scaled_style(source, speed, screen_height);
         let mut image = scale_lanczos3_rgb565_tinted(source, width, height, tint);
         apply_depth_cues(&mut image, speed);
