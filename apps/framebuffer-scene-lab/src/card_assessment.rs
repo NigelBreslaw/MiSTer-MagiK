@@ -6,7 +6,8 @@
 use serde::Serialize;
 
 pub const FRAME_EVIDENCE_SCHEMA: &str = "mister-magik-scene-lab-frame-v2";
-pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v2";
+pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v3";
+pub const PRESENTATION_TELEMETRY_SCHEMA: &str = "mister-magik-scene-lab-presentation-telemetry-v1";
 pub const VSYNC_EVENT_SCHEMA: &str = "mister-magik-scene-lab-vsync-event-v1";
 pub const VSYNC_SUMMARY_SCHEMA: &str = "mister-magik-scene-lab-vsync-summary-v1";
 
@@ -226,6 +227,10 @@ pub struct CadenceSummary {
     pub expected_refresh_intervals: u64,
     pub unique_latch_flips: u64,
     pub dropped_frames: u64,
+    pub software_estimated_dropped_frames: u64,
+    pub cadence_source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation_telemetry: Option<PresentationTelemetrySummary>,
     pub confirmation_sequence_failures: u64,
     pub latch_drop_delta: u64,
     pub completion_failures: u64,
@@ -233,6 +238,135 @@ pub struct CadenceSummary {
     pub max_completion_interval_us: u64,
     pub unique_fps: f64,
     pub cadence_authoritative: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+pub struct PresentationTelemetrySnapshot {
+    pub owned_vblank_count: u32,
+    pub presented_vblank_count: u32,
+    pub repeated_vblank_count: u32,
+    pub ownership_loss_count: u32,
+    pub active_sequence: u16,
+    pub flags: u16,
+}
+
+impl PresentationTelemetrySnapshot {
+    pub const fn magik_ownership(self) -> bool {
+        self.flags & (1 << 3) != 0
+    }
+
+    pub const fn pending(self) -> bool {
+        self.flags & (1 << 2) != 0
+    }
+
+    pub const fn lifetime_invariant_valid(self) -> bool {
+        self.owned_vblank_count
+            == self
+                .presented_vblank_count
+                .wrapping_add(self.repeated_vblank_count)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct PresentationTelemetrySummary {
+    pub schema: &'static str,
+    pub start: PresentationTelemetrySnapshot,
+    pub end: PresentationTelemetrySnapshot,
+    pub elapsed_us: u64,
+    pub owned_vblank_delta: u32,
+    pub presented_vblank_delta: u32,
+    pub repeated_vblank_delta: u32,
+    pub ownership_loss_delta: u32,
+    pub maximum_plausible_vblanks: u64,
+    pub lifetime_invariant_valid: bool,
+    pub delta_invariant_valid: bool,
+    pub plausible: bool,
+    pub endpoints_owned_and_settled: bool,
+}
+
+pub fn summarize_presentation_telemetry(
+    start: PresentationTelemetrySnapshot,
+    end: PresentationTelemetrySnapshot,
+    elapsed_us: u64,
+    refresh_period_us: u64,
+) -> Result<PresentationTelemetrySummary, String> {
+    if elapsed_us == 0 || refresh_period_us == 0 {
+        return Err(
+            "presentation telemetry requires non-zero elapsed time and refresh period".into(),
+        );
+    }
+    let owned_vblank_delta = end
+        .owned_vblank_count
+        .wrapping_sub(start.owned_vblank_count);
+    let presented_vblank_delta = end
+        .presented_vblank_count
+        .wrapping_sub(start.presented_vblank_count);
+    let repeated_vblank_delta = end
+        .repeated_vblank_count
+        .wrapping_sub(start.repeated_vblank_count);
+    let ownership_loss_delta = end
+        .ownership_loss_count
+        .wrapping_sub(start.ownership_loss_count);
+    let maximum_plausible_vblanks = elapsed_us.div_ceil(refresh_period_us).saturating_add(2);
+    let lifetime_invariant_valid =
+        start.lifetime_invariant_valid() && end.lifetime_invariant_valid();
+    let delta_invariant_valid =
+        owned_vblank_delta == presented_vblank_delta.wrapping_add(repeated_vblank_delta);
+    let plausible = u64::from(owned_vblank_delta) <= maximum_plausible_vblanks
+        && u64::from(presented_vblank_delta) <= maximum_plausible_vblanks
+        && u64::from(repeated_vblank_delta) <= maximum_plausible_vblanks;
+    let endpoints_owned_and_settled =
+        start.magik_ownership() && end.magik_ownership() && !start.pending() && !end.pending();
+    if !lifetime_invariant_valid {
+        return Err("FPGA presentation telemetry lifetime invariant failed".into());
+    }
+    if !delta_invariant_valid {
+        return Err("FPGA presentation telemetry delta invariant failed".into());
+    }
+    if !plausible {
+        return Err(format!(
+            "FPGA presentation telemetry delta is implausible: owned={owned_vblank_delta} maximum={maximum_plausible_vblanks}"
+        ));
+    }
+    if !endpoints_owned_and_settled {
+        return Err("FPGA presentation telemetry endpoints are not owned and settled".into());
+    }
+    if ownership_loss_delta != 0 {
+        return Err(format!(
+            "FPGA presentation ownership changed during measurement: losses={ownership_loss_delta}"
+        ));
+    }
+    Ok(PresentationTelemetrySummary {
+        schema: PRESENTATION_TELEMETRY_SCHEMA,
+        start,
+        end,
+        elapsed_us,
+        owned_vblank_delta,
+        presented_vblank_delta,
+        repeated_vblank_delta,
+        ownership_loss_delta,
+        maximum_plausible_vblanks,
+        lifetime_invariant_valid,
+        delta_invariant_valid,
+        plausible,
+        endpoints_owned_and_settled,
+    })
+}
+
+pub fn apply_authoritative_presentation_telemetry(
+    mut cadence: CadenceSummary,
+    telemetry: PresentationTelemetrySummary,
+) -> CadenceSummary {
+    cadence.software_estimated_dropped_frames = cadence.dropped_frames;
+    cadence.expected_refresh_intervals = u64::from(telemetry.owned_vblank_delta);
+    cadence.unique_latch_flips = u64::from(telemetry.presented_vblank_delta);
+    cadence.dropped_frames = u64::from(telemetry.repeated_vblank_delta);
+    cadence.unique_fps =
+        cadence.unique_latch_flips as f64 * 1_000_000.0 / telemetry.elapsed_us as f64;
+    cadence.cadence_source = "fpga-owned-vblank-telemetry";
+    cadence.cadence_authoritative = !cadence.profiler_enabled;
+    cadence.presentation_telemetry = Some(telemetry);
+    cadence
 }
 
 pub fn summarize_cadence(
@@ -324,13 +458,16 @@ pub fn summarize_cadence(
         expected_refresh_intervals,
         unique_latch_flips,
         dropped_frames,
+        software_estimated_dropped_frames: dropped_frames,
+        cadence_source: "software-completion-estimator",
+        presentation_telemetry: None,
         confirmation_sequence_failures,
         latch_drop_delta,
         completion_failures,
         long_completion_intervals,
         max_completion_interval_us,
         unique_fps: unique_latch_flips as f64 * 1_000_000.0 / elapsed_us as f64,
-        cadence_authoritative: !profiler_enabled,
+        cadence_authoritative: false,
     })
 }
 
@@ -446,6 +583,63 @@ mod tests {
         assert!(confirmation_sequence_is_contiguous(u16::MAX, 1));
         assert!(!confirmation_sequence_is_contiguous(41, 41));
         assert!(!confirmation_sequence_is_contiguous(41, 43));
+    }
+
+    fn telemetry_snapshot(
+        owned: u32,
+        presented: u32,
+        repeated: u32,
+    ) -> PresentationTelemetrySnapshot {
+        PresentationTelemetrySnapshot {
+            owned_vblank_count: owned,
+            presented_vblank_count: presented,
+            repeated_vblank_count: repeated,
+            ownership_loss_count: 7,
+            active_sequence: 42,
+            flags: 1 << 3,
+        }
+    }
+
+    #[test]
+    fn hardware_telemetry_replaces_the_rounded_estimator() {
+        let frames = [
+            frame(1, 1_000_000, 1, 10),
+            frame(2, 1_016_667, 2, 11),
+            frame(3, 1_033_334, 3, 12),
+        ];
+        let cadence = summarize_cadence(&frames, 16_667, "test").unwrap();
+        assert_eq!(cadence.dropped_frames, 0);
+        let telemetry = summarize_presentation_telemetry(
+            telemetry_snapshot(u32::MAX - 1, u32::MAX - 1, 0),
+            telemetry_snapshot(1, 0, 1),
+            50_001,
+            16_667,
+        )
+        .unwrap();
+        let cadence = apply_authoritative_presentation_telemetry(cadence, telemetry);
+        assert_eq!(cadence.software_estimated_dropped_frames, 0);
+        assert_eq!(cadence.dropped_frames, 1);
+        assert_eq!(cadence.expected_refresh_intervals, 3);
+        assert_eq!(cadence.unique_latch_flips, 2);
+        assert!(cadence.cadence_authoritative);
+    }
+
+    #[test]
+    fn telemetry_rejects_pending_loss_invariant_and_implausible_deltas() {
+        let valid = telemetry_snapshot(10, 9, 1);
+        let mut pending = valid;
+        pending.flags |= 1 << 2;
+        assert!(summarize_presentation_telemetry(pending, valid, 16_667, 16_667).is_err());
+
+        let mut loss = telemetry_snapshot(11, 10, 1);
+        loss.ownership_loss_count = 8;
+        assert!(summarize_presentation_telemetry(valid, loss, 16_667, 16_667).is_err());
+
+        let invalid = telemetry_snapshot(11, 9, 1);
+        assert!(summarize_presentation_telemetry(valid, invalid, 16_667, 16_667).is_err());
+
+        let implausible = telemetry_snapshot(1_000, 999, 1);
+        assert!(summarize_presentation_telemetry(valid, implausible, 16_667, 16_667).is_err());
     }
 
     #[test]

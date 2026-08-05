@@ -1,6 +1,6 @@
-# FPGA latch-v4 production requirements
+# FPGA latch-v5 production requirements
 
-Latch v4 is the only production protocol. New builds must not contain v2/v3
+Latch v5 is the only production protocol. New builds must not contain v2/v3/v4
 negotiation, decoding, fixtures, feature switches, fallback presentation, or
 rollback paths. Main, the scanout module, the latch RBF, and the MagiK runtime
 are one platform candidate and are installed or rejected as one transaction.
@@ -26,9 +26,22 @@ An ambiguous SET is never retried.
 
 ## Wire and ownership requirements
 
-- Protocol is exactly `4`; capabilities are exactly `0x01ff`.
-- SET, status, diagnostics, capabilities, and receipt messages are
+- Protocol is exactly `5`; capabilities are exactly `0x03ff`.
+- SET, status, diagnostics, capabilities, receipt, and presentation telemetry messages are
   CRC-16/CCITT-FALSE protected.
+- Presentation telemetry atomically counts every MagiK-owned vblank as either
+  a new presentation or a repeat; ownership loss invalidates cadence evidence.
+- The `0x5c` telemetry command returns ten snapshot words followed by CRC:
+  wrapping 32-bit owned, presented, repeated, and ownership-loss counters,
+  then active sequence and live status flags. Its acknowledgement magic is
+  `0x4d4c`.
+- The command-start edge snapshots pre-event registers. Subtracting two
+  snapshots therefore measures the half-open interval from the start command
+  edge through, but excluding, the end command edge: a coincident start vblank
+  is included and a coincident end vblank is excluded.
+- A legacy write while MagiK owns scanout increments ownership loss. A
+  same-edge legacy write wins over apply and that vblank is classified as
+  neither a presentation nor a repeat. Unowned vblanks are never counted.
 - A second SET while presentation is pending is rejected and cannot replace the
   pending frame.
 - Active base, geometry, sequence, and transaction become visible atomically;
@@ -82,7 +95,7 @@ scripts/agent release qualify
 ```
 
 The fixed workflow performs its runtime, catalog, and handoff preflights, then
-runs `latch-v4-six-hour-stress` before the independent multi-mode display
+runs `latch-v5-six-hour-stress` before the independent multi-mode display
 matrix. The launcher reads the real installed libraries and metadata, but
 writes every generated catalog artifact to a volatile isolated qualification
 directory. The host rotates the six stress classes every five minutes,
@@ -101,7 +114,7 @@ configuration snapshot is retained on the FAT volume until restoration so a
 reboot cannot silently discard the rollback source.
 
 Raw samples and the terminal summary are retained under
-`build/release-qualification/latch-v4/<candidate-id>/<run-id>/`. The summary
+`build/release-qualification/latch-v5/<candidate-id>/<run-id>/`. The summary
 binds the immutable identity block and the SHA-256 of the NDJSON sample stream.
 An interruption or any failed sample fails the gate and still runs the release
 restoration path.

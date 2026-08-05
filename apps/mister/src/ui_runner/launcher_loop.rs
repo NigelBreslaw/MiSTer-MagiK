@@ -2038,8 +2038,8 @@ pub(super) fn run_launcher_loop(
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_env();
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
-    let mut latch_v4_qualification = LatchV4Qualification::from_env(start);
-    let mut latch_v4_bench_state = LauncherBenchState::default();
+    let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
+    let mut latch_v5_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
@@ -2070,7 +2070,7 @@ pub(super) fn run_launcher_loop(
         .is_some()
         .then(launcher_start_menu_from_env)
         .flatten();
-    let start_screen = latch_v4_qualification
+    let start_screen = latch_v5_qualification
         .enabled()
         .then_some(Screen::Arcade)
         .or(env_start_screen)
@@ -3573,12 +3573,12 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        latch_v4_qualification.poll_control(loop_start);
-        latch_v4_qualification.observe_catalog_worker(
+        latch_v5_qualification.poll_control(loop_start);
+        latch_v5_qualification.observe_catalog_worker(
             scheduler.catalog_worker_running(),
             catalog_session.refresh_done(),
         );
-        if latch_v4_qualification.take_catalog_request(scheduler.catalog_worker_running()) {
+        if latch_v5_qualification.take_catalog_request(scheduler.catalog_worker_running()) {
             let effects = catalog_session.qualification_fresh_rebuild(arcade_root.clone());
             apply_catalog_session_effects(
                 effects,
@@ -3602,10 +3602,10 @@ pub(super) fn run_launcher_loop(
             );
             request_launcher_redraw!();
         }
-        if latch_v4_qualification.enabled()
+        if latch_v5_qualification.enabled()
             && launcher_presenter.latch_failure().is_none()
             && arcade_navigation_ready(catalog_ready, &catalog)
-            && let Some(scenario) = latch_v4_qualification.stress_class().bench_scenario()
+            && let Some(scenario) = latch_v5_qualification.stress_class().bench_scenario()
         {
             let before = LauncherBridgeKey::from_nav(&nav);
             if launcher_bench_step(
@@ -3613,10 +3613,10 @@ pub(super) fn run_launcher_loop(
                 &mut nav,
                 &catalog,
                 None,
-                &mut latch_v4_bench_state,
+                &mut latch_v5_bench_state,
                 loop_start,
             ) {
-                latch_v4_bench_state.advance_if(true);
+                latch_v5_bench_state.advance_if(true);
                 let after = LauncherBridgeKey::from_nav(&nav);
                 if before != after {
                     media_session.note_nav_change(&before, &after, loop_start);
@@ -3727,8 +3727,8 @@ pub(super) fn run_launcher_loop(
         );
         screensaver.set_qualification_particles(
             loop_start,
-            latch_v4_qualification.enabled(),
-            latch_v4_qualification.stress_class() == LatchV4StressClass::Particles,
+            latch_v5_qualification.enabled(),
+            latch_v5_qualification.stress_class() == LatchV5StressClass::Particles,
         );
         let restore_before = screensaver.restore_full_frame;
         let preview_was_active = screensaver.is_preview();
@@ -6632,7 +6632,7 @@ pub(super) fn run_launcher_loop(
                 latch_trace_flush_deferred,
             );
         }
-        latch_v4_qualification.record_present(
+        latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
         );
@@ -6652,7 +6652,7 @@ pub(super) fn run_launcher_loop(
         if preview.presentation_requires_present() {
             request_launcher_redraw!();
         }
-        latch_v4_qualification.write_state_if_due(Instant::now());
+        latch_v5_qualification.write_state_if_due(Instant::now());
         frames += 1;
     }
     if let Some(mut intro) = startup_intro.take() {

@@ -888,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn fpga_verification_requires_exact_v4_identity() {
+    fn fpga_verification_requires_exact_v5_identity() {
         for (label, original, replacement, expected_code) in [
             (
                 "protocol",

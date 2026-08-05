@@ -1,19 +1,21 @@
 {
-  "schema": 4,
-  "active_protocol_version": 4,
+  "schema": 5,
+  "active_protocol_version": 5,
   "commands": {
     "set": 87,
     "get": 88,
     "caps": 89,
     "diagnostics": 90,
-    "receipt": 91
+    "receipt": 91,
+    "presentation_telemetry": 92
   },
   "magic": {
     "set": 19783,
     "status": 19784,
     "caps": 19785,
     "diagnostics": 19786,
-    "receipt": 19787
+    "receipt": 19787,
+    "presentation_telemetry": 19788
   },
   "limits": {
     "max_width": 1366,
@@ -29,11 +31,12 @@
     "status_crc": 5,
     "post_crc": 6,
     "rejection_context": 7,
-    "authoritative_receipt": 8
+    "authoritative_receipt": 8,
+    "authoritative_presentation_telemetry": 9
   },
   "protocols": {
-    "4": {
-      "flags": 511,
+    "5": {
+      "flags": 1023,
       "caps_words": 6,
       "set_payload_words": 11,
       "set_words": 12,
@@ -43,13 +46,16 @@
       "diagnostics_words": 7,
       "receipt_payload_words": 10,
       "receipt_words": 11,
+      "presentation_telemetry_payload_words": 10,
+      "presentation_telemetry_words": 11,
       "caps_crc": true,
       "set_crc": true,
       "status_crc": true,
-      "receipt_crc": true
+      "receipt_crc": true,
+      "presentation_telemetry_crc": true
     }
   },
-  "set_words_v4": [
+  "set_words_v5": [
     "mode",
     "base_low",
     "base_high",
@@ -63,7 +69,7 @@
     "sequence",
     "crc"
   ],
-  "status_words_v4": [
+  "status_words_v5": [
     "active_sequence",
     "pending_sequence",
     "flags",
@@ -81,7 +87,7 @@
     "accepted_transaction",
     "crc"
   ],
-  "diagnostics_words_v4": [
+  "diagnostics_words_v5": [
     "reject_count",
     "last_reject_reason",
     "last_reject_expected_index",
@@ -90,7 +96,7 @@
     "receiver_flags",
     "crc"
   ],
-  "receipt_words_v4": [
+  "receipt_words_v5": [
     "attempted_transaction",
     "attempted_sequence",
     "disposition",
@@ -101,6 +107,19 @@
     "active_transaction",
     "active_sequence",
     "reject_reason",
+    "crc"
+  ],
+  "presentation_telemetry_words_v5": [
+    "owned_vblank_count_low",
+    "owned_vblank_count_high",
+    "presented_vblank_count_low",
+    "presented_vblank_count_high",
+    "repeated_vblank_count_low",
+    "repeated_vblank_count_high",
+    "ownership_loss_count_low",
+    "ownership_loss_count_high",
+    "active_sequence",
+    "flags",
     "crc"
   ],
   "receipt_dispositions": {
@@ -149,30 +168,35 @@
     ]
   },
   "goldens": {
-    "caps_v4": {
+    "caps_v5": {
       "command": 89,
-      "payload": [4, 511, 1366, 768, 2736],
-      "crc": 15780
+      "payload": [5, 1023, 1366, 768, 2736],
+      "crc": 7234
     },
-    "set_v4": {
+    "set_v5": {
       "command": 87,
       "payload": [32788, 36864, 8830, 960, 540, 0, 959, 0, 539, 1920, 43],
-      "crc": 22261
+      "crc": 4929
     },
-    "status_v4": {
+    "status_v5": {
       "command": 88,
       "payload": [42, 43, 15, 3, 4, 36864, 8830, 960, 540, 1920, 7, 9, 100, 101, 101],
-      "crc": 37242
+      "crc": 7334
     },
-    "diagnostics_v4": {
+    "diagnostics_v5": {
       "command": 90,
       "payload": [7, 1, 11, 0, 88, 0],
-      "crc": 61309
+      "crc": 16769
     },
-    "receipt_v4": {
+    "receipt_v5": {
       "command": 91,
       "payload": [101, 43, 1, 101, 43, 101, 43, 100, 42, 0],
-      "crc": 22657
+      "crc": 15754
+    },
+    "presentation_telemetry_v5": {
+      "command": 92,
+      "payload": [22136, 4660, 22128, 4660, 8, 0, 3, 0, 42, 9],
+      "crc": 57682
     }
   }
 }

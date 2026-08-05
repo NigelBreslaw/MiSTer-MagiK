@@ -395,8 +395,8 @@ mod tests {
         values.insert("platform_release".into(), "platform-v0.16".to_owned());
         values.insert("platform_release_number".into(), "16".to_owned());
         values.insert("platform_bundle_id".into(), "e".repeat(64));
-        values.insert("latch_protocol_version".into(), "4".to_owned());
-        values.insert("latch_capability_mask".into(), "0x01ff".to_owned());
+        values.insert("latch_protocol_version".into(), "5".to_owned());
+        values.insert("latch_capability_mask".into(), "0x03ff".to_owned());
         for (name, path) in Layout::Development.paths() {
             values.insert(format!("{name}_path"), path.to_owned());
         }

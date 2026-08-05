@@ -50,8 +50,8 @@ class ManifestTest(unittest.TestCase):
                     )
                 ),
                 "latch_protocol_sha256=" + "7" * 64,
-                "latch_protocol_version=" + ("2" if historical_v2 else "4"),
-                *(() if historical_v2 else ("latch_capability_mask=0x01ff",)),
+                "latch_protocol_version=" + ("2" if historical_v2 else "5"),
+                *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
                 "quartus_seed=1",
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
@@ -113,15 +113,15 @@ class ManifestTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
             valid = metadata.read_text()
-            metadata.write_text(valid.replace("latch_protocol_version=4\n", ""))
+            metadata.write_text(valid.replace("latch_protocol_version=5\n", ""))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             metadata.write_text(
-                valid.replace("latch_protocol_version=4", "latch_protocol_version=3")
+                valid.replace("latch_protocol_version=5", "latch_protocol_version=3")
             )
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             metadata.write_text(
                 valid.replace(
-                    "latch_capability_mask=0x01ff",
+                    "latch_capability_mask=0x03ff",
                     "latch_capability_mask=0x01fe",
                 )
             )

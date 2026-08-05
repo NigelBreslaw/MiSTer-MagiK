@@ -261,8 +261,8 @@ fn test_manifest(magik_revision: &str) -> String {
     values.insert("platform_release".to_owned(), "platform-v0.16".to_owned());
     values.insert("platform_release_number".to_owned(), "16".to_owned());
     values.insert("platform_bundle_id".to_owned(), "c".repeat(64));
-    values.insert("latch_protocol_version".to_owned(), "4".to_owned());
-    values.insert("latch_capability_mask".to_owned(), "0x01ff".to_owned());
+    values.insert("latch_protocol_version".to_owned(), "5".to_owned());
+    values.insert("latch_capability_mask".to_owned(), "0x03ff".to_owned());
     for (name, path) in crate::platform_manifest::Layout::Development.paths() {
         values.insert(format!("{name}_path"), path.into());
     }

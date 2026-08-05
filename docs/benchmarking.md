@@ -124,10 +124,11 @@ Terminology is normative throughout this repository:
 
 - `latch_drop_count` measures rejected or superseded latch protocol posts. It
   says nothing about whether rendering supplied a new frame for every refresh.
-- `dropped_frames` measures physical refresh intervals that displayed the
-  previous frame because no new frame was confirmed. This is the authoritative
-  dropped-frame signal, and it must be exactly zero during an authoritative
-  animation window.
+- `dropped_frames` is the FPGA protocol-v5 repeated-owned-vblank delta: refresh
+  intervals where the MagiK scanout route retained the previous framebuffer.
+  It is authoritative at the FPGA scanout source and must be exactly zero
+  during an authoritative animation window. Host completion estimates and
+  `FBIO_WAITFORVSYNC` observations are diagnostic only.
 - `cadence-warning` and `cadence-overrun` describe frame wall-time budget
   observations. They are not latch drops.
 

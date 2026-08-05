@@ -266,6 +266,14 @@ impl HiddenLatchPresenter {
         self.pipeline_stats
     }
 
+    pub fn presentation_telemetry(
+        &mut self,
+    ) -> Result<mister_magik_latch_contract::PresentationTelemetry, HiddenLatchError> {
+        self.fpga
+            .read_magik_presentation_telemetry()
+            .map_err(HiddenLatchError::Transport)
+    }
+
     /// Returns the inactive slot selected after the previous verified presentation.
     pub fn pixels_mut(&mut self) -> &mut [Rgb565] {
         assert!(
@@ -356,7 +364,7 @@ impl HiddenLatchPresenter {
         })
     }
 
-    /// Publishes current slot writes, posts through the existing v4 protocol, and
+    /// Publishes current slot writes, posts through the existing v5 protocol, and
     /// waits for a bounded verified flip before exposing the other slot.
     pub fn present(&mut self) -> Result<HiddenLatchPresentReceipt, HiddenLatchError> {
         self.post()?;
@@ -405,6 +413,13 @@ impl CachedHiddenLatchPresenter {
     #[must_use]
     pub const fn pipeline_stats(&self) -> HiddenLatchPipelineStats {
         self.raw.pipeline_stats()
+    }
+
+    pub fn presentation_telemetry(
+        &mut self,
+    ) -> Result<mister_magik_latch_contract::PresentationTelemetry, HiddenLatchError> {
+        self.ensure_healthy()?;
+        self.raw.presentation_telemetry()
     }
 
     #[must_use]

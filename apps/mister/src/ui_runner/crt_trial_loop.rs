@@ -179,7 +179,7 @@ pub(super) fn run_crt_trial_loop(
     let mode = ui.output_route();
     if secs != CRT_TRIAL_SECS || !mode.is_crt() {
         crate::ui_errln!(
-            "crt_trial_status_v4 schema=4 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
+            "crt_trial_status_v5 schema=5 ok=0 mode={} reason=invalid-contract requested_secs={} geometry={}x{}",
             mode.label(),
             secs,
             ui.render_w(),
@@ -192,7 +192,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(capabilities) => capabilities,
         Err(error) => {
             crate::ui_errln!(
-                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-capabilities detail={}",
+                "crt_trial_status_v5 schema=5 ok=0 mode={} reason=latch-capabilities detail={}",
                 mode.label(),
                 safe_field(&error.to_string())
             );
@@ -203,7 +203,7 @@ pub(super) fn run_crt_trial_loop(
         || caps_lo == crate::fpga::MAGIK_FBUF_CAPS_MAGIC;
     if !caps_supported || !capabilities.production_ready() {
         crate::ui_errln!(
-            "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-capabilities protocol={} flags=0x{:04x}",
+            "crt_trial_status_v5 schema=5 ok=0 mode={} reason=latch-capabilities protocol={} flags=0x{:04x}",
             mode.label(),
             capabilities.protocol_version,
             capabilities.flags
@@ -215,7 +215,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(status) if status.supported() => status,
         Ok(status) => {
             crate::ui_errln!(
-                "crt_trial_status_v4 schema=4 ok=0 mode={} duration_ms=0 frames=0 flips=0 posts=0 drops=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
+                "crt_trial_status_v5 schema=5 ok=0 mode={} duration_ms=0 frames=0 flips=0 posts=0 drops=0 reason=latch-status-unsupported ack_high=0x{:04x} ack_low=0x{:04x}",
                 mode.label(),
                 status.magic_hi,
                 status.magic_lo
@@ -224,7 +224,7 @@ pub(super) fn run_crt_trial_loop(
         }
         Err(error) => {
             crate::ui_errln!(
-                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=latch-status-read detail={}",
+                "crt_trial_status_v5 schema=5 ok=0 mode={} reason=latch-status-read detail={}",
                 mode.label(),
                 safe_field(&error.to_string())
             );
@@ -249,7 +249,7 @@ pub(super) fn run_crt_trial_loop(
         Ok(presenter) => presenter,
         Err(failure) => {
             crate::ui_errln!(
-                "crt_trial_status_v4 schema=4 ok=0 mode={} reason=presenter-open stage={} detail={}",
+                "crt_trial_status_v5 schema=5 ok=0 mode={} reason=presenter-open stage={} detail={}",
                 mode.label(),
                 failure.stage.code(),
                 safe_field(&failure.detail)
@@ -358,7 +358,7 @@ pub(super) fn run_crt_trial_loop(
         "none"
     });
     crate::ui_logln!(
-        "crt_trial_status_v4 schema=4 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} max_settle_us={} max_render_us={} max_copy_us={} max_status_us={} post_status_retry_frames={} max_post_status_reads={} post_status_transport_retry_frames={} max_post_status_wire_attempts={} last_buffer={} last_sequence={} reason={}",
+        "crt_trial_status_v5 schema=5 ok={} mode={} duration_ms={} frames={} flips={} posts={} drops={} final_pending={} final_active_matches={} unsafe_active_writes={} pending_writes={} alternation_misses={} cadence_misses={} max_interval_us={} max_settle_us={} max_render_us={} max_copy_us={} max_status_us={} post_status_retry_frames={} max_post_status_reads={} post_status_transport_retry_frames={} max_post_status_wire_attempts={} last_buffer={} last_sequence={} reason={}",
         u8::from(failure.is_none() && frames > 0 && counters.flips > 0),
         mode.label(),
         started.elapsed().as_millis(),

@@ -60,11 +60,12 @@ X uses scale `2/3`, Y uses `framebuffer_height/720`, and the resulting frame is
 centred with equal top and bottom margins.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
-the FPGA latch did not reject or supersede a post. Animation requires completion
-timestamps and flip deltas to prove that every physical refresh received one
-new confirmed frame. Runtime and benchmark evidence therefore reports
-`dropped_frames` separately from latch protocol drops and fails if either axis
-is nonzero.
+the FPGA latch did not reject or supersede a post. Protocol-v5 owned-vblank
+telemetry independently classifies every MagiK-owned refresh as a presentation
+or repeat. Runtime and benchmark evidence therefore reports the hardware
+`dropped_frames` count separately from latch protocol drops and fails if either
+axis is nonzero; completion timestamps and the Linux vblank observer remain
+attribution signals.
 
 The final handoff is derived only from the production launcher's live frame:
 

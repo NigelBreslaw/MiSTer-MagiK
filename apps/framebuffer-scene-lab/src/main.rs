@@ -10,8 +10,9 @@ mod vsync_observer;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use card_assessment::{
-    CardFrameDetails, FrameEvidence, ScreenshotFrameDetails, confirmation_sequence_is_contiguous,
-    summarize_cadence, summarize_vsync_observer,
+    CardFrameDetails, FrameEvidence, PresentationTelemetrySnapshot, ScreenshotFrameDetails,
+    apply_authoritative_presentation_telemetry, confirmation_sequence_is_contiguous,
+    summarize_cadence, summarize_presentation_telemetry, summarize_vsync_observer,
 };
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
@@ -231,7 +232,7 @@ fn write_measurement_evidence(
         })
     });
     let summary = serde_json::json!({
-        "schema": "mister-magik-scene-lab-measurement-pass-v2",
+        "schema": "mister-magik-scene-lab-measurement-pass-v3",
         "scene": scene,
         "pass": assessment.pass.label(),
         "profiler_enabled": assessment.pass.profiler_enabled(),
@@ -1523,6 +1524,7 @@ fn run_window(
     let mut warmup_unit_flip_streak = 0_u8;
     let mut warmup_started = None;
     let mut measurement_started = None;
+    let mut presentation_telemetry_start = None;
     let mut measurement_cpu_started = Duration::ZERO;
     let mut frame_evidence = Vec::with_capacity(bounded.map_or(0, |run| {
         run.duration.as_secs() as usize * FRAME_RATE as usize + 4
@@ -1587,8 +1589,26 @@ fn run_window(
                 if warmup_unit_flip_streak >= 3 {
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
+                        let raw_telemetry_start =
+                            presenter.presentation_telemetry().map_err(|error| {
+                                format!("read start FPGA presentation telemetry: {error}")
+                            })?;
+                        let telemetry_start = PresentationTelemetrySnapshot {
+                            owned_vblank_count: raw_telemetry_start.owned_vblank_count,
+                            presented_vblank_count: raw_telemetry_start.presented_vblank_count,
+                            repeated_vblank_count: raw_telemetry_start.repeated_vblank_count,
+                            ownership_loss_count: raw_telemetry_start.ownership_loss_count,
+                            active_sequence: raw_telemetry_start.active_sequence,
+                            flags: raw_telemetry_start.flags,
+                        };
+                        if !telemetry_start.magik_ownership() || telemetry_start.pending() {
+                            return Err(
+                                "start FPGA presentation telemetry is not owned and settled".into(),
+                            );
+                        }
                         let measured_at = Instant::now();
                         measurement_started = Some(measured_at);
+                        presentation_telemetry_start = Some(telemetry_start);
                         status_started = measured_at;
                         measurement_cpu_started = process_cpu_time();
                         cpu_started = measurement_cpu_started;
@@ -1785,6 +1805,21 @@ fn run_window(
                 );
                 frame_evidence.push(evidence);
             }
+            let raw_telemetry_end = presenter
+                .presentation_telemetry()
+                .map_err(|error| format!("read end FPGA presentation telemetry: {error}"))?;
+            let presentation_telemetry_end = PresentationTelemetrySnapshot {
+                owned_vblank_count: raw_telemetry_end.owned_vblank_count,
+                presented_vblank_count: raw_telemetry_end.presented_vblank_count,
+                repeated_vblank_count: raw_telemetry_end.repeated_vblank_count,
+                ownership_loss_count: raw_telemetry_end.ownership_loss_count,
+                active_sequence: raw_telemetry_end.active_sequence,
+                flags: raw_telemetry_end.flags,
+            };
+            let telemetry_elapsed_us = measurement_started
+                .expect("bounded scene completes only after measurement begins")
+                .elapsed()
+                .as_micros() as u64;
             if let Some(observer) = vsync_observer.as_ref() {
                 observer.request_stop();
             }
@@ -1811,18 +1846,42 @@ fn run_window(
                 .map_or((16_667, "hdmi-60hz-contract"), |period| {
                     (period, "resolved-output-route")
                 });
-            let cadence =
-                summarize_cadence(&frame_evidence, refresh_period_us, refresh_period_source)?;
+            let telemetry = summarize_presentation_telemetry(
+                presentation_telemetry_start
+                    .expect("bounded measurement starts with FPGA telemetry"),
+                presentation_telemetry_end,
+                telemetry_elapsed_us,
+                refresh_period_us,
+            )?;
+            let cadence = apply_authoritative_presentation_telemetry(
+                summarize_cadence(&frame_evidence, refresh_period_us, refresh_period_source)?,
+                telemetry,
+            );
             println!(
-                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} software_estimated_dropped_frames={} ownership_losses={} telemetry_invariant={} telemetry_plausible={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 renderer.effect().label(),
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
+                cadence.cadence_source,
                 cadence.refresh_period_us,
                 cadence.confirmed_frames,
                 cadence.expected_refresh_intervals,
                 cadence.unique_latch_flips,
                 cadence.dropped_frames,
+                cadence.software_estimated_dropped_frames,
+                cadence
+                    .presentation_telemetry
+                    .as_ref()
+                    .map_or(0, |telemetry| telemetry.ownership_loss_delta),
+                cadence
+                    .presentation_telemetry
+                    .as_ref()
+                    .is_some_and(|telemetry| telemetry.lifetime_invariant_valid
+                        && telemetry.delta_invariant_valid),
+                cadence
+                    .presentation_telemetry
+                    .as_ref()
+                    .is_some_and(|telemetry| telemetry.plausible),
                 cadence.confirmation_sequence_failures,
                 cadence.latch_drop_delta,
                 cadence.completion_failures,
@@ -2060,6 +2119,7 @@ fn run_card_flip_mister(
             .is_some_and(|assessment| assessment.pass.profiler_enabled());
     let bounded_run = bounded.is_some();
     let mut measurement_started = None;
+    let mut presentation_telemetry_start = None;
     let mut measurement_cpu_started = profile_cpu_started;
     let mut warmup_full_slot_restores = 0_u64;
     let mut warmup_last_flip_count = None;
@@ -2137,8 +2197,26 @@ fn run_card_flip_mister(
                     let bounded = bounded.expect("bounded card run has duration");
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
+                        let raw_telemetry_start =
+                            presenter.presentation_telemetry().map_err(|error| {
+                                format!("read start FPGA presentation telemetry: {error}")
+                            })?;
+                        let telemetry_start = PresentationTelemetrySnapshot {
+                            owned_vblank_count: raw_telemetry_start.owned_vblank_count,
+                            presented_vblank_count: raw_telemetry_start.presented_vblank_count,
+                            repeated_vblank_count: raw_telemetry_start.repeated_vblank_count,
+                            ownership_loss_count: raw_telemetry_start.ownership_loss_count,
+                            active_sequence: raw_telemetry_start.active_sequence,
+                            flags: raw_telemetry_start.flags,
+                        };
+                        if !telemetry_start.magik_ownership() || telemetry_start.pending() {
+                            return Err(
+                                "start FPGA presentation telemetry is not owned and settled".into(),
+                            );
+                        }
                         let measured_at = Instant::now();
                         measurement_started = Some(measured_at);
+                        presentation_telemetry_start = Some(telemetry_start);
                         measurement_cpu_started = process_cpu_time();
                         profile_frame_to_present_samples_us.clear();
                         profile_render_samples_us.clear();
@@ -2427,6 +2505,21 @@ fn run_card_flip_mister(
                     profile_frame_evidence.push(evidence);
                 }
             }
+            let raw_telemetry_end = presenter
+                .presentation_telemetry()
+                .map_err(|error| format!("read end FPGA presentation telemetry: {error}"))?;
+            let presentation_telemetry_end = PresentationTelemetrySnapshot {
+                owned_vblank_count: raw_telemetry_end.owned_vblank_count,
+                presented_vblank_count: raw_telemetry_end.presented_vblank_count,
+                repeated_vblank_count: raw_telemetry_end.repeated_vblank_count,
+                ownership_loss_count: raw_telemetry_end.ownership_loss_count,
+                active_sequence: raw_telemetry_end.active_sequence,
+                flags: raw_telemetry_end.flags,
+            };
+            let telemetry_elapsed_us = measurement_started
+                .expect("bounded card run completes only after measurement begins")
+                .elapsed()
+                .as_micros() as u64;
             if let Some(observer) = vsync_observer.as_ref() {
                 observer.request_stop();
             }
@@ -2489,20 +2582,32 @@ fn run_card_flip_mister(
                 .map_or((16_667, "hdmi-60hz-contract"), |period| {
                     (period, "resolved-output-route")
                 });
-            let cadence = summarize_cadence(
-                &profile_frame_evidence,
+            let telemetry = summarize_presentation_telemetry(
+                presentation_telemetry_start
+                    .expect("bounded card measurement starts with FPGA telemetry"),
+                presentation_telemetry_end,
+                telemetry_elapsed_us,
                 refresh_period_us,
-                refresh_period_source,
             )?;
+            let cadence = apply_authoritative_presentation_telemetry(
+                summarize_cadence(
+                    &profile_frame_evidence,
+                    refresh_period_us,
+                    refresh_period_source,
+                )?,
+                telemetry,
+            );
             println!(
-                "card-flip-cadence profiler_enabled={} authoritative={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "card-flip-cadence profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} software_estimated_dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
+                cadence.cadence_source,
                 cadence.refresh_period_us,
                 cadence.confirmed_frames,
                 cadence.expected_refresh_intervals,
                 cadence.unique_latch_flips,
                 cadence.dropped_frames,
+                cadence.software_estimated_dropped_frames,
                 cadence.confirmation_sequence_failures,
                 cadence.latch_drop_delta,
                 cadence.completion_failures,

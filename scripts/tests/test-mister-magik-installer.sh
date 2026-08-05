@@ -22,7 +22,7 @@ module_hash="$(sha256sum "$APP/mister_magik_scanout_slots.ko" | awk '{print $1}'
 rbf_hash="$(sha256sum "$APP/fpga/menu-magik-vblank-latch.rbf" | awk '{print $1}')"
 printf 'platform_contract_sha256=%s\nmodule_sha256=%s\nvermagic=5.15.1-MiSTer fixture\n' \
   "$contract" "$module_hash" >"$APP/mister_magik_scanout_slots.metadata.txt"
-printf 'platform_contract_sha256=%s\nsource_commit=%040d\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\nrbf_sha256=%s\n' \
+printf 'platform_contract_sha256=%s\nsource_commit=%040d\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\nrbf_sha256=%s\n' \
   "$contract" 3 "$rbf_hash" >"$APP/fpga/menu-magik-vblank-latch.metadata.txt"
 printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bundle_id":"%064d"}\n' 0 \
   >"$APP/platform-bundle-v0.2.json"

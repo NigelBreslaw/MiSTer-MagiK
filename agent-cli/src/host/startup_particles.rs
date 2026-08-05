@@ -1152,23 +1152,57 @@ fn parse_vsync_events(text: &str) -> Result<Vec<Value>> {
 
 fn validated_scene_cadence(summary: &Value) -> Result<&Value> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-scene-lab-measurement-pass-v2")
+        != Some("mister-magik-scene-lab-measurement-pass-v3")
     {
         return Err("scene-lab measurement pass has the wrong schema".into());
     }
     let cadence = summary
         .get("cadence")
         .ok_or("scene pass summary has no physical cadence")?;
-    if cadence.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-cadence-v2") {
+    if cadence.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-cadence-v3") {
         return Err("scene-lab cadence evidence has the wrong schema".into());
     }
     for field in [
         "dropped_frames",
+        "software_estimated_dropped_frames",
         "confirmation_sequence_failures",
         "latch_drop_delta",
         "completion_failures",
     ] {
         required_u64(cadence, field)?;
+    }
+    if cadence.get("cadence_source").and_then(Value::as_str) != Some("fpga-owned-vblank-telemetry")
+    {
+        return Err("scene-lab cadence is not sourced from FPGA presentation telemetry".into());
+    }
+    let telemetry = cadence
+        .get("presentation_telemetry")
+        .ok_or("scene-lab cadence has no FPGA presentation telemetry")?;
+    if telemetry.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-scene-lab-presentation-telemetry-v1")
+        || telemetry
+            .get("lifetime_invariant_valid")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || telemetry
+            .get("delta_invariant_valid")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || telemetry.get("plausible").and_then(Value::as_bool) != Some(true)
+        || telemetry
+            .get("endpoints_owned_and_settled")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || required_u64(telemetry, "ownership_loss_delta")? != 0
+    {
+        return Err("scene-lab FPGA presentation telemetry is invalid".into());
+    }
+    for field in [
+        "owned_vblank_delta",
+        "presented_vblank_delta",
+        "repeated_vblank_delta",
+    ] {
+        required_u64(telemetry, field)?;
     }
     Ok(cadence)
 }
@@ -1227,7 +1261,7 @@ fn summarize_scene_assessment(
         "dropped frames occurred in the unprofiled control; inspect dropped-frame contexts and CPU stacks"
     };
     Ok(json!({
-        "schema": "mister-magik-scene-lab-assessment-v2",
+        "schema": "mister-magik-scene-lab-assessment-v3",
         "cadence_pass": cadence,
         "profile_pass": profile,
         "cadence_phase_timings": card_phase_summary(cadence_frames),
@@ -1387,7 +1421,7 @@ fn scene_assessment_report(scene: &str, summary: &Value) -> String {
         .and_then(|outlier| outlier.get("frame"))
         .map_or(0, |frame| value_u64(frame, "frame"));
     format!(
-        "# {scene} cadence and CPU assessment\n\n## Cadence evidence\n\n- Result: {}\n- Unprofiled confirmed-presentation FPS: {:.3}\n- Unprofiled dropped frames under the existing estimator: {}\n- Unprofiled confirmation sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Independent vblank observer: {} hits at {:.3} Hz\n- Independent vblank interval min / p50 / p99 / max: {:.3} / {:.3} / {:.3} / {:.3} ms\n- Independent vblank observer timeouts / errors: {} / {}\n- Profiled estimated dropped frames (attribution only): {}\n- Attribution: {}\n\nThe independent observer is a separate blocking `FBIO_WAITFORVSYNC` stream and does not pace rendering. The existing confirmation estimator remains the qualification rule for this experiment; the raw observer stream is retained so the two clocks can be compared without rounding away timing detail. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Cadence vblanks](cadence-vsync.jsonl) · [Profile frames](profile-frames.jsonl) · [Profile vblanks](profile-vsync.jsonl) · [Machine summary](summary.json)\n",
+        "# {scene} cadence and CPU assessment\n\n## Cadence evidence\n\n- Result: {}\n- Unprofiled confirmed-presentation FPS: {:.3}\n- Authoritative FPGA repeated frames: {}\n- Software-estimated repeats (diagnostic): {}\n- Unprofiled confirmation sequence failures: {}\n- Unprofiled latch drops: {}\n- Unprofiled completion failures: {}\n- Independent vblank observer: {} hits at {:.3} Hz\n- Independent vblank interval min / p50 / p99 / max: {:.3} / {:.3} / {:.3} / {:.3} ms\n- Independent vblank observer timeouts / errors: {} / {}\n- Profiled FPGA repeated frames (attribution only): {}\n- Attribution: {}\n\nThe FPGA owned-vblank counters are the cadence authority. The rounded completion estimator and independent `FBIO_WAITFORVSYNC` observer remain diagnostic attribution signals only. The 99 Hz sampled pass cannot qualify cadence.\n\n## Full timing and CPU\n\n| Pass | Process CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| Unprofiled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n| 99 Hz sampled | {:.2}% | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms | {:.3} / {:.3} ms |\n\nThe longest unprofiled confirmation interval was {:.3} ms at frame {}. The largest unprofiled pre-post workload was {:.3} ms at frame {}. Scene-specific details, ranked contexts, and RSS statistics are retained in `summary.json`. Wall time materially above CPU time in settle/post-to-confirm is expected vblank waiting; renderer or transfer pressure instead appears as matching wall and CPU growth before the latch post.\n\n## Artifacts\n\n[Flamegraph](flamegraph.svg) · [Folded stacks](stacks.folded) · [Cadence frames](cadence-frames.jsonl) · [Cadence vblanks](cadence-vsync.jsonl) · [Profile frames](profile-frames.jsonl) · [Profile vblanks](profile-vsync.jsonl) · [Machine summary](summary.json)\n",
         if value_u64(cadence, "dropped_frames") == 0 {
             "PASS — 0 dropped frames".to_string()
         } else {
@@ -1401,6 +1435,7 @@ fn scene_assessment_report(scene: &str, summary: &Value) -> String {
             .and_then(Value::as_f64)
             .unwrap_or(0.0),
         value_u64(cadence, "dropped_frames"),
+        value_u64(cadence, "software_estimated_dropped_frames"),
         value_u64(cadence, "confirmation_sequence_failures"),
         value_u64(cadence, "latch_drop_delta"),
         value_u64(cadence, "completion_failures"),
@@ -1772,12 +1807,25 @@ mod tests {
 
     fn scene_pass(authoritative: bool, dropped_frames: u64) -> Value {
         serde_json::json!({
-            "schema": "mister-magik-scene-lab-measurement-pass-v2",
+            "schema": "mister-magik-scene-lab-measurement-pass-v3",
             "cadence": {
-                "schema": "mister-magik-scene-lab-cadence-v2",
+                "schema": "mister-magik-scene-lab-cadence-v3",
                 "cadence_authoritative": authoritative,
+                "cadence_source": "fpga-owned-vblank-telemetry",
                 "refresh_period_us": 16_667,
                 "dropped_frames": dropped_frames,
+                "software_estimated_dropped_frames": 0,
+                "presentation_telemetry": {
+                    "schema": "mister-magik-scene-lab-presentation-telemetry-v1",
+                    "owned_vblank_delta": 60,
+                    "presented_vblank_delta": 60 - dropped_frames,
+                    "repeated_vblank_delta": dropped_frames,
+                    "ownership_loss_delta": 0,
+                    "lifetime_invariant_valid": true,
+                    "delta_invariant_valid": true,
+                    "plausible": true,
+                    "endpoints_owned_and_settled": true,
+                },
                 "confirmation_sequence_failures": 0,
                 "latch_drop_delta": 0,
                 "completion_failures": 0,

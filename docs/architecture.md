@@ -232,7 +232,7 @@ conversion:
   not prove the patched core is running.
   Runtime proof comes from Main's cmdline, the scanout-slots module, passive
   `fpga-latch-report` magic for passive commands `0x58`/`0x59`, production-ready
-  exact protocol-v4 capabilities `0x01ff` and CAPS CRC from `0x59`, SET support derived
+  exact protocol-v5 capabilities `0x03ff` and CAPS CRC from `0x59`, SET support derived
   from that exact profile without a side-effecting `0x57` probe, and advancing latch
   `flip_count`/`post_count` while the launcher runs. The JSON
   `composition_state` describes UI composition, not the final present backend.
@@ -245,7 +245,7 @@ conversion:
   must receive a newly confirmed frame. A zero latch drop count never proves
   zero dropped frames. Linux wake jitter after the vblank wait is reported
   separately as scheduler timing.
-  A protocol-v4 rejection also snapshots passive
+  A protocol-v5 rejection also snapshots passive
   `0x5a` receiver context:
   reject count/reason, expected and observed word indices, observed command,
   receiver state, and CRC. The latch failure episode pairs that snapshot with

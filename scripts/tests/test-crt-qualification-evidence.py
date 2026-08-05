@@ -24,7 +24,7 @@ class CrtEvidenceTest(unittest.TestCase):
             "platform_contract_sha256": "4" * 64,
             "latch_protocol_sha256": "5" * 64,
             "platform_manifest_sha256": "6" * 64,
-            "latch_protocol_version": 2 if historical_v2 else 4,
+            "latch_protocol_version": 2 if historical_v2 else 5,
         }
         if not historical_v2:
             identity.update(
@@ -33,7 +33,7 @@ class CrtEvidenceTest(unittest.TestCase):
                     "kernel_sha256": "8" * 64,
                     "fpga_component_id": "9" * 64,
                     "candidate_workflow_url": "https://github.example/actions/runs/1",
-                    "latch_capability_mask": "0x01ff",
+                    "latch_capability_mask": "0x03ff",
                 }
             )
         payload = {

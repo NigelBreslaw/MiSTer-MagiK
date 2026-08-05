@@ -67,13 +67,13 @@ def verify(path: Path, *, historical_v2: bool = False) -> dict[str, object]:
     for name in hash_names:
         if not HEX64.fullmatch(str(identity.get(name, ""))):
             raise ValueError(f"invalid {name}")
-    expected_protocol = 2 if historical_v2 else 4
+    expected_protocol = 2 if historical_v2 else 5
     if identity.get("latch_protocol_version") != expected_protocol:
         raise ValueError(
             f"qualification must use latch protocol version {expected_protocol}"
         )
-    if not historical_v2 and identity.get("latch_capability_mask") != "0x01ff":
-        raise ValueError("qualification must use latch capability mask 0x01ff")
+    if not historical_v2 and identity.get("latch_capability_mask") != "0x03ff":
+        raise ValueError("qualification must use latch capability mask 0x03ff")
     if not historical_v2 and not str(identity.get("candidate_workflow_url", "")).startswith(
         "https://"
     ):

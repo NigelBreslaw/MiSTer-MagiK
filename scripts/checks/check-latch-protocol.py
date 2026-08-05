@@ -30,20 +30,29 @@ subprocess.run(
     check=True,
 )
 spec = json.loads(SPEC_PATH.read_text())
-if spec["active_protocol_version"] != 4 or set(spec["protocols"]) != {"4"}:
-    raise SystemExit("only latch protocol v4 may be generated")
-if len(spec["set_words_v4"]) != 12 or spec["set_words_v4"][-1] != "crc":
-    raise SystemExit("protocol-v4 SET must contain eleven payload words plus CRC")
-if len(spec["status_words_v4"]) != 16 or spec["status_words_v4"][-1] != "crc":
-    raise SystemExit("protocol-v4 status must contain fifteen payload words plus CRC")
-if len(spec["receipt_words_v4"]) != 11 or spec["receipt_words_v4"][-1] != "crc":
-    raise SystemExit("protocol-v4 receipt must contain ten payload words plus CRC")
-if spec["protocols"]["4"]["flags"] != 0x01FF:
-    raise SystemExit("protocol-v4 capability flags must be exactly 0x01ff")
+if spec["schema"] != 5:
+    raise SystemExit("latch protocol schema must be v5")
+if spec["active_protocol_version"] != 5 or set(spec["protocols"]) != {"5"}:
+    raise SystemExit("only latch protocol v5 may be generated")
+if len(spec["set_words_v5"]) != 12 or spec["set_words_v5"][-1] != "crc":
+    raise SystemExit("protocol-v5 SET must contain eleven payload words plus CRC")
+if len(spec["status_words_v5"]) != 16 or spec["status_words_v5"][-1] != "crc":
+    raise SystemExit("protocol-v5 status must contain fifteen payload words plus CRC")
+if len(spec["receipt_words_v5"]) != 11 or spec["receipt_words_v5"][-1] != "crc":
+    raise SystemExit("protocol-v5 receipt must contain ten payload words plus CRC")
+if (
+    len(spec["presentation_telemetry_words_v5"]) != 11
+    or spec["presentation_telemetry_words_v5"][-1] != "crc"
+):
+    raise SystemExit("protocol-v5 presentation telemetry must contain ten payload words plus CRC")
+if spec["protocols"]["5"]["flags"] != 0x03FF:
+    raise SystemExit("protocol-v5 capability flags must be exactly 0x03ff")
+if spec["capabilities"].get("authoritative_presentation_telemetry") != 9:
+    raise SystemExit("protocol-v5 presentation telemetry capability must be bit 9")
 for name, golden in spec["goldens"].items():
     words = [
         golden["command"],
-        4,
+        5,
         len(golden["payload"]),
         *golden["payload"],
     ]

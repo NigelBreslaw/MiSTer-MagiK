@@ -15,7 +15,7 @@ pub enum Phase {
     Catalog,
     InputAndHandoff,
     Display,
-    LatchV4Stress,
+    LatchV5Stress,
     Recovery,
     Restore,
 }
@@ -29,7 +29,7 @@ impl Phase {
             Self::Catalog => "catalog",
             Self::InputAndHandoff => "input-and-handoff",
             Self::Display => "display",
-            Self::LatchV4Stress => "latch-v4-six-hour-stress",
+            Self::LatchV5Stress => "latch-v5-six-hour-stress",
             Self::Recovery => "recovery",
             Self::Restore => "restore",
         }
@@ -48,7 +48,7 @@ trait ReleaseDevice {
     fn qualify_catalog(&mut self) -> AgentResult<()>;
     fn qualify_input_and_handoff(&mut self) -> AgentResult<()>;
     fn qualify_display(&mut self) -> AgentResult<()>;
-    fn qualify_latch_v4_stress(&mut self) -> AgentResult<()>;
+    fn qualify_latch_v5_stress(&mut self) -> AgentResult<()>;
     fn qualify_recovery(&mut self) -> AgentResult<()>;
     fn restore(&mut self) -> AgentResult<()>;
 }
@@ -74,8 +74,8 @@ impl ReleaseDevice for DeviceClient {
         self.mutate(crate::NativeDevice::qualify_release_display)
     }
 
-    fn qualify_latch_v4_stress(&mut self) -> AgentResult<()> {
-        self.mutate(crate::NativeDevice::qualify_release_latch_v4_stress)
+    fn qualify_latch_v5_stress(&mut self) -> AgentResult<()> {
+        self.mutate(crate::NativeDevice::qualify_release_latch_v5_stress)
     }
 
     fn qualify_recovery(&mut self) -> AgentResult<()> {
@@ -97,7 +97,7 @@ pub fn run_workflow(
         (Phase::Runtime, 25),
         (Phase::Catalog, 40),
         (Phase::InputAndHandoff, 58),
-        (Phase::LatchV4Stress, 65),
+        (Phase::LatchV5Stress, 65),
         (Phase::Display, 90),
         (Phase::Recovery, 92),
         (Phase::Restore, 100),
@@ -172,7 +172,7 @@ impl<D: ReleaseDevice> ReleaseActions for ProcessActions<D> {
             Phase::Catalog => self.device.qualify_catalog(),
             Phase::InputAndHandoff => self.device.qualify_input_and_handoff(),
             Phase::Display => self.device.qualify_display(),
-            Phase::LatchV4Stress => self.device.qualify_latch_v4_stress(),
+            Phase::LatchV5Stress => self.device.qualify_latch_v5_stress(),
             Phase::Recovery => self.device.qualify_recovery(),
             Phase::Restore => unreachable!("restore has a dedicated action"),
         }
@@ -254,7 +254,7 @@ mod tests {
             Phase::Catalog,
             Phase::InputAndHandoff,
             Phase::Display,
-            Phase::LatchV4Stress,
+            Phase::LatchV5Stress,
             Phase::Recovery,
         ] {
             let mut actions = FakeActions {

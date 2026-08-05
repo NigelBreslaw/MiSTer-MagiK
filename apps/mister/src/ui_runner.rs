@@ -89,7 +89,7 @@ mod controller_setup_input_session;
 mod crt_trial_loop;
 #[cfg(mister_experiments)]
 mod experiments;
-mod latch_v4_qualification;
+mod latch_v5_qualification;
 mod launch_handoff_session;
 mod launcher_automation;
 mod launcher_bench;
@@ -131,7 +131,7 @@ use experiments::effects::{
     run_camera_effects_loop, run_raster_effects_loop, run_sprite_effects_loop,
     run_text_effects_loop, run_transition_effects_loop,
 };
-use latch_v4_qualification::*;
+use latch_v5_qualification::*;
 use launch_handoff_session::*;
 use launcher_automation::*;
 use launcher_bench::*;

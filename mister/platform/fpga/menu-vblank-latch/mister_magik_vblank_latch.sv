@@ -116,9 +116,13 @@ module mister_magik_vblank_latch (
 	reg [15:0] receipt_attempted_sequence = 16'd0;
 	reg [15:0] receipt_disposition = MAGIK_RECEIPT_NONE;
 	reg [3:0] receipt_reject_reason = MAGIK_REJECT_NONE;
+	reg [31:0] owned_vblank_count = 32'd0;
+	reg [31:0] presented_vblank_count = 32'd0;
+	reg [31:0] repeated_vblank_count = 32'd0;
+	reg [31:0] ownership_loss_count = 32'd0;
 
 	// Read commands are serialized, so one bank preserves each command-start
-	// snapshot without carrying three mutually exclusive register arrays.
+	// snapshot without carrying separate mutually exclusive register arrays.
 	reg [15:0] response_snapshot [0:14];
 	reg [15:0] tx_crc = 16'd0;
 	reg [3:0] tx_expected = 4'd0;
@@ -195,11 +199,13 @@ module mister_magik_vblank_latch (
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
-		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT))) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY))) ||
 		(cmd_data && ((cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
-		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)));
+		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) ||
+		              (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)));
 
 	always @(*) begin
 		response_data = 16'd0;
@@ -212,6 +218,8 @@ module mister_magik_vblank_latch (
 					response_data = MAGIK_FBUF_DIAGNOSTICS_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH_RECEIPT:
 					response_data = MAGIK_FBUF_RECEIPT_MAGIC;
+				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY:
+					response_data = MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -237,6 +245,11 @@ module mister_magik_vblank_latch (
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT)) begin
+			if(word_index < 4'd10) response_data = response_snapshot[word_index];
+			else if(word_index == 4'd10)
+				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
+		end
+		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)) begin
 			if(word_index < 4'd10) response_data = response_snapshot[word_index];
 			else if(word_index == 4'd10)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
@@ -302,6 +315,21 @@ module mister_magik_vblank_latch (
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_LATCH_RECEIPT;
 		end
+		else if(cmd_start && (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)) begin
+			response_snapshot[0] <= owned_vblank_count[15:0];
+			response_snapshot[1] <= owned_vblank_count[31:16];
+			response_snapshot[2] <= presented_vblank_count[15:0];
+			response_snapshot[3] <= presented_vblank_count[31:16];
+			response_snapshot[4] <= repeated_vblank_count[15:0];
+			response_snapshot[5] <= repeated_vblank_count[31:16];
+			response_snapshot[6] <= ownership_loss_count[15:0];
+			response_snapshot[7] <= ownership_loss_count[31:16];
+			response_snapshot[8] <= active_seq;
+			response_snapshot[9] <= live_status_flags;
+			tx_crc <= crc_header(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY, 16'd10);
+			tx_expected <= 4'd0;
+			tx_command <= MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY;
+		end
 		else if(cmd_data && (cmd_id == tx_command) &&
 		        (word_index == tx_expected)) begin
 			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd15)) begin
@@ -333,7 +361,25 @@ module mister_magik_vblank_latch (
 					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
 					tx_expected <= tx_expected + 1'd1;
 				end
+				else if((tx_command == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY) &&
+				        (word_index < 4'd10)) begin
+					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
+					tx_expected <= tx_expected + 1'd1;
+				end
 			end
+
+		if(legacy_write && magik_ownership)
+			ownership_loss_count <= ownership_loss_count + 1'd1;
+		if(vbl_rise && !legacy_write) begin
+			if(apply_accepted) begin
+				owned_vblank_count <= owned_vblank_count + 1'd1;
+				presented_vblank_count <= presented_vblank_count + 1'd1;
+			end
+			else if(magik_ownership) begin
+				owned_vblank_count <= owned_vblank_count + 1'd1;
+				repeated_vblank_count <= repeated_vblank_count + 1'd1;
+			end
+		end
 
 		if(legacy_write) begin
 			magik_ownership <= 1'b0;
@@ -567,6 +613,8 @@ module mister_magik_vblank_latch (
 
 	`ifndef SYNTHESIS
 	always @(posedge clk_sys) begin
+		assert(owned_vblank_count == (presented_vblank_count + repeated_vblank_count))
+			else $fatal(1, "owned vblank accounting invariant failed");
 		if(!pending) begin
 			assert(accepted_seq == active_seq)
 				else $fatal(1, "accepted N / active N-1 / no pending is forbidden");

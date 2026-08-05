@@ -171,8 +171,8 @@ fn load_platform(
     };
     let invalid = values.get("format").map(String::as_str) != Some(MANIFEST_FORMAT)
         || platform.release_tag != format!("platform-v0.{}", platform.release_number)
-        || platform.latch_protocol_version != 4
-        || platform.latch_capability_mask != "0x01ff"
+        || platform.latch_protocol_version != 5
+        || platform.latch_capability_mask != "0x03ff"
         || runtime.binary_sha256.as_ref() != Some(&platform.runtime_sha256)
         || runtime.source_revision != platform.magik_revision;
     if invalid {

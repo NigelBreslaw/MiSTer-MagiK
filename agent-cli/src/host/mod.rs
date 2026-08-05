@@ -23,7 +23,7 @@ mod agent_client;
 mod arcade_database;
 mod crt_qualification;
 mod discovery;
-mod latch_v4_qualification;
+mod latch_v5_qualification;
 mod launcher_automation;
 mod live_particles;
 mod media;
@@ -743,10 +743,10 @@ impl NativeDevice {
         .map_err(device_failure)
     }
 
-    pub(crate) fn qualify_release_latch_v4_stress(
+    pub(crate) fn qualify_release_latch_v5_stress(
         &mut self,
     ) -> std::result::Result<(), DeviceFailure> {
-        self.release_ssh_mutation(|config| latch_v4_qualification::run(config).map(|_| ()))
+        self.release_ssh_mutation(|config| latch_v5_qualification::run(config).map(|_| ()))
     }
 
     pub(crate) fn qualify_release_recovery(&mut self) -> std::result::Result<(), DeviceFailure> {
@@ -3651,7 +3651,7 @@ fn release_rearm_token_command() -> String {
 }
 
 fn release_arming_cleanup_command() -> &'static str {
-    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /tmp/mister-magik/latch-v4-qualification-control.tsv /tmp/mister-magik/latch-v4-qualification-control.tsv.tmp /tmp/mister-magik/latch-v4-qualification-state.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; rm -rf /tmp/mister-magik/latch-v4-catalog"
+    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /tmp/mister-magik/latch-v5-qualification-control.tsv /tmp/mister-magik/latch-v5-qualification-control.tsv.tmp /tmp/mister-magik/latch-v5-qualification-state.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; rm -rf /tmp/mister-magik/latch-v5-catalog"
 }
 
 fn release_begin_command() -> String {
@@ -4034,7 +4034,7 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
     const MARKERS: [&str; 3] = [
         "crt_trial_status_v2 schema=2 ",
         "crt_trial_status_v3 schema=3 ",
-        "crt_trial_status_v4 schema=4 ",
+        "crt_trial_status_v5 schema=5 ",
     ];
     let status = output
         .match_indices("crt_trial_status_v")
@@ -10743,8 +10743,8 @@ fn validate_runtime_bundle_identity(
     }
     for (key, expected) in [
         ("format", "mister-magik-platform-v3"),
-        ("latch_protocol_version", "4"),
-        ("latch_capability_mask", "0x01ff"),
+        ("latch_protocol_version", "5"),
+        ("latch_capability_mask", "0x03ff"),
         ("main_path", "/media/fat/MiSTer_MagiKDev"),
         ("gui_path", "/media/fat/mister-magik-dev/mister-magik-fb"),
         (
@@ -13682,7 +13682,7 @@ mod tests {
 
     fn runtime_manifest_for(gui_sha256: &str) -> String {
         format!(
-            "format=mister-magik-platform-v3\nplatform_release=platform-v0.1\nplatform_release_number=1\nplatform_bundle_id={hash}\nqualification_candidate_id={hash}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\nmain_path=/media/fat/MiSTer_MagiKDev\ngui_path=/media/fat/mister-magik-dev/mister-magik-fb\nmanager_path=/media/fat/mister-magik-dev/mister-magik-manager\nscanout_module_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko\nscanout_metadata_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt\nlatch_rbf_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf\nlatch_metadata_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt\nmain_sha256={hash}\ngui_sha256={gui_sha256}\nmanager_sha256={hash}\nscanout_module_sha256={hash}\nscanout_metadata_sha256={hash}\nlatch_rbf_sha256={hash}\nlatch_metadata_sha256={hash}\nplatform_contract_sha256={hash}\nmain_revision={revision}\nmagik_revision={revision}\nmenu_revision={revision}\n",
+            "format=mister-magik-platform-v3\nplatform_release=platform-v0.1\nplatform_release_number=1\nplatform_bundle_id={hash}\nqualification_candidate_id={hash}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\nmain_path=/media/fat/MiSTer_MagiKDev\ngui_path=/media/fat/mister-magik-dev/mister-magik-fb\nmanager_path=/media/fat/mister-magik-dev/mister-magik-manager\nscanout_module_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko\nscanout_metadata_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt\nlatch_rbf_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf\nlatch_metadata_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt\nmain_sha256={hash}\ngui_sha256={gui_sha256}\nmanager_sha256={hash}\nscanout_module_sha256={hash}\nscanout_metadata_sha256={hash}\nlatch_rbf_sha256={hash}\nlatch_metadata_sha256={hash}\nplatform_contract_sha256={hash}\nmain_revision={revision}\nmagik_revision={revision}\nmenu_revision={revision}\n",
             hash = "a".repeat(64),
             revision = "b".repeat(40),
         )
@@ -13883,7 +13883,7 @@ video_mode=14
             parse_crt_trial_status(diagnostic).unwrap(),
             diagnostic.trim()
         );
-        let wire_diagnostic = "crt_trial_status_v4 schema=4 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 max_settle_us=18000 max_render_us=1000 max_copy_us=500 max_status_us=200 post_status_retry_frames=0 max_post_status_reads=1 post_status_transport_retry_frames=1 max_post_status_wire_attempts=2 last_buffer=1 last_sequence=1513 reason=none\n";
+        let wire_diagnostic = "crt_trial_status_v5 schema=5 ok=1 mode=crt-576p50 duration_ms=30001 frames=1513 flips=1513 posts=1513 drops=0 final_pending=0 final_active_matches=1 unsafe_active_writes=0 pending_writes=0 alternation_misses=0 cadence_misses=0 max_interval_us=20500 max_settle_us=18000 max_render_us=1000 max_copy_us=500 max_status_us=200 post_status_retry_frames=0 max_post_status_reads=1 post_status_transport_retry_frames=1 max_post_status_wire_attempts=2 last_buffer=1 last_sequence=1513 reason=none\n";
         assert_eq!(
             parse_crt_trial_status(wire_diagnostic).unwrap(),
             wire_diagnostic.trim()

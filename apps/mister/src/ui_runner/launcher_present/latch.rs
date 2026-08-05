@@ -176,7 +176,7 @@ fn dev_latch_post_skip_for(
     configured?
         .parse::<usize>()
         .ok()
-        .filter(|index| *index < mister_magik_latch_contract::V4_SET_WORDS)
+        .filter(|index| *index < mister_magik_latch_contract::V5_SET_WORDS)
 }
 
 fn latch_status_read_failure(
@@ -1427,9 +1427,9 @@ pub(in crate::ui_runner) fn wait_for_latch_completion(
     posted_sequence: u16,
     timeout: Duration,
 ) -> Result<LatchCompletion, LatchFailure> {
-    // This pacing boundary never selects or writes a hidden buffer. Protocol-v4
+    // This pacing boundary never selects or writes a hidden buffer. Protocol-v5
     // geometry containment runs again before every subsequent copy or post.
-    // Protocol v4 replaces this residual unsnapshotted sequence observation
+    // Protocol v5 replaces this residual unsnapshotted sequence observation
     // with a coherent, CRC-protected status read.
     let started = Instant::now();
     let cpu_started = thread_cpu_us();
@@ -1853,7 +1853,7 @@ mod tests {
                     1366,
                     768,
                     2736,
-                    mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC,
+                    mister_magik_latch_contract::GOLDEN_CAPS_V5_CRC,
                 ])
                 .map_err(io::Error::other)?,
             ))
@@ -1902,7 +1902,7 @@ mod tests {
                     1366,
                     768,
                     2736,
-                    mister_magik_latch_contract::GOLDEN_CAPS_V4_CRC,
+                    mister_magik_latch_contract::GOLDEN_CAPS_V5_CRC,
                 ])
                 .unwrap(),
             )
@@ -1933,10 +1933,10 @@ mod tests {
                         ack_high,
                         ack_low,
                         diagnostics: mister_magik_fb::latch_readiness::LatchPostDiagnostics {
-                            protocol_version: 4,
+                            protocol_version: 5,
                             sequence,
-                            expected_word_count: mister_magik_latch_contract::V4_SET_WORDS as u8,
-                            transmitted_word_count: mister_magik_latch_contract::V4_SET_WORDS as u8,
+                            expected_word_count: mister_magik_latch_contract::V5_SET_WORDS as u8,
+                            transmitted_word_count: mister_magik_latch_contract::V5_SET_WORDS as u8,
                             ..Default::default()
                         },
                     })
@@ -2524,7 +2524,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_geometry_fault_requires_two_matching_valid_samples_before_copy_or_post() {
+    fn v5_geometry_fault_requires_two_matching_valid_samples_before_copy_or_post() {
         let mut bad_geometry = status(BASE1, 0x0001);
         bad_geometry.active_width = 960;
         bad_geometry.active_height = 0;
@@ -2563,7 +2563,7 @@ mod tests {
     }
 
     #[test]
-    fn two_identical_invalid_v4_samples_fail_early_without_copy_or_post() {
+    fn two_identical_invalid_v5_samples_fail_early_without_copy_or_post() {
         let mut bad_geometry = status(BASE1, 0x0001);
         bad_geometry.active_width = 960;
         bad_geometry.active_height = 0;
@@ -2582,7 +2582,7 @@ mod tests {
 
         assert_eq!(hardware.read_count, 2);
         assert_eq!(diagnostics.decision, LatchWireDecision::Rejected);
-        assert_eq!(diagnostics.protocol_version, Some(4));
+        assert_eq!(diagnostics.protocol_version, Some(5));
         assert_eq!(
             diagnostics.capability_flags,
             Some(mister_magik_latch_contract::REQUIRED_CAPS)
@@ -2597,7 +2597,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_invalid_v4_samples_then_one_valid_sample_remain_rejected() {
+    fn changing_invalid_v5_samples_then_one_valid_sample_remain_rejected() {
         let mut invalid_a = status(BASE1, 0x0001);
         invalid_a.active_width = 960;
         invalid_a.active_height = 0;
@@ -2665,7 +2665,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_grant_uses_the_same_v4_status_corroboration_policy() {
+    fn direct_grant_uses_the_same_v5_status_corroboration_policy() {
         let mut invalid = status(BASE1, 0x0001);
         invalid.active_width = 960;
         invalid.active_height = 0;
@@ -2827,7 +2827,7 @@ mod tests {
             diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
         );
-        assert_eq!(diagnostics.protocol_version, Some(4));
+        assert_eq!(diagnostics.protocol_version, Some(5));
         assert_eq!(
             diagnostics.capability_flags,
             Some(mister_magik_latch_contract::REQUIRED_CAPS)
@@ -2853,7 +2853,7 @@ mod tests {
             diagnostics.decision,
             LatchWireDecision::TransportRetryFailed
         );
-        assert_eq!(diagnostics.protocol_version, Some(4));
+        assert_eq!(diagnostics.protocol_version, Some(5));
         assert_eq!(diagnostics.attempt_count, 2);
     }
 }

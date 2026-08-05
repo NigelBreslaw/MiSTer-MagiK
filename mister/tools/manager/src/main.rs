@@ -657,8 +657,8 @@ fn verify_platform(paths: &Paths) -> Result<()> {
         &fields["qualification_candidate_id"],
         64,
     )?;
-    if fields["latch_protocol_version"] != "4" || fields["latch_capability_mask"] != "0x01ff" {
-        return Err("platform does not provide the required latch v4 contract".into());
+    if fields["latch_protocol_version"] != "5" || fields["latch_capability_mask"] != "0x03ff" {
+        return Err("platform does not provide the required latch v5 contract".into());
     }
     for name in ["main_revision", "magik_revision", "menu_revision"] {
         require_lower_hex(name, &fields[name], 40)?;
@@ -1023,7 +1023,7 @@ mod tests {
         fs::write(
             fpga.join("menu-magik-vblank-latch.metadata.txt"),
             format!(
-                "rbf_sha256={rbf_sha}\nplatform_contract_sha256={contract}\nsource_commit={}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\n",
+                "rbf_sha256={rbf_sha}\nplatform_contract_sha256={contract}\nsource_commit={}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\n",
                 "2".repeat(40)
             ),
         )
@@ -1067,7 +1067,7 @@ mod tests {
             ),
         ];
         let mut manifest = format!(
-            "format=mister-magik-platform-v3\nplatform_release=platform-v0.7\nplatform_release_number=7\nplatform_bundle_id={}\nqualification_candidate_id={}\nlatch_protocol_version=4\nlatch_capability_mask=0x01ff\n",
+            "format=mister-magik-platform-v3\nplatform_release=platform-v0.7\nplatform_release_number=7\nplatform_bundle_id={}\nqualification_candidate_id={}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\n",
             "3".repeat(64),
             "4".repeat(64)
         );

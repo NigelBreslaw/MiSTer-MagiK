@@ -3,7 +3,7 @@
 MiSTer MagiK does not implement a CRT raster. The launcher publishes RGB565
 frames through the same `UIO_SET_FBUF`/`LFB` machinery used by Menu on HDMI.
 Main and Menu's `sys_top` exclusively own the output clock, raster, sync, and
-Direct Video mux. The MagiK RBF delta uses the protocol-v4 atomic latch; it
+Direct Video mux. The MagiK RBF delta uses the protocol-v5 atomic latch; it
 contains no CRT PLL, DDR scanout reader, line buffers, raster generator, or
 output-clock mux.
 
@@ -132,7 +132,7 @@ framebuffer route override across that handoff.
 
 The bounded `crt_trial` scene exercises route-owned composition and native
 RGB565 publication through the shared
-protocol-v4 latch for exactly 30 seconds. It requires Main to report one of the
+protocol-v5 latch for exactly 30 seconds. It requires Main to report one of the
 four standard CRT modes, advancing flip counters, and no presentation failure.
 Matching top and bottom frame markers expose mixed-frame publication
 immediately. It never switches an FPGA output route.

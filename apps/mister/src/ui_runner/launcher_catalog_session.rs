@@ -607,7 +607,7 @@ impl LauncherCatalogSession {
         let mut effects = CatalogSessionEffects::default();
         effects.event(
             "library_fresh_rebuild_requested",
-            "source=latch-v4-qualification",
+            "source=latch-v5-qualification",
         );
         self.refresh_done = false;
         self.foreground_update = true;

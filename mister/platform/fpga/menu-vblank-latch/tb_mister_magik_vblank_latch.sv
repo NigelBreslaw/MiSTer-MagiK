@@ -140,18 +140,18 @@ module tb_mister_magik_vblank_latch;
 		input [3:0] index;
 		begin
 			case(index)
-				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V4_0;
-				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V4_1;
-				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V4_2;
-				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V4_3;
-				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V4_4;
-				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V4_5;
-				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V4_6;
-				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V4_7;
-				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V4_8;
-				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V4_9;
-				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V4_10;
-				default: golden_set_word = MAGIK_GOLDEN_SET_V4_CRC;
+				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V5_0;
+				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V5_1;
+				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V5_2;
+				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V5_3;
+				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V5_4;
+				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V5_5;
+				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V5_6;
+				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V5_7;
+				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V5_8;
+				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V5_9;
+				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V5_10;
+				default: golden_set_word = MAGIK_GOLDEN_SET_V5_CRC;
 			endcase
 		end
 	endfunction
@@ -330,7 +330,7 @@ module tb_mister_magik_vblank_latch;
 			);
 			if(pending) pulse_vblank();
 			send_route(
-				MAGIK_GOLDEN_SET_V4_0,
+				MAGIK_GOLDEN_SET_V5_0,
 				32'h227e9000,
 				16'd960,
 				16'd540,
@@ -345,7 +345,7 @@ module tb_mister_magik_vblank_latch;
 			pulse_vblank();
 			expect16(active_seq, active_value, "regression active setup sequence");
 			send_route(
-				MAGIK_GOLDEN_SET_V4_0,
+				MAGIK_GOLDEN_SET_V5_0,
 				32'h227e9000,
 				16'd960,
 				16'd540,
@@ -425,6 +425,10 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] drop_before;
 		reg [15:0] flip_before;
 		reg [15:0] epoch_before;
+		reg [31:0] owned_before;
+		reg [31:0] presented_before;
+		reg [31:0] repeated_before;
+		reg [31:0] ownership_loss_before;
 		reg [15:0] snapshot [0:15];
 		reg [15:0] random_state;
 		reg model_pending;
@@ -435,6 +439,11 @@ module tb_mister_magik_vblank_latch;
 		reg [15:0] model_drop_count;
 		reg [15:0] model_reject_count;
 		reg [15:0] model_epoch;
+		reg model_magik_ownership;
+		reg [31:0] model_owned_vblank_count;
+		reg [31:0] model_presented_vblank_count;
+		reg [31:0] model_repeated_vblank_count;
+		reg [31:0] model_ownership_loss_count;
 
 		idle_cycles(2);
 		expect16(active_seq, 16'd0, "power-up active sequence");
@@ -444,22 +453,46 @@ module tb_mister_magik_vblank_latch;
 		expect16(drop_count, 16'd0, "power-up drop count");
 		expect16(reject_count, 16'd0, "power-up reject count");
 		expect16(active_route_epoch, 16'd0, "power-up route epoch");
+		expect32(dut.owned_vblank_count, 32'd0, "power-up owned vblank count");
+		expect32(dut.presented_vblank_count, 32'd0, "power-up presented count");
+		expect32(dut.repeated_vblank_count, 32'd0, "power-up repeated count");
+		expect32(dut.ownership_loss_count, 32'd0, "power-up ownership loss count");
 
 		start_command(MAGIK_UIO_GET_FBUF_LATCH_CAPS, MAGIK_FBUF_CAPS_MAGIC);
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd0, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_0, "caps version");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_0, "caps version");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd1, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_1, "caps flags");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_1, "caps flags");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd2, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_2, "caps width");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_2, "caps width");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd3, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_3, "caps height");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_3, "caps height");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd4, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_4, "caps stride");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_4, "caps stride");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd5, value);
-		expect16(value, MAGIK_GOLDEN_CAPS_V4_CRC, "caps CRC");
+		expect16(value, MAGIK_GOLDEN_CAPS_V5_CRC, "caps CRC");
 		read_word(MAGIK_UIO_GET_FBUF_LATCH_CAPS, 4'd6, value);
 		expect16(value, 16'd0, "caps post-close word is zero");
+		start_command(
+			MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+			MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC
+		);
+		for(index = 0; index < 11; index = index + 1)
+			read_word(
+				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+				index[3:0],
+				snapshot[index]
+			);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY, 16'd10);
+		for(index = 0; index < 10; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(snapshot[0], 16'd0, "initial telemetry owned low");
+		expect16(snapshot[2], 16'd0, "initial telemetry presented low");
+		expect16(snapshot[4], 16'd0, "initial telemetry repeated low");
+		expect16(snapshot[6], 16'd0, "initial telemetry ownership loss low");
+		expect16(snapshot[8], 16'd0, "initial telemetry active sequence");
+		expect16(snapshot[9], 16'd0, "initial telemetry flags");
+		expect16(snapshot[10], crc, "initial telemetry CRC");
 		start_command(
 			MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS,
 			MAGIK_FBUF_DIAGNOSTICS_MAGIC
@@ -481,7 +514,7 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[5], 16'd0, "initial diagnostics receiver flags");
 		expect16(snapshot[6], crc, "initial diagnostics CRC");
 		@(negedge clk_sys);
-		cmd_id = 8'h5c;
+		cmd_id = 8'h5d;
 		cmd_start = 1'b1;
 		#1;
 		expect_true(!response_valid, "unknown command is not acknowledged");
@@ -535,6 +568,9 @@ module tb_mister_magik_vblank_latch;
 		expect16(active_route_epoch, 16'd1, "accepted apply epoch");
 		expect_true(!pending, "accepted apply clears pending");
 		expect32(accepted_apply_count, 32'd1, "accepted apply pulse count");
+		expect32(dut.owned_vblank_count, 32'd1, "first takeover owns one vblank");
+		expect32(dut.presented_vblank_count, 32'd1, "first takeover presents once");
+		expect32(dut.repeated_vblank_count, 32'd0, "first takeover is not a repeat");
 		requirement_coverage[2] = 1'b1;
 
 		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
@@ -555,6 +591,38 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[12], 16'd1, "status active transaction");
 		expect16(snapshot[14], 16'd1, "status accepted transaction");
 		requirement_coverage[3] = 1'b1;
+
+		pulse_vblank();
+		expect32(dut.owned_vblank_count, 32'd2, "owned idle vblank is counted");
+		expect32(dut.presented_vblank_count, 32'd1, "repeat does not present");
+		expect32(dut.repeated_vblank_count, 32'd1, "owned idle vblank repeats");
+		start_command(
+			MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+			MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC
+		);
+		for(index = 0; index < 5; index = index + 1)
+			read_word(
+				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+				index[3:0],
+				snapshot[index]
+			);
+		pulse_vblank();
+		for(index = 5; index < 11; index = index + 1)
+			read_word(
+				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+				index[3:0],
+				snapshot[index]
+			);
+		crc = crc_header(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY, 16'd10);
+		for(index = 0; index < 10; index = index + 1)
+			crc = crc_word(crc, snapshot[index]);
+		expect16(snapshot[0], 16'd2, "telemetry snapshot owned count is pre-vblank");
+		expect16(snapshot[2], 16'd1, "telemetry snapshot presented count is coherent");
+		expect16(snapshot[4], 16'd1, "telemetry snapshot repeated count is pre-vblank");
+		expect16(snapshot[10], crc, "telemetry snapshot remains CRC coherent");
+		expect32(dut.owned_vblank_count, 32'd3, "live owned count advances after snapshot");
+		expect32(dut.repeated_vblank_count, 32'd2, "live repeat count advances after snapshot");
+		requirement_coverage[12] = 1'b1;
 
 		// A command-start snapshot remains coherent while the live route changes.
 		start_command(MAGIK_UIO_GET_FBUF_LATCH, MAGIK_FBUF_STATUS_MAGIC);
@@ -579,10 +647,22 @@ module tb_mister_magik_vblank_latch;
 		expect16(snapshot[5], 16'h9000, "snapshot base predates takeover");
 		expect16(active_seq, 16'd0, "legacy takeover clears active sequence");
 		expect16(active_route_epoch, epoch_before + 1'd1, "legacy takeover epoch");
+		expect32(dut.ownership_loss_count, 32'd1, "owned legacy takeover records loss");
+		ownership_loss_before = dut.ownership_loss_count;
+		legacy_write = 1'b1;
+		idle_cycles(1);
+		legacy_write = 1'b0;
+		expect32(
+			dut.ownership_loss_count,
+			ownership_loss_before,
+			"legacy write while unowned records no additional loss"
+		);
+		pulse_vblank();
+		expect32(dut.owned_vblank_count, 32'd3, "unowned vblank is excluded");
 
 		// A receipt query finalizes an interrupted SET as one rejected attempt.
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
 		reject_before = reject_count;
 		start_command(
 			MAGIK_UIO_GET_FBUF_LATCH_RECEIPT,
@@ -647,8 +727,8 @@ module tb_mister_magik_vblank_latch;
 		// Framing failures each reject once and leave committed pending untouched.
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, MAGIK_GOLDEN_SET_V4_CRC);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd11, MAGIK_GOLDEN_SET_V5_CRC);
 		expect_reject(reject_before, MAGIK_REJECT_MISSING_WORD, "missing word");
 		start_command(
 			MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS,
@@ -681,25 +761,25 @@ module tb_mister_magik_vblank_latch;
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
 		expect_reject(reject_before, MAGIK_REJECT_DUPLICATE_WORD, "duplicate word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, MAGIK_GOLDEN_SET_V4_1);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd1, MAGIK_GOLDEN_SET_V5_1);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
 		expect_reject(reject_before, MAGIK_REJECT_OUT_OF_ORDER, "reordered word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, MAGIK_GOLDEN_SET_V4_2);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd2, MAGIK_GOLDEN_SET_V5_2);
 		expect_reject(reject_before, MAGIK_REJECT_SHIFTED_WORD, "shifted word");
 
 		reject_before = reject_count;
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
-		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V4_0);
+		send_word(MAGIK_UIO_SET_FBUF_LATCH, 4'd0, MAGIK_GOLDEN_SET_V5_0);
 		start_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
 		expect_reject(reject_before, MAGIK_REJECT_RESTARTED, "restarted transaction");
 		// Close the newly opened replacement before the post-close test.
@@ -778,7 +858,7 @@ module tb_mister_magik_vblank_latch;
 		while(!apply) @(negedge clk_sys);
 		cmd_id = MAGIK_UIO_SET_FBUF_LATCH;
 		word_index = 4'd11;
-		data_in = MAGIK_GOLDEN_SET_V4_CRC;
+		data_in = MAGIK_GOLDEN_SET_V5_CRC;
 		cmd_data = 1'b1;
 		@(posedge clk_sys);
 		#1;
@@ -800,6 +880,10 @@ module tb_mister_magik_vblank_latch;
 		send_golden_route();
 		epoch_before = active_route_epoch;
 		flip_before = flip_count;
+		owned_before = dut.owned_vblank_count;
+		presented_before = dut.presented_vblank_count;
+		repeated_before = dut.repeated_vblank_count;
+		ownership_loss_before = dut.ownership_loss_count;
 		@(negedge clk_sys);
 		hdmi_vbl = 1'b1;
 		while(!apply) @(negedge clk_sys);
@@ -816,6 +900,22 @@ module tb_mister_magik_vblank_latch;
 		expect_true(!pending, "legacy winner cancels MagiK pending state");
 		expect16(active_seq, 16'd0, "legacy winner clears ownership sequence");
 		expect16(active_route_epoch, epoch_before + 1'd1, "legacy winner advances epoch");
+		expect32(dut.owned_vblank_count, owned_before, "legacy winner excludes collision vblank");
+		expect32(
+			dut.presented_vblank_count,
+			presented_before,
+			"legacy winner excludes collision presentation"
+		);
+		expect32(
+			dut.repeated_vblank_count,
+			repeated_before,
+			"legacy winner excludes collision repeat"
+		);
+		expect32(
+			dut.ownership_loss_count,
+			ownership_loss_before + 1'd1,
+			"legacy winner records one ownership loss"
+		);
 		@(negedge clk_sys);
 		hdmi_vbl = 1'b0;
 		idle_cycles(4);
@@ -835,6 +935,10 @@ module tb_mister_magik_vblank_latch;
 		dut.drop_count = 16'hffff;
 		dut.reject_count = 16'hffff;
 		dut.active_route_epoch = 16'hffff;
+		dut.owned_vblank_count = 32'hffff_ffff;
+		dut.presented_vblank_count = 32'hffff_fffe;
+		dut.repeated_vblank_count = 32'd1;
+		dut.ownership_loss_count = 32'hffff_ffff;
 		send_route(16'h0000, 32'd0, 16'd0, 16'd0,
 		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'hffff);
 		expect16(post_count, 16'd0, "post counter wrap");
@@ -843,12 +947,20 @@ module tb_mister_magik_vblank_latch;
 		expect16(drop_count, 16'd0, "drop counter wrap");
 		pulse_vblank();
 		expect16(flip_count, 16'd0, "flip counter wrap");
+		expect32(dut.owned_vblank_count, 32'd0, "owned vblank counter wrap");
+		expect32(dut.presented_vblank_count, 32'hffff_ffff, "presented counter advances at wrap");
 		expect16(active_seq, 16'hffff, "first wrap-boundary sequence applies");
 		expect16(active_route_epoch, 16'd0, "route epoch wrap");
 		send_route(16'h0000, 32'd0, 16'd0, 16'd0,
 		           16'd0, 16'd0, 16'd0, 16'd0, 16'd0, 16'd0);
 		pulse_vblank();
 		expect16(active_seq, 16'd0, "sequence wrap");
+		expect32(dut.owned_vblank_count, 32'd1, "owned counter advances after wrap");
+		expect32(dut.presented_vblank_count, 32'd0, "presented counter wraps");
+		legacy_write = 1'b1;
+		idle_cycles(1);
+		legacy_write = 1'b0;
+		expect32(dut.ownership_loss_count, 32'd0, "ownership loss counter wrap");
 		reject_before = reject_count;
 		corrupt_golden_transaction(4'd11);
 		expect16(reject_count, reject_before + 1'd1, "reject counter advances after wrap");
@@ -865,6 +977,11 @@ module tb_mister_magik_vblank_latch;
 		model_drop_count = drop_count;
 		model_reject_count = reject_count;
 		model_epoch = active_route_epoch;
+		model_magik_ownership = dut.magik_ownership;
+		model_owned_vblank_count = dut.owned_vblank_count;
+		model_presented_vblank_count = dut.presented_vblank_count;
+		model_repeated_vblank_count = dut.repeated_vblank_count;
+		model_ownership_loss_count = dut.ownership_loss_count;
 		for(index = 0; index < 96; index = index + 1) begin
 			random_state = {random_state[14:0],
 			                random_state[15] ^ random_state[13] ^
@@ -903,14 +1020,23 @@ module tb_mister_magik_vblank_latch;
 				3'd3: begin
 					pulse_vblank();
 					if(model_pending) begin
+						model_owned_vblank_count = model_owned_vblank_count + 1'd1;
+						model_presented_vblank_count = model_presented_vblank_count + 1'd1;
+						model_magik_ownership = 1'b1;
 						model_active_seq = model_pending_seq;
 						model_pending = 1'b0;
 						model_pending_seq = 16'd0;
 						model_flip_count = model_flip_count + 1'd1;
 						model_epoch = model_epoch + 1'd1;
 					end
+					else if(model_magik_ownership) begin
+						model_owned_vblank_count = model_owned_vblank_count + 1'd1;
+						model_repeated_vblank_count = model_repeated_vblank_count + 1'd1;
+					end
 				end
 				3'd4: begin
+					if(model_magik_ownership)
+						model_ownership_loss_count = model_ownership_loss_count + 1'd1;
 					legacy_write = 1'b1;
 					active_lfb_en = 1'b0;
 					active_lfb_base = {16'h4000, random_state};
@@ -920,6 +1046,7 @@ module tb_mister_magik_vblank_latch;
 					idle_cycles(1);
 					legacy_write = 1'b0;
 					model_active_seq = 16'd0;
+					model_magik_ownership = 1'b0;
 					model_pending = 1'b0;
 					model_pending_seq = 16'd0;
 					model_epoch = model_epoch + 1'd1;
@@ -935,13 +1062,21 @@ module tb_mister_magik_vblank_latch;
 			expect16(drop_count, model_drop_count, "randomized drop count");
 			expect16(reject_count, model_reject_count, "randomized reject count");
 			expect16(active_route_epoch, model_epoch, "randomized route epoch");
+			expect32(dut.owned_vblank_count, model_owned_vblank_count,
+			         "randomized owned vblank count");
+			expect32(dut.presented_vblank_count, model_presented_vblank_count,
+			         "randomized presented count");
+			expect32(dut.repeated_vblank_count, model_repeated_vblank_count,
+			         "randomized repeated count");
+			expect32(dut.ownership_loss_count, model_ownership_loss_count,
+			         "randomized ownership loss count");
 		end
-		$display("COVER LATCH-V4-RANDOM fixed-seed reference-model interleavings");
+		$display("COVER LATCH-V5-RANDOM fixed-seed reference-model interleavings");
 
-		if(requirement_coverage[11:0] !== 12'hfff)
-			fail("not all protocol-v4 RTL requirement coverpoints hit");
-		$display("COVER LATCH-V4-001..LATCH-V4-012 all RTL requirements hit");
-		$display("PASS: atomic protocol-v4 latch, coherent status, and ownership arbitration");
+		if(requirement_coverage[12:0] !== 13'h1fff)
+			fail("not all protocol-v5 RTL requirement coverpoints hit");
+		$display("COVER LATCH-V5-001..LATCH-V5-013 all RTL requirements hit");
+		$display("PASS: atomic protocol-v5 latch, coherent status, and ownership arbitration");
 		$finish;
 	end
 

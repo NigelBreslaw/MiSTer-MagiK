@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 pub const FORMAT: &str = "mister-magik-platform-v3";
 pub const FILE_NAME: &str = "platform-v3.manifest";
-pub const LATCH_PROTOCOL_VERSION: &str = "4";
-pub const LATCH_CAPABILITY_MASK: &str = "0x01ff";
+pub const LATCH_PROTOCOL_VERSION: &str = "5";
+pub const LATCH_CAPABILITY_MASK: &str = "0x03ff";
 pub(crate) const FIELDS: &[&str] = &[
     "format",
     "platform_release",

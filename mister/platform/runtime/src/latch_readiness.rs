@@ -533,7 +533,7 @@ impl LatchFailureEvidence {
         recovery_state: impl Into<String>,
     ) -> Self {
         Self {
-            schema: "mister-magik-latch-failure-v4",
+            schema: "mister-magik-latch-failure-v5",
             state: first.state.code().to_string(),
             stage: first.stage.code().to_string(),
             reason: first.reason_code().to_string(),
@@ -904,7 +904,7 @@ mod tests {
     #[test]
     fn post_rejection_evidence_includes_geometry_and_receiver_position() {
         let post = LatchPostDiagnostics {
-            protocol_version: 4,
+            protocol_version: 5,
             sequence: 219,
             command_word: LatchPostWord {
                 transmitted: 0x57,

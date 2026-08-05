@@ -7,14 +7,14 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-pub(super) const CONTROL_PATH: &str = "/tmp/mister-magik/latch-v4-qualification-control.tsv";
-pub(super) const STATE_PATH: &str = "/tmp/mister-magik/latch-v4-qualification-state.json";
+pub(super) const CONTROL_PATH: &str = "/tmp/mister-magik/latch-v5-qualification-control.tsv";
+pub(super) const STATE_PATH: &str = "/tmp/mister-magik/latch-v5-qualification-state.json";
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STATE_WRITE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(super) enum LatchV4StressClass {
+pub(super) enum LatchV5StressClass {
     Particles,
     Transitions,
     ArcadeScroll,
@@ -23,7 +23,7 @@ pub(super) enum LatchV4StressClass {
     InputTraffic,
 }
 
-impl LatchV4StressClass {
+impl LatchV5StressClass {
     pub(super) const ALL: [Self; 6] = [
         Self::Particles,
         Self::Transitions,
@@ -74,10 +74,10 @@ impl LatchV4StressClass {
 }
 
 #[derive(Debug)]
-pub(super) struct LatchV4Qualification {
+pub(super) struct LatchV5Qualification {
     enabled: bool,
     started: Instant,
-    stress_class: LatchV4StressClass,
+    stress_class: LatchV5StressClass,
     catalog_request: u64,
     catalog_started: u64,
     catalog_completed: u64,
@@ -90,10 +90,10 @@ pub(super) struct LatchV4Qualification {
     control_error: Option<String>,
 }
 
-impl LatchV4Qualification {
+impl LatchV5Qualification {
     pub(super) fn from_env(now: Instant) -> Self {
         let enabled = matches!(
-            std::env::var("MISTER_LATCH_V4_QUALIFICATION")
+            std::env::var("MISTER_LATCH_V5_QUALIFICATION")
                 .ok()
                 .as_deref(),
             Some("1") | Some("on") | Some("true") | Some("yes")
@@ -101,7 +101,7 @@ impl LatchV4Qualification {
         Self {
             enabled,
             started: now,
-            stress_class: LatchV4StressClass::Particles,
+            stress_class: LatchV5StressClass::Particles,
             catalog_request: 0,
             catalog_started: 0,
             catalog_completed: 0,
@@ -119,7 +119,7 @@ impl LatchV4Qualification {
         self.enabled
     }
 
-    pub(super) const fn stress_class(&self) -> LatchV4StressClass {
+    pub(super) const fn stress_class(&self) -> LatchV5StressClass {
         self.stress_class
     }
 
@@ -143,8 +143,8 @@ impl LatchV4Qualification {
                 continue;
             };
             match key {
-                "schema" => valid = value == "mister-magik-latch-v4-qualification-control-v1",
-                "stress_class" => stress_class = LatchV4StressClass::parse(value),
+                "schema" => valid = value == "mister-magik-latch-v5-qualification-control-v1",
+                "stress_class" => stress_class = LatchV5StressClass::parse(value),
                 "catalog_request" => catalog_request = value.parse::<u64>().ok(),
                 _ => {}
             }
@@ -205,7 +205,7 @@ impl LatchV4Qualification {
         self.next_state_write = now + STATE_WRITE_INTERVAL;
         let identity = crate::diagnostic_identity::current();
         let state = QualificationState {
-            schema: "mister-magik-latch-v4-qualification-state-v1",
+            schema: "mister-magik-latch-v5-qualification-state-v1",
             identity,
             identity_namespace: identity.namespace(),
             elapsed_ms: now.saturating_duration_since(self.started).as_millis() as u64,
@@ -226,7 +226,7 @@ impl LatchV4Qualification {
             control_error: self.control_error.as_deref(),
         };
         if let Err(error) = write_json_atomic(Path::new(STATE_PATH), &state) {
-            crate::ui_errln!("latch_v4_qualification_state_write_failed error={error}");
+            crate::ui_errln!("latch_v5_qualification_state_write_failed error={error}");
         }
     }
 }
@@ -237,7 +237,7 @@ struct QualificationState<'a> {
     identity: &'a crate::diagnostic_identity::DiagnosticIdentity,
     identity_namespace: String,
     elapsed_ms: u64,
-    stress_class: LatchV4StressClass,
+    stress_class: LatchV5StressClass,
     catalog_requested: u64,
     catalog_started: u64,
     catalog_completed: u64,
@@ -276,19 +276,19 @@ mod tests {
     #[test]
     fn control_requires_exact_schema_class_and_generation() {
         let now = Instant::now();
-        let mut qualification = LatchV4Qualification {
+        let mut qualification = LatchV5Qualification {
             enabled: true,
-            ..LatchV4Qualification::from_env(now)
+            ..LatchV5Qualification::from_env(now)
         };
         qualification
             .apply_control(
-                "schema=mister-magik-latch-v4-qualification-control-v1 \
+                "schema=mister-magik-latch-v5-qualification-control-v1 \
                  stress_class=arcade-scroll catalog_request=7",
             )
             .unwrap();
         assert_eq!(
             qualification.stress_class(),
-            LatchV4StressClass::ArcadeScroll
+            LatchV5StressClass::ArcadeScroll
         );
         assert_eq!(qualification.catalog_request, 7);
         assert!(
@@ -301,10 +301,10 @@ mod tests {
     #[test]
     fn catalog_generation_is_serial_and_completion_is_edge_triggered() {
         let now = Instant::now();
-        let mut qualification = LatchV4Qualification {
+        let mut qualification = LatchV5Qualification {
             enabled: true,
             catalog_request: 2,
-            ..LatchV4Qualification::from_env(now)
+            ..LatchV5Qualification::from_env(now)
         };
         assert!(qualification.take_catalog_request(false));
         assert!(!qualification.take_catalog_request(false));
@@ -317,10 +317,10 @@ mod tests {
     #[test]
     fn only_active_confirmed_frames_contribute_to_required_counters() {
         let now = Instant::now();
-        let mut qualification = LatchV4Qualification {
+        let mut qualification = LatchV5Qualification {
             enabled: true,
-            stress_class: LatchV4StressClass::Transitions,
-            ..LatchV4Qualification::from_env(now)
+            stress_class: LatchV5StressClass::Transitions,
+            ..LatchV5Qualification::from_env(now)
         };
         qualification.record_present(false, true);
         qualification.record_present(true, true);

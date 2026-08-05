@@ -172,22 +172,56 @@ module tb_mister_magik_sys_top_integration;
 		end
 	endtask
 
+	function automatic [15:0] crc_byte;
+		input [15:0] current;
+		input [7:0] value;
+		integer bit_index;
+		reg [15:0] next;
+		begin
+			next = current ^ {value, 8'h00};
+			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1) begin
+				if(next[15]) next = (next << 1) ^ 16'h1021;
+				else next = next << 1;
+			end
+			crc_byte = next;
+		end
+	endfunction
+
+	function automatic [15:0] crc_word;
+		input [15:0] current;
+		input [15:0] value;
+		begin
+			crc_word = crc_byte(crc_byte(current, value[15:8]), value[7:0]);
+		end
+	endfunction
+
+	function automatic [15:0] crc_header;
+		input [7:0] command;
+		input [15:0] count;
+		reg [15:0] next;
+		begin
+			next = crc_word(16'hffff, {8'd0, command});
+			next = crc_word(next, MAGIK_FBUF_PROTOCOL_VERSION);
+			crc_header = crc_word(next, count);
+		end
+	endfunction
+
 	function automatic [15:0] golden_set_word;
 		input [3:0] word;
 		begin
 			case(word)
-				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V4_0;
-				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V4_1;
-				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V4_2;
-				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V4_3;
-				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V4_4;
-				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V4_5;
-				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V4_6;
-				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V4_7;
-				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V4_8;
-				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V4_9;
-				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V4_10;
-				default: golden_set_word = MAGIK_GOLDEN_SET_V4_CRC;
+				4'd0: golden_set_word = MAGIK_GOLDEN_SET_V5_0;
+				4'd1: golden_set_word = MAGIK_GOLDEN_SET_V5_1;
+				4'd2: golden_set_word = MAGIK_GOLDEN_SET_V5_2;
+				4'd3: golden_set_word = MAGIK_GOLDEN_SET_V5_3;
+				4'd4: golden_set_word = MAGIK_GOLDEN_SET_V5_4;
+				4'd5: golden_set_word = MAGIK_GOLDEN_SET_V5_5;
+				4'd6: golden_set_word = MAGIK_GOLDEN_SET_V5_6;
+				4'd7: golden_set_word = MAGIK_GOLDEN_SET_V5_7;
+				4'd8: golden_set_word = MAGIK_GOLDEN_SET_V5_8;
+				4'd9: golden_set_word = MAGIK_GOLDEN_SET_V5_9;
+				4'd10: golden_set_word = MAGIK_GOLDEN_SET_V5_10;
+				default: golden_set_word = MAGIK_GOLDEN_SET_V5_CRC;
 			endcase
 		end
 	endfunction
@@ -229,6 +263,8 @@ module tb_mister_magik_sys_top_integration;
 
 	initial begin
 		reg [15:0] response;
+		reg [15:0] telemetry [0:10];
+		reg [15:0] telemetry_crc;
 		repeat(3) @(posedge test_clk);
 		end_command();
 		// Exercise the production bridge's selected-but-idle parser state.
@@ -247,7 +283,7 @@ module tb_mister_magik_sys_top_integration;
 		for(index = 2; index < 5; index = index + 1)
 			transfer_word(16'd0, response);
 		transfer_word(16'd0, response);
-		expect16(response, MAGIK_GOLDEN_CAPS_V4_CRC, "sys_top caps CRC");
+		expect16(response, MAGIK_GOLDEN_CAPS_V5_CRC, "sys_top caps CRC");
 		end_command();
 
 		begin_command(MAGIK_UIO_SET_FBUF_LATCH, MAGIK_FBUF_LATCH_MAGIC);
@@ -267,6 +303,24 @@ module tb_mister_magik_sys_top_integration;
 		@(negedge test_clk);
 		test_vblank = 1'b0;
 		repeat(4) @(posedge test_clk);
+
+		begin_command(
+			MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY,
+			MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC
+		);
+		for(index = 0; index < 11; index = index + 1)
+			transfer_word(16'd0, telemetry[index]);
+		end_command();
+		expect16(telemetry[0], 16'd1, "sys_top telemetry owned count");
+		expect16(telemetry[2], 16'd1, "sys_top telemetry presented count");
+		expect16(telemetry[4], 16'd0, "sys_top telemetry repeated count");
+		expect16(telemetry[6], 16'd0, "sys_top telemetry ownership loss count");
+		expect16(telemetry[8], 16'h002b, "sys_top telemetry active sequence");
+		expect16(telemetry[9], 16'h0009, "sys_top telemetry live flags");
+		telemetry_crc = crc_header(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY, 16'd10);
+		for(index = 0; index < 10; index = index + 1)
+			telemetry_crc = crc_word(telemetry_crc, telemetry[index]);
+		expect16(telemetry[10], telemetry_crc, "sys_top telemetry CRC");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.
@@ -298,7 +352,7 @@ module tb_mister_magik_sys_top_integration;
 		expect16(dut.LFB_BASE[31:16], 16'h3333, "legacy base high wins");
 		expect16(dut.magik_lfb_active_seq, 16'd0, "legacy write clears active sequence");
 
-		$display("COVER LATCH-V4-SYS-TOP actual command counter/strobe path");
+		$display("COVER LATCH-V5-SYS-TOP actual command counter/strobe path");
 		$display("PASS: patched sys_top latch integration");
 		$finish;
 	end

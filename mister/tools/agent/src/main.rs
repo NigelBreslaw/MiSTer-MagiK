@@ -2353,7 +2353,7 @@ mod linux {
         value.to_string()
     }
 
-    fn local_ipv4() -> Option<String> {
+    fn local_ipv5() -> Option<String> {
         let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
         socket.connect("192.0.2.1:9").ok()?;
         Some(socket.local_addr().ok()?.ip().to_string())
@@ -2376,7 +2376,7 @@ mod linux {
             },
             "network": {
                 "interface": IFACE,
-                "ip": local_ipv4(),
+                "ip": local_ipv5(),
                 "carrier": read_trimmed("/sys/class/net/eth0/carrier"),
                 "operstate": read_trimmed("/sys/class/net/eth0/operstate"),
                 "mac": read_trimmed("/sys/class/net/eth0/address"),
@@ -3031,7 +3031,7 @@ mod linux {
             };
             match self.read_latched_fbuf_status_once(protocol) {
                 Err(first)
-                    if protocol == mister_magik_latch_contract::LatchProtocol::V4
+                    if protocol == mister_magik_latch_contract::LatchProtocol::V5
                         && first.kind() == io::ErrorKind::InvalidData =>
                 {
                     self.reset_spi_transport();
@@ -3055,7 +3055,7 @@ mod linux {
                         ),
                     ));
                 }
-                let mut words = [0u16; mister_magik_latch_contract::V4_STATUS_WORDS];
+                let mut words = [0u16; mister_magik_latch_contract::V5_STATUS_WORDS];
                 for word in words.iter_mut().take(protocol.status_word_count()) {
                     *word = self.spi_capture(0)?.1;
                 }
@@ -3086,7 +3086,7 @@ mod linux {
         ) -> io::Result<mister_magik_latch_contract::LatchProtocol> {
             self.latch_protocol = None;
             let result = match self.read_latch_capabilities_once() {
-                Err((first, Some(mister_magik_latch_contract::LatchProtocol::V4)))
+                Err((first, Some(mister_magik_latch_contract::LatchProtocol::V5)))
                     if first.kind() == io::ErrorKind::InvalidData =>
                 {
                     self.reset_spi_transport();
@@ -3120,7 +3120,7 @@ mod linux {
                         ),
                     ));
                 }
-                let mut words = [0u16; mister_magik_latch_contract::V4_CAPS_WORDS];
+                let mut words = [0u16; mister_magik_latch_contract::V5_CAPS_WORDS];
                 words[0] = self.spi_capture(0)?.1;
                 let protocol = mister_magik_latch_contract::LatchProtocol::try_from(words[0])
                     .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;

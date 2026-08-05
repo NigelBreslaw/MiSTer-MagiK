@@ -4,10 +4,10 @@
 use super::*;
 use std::io::BufWriter;
 
-const CONTROL_REMOTE: &str = "/tmp/mister-magik/latch-v4-qualification-control.tsv";
-const CONTROL_TEMP_REMOTE: &str = "/tmp/mister-magik/latch-v4-qualification-control.tsv.tmp";
-const STATE_REMOTE: &str = "/tmp/mister-magik/latch-v4-qualification-state.json";
-const CATALOG_STATE_REMOTE: &str = "/tmp/mister-magik/latch-v4-catalog";
+const CONTROL_REMOTE: &str = "/tmp/mister-magik/latch-v5-qualification-control.tsv";
+const CONTROL_TEMP_REMOTE: &str = "/tmp/mister-magik/latch-v5-qualification-control.tsv.tmp";
+const STATE_REMOTE: &str = "/tmp/mister-magik/latch-v5-qualification-state.json";
+const CATALOG_STATE_REMOTE: &str = "/tmp/mister-magik/latch-v5-catalog";
 const DURATION: Duration = Duration::from_secs(6 * 60 * 60);
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5 * 60);
@@ -36,7 +36,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     let preflight_session = connect_with(&config.connection, 10)?;
     exec_checked(
         &preflight_session,
-        "latch v4 qualification preflight",
+        "latch v5 qualification preflight",
         &format!("set -eu; test -s {RELEASE_TOKEN}"),
     )?;
     let development = exec(
@@ -64,13 +64,13 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     issue_reboot(&preflight_session, RebootMode::Supervised)?;
     drop(preflight_session);
     if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
-        return Err("latch v4 qualification clean boot did not complete".into());
+        return Err("latch v5 qualification clean boot did not complete".into());
     }
 
     let session = connect_with(&config.connection, 10)?;
     exec_checked(
         &session,
-        "latch v4 qualification rearm token",
+        "latch v5 qualification rearm token",
         &release_rearm_token_command(),
     )?;
     let current_development =
@@ -80,7 +80,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     }
     exec_checked(
         &session,
-        "latch v4 qualification prepare",
+        "latch v5 qualification prepare",
         &format!(
             "set -eu; test -s {RELEASE_TOKEN}; rm -f {remote_env}; mkdir -p /tmp/mister-magik; rm -f {CONTROL_TEMP_REMOTE}; mkdir -p {CATALOG_STATE_REMOTE}"
         ),
@@ -141,7 +141,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
             )?;
             if Instant::now() >= next_progress {
                 println!(
-                    "latch-v4 qualification elapsed={}m samples={} accepted={} overlap={} catalogs={}",
+                    "latch-v5 qualification elapsed={}m samples={} accepted={} overlap={} catalogs={}",
                     elapsed.as_secs() / 60,
                     samples,
                     u64_at(&last_state, "/accepted_confirmed_frames")?,
@@ -164,7 +164,7 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     let raw_bytes = fs::read(&raw_path)?;
     let raw_sha256 = encode_hex(&Sha256::digest(&raw_bytes));
     let summary = json!({
-        "schema": "mister-magik-latch-v4-qualification-summary-v1",
+        "schema": "mister-magik-latch-v5-qualification-summary-v1",
         "qualified": run_result.is_ok(),
         "failure": run_result.as_ref().err().map(ToString::to_string),
         "duration_required_secs": DURATION.as_secs(),
@@ -187,14 +187,14 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     )?;
     run_result?;
     Ok(format!(
-        "latch-v4-qualified evidence={}",
+        "latch-v5-qualified evidence={}",
         output_dir.display()
     ))
 }
 
 fn qualification_launcher_env() -> Vec<(String, String)> {
     vec![
-        ("MISTER_LATCH_V4_QUALIFICATION".into(), "1".into()),
+        ("MISTER_LATCH_V5_QUALIFICATION".into(), "1".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
         (
             "MISTER_SCREENSAVER_RENDERER".into(),
@@ -227,12 +227,12 @@ fn qualification_launcher_env() -> Vec<(String, String)> {
 
 fn write_control(session: &Session, stress_class: &str, catalog_request: u64) -> Result<()> {
     let text = format!(
-        "schema=mister-magik-latch-v4-qualification-control-v1 stress_class={stress_class} catalog_request={catalog_request}\n"
+        "schema=mister-magik-latch-v5-qualification-control-v1 stress_class={stress_class} catalog_request={catalog_request}\n"
     );
     put_bytes(session, CONTROL_TEMP_REMOTE, text.as_bytes())?;
     exec_checked(
         session,
-        "latch v4 qualification control",
+        "latch v5 qualification control",
         &format!("set -eu; mv {CONTROL_TEMP_REMOTE} {CONTROL_REMOTE}"),
     )
 }
@@ -248,12 +248,12 @@ fn wait_qualification_state(session: &Session, timeout: Duration) -> Result<Valu
         }
         thread::sleep(Duration::from_millis(250));
     }
-    Err("latch v4 qualification state did not become ready".into())
+    Err("latch v5 qualification state did not become ready".into())
 }
 
 fn qualification_state_ready(state: &Value) -> bool {
     state.get("schema").and_then(Value::as_str)
-        == Some("mister-magik-latch-v4-qualification-state-v1")
+        == Some("mister-magik-latch-v5-qualification-state-v1")
         && state.get("control_error").is_some_and(Value::is_null)
         && state
             .get("catalog_requested")
@@ -269,7 +269,7 @@ fn collect_sample(
     catalog_request: u64,
 ) -> Result<Value> {
     let qualification_state_text =
-        remote_read(session, STATE_REMOTE).ok_or("latch v4 qualification state disappeared")?;
+        remote_read(session, STATE_REMOTE).ok_or("latch v5 qualification state disappeared")?;
     let qualification_state = serde_json::from_str::<Value>(&qualification_state_text)?;
     let status = read_launcher_status(session)?;
     let main_status = read_main_status(session)?;
@@ -278,7 +278,7 @@ fn collect_sample(
         &format!("{root}/mister-magik-fb latch-readiness-report --json"),
         true,
     )?;
-    if let Some(error) = exec_failure_message("latch v4 readiness sample", &readiness_output) {
+    if let Some(error) = exec_failure_message("latch v5 readiness sample", &readiness_output) {
         return Err(error.into());
     }
     let readiness = readiness_output
@@ -292,11 +292,11 @@ fn collect_sample(
         &format!("{root}/mister-magik-fb fpga-latch-report"),
         true,
     )?;
-    if let Some(error) = exec_failure_message("latch v4 authoritative sample", &latch_output) {
+    if let Some(error) = exec_failure_message("latch v5 authoritative sample", &latch_output) {
         return Err(error.into());
     }
     Ok(json!({
-        "schema": "mister-magik-latch-v4-qualification-sample-v1",
+        "schema": "mister-magik-latch-v5-qualification-sample-v1",
         "elapsed_ms": elapsed.as_millis() as u64,
         "requested_stress_class": stress_class,
         "requested_catalog_generation": catalog_request,
@@ -346,8 +346,8 @@ fn validate_sample(
         .ok_or("latch report is missing")?;
     for required in [
         "production_ready=1",
-        "protocol_version=4",
-        "flags=0x01ff",
+        "protocol_version=5",
+        "flags=0x03ff",
         "supported=1",
         "drop_count=0",
     ] {
@@ -356,7 +356,7 @@ fn validate_sample(
         }
     }
     if latch.contains("supported=0") {
-        return Err("latch report contains an unsupported v4 operation".into());
+        return Err("latch report contains an unsupported v5 operation".into());
     }
     let namespace = state
         .get("identity_namespace")
@@ -456,9 +456,9 @@ fn validate_identity(identity: &Value) -> Result<()> {
     ) {
         return Err("qualification identity is unknown or mixed".into());
     }
-    require_text(identity, "/platform/latch_protocol_version", "4")
-        .or_else(|_| require_u64(identity, "/platform/latch_protocol_version", 4))?;
-    require_text(identity, "/platform/latch_capability_mask", "0x01ff")?;
+    require_text(identity, "/platform/latch_protocol_version", "5")
+        .or_else(|_| require_u64(identity, "/platform/latch_protocol_version", 5))?;
+    require_text(identity, "/platform/latch_capability_mask", "0x03ff")?;
     for pointer in [
         "/runtime/build_number",
         "/runtime/source_revision",
@@ -544,7 +544,7 @@ fn qualification_output_dir(identity: &Value) -> Result<PathBuf> {
     }
     let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     Ok(std::env::current_dir()?
-        .join("build/release-qualification/latch-v4")
+        .join("build/release-qualification/latch-v5")
         .join(safe_candidate)
         .join(timestamp.to_string()))
 }
@@ -607,7 +607,7 @@ mod tests {
     fn clean_boot_environment_is_isolated_and_self_contained() {
         let environment = qualification_launcher_env();
         for key in [
-            "MISTER_LATCH_V4_QUALIFICATION",
+            "MISTER_LATCH_V5_QUALIFICATION",
             "MISTER_LIBRARY_SQLITE",
             "MISTER_LIBRARY_SQLITE_BUILD_DIR",
             "MISTER_SHARDED_CATALOG_DIR",
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn initial_state_waits_for_control_acknowledgement() {
         let mut state = json!({
-            "schema": "mister-magik-latch-v4-qualification-state-v1",
+            "schema": "mister-magik-latch-v5-qualification-state-v1",
             "control_error": "No such file or directory",
             "catalog_requested": 0,
         });
@@ -702,8 +702,8 @@ mod tests {
                 "binary_sha256": "runtime-sha",
             },
             "platform": {
-                "latch_protocol_version": 4,
-                "latch_capability_mask": "0x01ff",
+                "latch_protocol_version": 5,
+                "latch_capability_mask": "0x03ff",
                 "release_tag": "platform-v0.7",
                 "bundle_id": "bundle",
                 "qualification_candidate_id": "candidate",
