@@ -1282,13 +1282,19 @@ fn run_card_flip_mister(
     let mut status_started = started;
     let mut cpu_started = process_cpu_time();
     let mut rendered_frames = 0_u64;
-    let mut render_samples_us = Vec::with_capacity(64);
-    let mut transfer_samples_us = Vec::with_capacity(64);
+    let mut frame_to_present_samples_us = Vec::with_capacity(128);
+    let mut render_samples_us = Vec::with_capacity(128);
+    let mut transfer_samples_us = Vec::with_capacity(128);
+    let mut present_samples_us = Vec::with_capacity(128);
+    let mut pending_frame_started = None;
+    let mut pending_present_started = None;
     let mut last_sequence = None;
     let mut repeated_presentations = 0_u64;
     let mut latch_drop_count = 0_u16;
-    let mut profile_render_samples_us = Vec::with_capacity(1024);
-    let mut profile_transfer_samples_us = Vec::with_capacity(1024);
+    let mut profile_frame_to_present_samples_us = Vec::with_capacity(2048);
+    let mut profile_render_samples_us = Vec::with_capacity(2048);
+    let mut profile_transfer_samples_us = Vec::with_capacity(2048);
+    let mut profile_present_samples_us = Vec::with_capacity(2048);
     let profile_cpu_started = process_cpu_time();
     let mut profile_frames = 0_u64;
     let mut profile_repeated_presentations = 0_u64;
@@ -1317,7 +1323,7 @@ fn run_card_flip_mister(
     }
 
     println!(
-        "framebuffer-scene-lab scene=card-flip render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} card={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=cached-prepare-only",
+        "framebuffer-scene-lab scene=card-flip render={}x{} framebuffer={}x{} scan={}x{} output={}x{} route={} card={}x{} format=rgb565 raster=armv7-fixed-q16 transfer=cached-prepare-only present=post-to-latch-confirmed",
         plan.render_w,
         plan.render_h,
         plan.fb_w,
@@ -1336,6 +1342,16 @@ fn run_card_flip_mister(
             .settle_pending()
             .map_err(|error| format!("settle hidden RGB565 card frame: {error}"))?
         {
+            if let Some(present_started) = pending_present_started.take() {
+                let present_us = present_started.elapsed().as_micros() as u64;
+                present_samples_us.push(present_us);
+                profile_present_samples_us.push(present_us);
+            }
+            if let Some(frame_started) = pending_frame_started.take() {
+                let frame_to_present_us = frame_started.elapsed().as_micros() as u64;
+                frame_to_present_samples_us.push(frame_to_present_us);
+                profile_frame_to_present_samples_us.push(frame_to_present_us);
+            }
             if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
                 repeated_presentations = repeated_presentations.saturating_add(1);
             }
@@ -1361,7 +1377,8 @@ fn run_card_flip_mister(
 
         let now = Instant::now();
         if renderer.is_dirty() && now >= next_frame {
-            let render_started = Instant::now();
+            let frame_started = Instant::now();
+            let render_started = frame_started;
             let stats = renderer
                 .render(&mut staging, elapsed)
                 .map_err(str::to_owned)?;
@@ -1377,9 +1394,12 @@ fn run_card_flip_mister(
                     .prepare_cached(cached, &card_damage)
                     .map_err(|error| format!("copy cached card frame: {error}"))?;
                 let transfer_us = transfer_started.elapsed().as_micros() as u64;
+                let present_started = Instant::now();
                 let post = presenter
                     .post_prepared()
                     .map_err(|error| format!("post hidden RGB565 card frame: {error}"))?;
+                pending_frame_started = Some(frame_started);
+                pending_present_started = Some(present_started);
                 debug_assert_eq!(post.slot_index, copy.slot_index);
                 rendered_frames = rendered_frames.saturating_add(1);
                 render_samples_us.push(render_us);
@@ -1418,24 +1438,35 @@ fn run_card_flip_mister(
             let seconds = status_started.elapsed().as_secs_f64();
             let cpu_now = process_cpu_time();
             let cpu_percent = cpu_now.saturating_sub(cpu_started).as_secs_f64() / seconds * 100.0;
+            let (frame_to_present_average_us, frame_to_present_p99_us, frame_to_present_max_us) =
+                sample_summary(&mut frame_to_present_samples_us);
             let (render_average_us, render_p99_us, render_max_us) =
                 sample_summary(&mut render_samples_us);
             let (transfer_average_us, transfer_p99_us, transfer_max_us) =
                 sample_summary(&mut transfer_samples_us);
+            let (present_average_us, present_p99_us, present_max_us) =
+                sample_summary(&mut present_samples_us);
             println!(
-                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
+                "card-flip frames={} fps={:.1} cpu_pct={:.1} active={} progress_q16={} direction={} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
                 rendered_frames,
                 rendered_frames as f64 / seconds,
                 cpu_percent,
                 renderer.is_active(),
                 renderer.progress_q16(),
                 renderer.direction().label(),
+                frame_to_present_average_us,
+                frame_to_present_p99_us,
+                frame_to_present_max_us,
                 render_average_us,
                 render_p99_us,
                 render_max_us,
                 transfer_average_us,
                 transfer_p99_us,
                 transfer_max_us,
+                present_average_us,
+                present_p99_us,
+                present_max_us,
+                present_samples_us.len(),
                 transfer_source_rects,
                 transfer_destination_rects,
                 transfer_source_bytes,
@@ -1447,8 +1478,10 @@ fn run_card_flip_mister(
             status_started = Instant::now();
             cpu_started = cpu_now;
             rendered_frames = 0;
+            frame_to_present_samples_us.clear();
             render_samples_us.clear();
             transfer_samples_us.clear();
+            present_samples_us.clear();
             transfer_source_rects = 0;
             transfer_destination_rects = 0;
             transfer_source_bytes = 0;
@@ -1460,28 +1493,58 @@ fn run_card_flip_mister(
         }
 
         if profile && started.elapsed() >= CARD_FLIP_PROFILE_DURATION {
+            if let Some(receipt) = presenter
+                .settle_pending()
+                .map_err(|error| format!("settle final hidden RGB565 card frame: {error}"))?
+            {
+                if let Some(present_started) = pending_present_started.take() {
+                    let present_us = present_started.elapsed().as_micros() as u64;
+                    present_samples_us.push(present_us);
+                    profile_present_samples_us.push(present_us);
+                }
+                if let Some(frame_started) = pending_frame_started.take() {
+                    let frame_to_present_us = frame_started.elapsed().as_micros() as u64;
+                    frame_to_present_samples_us.push(frame_to_present_us);
+                    profile_frame_to_present_samples_us.push(frame_to_present_us);
+                }
+                if last_sequence.is_some_and(|sequence| receipt.sequence <= sequence) {
+                    repeated_presentations = repeated_presentations.saturating_add(1);
+                }
+                latch_drop_count = receipt.drop_count;
+            }
             let seconds = started.elapsed().as_secs_f64();
             let cpu_percent = process_cpu_time()
                 .saturating_sub(profile_cpu_started)
                 .as_secs_f64()
                 / seconds
                 * 100.0;
+            let (frame_to_present_average_us, frame_to_present_p99_us, frame_to_present_max_us) =
+                sample_summary(&mut profile_frame_to_present_samples_us);
             let (render_average_us, render_p99_us, render_max_us) =
                 sample_summary(&mut profile_render_samples_us);
             let (transfer_average_us, transfer_p99_us, transfer_max_us) =
                 sample_summary(&mut profile_transfer_samples_us);
+            let (present_average_us, present_p99_us, present_max_us) =
+                sample_summary(&mut profile_present_samples_us);
             println!(
-                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
+                "card-flip-profile seconds={:.3} frames={} fps={:.3} cpu_pct={:.2} frame_to_present_avg_us={} frame_to_present_p99_us={} frame_to_present_max_us={} render_avg_us={} render_p99_us={} render_max_us={} transfer_avg_us={} transfer_p99_us={} transfer_max_us={} present_avg_us={} present_p99_us={} present_max_us={} present_samples={} transfer_source_rects={} transfer_destination_rects={} transfer_source_bytes={} transfer_destination_bytes={} full_slot_restores={} repeated_presentations={} latch_drop_count={}",
                 seconds,
                 profile_frames,
                 profile_frames as f64 / seconds,
                 cpu_percent,
+                frame_to_present_average_us,
+                frame_to_present_p99_us,
+                frame_to_present_max_us,
                 render_average_us,
                 render_p99_us,
                 render_max_us,
                 transfer_average_us,
                 transfer_p99_us,
                 transfer_max_us,
+                present_average_us,
+                present_p99_us,
+                present_max_us,
+                profile_present_samples_us.len(),
                 profile_transfer_source_rects,
                 profile_transfer_destination_rects,
                 profile_transfer_source_bytes,
