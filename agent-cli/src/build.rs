@@ -168,7 +168,7 @@ impl BuildSpec {
                 BuildTarget::FramebufferSceneLab,
                 BuildMode::Build,
                 "release-device",
-                Vec::new(),
+                vec!["profile"],
                 UiScope::All,
                 framebuffer_scene_lab_artifact("release-device"),
             ),
@@ -1664,7 +1664,8 @@ mod tests {
     fn framebuffer_scene_lab_build_is_slint_free_and_focused() {
         let spec = BuildSpec::framebuffer_scene_lab_device();
         assert_eq!(spec.target, BuildTarget::FramebufferSceneLab);
-        assert!(spec.features.is_empty());
+        assert_eq!(spec.features, ["profile"]);
+        assert_eq!(spec.profile, "release-device");
         assert_eq!(host_workdir(spec.target), "apps/framebuffer-scene-lab");
         assert_eq!(
             spec.artifact,
