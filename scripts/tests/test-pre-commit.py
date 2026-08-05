@@ -146,6 +146,26 @@ class PreCommitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unclassified changed paths: unknown/new.txt", result.stderr)
 
+    def test_deprecated_dropped_frame_metrics_are_rejected(self) -> None:
+        self.repository.stage(
+            "apps/mister/src/lib.rs",
+            "fn probe() { let repeated_" "refreshes = 1; }\n",
+        )
+        result = self.repository.gate()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("deprecated_dropped_frame_term", result.stderr)
+        self.assertIn("repeated_" "refreshes", result.stderr)
+
+        self.repository.run("git", "reset", "-q")
+        self.repository.stage(
+            "apps/mister/src/lib.rs",
+            "// dropped-frame-legacy-fixture: rejection coverage\n"
+            'const LEGACY: &str = "repeated_'
+            'refreshes";\n',
+        )
+        marked = self.repository.gate()
+        self.assertEqual(marked.returncode, 0, marked.stderr)
+
     def test_whitespace_shell_and_formatter_failures_are_actionable(self) -> None:
         self.repository.stage("README.md", "trailing space \n")
         result = self.repository.gate()

@@ -137,6 +137,25 @@ PIXEL_TEXT_CONTRACT_PATHS = {
     "scripts/checks/pre-commit.py",
     "scripts/tests/test-pixel-text-contract.py",
 }
+TEXT_SUFFIXES = {
+    ".json",
+    ".md",
+    ".py",
+    ".rs",
+    ".sh",
+    ".slint",
+    ".toml",
+    ".txt",
+    ".yaml",
+    ".yml",
+}
+DROPPED_FRAME_LEGACY_MARKER = "dropped-frame-legacy-fixture"
+DEPRECATED_DROPPED_FRAME_TERMS = (
+    "repeated_" + "refreshes",
+    "skipped_" + "refreshes",
+    "repeated_" + "presentations",
+    "repeated-" + "refreshes",
+)
 
 
 class GateError(Exception):
@@ -288,6 +307,33 @@ def check_forbidden_and_ignored(repository: Path, paths: Sequence[str]) -> None:
         raise GateError(f"staged_git_ignored: {os.fsdecode(first)}")
 
 
+def check_dropped_frame_terminology(repository: Path, paths: Sequence[str]) -> None:
+    for path in paths:
+        value = PurePosixPath(path)
+        if (
+            path.startswith(("history/", "reference/"))
+            or value.suffix.lower() not in TEXT_SUFFIXES
+        ):
+            continue
+        staged = git(
+            repository,
+            ["show", f":{path}"],
+            allowed_codes=(0, 128),
+        )
+        if staged.returncode != 0:
+            continue
+        lines = staged.stdout.decode(errors="replace").splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            previous = lines[line_number - 2] if line_number > 1 else ""
+            if DROPPED_FRAME_LEGACY_MARKER in line or DROPPED_FRAME_LEGACY_MARKER in previous:
+                continue
+            for term in DEPRECATED_DROPPED_FRAME_TERMS:
+                if term in line:
+                    raise GateError(
+                        f"deprecated_dropped_frame_term: {path}:{line_number}: {term}"
+                    )
+
+
 def staged_submodules(repository: Path, paths: Sequence[str]) -> list[str]:
     wanted = set(paths)
     output = git(repository, ["ls-files", "--stage", "-z"]).stdout
@@ -405,11 +451,12 @@ def execute(repository: Path) -> None:
     shells = shell_paths(repository, paths)
     cargo_formatters = formatters(paths)
     pixel_text_contract = needs_pixel_text_contract(paths)
-    planned = 4 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
+    planned = 5 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
     print(f"pre-commit: {planned} fast checks planned (0%)")
 
     check_identity(repository)
     check_forbidden_and_ignored(repository, paths)
+    check_dropped_frame_terminology(repository, paths)
     check_submodules(repository, paths)
     git(repository, ["diff", "--cached", "--check"])
     run(

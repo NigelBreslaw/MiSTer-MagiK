@@ -34,7 +34,7 @@ projection, RGB565 rasterization, and foreground bookkeeping, but ends before
 latch presentation waiting. The table records the worst one-second P99/maximum
 observed during each run.
 
-| Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
+| Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Dropped frames |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | MagiK before extraction, production launcher | 40,960 | 60.029 | 57.55% | 4.704 / 9.229 ms | 0 |
 | MagiK after extraction, focused lab | 40,960 | 60.0 | 50.0–58.5% | 10.774 / 10.774 ms | 0 |

@@ -27,7 +27,7 @@ Performance tuning must not remove the scene's defining visual read.
 
 - unique physical presentation is within 0.1 FPS of 60 Hz;
 - render P99 is below the measured refresh period minus 750 microseconds;
-- no repeated refreshes, completion gaps, latch drops, presentation misses,
+- no dropped frames, completion gaps, latch drops, presentation misses,
   starvation, unsafe slot reuse, or superseded frames;
 - no allocation or capacity growth after three warm-up frames;
 - the declared source, evaluated, visible, clipped, topology, attempted-write,

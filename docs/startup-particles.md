@@ -60,11 +60,11 @@ X uses scale `2/3`, Y uses `framebuffer_height/720`, and the resulting frame is
 centred with equal top and bottom margins.
 
 Cadence and latch health are independent. `latch_drop_count=0` proves only that
-the FPGA latch did not reject or supersede a post. Skipless animation requires
-completion timestamps and flip deltas to prove that every physical refresh
-received one new confirmed frame. Runtime and benchmark evidence therefore
-reports `skipped_refreshes` separately from latch protocol drops and fails if
-either axis is nonzero.
+the FPGA latch did not reject or supersede a post. Animation requires completion
+timestamps and flip deltas to prove that every physical refresh received one
+new confirmed frame. Runtime and benchmark evidence therefore reports
+`dropped_frames` separately from latch protocol drops and fails if either axis
+is nonzero.
 
 The final handoff is derived only from the production launcher's live frame:
 
@@ -292,13 +292,13 @@ gates. The reports, source hashes, and individual samples live in
 
 ## Device evidence and pending qualification
 
-Earlier attended particle-lab evidence preserved physical 60 Hz with no
-repeated presentations. Its after-change timing includes simulation,
+Earlier attended particle-lab evidence preserved physical 60 Hz with zero
+confirmation sequence failures. Its after-change timing includes simulation,
 projection, RGB565 rasterization, and foreground bookkeeping, and ends before
 latch presentation waiting. It predates the final shared-renderer migration and
 must not be represented as final device qualification for this extraction.
 
-| Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Repeats |
+| Effect and path | Particles | Physical FPS | Process CPU | Render P99/max | Dropped frames |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | MagiK before extraction, production launcher | 40,960 | 60.029 | 57.55% | 4.704 / 9.229 ms | 0 |
 | MagiK after extraction, focused lab | 40,960 | 60.0 | 50.0–58.5% | 10.774 / 10.774 ms | 0 |
@@ -309,7 +309,8 @@ The pre-extraction renderer timing excluded asynchronous preparation, so its
 P99 must not be compared directly with the lab's synchronous render-work
 interval. Process CPU is the useful directional comparison. The earlier
 focused MagiK result met the 65% CPU, 12 ms render-work P99, 16.667 ms maximum,
-and zero-repeat targets. The final shared MagiK scene does include the qualified
+and zero dropped frames target. The final shared MagiK scene does include the
+qualified
 two-cohort projection cache, lookahead preparation, ordered commands, and
 per-buffer dirty history moved from production.
 

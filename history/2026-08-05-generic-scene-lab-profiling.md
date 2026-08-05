@@ -41,8 +41,8 @@ Seed: `0x4d6167694b54696c`; sampling profile: `hdmi`.
 | Confirmed frames | 5,397 | 5,378 |
 | Unique latch flips | 5,396 | 5,377 |
 | Unique presentation FPS | 59.953 | 59.950 |
-| Repeated refreshes | 0 | 0 |
-| Sequence failures | 0 | 0 |
+| Dropped frames | 0 | 0 |
+| Confirmation sequence failures | 0 | 0 |
 | Latch drops | 0 | 0 |
 | Completion failures | 0 | 0 |
 | Long completion intervals | 0 | 0 |
@@ -56,21 +56,21 @@ Seed: `0x4d6167694b54696c`; sampling profile: `hdmi`.
 
 The sampled profile contains 7,300 hits across 681 stack groups, with complete
 profile metadata, folded stacks, and flamegraph. Only the unprofiled pass is the
-cadence authority; it qualified with no physical frame drops.
+cadence authority; it qualified with zero dropped frames.
 
 ## Cross-scene checks
 
 The five-second `navigation-transition` measurement retained evidence at
-`build/scene-lab/navigation-transition/1785938131/`. It reported 258 confirmed
-frames, 51.701 unique FPS, 41 repeated refreshes/long intervals, and zero
-sequence failures or latch drops. This intentionally demonstrates that the
-generic recorder detects physical skips independently of latch-drop counters
-and retains evidence on qualification failure.
+`build/scene-lab/navigation-transition/1785938131/`. It **failed with 41 dropped
+frames**: 258 frames were confirmed at 51.701 unique FPS, with 41 long
+confirmation intervals and zero confirmation sequence failures or latch drops.
+The failed qualification demonstrates that the generic recorder detects dropped
+frames independently of latch-drop counters and retains evidence on failure.
 
 The five-second card-flip assessment retained evidence at
 `build/scene-lab/card-flip/1785938247/`. Its authoritative pass reported 301
-confirmations, 59.949 FPS, and zero repeated refreshes, sequence failures,
-latch drops, completion failures, or long intervals. Its sampled pass collected
+confirmations, 59.949 FPS, and zero dropped frames, confirmation sequence
+failures, latch drops, completion failures, or long intervals. Its sampled pass collected
 171 hits across 47 stack groups. Card geometry (287×420), progress, face,
 direction, dirty rectangles, and byte counts remained present in the raw frame
 evidence. Unprofiled render mean/P99 was 3.886/6.228 ms and sampled was

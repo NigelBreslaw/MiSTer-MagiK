@@ -110,7 +110,7 @@ external-direct post count as `ceil(20 seconds / measured refresh period)`, plus
 any reported spinning-cabinet wait frames before the live launcher is ready.
 This applies to HDMI and to `crt-240p60`, `crt-288p50`, `crt-480p60`, and
 `crt-576p50`. All must sustain the resolved physical refresh within the ordinary
-tolerance, zero repeated refreshes, zero pacing failures, and independently
+tolerance, zero dropped frames, zero pacing failures, and independently
 zero latch-protocol drops or completion failures. Catalog coordinator and walker
 affinity must remain on CPU0. The run also requires a snapshot milestone before
 the launcher morph begins and a pixel-identical 20-second frame/cache handoff.
@@ -124,15 +124,18 @@ Terminology is normative throughout this repository:
 
 - `latch_drop_count` measures rejected or superseded latch protocol posts. It
   says nothing about whether rendering supplied a new frame for every refresh.
-- `skipped_refreshes` or `repeated_refreshes` measures physical refresh
-  intervals that reused the previous visible frame. This is the authoritative
-  frame-skip signal.
+- `dropped_frames` measures physical refresh intervals that displayed the
+  previous frame because no new frame was confirmed. This is the authoritative
+  dropped-frame signal, and it must be exactly zero during an authoritative
+  animation window.
 - `cadence-warning` and `cadence-overrun` describe frame wall-time budget
   observations. They are not latch drops.
 
-Never report zero latch drops as zero frame skips. First-run qualification must
-show the cadence and latch-protocol sections as separate gates even when both
-pass.
+Never report zero latch drops as zero dropped frames. A nonzero dropped-frame
+count is always a qualification failure; FPS tolerance or healthy latch counters
+cannot compensate for it. First-run qualification must show the cadence and
+latch-protocol sections as separate gates even when both pass. Sampled profiles
+provide attribution only and cannot qualify cadence.
 
 This is runtime/platform qualification, so it requires a clean committed Dev
 delivery before measurement. Host tests cover route-aware cue boundaries,
@@ -168,7 +171,7 @@ Only the highest passing count is accepted, and it must still pass a separate
 
 A count passes only when unique physical latch flips match refresh within
 0.1 FPS, P99 render wall time is below the refresh period minus 750
-microseconds, and there are no repeated refreshes, completion gaps, latch
+microseconds, and there are no dropped frames, completion gaps, latch
 drops, presentation misses or errors, starvation, reused frames, or superseded
 frames. Evidence includes per-phase simulation, clear, raster, and render-wall
 timings, CPU use, visible counts, and the 32-byte simulation footprint per
@@ -274,7 +277,7 @@ Steady state begins on the fourth active screensaver frame. The benchmark uses
 the median nonzero measured refresh period and completion timestamps to count
 the physical refresh intervals in that window. Wrapping latch flip-counter
 deltas count unique presentations. Unique presentation FPS must remain within
-0.1 FPS of the measured refresh rate, with no repeated refresh, completion gap
+0.1 FPS of the measured refresh rate, with zero dropped frames, no completion gap
 over 1.5 refresh periods, incomplete latch, sequence mismatch, non-unit flip,
 presentation error, latch drop, or final pacing miss. Submitted FPS, wall-time
 overruns, P99, and maximum timings remain diagnostic evidence; contiguous

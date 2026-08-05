@@ -124,8 +124,10 @@ latch post through confirmed presentation, and `frame_to_present` runs from
 render start through that same confirmation. `cpu_pct` is whole-process CPU
 time divided by wall time. Physical cadence is calculated only from monotonic
 confirmation intervals and wrapping latch flip-counter deltas. A
-`repeated_refreshes` result from the unprofiled pass is the skip authority;
-sequence failures, latch drops, and completion failures are separate results.
+`dropped_frames` result from the unprofiled pass is the cadence authority and
+must be exactly zero for the animation to qualify;
+confirmation sequence failures, latch drops, and completion failures are
+separate results.
 The sampled pass can attribute a failure but can never qualify cadence.
 
 Two consecutive 2026-08-05 assessments of commit `0e335037`, using the same
@@ -139,11 +141,11 @@ optimized ARMv7 binary hash in all four passes, produced:
 | 2 | 99 Hz attribution | 59.950 | 43.40% | 4.042 / 6.411 ms | 0.649 / 0.811 ms | 0.095 / 0.156 ms | 9.735 / 13.411 ms | 11.834 / 15.501 ms | 16.641 / 16.816 ms |
 
 Each unprofiled authority recorded 1,800 confirmed frames, 1,799 expected
-refresh intervals, and 1,799 unique latch flips. Both had zero physical repeated
-refreshes, zero sequence failures, zero latch drops, zero completion failures,
+refresh intervals, and 1,799 unique latch flips. Both had zero dropped frames,
+zero confirmation sequence failures, zero latch drops, zero completion failures,
 and no long confirmation intervals. The largest confirmation gaps were 16.878
 ms and 16.898 ms, still one 60 Hz refresh interval. Consequently, the earlier
-59.5 FPS aggregate was not evidence of physical frame skipping.
+59.5 FPS aggregate was not evidence that frames were dropped.
 
 The two sampled runs collected 1,428 and 1,328 stack samples. Respectively, 552
 and 535 resolved into `CardFlip::paint_rows_device`, while 605 and 513 resolved

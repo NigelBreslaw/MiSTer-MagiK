@@ -188,9 +188,11 @@ remote. Concurrent agents must use separate worktrees.
   `/dev/fb0` capture paths.
 - `/dev/fb0` contents alone do not prove HDMI visibility.
 - Never infer frame cadence from FPGA latch drop counters. A latch drop is a
-  rejected or superseded protocol post; a frame skip is a physical refresh
-  interval with no newly confirmed frame. Qualification and status reports
-  must measure and report these independently.
+  rejected or superseded protocol post; a dropped frame is a physical refresh
+  interval that displayed the previous frame because no new frame was
+  confirmed. An authoritative animation window requires exactly zero dropped
+  frames. Qualification and status reports must measure dropped frames and
+  latch drops independently.
 - Production rendering is RGB565-only. Do not restore wider-color routes.
 - Do not rebuild preview caches on the MiSTer hot path.
 

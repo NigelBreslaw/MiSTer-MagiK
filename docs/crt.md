@@ -151,7 +151,7 @@ trial stores a single post-trial sink frame rather than recording video. Text
 must remain sharp and readable, proportions and safe areas must be correct, and
 latch, visual, and FPGA protocol failures must stay zero. Motion cadence must
 also show zero physical refreshes that reused the previous confirmed frame;
-zero latch or FPGA drops alone is not skipless-motion evidence. HDMI regression,
+zero latch or FPGA drops alone is not evidence of zero dropped frames. HDMI regression,
 core launch/return (including native interlace), cleanup, recovery, and stock
 rollback remain part of the gate. No current document should be read as claiming
 that attended gate has passed. CRT intro implementation and host assurance are

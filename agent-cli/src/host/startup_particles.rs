@@ -1967,6 +1967,7 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("dropped_frames");
+        // dropped-frame-legacy-fixture: old evidence must fail closed.
         missing["cadence"]["repeated_refreshes"] = serde_json::json!(0);
         assert!(validated_scene_cadence(&missing).is_err());
 

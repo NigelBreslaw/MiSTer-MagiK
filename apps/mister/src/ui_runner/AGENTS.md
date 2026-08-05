@@ -22,7 +22,7 @@ ordering source of truth.
 - Keep scanout cadence and latch protocol health as separate gates. A zero
   latch drop count does not prove that every physical refresh received a new
   frame; use confirmed completion timestamps and flip progression to count
-  skipped refreshes.
+  dropped frames. Every authoritative animation window requires exactly zero.
 - Tests should exercise event/state sequences, not only helper predicates.
 
 ## Assurance

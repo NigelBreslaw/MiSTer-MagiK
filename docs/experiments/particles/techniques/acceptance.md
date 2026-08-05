@@ -47,7 +47,7 @@ Acceptance requires:
   saturation collapse, or allocation-related cadence changes;
 - no loss of a defining visual read after performance tuning;
 - physical presentation within 0.1 FPS of 60 Hz, render P99 below the refresh
-  period minus 750 microseconds, and no repeats, misses, latch drops,
+  period minus 750 microseconds, and no dropped frames, misses, latch drops,
   starvation, reused frames, or superseded frames.
 
 ## Technique-specific requirements

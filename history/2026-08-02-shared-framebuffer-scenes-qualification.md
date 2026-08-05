@@ -54,7 +54,7 @@ The prior attended particle evidence below is retained for directional context.
 It predates the final shared-renderer extraction and is not relabeled as current
 qualification.
 
-| Effect/path | Source/destination | Physical FPS | CPU | P99/max | Repeats | Status |
+| Effect/path | Source/destination | Physical FPS | CPU | P99/max | Dropped frames | Status |
 |---|---|---:|---:|---:|---:|---|
 | MagiK pre-split production | 960x540 / 1920x1080 | 60.029 | 57.55% | 4.704 / 9.229 ms | 0 | historical baseline |
 | MagiK earlier focused lab | 960x540 / 1920x1080 | 60.0 | 50.0–58.5% | 10.774 / 10.774 ms | 0 | historical directional evidence |

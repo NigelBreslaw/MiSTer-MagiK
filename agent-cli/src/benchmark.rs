@@ -1071,6 +1071,7 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("dropped_frames");
+        // dropped-frame-legacy-fixture: old evidence must fail closed.
         legacy["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(0);
         assert!(evaluate_run(&legacy).is_err());
         let mut long_gap = passing_run(1);

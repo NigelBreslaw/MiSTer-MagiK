@@ -55,8 +55,8 @@ drops, with advancing post and flip counters. Deliberate faster-than-vblank
 posting increments the drop counter; normal-cadence posting subsequently
 recovers with no pending request. Reloading the same exact RBF clears the test
 counters before protocol-integrity gates. These zero-drop results do not prove
-skipless motion: physical-refresh cadence and repeated-refresh counts are a
-separate qualification axis.
+zero dropped frames: physical-refresh cadence and dropped-frame counts are a
+separate qualification axis, and motion requires exactly zero dropped frames.
 
 A physical USB HDMI capture was recorded at 1920x1080 from the candidate. Its
 contact strips show the expected moving Home row without an obvious horizontal

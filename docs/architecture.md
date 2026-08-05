@@ -243,7 +243,7 @@ conversion:
   `reject_count`. Motion cadence is a separate TV-visible gate derived from
   confirmed completion timestamps and flip progression: every physical refresh
   must receive a newly confirmed frame. A zero latch drop count never proves
-  zero skipped refreshes. Linux wake jitter after the vblank wait is reported
+  zero dropped frames. Linux wake jitter after the vblank wait is reported
   separately as scheduler timing.
   A protocol-v4 rejection also snapshots passive
   `0x5a` receiver context:
