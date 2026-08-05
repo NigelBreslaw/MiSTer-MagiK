@@ -17,8 +17,13 @@ use mister_magik_framebuffer_scene_lab::{
     CABINET_LAB_MAX_PARTICLES, DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer,
     NavigationFixture, NavigationFixtureScene, read_effect_recipe,
 };
+use mister_magik_framebuffer_scenes::SceneGeometry;
 use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
+};
+use mister_magik_screenshot_parade::{
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStartup, ScreenshotParadeStats,
+    ScreenshotSamplingProfile,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -36,6 +41,7 @@ const CARD_FLIP_PROFILE_DURATION: Duration = Duration::from_secs(30);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
+const DEFAULT_SCREENSHOT_SEED: u64 = 0x4d61_6769_4b54_696c;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CardAssessmentPass {
@@ -185,6 +191,51 @@ fn write_card_assessment_evidence(
 
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
+    if options.scene == EffectKind::ScreenshotScreensaver {
+        let archive = options
+            .archive
+            .as_deref()
+            .expect("screenshot option validation requires an archive");
+        if options.check {
+            let scene = screenshot_scene(
+                archive,
+                options.seed,
+                options.sampling_profile,
+                ScreenshotParadeStartup::Prepared,
+                DEFAULT_WIDTH,
+                DEFAULT_HEIGHT,
+            )?;
+            println!(
+                "framebuffer-scene-lab check passed scene={} entries={} pack_bytes={} seed=0x{:016x}",
+                options.scene.label(),
+                scene.asset_count(),
+                scene.compressed_bytes(),
+                options.seed
+            );
+            return Ok(());
+        }
+        if let Some(output) = options.output.as_deref() {
+            return render_screenshot_headless(
+                archive,
+                options.seed,
+                options.sampling_profile,
+                options
+                    .time_ms
+                    .expect("option parser requires time with output"),
+                output,
+            );
+        }
+        return run_window(
+            SceneSource::Screenshot {
+                archive: archive.to_path_buf(),
+                seed: options.seed,
+                sampling_profile: options.sampling_profile,
+            },
+            None,
+            false,
+            None,
+        );
+    }
     if options.scene == EffectKind::CardFlip {
         let duration = options.card_duration();
         if options.check {
@@ -453,6 +504,70 @@ enum SceneSource {
     Particle(PathBuf),
     Navigation(NavigationFixture),
     CardFlip(Duration),
+    Screenshot {
+        archive: PathBuf,
+        seed: u64,
+        sampling_profile: ScreenshotSamplingProfile,
+    },
+}
+
+fn screenshot_scene(
+    archive_path: &Path,
+    seed: u64,
+    sampling_profile: ScreenshotSamplingProfile,
+    startup: ScreenshotParadeStartup,
+    width: usize,
+    height: usize,
+) -> Result<ScreenshotParade, String> {
+    let archive = mister_magik_catalog::preview_worker::ResidentPreviewArchive::open(archive_path)?;
+    let geometry = SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+    ScreenshotParade::new(
+        archive,
+        ScreenshotParadeConfig {
+            geometry,
+            seed,
+            sampling_profile,
+            startup,
+            worker_start: None,
+        },
+    )
+}
+
+fn render_screenshot_headless(
+    archive_path: &Path,
+    seed: u64,
+    sampling_profile: ScreenshotSamplingProfile,
+    time_ms: u64,
+    output: &Path,
+) -> Result<(), String> {
+    let mut renderer = screenshot_scene(
+        archive_path,
+        seed,
+        sampling_profile,
+        ScreenshotParadeStartup::Prepared,
+        DEFAULT_WIDTH,
+        DEFAULT_HEIGHT,
+    )?;
+    let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+    let target = Duration::from_millis(time_ms);
+    let mut elapsed = Duration::ZERO;
+    let stats = loop {
+        let stats = renderer.render_at(&mut pixels, elapsed)?;
+        if elapsed >= target {
+            break stats;
+        }
+        elapsed = (elapsed + FRAME_DURATION).min(target);
+    };
+    write_ppm(output, &pixels)?;
+    println!(
+        "capture={} scene=screenshot-screensaver time_ms={} seed=0x{:016x} cards={} hash={:016x}",
+        output.display(),
+        time_ms,
+        seed,
+        stats.cards_drawn,
+        frame_hash(&pixels)
+    );
+    Ok(())
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
@@ -530,6 +645,7 @@ enum LabScene {
     Focused(FocusedParticleRenderer),
     Navigation(NavigationFixtureScene),
     CardFlip(Box<CardFlip>),
+    Screenshot(ScreenshotParade),
 }
 
 #[cfg(any(target_os = "macos", all(target_os = "linux", target_arch = "arm")))]
@@ -573,6 +689,19 @@ impl LabScene {
                 renderer.set_duration(duration);
                 Ok(Self::CardFlip(Box::new(renderer)))
             }
+            SceneSource::Screenshot {
+                archive,
+                seed,
+                sampling_profile,
+            } => screenshot_scene(
+                &archive,
+                seed,
+                sampling_profile,
+                ScreenshotParadeStartup::Streaming,
+                width,
+                height,
+            )
+            .map(Self::Screenshot),
         }
     }
 
@@ -583,6 +712,7 @@ impl LabScene {
         elapsed: Duration,
         next_elapsed: Option<Duration>,
     ) -> Result<mister_magik_framebuffer_scene_lab::FrameStats, String> {
+        let pixel_count = destination.len();
         match self {
             Self::Particle(renderer) => {
                 renderer.render_buffer(destination, buffer_id, elapsed, next_elapsed)
@@ -595,6 +725,9 @@ impl LabScene {
                 .render(destination, elapsed)
                 .map(card_frame_stats)
                 .map_err(str::to_owned),
+            Self::Screenshot(renderer) => renderer
+                .render_at(destination, elapsed)
+                .map(|stats| screenshot_frame_stats(stats, pixel_count)),
         }
     }
 
@@ -604,6 +737,7 @@ impl LabScene {
             Self::Focused(renderer) => renderer.kind(),
             Self::Navigation(_) => EffectKind::NavigationTransition,
             Self::CardFlip(_) => EffectKind::CardFlip,
+            Self::Screenshot(_) => EffectKind::ScreenshotScreensaver,
         }
     }
 
@@ -635,6 +769,7 @@ impl LabScene {
             Self::Focused(_) => 0,
             Self::Navigation(_) => 0,
             Self::CardFlip(_) => 0,
+            Self::Screenshot(_) => 0,
         }
     }
 
@@ -653,6 +788,15 @@ impl LabScene {
                     "idle"
                 }
             ),
+            Self::Screenshot(renderer) => format!(
+                "{}:{}",
+                if renderer.is_ready() {
+                    "ready"
+                } else {
+                    "loading"
+                },
+                renderer.active_card_count()
+            ),
         }
     }
 
@@ -662,7 +806,34 @@ impl LabScene {
             Self::Focused(_) => None,
             Self::Navigation(_) => None,
             Self::CardFlip(_) => None,
+            Self::Screenshot(_) => None,
         }
+    }
+}
+
+fn screenshot_frame_stats(
+    stats: ScreenshotParadeStats,
+    pixel_count: usize,
+) -> mister_magik_framebuffer_scene_lab::FrameStats {
+    mister_magik_framebuffer_scene_lab::FrameStats {
+        effect: EffectKind::ScreenshotScreensaver,
+        particles: 0,
+        projected_particles: 0,
+        projection_cohorts: 5,
+        visible: stats.cards_drawn,
+        pixel_writes: pixel_count,
+        simulation_backend: "elapsed-time-schedule",
+        projection_backend: "rgb565-lanczos-parade",
+        magik_stages: None,
+        cabinet_stages: None,
+        intro_stages: None,
+        cue_id: "screenshot-screensaver",
+        cue_index: 0,
+        cue_start_ms: 0,
+        previous_cue_start_ms: 0,
+        cue_elapsed_ms: 0,
+        cue_duration_ms: 0,
+        total_ms: 0,
     }
 }
 
@@ -1992,7 +2163,12 @@ fn run_window(
 struct Options {
     scene: EffectKind,
     recipe: Option<PathBuf>,
+    archive: Option<PathBuf>,
     fixture: Option<NavigationFixture>,
+    seed: u64,
+    seed_requested: bool,
+    sampling_profile: ScreenshotSamplingProfile,
+    sampling_profile_requested: bool,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
@@ -2008,7 +2184,12 @@ struct Options {
 impl Options {
     fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut recipe = None;
+        let mut archive = None;
         let mut fixture = None;
+        let mut seed = DEFAULT_SCREENSHOT_SEED;
+        let mut seed_requested = false;
+        let mut sampling_profile = ScreenshotSamplingProfile::HdmiLegacyHalf;
+        let mut sampling_profile_requested = false;
         let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
@@ -2028,11 +2209,32 @@ impl Options {
                     scene = EffectKind::parse(&value);
                     if scene.is_none() {
                         return Err(format!(
-                            "invalid scene {value:?}; expected magik, cabinet, intro, navigation-transition, or card-flip"
+                            "invalid scene {value:?}; expected magik, cabinet, intro, navigation-transition, card-flip, or screenshot-screensaver"
                         ));
                     }
                 }
                 "--recipe" => recipe = arguments.next().map(PathBuf::from),
+                "--archive" => archive = arguments.next().map(PathBuf::from),
+                "--seed" => {
+                    let value = arguments.next().ok_or("--seed requires an integer")?;
+                    seed = parse_seed(&value)?;
+                    seed_requested = true;
+                }
+                "--sampling-profile" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--sampling-profile requires hdmi or crt")?;
+                    sampling_profile = match value.as_str() {
+                        "hdmi" => ScreenshotSamplingProfile::HdmiLegacyHalf,
+                        "crt" => ScreenshotSamplingProfile::CrtSixteenth,
+                        _ => {
+                            return Err(format!(
+                                "invalid sampling profile {value:?}; expected hdmi or crt"
+                            ));
+                        }
+                    };
+                    sampling_profile_requested = true;
+                }
                 "--fixture" => {
                     let value = arguments.next().ok_or("--fixture requires a name")?;
                     fixture = NavigationFixture::parse(&value);
@@ -2114,7 +2316,12 @@ impl Options {
         let options = Self {
             scene: scene.ok_or("--scene is required")?,
             recipe,
+            archive,
             fixture,
+            seed,
+            seed_requested,
+            sampling_profile,
+            sampling_profile_requested,
             time_ms,
             output,
             check,
@@ -2165,6 +2372,14 @@ impl Options {
         {
             return Err("--duration-ms and --direction are valid only for card-flip".into());
         }
+        if self.scene != EffectKind::ScreenshotScreensaver
+            && (self.archive.is_some() || self.seed_requested || self.sampling_profile_requested)
+        {
+            return Err(
+                "--archive, --seed, and --sampling-profile are valid only for screenshot-screensaver"
+                    .into(),
+            );
+        }
         match self.scene {
             EffectKind::Magik | EffectKind::Cabinet | EffectKind::Intro => {
                 if self.recipe.is_none() {
@@ -2192,6 +2407,27 @@ impl Options {
                     return Err("card-flip does not accept cabinet case options".into());
                 }
             }
+            EffectKind::ScreenshotScreensaver => {
+                if self.archive.is_none() {
+                    return Err("screenshot-screensaver requires --archive".into());
+                }
+                if self.recipe.is_some() || self.fixture.is_some() {
+                    return Err(
+                        "screenshot-screensaver accepts no recipe or fixture options".into(),
+                    );
+                }
+                if self.case.is_some()
+                    || self.profile
+                    || self.assessment_pass.is_some()
+                    || self.duration_ms.is_some()
+                    || self.direction_requested
+                {
+                    return Err(
+                        "screenshot-screensaver rejects cabinet, profile, assessment, and card-only options"
+                            .into(),
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -2212,7 +2448,19 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile hdmi|crt]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+}
+
+fn parse_seed(value: &str) -> Result<u64, String> {
+    let value = value.trim();
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map_or_else(
+            || value.parse::<u64>(),
+            |digits| u64::from_str_radix(digits, 16),
+        )
+        .map_err(|_| format!("invalid screenshot seed {value:?}"))
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -2782,6 +3030,30 @@ mod tests {
             assessment.evidence_dir,
             PathBuf::from("/tmp/card-assessment")
         );
+
+        let screenshot = Options::parse(
+            [
+                "--scene",
+                "screenshot-screensaver",
+                "--archive",
+                "screenshots.mmlz4b",
+                "--seed",
+                "0x1234",
+                "--sampling-profile",
+                "crt",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            screenshot.archive,
+            Some(PathBuf::from("screenshots.mmlz4b"))
+        );
+        assert_eq!(screenshot.seed, 0x1234);
+        assert_eq!(
+            screenshot.sampling_profile,
+            ScreenshotSamplingProfile::CrtSixteenth
+        );
     }
 
     #[test]
@@ -2897,6 +3169,35 @@ mod tests {
             )
             .is_err()
         );
+        assert!(Options::parse(["--scene", "screenshot-screensaver"].map(String::from)).is_err());
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "screenshot-screensaver",
+                    "--archive",
+                    "screenshots.mmlz4b",
+                    "--recipe",
+                    "magik.json",
+                ]
+                .map(String::from),
+            )
+            .is_err()
+        );
+        assert!(
+            Options::parse(
+                ["--scene", "magik", "--recipe", "magik.json", "--seed", "7",].map(String::from),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn screenshot_seed_accepts_decimal_and_prefixed_hex() {
+        assert_eq!(parse_seed("42").unwrap(), 42);
+        assert_eq!(parse_seed("0x2a").unwrap(), 42);
+        assert_eq!(parse_seed("0X2A").unwrap(), 42);
+        assert!(parse_seed("0xnope").is_err());
     }
 
     #[test]

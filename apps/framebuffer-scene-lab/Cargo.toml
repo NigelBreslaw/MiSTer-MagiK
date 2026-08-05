@@ -25,9 +25,11 @@ path = "src/bin/generate_intro_assets.rs"
 required-features = ["asset-tools"]
 
 [dependencies]
+mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["reader"] }
 mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-particles = { path = "../../crates/particles" }
+mister-magik-screenshot-parade = { path = "../../crates/screenshot-parade" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = { version = "0.18.1", optional = true }

@@ -38,6 +38,7 @@ pub enum EffectKind {
     Intro,
     NavigationTransition,
     CardFlip,
+    ScreenshotScreensaver,
 }
 
 impl EffectKind {
@@ -49,6 +50,7 @@ impl EffectKind {
             Self::Intro => "intro",
             Self::NavigationTransition => "navigation-transition",
             Self::CardFlip => "card-flip",
+            Self::ScreenshotScreensaver => "screenshot-screensaver",
         }
     }
 
@@ -60,6 +62,7 @@ impl EffectKind {
             "intro" => Some(Self::Intro),
             "navigation-transition" => Some(Self::NavigationTransition),
             "card-flip" => Some(Self::CardFlip),
+            "screenshot-screensaver" => Some(Self::ScreenshotScreensaver),
             _ => None,
         }
     }
@@ -69,7 +72,7 @@ impl EffectKind {
             Self::Magik => StartupParticleRecipe::Magik,
             Self::Cabinet => StartupParticleRecipe::Cabinet,
             Self::Intro => StartupParticleRecipe::Intro,
-            Self::NavigationTransition | Self::CardFlip => {
+            Self::NavigationTransition | Self::CardFlip | Self::ScreenshotScreensaver => {
                 unreachable!("self-contained scenes do not publish particle recipe status")
             }
         }
