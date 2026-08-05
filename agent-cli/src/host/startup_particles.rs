@@ -481,7 +481,7 @@ fn prepare_lab_files(
         &format!(
             "{} --check {}",
             sh(REMOTE_BINARY),
-            remote_scene_arguments(scene, recipe.is_some(), fixture, screenshot)
+            remote_scene_arguments(scene, recipe.is_some(), fixture, screenshot, false)
         ),
     )
 }
@@ -1689,6 +1689,7 @@ fn remote_scene_arguments(
     has_recipe: bool,
     fixture: Option<&str>,
     screenshot: Option<&RemoteScreenshotArgs>,
+    include_copy_experiment: bool,
 ) -> String {
     if has_recipe {
         format!("--scene {} --recipe {}", sh(scene), sh(REMOTE_LAB_RECIPE))
@@ -1704,7 +1705,7 @@ fn remote_scene_arguments(
             sh(screenshot.phase_generation),
             sh(screenshot.replacement_mode)
         );
-        if screenshot.copy_experiment {
+        if include_copy_experiment && screenshot.copy_experiment {
             arguments.push_str(" --copy-experiment");
         }
         arguments
@@ -1735,7 +1736,7 @@ fn remote_run_lab_command(
     );
     let scene_arguments = format!(
         "{} {}",
-        remote_scene_arguments(scene, has_recipe, fixture, screenshot),
+        remote_scene_arguments(scene, has_recipe, fixture, screenshot, true),
         case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
     );
     let bounded = seconds.map(|seconds| {
