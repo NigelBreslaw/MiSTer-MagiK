@@ -25,6 +25,85 @@ const FIXED_SHIFT: u32 = 16;
 const FIXED_ONE: i64 = 1_i64 << FIXED_SHIFT;
 const PROGRESS_MAX: u32 = u16::MAX as u32;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CardGeometry {
+    pub surface_width: usize,
+    pub surface_height: usize,
+    pub card_x: usize,
+    pub card_y: usize,
+    pub card_width: usize,
+    pub card_height: usize,
+    camera: i32,
+    spine_width: usize,
+    source_x_scale_q16: i64,
+    source_y_scale_q16: i64,
+}
+
+impl CardGeometry {
+    #[must_use]
+    pub const fn reference() -> Self {
+        Self {
+            surface_width: WIDTH,
+            surface_height: HEIGHT,
+            card_x: CARD_X,
+            card_y: CARD_Y,
+            card_width: CARD_WIDTH,
+            card_height: CARD_HEIGHT,
+            camera: CAMERA,
+            spine_width: MINIMUM_SPINE_WIDTH,
+            source_x_scale_q16: FIXED_ONE,
+            source_y_scale_q16: FIXED_ONE,
+        }
+    }
+
+    pub fn for_surface(surface_width: usize, surface_height: usize) -> Result<Self, &'static str> {
+        if surface_width == 0 || surface_height == 0 {
+            return Err("card flip surface dimensions must be non-zero");
+        }
+        if surface_width > usize::from(u16::MAX) || surface_height > usize::from(u16::MAX) {
+            return Err("card flip surface dimensions exceed u16 geometry");
+        }
+        let card_height = surface_height
+            .checked_mul(7)
+            .ok_or("card flip height overflow")?
+            .div_ceil(10)
+            .min(surface_height);
+        let card_width = card_height
+            .checked_mul(43)
+            .and_then(|value| value.checked_add(31))
+            .ok_or("card flip width overflow")?
+            .checked_div(63)
+            .ok_or("card flip aspect ratio is invalid")?
+            .min(surface_width);
+        if card_width < 2 * OUTLINE_WIDTH + 1 || card_height < 2 * OUTLINE_WIDTH + 1 {
+            return Err("card flip surface is too small for its outline");
+        }
+        let source_x_scale_q16 =
+            ((CARD_WIDTH - 1) as i64 * FIXED_ONE) / (card_width.saturating_sub(1).max(1) as i64);
+        let source_y_scale_q16 =
+            ((CARD_HEIGHT - 1) as i64 * FIXED_ONE) / (card_height.saturating_sub(1).max(1) as i64);
+        let camera = ((i64::from(CAMERA) * card_width as i64 + CARD_WIDTH as i64 / 2)
+            / CARD_WIDTH as i64)
+            .max(1) as i32;
+        let spine_width = (MINIMUM_SPINE_WIDTH * card_width)
+            .div_ceil(CARD_WIDTH)
+            .max(2 * OUTLINE_WIDTH + 1)
+            .min(card_width);
+        Ok(Self {
+            surface_width,
+            surface_height,
+            card_x: (surface_width - card_width) / 2,
+            card_y: (surface_height - card_height) / 2,
+            card_width,
+            card_height,
+            camera,
+            spine_width,
+            source_x_scale_q16,
+            source_y_scale_q16,
+        })
+    }
+}
+
 const BACKGROUND: Rgb565Pixel = rgb565(0x10, 0x14, 0x20);
 const PANEL: Rgb565Pixel = rgb565(0x18, 0x18, 0x29);
 const PANEL_ALT: Rgb565Pixel = rgb565(0x21, 0x20, 0x35);
@@ -94,6 +173,7 @@ struct Column {
 }
 
 pub struct CardFlip {
+    geometry: CardGeometry,
     duration: Duration,
     progress_q16: u16,
     start_progress_q16: u16,
@@ -119,6 +199,7 @@ impl CardFlip {
     #[must_use]
     pub fn new(raster_path: RasterPath) -> Self {
         Self {
+            geometry: CardGeometry::reference(),
             duration: DEFAULT_DURATION,
             progress_q16: 0,
             start_progress_q16: 0,
@@ -133,6 +214,11 @@ impl CardFlip {
             columns: [Column::default(); WIDTH],
             device_initialized: false,
         }
+    }
+
+    #[must_use]
+    pub const fn geometry(&self) -> CardGeometry {
+        self.geometry
     }
 
     pub fn set_duration(&mut self, duration: Duration) {
@@ -730,6 +816,41 @@ const fn rgb565(red: u8, green: u8, blue: u8) -> Rgb565Pixel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geometry_tracks_resolved_render_height() {
+        assert_eq!(
+            CardGeometry::for_surface(960, 600).unwrap(),
+            CardGeometry {
+                surface_width: 960,
+                surface_height: 600,
+                card_x: 336,
+                card_y: 90,
+                card_width: 287,
+                card_height: 420,
+                camera: 512,
+                spine_width: 14,
+                source_x_scale_q16: 58_890,
+                source_y_scale_q16: 58_966,
+            }
+        );
+        let crt = CardGeometry::for_surface(640, 480).unwrap();
+        assert_eq!(
+            (crt.card_x, crt.card_y, crt.card_width, crt.card_height),
+            (205, 72, 229, 336)
+        );
+        assert_eq!(
+            CardGeometry::for_surface(WIDTH, HEIGHT).unwrap(),
+            CardGeometry::reference()
+        );
+    }
+
+    #[test]
+    fn geometry_rejects_invalid_surfaces() {
+        assert!(CardGeometry::for_surface(0, 600).is_err());
+        assert!(CardGeometry::for_surface(960, 0).is_err());
+        assert!(CardGeometry::for_surface(4, 4).is_err());
+    }
 
     fn frame(scene: &mut CardFlip, at: Duration) -> Vec<Rgb565Pixel> {
         let mut pixels = vec![BACKGROUND; WIDTH * HEIGHT];
