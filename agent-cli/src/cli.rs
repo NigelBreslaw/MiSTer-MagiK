@@ -467,6 +467,18 @@ mod tests {
                 "scene-lab",
                 "--scene",
                 "card-flip",
+                "--assess",
+                "--attended",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "device",
+                "scene-lab",
+                "--scene",
+                "card-flip",
                 "--profile",
                 "--attended",
             ])

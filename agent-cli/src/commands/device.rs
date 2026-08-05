@@ -223,6 +223,8 @@ pub struct SceneLabArgs {
     pub(crate) case: Option<String>,
     #[arg(long)]
     pub(crate) profile: bool,
+    #[arg(long)]
+    pub(crate) assess: bool,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -327,7 +329,11 @@ pub fn run_startup_particles(
     device.mutate(|device| device.run_startup_particles(binary, &args.recipe, args.runtime))
 }
 
-pub fn run_scene_lab(args: &SceneLabArgs, binary: &Path) -> AgentResult<()> {
+pub fn run_scene_lab(
+    args: &SceneLabArgs,
+    binary: &Path,
+    output_dir: Option<&Path>,
+) -> AgentResult<()> {
     let mut device = crate::device::DeviceClient::default();
     device.mutate(|device| {
         device.run_scene_lab(
@@ -337,6 +343,8 @@ pub fn run_scene_lab(args: &SceneLabArgs, binary: &Path) -> AgentResult<()> {
             args.fixture.as_deref(),
             args.case.as_deref(),
             args.profile,
+            args.assess,
+            output_dir,
         )
     })
 }

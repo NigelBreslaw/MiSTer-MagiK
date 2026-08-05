@@ -15,7 +15,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const LAB_DIR: &str = "apps/framebuffer-scene-lab";
@@ -354,13 +354,32 @@ pub fn execute_scene_device(
     if args.profile && args.scene != DeviceSceneLabScene::CardFlip && args.case.is_none() {
         return Err("scene-lab --profile requires card-flip or a closed cabinet --case".into());
     }
-    let spec = if args.profile {
+    if args.assess && args.scene != DeviceSceneLabScene::CardFlip {
+        return Err("scene-lab --assess requires card-flip".into());
+    }
+    if args.assess && args.profile {
+        return Err("scene-lab --assess cannot be combined with --profile".into());
+    }
+    let spec = if args.profile && !args.assess {
         BuildSpec::framebuffer_scene_lab_analysis()
     } else {
         BuildSpec::framebuffer_scene_lab_device()
     };
     execute(repository, &spec, reporter)?;
-    crate::commands::device::run_scene_lab(args, &repository.join(spec.artifact()))
+    let output_dir = args.assess.then(|| {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after Unix epoch")
+            .as_secs();
+        repository
+            .join("build/scene-lab/card-flip")
+            .join(timestamp.to_string())
+    });
+    crate::commands::device::run_scene_lab(
+        args,
+        &repository.join(spec.artifact()),
+        output_dir.as_deref(),
+    )
 }
 
 fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {

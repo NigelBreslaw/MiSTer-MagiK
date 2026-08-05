@@ -37,6 +37,31 @@ const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CardAssessmentPass {
+    Cadence,
+    Profile,
+}
+
+impl CardAssessmentPass {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Cadence => "cadence",
+            Self::Profile => "profile",
+        }
+    }
+
+    const fn profiler_enabled(self) -> bool {
+        matches!(self, Self::Profile)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CardAssessment {
+    pass: CardAssessmentPass,
+    evidence_dir: PathBuf,
+}
+
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 struct PendingCardEvidence {
     frame: CardFlipFrameEvidence,
@@ -101,6 +126,61 @@ fn finish_card_evidence(
     pending.frame
 }
 
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn write_card_assessment_evidence(
+    assessment: &CardAssessment,
+    frames: &[CardFlipFrameEvidence],
+    cadence: &card_assessment::CardFlipCadenceSummary,
+    plan: mister_magik_core::display::ResolvedDisplayPlan,
+    geometry: card_flip::CardGeometry,
+    process_cpu_pct: f64,
+) -> Result<(), String> {
+    std::fs::create_dir_all(&assessment.evidence_dir).map_err(|error| {
+        format!(
+            "create card assessment directory {}: {error}",
+            assessment.evidence_dir.display()
+        )
+    })?;
+    let frames_path = assessment.evidence_dir.join("frames.jsonl");
+    let mut frame_bytes = Vec::with_capacity(frames.len().saturating_mul(768));
+    for frame in frames {
+        serde_json::to_writer(&mut frame_bytes, frame).map_err(|error| error.to_string())?;
+        frame_bytes.push(b'\n');
+    }
+    std::fs::write(&frames_path, frame_bytes)
+        .map_err(|error| format!("write {}: {error}", frames_path.display()))?;
+    let summary = serde_json::json!({
+        "schema": "mister-magik-card-flip-assessment-pass-v1",
+        "pass": assessment.pass.label(),
+        "profiler_enabled": assessment.pass.profiler_enabled(),
+        "process_cpu_pct_of_one_core": process_cpu_pct,
+        "display": {
+            "render_w": plan.render_w,
+            "render_h": plan.render_h,
+            "framebuffer_w": plan.fb_w,
+            "framebuffer_h": plan.fb_h,
+            "scan_w": plan.scan_w,
+            "scan_h": plan.scan_h,
+            "output_w": plan.output_w,
+            "output_h": plan.output_h,
+            "route": plan.output_route.label(),
+        },
+        "card": {
+            "x": geometry.card_x,
+            "y": geometry.card_y,
+            "width": geometry.card_width,
+            "height": geometry.card_height,
+        },
+        "cadence": cadence,
+    });
+    let summary_path = assessment.evidence_dir.join("summary.json");
+    let mut summary_bytes =
+        serde_json::to_vec_pretty(&summary).map_err(|error| error.to_string())?;
+    summary_bytes.push(b'\n');
+    std::fs::write(&summary_path, summary_bytes)
+        .map_err(|error| format!("write {}: {error}", summary_path.display()))
+}
+
 fn main() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
     if options.scene == EffectKind::CardFlip {
@@ -121,7 +201,12 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(SceneSource::CardFlip(duration), None, options.profile);
+        return run_window(
+            SceneSource::CardFlip(duration),
+            None,
+            options.profile,
+            options.card_assessment(),
+        );
     }
     if options.scene == EffectKind::NavigationTransition {
         let fixture = options
@@ -145,7 +230,7 @@ fn main() -> Result<(), String> {
                 output,
             );
         }
-        return run_window(SceneSource::Navigation(fixture), None, false);
+        return run_window(SceneSource::Navigation(fixture), None, false, None);
     }
     let recipe_path = options
         .recipe
@@ -180,6 +265,7 @@ fn main() -> Result<(), String> {
         SceneSource::Particle(recipe_path.to_path_buf()),
         options.case,
         options.profile,
+        None,
     )
 }
 
@@ -1035,6 +1121,7 @@ fn run_window(
     source: SceneSource,
     case: Option<CabinetCase>,
     _profile: bool,
+    _card_assessment: Option<CardAssessment>,
 ) -> Result<(), String> {
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
@@ -1046,7 +1133,12 @@ fn run_window(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_window(source: SceneSource, case: Option<CabinetCase>, profile: bool) -> Result<(), String> {
+fn run_window(
+    source: SceneSource,
+    case: Option<CabinetCase>,
+    profile: bool,
+    card_assessment: Option<CardAssessment>,
+) -> Result<(), String> {
     use mister_magik_mister_runtime::display_plan::detect_runtime_display_plan;
     use mister_magik_mister_runtime::fpga::Fpga;
     use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
@@ -1061,7 +1153,7 @@ fn run_window(source: SceneSource, case: Option<CabinetCase>, profile: bool) -> 
     drop(fpga);
     let plan = runtime.plan;
     if let SceneSource::CardFlip(duration) = &source {
-        return run_card_flip_mister(*duration, plan, profile);
+        return run_card_flip_mister(*duration, plan, profile, card_assessment);
     }
     let mut renderer = LabScene::start(source, case, plan.render_w, plan.render_h)?;
     let mut controls =
@@ -1322,6 +1414,7 @@ fn run_card_flip_mister(
     duration: Duration,
     plan: mister_magik_core::display::ResolvedDisplayPlan,
     profile: bool,
+    assessment: Option<CardAssessment>,
 ) -> Result<(), String> {
     use mister_magik_mister_runtime::framebuffer::damage::{DirtyRect, DirtyRectList};
     use mister_magik_mister_runtime::framebuffer::hidden_latch::CachedHiddenLatchPresenter;
@@ -1378,18 +1471,29 @@ fn run_card_flip_mister(
     let mut profile_full_slot_restores = 0_u64;
     let mut profile_frame_evidence = Vec::with_capacity(2048);
     let mut pending_card_evidence: Option<PendingCardEvidence> = None;
+    let assessment_active = assessment.is_some();
+    let profiler_requested = profile
+        || assessment
+            .as_ref()
+            .is_some_and(|assessment| assessment.pass.profiler_enabled());
+    let bounded_run = profile || assessment_active;
+    let mut measurement_started = profile.then_some(started);
+    let mut measurement_cpu_started = profile_cpu_started;
+    let mut warmup_full_slot_restores = 0_u64;
+    let mut warmup_last_flip_count = None;
+    let mut warmup_unit_flip_streak = 0_u8;
     let mut automatic_direction = CardFlipDirection::Reverse;
     let mut next_automatic_flip = duration;
-    if profile {
+    if bounded_run {
         renderer.play(CardFlipDirection::Forward, Duration::ZERO);
     }
     #[cfg(feature = "profile")]
-    let profiler = profile
+    let mut profiler = profile
         .then(|| cpu_profile::start(cpu_profile::CpuProfileScene::CardFlip))
         .transpose()?;
     #[cfg(not(feature = "profile"))]
-    if profile {
-        return Err("card flip profiling requires a release-device-profile build".into());
+    if profiler_requested {
+        return Err("card flip profiling requires a profiled-capable device build".into());
     }
 
     println!(
@@ -1433,6 +1537,51 @@ fn run_card_flip_mister(
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
+            if assessment_active && measurement_started.is_none() {
+                let flip_delta = warmup_last_flip_count
+                    .map(|previous: u16| receipt.flip_count.wrapping_sub(previous))
+                    .unwrap_or(0);
+                warmup_last_flip_count = Some(receipt.flip_count);
+                warmup_unit_flip_streak = if flip_delta == 1 {
+                    warmup_unit_flip_streak.saturating_add(1)
+                } else {
+                    0
+                };
+                if warmup_full_slot_restores >= 2 && warmup_unit_flip_streak >= 3 {
+                    let measured_at = Instant::now();
+                    measurement_started = Some(measured_at);
+                    measurement_cpu_started = process_cpu_time();
+                    profile_frame_to_present_samples_us.clear();
+                    profile_render_samples_us.clear();
+                    profile_transfer_samples_us.clear();
+                    profile_present_samples_us.clear();
+                    profile_frame_evidence.clear();
+                    profile_frames = 0;
+                    profile_repeated_presentations = 0;
+                    profile_transfer_source_rects = 0;
+                    profile_transfer_destination_rects = 0;
+                    profile_transfer_source_bytes = 0;
+                    profile_transfer_destination_bytes = 0;
+                    profile_full_slot_restores = 0;
+                    #[cfg(feature = "profile")]
+                    if profiler_requested {
+                        profiler =
+                            Some(cpu_profile::start(cpu_profile::CpuProfileScene::CardFlip)?);
+                    }
+                    println!(
+                        "card-flip-assessment pass={} state=measuring warmup_full_slot_restores={} warmup_unit_flip_streak={}",
+                        assessment
+                            .as_ref()
+                            .expect("active assessment has configuration")
+                            .pass
+                            .label(),
+                        warmup_full_slot_restores,
+                        warmup_unit_flip_streak,
+                    );
+                    status_started = measured_at;
+                    cpu_started = measurement_cpu_started;
+                }
+            }
             if let Some(pending) = pending_card_evidence.take() {
                 let evidence = finish_card_evidence(
                     pending,
@@ -1452,7 +1601,7 @@ fn run_card_flip_mister(
             renderer.play(direction, elapsed);
             next_frame = Instant::now();
         }
-        if profile && elapsed >= next_automatic_flip {
+        if bounded_run && elapsed >= next_automatic_flip {
             renderer.play(automatic_direction, elapsed);
             automatic_direction = match automatic_direction {
                 CardFlipDirection::Forward => CardFlipDirection::Reverse,
@@ -1503,9 +1652,14 @@ fn run_card_flip_mister(
                 pending_frame_started = Some(frame_started);
                 pending_present_started = Some(present_started);
                 debug_assert_eq!(post.slot_index, copy.slot_index);
-                if profile {
-                    let mut evidence =
-                        CardFlipFrameEvidence::new(profile_frames.saturating_add(1), true);
+                if assessment_active && measurement_started.is_none() && copy.full_restore {
+                    warmup_full_slot_restores = warmup_full_slot_restores.saturating_add(1);
+                }
+                if measurement_started.is_some() {
+                    let mut evidence = CardFlipFrameEvidence::new(
+                        profile_frame_evidence.len() as u64 + 1,
+                        profiler_requested,
+                    );
                     evidence.progress_q16 = stats.progress_q16;
                     evidence.face = if stats.progress_q16 < u16::MAX / 2 {
                         "front"
@@ -1535,8 +1689,6 @@ fn run_card_flip_mister(
                 rendered_frames = rendered_frames.saturating_add(1);
                 render_samples_us.push(render_us);
                 transfer_samples_us.push(transfer_us);
-                profile_render_samples_us.push(render_us);
-                profile_transfer_samples_us.push(transfer_us);
                 transfer_source_rects =
                     transfer_source_rects.saturating_add(u64::from(copy.source_rect_count));
                 transfer_destination_rects = transfer_destination_rects
@@ -1547,17 +1699,21 @@ fn run_card_flip_mister(
                     transfer_destination_bytes.saturating_add(copy.destination_bytes as u64);
                 full_slot_restores =
                     full_slot_restores.saturating_add(u64::from(copy.full_restore));
-                profile_transfer_source_rects =
-                    profile_transfer_source_rects.saturating_add(u64::from(copy.source_rect_count));
-                profile_transfer_destination_rects = profile_transfer_destination_rects
-                    .saturating_add(u64::from(copy.destination_rect_count));
-                profile_transfer_source_bytes =
-                    profile_transfer_source_bytes.saturating_add(copy.source_bytes as u64);
-                profile_transfer_destination_bytes = profile_transfer_destination_bytes
-                    .saturating_add(copy.destination_bytes as u64);
-                profile_full_slot_restores =
-                    profile_full_slot_restores.saturating_add(u64::from(copy.full_restore));
-                profile_frames = profile_frames.saturating_add(1);
+                if measurement_started.is_some() {
+                    profile_render_samples_us.push(render_us);
+                    profile_transfer_samples_us.push(transfer_us);
+                    profile_transfer_source_rects = profile_transfer_source_rects
+                        .saturating_add(u64::from(copy.source_rect_count));
+                    profile_transfer_destination_rects = profile_transfer_destination_rects
+                        .saturating_add(u64::from(copy.destination_rect_count));
+                    profile_transfer_source_bytes =
+                        profile_transfer_source_bytes.saturating_add(copy.source_bytes as u64);
+                    profile_transfer_destination_bytes = profile_transfer_destination_bytes
+                        .saturating_add(copy.destination_bytes as u64);
+                    profile_full_slot_restores =
+                        profile_full_slot_restores.saturating_add(u64::from(copy.full_restore));
+                    profile_frames = profile_frames.saturating_add(1);
+                }
             }
             next_frame += FRAME_DURATION;
             if next_frame <= Instant::now() {
@@ -1623,7 +1779,10 @@ fn run_card_flip_mister(
             repeated_presentations = 0;
         }
 
-        if profile && started.elapsed() >= CARD_FLIP_PROFILE_DURATION {
+        if bounded_run
+            && measurement_started
+                .is_some_and(|started| started.elapsed() >= CARD_FLIP_PROFILE_DURATION)
+        {
             let settle_started = Instant::now();
             let settle_cpu_started = process_cpu_time();
             let settled = presenter
@@ -1660,12 +1819,18 @@ fn run_card_flip_mister(
                     profile_frame_evidence.push(evidence);
                 }
             }
-            let seconds = started.elapsed().as_secs_f64();
+            let measured_started = measurement_started
+                .expect("bounded card run completes only after measurement begins");
+            let seconds = measured_started.elapsed().as_secs_f64();
             let cpu_percent = process_cpu_time()
-                .saturating_sub(profile_cpu_started)
+                .saturating_sub(measurement_cpu_started)
                 .as_secs_f64()
                 / seconds
                 * 100.0;
+            #[cfg(feature = "profile")]
+            if let Some(active_profiler) = profiler.take() {
+                cpu_profile::finish(active_profiler)?;
+            }
             let (frame_to_present_average_us, frame_to_present_p99_us, frame_to_present_max_us) =
                 sample_summary(&mut profile_frame_to_present_samples_us);
             let (render_average_us, render_p99_us, render_max_us) =
@@ -1728,9 +1893,20 @@ fn run_card_flip_mister(
                 cadence.max_completion_interval_us,
                 cadence.unique_fps,
             );
-            #[cfg(feature = "profile")]
-            if let Some(profiler) = profiler {
-                cpu_profile::finish(profiler)?;
+            if let Some(assessment) = assessment.as_ref() {
+                write_card_assessment_evidence(
+                    assessment,
+                    &profile_frame_evidence,
+                    &cadence,
+                    plan,
+                    geometry,
+                    cpu_percent,
+                )?;
+                println!(
+                    "card-flip-assessment pass={} state=complete evidence_dir={}",
+                    assessment.pass.label(),
+                    assessment.evidence_dir.display(),
+                );
             }
             return Ok(());
         }
@@ -1806,6 +1982,7 @@ fn run_window(
     _source: SceneSource,
     _case: Option<CabinetCase>,
     _profile: bool,
+    _card_assessment: Option<CardAssessment>,
 ) -> Result<(), String> {
     Err("interactive startup particle preview requires macOS or ARM MiSTer".into())
 }
@@ -1819,6 +1996,8 @@ struct Options {
     check: bool,
     case: Option<CabinetCase>,
     profile: bool,
+    assessment_pass: Option<CardAssessmentPass>,
+    evidence_dir: Option<PathBuf>,
     duration_ms: Option<u64>,
     direction: CardFlipDirection,
     direction_requested: bool,
@@ -1834,6 +2013,8 @@ impl Options {
         let mut check = false;
         let mut case = None;
         let mut profile = false;
+        let mut assessment_pass = None;
+        let mut evidence_dir = None;
         let mut duration_ms = None;
         let mut direction = CardFlipDirection::Forward;
         let mut direction_requested = false;
@@ -1878,6 +2059,21 @@ impl Options {
                     })?);
                 }
                 "--profile" => profile = true,
+                "--assessment-pass" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--assessment-pass requires cadence or profile")?;
+                    assessment_pass = Some(match value.as_str() {
+                        "cadence" => CardAssessmentPass::Cadence,
+                        "profile" => CardAssessmentPass::Profile,
+                        _ => {
+                            return Err(format!(
+                                "invalid assessment pass {value:?}; expected cadence or profile"
+                            ));
+                        }
+                    });
+                }
+                "--evidence-dir" => evidence_dir = arguments.next().map(PathBuf::from),
                 "--duration-ms" => {
                     let value = arguments
                         .next()
@@ -1922,6 +2118,8 @@ impl Options {
             check,
             case,
             profile,
+            assessment_pass,
+            evidence_dir,
             duration_ms,
             direction,
             direction_requested,
@@ -1944,6 +2142,21 @@ impl Options {
         }
         if self.profile && self.case.is_none() && self.scene != EffectKind::CardFlip {
             return Err("--profile requires card-flip or a closed cabinet --case".into());
+        }
+        if self.assessment_pass.is_some() != self.evidence_dir.is_some() {
+            return Err(
+                "card assessment requires both --assessment-pass and --evidence-dir".into(),
+            );
+        }
+        if self.assessment_pass.is_some()
+            && (self.scene != EffectKind::CardFlip
+                || self.profile
+                || self.check
+                || self.output.is_some())
+        {
+            return Err(
+                "--assessment-pass requires an interactive card-flip run without --profile".into(),
+            );
         }
         if self.scene != EffectKind::CardFlip
             && (self.duration_ms.is_some() || self.direction_requested)
@@ -1984,10 +2197,20 @@ impl Options {
     fn card_duration(&self) -> Duration {
         Duration::from_millis(self.duration_ms.unwrap_or(440))
     }
+
+    fn card_assessment(&self) -> Option<CardAssessment> {
+        self.assessment_pass.map(|pass| CardAssessment {
+            pass,
+            evidence_dir: self
+                .evidence_dir
+                .clone()
+                .expect("option validation pairs assessment pass and evidence directory"),
+        })
+    }
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene card-flip --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn status_path(recipe: &Path) -> PathBuf {
@@ -2538,6 +2761,25 @@ mod tests {
         .unwrap();
         assert_eq!(card.direction, CardFlipDirection::Reverse);
         assert_eq!(card.card_duration(), Duration::from_millis(600));
+
+        let assessment = Options::parse(
+            [
+                "--scene",
+                "card-flip",
+                "--assessment-pass",
+                "cadence",
+                "--evidence-dir",
+                "/tmp/card-assessment",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        let assessment = assessment.card_assessment().unwrap();
+        assert_eq!(assessment.pass, CardAssessmentPass::Cadence);
+        assert_eq!(
+            assessment.evidence_dir,
+            PathBuf::from("/tmp/card-assessment")
+        );
     }
 
     #[test]
@@ -2553,6 +2795,27 @@ mod tests {
                     "x.ppm",
                 ]
                 .map(String::from),
+            )
+            .is_err()
+        );
+        assert!(
+            Options::parse(
+                ["--scene", "card-flip", "--assessment-pass", "profile"].map(String::from)
+            )
+            .is_err()
+        );
+        assert!(
+            Options::parse(
+                [
+                    "--scene",
+                    "card-flip",
+                    "--assessment-pass",
+                    "profile",
+                    "--evidence-dir",
+                    "/tmp/card-assessment",
+                    "--profile",
+                ]
+                .map(String::from)
             )
             .is_err()
         );
