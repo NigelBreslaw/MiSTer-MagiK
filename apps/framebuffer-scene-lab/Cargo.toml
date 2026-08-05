@@ -29,7 +29,7 @@ mister-magik-catalog = { path = "../../crates/catalog", default-features = false
 mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
 mister-magik-core = { path = "../../crates/magik-core" }
 mister-magik-particles = { path = "../../crates/particles" }
-mister-magik-screenshot-parade = { path = "../../crates/screenshot-parade" }
+mister-magik-screenshot-parade = { path = "../../crates/screenshot-parade", features = ["neon-phase-lab"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = { version = "0.18.1", optional = true }

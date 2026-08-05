@@ -3,12 +3,14 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=src/card_flip_neon.c");
+    println!("cargo:rerun-if-changed=src/screenshot_phase_neon.c");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("arm") {
         return;
     }
 
     cc::Build::new()
         .file("src/card_flip_neon.c")
+        .file("src/screenshot_phase_neon.c")
         .flag("-std=c11")
         .flag("-O3")
         .flag("-mtune=cortex-a9")

@@ -1022,7 +1022,7 @@ fn reconstruct_linear_phase_neon_if_selected(
     if !matches!(kernel, LinearPhaseKernel::Neon) {
         return None;
     }
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
     {
         let mut output = vec![[0_u16; 4]; output_width * height];
         // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Both slices describe
@@ -1039,7 +1039,7 @@ fn reconstruct_linear_phase_neon_if_selected(
         }
         return Some(output);
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    #[cfg(not(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab")))]
     {
         let _ = (source, source_width, height, output_width, weights);
         None
@@ -1047,7 +1047,7 @@ fn reconstruct_linear_phase_neon_if_selected(
 }
 
 fn validate_neon_phase_kernel() {
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
     {
         use std::sync::OnceLock;
 
@@ -1104,8 +1104,7 @@ fn validate_neon_phase_kernel() {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-#[target_feature(enable = "neon")]
+#[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
 unsafe fn reconstruct_linear_phase_neon(
     source: &[[u16; 4]],
     source_width: usize,
@@ -1114,50 +1113,28 @@ unsafe fn reconstruct_linear_phase_neon(
     weights: [i32; 6],
     output: &mut [[u16; 4]],
 ) {
-    use core::arch::arm::{
-        int32x4_t, uint16x4_t, vdup_n_u16, vdupq_n_s32, vld1_u16, vmax_u16, vmin_u16, vmlaq_n_s32,
-        vmovl_u16, vreinterpretq_s32_u32, vst1_s32, vst1_u16,
-    };
+    unsafe extern "C" {
+        fn mister_magik_screenshot_phase_neon(
+            source: *const u16,
+            source_width: usize,
+            height: usize,
+            output_width: usize,
+            weights: *const i32,
+            output: *mut u16,
+        );
+    }
 
-    // The largest possible sum of absolute six-tap weights is 25,288,
-    // keeping every 16-bit sample accumulation within signed 32-bit range.
-    for y in 0..height {
-        for out_x in 0..output_width {
-            let mut sums: int32x4_t = unsafe { vdupq_n_s32(0) };
-            let mut minima: uint16x4_t = unsafe { vdup_n_u16(u16::MAX) };
-            let mut maxima: uint16x4_t = unsafe { vdup_n_u16(0) };
-            for (tap, weight) in weights.into_iter().enumerate() {
-                let source_x = out_x as isize + tap as isize - 3;
-                let sample = if (0..source_width as isize).contains(&source_x) {
-                    &source[y * source_width + source_x as usize]
-                } else {
-                    &[0_u16; 4]
-                };
-                // SAFETY: sample always refers to an in-bounds four-lane array.
-                let values = unsafe { vld1_u16(sample.as_ptr()) };
-                minima = unsafe { vmin_u16(minima, values) };
-                maxima = unsafe { vmax_u16(maxima, values) };
-                let wide = unsafe { vreinterpretq_s32_u32(vmovl_u16(values)) };
-                sums = unsafe { vmlaq_n_s32(sums, wide, weight) };
-            }
-            let mut sum_lanes = [0_i32; 4];
-            let mut minimum_lanes = [0_u16; 4];
-            let mut maximum_lanes = [0_u16; 4];
-            // SAFETY: each destination has exactly the lane count written.
-            unsafe {
-                vst1_s32(sum_lanes.as_mut_ptr(), sums);
-                vst1_u16(minimum_lanes.as_mut_ptr(), minima);
-                vst1_u16(maximum_lanes.as_mut_ptr(), maxima);
-            }
-            output[y * output_width + out_x] = std::array::from_fn(|channel| {
-                let value =
-                    (i64::from(sum_lanes[channel]) + i64::from(LANCZOS_WEIGHT_ONE / 2)) >> 14;
-                value.clamp(
-                    i64::from(minimum_lanes[channel]),
-                    i64::from(maximum_lanes[channel]),
-                ) as u16
-            });
-        }
+    // SAFETY: callers provide complete, non-overlapping source and output
+    // planes. The C kernel reads six weights and writes four lanes per output.
+    unsafe {
+        mister_magik_screenshot_phase_neon(
+            source.as_ptr().cast(),
+            source_width,
+            height,
+            output_width,
+            weights.as_ptr(),
+            output.as_mut_ptr().cast(),
+        );
     }
 }
 
