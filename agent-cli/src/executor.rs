@@ -14,6 +14,24 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 const VALIDATION_CACHE_SCHEMA: &str = "planner-schema-3";
+const GIT_LOCAL_ENVIRONMENT: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
 
 pub fn execute(
     evidence: &Evidence,
@@ -655,6 +673,7 @@ fn run_attempt(
         .args(args)
         .current_dir(repository)
         .env("MISTER_AGENT_PARENT_REQUEST_ID", request_id);
+    scrub_git_local_environment(&mut command);
     if attempt == "network-fallback" {
         command.env("CARGO_NET_RETRY", "0");
     }
@@ -684,6 +703,12 @@ fn run_attempt(
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
     Ok(status)
+}
+
+fn scrub_git_local_environment(command: &mut Command) {
+    for variable in GIT_LOCAL_ENVIRONMENT {
+        command.env_remove(variable);
+    }
 }
 
 fn is_cargo_dependency_operation(operation: &Operation) -> bool {
@@ -858,6 +883,22 @@ mod tests {
             inputs: vec!["fixture".into()],
             builtin: None,
         }
+    }
+
+    #[test]
+    fn validation_children_do_not_inherit_hook_repository_identity() {
+        let mut command = Command::new("fixture");
+        for variable in GIT_LOCAL_ENVIRONMENT {
+            command.env(variable, "inherited-from-hook");
+        }
+        scrub_git_local_environment(&mut command);
+        let removed = command
+            .get_envs()
+            .filter_map(|(name, value)| value.is_none().then_some(name))
+            .collect::<Vec<_>>();
+        assert_eq!(removed.len(), GIT_LOCAL_ENVIRONMENT.len());
+        assert!(removed.contains(&std::ffi::OsStr::new("GIT_DIR")));
+        assert!(removed.contains(&std::ffi::OsStr::new("GIT_WORK_TREE")));
     }
 
     fn fake_cargo(script: &str) -> (std::path::PathBuf, std::path::PathBuf) {
