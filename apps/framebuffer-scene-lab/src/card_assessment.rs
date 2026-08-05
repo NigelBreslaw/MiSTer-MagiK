@@ -1,21 +1,19 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Bounded card-flip frame evidence and physical-refresh accounting.
+//! Scene-neutral bounded frame evidence and physical-refresh accounting.
 
 use serde::Serialize;
 
-pub const CARD_FLIP_EVIDENCE_SCHEMA: &str = "mister-magik-card-flip-frame-v1";
-pub const CARD_FLIP_CADENCE_SCHEMA: &str = "mister-magik-card-flip-cadence-v1";
+pub const FRAME_EVIDENCE_SCHEMA: &str = "mister-magik-scene-lab-frame-v1";
+pub const CADENCE_SCHEMA: &str = "mister-magik-scene-lab-cadence-v1";
 
 #[derive(Clone, Debug, Serialize)]
-pub struct CardFlipFrameEvidence {
+pub struct FrameEvidence {
     pub schema: &'static str,
+    pub scene: &'static str,
     pub frame: u64,
     pub profiler_enabled: bool,
-    pub progress_q16: u16,
-    pub face: &'static str,
-    pub direction: &'static str,
     pub render_wall_us: u64,
     pub render_cpu_us: u64,
     pub transfer_wall_us: u64,
@@ -45,18 +43,27 @@ pub struct CardFlipFrameEvidence {
     pub source_bytes: usize,
     pub destination_bytes: usize,
     pub full_restore: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visible_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub card: Option<CardFrameDetails>,
 }
 
-impl CardFlipFrameEvidence {
+#[derive(Clone, Debug, Serialize)]
+pub struct CardFrameDetails {
+    pub progress_q16: u16,
+    pub face: &'static str,
+    pub direction: &'static str,
+}
+
+impl FrameEvidence {
     #[must_use]
-    pub const fn new(frame: u64, profiler_enabled: bool) -> Self {
+    pub const fn new(scene: &'static str, frame: u64, profiler_enabled: bool) -> Self {
         Self {
-            schema: CARD_FLIP_EVIDENCE_SCHEMA,
+            schema: FRAME_EVIDENCE_SCHEMA,
+            scene,
             frame,
             profiler_enabled,
-            progress_q16: 0,
-            face: "front",
-            direction: "forward",
             render_wall_us: 0,
             render_cpu_us: 0,
             transfer_wall_us: 0,
@@ -86,12 +93,14 @@ impl CardFlipFrameEvidence {
             source_bytes: 0,
             destination_bytes: 0,
             full_restore: false,
+            visible_count: None,
+            card: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct CardFlipCadenceSummary {
+pub struct CadenceSummary {
     pub schema: &'static str,
     pub profiler_enabled: bool,
     pub refresh_period_us: u64,
@@ -111,15 +120,15 @@ pub struct CardFlipCadenceSummary {
 }
 
 pub fn summarize_cadence(
-    frames: &[CardFlipFrameEvidence],
+    frames: &[FrameEvidence],
     refresh_period_us: u64,
     refresh_period_source: &'static str,
-) -> Result<CardFlipCadenceSummary, String> {
+) -> Result<CadenceSummary, String> {
     if refresh_period_us == 0 {
-        return Err("card cadence refresh period must be non-zero".into());
+        return Err("scene cadence refresh period must be non-zero".into());
     }
     if frames.len() < 2 {
-        return Err("card cadence requires at least two confirmed frames".into());
+        return Err("scene cadence requires at least two confirmed frames".into());
     }
     let first = frames
         .first()
@@ -132,13 +141,13 @@ pub fn summarize_cadence(
         .iter()
         .any(|frame| frame.profiler_enabled != profiler_enabled)
     {
-        return Err("card cadence cannot mix sampled and unsampled frames".into());
+        return Err("scene cadence cannot mix sampled and unsampled frames".into());
     }
     let elapsed_us = last
         .completion_monotonic_us
         .checked_sub(first.completion_monotonic_us)
         .filter(|elapsed| *elapsed > 0)
-        .ok_or("card cadence completion timestamps are not increasing")?;
+        .ok_or("scene cadence completion timestamps are not increasing")?;
 
     let mut expected_refresh_intervals = 0_u64;
     let mut unique_latch_flips = 0_u64;
@@ -159,7 +168,7 @@ pub fn summarize_cadence(
             .filter(|interval| *interval > 0)
             .ok_or_else(|| {
                 format!(
-                    "card cadence frame {} has a non-increasing completion timestamp",
+                    "scene cadence frame {} has a non-increasing completion timestamp",
                     current.frame
                 )
             })?;
@@ -187,8 +196,8 @@ pub fn summarize_cadence(
         max_completion_interval_us = max_completion_interval_us.max(interval_us);
     }
 
-    Ok(CardFlipCadenceSummary {
-        schema: CARD_FLIP_CADENCE_SCHEMA,
+    Ok(CadenceSummary {
+        schema: CADENCE_SCHEMA,
         profiler_enabled,
         refresh_period_us,
         refresh_period_source,
@@ -216,8 +225,8 @@ const fn next_sequence(sequence: u16) -> u16 {
 mod tests {
     use super::*;
 
-    fn frame(id: u64, completion_us: u64, sequence: u16, flips: u16) -> CardFlipFrameEvidence {
-        let mut frame = CardFlipFrameEvidence::new(id, false);
+    fn frame(id: u64, completion_us: u64, sequence: u16, flips: u16) -> FrameEvidence {
+        let mut frame = FrameEvidence::new("test", id, false);
         frame.completion_monotonic_us = completion_us;
         frame.sequence = sequence;
         frame.flip_count = flips;

@@ -7,7 +7,7 @@ mod card_flip;
 mod card_flip_neon;
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-use card_assessment::{CardFlipFrameEvidence, summarize_cadence};
+use card_assessment::{CardFrameDetails, FrameEvidence, summarize_cadence};
 use card_flip::{CardFlip, Direction as CardFlipDirection, RasterPath as CardFlipRasterPath};
 #[cfg(any(target_os = "linux", test))]
 use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
@@ -77,7 +77,7 @@ struct CardAssessment {
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 struct PendingCardEvidence {
-    frame: CardFlipFrameEvidence,
+    frame: FrameEvidence,
     frame_started: std::time::Instant,
     frame_cpu_started: Duration,
     post_completed: std::time::Instant,
@@ -92,8 +92,8 @@ fn finish_card_evidence(
     pipeline_after: mister_magik_mister_runtime::framebuffer::hidden_latch::HiddenLatchPipelineStats,
     settle_wall_us: u64,
     settle_cpu_us: u64,
-    previous: Option<&CardFlipFrameEvidence>,
-) -> CardFlipFrameEvidence {
+    previous: Option<&FrameEvidence>,
+) -> FrameEvidence {
     let completed_at = std::time::Instant::now();
     pending.frame.settle_wall_us = settle_wall_us;
     pending.frame.settle_cpu_us = settle_cpu_us;
@@ -142,8 +142,8 @@ fn finish_card_evidence(
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn write_card_assessment_evidence(
     assessment: &CardAssessment,
-    frames: &[CardFlipFrameEvidence],
-    cadence: &card_assessment::CardFlipCadenceSummary,
+    frames: &[FrameEvidence],
+    cadence: &card_assessment::CadenceSummary,
     plan: mister_magik_core::display::ResolvedDisplayPlan,
     geometry: card_flip::CardGeometry,
     process_cpu_pct: f64,
@@ -1917,17 +1917,20 @@ fn run_card_flip_mister(
                     warmup_full_slot_restores = warmup_full_slot_restores.saturating_add(1);
                 }
                 if measurement_started.is_some() {
-                    let mut evidence = CardFlipFrameEvidence::new(
+                    let mut evidence = FrameEvidence::new(
+                        "card-flip",
                         profile_frame_evidence.len() as u64 + 1,
                         profiler_requested,
                     );
-                    evidence.progress_q16 = stats.progress_q16;
-                    evidence.face = if stats.progress_q16 < u16::MAX / 2 {
-                        "front"
-                    } else {
-                        "back"
-                    };
-                    evidence.direction = stats.direction.label();
+                    evidence.card = Some(CardFrameDetails {
+                        progress_q16: stats.progress_q16,
+                        face: if stats.progress_q16 < u16::MAX / 2 {
+                            "front"
+                        } else {
+                            "back"
+                        },
+                        direction: stats.direction.label(),
+                    });
                     evidence.render_wall_us = render_us;
                     evidence.render_cpu_us = render_cpu_us;
                     evidence.transfer_wall_us = transfer_us;
