@@ -9072,6 +9072,12 @@ fn authoritative_presentation_window(
         .filter(|snapshot| {
             snapshot.captured_monotonic_us >= first_completion_us
                 && snapshot.captured_monotonic_us <= last_completion_us
+                && snapshot.magik_ownership
+                && !snapshot.pending
+                && snapshot.owned_vblank_count
+                    == snapshot
+                        .presented_vblank_count
+                        .wrapping_add(snapshot.repeated_vblank_count)
         })
         .collect::<Vec<_>>();
     let start = snapshots.first().copied().ok_or_else(|| {
@@ -16137,7 +16143,11 @@ H: Handlers=event3 js0"#
         final_sample["presentation"]["captured_monotonic_us"] = json!(80_000);
         final_sample["presentation"]["owned_vblank_count"] = json!(101);
         final_sample["presentation"]["presented_vblank_count"] = json!(101);
-        telemetry.push(final_sample);
+        telemetry.push(final_sample.clone());
+        let mut pending_edge = final_sample;
+        pending_edge["presentation"]["captured_monotonic_us"] = json!(82_000);
+        pending_edge["presentation"]["pending"] = json!(true);
+        telemetry.push(pending_edge);
         let summary = summarize_screensaver_telemetry(
             1,
             &telemetry,

@@ -165,7 +165,9 @@ FORBIDDEN_DROPPED_FRAME_SOURCES = (
     "completion_monotonic",
     SOFTWARE_REFRESH_HELPER,
 )
-DROP_ASSIGNMENT = re.compile(r"(?:dropped_frames\s*=|[\"']dropped_frames[\"']\s*:)")
+DROP_ASSIGNMENT = re.compile(
+    r"(?:(?<![A-Za-z0-9_])dropped_frames\s*=|[\"']dropped_frames[\"']\s*:)"
+)
 
 
 class GateError(Exception):
