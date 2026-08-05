@@ -28,6 +28,7 @@ For attended MiSTer sessions, use one of:
 scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
+scripts/agent device scene-lab --scene card-flip --assess --attended
 scripts/agent device startup-particles RECIPE --runtime dev-launcher --attended
 ```
 
@@ -79,8 +80,17 @@ instead of bouncing through the previous path. Face endpoints are identical
 across the trajectory reset, and direction changes continue from the current
 progress.
 
-Use the closed attended profile to alternate directions continuously for 30 seconds and
-restore the launcher automatically:
+Use the closed attended assessment to run an authoritative 30-second unprofiled
+cadence pass followed by a separate 30-second 99 Hz CPU-sampled attribution
+pass. Both passes execute the same optimized `release-device` binary, and the
+launcher is restored on every exit path:
+
+```text
+scripts/agent device scene-lab --scene card-flip --assess --attended
+```
+
+The older single sampled pass remains available when only an interactive CPU
+profile is wanted:
 
 ```text
 scripts/agent device scene-lab --scene card-flip --profile --attended
@@ -90,25 +100,42 @@ The timing fields are deliberately disjoint. `render` covers projection and
 rasterization, `transfer` covers only `prepare_cached`, `present` runs from the
 latch post through confirmed presentation, and `frame_to_present` runs from
 render start through that same confirmation. `cpu_pct` is whole-process CPU
-time divided by wall time.
+time divided by wall time. Physical cadence is calculated only from monotonic
+confirmation intervals and wrapping latch flip-counter deltas. A
+`repeated_refreshes` result from the unprofiled pass is the skip authority;
+sequence failures, latch drops, and completion failures are separate results.
+The sampled pass can attribute a failure but can never qualify cadence.
 
-Two consecutive 2026-08-05 continuous ARMv7 profiles of commit `e82859c8`
-produced:
+Two consecutive 2026-08-05 assessments of commit `131b0471`, using the same
+optimized ARMv7 binary hash in all four passes, produced:
 
-- Run 1: 59.510 fps and 41.00% CPU; render 3.790 ms average / 6.343 ms p99,
-  transfer 0.599 / 0.783 ms, present 12.252 / 15.716 ms, and
-  frame-to-present 16.650 / 16.824 ms.
-- Run 2: 59.513 fps and 41.62% CPU; render 3.856 ms average / 6.335 ms p99,
-  transfer 0.619 / 0.822 ms, present 12.163 / 15.710 ms, and
-  frame-to-present 16.648 / 16.821 ms.
+| Run | Pass | Physical FPS | CPU | Render avg / p99 | Transfer avg / p99 | Post avg / p99 | Settle avg / p99 | Post-to-confirm avg / p99 | Frame-to-confirm avg / p99 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | Unprofiled authority | 59.950 | 42.75% | 3.981 / 6.261 ms | 0.631 / 0.733 ms | 0.097 / 0.154 ms | 9.725 / 13.433 ms | 11.829 / 15.544 ms | 16.569 / 16.811 ms |
+| 1 | 99 Hz attribution | 59.950 | 44.19% | 4.129 / 6.405 ms | 0.660 / 0.814 ms | 0.099 / 0.186 ms | 9.639 / 13.404 ms | 11.732 / 15.515 ms | 16.641 / 16.817 ms |
+| 2 | Unprofiled authority | 59.949 | 40.54% | 3.760 / 6.223 ms | 0.599 / 0.722 ms | 0.090 / 0.142 ms | 10.064 / 13.564 ms | 12.163 / 15.660 ms | 16.641 / 16.829 ms |
+| 2 | 99 Hz attribution | 59.950 | 44.36% | 4.119 / 6.421 ms | 0.663 / 0.831 ms | 0.100 / 0.161 ms | 9.644 / 13.423 ms | 11.737 / 15.544 ms | 16.640 / 16.824 ms |
 
-Both runs presented 1,787 changed frames with zero repeats and zero latch drops.
-Each reported exactly two full-slot restores; every steady frame was one
-287x420 rectangle (241,080 source bytes and 241,080 destination bytes), for
-432,631,800 bytes per side over the run. The optimized device paint symbol
-contains no calls, software or hardware division, wide multiply, allocation, or
-bounds-check panic paths. Neither `scale_card_frame` nor `scaled_card_rect`
-exists in source or the ARM profile binary.
+Each unprofiled authority recorded 1,800 confirmed frames, 1,799 expected
+refresh intervals, and 1,799 unique latch flips. Both had zero physical repeated
+refreshes, zero sequence failures, zero latch drops, zero completion failures,
+and no long confirmation intervals. The largest confirmation gaps were 17.356
+ms and 17.149 ms, still one 60 Hz refresh interval. Consequently, the earlier
+59.5 FPS aggregate was not evidence of physical frame skipping.
+
+The two sampled runs collected 1,401 and 1,405 stack samples. Respectively, 561
+and 532 resolved into `CardFlip::paint_rows_device`, while 570 and 628 resolved
+into the shared latch settle path, including expected sleeping and status
+polling. Only 2 and 6 samples reached `prepare_cached`, and 11 and 5 reached
+`post_prepared`. The matched render wall/CPU time identifies the rasterizer as
+the real active CPU cost; the much larger settle wall time than settle CPU time
+is expected vblank waiting rather than an over-budget renderer stall.
+
+Every steady frame remains one 287x420 rectangle: 241,080 source bytes and
+241,080 destination bytes. The optimized device paint symbol contains no calls,
+software or hardware division, wide multiply, allocation, or bounds-check panic
+paths. Neither `scale_card_frame` nor `scaled_card_rect` exists in source or the
+ARM profile binary.
 
 Create a deterministic capture without opening a window:
 
