@@ -6172,6 +6172,30 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
                 == Some("force")
         })
         .collect::<Vec<_>>();
+    let presentation_telemetry = eligible_samples
+        .iter()
+        .rev()
+        .find_map(|sample| sample.pointer("/launcher/startup_intro"))
+        .cloned()
+        .ok_or("catalog lifecycle captured no authoritative startup intro cadence")?;
+    if presentation_telemetry.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-startup-intro-cadence-v1")
+        || presentation_telemetry.get("source").and_then(Value::as_str)
+            != Some("fpga-owned-vblank-telemetry")
+        || presentation_telemetry
+            .get("available")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(format!(
+            "catalog lifecycle startup intro cadence is unavailable or non-authoritative: {presentation_telemetry}"
+        )
+        .into());
+    }
+    let dropped_frames = presentation_telemetry
+        .get("dropped_frames")
+        .and_then(Value::as_u64)
+        .ok_or("startup intro FPGA cadence has no dropped-frame count")?;
     let output_route = display
         .get("route")
         .and_then(Value::as_str)
@@ -6213,12 +6237,19 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
     let refresh_period_us = median_u64(&refresh_periods)
         .ok_or("startup intro telemetry has no physical refresh period")?;
     let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
-    let physical_refresh = physical_refresh_summary(0, &selected, refresh_period_us)?;
-    let dropped_frames = physical_refresh
+    let mut software_refresh_diagnostics =
+        physical_refresh_summary(0, &selected, refresh_period_us)?;
+    let software_estimated_dropped_frames = software_refresh_diagnostics
         .get("dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
-    let long_completion_intervals = physical_refresh
+    software_refresh_diagnostics["software_estimated_dropped_frames"] =
+        json!(software_estimated_dropped_frames);
+    software_refresh_diagnostics
+        .as_object_mut()
+        .expect("physical refresh summary is an object")
+        .remove("dropped_frames");
+    let long_completion_intervals = software_refresh_diagnostics
         .get("long_completion_intervals")
         .and_then(Value::as_array)
         .map_or(usize::MAX, Vec::len);
@@ -6260,26 +6291,25 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         .iter()
         .map(|frame| frame_u64(frame, "main_present_completion_poll_count").saturating_sub(1))
         .sum::<u64>();
-    let unique_fps = physical_refresh
+    let unique_fps = software_refresh_diagnostics
         .get("unique_fps")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
-    let refresh_hz = physical_refresh
+    let refresh_hz = software_refresh_diagnostics
         .get("refresh_hz")
         .and_then(Value::as_f64)
         .unwrap_or(f64::INFINITY);
     let cabinet_wait_frames = selected.len().saturating_sub(expected_intro_frames);
-    let cadence_qualified = selected.len() >= expected_intro_frames
-        && dropped_frames == 0
-        && long_completion_intervals == 0
-        && frame_id_gaps == 0
-        && pacing_failures == 0
-        && (unique_fps - refresh_hz).abs() <= 0.1;
+    let cadence_qualified = dropped_frames == 0
+        && presentation_telemetry
+            .get("qualified")
+            .and_then(Value::as_bool)
+            == Some(true);
     let latch_qualified =
         latch_drop_delta == 0 && latch_completion_failures == 0 && sequence_gaps == 0;
 
     Ok(json!({
-        "schema": "mister-magik-startup-intro-qualification-v3",
+        "schema": "mister-magik-startup-intro-qualification-v4",
         "route": output_route,
         "framebuffer": {
             "width": framebuffer_width,
@@ -6298,10 +6328,14 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
         "cadence": {
             "qualified": cadence_qualified,
             "dropped_frames": dropped_frames,
+            "source": "fpga-owned-vblank-telemetry",
+            "presentation_telemetry": presentation_telemetry,
+            "software_estimated_dropped_frames": software_estimated_dropped_frames,
+            "software_disagrees": software_estimated_dropped_frames != dropped_frames,
             "frame_id_gaps": frame_id_gaps,
             "pacing_failures": pacing_failures,
             "long_completion_intervals": long_completion_intervals,
-            "physical_refresh": physical_refresh,
+            "software_refresh_diagnostics": software_refresh_diagnostics,
         },
         "latch_protocol": {
             "qualified": latch_qualified,
@@ -6368,7 +6402,7 @@ fn catalog_lifecycle_report(summary: &Value) -> Result<String> {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let unique_fps = summary
-        .pointer("/startup_intro/cadence/physical_refresh/unique_fps")
+        .pointer("/startup_intro/cadence/software_refresh_diagnostics/unique_fps")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
     let latch_qualified = summary
@@ -16624,13 +16658,20 @@ H: Handlers=event3 js0"#
                     })
                     .collect::<Vec<_>>()
             };
-        let telemetry = |route: &str, width: u64, height: u64, frames| {
+        let telemetry = |route: &str, width: u64, height: u64, frames, dropped_frames: u64| {
             vec![json!({
                 "launcher": {
                     "catalog_refresh_policy": "force",
                     "output_route": route,
                     "framebuffer_width": width,
                     "framebuffer_height": height,
+                    "startup_intro": {
+                        "schema": "mister-magik-startup-intro-cadence-v1",
+                        "source": "fpga-owned-vblank-telemetry",
+                        "available": true,
+                        "qualified": dropped_frames == 0,
+                        "dropped_frames": dropped_frames
+                    },
                     "frame_budget": {"recent_frames": frames}
                 }
             })]
@@ -16649,6 +16690,7 @@ H: Handlers=event3 js0"#
                 640,
                 480,
                 intro_frames(16_667, 1_200, None, None),
+                0,
             ),
             &display("crt-480p60", 640, 480),
         )
@@ -16664,6 +16706,7 @@ H: Handlers=event3 js0"#
                 640,
                 576,
                 intro_frames(20_000, 1_000, None, None),
+                0,
             ),
             &display("crt-576p50", 640, 576),
         )
@@ -16679,7 +16722,8 @@ H: Handlers=event3 js0"#
                 "crt-288p50",
                 640,
                 288,
-                intro_frames(20_000, 1_000, Some(500), None),
+                intro_frames(20_000, 1_000, None, None),
+                1,
             ),
             &display("crt-288p50", 640, 288),
         )
@@ -16696,18 +16740,54 @@ H: Handlers=event3 js0"#
                     640,
                     240,
                     intro_frames(16_667, 1_200, None, Some(failure)),
+                    0,
                 ),
                 &display("crt-240p60", 640, 240),
             )
             .unwrap();
             if failure == "pacing" {
-                assert_eq!(failed["cadence"]["qualified"], false);
+                assert_eq!(failed["cadence"]["qualified"], true);
                 assert_eq!(failed["latch_protocol"]["qualified"], true);
             } else {
                 assert_eq!(failed["cadence"]["qualified"], true);
                 assert_eq!(failed["latch_protocol"]["qualified"], false);
             }
         }
+
+        let software_disagreement = summarize_startup_intro_telemetry(
+            &telemetry(
+                "crt-480p60",
+                640,
+                480,
+                intro_frames(16_667, 1_200, Some(600), None),
+                0,
+            ),
+            &display("crt-480p60", 640, 480),
+        )
+        .unwrap();
+        assert_eq!(software_disagreement["cadence"]["qualified"], true);
+        assert_eq!(software_disagreement["cadence"]["dropped_frames"], 0);
+        assert_eq!(
+            software_disagreement["cadence"]["software_estimated_dropped_frames"],
+            1
+        );
+        assert_eq!(software_disagreement["cadence"]["software_disagrees"], true);
+
+        let mut unavailable = telemetry(
+            "crt-480p60",
+            640,
+            480,
+            intro_frames(16_667, 1_200, None, None),
+            0,
+        );
+        unavailable[0]["launcher"]
+            .as_object_mut()
+            .unwrap()
+            .remove("startup_intro");
+        assert!(
+            summarize_startup_intro_telemetry(&unavailable, &display("crt-480p60", 640, 480),)
+                .is_err()
+        );
     }
 
     #[test]

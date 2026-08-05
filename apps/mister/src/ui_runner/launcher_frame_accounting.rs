@@ -88,6 +88,7 @@ pub(super) struct LauncherFrameAccounting {
     last_latch_sequence: u16,
     last_latch_flip_count: u16,
     last_latch_drop_count: u16,
+    startup_intro: Option<runtime_status::StartupIntroCadenceStatus>,
     automation_state_hash: u64,
     automation_state_revision: u64,
     automation_presented_state_revision: u64,
@@ -1117,6 +1118,7 @@ impl LauncherFrameAccounting {
             last_latch_sequence: 0,
             last_latch_flip_count: 0,
             last_latch_drop_count: 0,
+            startup_intro: None,
             automation_state_hash: 0,
             automation_state_revision: 0,
             automation_presented_state_revision: 0,
@@ -1137,6 +1139,13 @@ impl LauncherFrameAccounting {
 
     pub(super) fn first_visible_copy_done(&self) -> bool {
         self.first_visible_copy_done
+    }
+
+    pub(super) fn record_startup_intro_cadence(
+        &mut self,
+        cadence: runtime_status::StartupIntroCadenceStatus,
+    ) {
+        self.startup_intro = Some(cadence);
     }
 
     pub(super) fn record_latch_failure(&mut self, failure: &LatchFailure) {
@@ -2476,6 +2485,7 @@ impl LauncherFrameAccounting {
             latch_sequence: self.last_latch_sequence,
             latch_flip_count: self.last_latch_flip_count,
             latch_drop_count: self.last_latch_drop_count,
+            startup_intro: self.startup_intro.clone(),
             catalog_ready,
             catalog_games: catalog.len(),
             catalog_systems: catalog.systems.len(),

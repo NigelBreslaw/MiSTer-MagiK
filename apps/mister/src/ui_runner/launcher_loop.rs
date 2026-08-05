@@ -6529,12 +6529,27 @@ pub(super) fn run_launcher_loop(
                 && let Some(intro) = startup_intro.as_mut()
             {
                 let confirmed_at = pace.hit_at.unwrap_or(wait_done);
-                let cadence = intro.note_confirmed_present(
+                if intro.presentation_start_capture_needed() {
+                    let telemetry = f.read_magik_presentation_telemetry();
+                    intro.capture_presentation_start(confirmed_at, telemetry);
+                }
+                let software_cadence = intro.note_confirmed_present(
                     confirmed_at,
                     pace.period_us,
                     pace.source == VsyncPaceSource::Vsync,
                 );
-                if let Some(cadence) = cadence {
+                if let Some(software_cadence) = software_cadence {
+                    let authoritative_cadence = intro.authoritative_cadence_status(
+                        confirmed_at,
+                        f.read_magik_presentation_telemetry(),
+                        software_cadence,
+                    );
+                    let dropped_frames = authoritative_cadence
+                        .dropped_frames
+                        .map_or_else(|| "unavailable".to_string(), |count| count.to_string());
+                    let cadence_qualified = authoritative_cadence.qualified;
+                    let cadence_error = authoritative_cadence.error.as_deref().unwrap_or("none");
+                    frame_accounting.record_startup_intro_cadence(authoritative_cadence.clone());
                     let restored = intro.restore_handoff_snapshot(&mut layer_target);
                     let returned = intro.take_buffers();
                     if !restored {
@@ -6552,13 +6567,16 @@ pub(super) fn run_launcher_loop(
                         start,
                         "startup_intro_completed",
                         format!(
-                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} dropped_frames={} pacing_failures={} max_confirmation_gap_us={}",
-                            cadence.confirmed_frames,
-                            cadence.cabinet_wait_frames,
-                            cadence.expected_refresh_intervals,
-                            cadence.dropped_frames,
-                            cadence.pacing_failures,
-                            cadence.max_confirmation_gap_us,
+                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} dropped_frames={} software_estimated_dropped_frames={} pacing_failures={} max_confirmation_gap_us={} cadence_qualified={} cadence_error={}",
+                            software_cadence.confirmed_frames,
+                            software_cadence.cabinet_wait_frames,
+                            software_cadence.expected_refresh_intervals,
+                            dropped_frames,
+                            software_cadence.software_estimated_dropped_frames,
+                            software_cadence.pacing_failures,
+                            software_cadence.max_confirmation_gap_us,
+                            cadence_qualified,
+                            cadence_error,
                         ),
                     );
                 }

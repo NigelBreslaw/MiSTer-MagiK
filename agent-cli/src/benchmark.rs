@@ -814,9 +814,22 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
     if summary
         .pointer("/startup_intro/schema")
         .and_then(Value::as_str)
-        != Some("mister-magik-startup-intro-qualification-v3")
+        != Some("mister-magik-startup-intro-qualification-v4")
     {
         return Err("startup intro qualification has the wrong schema".into());
+    }
+    if summary
+        .pointer("/startup_intro/cadence/source")
+        .and_then(Value::as_str)
+        != Some("fpga-owned-vblank-telemetry")
+        || summary
+            .pointer("/startup_intro/cadence/presentation_telemetry/available")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "startup intro qualification has no authoritative FPGA cadence evidence".into(),
+        );
     }
     if summary.pointer("/catalog/valid").and_then(Value::as_bool) != Some(true) {
         return Err("catalog lifecycle benchmark did not produce a valid catalog".into());
@@ -1093,12 +1106,21 @@ mod tests {
                 "systems": [{"system": "atari2600", "games": 2}]
             },
             "startup_intro": {
-                "schema": "mister-magik-startup-intro-qualification-v3",
-                "cadence": {"qualified": true, "dropped_frames": 0},
+                "schema": "mister-magik-startup-intro-qualification-v4",
+                "cadence": {
+                    "qualified": true,
+                    "dropped_frames": 0,
+                    "source": "fpga-owned-vblank-telemetry",
+                    "presentation_telemetry": {"available": true}
+                },
                 "latch_protocol": {"qualified": true}
             }
         });
         assert!(evaluate_catalog_lifecycle_summary(&passing).is_ok());
+
+        let mut legacy = passing.clone();
+        legacy["startup_intro"]["schema"] = json!("mister-magik-startup-intro-qualification-v3");
+        assert!(evaluate_catalog_lifecycle_summary(&legacy).is_err());
 
         let mut invalid = passing.clone();
         invalid["catalog"]["valid"] = json!(false);
@@ -1113,8 +1135,13 @@ mod tests {
             "scenario": "catalog-lifecycle",
             "catalog": {"valid": true, "systems": [{"system": "arcade"}]},
             "startup_intro": {
-                "schema": "mister-magik-startup-intro-qualification-v3",
-                "cadence": {"qualified": false, "dropped_frames": 1},
+                "schema": "mister-magik-startup-intro-qualification-v4",
+                "cadence": {
+                    "qualified": false,
+                    "dropped_frames": 1,
+                    "source": "fpga-owned-vblank-telemetry",
+                    "presentation_telemetry": {"available": true}
+                },
                 "latch_protocol": {"qualified": true, "latch_drop_delta": 0}
             }
         });

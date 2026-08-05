@@ -12,6 +12,7 @@ use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel as SceneRgb565Pixel, SceneBufferId, SceneClock, SceneGeometry,
     SceneTarget,
 };
+use mister_magik_latch_contract::{PresentationTelemetry, validate_presentation_telemetry_window};
 use mister_magik_particles::intro::{
     IntroParticleDensity, IntroProjectionScale, IntroScene, IntroSceneOptions,
     PreparedLauncherSnapshot,
@@ -70,12 +71,13 @@ impl PreparedStartupIntro {
             completed: false,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
-            dropped_frames: 0,
+            software_estimated_dropped_frames: 0,
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
             waiting_frames: 0,
             last_render_waiting: false,
+            presentation_start: None,
         }
     }
 }
@@ -95,12 +97,13 @@ pub(super) struct StartupIntroSession {
     completed: bool,
     confirmed_frames: u64,
     expected_refresh_intervals: u64,
-    dropped_frames: u64,
+    software_estimated_dropped_frames: u64,
     pacing_failures: u64,
     max_confirmation_gap_us: u64,
     last_confirmed_at: Option<Instant>,
     waiting_frames: u64,
     last_render_waiting: bool,
+    presentation_start: Option<Result<(PresentationTelemetry, Instant), String>>,
 }
 
 enum LauncherSnapshotPreparation {
@@ -114,12 +117,16 @@ pub(super) struct StartupIntroCadence {
     pub(super) confirmed_frames: u64,
     pub(super) cabinet_wait_frames: u64,
     pub(super) expected_refresh_intervals: u64,
-    pub(super) dropped_frames: u64,
+    pub(super) software_estimated_dropped_frames: u64,
     pub(super) pacing_failures: u64,
     pub(super) max_confirmation_gap_us: u64,
 }
 
 impl StartupIntroSession {
+    pub(super) fn presentation_start_capture_needed(&self) -> bool {
+        self.presentation_start.is_none()
+    }
+
     pub(super) fn snapshot_capture_needed(&self) -> bool {
         matches!(
             self.snapshot_preparation,
@@ -291,8 +298,8 @@ impl StartupIntroSession {
             let expected = expected_refresh_intervals(gap_us, refresh_period_us);
             self.expected_refresh_intervals =
                 self.expected_refresh_intervals.saturating_add(expected);
-            self.dropped_frames = self
-                .dropped_frames
+            self.software_estimated_dropped_frames = self
+                .software_estimated_dropped_frames
                 .saturating_add(expected.saturating_sub(1));
         }
         let refresh_period = Duration::from_micros(self.refresh_period_us);
@@ -315,9 +322,94 @@ impl StartupIntroSession {
             confirmed_frames: self.confirmed_frames,
             cabinet_wait_frames: self.waiting_frames,
             expected_refresh_intervals: self.expected_refresh_intervals,
-            dropped_frames: self.dropped_frames,
+            software_estimated_dropped_frames: self.software_estimated_dropped_frames,
             pacing_failures: self.pacing_failures,
             max_confirmation_gap_us: self.max_confirmation_gap_us,
+        }
+    }
+
+    pub(super) fn capture_presentation_start(
+        &mut self,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
+    ) {
+        if self.presentation_start.is_none() {
+            self.presentation_start = Some(
+                telemetry
+                    .map(|snapshot| (snapshot, captured_at))
+                    .map_err(|error| error.to_string()),
+            );
+        }
+    }
+
+    pub(super) fn authoritative_cadence_status(
+        &self,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
+        software: StartupIntroCadence,
+    ) -> runtime_status::StartupIntroCadenceStatus {
+        let start = match self.presentation_start.as_ref() {
+            Some(Ok(start)) => *start,
+            Some(Err(error)) => {
+                return unavailable_cadence_status(software, error.clone(), None, None);
+            }
+            None => {
+                return unavailable_cadence_status(
+                    software,
+                    "startup intro presentation telemetry baseline was not captured".into(),
+                    None,
+                    None,
+                );
+            }
+        };
+        let end = match telemetry {
+            Ok(end) => end,
+            Err(error) => {
+                return unavailable_cadence_status(
+                    software,
+                    error.to_string(),
+                    Some(snapshot_status(start.0)),
+                    None,
+                );
+            }
+        };
+        let elapsed_us = captured_at
+            .saturating_duration_since(start.1)
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        match validate_presentation_telemetry_window(
+            start.0,
+            end,
+            elapsed_us,
+            self.refresh_period_us,
+        ) {
+            Ok(delta) => runtime_status::StartupIntroCadenceStatus {
+                schema: "mister-magik-startup-intro-cadence-v1",
+                source: "fpga-owned-vblank-telemetry",
+                available: true,
+                qualified: delta.repeated_vblank_delta == 0,
+                dropped_frames: Some(u64::from(delta.repeated_vblank_delta)),
+                software_estimated_dropped_frames: software.software_estimated_dropped_frames,
+                confirmed_frames: software.confirmed_frames,
+                cabinet_wait_frames: software.cabinet_wait_frames,
+                expected_refresh_intervals: software.expected_refresh_intervals,
+                pacing_failures: software.pacing_failures,
+                max_confirmation_gap_us: software.max_confirmation_gap_us,
+                elapsed_us: Some(delta.elapsed_us),
+                owned_vblank_delta: Some(delta.owned_vblank_delta),
+                presented_vblank_delta: Some(delta.presented_vblank_delta),
+                repeated_vblank_delta: Some(delta.repeated_vblank_delta),
+                ownership_loss_delta: Some(delta.ownership_loss_delta),
+                start: Some(snapshot_status(start.0)),
+                end: Some(snapshot_status(end)),
+                error: None,
+            },
+            Err(error) => unavailable_cadence_status(
+                software,
+                error.to_string(),
+                Some(snapshot_status(start.0)),
+                Some(snapshot_status(end)),
+            ),
         }
     }
 
@@ -337,6 +429,50 @@ impl StartupIntroSession {
     #[cfg(test)]
     pub(super) fn elapsed(&self) -> Duration {
         self.elapsed
+    }
+}
+
+fn snapshot_status(
+    telemetry: PresentationTelemetry,
+) -> runtime_status::PresentationTelemetrySnapshotStatus {
+    runtime_status::PresentationTelemetrySnapshotStatus {
+        owned_vblank_count: telemetry.owned_vblank_count,
+        presented_vblank_count: telemetry.presented_vblank_count,
+        repeated_vblank_count: telemetry.repeated_vblank_count,
+        ownership_loss_count: telemetry.ownership_loss_count,
+        active_sequence: telemetry.active_sequence,
+        magik_ownership: telemetry.magik_ownership(),
+        pending: telemetry.pending(),
+        lifetime_invariant_valid: telemetry.lifetime_invariant_valid(),
+    }
+}
+
+fn unavailable_cadence_status(
+    software: StartupIntroCadence,
+    error: String,
+    start: Option<runtime_status::PresentationTelemetrySnapshotStatus>,
+    end: Option<runtime_status::PresentationTelemetrySnapshotStatus>,
+) -> runtime_status::StartupIntroCadenceStatus {
+    runtime_status::StartupIntroCadenceStatus {
+        schema: "mister-magik-startup-intro-cadence-v1",
+        source: "fpga-owned-vblank-telemetry",
+        available: false,
+        qualified: false,
+        dropped_frames: None,
+        software_estimated_dropped_frames: software.software_estimated_dropped_frames,
+        confirmed_frames: software.confirmed_frames,
+        cabinet_wait_frames: software.cabinet_wait_frames,
+        expected_refresh_intervals: software.expected_refresh_intervals,
+        pacing_failures: software.pacing_failures,
+        max_confirmation_gap_us: software.max_confirmation_gap_us,
+        elapsed_us: None,
+        owned_vblank_delta: None,
+        presented_vblank_delta: None,
+        repeated_vblank_delta: None,
+        ownership_loss_delta: None,
+        start,
+        end,
+        error: Some(error),
     }
 }
 
@@ -437,12 +573,13 @@ mod tests {
             completed: false,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
-            dropped_frames: 0,
+            software_estimated_dropped_frames: 0,
             pacing_failures: 0,
             max_confirmation_gap_us: 0,
             last_confirmed_at: None,
             waiting_frames: 0,
             last_render_waiting: false,
+            presentation_start: None,
         }
     }
 
@@ -596,16 +733,86 @@ mod tests {
         let (exact_session, exact) = run(None);
         assert_eq!(exact.confirmed_frames, 1_200);
         assert_eq!(exact.expected_refresh_intervals, 1_199);
-        assert_eq!(exact.dropped_frames, 0);
+        assert_eq!(exact.software_estimated_dropped_frames, 0);
         assert_eq!(exact.pacing_failures, 0);
         assert_eq!(exact_session.elapsed(), FINAL_ELAPSED);
 
         let (dropped_session, dropped) = run(Some(600));
         assert_eq!(dropped.confirmed_frames, 1_200);
         assert_eq!(dropped.expected_refresh_intervals, 1_200);
-        assert_eq!(dropped.dropped_frames, 1);
+        assert_eq!(dropped.software_estimated_dropped_frames, 1);
         assert_eq!(dropped.pacing_failures, 0);
         assert_eq!(dropped_session.elapsed(), FINAL_ELAPSED);
+    }
+
+    #[test]
+    fn fpga_repeats_are_authoritative_when_software_disagrees() {
+        let owned = 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP;
+        let snapshot = |owned_vblank_count, presented_vblank_count, repeated_vblank_count| {
+            PresentationTelemetry {
+                owned_vblank_count,
+                presented_vblank_count,
+                repeated_vblank_count,
+                ownership_loss_count: 0,
+                active_sequence: 7,
+                flags: owned,
+                crc: 0,
+            }
+        };
+        let started = Instant::now();
+        let software = StartupIntroCadence {
+            confirmed_frames: 2,
+            cabinet_wait_frames: 0,
+            expected_refresh_intervals: 2,
+            software_estimated_dropped_frames: 1,
+            pacing_failures: 0,
+            max_confirmation_gap_us: 33_334,
+        };
+        let mut session = test_session();
+        session.capture_presentation_start(started, Ok(snapshot(100, 100, 0)));
+        let fpga_zero = session.authoritative_cadence_status(
+            started + Duration::from_micros(16_667),
+            Ok(snapshot(101, 101, 0)),
+            software,
+        );
+        assert_eq!(fpga_zero.dropped_frames, Some(0));
+        assert!(fpga_zero.qualified);
+        assert_eq!(fpga_zero.software_estimated_dropped_frames, 1);
+
+        let fpga_repeat = session.authoritative_cadence_status(
+            started + Duration::from_micros(16_667),
+            Ok(snapshot(101, 100, 1)),
+            StartupIntroCadence {
+                software_estimated_dropped_frames: 0,
+                ..software
+            },
+        );
+        assert_eq!(fpga_repeat.dropped_frames, Some(1));
+        assert!(!fpga_repeat.qualified);
+    }
+
+    #[test]
+    fn missing_fpga_telemetry_fails_cadence_closed() {
+        let session = test_session();
+        let software = StartupIntroCadence {
+            confirmed_frames: 1_200,
+            cabinet_wait_frames: 0,
+            expected_refresh_intervals: 1_199,
+            software_estimated_dropped_frames: 0,
+            pacing_failures: 0,
+            max_confirmation_gap_us: 16_667,
+        };
+        let status = session.authoritative_cadence_status(
+            Instant::now(),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "missing capability",
+            )),
+            software,
+        );
+        assert_eq!(status.dropped_frames, None);
+        assert!(!status.available);
+        assert!(!status.qualified);
     }
 
     #[test]

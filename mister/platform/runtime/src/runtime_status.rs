@@ -70,6 +70,7 @@ launcher_status_types! {
         latch_sequence: u16,
         latch_flip_count: u16,
         latch_drop_count: u16,
+        startup_intro: Option<StartupIntroCadenceStatus>,
         display_frozen: bool,
         catalog_ready: bool,
         catalog_games: usize,
@@ -169,6 +170,41 @@ launcher_status_types! {
         return_phase,
         return_fallback_reason,
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PresentationTelemetrySnapshotStatus {
+    pub owned_vblank_count: u32,
+    pub presented_vblank_count: u32,
+    pub repeated_vblank_count: u32,
+    pub ownership_loss_count: u32,
+    pub active_sequence: u16,
+    pub magik_ownership: bool,
+    pub pending: bool,
+    pub lifetime_invariant_valid: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct StartupIntroCadenceStatus {
+    pub schema: &'static str,
+    pub source: &'static str,
+    pub available: bool,
+    pub qualified: bool,
+    pub dropped_frames: Option<u64>,
+    pub software_estimated_dropped_frames: u64,
+    pub confirmed_frames: u64,
+    pub cabinet_wait_frames: u64,
+    pub expected_refresh_intervals: u64,
+    pub pacing_failures: u64,
+    pub max_confirmation_gap_us: u64,
+    pub elapsed_us: Option<u64>,
+    pub owned_vblank_delta: Option<u32>,
+    pub presented_vblank_delta: Option<u32>,
+    pub repeated_vblank_delta: Option<u32>,
+    pub ownership_loss_delta: Option<u32>,
+    pub start: Option<PresentationTelemetrySnapshotStatus>,
+    pub end: Option<PresentationTelemetrySnapshotStatus>,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -701,6 +737,7 @@ fn write_launcher_status_json(
     field!("latch_sequence", status.latch_sequence);
     field!("latch_flip_count", status.latch_flip_count);
     field!("latch_drop_count", status.latch_drop_count);
+    field!("startup_intro", status.startup_intro);
     field!("catalog_ready", status.catalog_ready);
     field!("catalog_games", status.catalog_games);
     field!("catalog_systems", status.catalog_systems);
@@ -990,6 +1027,7 @@ fn launcher_status_value(
     insert!("latch_sequence", status.latch_sequence);
     insert!("latch_flip_count", status.latch_flip_count);
     insert!("latch_drop_count", status.latch_drop_count);
+    insert!("startup_intro", status.startup_intro);
     insert!("catalog_ready", status.catalog_ready);
     insert!("catalog_games", status.catalog_games);
     insert!("catalog_systems", status.catalog_systems);
@@ -1666,6 +1704,7 @@ mod tests {
                 latch_sequence: 41,
                 latch_flip_count: 40,
                 latch_drop_count: 0,
+                startup_intro: None,
                 display_frozen: true,
                 catalog_ready: true,
                 catalog_games: 9014,
@@ -2155,6 +2194,7 @@ mod tests {
             latch_sequence: 7,
             latch_flip_count: 6,
             latch_drop_count: 0,
+            startup_intro: None,
             display_frozen: false,
             catalog_ready: false,
             catalog_games: 12,
