@@ -602,23 +602,31 @@ fn linear16_to_srgb8(value: u16) -> u8 {
 }
 
 fn rgb565_to_linear(pixel: Rgb565Pixel) -> LinearRgb {
+    rgb565_to_linear_with_table(pixel, srgb_to_linear_table())
+}
+
+fn rgb565_to_linear_with_table(pixel: Rgb565Pixel, srgb_to_linear: &[u16; 256]) -> LinearRgb {
     let packed = pixel.0;
     let r = (((packed >> 11) & 0x1f) * 255 / 31) as u8;
     let g = (((packed >> 5) & 0x3f) * 255 / 63) as u8;
     let b = ((packed & 0x1f) * 255 / 31) as u8;
     LinearRgb {
-        r: srgb8_to_linear16(r),
-        g: srgb8_to_linear16(g),
-        b: srgb8_to_linear16(b),
+        r: srgb_to_linear[usize::from(r)],
+        g: srgb_to_linear[usize::from(g)],
+        b: srgb_to_linear[usize::from(b)],
     }
 }
 
 fn linear_to_rgb565(pixel: LinearRgb) -> Rgb565Pixel {
-    color565(
-        linear16_to_srgb8(pixel.r),
-        linear16_to_srgb8(pixel.g),
-        linear16_to_srgb8(pixel.b),
-    )
+    linear_to_rgb565_with_table(pixel, linear_to_srgb_table())
+}
+
+fn linear_to_rgb565_with_table(pixel: LinearRgb, linear_to_srgb: &[u8; 4097]) -> Rgb565Pixel {
+    let convert = |value: u16| {
+        let index = (usize::from(value) + 8).min(65_535) >> 4;
+        linear_to_srgb[index.min(4096)]
+    };
+    color565(convert(pixel.r), convert(pixel.g), convert(pixel.b))
 }
 
 fn scale_lanczos3_linear_tinted(
@@ -1216,6 +1224,8 @@ fn blit_coverage_phase(
     x: isize,
     y: isize,
 ) {
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
     for source_y in 0..image.height {
         let target_y = y + source_y as isize;
         if target_y < 0 || target_y >= screen_height as isize {
@@ -1242,6 +1252,8 @@ fn blit_coverage_phase(
                 target_row + (x + source_x as isize) as usize,
                 image.pixels[source_row + source_x],
                 coverage.values[coverage_row + source_x],
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
         if opaque_end > opaque_start {
@@ -1256,6 +1268,8 @@ fn blit_coverage_phase(
                 target_row + (x + source_x as isize) as usize,
                 image.pixels[source_row + source_x],
                 coverage.values[coverage_row + source_x],
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
     }
@@ -1266,6 +1280,8 @@ fn composite_coverage_pixel(
     target: usize,
     foreground: Rgb565Pixel,
     coverage: u8,
+    srgb_to_linear: &[u16; 256],
+    linear_to_srgb: &[u8; 4097],
 ) {
     if coverage == 0 {
         return;
@@ -1274,19 +1290,22 @@ fn composite_coverage_pixel(
         dst[target] = foreground;
         return;
     }
-    let background = rgb565_to_linear(dst[target]);
-    let foreground = rgb565_to_linear(foreground);
+    let background = rgb565_to_linear_with_table(dst[target], srgb_to_linear);
+    let foreground = rgb565_to_linear_with_table(foreground, srgb_to_linear);
     let alpha = u64::from(coverage);
     let inverse = 255 - alpha;
     let composite = |background: u16, foreground: u16| {
         ((u64::from(background) * inverse + u64::from(foreground) * alpha + 127) / 255).min(65_535)
             as u16
     };
-    dst[target] = linear_to_rgb565(LinearRgb {
-        r: composite(background.r, foreground.r),
-        g: composite(background.g, foreground.g),
-        b: composite(background.b, foreground.b),
-    });
+    dst[target] = linear_to_rgb565_with_table(
+        LinearRgb {
+            r: composite(background.r, foreground.r),
+            g: composite(background.g, foreground.g),
+            b: composite(background.b, foreground.b),
+        },
+        linear_to_srgb,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
