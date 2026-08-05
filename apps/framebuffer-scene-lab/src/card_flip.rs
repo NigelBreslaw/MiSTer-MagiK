@@ -343,7 +343,12 @@ impl CardFlip {
         let phase = f32::from(progress) / PROGRESS_MAX as f32;
         let eased = smoothstep(phase);
         let angle = eased * std::f32::consts::PI;
-        let sine = angle.sin();
+        // Back-to-front is the second half of the same rotation (pi..2pi),
+        // not a reversal back through the first half (pi..0).
+        let sine = match self.direction {
+            Direction::Forward => angle.sin(),
+            Direction::Reverse => -angle.sin(),
+        };
         let cosine = angle.cos();
         let anchor = CARD_X as f32 + (CARD_WIDTH - 1) as f32 * eased;
         let center_y = CARD_Y as f32 + (CARD_HEIGHT - 1) as f32 * 0.5;
@@ -389,6 +394,10 @@ impl CardFlip {
         let geometry = self.geometry;
         let eased = smoothstep_q16(progress);
         let (sine_q16, cosine_q16) = sin_cos_pi_q16(eased);
+        let sine_q16 = match self.direction {
+            Direction::Forward => sine_q16,
+            Direction::Reverse => -sine_q16,
+        };
         let anchor_q16 = (geometry.card_width - 1) as i64 * i64::from(eased);
         let target_center_y_q16 = (geometry.card_height - 1) as i64 * FIXED_ONE / 2;
         let source_half_height_q16 = (CARD_HEIGHT - 1) as i64 * FIXED_ONE / 2;
@@ -1128,23 +1137,42 @@ mod tests {
     }
 
     #[test]
-    fn reference_and_device_paths_match_major_checkpoints() {
-        for milliseconds in [0, 110, 220, 330, 440] {
-            let mut reference = CardFlip::new(RasterPath::Reference);
-            let mut device = CardFlip::new(RasterPath::Device);
-            reference.start_from_endpoint(Direction::Forward, Duration::ZERO);
-            device.start_from_endpoint(Direction::Forward, Duration::ZERO);
-            let reference = frame(&mut reference, Duration::from_millis(milliseconds));
-            let device = frame(&mut device, Duration::from_millis(milliseconds));
-            let mismatches = reference
-                .iter()
-                .zip(&device)
-                .filter(|(a, b)| a != b)
-                .count();
-            assert!(
-                mismatches <= 1_500,
-                "checkpoint {milliseconds}ms mismatched {mismatches} pixels"
-            );
+    fn back_to_front_uses_the_second_half_of_the_rotation() {
+        let at = DEFAULT_DURATION / 4;
+        let mut continuing = CardFlip::new(RasterPath::Device);
+        continuing.start_from_endpoint(Direction::Reverse, Duration::ZERO);
+        let continuing_pixels = frame(&mut continuing, at);
+
+        let mut retracing = CardFlip::new(RasterPath::Device);
+        retracing.start_from_endpoint(Direction::Reverse, Duration::ZERO);
+        retracing.advance(at);
+        retracing.direction = Direction::Forward;
+        let retracing_pixels = frame(&mut retracing, at);
+
+        assert_eq!(continuing.progress_q16(), retracing.progress_q16());
+        assert_ne!(continuing_pixels, retracing_pixels);
+    }
+
+    #[test]
+    fn reference_and_device_paths_match_major_checkpoints_in_both_halves() {
+        for direction in [Direction::Forward, Direction::Reverse] {
+            for milliseconds in [0, 110, 220, 330, 440] {
+                let mut reference = CardFlip::new(RasterPath::Reference);
+                let mut device = CardFlip::new(RasterPath::Device);
+                reference.start_from_endpoint(direction, Duration::ZERO);
+                device.start_from_endpoint(direction, Duration::ZERO);
+                let reference = frame(&mut reference, Duration::from_millis(milliseconds));
+                let device = frame(&mut device, Duration::from_millis(milliseconds));
+                let mismatches = reference
+                    .iter()
+                    .zip(&device)
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert!(
+                    mismatches <= 1_500,
+                    "{direction:?} checkpoint {milliseconds}ms mismatched {mismatches} pixels"
+                );
+            }
         }
     }
 
