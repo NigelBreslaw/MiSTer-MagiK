@@ -190,6 +190,7 @@ struct FramebufferStreamState {
 pub struct DeviceTelemetrySample {
     pub seq: u64,
     pub combined_cpu_pct: f64,
+    pub presentation: PresentationTelemetrySample,
     pub cores: Vec<CpuCoreTelemetry>,
     pub memory: MemoryTelemetry,
     pub frame_budget: FrameBudgetTelemetry,
@@ -198,6 +199,21 @@ pub struct DeviceTelemetrySample {
     pub main: ProcessTelemetry,
     pub network: NetworkTelemetry,
     pub storage: StorageTelemetry,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PresentationTelemetrySample {
+    pub available: bool,
+    pub captured_monotonic_us: u64,
+    pub owned_vblank_count: Option<u32>,
+    pub presented_vblank_count: Option<u32>,
+    pub repeated_vblank_count: Option<u32>,
+    pub ownership_loss_count: Option<u32>,
+    pub active_sequence: Option<u16>,
+    pub magik_ownership: bool,
+    pub pending: bool,
+    pub lifetime_invariant_valid: bool,
+    pub error: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -476,7 +492,7 @@ pub fn connect_device_telemetry_stream(host: &str) -> Result<DeviceTelemetryStre
     let (token, _) = read_token();
     let client = AgentClient::new(host.to_string(), token);
     let (_, reader) = client.request_stream(
-        "device_telemetry_stream_v1",
+        "device_telemetry_stream_v2",
         json!({"analytics_mode": "process"}),
     )?;
     let control = DeviceTelemetryStreamControl {
@@ -1155,9 +1171,19 @@ fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
 fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, AgentError> {
     let value: Value = serde_json::from_str(line.trim())
         .map_err(|err| AgentError::Protocol(format!("invalid telemetry JSON: {err}")))?;
-    if value.get("schema").and_then(Value::as_str) != Some("mister-magik-device-telemetry-v1") {
+    if value.get("schema").and_then(Value::as_str) != Some("mister-magik-device-telemetry-v2") {
         return Err(AgentError::Protocol(
             "unexpected telemetry schema".to_string(),
+        ));
+    }
+    let presentation = value.pointer("/presentation").unwrap_or(&Value::Null);
+    if presentation.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-presentation-telemetry-snapshot-v1")
+        || presentation.get("source").and_then(Value::as_str)
+            != Some("fpga-owned-vblank-telemetry")
+    {
+        return Err(AgentError::Protocol(
+            "missing authoritative FPGA presentation telemetry".to_string(),
         ));
     }
     let frame = value
@@ -1166,6 +1192,31 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
     Ok(DeviceTelemetrySample {
         seq: u64_at(&value, "/seq"),
         combined_cpu_pct: f64_at(&value, "/cpu/combined_busy_pct"),
+        presentation: PresentationTelemetrySample {
+            available: presentation
+                .get("available")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            captured_monotonic_us: u64_at(presentation, "/captured_monotonic_us"),
+            owned_vblank_count: optional_u32_at(presentation, "/owned_vblank_count"),
+            presented_vblank_count: optional_u32_at(presentation, "/presented_vblank_count"),
+            repeated_vblank_count: optional_u32_at(presentation, "/repeated_vblank_count"),
+            ownership_loss_count: optional_u32_at(presentation, "/ownership_loss_count"),
+            active_sequence: optional_u16_at(presentation, "/active_sequence"),
+            magik_ownership: presentation
+                .get("magik_ownership")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            pending: presentation
+                .get("pending")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            lifetime_invariant_valid: presentation
+                .get("lifetime_invariant_valid")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            error: str_at(presentation, "/error", "").to_string(),
+        },
         cores: value
             .pointer("/cpu/cores")
             .and_then(Value::as_array)
@@ -1253,6 +1304,14 @@ fn parse_device_telemetry_sample(line: &str) -> Result<DeviceTelemetrySample, Ag
             write_pct: f64_at(&value, "/storage/write_pct"),
         },
     })
+}
+
+fn optional_u32_at(value: &Value, pointer: &str) -> Option<u32> {
+    value.pointer(pointer)?.as_u64()?.try_into().ok()
+}
+
+fn optional_u16_at(value: &Value, pointer: &str) -> Option<u16> {
+    value.pointer(pointer)?.as_u64()?.try_into().ok()
 }
 
 fn parse_frame_budget_recent_frame(value: &Value) -> FrameBudgetFrameTelemetry {
@@ -2377,8 +2436,9 @@ tiny"#
     fn parse_device_telemetry_sample_extracts_ui_fields() {
         let sample = parse_device_telemetry_sample(
             r#"{
-                "schema":"mister-magik-device-telemetry-v1",
+                "schema":"mister-magik-device-telemetry-v2",
                 "seq":7,
+                "presentation":{"schema":"mister-magik-presentation-telemetry-snapshot-v1","source":"fpga-owned-vblank-telemetry","available":true,"captured_monotonic_us":1000000,"owned_vblank_count":60,"presented_vblank_count":59,"repeated_vblank_count":1,"ownership_loss_count":0,"active_sequence":42,"magik_ownership":true,"pending":false,"lifetime_invariant_valid":true,"error":null},
                 "cpu":{"combined_busy_pct":12.5,"cores":[{"id":0,"busy_pct":10.0},{"id":1,"busy_pct":15.0}]},
                 "memory":{"total_kb":1000,"magik_kb":100,"main_kb":20,"other_used_kb":600,"available_kb":300,"magik_pct":10.0,"other_used_pct":60.0,"available_pct":30.0},
                 "launcher":{"status_current":true,"idle":false,"rolling_fps":59.9,"preview_cache_state":"exact","frame_budget":{"budget_us":16667,"frames_total":120,"window_frames":60,"window_over_budget":2,"window_over_20ms":1,"window_over_33ms":0,"window_max_wall_us":21000,"max_wall_us":33000,"max_vsync_miss_streak":1,"window_prepare_us":100,"window_render_us":200,"window_custom_draw_us":300,"window_vsync_us":400,"window_present_us":500,"recent_frames":[{"frame":120,"wall_us":17000,"prepare_us":100,"render_us":200,"custom_draw_us":300,"vsync_us":400,"present_us":500,"cpu_prepare_us":10,"cpu_render_us":20,"cpu_custom_draw_us":30,"cpu_vsync_us":1,"cpu_present_us":5,"process_cpu_us":80,"vsync_source":"vsync","vsync_miss_streak":1}]}},
@@ -2390,6 +2450,8 @@ tiny"#
         .expect("telemetry should parse");
 
         assert_eq!(sample.seq, 7);
+        assert!(sample.presentation.available);
+        assert_eq!(sample.presentation.repeated_vblank_count, Some(1));
         assert_eq!(sample.cores.len(), 2);
         assert_eq!(sample.cores[0].label, "CPU0");
         assert_eq!(sample.memory.magik_pct, 10.0);
@@ -2409,9 +2471,9 @@ tiny"#
     #[test]
     fn parse_device_telemetry_sample_defaults_missing_storage_activity() {
         let sample = parse_device_telemetry_sample(
-            r#"{"schema":"mister-magik-device-telemetry-v1","seq":1,"storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}}"#,
+            r#"{"schema":"mister-magik-device-telemetry-v2","seq":1,"presentation":{"schema":"mister-magik-presentation-telemetry-snapshot-v1","source":"fpga-owned-vblank-telemetry","available":false,"captured_monotonic_us":1,"error":"busy"},"storage":{"available_bytes":1000,"total_bytes":2000,"available_pct":50.0}}"#,
         )
-        .expect("older telemetry should parse");
+        .expect("telemetry should parse");
         assert_eq!(sample.storage.device, "");
         assert!(!sample.storage.activity_valid);
         assert_eq!(sample.storage.read_bytes_per_sec, 0);
@@ -2423,11 +2485,20 @@ tiny"#
     #[test]
     fn parse_device_telemetry_sample_keeps_the_sampled_ui_thread_cpu() {
         let sample = parse_device_telemetry_sample(
-            r#"{"schema":"mister-magik-device-telemetry-v1","launcher":{"ui_thread_cpu":1}}"#,
+            r#"{"schema":"mister-magik-device-telemetry-v2","presentation":{"schema":"mister-magik-presentation-telemetry-snapshot-v1","source":"fpga-owned-vblank-telemetry","available":false,"captured_monotonic_us":1,"error":"busy"},"launcher":{"ui_thread_cpu":1}}"#,
         )
         .expect("telemetry should parse");
 
         assert_eq!(sample.launcher.ui_thread_cpu, Some(1));
+    }
+
+    #[test]
+    fn parse_device_telemetry_sample_rejects_legacy_streams() {
+        let error = parse_device_telemetry_sample(
+            r#"{"schema":"mister-magik-device-telemetry-v1"}"#,
+        )
+        .expect_err("legacy telemetry must not qualify");
+        assert!(matches!(error, AgentError::Protocol(_)));
     }
 
     #[test]

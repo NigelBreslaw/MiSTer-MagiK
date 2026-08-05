@@ -121,6 +121,7 @@ pub(crate) fn bootstrap_agent_with(
                 agent_protocol::PROTOCOL_VERSION,
                 true,
                 true,
+                true,
             ))
         {
             cleanup_agent_backup(&session)?;
@@ -146,12 +147,18 @@ fn preferred_token(explicit: Option<&str>, stored: Option<&str>) -> Option<Strin
 }
 
 fn apply_installed_version_policy(endpoint: &AgentEndpoint) -> Result<bool> {
-    let Ok((agent, protocol, has_capture_v2, has_launcher_automation)) =
+    let Ok((agent, protocol, has_capture_v2, has_device_telemetry_v2, has_launcher_automation)) =
         installed_identity(endpoint)
     else {
         return Ok(false);
     };
-    match version_action(agent, protocol, has_capture_v2, has_launcher_automation) {
+    match version_action(
+        agent,
+        protocol,
+        has_capture_v2,
+        has_device_telemetry_v2,
+        has_launcher_automation,
+    ) {
         VersionAction::Current => Ok(true),
         VersionAction::Upgrade => Ok(false),
         VersionAction::RejectNewer => Err(format!(
@@ -165,11 +172,13 @@ fn version_action(
     agent: u64,
     protocol: u64,
     has_capture_v2: bool,
+    has_device_telemetry_v2: bool,
     has_launcher_automation: bool,
 ) -> VersionAction {
     if agent == agent_protocol::AGENT_VERSION
         && protocol == agent_protocol::PROTOCOL_VERSION
         && has_capture_v2
+        && has_device_telemetry_v2
         && has_launcher_automation
     {
         VersionAction::Current
@@ -182,7 +191,7 @@ fn version_action(
 
 fn installed_identity(
     endpoint: &AgentEndpoint,
-) -> std::result::Result<(u64, u64, bool, bool), String> {
+) -> std::result::Result<(u64, u64, bool, bool, bool), String> {
     let reply = agent_request_at(endpoint, "ping", json!({}), Duration::from_millis(500))
         .map_err(|error| error.to_string())?;
     let result = reply.response.get("result").unwrap_or(&Value::Null);
@@ -210,7 +219,21 @@ fn installed_identity(
                 capability.as_str() == Some(agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY)
             })
         });
-    Ok((agent, protocol, has_capture_v2, has_launcher_automation))
+    let has_device_telemetry_v2 = result
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.as_str() == Some(agent_protocol::DEVICE_TELEMETRY_CAPABILITY)
+            })
+        });
+    Ok((
+        agent,
+        protocol,
+        has_capture_v2,
+        has_device_telemetry_v2,
+        has_launcher_automation,
+    ))
 }
 
 fn valid_token(token: &str) -> bool {
@@ -538,7 +561,7 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
     let request = agent_protocol::request(
         &endpoint.token,
         1,
-        "device_telemetry_stream_v1",
+        "device_telemetry_stream_v2",
         json!({"analytics_mode": "process", "cadence_ms": 250}),
     );
     let started = Instant::now();
@@ -562,7 +585,7 @@ pub(crate) fn agent_telemetry_until_screensaver_profile_complete(
         match reader.read_line(&mut line) {
             Ok(0) => return Err("MiSTer telemetry stream closed before profile completion".into()),
             Ok(_) => {
-                let sample: Value = serde_json::from_str(line.trim())?;
+                let sample = parse_device_telemetry_sample(&line)?;
                 let state = sample
                     .pointer("/launcher/screensaver_profile_state")
                     .and_then(Value::as_str)
@@ -620,7 +643,7 @@ pub(crate) fn agent_telemetry_for_duration(
     let request = agent_protocol::request(
         &endpoint.token,
         1,
-        "device_telemetry_stream_v1",
+        "device_telemetry_stream_v2",
         json!({"analytics_mode": "process", "cadence_ms": 250}),
     );
     let started = Instant::now();
@@ -642,7 +665,7 @@ pub(crate) fn agent_telemetry_for_duration(
         let mut line = String::new();
         match reader.read_line(&mut line) {
             Ok(0) => return Err("MiSTer telemetry stream closed during particle trial".into()),
-            Ok(_) => samples.push(serde_json::from_str(line.trim())?),
+            Ok(_) => samples.push(parse_device_telemetry_sample(&line)?),
             Err(error)
                 if matches!(
                     error.kind(),
@@ -689,7 +712,7 @@ pub(crate) fn agent_telemetry_for_particle_renderer_trial(
     let request = agent_protocol::request(
         &endpoint.token,
         1,
-        "device_telemetry_stream_v1",
+        "device_telemetry_stream_v2",
         json!({"analytics_mode": "process", "cadence_ms": 250}),
     );
     let started = Instant::now();
@@ -732,7 +755,7 @@ pub(crate) fn agent_telemetry_for_particle_renderer_trial(
         match reader.read_line(&mut line) {
             Ok(0) => return Err("MiSTer telemetry stream closed during particle trial".into()),
             Ok(_) => {
-                let sample: Value = serde_json::from_str(line.trim())?;
+                let sample = parse_device_telemetry_sample(&line)?;
                 if measurement_started.is_none()
                     && telemetry_contains_particle_frame(&sample, renderer, preset, count)
                 {
@@ -752,6 +775,23 @@ pub(crate) fn agent_telemetry_for_particle_renderer_trial(
             Err(error) => return Err(error.into()),
         }
     }
+}
+
+fn parse_device_telemetry_sample(line: &str) -> Result<Value> {
+    let sample: Value = serde_json::from_str(line.trim())?;
+    if sample.get("schema").and_then(Value::as_str) != Some("mister-magik-device-telemetry-v2")
+        || sample
+            .pointer("/presentation/schema")
+            .and_then(Value::as_str)
+            != Some("mister-magik-presentation-telemetry-snapshot-v1")
+        || sample
+            .pointer("/presentation/source")
+            .and_then(Value::as_str)
+            != Some("fpga-owned-vblank-telemetry")
+    {
+        return Err("MiSTer agent returned non-authoritative device telemetry".into());
+    }
+    Ok(sample)
 }
 
 fn telemetry_contains_particle_frame(
@@ -929,25 +969,30 @@ mod tests {
                 agent_protocol::PROTOCOL_VERSION,
                 true,
                 true,
+                true,
             ),
             VersionAction::Current
         );
-        assert_eq!(version_action(0, 0, false, false), VersionAction::Upgrade);
+        assert_eq!(
+            version_action(0, 0, false, false, false),
+            VersionAction::Upgrade
+        );
         assert_eq!(
             version_action(
                 agent_protocol::AGENT_VERSION,
                 agent_protocol::PROTOCOL_VERSION,
                 false,
                 true,
+                true,
             ),
             VersionAction::Upgrade
         );
         assert_eq!(
-            version_action(agent_protocol::AGENT_VERSION + 1, 0, false, false),
+            version_action(agent_protocol::AGENT_VERSION + 1, 0, false, false, false,),
             VersionAction::RejectNewer
         );
         assert_eq!(
-            version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false, false),
+            version_action(0, agent_protocol::PROTOCOL_VERSION + 1, false, false, false,),
             VersionAction::RejectNewer
         );
     }

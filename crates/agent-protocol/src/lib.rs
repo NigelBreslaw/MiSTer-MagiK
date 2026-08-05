@@ -4,10 +4,11 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 12 reads authoritative presentation telemetry from latch protocol v5.
-pub const AGENT_VERSION: u64 = 12;
+// Version 13 streams authoritative presentation telemetry from latch protocol v5.
+pub const AGENT_VERSION: u64 = 13;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
+pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
 pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
 pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1";
 pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v4";

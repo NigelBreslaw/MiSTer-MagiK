@@ -6994,6 +6994,19 @@ mod tests {
         DeviceTelemetrySample {
             seq,
             combined_cpu_pct: 12.5,
+            presentation: agent_client::PresentationTelemetrySample {
+                available: true,
+                captured_monotonic_us: seq.saturating_mul(1_000_000),
+                owned_vblank_count: Some(seq as u32),
+                presented_vblank_count: Some(seq as u32),
+                repeated_vblank_count: Some(0),
+                ownership_loss_count: Some(0),
+                active_sequence: Some(seq as u16),
+                magik_ownership: true,
+                pending: false,
+                lifetime_invariant_valid: true,
+                error: String::new(),
+            },
             cores: vec![
                 agent_client::CpuCoreTelemetry {
                     label: "CPU0".to_string(),

@@ -916,8 +916,12 @@ mod linux {
     const TOKEN_PATH: &str = "/media/fat/mister-magik-dev/agent.token";
     const MAGIK_UIO_GET_FBUF_LATCH: u16 = mister_magik_latch_contract::GET_FBUF_LATCH;
     const MAGIK_UIO_GET_FBUF_LATCH_CAPS: u16 = mister_magik_latch_contract::GET_FBUF_LATCH_CAPS;
+    const MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY: u16 =
+        mister_magik_latch_contract::GET_FBUF_PRESENTATION_TELEMETRY;
     const MAGIK_FBUF_STATUS_MAGIC: u16 = mister_magik_latch_contract::STATUS_MAGIC;
     const MAGIK_FBUF_CAPS_MAGIC: u16 = mister_magik_latch_contract::CAPS_MAGIC;
+    const MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC: u16 =
+        mister_magik_latch_contract::PRESENTATION_TELEMETRY_MAGIC;
     const FPGA_MGR_BASE: i64 = 0xFF70_6000;
     const FPGA_MGR_LEN: usize = 0x1000;
     const FPGA_GPO_OFF: usize = 0x10;
@@ -1317,7 +1321,7 @@ mod linux {
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
                 }
-                if maybe_handle_device_telemetry_stream_v1(
+                if maybe_handle_device_telemetry_stream_v2(
                     &line,
                     &token,
                     boot_id,
@@ -1477,7 +1481,7 @@ mod linux {
         true
     }
 
-    fn maybe_handle_device_telemetry_stream_v1(
+    fn maybe_handle_device_telemetry_stream_v2(
         line: &str,
         token: &str,
         boot_id: u64,
@@ -1488,7 +1492,7 @@ mod linux {
             Ok(value) => value,
             Err(_) => return false,
         };
-        if parsed.get("cmd").and_then(Value::as_str) != Some("device_telemetry_stream_v1") {
+        if parsed.get("cmd").and_then(Value::as_str) != Some("device_telemetry_stream_v2") {
             return false;
         }
         let id = parsed.get("id").cloned();
@@ -1514,11 +1518,11 @@ mod linux {
                 .clamp(100, 1_000),
         );
         append_log_line(format!(
-            "device_telemetry_stream_v1_start analytics_mode={analytics_mode} cadence_ms={}",
+            "device_telemetry_stream_v2_start analytics_mode={analytics_mode} cadence_ms={}",
             cadence.as_millis()
         ));
         let result = json!({
-            "schema": "mister-magik-device-telemetry-stream-v1",
+            "schema": "mister-magik-device-telemetry-stream-v2",
             "cadence_ms": cadence.as_millis(),
             "encoding": "jsonl",
         });
@@ -1547,7 +1551,7 @@ mod linux {
             }
         }
         clear_frame_analytics_lease();
-        append_log_line("device_telemetry_stream_v1_end".to_string());
+        append_log_line("device_telemetry_stream_v2_end".to_string());
         true
     }
 
@@ -1644,6 +1648,7 @@ mod linux {
         previous_cpu: Option<Vec<CpuTimes>>,
         previous_net: Option<NetSample>,
         previous_disk: Option<DiskSample>,
+        fpga: Option<FpgaIo>,
     }
 
     impl DeviceTelemetryStreamState {
@@ -1696,8 +1701,9 @@ mod linux {
             let ui_thread_cpu =
                 launcher_ui_pid(&slint_status, &magik["pids"]).and_then(main_thread_current_cpu);
             let slint_current = status_pid_matches(&slint_status, &magik["pids"]);
+            let presentation = self.presentation_telemetry_json();
             json!({
-                "schema": "mister-magik-device-telemetry-v1",
+                "schema": "mister-magik-device-telemetry-v2",
                 "seq": seq,
                 "agent": {
                     "boot_id": boot_id,
@@ -1712,6 +1718,7 @@ mod linux {
                 },
                 "network": network,
                 "storage": storage_json("/media/fat", disk_activity),
+                "presentation": presentation,
                 "launcher": {
                     "status_current": slint_current,
                     "status_sequence": slint_status.get("status_sequence").cloned().unwrap_or(Value::Null),
@@ -1743,6 +1750,58 @@ mod linux {
                 },
             })
         }
+
+        fn presentation_telemetry_json(&mut self) -> Value {
+            if self.fpga.is_none() {
+                match FpgaIo::open() {
+                    Ok(fpga) => self.fpga = Some(fpga),
+                    Err(error) => return unavailable_presentation_telemetry(error.to_string()),
+                }
+            }
+            let fpga = self.fpga.as_mut().expect("FPGA opened above");
+            let result = fpga
+                .lock_uio_transaction()
+                .and_then(|_guard| fpga.read_presentation_telemetry());
+            match result {
+                Ok(telemetry) => presentation_telemetry_json(telemetry, monotonic_us_now()),
+                Err(error) => {
+                    self.fpga = None;
+                    unavailable_presentation_telemetry(error.to_string())
+                }
+            }
+        }
+    }
+
+    pub(super) fn presentation_telemetry_json(
+        telemetry: mister_magik_latch_contract::PresentationTelemetry,
+        captured_monotonic_us: u64,
+    ) -> Value {
+        json!({
+            "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+            "source": "fpga-owned-vblank-telemetry",
+            "available": true,
+            "captured_monotonic_us": captured_monotonic_us,
+            "owned_vblank_count": telemetry.owned_vblank_count,
+            "presented_vblank_count": telemetry.presented_vblank_count,
+            "repeated_vblank_count": telemetry.repeated_vblank_count,
+            "ownership_loss_count": telemetry.ownership_loss_count,
+            "active_sequence": telemetry.active_sequence,
+            "flags": telemetry.flags,
+            "magik_ownership": telemetry.magik_ownership(),
+            "pending": telemetry.pending(),
+            "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
+            "error": Value::Null,
+        })
+    }
+
+    pub(super) fn unavailable_presentation_telemetry(error: String) -> Value {
+        json!({
+            "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+            "source": "fpga-owned-vblank-telemetry",
+            "available": false,
+            "captured_monotonic_us": monotonic_us_now(),
+            "error": error,
+        })
     }
 
     pub(super) fn parse_cpu_times_text(text: &str) -> Vec<CpuTimes> {
@@ -2285,6 +2344,7 @@ mod linux {
                     "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
                     "capabilities": [
                         mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
+                        mister_magik_agent_protocol::DEVICE_TELEMETRY_CAPABILITY,
                         mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
                         mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                     ],
@@ -2367,6 +2427,7 @@ mod linux {
                 "protocol_version": mister_magik_agent_protocol::PROTOCOL_VERSION,
                 "capabilities": [
                     mister_magik_agent_protocol::FRAMEBUFFER_CAPTURE_CAPABILITY,
+                    mister_magik_agent_protocol::DEVICE_TELEMETRY_CAPABILITY,
                     mister_magik_agent_protocol::LAUNCHER_AUTOMATION_CAPABILITY,
                     mister_magik_agent_protocol::ALPHA_CANDIDATE_INSTALL_CAPABILITY,
                 ],
@@ -3039,6 +3100,56 @@ mod linux {
                 }
                 result => result,
             }
+        }
+
+        fn read_presentation_telemetry(
+            &mut self,
+        ) -> io::Result<mister_magik_latch_contract::PresentationTelemetry> {
+            let protocol = match self.latch_protocol {
+                Some(protocol) => protocol,
+                None => self.negotiate_latch_protocol()?,
+            };
+            if protocol != mister_magik_latch_contract::LatchProtocol::V5 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "authoritative presentation telemetry requires latch protocol v5",
+                ));
+            }
+            match self.read_presentation_telemetry_once() {
+                Err(first) if first.kind() == io::ErrorKind::InvalidData => {
+                    self.reset_spi_transport();
+                    self.read_presentation_telemetry_once()
+                }
+                result => result,
+            }
+        }
+
+        fn read_presentation_telemetry_once(
+            &mut self,
+        ) -> io::Result<mister_magik_latch_contract::PresentationTelemetry> {
+            let result = (|| {
+                let (magic_hi, magic_lo) =
+                    self.cmd_capture(MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)?;
+                if magic_hi != MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC
+                    && magic_lo != MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "presentation telemetry unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                        ),
+                    ));
+                }
+                let mut words =
+                    [0u16; mister_magik_latch_contract::V5_PRESENTATION_TELEMETRY_WORDS];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                mister_magik_latch_contract::decode_presentation_telemetry(&words)
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
+            })();
+            self.disable_io();
+            result
         }
 
         fn read_latched_fbuf_status_once(
@@ -4346,6 +4457,31 @@ mod tests {
         drop(first);
         assert!(clients.claim().is_some());
         drop(second);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn presentation_telemetry_json_never_conflates_unavailable_with_zero() {
+        let available = linux::presentation_telemetry_json(
+            mister_magik_latch_contract::PresentationTelemetry {
+                owned_vblank_count: 60,
+                presented_vblank_count: 59,
+                repeated_vblank_count: 1,
+                ownership_loss_count: 0,
+                active_sequence: 42,
+                flags: 1 << 3,
+                crc: 0,
+            },
+            1_000_000,
+        );
+        assert_eq!(available["available"], true);
+        assert_eq!(available["repeated_vblank_count"], 1);
+        assert_eq!(available["captured_monotonic_us"], 1_000_000);
+
+        let unavailable = linux::unavailable_presentation_telemetry("busy".into());
+        assert_eq!(unavailable["available"], false);
+        assert!(unavailable.get("repeated_vblank_count").is_none());
+        assert_eq!(unavailable["error"], "busy");
     }
 
     #[cfg(target_os = "linux")]
