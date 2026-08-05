@@ -642,6 +642,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "libc",
+ "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "serde",
  "serde_json",

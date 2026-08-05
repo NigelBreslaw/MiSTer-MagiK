@@ -6237,7 +6237,7 @@ fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Re
     let refresh_period_us = median_u64(&refresh_periods)
         .ok_or("startup intro telemetry has no physical refresh period")?;
     let expected_intro_frames = INTRO_DURATION_US.div_ceil(refresh_period_us) as usize;
-    let mut software_refresh_diagnostics =
+    let software_refresh_diagnostics =
         software_refresh_diagnostics(0, &selected, refresh_period_us)?;
     let software_estimated_dropped_frames = software_refresh_diagnostics
         .get("software_estimated_dropped_frames")

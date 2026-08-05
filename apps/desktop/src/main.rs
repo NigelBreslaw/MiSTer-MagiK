@@ -819,6 +819,102 @@ struct RealtimeHealthTileView {
     state: String,
 }
 
+fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
+    let unavailable = |value: &str, detail: String, state: &str| RealtimeHealthTileView {
+        title: "Scanout".to_string(),
+        value: value.to_string(),
+        detail,
+        state: state.to_string(),
+    };
+    let Some(latest) = history.samples.back().map(|sample| &sample.presentation) else {
+        return unavailable("Unavailable", "No FPGA cadence sample.".to_string(), "warn");
+    };
+    if !latest.available {
+        return unavailable(
+            "Unavailable",
+            if latest.error.is_empty() {
+                "FPGA cadence telemetry is unavailable.".to_string()
+            } else {
+                latest.error.clone()
+            },
+            "warn",
+        );
+    }
+    if !latest.magik_ownership {
+        return unavailable("Ownership lost", "MagiK does not own scanout.".to_string(), "bad");
+    }
+    if latest.pending {
+        return unavailable("Pending", "FPGA endpoint is not settled.".to_string(), "warn");
+    }
+    if !latest.lifetime_invariant_valid {
+        return unavailable("Invalid", "FPGA cadence invariant failed.".to_string(), "bad");
+    }
+    let previous = history
+        .samples
+        .iter()
+        .rev()
+        .skip(1)
+        .map(|sample| &sample.presentation)
+        .find(|sample| {
+            sample.available
+                && sample.magik_ownership
+                && !sample.pending
+                && sample.lifetime_invariant_valid
+        });
+    let Some(previous) = previous else {
+        return unavailable("Settling", "Waiting for a second FPGA sample.".to_string(), "warn");
+    };
+    let Some((owned, presented, repeated, losses)) = latest
+        .owned_vblank_count
+        .zip(previous.owned_vblank_count)
+        .map(|(end, start)| end.wrapping_sub(start))
+        .zip(
+            latest
+                .presented_vblank_count
+                .zip(previous.presented_vblank_count)
+                .map(|(end, start)| end.wrapping_sub(start)),
+        )
+        .zip(
+            latest
+                .repeated_vblank_count
+                .zip(previous.repeated_vblank_count)
+                .map(|(end, start)| end.wrapping_sub(start)),
+        )
+        .zip(
+            latest
+                .ownership_loss_count
+                .zip(previous.ownership_loss_count)
+                .map(|(end, start)| end.wrapping_sub(start)),
+        )
+        .map(|(((owned, presented), repeated), losses)| (owned, presented, repeated, losses))
+    else {
+        return unavailable("Unavailable", "FPGA counters are incomplete.".to_string(), "warn");
+    };
+    if owned != presented.wrapping_add(repeated) {
+        return unavailable("Invalid", "FPGA cadence delta invariant failed.".to_string(), "bad");
+    }
+    if losses > 0 {
+        return unavailable(
+            "Ownership lost",
+            format!("{losses} ownership transition(s) in the latest window."),
+            "bad",
+        );
+    }
+    if repeated > 0 {
+        unavailable(
+            &format!("{repeated} repeated"),
+            format!("{presented} new frames across {owned} owned vblanks."),
+            "bad",
+        )
+    } else {
+        unavailable(
+            "0 repeated",
+            format!("{presented} new frames; ownership remained settled."),
+            "good",
+        )
+    }
+}
+
 #[cfg(feature = "compiled-ui")]
 slint::include_modules!();
 
@@ -1215,6 +1311,7 @@ fn realtime_view_from_history(
             }
             .to_string(),
         },
+        scanout_health_tile(history),
         RealtimeHealthTileView {
             title: "Network".to_string(),
             value: format!(
@@ -7132,10 +7229,12 @@ mod tests {
         assert_eq!(view.frame_samples[0].process_cpu_us, 80);
         assert!(!view.frame_samples[0].idle);
         assert_eq!(view.phases.len(), 5);
-        assert_eq!(view.health_tiles.len(), 3);
+        assert_eq!(view.health_tiles.len(), 4);
         assert_eq!(view.health_tiles[0].title, "MagiK");
         assert_eq!(view.health_tiles[1].title, "Main");
-        assert_eq!(view.health_tiles[2].title, "Network");
+        assert_eq!(view.health_tiles[2].title, "Scanout");
+        assert_eq!(view.health_tiles[2].value, "Settling");
+        assert_eq!(view.health_tiles[3].title, "Network");
         assert_eq!(view.storage_total_label, "512GB");
         assert_eq!(view.storage_used_label, "Used: 375GB");
         assert_eq!(view.storage_empty_label, "Free: 137GB");
@@ -7146,6 +7245,42 @@ mod tests {
         );
         assert!(!view.storage_read_path.is_empty());
         assert!(!view.storage_write_path.is_empty());
+    }
+
+    #[test]
+    fn scanout_health_uses_fpga_repeat_and_ownership_deltas() {
+        let mut history = RealtimeHistory::default();
+        history.push(telemetry_sample(10));
+        history.push(telemetry_sample(11));
+        let healthy = scanout_health_tile(&history);
+        assert_eq!(healthy.value, "0 repeated");
+        assert_eq!(healthy.state, "good");
+
+        let mut repeated = telemetry_sample(12);
+        repeated.presentation.owned_vblank_count = Some(12);
+        repeated.presentation.presented_vblank_count = Some(11);
+        repeated.presentation.repeated_vblank_count = Some(1);
+        history.push(repeated);
+        let dropped = scanout_health_tile(&history);
+        assert_eq!(dropped.value, "1 repeated");
+        assert_eq!(dropped.state, "bad");
+
+        let mut lost = telemetry_sample(13);
+        lost.presentation.presented_vblank_count = Some(12);
+        lost.presentation.repeated_vblank_count = Some(1);
+        lost.presentation.ownership_loss_count = Some(1);
+        history.push(lost);
+        let ownership = scanout_health_tile(&history);
+        assert_eq!(ownership.value, "Ownership lost");
+        assert_eq!(ownership.state, "bad");
+
+        let mut unavailable = telemetry_sample(14);
+        unavailable.presentation.available = false;
+        unavailable.presentation.error = "missing capability".to_string();
+        history.push(unavailable);
+        let missing = scanout_health_tile(&history);
+        assert_eq!(missing.value, "Unavailable");
+        assert_eq!(missing.state, "warn");
     }
 
     #[test]

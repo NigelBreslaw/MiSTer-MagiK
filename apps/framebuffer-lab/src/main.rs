@@ -143,6 +143,9 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
     let mut next_frame = started;
     let mut status_started = started;
     let mut status_frames = 0_u64;
+    let mut cadence_start = presenter
+        .presentation_telemetry()
+        .map(|telemetry| (telemetry, Instant::now()));
     loop {
         presenter
             .settle_pending()
@@ -164,16 +167,47 @@ fn run_window(demo: ParticleDemoKind, family: Option<PathBuf>) -> Result<(), Str
                 .live_reload_status_label()
                 .unwrap_or_else(|| "embedded".into());
             let error = renderer.live_reload_error().unwrap_or("none");
+            let cadence_end_at = Instant::now();
+            let cadence_end = presenter.presentation_telemetry();
+            let cadence = match (&cadence_start, &cadence_end) {
+                (Ok((start, start_at)), Ok(end)) => {
+                    let elapsed_us = cadence_end_at
+                        .saturating_duration_since(*start_at)
+                        .as_micros()
+                        .min(u128::from(u64::MAX)) as u64;
+                    match mister_magik_latch_contract::validate_presentation_telemetry_window(
+                        *start,
+                        *end,
+                        elapsed_us,
+                        FRAME_DURATION.as_micros() as u64,
+                    ) {
+                        Ok(delta) => format!(
+                            "authoritative_repeats={} presented={} owned={} ownership_losses=0",
+                            delta.repeated_vblank_delta,
+                            delta.presented_vblank_delta,
+                            delta.owned_vblank_delta,
+                        ),
+                        Err(error) => {
+                            format!("authoritative_repeats=unavailable cadence_error={error}")
+                        }
+                    }
+                }
+                (Err(error), _) | (_, Err(error)) => {
+                    format!("authoritative_repeats=unavailable cadence_error={error}")
+                }
+            };
             println!(
-                "particle-lab demo={} generation={} fps={:.1} visible={} slot={} sequence={} reload_error={}",
+                "particle-lab demo={} generation={} fps={:.1} visible={} slot={} sequence={} {} reload_error={}",
                 stats.demo.telemetry_label(),
                 reload,
                 status_frames as f64 / seconds,
                 stats.visible,
                 post.slot_index,
                 post.sequence,
+                cadence,
                 error
             );
+            cadence_start = cadence_end.map(|telemetry| (telemetry, cadence_end_at));
             status_started = Instant::now();
             status_frames = 0;
         }
