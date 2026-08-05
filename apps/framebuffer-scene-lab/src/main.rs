@@ -287,8 +287,8 @@ fn main() -> Result<(), String> {
                 options.phase_generation,
                 options.replacement_mode,
                 ScreenshotParadeStartup::Prepared,
-                DEFAULT_WIDTH,
-                DEFAULT_HEIGHT,
+                SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
+                    .map_err(|error| error.to_string())?,
             )?;
             println!(
                 "framebuffer-scene-lab check passed scene={} entries={} pack_bytes={} seed=0x{:016x}",
@@ -618,11 +618,9 @@ fn screenshot_scene(
     phase_generation: ScreenshotPhaseGeneration,
     replacement_mode: ScreenshotParadeReplacementMode,
     startup: ScreenshotParadeStartup,
-    width: usize,
-    height: usize,
+    geometry: SceneGeometry,
 ) -> Result<ScreenshotParade, String> {
     let archive = mister_magik_catalog::preview_worker::ResidentPreviewArchive::open(archive_path)?;
-    let geometry = SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
     ScreenshotParade::new(
         archive,
         ScreenshotParadeConfig {
@@ -653,8 +651,8 @@ fn render_screenshot_headless(
         phase_generation,
         replacement_mode,
         ScreenshotParadeStartup::Prepared,
-        DEFAULT_WIDTH,
-        DEFAULT_HEIGHT,
+        SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
+            .map_err(|error| error.to_string())?,
     )?;
     let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
     let target = Duration::from_millis(time_ms);
@@ -813,8 +811,7 @@ impl LabScene {
                     ScreenshotParadeReplacementMode::Prepare => ScreenshotParadeStartup::Streaming,
                     ScreenshotParadeReplacementMode::Recycle => ScreenshotParadeStartup::Prepared,
                 },
-                width,
-                height,
+                SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?,
             )
             .map(Box::new)
             .map(Self::Screenshot),
