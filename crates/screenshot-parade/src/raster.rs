@@ -1022,7 +1022,7 @@ fn reconstruct_linear_phase_neon_if_selected(
     if !matches!(kernel, LinearPhaseKernel::Neon) {
         return None;
     }
-    #[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
         let mut output = vec![[0_u16; 4]; output_width * height];
         // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Both slices describe
@@ -1039,7 +1039,7 @@ fn reconstruct_linear_phase_neon_if_selected(
         }
         return Some(output);
     }
-    #[cfg(not(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab")))]
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
     {
         let _ = (source, source_width, height, output_width, weights);
         None
@@ -1047,7 +1047,7 @@ fn reconstruct_linear_phase_neon_if_selected(
 }
 
 fn validate_neon_phase_kernel() {
-    #[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
         use std::sync::OnceLock;
 
@@ -1104,7 +1104,7 @@ fn validate_neon_phase_kernel() {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "arm", feature = "neon-phase-lab"))]
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 unsafe fn reconstruct_linear_phase_neon(
     source: &[[u16; 4]],
     source_width: usize,

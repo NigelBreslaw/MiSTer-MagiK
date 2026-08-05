@@ -15,13 +15,12 @@ warnings = "deny"
 [lints.clippy]
 all = "deny"
 
-[features]
-default = []
-neon-phase-lab = []
-
 [dependencies]
 mister-magik-catalog = { path = "../catalog", default-features = false, features = ["reader"] }
 mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
+
+[build-dependencies]
+cc = "1.3"
 
 [profile.release]
 opt-level = 3
