@@ -55,6 +55,9 @@ use crate::ui_display::{
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,
 };
+use mister_magik_fb::framebuffer::full_frame_latch::{
+    LatchCopyPath, LatchFrameBuffers, LatchHardware, wait_for_latch_completion,
+};
 use mister_magik_fb::framebuffer::present::{
     copy_cached_rect_565, copy_cached_rows_565, copy_direct_preview_rect_565,
     copy_direct_preview_rect_to_hidden,
@@ -142,8 +145,7 @@ use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use launcher_startup_intro::*;
 use mister_magik_mister_runtime::framebuffer::latch_state::{
-    DirectLayerState, LatchFramePlan as LauncherFramePlan, LatchPresentPlan,
-    LatchSlotHardwareState, TwoBufferLatchState,
+    DirectLayerState, LatchFramePlan as LauncherFramePlan, LatchPresentPlan, TwoBufferLatchState,
 };
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;

@@ -18,18 +18,19 @@
 use super::super::*;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use mister_magik_fb::framebuffer::full_frame_latch::{
-    LatchCompletion, LatchCopyPath, LatchCopyResult, LatchFrameBuffers, LatchHardware,
-    LatchPostRequest, LogicalStatusReadBudget, latch_status_read_failure,
-    post_confirm_prepared_frame, posted_sequence_observed, read_post_status, read_status_sample,
-    rejected_wire_diagnostics, wait_for_latch_completion,
+    LatchCompletion, LatchCopyResult, LatchPostRequest, LogicalStatusReadBudget,
+    latch_status_read_failure, post_confirm_prepared_frame, read_status_sample,
+    rejected_wire_diagnostics,
 };
 #[cfg(test)]
 use mister_magik_fb::framebuffer::full_frame_latch::{
-    dev_latch_post_skip_for, dev_latch_timeout_for,
+    dev_latch_post_skip_for, dev_latch_timeout_for, posted_sequence_observed, read_post_status,
 };
 use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
+#[cfg(test)]
+use mister_magik_fb::latch_readiness::LatchWireDiagnostics;
 use mister_magik_fb::latch_readiness::{
-    LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision, LatchWireDiagnostics,
+    LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision,
 };
 use std::io;
 
