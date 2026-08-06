@@ -1922,6 +1922,7 @@ fn run_window(
         return Err("scene profiling requires a release-device-profile build".into());
     }
     loop {
+        let pipeline_before_settle = presenter.pipeline_stats();
         let settle_started = Instant::now();
         let settle_cpu_started = process_cpu_time();
         let settled = presenter
@@ -1951,6 +1952,17 @@ fn run_window(
                 frame_evidence.push(evidence);
             }
             presentation_tick = presentation_tick.saturating_add(1);
+            let settle_status_reads = presenter
+                .pipeline_stats()
+                .status_reads
+                .saturating_sub(pipeline_before_settle.status_reads);
+            if screenshot_pipeline.is_some() && settle_status_reads > 1 {
+                // A polled confirmation was observed within one short status
+                // backoff of the physical vblank, so it is safe to calibrate
+                // the absolute userspace cadence to this receipt. A one-read
+                // (possibly late) confirmation never moves the clock.
+                next_frame = Instant::now();
+            }
             if let Some(bounded) = bounded
                 && measurement_started.is_none()
                 && screenshot_pipeline.as_ref().map_or_else(
