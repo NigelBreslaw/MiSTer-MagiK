@@ -215,6 +215,10 @@ pub struct SceneLabArgs {
     pub(crate) seed: Option<String>,
     #[arg(long)]
     pub(crate) case: Option<String>,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=524_288))]
+    pub(crate) particle_count: Option<u32>,
+    #[arg(long, value_enum)]
+    pub(crate) particle_preset: Option<SceneLabParticlePreset>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
     pub(crate) seconds: Option<u64>,
     #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=600))]
@@ -235,6 +239,21 @@ pub enum SceneLabScene {
     NavigationTransition,
     CardFlip,
     ScreenshotScreensaver,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum SceneLabParticlePreset {
+    Capacity,
+    Visual,
+}
+
+impl SceneLabParticlePreset {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Capacity => "capacity",
+            Self::Visual => "visual",
+        }
+    }
 }
 
 impl SceneLabScene {
@@ -345,6 +364,8 @@ pub fn run_scene_lab(
             fixture: args.fixture.as_deref(),
             seed,
             case: args.case.as_deref(),
+            particle_count: args.particle_count,
+            particle_preset: args.particle_preset.map(SceneLabParticlePreset::as_str),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,
             profile: args.profile,

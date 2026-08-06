@@ -11,7 +11,7 @@ use mister_magik_framebuffer_scenes::{
     FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneGeometry, SceneTarget,
 };
 use mister_magik_particles::cabinet::{CabinetRenderOptions, CabinetScene, CabinetStageTimings};
-use mister_magik_particles::engine::ParticlePreset;
+use mister_magik_particles::engine::{PARTICLE_COUNT_MAX, ParticlePreset};
 use mister_magik_particles::intro::{IntroScene, IntroStageTimings};
 use mister_magik_particles::intro_recipe::{
     INTRO_RECIPE_SCHEMA_V1, IntroRecipe, embedded_intro_recipe, parse_intro_recipe,
@@ -424,6 +424,56 @@ pub struct FocusedParticleRenderer {
     geometry: SceneGeometry,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MagikBenchmarkPreset {
+    Capacity,
+    Visual,
+}
+
+impl MagikBenchmarkPreset {
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "capacity" => Some(Self::Capacity),
+            "visual" => Some(Self::Visual),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Capacity => "capacity",
+            Self::Visual => "visual",
+        }
+    }
+
+    const fn particle_preset(self) -> ParticlePreset {
+        match self {
+            Self::Capacity => ParticlePreset::Capacity,
+            Self::Visual => ParticlePreset::Visual,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MagikBenchmarkOptions {
+    pub particle_count: usize,
+    pub preset: MagikBenchmarkPreset,
+}
+
+impl MagikBenchmarkOptions {
+    pub fn validate(self) -> Result<Self, String> {
+        if !(1..=PARTICLE_COUNT_MAX).contains(&self.particle_count) {
+            return Err(format!(
+                "MagiK particle count {} is outside 1..={PARTICLE_COUNT_MAX}",
+                self.particle_count
+            ));
+        }
+        Ok(self)
+    }
+}
+
 pub const CABINET_LAB_MAX_PARTICLES: usize = 72_704;
 
 enum PreparedEffect {
@@ -434,12 +484,29 @@ enum PreparedEffect {
 
 impl FocusedParticleRenderer {
     pub fn new(width: usize, height: usize, recipe: EffectRecipe) -> Result<Self, String> {
+        Self::new_with_magik_benchmark(width, height, recipe, None)
+    }
+
+    pub fn new_with_magik_benchmark(
+        width: usize,
+        height: usize,
+        recipe: EffectRecipe,
+        magik: Option<MagikBenchmarkOptions>,
+    ) -> Result<Self, String> {
         let effect = match recipe {
-            EffectRecipe::Magik(recipe) => {
+            EffectRecipe::Magik(mut recipe) => {
+                let preset = if let Some(options) =
+                    magik.map(MagikBenchmarkOptions::validate).transpose()?
+                {
+                    recipe.particle_count = options.particle_count;
+                    options.preset.particle_preset()
+                } else {
+                    ParticlePreset::Visual
+                };
                 PreparedEffect::Magik(Box::new(MagikScene::from_magik_recipe_with_options(
                     width,
                     height,
-                    ParticlePreset::Visual,
+                    preset,
                     recipe,
                     MagikSceneOptions {
                         order_commands: false,
@@ -449,6 +516,9 @@ impl FocusedParticleRenderer {
                 )?))
             }
             EffectRecipe::Cabinet(recipe) => {
+                if magik.is_some() {
+                    return Err("MagiK benchmark options require a MagiK recipe".into());
+                }
                 PreparedEffect::Cabinet(Box::new(CabinetScene::new_with_capacity(
                     width,
                     height,
@@ -458,6 +528,9 @@ impl FocusedParticleRenderer {
                 )?))
             }
             EffectRecipe::Intro(recipe) => {
+                if magik.is_some() {
+                    return Err("MagiK benchmark options require a MagiK recipe".into());
+                }
                 PreparedEffect::Intro(Box::new(IntroScene::new(width, height, recipe)?))
             }
         };
@@ -697,10 +770,21 @@ struct PreparedCandidate {
 }
 
 impl PreparedCandidate {
-    fn prepare(width: usize, height: usize, recipe: EffectRecipe) -> Result<Self, String> {
+    fn prepare(
+        width: usize,
+        height: usize,
+        recipe: EffectRecipe,
+        magik: Option<MagikBenchmarkOptions>,
+    ) -> Result<Self, String> {
         let kind = recipe.kind();
-        let renderer = FocusedParticleRenderer::new(width, height, recipe)?;
-        let embedded = FocusedParticleRenderer::new(width, height, EffectRecipe::embedded(kind)?)?;
+        let renderer =
+            FocusedParticleRenderer::new_with_magik_benchmark(width, height, recipe, magik)?;
+        let embedded = FocusedParticleRenderer::new_with_magik_benchmark(
+            width,
+            height,
+            EffectRecipe::embedded(kind)?,
+            magik,
+        )?;
         Ok(Self {
             kind,
             renderer,
@@ -713,6 +797,7 @@ impl PreparedCandidate {
         height: usize,
         expected: EffectKind,
         recipe: EffectRecipe,
+        magik: Option<MagikBenchmarkOptions>,
     ) -> Result<Self, String> {
         let actual = recipe.kind();
         if actual != expected {
@@ -722,7 +807,7 @@ impl PreparedCandidate {
                 actual.label()
             ));
         }
-        Self::prepare(width, height, recipe)
+        Self::prepare(width, height, recipe, magik)
     }
 }
 
@@ -733,9 +818,19 @@ impl LiveParticleRenderer {
         recipe_path: PathBuf,
         status_path: PathBuf,
     ) -> Result<Self, String> {
+        Self::start_with_magik_benchmark(width, height, recipe_path, status_path, None)
+    }
+
+    pub fn start_with_magik_benchmark(
+        width: usize,
+        height: usize,
+        recipe_path: PathBuf,
+        status_path: PathBuf,
+        magik: Option<MagikBenchmarkOptions>,
+    ) -> Result<Self, String> {
         let initial_bytes = read_effect_recipe_bytes(&recipe_path)?;
         let initial =
-            PreparedCandidate::prepare(width, height, parse_effect_recipe(&initial_bytes)?)?;
+            PreparedCandidate::prepare(width, height, parse_effect_recipe(&initial_bytes)?, magik)?;
         let expected_kind = initial.kind;
         publish_startup_particle_status(
             &status_path,
@@ -746,7 +841,7 @@ impl LiveParticleRenderer {
             &initial_bytes,
             move |bytes| {
                 let recipe = parse_effect_recipe(bytes)?;
-                PreparedCandidate::prepare_for_kind(width, height, expected_kind, recipe)
+                PreparedCandidate::prepare_for_kind(width, height, expected_kind, recipe, magik)
             },
         )?;
         Ok(Self {
@@ -1008,6 +1103,7 @@ mod tests {
             DEFAULT_HEIGHT,
             EffectKind::Magik,
             magik,
+            None,
         )
         .unwrap();
         assert_eq!(prepared.renderer.kind(), EffectKind::Magik);
@@ -1019,10 +1115,28 @@ mod tests {
             DEFAULT_HEIGHT,
             EffectKind::Magik,
             cabinet,
+            None,
         )
         .err()
         .unwrap();
         assert!(error.contains("cannot switch"));
+    }
+
+    #[test]
+    fn magik_benchmark_options_override_count_and_preset() {
+        let mut renderer = FocusedParticleRenderer::new_with_magik_benchmark(
+            DEFAULT_WIDTH,
+            DEFAULT_HEIGHT,
+            EffectRecipe::Magik(embedded_magik_recipe().unwrap()),
+            Some(MagikBenchmarkOptions {
+                particle_count: 1_024,
+                preset: MagikBenchmarkPreset::Capacity,
+            }),
+        )
+        .unwrap();
+        let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+        let stats = renderer.render(&mut pixels, Duration::ZERO).unwrap();
+        assert_eq!(stats.particles, 1_024);
     }
 
     fn rgb565_hash(pixels: &[Rgb565Pixel]) -> u64 {

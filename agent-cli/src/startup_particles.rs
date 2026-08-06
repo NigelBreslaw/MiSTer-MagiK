@@ -398,6 +398,16 @@ pub fn execute_scene_device(
             return Err("scene-lab --case requires --seconds".into());
         }
     }
+    if args.particle_count.is_some() != args.particle_preset.is_some() {
+        return Err(
+            "scene-lab --particle-count and --particle-preset must be supplied together".into(),
+        );
+    }
+    if args.particle_count.is_some()
+        && (args.scene != DeviceSceneLabScene::Magik || args.seconds.is_none())
+    {
+        return Err("scene-lab particle benchmark options require a timed MagiK scene".into());
+    }
     if args.warmup_seconds > 0 && args.seconds.is_none() {
         return Err("scene-lab --warmup-seconds requires --seconds".into());
     }

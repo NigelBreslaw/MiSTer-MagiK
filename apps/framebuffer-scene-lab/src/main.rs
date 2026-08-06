@@ -21,7 +21,8 @@ use mister_magik_core::input_state::{DirectionalEdges, DirectionalState};
 use mister_magik_framebuffer_scene_lab::LiveParticleRenderer;
 use mister_magik_framebuffer_scene_lab::{
     CABINET_LAB_MAX_PARTICLES, DEFAULT_HEIGHT, DEFAULT_WIDTH, EffectKind, FocusedParticleRenderer,
-    NavigationFixture, NavigationFixtureScene, read_effect_recipe,
+    MagikBenchmarkOptions, MagikBenchmarkPreset, NavigationFixture, NavigationFixtureScene,
+    read_effect_recipe,
 };
 use mister_magik_framebuffer_scenes::SceneGeometry;
 use mister_magik_particles::cabinet::{
@@ -399,6 +400,7 @@ fn main() -> Result<(), String> {
                 seed: options.seed,
             },
             None,
+            None,
             options.profile,
             options.measurement_evidence(),
             options.bounded_run(),
@@ -424,6 +426,7 @@ fn main() -> Result<(), String> {
         }
         return run_window(
             SceneSource::CardFlip(duration),
+            None,
             None,
             options.profile,
             options.measurement_evidence(),
@@ -454,6 +457,7 @@ fn main() -> Result<(), String> {
         }
         return run_window(
             SceneSource::Navigation(fixture),
+            None,
             None,
             options.profile,
             options.measurement_evidence(),
@@ -492,6 +496,7 @@ fn main() -> Result<(), String> {
     run_window(
         SceneSource::Particle(recipe_path.to_path_buf()),
         options.case,
+        options.magik_benchmark_options(),
         options.profile,
         options.measurement_evidence(),
         options.bounded_run(),
@@ -825,6 +830,7 @@ impl LabScene {
     fn start(
         source: SceneSource,
         case: Option<CabinetCase>,
+        magik: Option<MagikBenchmarkOptions>,
         width: usize,
         height: usize,
     ) -> Result<Self, String> {
@@ -840,12 +846,15 @@ impl LabScene {
                     })?;
                     Ok(Self::Focused(renderer))
                 } else {
-                    Ok(Self::Particle(LiveParticleRenderer::start(
-                        width,
-                        height,
-                        recipe.clone(),
-                        status_path(&recipe),
-                    )?))
+                    Ok(Self::Particle(
+                        LiveParticleRenderer::start_with_magik_benchmark(
+                            width,
+                            height,
+                            recipe.clone(),
+                            status_path(&recipe),
+                            magik,
+                        )?,
+                    ))
                 }
             }
             SceneSource::Navigation(fixture) => Ok(Self::Navigation(
@@ -1515,6 +1524,7 @@ const fn hud_glyph(character: char) -> [u8; 7] {
 fn run_window(
     source: SceneSource,
     case: Option<CabinetCase>,
+    magik: Option<MagikBenchmarkOptions>,
     _profile: bool,
     _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
@@ -1522,7 +1532,7 @@ fn run_window(
     let event_loop = winit::event_loop::EventLoop::new()
         .map_err(|error| format!("create framebuffer-scene-lab event loop: {error}"))?;
     event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
-    let mut application = macos::ParticleLabApplication::new(source, case)?;
+    let mut application = macos::ParticleLabApplication::new(source, case, magik)?;
     event_loop
         .run_app(&mut application)
         .map_err(|error| format!("run framebuffer-scene-lab window: {error}"))
@@ -1532,6 +1542,7 @@ fn run_window(
 fn run_window(
     source: SceneSource,
     case: Option<CabinetCase>,
+    magik: Option<MagikBenchmarkOptions>,
     profile: bool,
     measurement_evidence: Option<MeasurementEvidence>,
     bounded: Option<BoundedRun>,
@@ -1560,7 +1571,13 @@ fn run_window(
         _ => None,
     };
     let mut renderer = if screenshot_request.is_none() {
-        Some(LabScene::start(source, case, plan.render_w, plan.render_h)?)
+        Some(LabScene::start(
+            source,
+            case,
+            magik,
+            plan.render_w,
+            plan.render_h,
+        )?)
     } else {
         None
     };
@@ -3041,6 +3058,7 @@ fn monotonic_time_us() -> u64 {
 fn run_window(
     _source: SceneSource,
     _case: Option<CabinetCase>,
+    _magik: Option<MagikBenchmarkOptions>,
     _profile: bool,
     _measurement_evidence: Option<MeasurementEvidence>,
     _bounded: Option<BoundedRun>,
@@ -3059,6 +3077,8 @@ struct Options {
     output: Option<PathBuf>,
     check: bool,
     case: Option<CabinetCase>,
+    particle_count: Option<usize>,
+    particle_preset: Option<MagikBenchmarkPreset>,
     seconds: Option<u64>,
     warmup_seconds: u64,
     profile: bool,
@@ -3081,6 +3101,8 @@ impl Options {
         let mut output = None;
         let mut check = false;
         let mut case = None;
+        let mut particle_count = None;
+        let mut particle_preset = None;
         let mut seconds = None;
         let mut warmup_seconds = 0;
         let mut profile = false;
@@ -3134,6 +3156,27 @@ impl Options {
                             "unknown cabinet case {value:?}; use one of the closed case registry"
                         )
                     })?);
+                }
+                "--particle-count" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--particle-count requires a value")?;
+                    particle_count = Some(
+                        value
+                            .parse::<usize>()
+                            .map_err(|_| format!("invalid particle count {value:?}"))?,
+                    );
+                }
+                "--particle-preset" => {
+                    let value = arguments
+                        .next()
+                        .ok_or("--particle-preset requires a value")?;
+                    particle_preset =
+                        Some(MagikBenchmarkPreset::parse(&value).ok_or_else(|| {
+                            format!(
+                                "invalid particle preset {value:?}; expected capacity or visual"
+                            )
+                        })?);
                 }
                 "--seconds" => {
                     let value = arguments.next().ok_or("--seconds requires a value")?;
@@ -3221,6 +3264,8 @@ impl Options {
             output,
             check,
             case,
+            particle_count,
+            particle_preset,
             seconds,
             warmup_seconds,
             profile,
@@ -3248,6 +3293,21 @@ impl Options {
         }
         if self.case.is_some() && self.seconds.is_none() {
             return Err("--case requires --seconds".into());
+        }
+        if self.particle_count.is_some() != self.particle_preset.is_some() {
+            return Err("--particle-count and --particle-preset must be supplied together".into());
+        }
+        if let Some(options) = self.magik_benchmark_options() {
+            options.validate()?;
+            if self.scene != EffectKind::Magik
+                || self.seconds.is_none()
+                || self.check
+                || self.output.is_some()
+            {
+                return Err(
+                    "MagiK particle benchmark options require a timed interactive MagiK run".into(),
+                );
+            }
         }
         if self.warmup_seconds > 0 && self.seconds.is_none() {
             return Err("--warmup-seconds requires --seconds".into());
@@ -3328,6 +3388,15 @@ impl Options {
         })
     }
 
+    fn magik_benchmark_options(&self) -> Option<MagikBenchmarkOptions> {
+        self.particle_count
+            .zip(self.particle_preset)
+            .map(|(particle_count, preset)| MagikBenchmarkOptions {
+                particle_count,
+                preset,
+            })
+    }
+
     fn measurement_evidence(&self) -> Option<MeasurementEvidence> {
         self.assessment_pass.map(|pass| MeasurementEvidence {
             pass,
@@ -3340,7 +3409,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene magik --recipe FILE.json --particle-count N --particle-preset capacity|visual --seconds N\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
@@ -3515,8 +3584,12 @@ mod macos {
     }
 
     impl ParticleLabApplication {
-        pub(super) fn new(source: SceneSource, case: Option<CabinetCase>) -> Result<Self, String> {
-            let renderer = LabScene::start(source, case, DEFAULT_WIDTH, DEFAULT_HEIGHT)?;
+        pub(super) fn new(
+            source: SceneSource,
+            case: Option<CabinetCase>,
+            magik: Option<MagikBenchmarkOptions>,
+        ) -> Result<Self, String> {
+            let renderer = LabScene::start(source, case, magik, DEFAULT_WIDTH, DEFAULT_HEIGHT)?;
             let controls = (case.is_none() && renderer.effect() == EffectKind::Cabinet)
                 .then(CabinetLabControls::new);
             let now = Instant::now();
@@ -3836,6 +3909,30 @@ mod tests {
         assert_eq!(interactive.recipe, Some(PathBuf::from("magik.json")));
         assert!(interactive.output.is_none());
 
+        let benchmark = Options::parse(
+            [
+                "--scene",
+                "magik",
+                "--recipe",
+                "magik.json",
+                "--particle-count",
+                "40000",
+                "--particle-preset",
+                "visual",
+                "--seconds",
+                "30",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert_eq!(
+            benchmark.magik_benchmark_options(),
+            Some(MagikBenchmarkOptions {
+                particle_count: 40_000,
+                preset: MagikBenchmarkPreset::Visual,
+            })
+        );
+
         let navigation = Options::parse(
             [
                 "--scene",
@@ -4081,6 +4178,44 @@ mod tests {
             )
             .is_err()
         );
+        for arguments in [
+            vec![
+                "--scene",
+                "magik",
+                "--recipe",
+                "magik.json",
+                "--particle-count",
+                "40000",
+                "--seconds",
+                "30",
+            ],
+            vec![
+                "--scene",
+                "cabinet",
+                "--recipe",
+                "cabinet.json",
+                "--particle-count",
+                "40000",
+                "--particle-preset",
+                "capacity",
+                "--seconds",
+                "30",
+            ],
+            vec![
+                "--scene",
+                "magik",
+                "--recipe",
+                "magik.json",
+                "--particle-count",
+                "524289",
+                "--particle-preset",
+                "capacity",
+                "--seconds",
+                "30",
+            ],
+        ] {
+            assert!(Options::parse(arguments.into_iter().map(String::from)).is_err());
+        }
     }
 
     #[test]

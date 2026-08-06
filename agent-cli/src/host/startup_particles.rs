@@ -46,6 +46,8 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
     pub(crate) case: Option<&'a str>,
+    pub(crate) particle_count: Option<u32>,
+    pub(crate) particle_preset: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
     pub(crate) warmup_seconds: u64,
     pub(crate) profile: bool,
@@ -61,6 +63,8 @@ struct RemoteLabRequest {
     fixture: Option<String>,
     screenshot: Option<RemoteScreenshotArgs>,
     case: Option<String>,
+    particle_count: Option<u32>,
+    particle_preset: Option<String>,
     seconds: Option<u64>,
     warmup_seconds: u64,
     profile: bool,
@@ -94,6 +98,8 @@ pub(super) fn run(
             fixture: None,
             seed: None,
             case: None,
+            particle_count: None,
+            particle_preset: None,
             seconds: None,
             warmup_seconds: 0,
             profile: false,
@@ -125,6 +131,8 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         fixture,
         seed,
         case,
+        particle_count,
+        particle_preset,
         seconds,
         warmup_seconds,
         profile,
@@ -173,6 +181,8 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             recipe,
             fixture,
             case,
+            particle_count,
+            particle_preset,
             profile,
             assess,
         ) {
@@ -210,6 +220,8 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     fixture,
                     screenshot,
                     case,
+                    particle_count,
+                    particle_preset: particle_preset.map(str::to_owned),
                     seconds,
                     warmup_seconds,
                     profile,
@@ -537,6 +549,8 @@ fn run_remote_lab(
         fixture,
         screenshot,
         case,
+        particle_count,
+        particle_preset,
         seconds,
         warmup_seconds,
         profile,
@@ -553,6 +567,8 @@ fn run_remote_lab(
             fixture.as_deref(),
             screenshot.as_ref(),
             case.as_deref(),
+            particle_count,
+            particle_preset.as_deref(),
             seconds,
             warmup_seconds,
             profile,
@@ -612,6 +628,8 @@ fn prepare_scene_evidence_output(
     recipe: Option<&Path>,
     fixture: Option<&str>,
     case: Option<&str>,
+    particle_count: Option<u32>,
+    particle_preset: Option<&str>,
     profile: bool,
     assess: bool,
 ) -> Result<()> {
@@ -648,6 +666,8 @@ fn prepare_scene_evidence_output(
         })),
         "fixture": fixture,
         "case": case,
+        "particle_count": particle_count,
+        "particle_preset": particle_preset,
         "recipe_sha256": recipe.map(|path| file_sha256(path.to_path_buf())).transpose()?,
     });
     fs::write(
@@ -1567,6 +1587,8 @@ fn remote_run_lab_command(
     fixture: Option<&str>,
     screenshot: Option<&RemoteScreenshotArgs>,
     case: Option<&str>,
+    particle_count: Option<u32>,
+    particle_preset: Option<&str>,
     seconds: Option<u64>,
     warmup_seconds: u64,
     profile: bool,
@@ -1580,9 +1602,14 @@ fn remote_run_lab_command(
         sh(&display_contracts.display),
     );
     let scene_arguments = format!(
-        "{} {}",
+        "{} {} {}",
         remote_scene_arguments(scene, has_recipe, fixture, screenshot),
         case.map_or_else(String::new, |case| format!("--case {}", sh(case))),
+        particle_count
+            .zip(particle_preset)
+            .map_or_else(String::new, |(count, preset)| {
+                format!("--particle-count {count} --particle-preset {}", sh(preset))
+            }),
     );
     let bounded = seconds.map(|seconds| {
         format!(
@@ -1707,6 +1734,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
             0,
             false,
             false,
@@ -1723,12 +1752,34 @@ mod tests {
     }
 
     #[test]
+    fn magik_benchmark_controls_are_forwarded() {
+        let run = remote_run_lab_command(
+            &hdmi_contracts(),
+            "magik",
+            true,
+            None,
+            None,
+            None,
+            Some(40_000),
+            Some("visual"),
+            Some(30),
+            0,
+            false,
+            false,
+        );
+        assert!(run.contains("--particle-count 40000"));
+        assert!(run.contains(&format!("--particle-preset {}", sh("visual"))));
+    }
+
+    #[test]
     fn navigation_fixture_lab_is_volatile_and_recipe_free() {
         let run = remote_run_lab_command(
             &hdmi_contracts(),
             "navigation-transition",
             false,
             Some("home-arcade"),
+            None,
+            None,
             None,
             None,
             None,
@@ -1752,6 +1803,8 @@ mod tests {
             &hdmi_contracts(),
             "card-flip",
             false,
+            None,
+            None,
             None,
             None,
             None,
@@ -1782,6 +1835,8 @@ mod tests {
             Some(&screenshot),
             None,
             None,
+            None,
+            None,
             0,
             false,
             false,
@@ -1800,6 +1855,8 @@ mod tests {
             &hdmi_contracts(),
             "card-flip",
             false,
+            None,
+            None,
             None,
             None,
             None,
@@ -1824,6 +1881,8 @@ mod tests {
             Some("home-arcade"),
             None,
             None,
+            None,
+            None,
             Some(5),
             1,
             false,
@@ -1844,6 +1903,8 @@ mod tests {
             false,
             None,
             Some(&screenshot),
+            None,
+            None,
             None,
             Some(90),
             0,
@@ -2029,6 +2090,8 @@ mod tests {
             &contracts,
             "card-flip",
             false,
+            None,
+            None,
             None,
             None,
             None,
