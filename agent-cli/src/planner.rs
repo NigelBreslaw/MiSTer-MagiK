@@ -974,6 +974,7 @@ fn add_path_operations(
     add_crate(path, "crates/magik-core", "magik-core", out);
     add_crate(path, "crates/framebuffer-scenes", "framebuffer-scenes", out);
     add_crate(path, "crates/particles", "particles", out);
+    add_crate(path, "crates/perf-events", "perf-events", out);
     add_crate(path, "crates/screenshot-parade", "screenshot-parade", out);
     if path.starts_with("crates/screenshot-parade") {
         add_crate(
@@ -1387,6 +1388,30 @@ mod tests {
                 .iter()
                 .any(|argument| argument.contains("apps/mister/Cargo.toml"))
         }));
+    }
+
+    #[test]
+    fn perf_event_changes_select_focused_crate_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["crates/perf-events/src/lib.rs".into()],
+        )
+        .unwrap();
+        let ids = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "perf-events.clippy",
+                "perf-events.format",
+                "perf-events.tests"
+            ]
+        );
     }
 
     #[test]
