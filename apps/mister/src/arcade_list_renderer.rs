@@ -328,18 +328,7 @@ struct ArcadeFilterListDrawKey {
     visible_hash: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArcadeListUpdate {
-    Full(DirtyRect),
-    /// The cached RAM list surface was advanced by scrolling and patching only
-    /// the newly exposed content band. This is not a framebuffer dirty rect:
-    /// presenting a scroll by reading from live `/dev/fb0` was measured slower
-    /// on MiSTer's write-combined framebuffer than rewriting the list overlay.
-    Scroll {
-        delta_y: isize,
-        rect: DirtyRect,
-    },
-}
+pub(crate) use mister_magik_mister_runtime::framebuffer::latch_state::DirectLayerUpdate as ArcadeListUpdate;
 
 impl ArcadeListRenderer {
     pub(crate) fn new() -> Self {

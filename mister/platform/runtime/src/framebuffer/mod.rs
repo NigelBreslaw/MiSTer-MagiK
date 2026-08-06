@@ -10,6 +10,8 @@ pub mod format;
 pub mod hidden_latch;
 pub mod hidden_scanout;
 #[cfg(feature = "ui")]
+pub mod latch_state;
+#[cfg(feature = "ui")]
 pub mod mapped;
 #[cfg(feature = "ui")]
 pub mod mode;

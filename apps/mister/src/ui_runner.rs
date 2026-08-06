@@ -97,7 +97,6 @@ mod launcher_catalog_session;
 mod launcher_compositor;
 pub(crate) mod launcher_display_session;
 mod launcher_frame_accounting;
-mod launcher_latch_state;
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
@@ -136,13 +135,16 @@ use launcher_catalog_session::*;
 use launcher_compositor::*;
 use launcher_display_session::*;
 use launcher_frame_accounting::*;
-use launcher_latch_state::*;
 use launcher_loop::*;
 use launcher_present::*;
 use launcher_scheduler::*;
 use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use launcher_startup_intro::*;
+use mister_magik_mister_runtime::framebuffer::latch_state::{
+    DirectLayerState, LatchFramePlan as LauncherFramePlan, LatchPresentPlan,
+    LatchSlotHardwareState, TwoBufferLatchState,
+};
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
 use tear_pattern_loop::*;

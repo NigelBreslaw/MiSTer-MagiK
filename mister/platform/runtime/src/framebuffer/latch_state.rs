@@ -1,12 +1,25 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::{ArcadeListUpdate, arcade_update_dirty_rect};
-use mister_magik_fb::framebuffer::damage::TwoSlotDamageLedger;
-use mister_magik_fb::framebuffer::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
+use super::damage::TwoSlotDamageLedger;
+use super::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LatchSlotHardwareState {
+pub enum DirectLayerUpdate {
+    Full(DirtyRect),
+    Scroll { delta_y: isize, rect: DirtyRect },
+}
+
+impl DirectLayerUpdate {
+    pub const fn dirty_rect(self) -> DirtyRect {
+        match self {
+            Self::Full(rect) | Self::Scroll { rect, .. } => rect,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LatchSlotHardwareState {
     Unknown,
     Writable,
     Pending(u16),
@@ -14,14 +27,14 @@ pub(super) enum LatchSlotHardwareState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct DirectLayerState {
-    pub(super) rect: DirtyRect,
-    pub(super) version: u64,
-    pub(super) content_offset_y: i64,
+pub struct DirectLayerState {
+    pub rect: DirtyRect,
+    pub version: u64,
+    pub content_offset_y: i64,
 }
 
 impl DirectLayerState {
-    pub(super) fn new(rect: DirtyRect, version: u64) -> Self {
+    pub fn new(rect: DirtyRect, version: u64) -> Self {
         Self {
             rect,
             version,
@@ -29,7 +42,7 @@ impl DirectLayerState {
         }
     }
 
-    pub(super) fn with_content_offset_y(mut self, content_offset_y: i64) -> Self {
+    pub fn with_content_offset_y(mut self, content_offset_y: i64) -> Self {
         self.content_offset_y = content_offset_y;
         self
     }
@@ -43,21 +56,21 @@ struct LatchSlotCoherency {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LauncherFramePlan {
+pub struct LatchFramePlan {
     cached_damage: DirtyRectList,
     preview_desired: Option<DirectLayerState>,
     preview_dirty: Option<DirtyRect>,
     arcade_desired: Option<DirectLayerState>,
-    arcade_dirty: Option<ArcadeListUpdate>,
+    arcade_dirty: Option<DirectLayerUpdate>,
 }
 
-impl LauncherFramePlan {
-    pub(super) fn new(
+impl LatchFramePlan {
+    pub fn new(
         cached_damage: DirtyRectList,
         preview_desired: Option<DirectLayerState>,
         preview_dirty: Option<DirtyRect>,
         arcade_desired: Option<DirectLayerState>,
-        arcade_dirty: Option<ArcadeListUpdate>,
+        arcade_dirty: Option<DirectLayerUpdate>,
     ) -> Self {
         Self {
             cached_damage,
@@ -68,25 +81,25 @@ impl LauncherFramePlan {
         }
     }
 
-    pub(super) fn cached_damage(self) -> DirtyRectList {
+    pub fn cached_damage(self) -> DirtyRectList {
         self.cached_damage
     }
 
-    pub(super) fn preview_dirty(self) -> Option<DirtyRect> {
+    pub fn preview_dirty(self) -> Option<DirtyRect> {
         self.preview_dirty
     }
 
-    pub(super) fn arcade_dirty(self) -> Option<ArcadeListUpdate> {
+    pub fn arcade_dirty(self) -> Option<DirectLayerUpdate> {
         self.arcade_dirty
     }
 
-    pub(super) fn for_fb0_recovery(self, full_rect: DirtyRect) -> Self {
+    pub fn for_fb0_recovery(self, full_rect: DirtyRect) -> Self {
         Self {
             cached_damage: DirtyRectList::from_one(full_rect),
             preview_dirty: self.preview_desired.map(|layer| layer.rect),
             arcade_dirty: self
                 .arcade_desired
-                .map(|layer| ArcadeListUpdate::Full(layer.rect)),
+                .map(|layer| DirectLayerUpdate::Full(layer.rect)),
             ..self
         }
     }
@@ -97,7 +110,7 @@ impl LauncherFramePlan {
         preview_desired: Option<DirectLayerState>,
         preview_dirty: Option<DirtyRect>,
         arcade_desired: Option<DirectLayerState>,
-        arcade_dirty: Option<ArcadeListUpdate>,
+        arcade_dirty: Option<DirectLayerUpdate>,
     ) -> Self {
         let mut cached = DirtyRectList::new();
         cached.push_if_some(cached_damage);
@@ -112,24 +125,24 @@ impl LauncherFramePlan {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LatchPresentPlan {
-    pub(super) slot_index: u8,
-    pub(super) restore_rects: DirtyRectList,
-    pub(super) preview_redraw: Option<DirtyRect>,
-    pub(super) arcade_redraw: Option<ArcadeListUpdate>,
+pub struct LatchPresentPlan {
+    pub slot_index: u8,
+    pub restore_rects: DirtyRectList,
+    pub preview_redraw: Option<DirtyRect>,
+    pub arcade_redraw: Option<DirectLayerUpdate>,
     preview_after: Option<DirectLayerState>,
     arcade_after: Option<DirectLayerState>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct TwoBufferLatchState {
+pub struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],
     base_damage: TwoSlotDamageLedger,
     next_slot_index: u8,
 }
 
 impl TwoBufferLatchState {
-    pub(super) fn new(width: usize, height: usize) -> Self {
+    pub fn new(width: usize, height: usize) -> Self {
         Self {
             slots: [
                 LatchSlotCoherency {
@@ -148,7 +161,7 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub(super) fn invalidate_all(&mut self) {
+    pub fn invalidate_all(&mut self) {
         self.base_damage.invalidate_all();
         for slot in &mut self.slots {
             slot.preview_present = None;
@@ -158,7 +171,7 @@ impl TwoBufferLatchState {
         self.next_slot_index = 1;
     }
 
-    pub(super) fn sync_hardware(
+    pub fn sync_hardware(
         &mut self,
         active_slot_index: Option<u8>,
         active_sequence: u16,
@@ -180,13 +193,13 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub(super) fn plan_next(&mut self, input: LauncherFramePlan) -> Option<LatchPresentPlan> {
+    pub fn plan_next(&mut self, input: LatchFramePlan) -> Option<LatchPresentPlan> {
         self.base_damage.record_damage(&input.cached_damage);
         let slot_index = self.select_writable_slot()?;
         Some(self.plan_for_slot(slot_index, input))
     }
 
-    pub(super) fn mark_post_success(&mut self, plan: LatchPresentPlan) {
+    pub fn mark_post_success(&mut self, plan: LatchPresentPlan) {
         let slot_index = plan.slot_index;
         self.base_damage.mark_presented(slot_index);
         let selected = self.slot_mut(slot_index);
@@ -196,7 +209,7 @@ impl TwoBufferLatchState {
         self.next_slot_index = other_slot(slot_index);
     }
 
-    pub(super) fn mark_attempt_failed(&mut self, slot_index: u8) {
+    pub fn mark_attempt_failed(&mut self, slot_index: u8) {
         self.base_damage.mark_attempt_failed(slot_index);
         let slot = self.slot_mut(slot_index);
         slot.preview_present = None;
@@ -204,7 +217,7 @@ impl TwoBufferLatchState {
         slot.hardware = LatchSlotHardwareState::Unknown;
     }
 
-    pub(super) fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
+    pub fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
         let mut bytes = self.base_damage.invalid_bytes(slot_index);
         if let Some(preview) = slot.preview_present {
@@ -216,11 +229,11 @@ impl TwoBufferLatchState {
         bytes
     }
 
-    pub(super) fn writable_slot_index(&self) -> Option<u8> {
+    pub fn writable_slot_index(&self) -> Option<u8> {
         self.select_writable_slot()
     }
 
-    pub(super) fn slot_is_writable(&self, slot_index: u8) -> bool {
+    pub fn slot_is_writable(&self, slot_index: u8) -> bool {
         self.slot(slot_index).hardware == LatchSlotHardwareState::Writable
     }
 
@@ -236,7 +249,7 @@ impl TwoBufferLatchState {
         }
     }
 
-    fn plan_for_slot(&self, slot_index: u8, input: LauncherFramePlan) -> LatchPresentPlan {
+    fn plan_for_slot(&self, slot_index: u8, input: LatchFramePlan) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
         let mut restore_rects = self.base_damage.plan(slot_index);
 
@@ -273,7 +286,7 @@ impl TwoBufferLatchState {
         );
         let mut direct_redraws = DirtyRectList::new();
         direct_redraws.push_if_some(preview_redraw);
-        direct_redraws.push_if_some(arcade_redraw.as_ref().map(arcade_update_dirty_rect));
+        direct_redraws.push_if_some(arcade_redraw.as_ref().map(direct_layer_update_rect));
         let restore_rects = subtract_dirty_rects(restore_rects, &direct_redraws);
 
         LatchPresentPlan {
@@ -322,15 +335,15 @@ fn direct_layer_redraw_rect(
 fn direct_layer_redraw_update(
     current: Option<DirectLayerState>,
     desired: Option<DirectLayerState>,
-    dirty: Option<ArcadeListUpdate>,
+    dirty: Option<DirectLayerUpdate>,
     intersects_restore: bool,
-) -> Option<ArcadeListUpdate> {
+) -> Option<DirectLayerUpdate> {
     let desired = desired?;
     if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
-            Some(ArcadeListUpdate::Full(desired.rect))
+            Some(DirectLayerUpdate::Full(desired.rect))
         } else if current.content_offset_y != desired.content_offset_y {
-            Some(ArcadeListUpdate::Scroll {
+            Some(DirectLayerUpdate::Scroll {
                 delta_y: desired
                     .content_offset_y
                     .saturating_sub(current.content_offset_y)
@@ -338,12 +351,12 @@ fn direct_layer_redraw_update(
                 rect: desired.rect,
             })
         } else if intersects_restore {
-            Some(ArcadeListUpdate::Full(desired.rect))
+            Some(DirectLayerUpdate::Full(desired.rect))
         } else {
             dirty
         }
     } else {
-        Some(ArcadeListUpdate::Full(desired.rect))
+        Some(DirectLayerUpdate::Full(desired.rect))
     }
 }
 
@@ -356,6 +369,10 @@ fn layer_intersects_restore(
             .iter()
             .any(|restore| restore.intersection(layer.rect).is_some())
     })
+}
+
+fn direct_layer_update_rect(update: &DirectLayerUpdate) -> DirtyRect {
+    update.dirty_rect()
 }
 
 fn slot_offset(slot_index: u8) -> usize {
@@ -389,7 +406,7 @@ fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) {
 fn rect_bytes(rect: DirtyRect) -> usize {
     rect.width()
         .saturating_mul(rect.rows() as usize)
-        .saturating_mul(mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL)
+        .saturating_mul(super::format::RGB565_BYTES_PER_PIXEL)
 }
 
 #[cfg(test)]
@@ -424,9 +441,9 @@ mod tests {
         preview: Option<DirectLayerState>,
         preview_dirty: Option<DirtyRect>,
         arcade: Option<DirectLayerState>,
-        arcade_dirty: Option<ArcadeListUpdate>,
-    ) -> LauncherFramePlan {
-        LauncherFramePlan::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
+        arcade_dirty: Option<DirectLayerUpdate>,
+    ) -> LatchFramePlan {
+        LatchFramePlan::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
     }
 
     fn copy_restore(buffer: &mut [Rgb565Pixel], cached: &[Rgb565Pixel], plan: LatchPresentPlan) {
@@ -450,9 +467,9 @@ mod tests {
         }
     }
 
-    fn arcade_update_rect(update: ArcadeListUpdate) -> DirtyRect {
+    fn arcade_update_rect(update: DirectLayerUpdate) -> DirtyRect {
         match update {
-            ArcadeListUpdate::Full(rect) | ArcadeListUpdate::Scroll { rect, .. } => rect,
+            DirectLayerUpdate::Full(rect) | DirectLayerUpdate::Scroll { rect, .. } => rect,
         }
     }
 
@@ -528,7 +545,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -588,7 +605,7 @@ mod tests {
             .expect("plan");
 
         assert_eq!(plan.preview_redraw, Some(preview));
-        assert_eq!(plan.arcade_redraw, Some(ArcadeListUpdate::Full(arcade)));
+        assert_eq!(plan.arcade_redraw, Some(DirectLayerUpdate::Full(arcade)));
     }
 
     #[test]
@@ -609,7 +626,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -731,7 +748,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("launcher plan");
         apply_plan(&mut slot1, &launcher, launcher_plan);
@@ -744,7 +761,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("second launcher plan");
         apply_plan(&mut slot2, &launcher, second_launcher_plan);
@@ -914,7 +931,7 @@ mod tests {
                 Some(layer(preview, 1)),
                 Some(preview),
                 Some(layer(arcade, 1)),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("plan");
         apply_plan(&mut slot, &cached, plan);
@@ -940,7 +957,7 @@ mod tests {
                 Some(layer(preview, 1)),
                 Some(preview),
                 Some(layer(arcade, 1)),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("plan");
 
@@ -974,7 +991,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_v1),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -987,7 +1004,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_v1),
-                Some(ArcadeListUpdate::Full(arcade)),
+                Some(DirectLayerUpdate::Full(arcade)),
             ))
             .expect("second plan");
         apply_plan(&mut slot2, &cached, second);
@@ -1000,7 +1017,7 @@ mod tests {
                 Some(preview_layer),
                 None,
                 Some(arcade_v2),
-                Some(ArcadeListUpdate::Scroll {
+                Some(DirectLayerUpdate::Scroll {
                     delta_y: -1,
                     rect: arcade,
                 }),
@@ -1008,7 +1025,7 @@ mod tests {
             .expect("changed plan");
 
         assert_eq!(changed.preview_redraw, Some(preview));
-        assert_eq!(changed.arcade_redraw, Some(ArcadeListUpdate::Full(arcade)));
+        assert_eq!(changed.arcade_redraw, Some(DirectLayerUpdate::Full(arcade)));
         assert!(changed.restore_rects.iter().all(|restore| {
             restore.intersection(preview).is_none() && restore.intersection(arcade).is_none()
         }));
@@ -1027,7 +1044,7 @@ mod tests {
 
         assert_eq!(
             direct_layer_redraw_update(current.into(), desired.into(), None, true),
-            Some(ArcadeListUpdate::Scroll {
+            Some(DirectLayerUpdate::Scroll {
                 delta_y: -8,
                 rect: arcade,
             })
@@ -1117,7 +1134,7 @@ mod tests {
         assert_eq!(recovered.preview_dirty(), Some(preview));
         assert_eq!(
             recovered.arcade_dirty(),
-            Some(ArcadeListUpdate::Full(arcade))
+            Some(DirectLayerUpdate::Full(arcade))
         );
     }
 }
