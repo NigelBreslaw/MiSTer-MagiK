@@ -1837,7 +1837,18 @@ mod tests {
         let background = color565(4, 8, 12);
         let mut frame = vec![background; 32 * 24];
         card.blit(&mut frame, 32, 24, 3 * PARADE_SUBPIXEL_ONE, 2);
-        assert_eq!(frame[2 * 32 + 3], background);
+        let corner_coverage = card.phases.base_coverage().alpha_at(0, 0);
+        assert!((1..255).contains(&corner_coverage));
+        let mut expected_corner = [background];
+        composite_coverage_pixel(
+            &mut expected_corner,
+            0,
+            card.image.pixels[0],
+            corner_coverage,
+            srgb_to_linear_table(),
+            linear_to_srgb_table(),
+        );
+        assert_eq!(frame[2 * 32 + 3], expected_corner[0]);
         assert_ne!(frame[3 * 32 + 4], background);
     }
 
