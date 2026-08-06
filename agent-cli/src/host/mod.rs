@@ -9982,7 +9982,6 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
     const STRING_FIELDS: &[&str] = &[
         "vsync_source",
         "main_present_status",
-        "screensaver_sampling_profile",
         "status_publish_mode",
         "screensaver_renderer",
         "particle_preset",
@@ -10189,7 +10188,6 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     let mut moved_cards = 0_u64;
     let mut layer_held_frames = [0_u64; 5];
     let mut layer_visible_frames = [0_u64; 5];
-    let mut profiles = std::collections::BTreeSet::new();
     for frame in frames {
         let held = frame_u64(frame, "screensaver_raster_held_cards");
         held_frames += u64::from(held > 0);
@@ -10201,18 +10199,8 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
             layer_held_frames[layer] += u64::from(mask & (1 << layer) != 0);
             layer_visible_frames[layer] += u64::from(visible_mask & (1 << layer) != 0);
         }
-        if let Some(profile) = frame
-            .get("screensaver_sampling_profile")
-            .and_then(Value::as_str)
-        {
-            profiles.insert(profile);
-        }
     }
     json!({
-        "sampling_profiles": profiles,
-        "layer_sampling_profiles": std::array::from_fn::<_, 5, _>(|_| {
-            profiles.iter().next().copied().unwrap_or("unknown")
-        }),
         "held_frames": held_frames,
         "held_card_events": held_cards,
         "moved_card_events": moved_cards,
@@ -10580,7 +10568,7 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
         )?;
         writeln!(
             report,
-            "Visible raster holds: {} frames, {} held-card events, {} moved-card events. Per-layer held/visible/rate: `{}` / `{}` / `{}`. Sampling: `{}`.\n",
+            "Visible raster holds: {} frames, {} held-card events, {} moved-card events. Per-layer held/visible/rate: `{}` / `{}` / `{}`.\n",
             run.pointer("/raster_cadence/held_frames")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
@@ -10597,9 +10585,6 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
                 .cloned()
                 .unwrap_or(Value::Null),
             run.pointer("/raster_cadence/layer_hold_rates")
-                .cloned()
-                .unwrap_or(Value::Null),
-            run.pointer("/raster_cadence/sampling_profiles")
                 .cloned()
                 .unwrap_or(Value::Null),
         )?;
@@ -16628,7 +16613,6 @@ H: Handlers=event3 js0"#
                 "runtime_status_write_us": 0,
                 "clock_update_due": false,
                 "clock_update_us": 0,
-                "screensaver_sampling_profile": "legacy-half",
                 "screensaver_active_cards": 73,
                 "screensaver_archive_poll_us": 0,
                 "screensaver_card_adopt_us": 0,
@@ -17096,7 +17080,6 @@ H: Handlers=event3 js0"#
             "clock_update_us": 0,
             "screensaver_active": true,
             "screensaver_renderer": "particle-magik",
-            "screensaver_sampling_profile": "full",
             "screensaver_active_cards": 0,
             "screensaver_archive_poll_us": 0,
             "screensaver_card_adopt_us": 0,

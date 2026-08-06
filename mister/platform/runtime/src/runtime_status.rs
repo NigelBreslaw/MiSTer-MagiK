@@ -298,7 +298,6 @@ pub struct FrameBudgetRecentFrame {
     pub status_worker_active: bool,
     pub clock_update_due: bool,
     pub clock_update_us: u64,
-    pub screensaver_sampling_profile: &'static str,
     pub screensaver_archive_poll_us: u64,
     pub screensaver_card_adopt_us: u64,
     pub screensaver_parade_advance_us: u64,
@@ -1313,10 +1312,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("clock_update_due", frame.clock_update_due);
     field!("clock_update_us", frame.clock_update_us);
     field!(
-        "screensaver_sampling_profile",
-        frame.screensaver_sampling_profile
-    );
-    field!(
         "screensaver_archive_poll_us",
         frame.screensaver_archive_poll_us
     );
@@ -1827,7 +1822,6 @@ mod tests {
                         runtime_status_write_us: 321,
                         clock_update_due: true,
                         clock_update_us: 45,
-                        screensaver_sampling_profile: "legacy-half",
                         screensaver_raster_held_cards: 2,
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,

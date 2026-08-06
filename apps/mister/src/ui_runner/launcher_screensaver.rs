@@ -179,7 +179,6 @@ pub struct ScreensaverFrameTrace {
     pub(super) tile_blit_us: u128,
     pub(super) cards_drawn: usize,
     pub(super) cards_culled: usize,
-    pub(super) sampling_profile: &'static str,
     pub(super) raster_held_cards: usize,
     pub(super) raster_moved_cards: usize,
     pub(super) raster_hold_layer_mask: u8,
@@ -239,7 +238,6 @@ pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverFr
         tile_blit_us: stats.tile_blit_us,
         cards_drawn: stats.cards_drawn,
         cards_culled: stats.cards_culled,
-        sampling_profile: "1:sixteenth,2:sixteenth,3:sixteenth,4:sixteenth,5:sixteenth",
         raster_held_cards: stats.raster_held_cards,
         raster_moved_cards: stats.raster_moved_cards,
         raster_hold_layer_mask: stats.raster_hold_layer_mask,
@@ -254,8 +252,7 @@ fn log_shared_parade_stats(parade: &ScreenshotParade) {
     let scale_average_us = stats.scale_total_us / u128::from(stats.scale_count.max(1));
     let phase_average_us = stats.phase_total_us / u128::from(stats.phase_count.max(1));
     crate::ui_logln!(
-        "screensaver_lanczos sampling={} scales={} total_us={} average_us={} max_us={} phase_prepares={} phase_total_us={} phase_average_us={} phase_max_us={} queue_max={} queue_bound={} worker_connected=true phase_cache_bytes={}",
-        "sixteenth",
+        "screensaver_lanczos scales={} total_us={} average_us={} max_us={} phase_prepares={} phase_total_us={} phase_average_us={} phase_max_us={} queue_max={} queue_bound={} worker_connected=true phase_cache_bytes={}",
         stats.scale_count,
         stats.scale_total_us,
         scale_average_us,
@@ -473,7 +470,6 @@ impl LauncherScreensaver {
                 }) {
                 Ok(stats) => ScreensaverFrameTrace {
                     renderer: PARTICLE_RENDERER_LABEL,
-                    sampling_profile: "particle-scalar",
                     particle_preset: particle.preset().label(),
                     particle_phase: stats.phase.label(),
                     particle_simulation_backend: stats.simulation_backend,
@@ -514,7 +510,6 @@ impl LauncherScreensaver {
                     crate::ui_errln!("particle renderer failed: {error}");
                     ScreensaverFrameTrace {
                         renderer: "particle-error",
-                        sampling_profile: "particle-error",
                         particle_preset: particle.preset().label(),
                         particle_count: particle.particle_count(),
                         ..ScreensaverFrameTrace::default()

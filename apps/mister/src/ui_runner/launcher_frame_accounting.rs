@@ -1943,7 +1943,6 @@ impl LauncherFrameAccounting {
                 status_worker_active: publisher.worker_active,
                 clock_update_due: frame.clock_update_due,
                 clock_update_us: u128_to_u64_saturating(frame.clock_update_us),
-                screensaver_sampling_profile: frame.screensaver_frame_trace.sampling_profile,
                 screensaver_archive_poll_us: u128_to_u64_saturating(
                     frame.screensaver_frame_trace.archive_poll_us,
                 ),
@@ -3360,7 +3359,6 @@ mod tests {
         frame.status_write_due = true;
         frame.clock_update_due = true;
         frame.clock_update_us = 45;
-        frame.screensaver_frame_trace.sampling_profile = "legacy-half";
         frame.screensaver_frame_trace.raster_held_cards = 2;
         frame.screensaver_frame_trace.raster_moved_cards = 8;
         frame.screensaver_frame_trace.raster_hold_layer_mask = 1;
@@ -3384,7 +3382,6 @@ mod tests {
         assert_eq!(recent.main_present_status, "ok");
         assert_eq!(recent.runtime_status_write_us, 321);
         assert_eq!(recent.clock_update_us, 45);
-        assert_eq!(recent.screensaver_sampling_profile, "legacy-half");
         assert_eq!(recent.screensaver_raster_held_cards, 2);
         assert_eq!(recent.screensaver_raster_hold_layer_mask, 1);
         assert_eq!(recent.screensaver_raster_visible_layer_mask, 3);
