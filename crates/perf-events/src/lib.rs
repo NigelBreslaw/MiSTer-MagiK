@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const EVENT_SET: [HardwareEvent; 6] = [
     HardwareEvent::Cycles,
@@ -306,6 +307,7 @@ pub struct SpanRecord {
 
 const DEFAULT_SAMPLE_EVERY: u64 = 16;
 const DEFAULT_RECORD_LIMIT: usize = 4_096;
+const PROCESS_PROFILE_LIMIT: usize = 16;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ThreadProfile {
@@ -318,6 +320,61 @@ pub struct ThreadProfile {
     pub failure: Option<PmuFailure>,
     pub read_format: Option<GroupReadFormat>,
     pub scope: Option<CounterScope>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SubmittedThreadProfile {
+    pub label: String,
+    pub profile: ThreadProfile,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct ProcessProfileBatch {
+    pub profiles: Vec<SubmittedThreadProfile>,
+    pub dropped_profiles: u64,
+}
+
+#[derive(Default)]
+struct ProcessCollector {
+    profiles: Vec<SubmittedThreadProfile>,
+    dropped_profiles: u64,
+}
+
+impl ProcessCollector {
+    fn submit(&mut self, label: &'static str, profile: ThreadProfile) {
+        if !profile.enabled {
+            return;
+        }
+        if self.profiles.len() < PROCESS_PROFILE_LIMIT {
+            self.profiles.push(SubmittedThreadProfile {
+                label: label.to_owned(),
+                profile,
+            });
+        } else {
+            self.dropped_profiles = self.dropped_profiles.saturating_add(1);
+        }
+    }
+
+    fn take(&mut self) -> ProcessProfileBatch {
+        ProcessProfileBatch {
+            profiles: std::mem::take(&mut self.profiles),
+            dropped_profiles: std::mem::take(&mut self.dropped_profiles),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.profiles.clear();
+        self.dropped_profiles = 0;
+    }
+}
+
+static PROCESS_COLLECTOR: OnceLock<Mutex<ProcessCollector>> = OnceLock::new();
+
+fn process_collector() -> MutexGuard<'static, ProcessCollector> {
+    PROCESS_COLLECTOR
+        .get_or_init(|| Mutex::new(ProcessCollector::default()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct ThreadCollector {
@@ -471,6 +528,27 @@ pub fn sampled_span(name: &'static str) -> Option<SampledSpan> {
 #[must_use]
 pub fn take_thread_profile() -> ThreadProfile {
     THREAD_COLLECTOR.with(|collector| collector.borrow_mut().take())
+}
+
+/// Drains the calling thread's profile into the bounded process collector.
+///
+/// Disabled profiles are discarded. Enabled profiles, including profiles that
+/// contain a PMU failure, remain available as workload evidence.
+pub fn submit_thread_profile(label: &'static str) {
+    let profile = take_thread_profile();
+    process_collector().submit(label, profile);
+}
+
+/// Removes all profiles submitted by worker threads since the previous drain.
+#[must_use]
+pub fn take_process_profiles() -> ProcessProfileBatch {
+    process_collector().take()
+}
+
+/// Clears submitted profiles and stale records on the calling control thread.
+pub fn clear_process_profiles() {
+    process_collector().clear();
+    let _ = take_thread_profile();
 }
 
 pub struct SampledSpan {
@@ -1131,6 +1209,9 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn ids() -> BTreeMap<u64, HardwareEvent> {
         EVENT_SET
@@ -1287,5 +1368,90 @@ mod tests {
         assert!(profile.enabled);
         assert_eq!(profile.schema, "mister-magik-pmu-thread-profile-v1");
         assert!(collector.calls_by_name.is_empty());
+    }
+
+    fn test_profile(enabled: bool) -> ThreadProfile {
+        ThreadProfile {
+            schema: "mister-magik-pmu-thread-profile-v1",
+            enabled,
+            sample_every: 1,
+            attempted_spans: 0,
+            dropped_spans: 0,
+            records: Vec::new(),
+            failure: None,
+            read_format: None,
+            scope: None,
+        }
+    }
+
+    #[test]
+    fn process_collector_discards_disabled_profiles_and_drains() {
+        let mut collector = ProcessCollector::default();
+        collector.submit("disabled", test_profile(false));
+        collector.submit("builder", test_profile(true));
+
+        let batch = collector.take();
+        assert_eq!(batch.profiles.len(), 1);
+        assert_eq!(batch.profiles[0].label, "builder");
+        assert_eq!(batch.dropped_profiles, 0);
+        assert_eq!(collector.take(), ProcessProfileBatch::default());
+    }
+
+    #[test]
+    fn process_collector_bounds_profiles_and_reports_overflow() {
+        let mut collector = ProcessCollector::default();
+        for _ in 0..PROCESS_PROFILE_LIMIT + 3 {
+            collector.submit("worker", test_profile(true));
+        }
+
+        let batch = collector.take();
+        assert_eq!(batch.profiles.len(), PROCESS_PROFILE_LIMIT);
+        assert_eq!(batch.dropped_profiles, 3);
+    }
+
+    #[test]
+    fn process_collector_preserves_failures_as_evidence() {
+        let mut profile = test_profile(true);
+        profile.failure = Some(PmuFailure::unsupported("counter unavailable"));
+        let mut collector = ProcessCollector::default();
+        collector.submit("worker", profile);
+
+        let batch = collector.take();
+        assert_eq!(batch.profiles.len(), 1);
+        assert_eq!(
+            batch.profiles[0]
+                .profile
+                .failure
+                .as_ref()
+                .map(|failure| failure.message.as_str()),
+            Some("counter unavailable")
+        );
+    }
+
+    #[test]
+    fn public_process_collection_accepts_multiple_threads_and_resets() {
+        let _guard = PROCESS_TEST_LOCK.lock().unwrap();
+        clear_process_profiles();
+        let workers = ["walker", "publisher"].map(|label| {
+            std::thread::spawn(move || {
+                THREAD_COLLECTOR.with(|collector| {
+                    *collector.borrow_mut() = ThreadCollector::new(true, 1, 1);
+                });
+                submit_thread_profile(label);
+            })
+        });
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        let mut labels = take_process_profiles()
+            .profiles
+            .into_iter()
+            .map(|entry| entry.label)
+            .collect::<Vec<_>>();
+        labels.sort();
+        assert_eq!(labels, ["publisher", "walker"]);
+        clear_process_profiles();
+        assert_eq!(take_process_profiles(), ProcessProfileBatch::default());
     }
 }
