@@ -145,12 +145,14 @@ mod tests {
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&pixels);
         std::fs::write(&path, bytes).expect("write render-ahead fixture");
-        let archive = preview_worker::ResidentPreviewArchive::open(&path).expect("open fixture");
+        let archive =
+            crate::preview_worker::ResidentPreviewArchive::open(&path).expect("open fixture");
         let buffers = std::array::from_fn(|_| LauncherScreenshotBuffer::new(width, height));
         let mut runtime = mister_magik_screenshot_parade::LiveScreenshotParade::start(
             archive,
             mister_magik_screenshot_parade::LiveScreenshotConfig {
-                geometry: SceneGeometry::new(width, height, width).unwrap(),
+                geometry: mister_magik_framebuffer_scenes::SceneGeometry::new(width, height, width)
+                    .unwrap(),
                 seed: 0x1234,
                 scale_worker_start: None,
                 render_worker_start: None,
