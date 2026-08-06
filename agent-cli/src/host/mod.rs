@@ -4589,14 +4589,15 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
     )?;
     let run_result = (|| -> Result<(String, String)> {
         put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
-        let version = exec_checked_output(
+        let version = exec(
             &session,
-            "inspect gatord version",
             &format!(
                 "chmod 700 {gatord}; {gatord} --version",
                 gatord = sh(STREAMLINE_REMOTE_GATORD)
             ),
+            true,
         )?;
+        let gatord_version = parse_gatord_version(&version)?;
         let output = exec(&session, &streamline_capture_command(), true)?;
         let mut capture_log = output.stdout.clone();
         capture_log.push_str(&output.stderr);
@@ -4626,9 +4627,7 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
             return Err("Streamline capture archive changed during transfer".into());
         }
         extract_streamline_archive(&archive, output_dir)?;
-        let mut gatord_version = version.stdout;
-        gatord_version.push_str(&version.stderr);
-        Ok((gatord_version.trim().to_owned(), local_archive_sha256))
+        Ok((gatord_version, local_archive_sha256))
     })();
 
     let cleanup_result = exec_checked(
@@ -4679,6 +4678,19 @@ fn streamline_gatord_path(value: Option<std::ffi::OsString>) -> Result<PathBuf> 
         return Err("MISTER_GATORD_PATH must be an absolute path".into());
     }
     Ok(path)
+}
+
+fn parse_gatord_version(output: &ExecOutput) -> Result<String> {
+    if !matches!(output.rc, 0 | 1) {
+        return Err(format!("inspect gatord version failed with rc={}", output.rc).into());
+    }
+    output
+        .stdout
+        .lines()
+        .chain(output.stderr.lines())
+        .find(|line| line.starts_with("Streamline Data Recorder v"))
+        .map(str::to_owned)
+        .ok_or_else(|| "gatord version output contains no Streamline Data Recorder banner".into())
 }
 
 fn streamline_prepare_command() -> String {
@@ -12844,6 +12856,30 @@ mod tests {
             streamline_gatord_path(Some("/tmp/gatord".into())).unwrap(),
             PathBuf::from("/tmp/gatord")
         );
+    }
+
+    #[test]
+    fn streamline_accepts_gatord_version_banner_with_legacy_exit_status() {
+        for rc in [0, 1] {
+            let output = ExecOutput {
+                rc,
+                stdout: "Streamline Data Recorder v9.7.2 (Build oss)\n".to_string(),
+                stderr: String::new(),
+            };
+            assert_eq!(
+                parse_gatord_version(&output).unwrap(),
+                "Streamline Data Recorder v9.7.2 (Build oss)"
+            );
+        }
+        assert!(
+            parse_gatord_version(&ExecOutput {
+                rc: 2,
+                stdout: "Streamline Data Recorder v9.7.2 (Build oss)\n".to_string(),
+                stderr: String::new(),
+            })
+            .is_err()
+        );
+        assert!(parse_gatord_version(&ExecOutput::default()).is_err());
     }
 
     #[test]
