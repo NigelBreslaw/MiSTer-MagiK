@@ -74,6 +74,11 @@ pub struct ScreenshotParadeStats {
     pub active_cards: usize,
     pub cards_drawn: usize,
     pub cards_culled: usize,
+    pub opaque_pixels: usize,
+    pub opaque_rows: usize,
+    pub union_avoidable_opaque_pixels: usize,
+    pub union_avoidable_opaque_rows: usize,
+    pub union_fully_covered_opaque_rows: usize,
     pub preparation_overlapped_render: bool,
     pub preparation_decode_overlapped_render: bool,
     pub preparation_activity_transitions: u32,
@@ -158,6 +163,15 @@ struct Rect {
     y1: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct UnionOcclusionStats {
+    opaque_pixels: usize,
+    opaque_rows: usize,
+    avoidable_pixels: usize,
+    avoidable_rows: usize,
+    fully_covered_rows: usize,
+}
+
 impl Rect {
     fn contains(self, other: Self) -> bool {
         self.x0 <= other.x0 && self.y0 <= other.y0 && self.x1 >= other.x1 && self.y1 >= other.y1
@@ -170,6 +184,7 @@ pub struct ScreenshotParade {
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<Rect>,
+    coverage_intervals: Vec<(usize, usize)>,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -263,6 +278,7 @@ impl ScreenshotParade {
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
+            coverage_intervals: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             deck: (0..asset_keys.len()).collect(),
             cursor: 0,
             rng: config.seed,
@@ -419,7 +435,7 @@ impl ScreenshotParade {
         let draw_order_start = Instant::now();
         let draw_order_pmu = mister_magik_perf_events::sampled_span("screensaver.draw-order");
         self.prepare_draw_order();
-        let cards_culled = self.prepare_visible_draw_order();
+        let (cards_culled, union_occlusion) = self.prepare_visible_draw_order();
         drop(draw_order_pmu);
         let draw_order_us = draw_order_start.elapsed().as_micros();
 
@@ -501,6 +517,11 @@ impl ScreenshotParade {
             active_cards: self.tiles.iter().filter(|tile| tile.active).count(),
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
+            opaque_pixels: union_occlusion.opaque_pixels,
+            opaque_rows: union_occlusion.opaque_rows,
+            union_avoidable_opaque_pixels: union_occlusion.avoidable_pixels,
+            union_avoidable_opaque_rows: union_occlusion.avoidable_rows,
+            union_fully_covered_opaque_rows: union_occlusion.fully_covered_rows,
             preparation_overlapped_render: if self.preparation_slack.is_some() {
                 raster_overlap
             } else {
@@ -968,10 +989,11 @@ impl ScreenshotParade {
         }
     }
 
-    fn prepare_visible_draw_order(&mut self) -> usize {
+    fn prepare_visible_draw_order(&mut self) -> (usize, UnionOcclusionStats) {
         self.visible_draw_order.clear();
         self.depth_coverage.clear();
         let mut culled = 0;
+        let mut union_occlusion = UnionOcclusionStats::default();
         for &tile_index in self.draw_order.iter().rev() {
             let tile = &self.tiles[tile_index];
             let Some(draw_bounds) =
@@ -987,6 +1009,18 @@ impl ScreenshotParade {
                 culled += 1;
                 continue;
             }
+            let measured = measure_union_occlusion(
+                tile,
+                self.geometry.width(),
+                self.geometry.height(),
+                &self.depth_coverage,
+                &mut self.coverage_intervals,
+            );
+            union_occlusion.opaque_pixels += measured.opaque_pixels;
+            union_occlusion.opaque_rows += measured.opaque_rows;
+            union_occlusion.avoidable_pixels += measured.avoidable_pixels;
+            union_occlusion.avoidable_rows += measured.avoidable_rows;
+            union_occlusion.fully_covered_rows += measured.fully_covered_rows;
             self.visible_draw_order.push(tile_index);
             if let Some(opaque_bounds) =
                 tile_opaque_bounds(tile, self.geometry.width(), self.geometry.height())
@@ -995,7 +1029,7 @@ impl ScreenshotParade {
             }
         }
         self.visible_draw_order.reverse();
-        culled
+        (culled, union_occlusion)
     }
 
     fn jittered_interval(&mut self, base: u64) -> u64 {
@@ -1291,6 +1325,62 @@ fn tile_opaque_bounds(tile: &Tile, screen_width: usize, screen_height: usize) ->
     )
 }
 
+fn measure_union_occlusion(
+    tile: &Tile,
+    screen_width: usize,
+    screen_height: usize,
+    coverage: &[Rect],
+    intervals: &mut Vec<(usize, usize)>,
+) -> UnionOcclusionStats {
+    let mut stats = UnionOcclusionStats::default();
+    tile.raster.visit_opaque_target_spans(
+        screen_width,
+        screen_height,
+        tile.x_fp,
+        tile.y,
+        |target_y, target_x0, target_x1| {
+            let opaque_pixels = target_x1 - target_x0;
+            stats.opaque_pixels += opaque_pixels;
+            stats.opaque_rows += 1;
+            let covered = union_covered_pixels(target_y, target_x0, target_x1, coverage, intervals);
+            stats.avoidable_pixels += covered;
+            stats.avoidable_rows += usize::from(covered > 0);
+            stats.fully_covered_rows += usize::from(covered == opaque_pixels);
+        },
+    );
+    stats
+}
+
+fn union_covered_pixels(
+    y: usize,
+    x0: usize,
+    x1: usize,
+    coverage: &[Rect],
+    intervals: &mut Vec<(usize, usize)>,
+) -> usize {
+    intervals.clear();
+    intervals.extend(coverage.iter().filter_map(|rect| {
+        if !(rect.y0..rect.y1).contains(&y) {
+            return None;
+        }
+        let start = rect.x0.max(x0);
+        let end = rect.x1.min(x1);
+        (end > start).then_some((start, end))
+    }));
+    intervals.sort_unstable_by_key(|interval| interval.0);
+    let mut covered = 0;
+    let mut merged_end = x0;
+    for &(start, end) in intervals.iter() {
+        if end <= merged_end {
+            continue;
+        }
+        let uncovered_start = start.max(merged_end);
+        covered += end - uncovered_start;
+        merged_end = end;
+    }
+    covered
+}
+
 fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3))
 }
@@ -1570,5 +1660,102 @@ mod tests {
         let draw = expected_draw.unwrap();
         assert_eq!(draw.x0, 20);
         assert_eq!(draw.x1 - draw.x0, tile.raster.width() + 1);
+    }
+
+    #[test]
+    fn union_coverage_merges_disjoint_overlapping_and_joint_intervals() {
+        let mut intervals = Vec::new();
+        let coverage = [
+            Rect {
+                x0: 2,
+                y0: 4,
+                x1: 7,
+                y1: 8,
+            },
+            Rect {
+                x0: 5,
+                y0: 4,
+                x1: 11,
+                y1: 8,
+            },
+            Rect {
+                x0: 13,
+                y0: 4,
+                x1: 18,
+                y1: 8,
+            },
+        ];
+        assert_eq!(
+            union_covered_pixels(5, 0, 20, &coverage, &mut intervals),
+            14
+        );
+        assert_eq!(union_covered_pixels(3, 0, 20, &coverage, &mut intervals), 0);
+        assert_eq!(union_covered_pixels(5, 6, 14, &coverage, &mut intervals), 7);
+
+        let joint = [
+            Rect {
+                x0: 0,
+                y0: 0,
+                x1: 5,
+                y1: 1,
+            },
+            Rect {
+                x0: 5,
+                y0: 0,
+                x1: 10,
+                y1: 1,
+            },
+        ];
+        assert_eq!(union_covered_pixels(0, 0, 10, &joint, &mut intervals), 10);
+    }
+
+    #[test]
+    fn union_diagnostic_handles_rounded_phases_and_clipped_edges() {
+        let raster = PreparedScreenshotCard::prepare(
+            &ScreenshotImage {
+                pixels: vec![Rgb565Pixel(0xffff); 32 * 24],
+                width: 32,
+                height: 24,
+                stride: 32,
+            },
+            5,
+            135,
+        );
+        let coverage = [Rect {
+            x0: 0,
+            y0: 0,
+            x1: 20,
+            y1: 18,
+        }];
+        let mut intervals = Vec::new();
+        for phase in 0..16 {
+            let tile = Tile {
+                x_fp: -8 * PARADE_SUBPIXEL_ONE + phase * 16,
+                y: -3,
+                layer: 5,
+                speed: 5,
+                velocity_fp: PARADE_SUBPIXEL_ONE,
+                velocity_remainder: 0,
+                image_index: 0,
+                raster: raster.clone(),
+                active: true,
+                raster_held_this_frame: false,
+                raster_moved_this_frame: false,
+                next: None,
+                pending_image_index: None,
+            };
+            let stats = measure_union_occlusion(&tile, 48, 36, &coverage, &mut intervals);
+            assert!(stats.opaque_pixels > 0, "phase={phase}");
+            assert!(stats.opaque_rows > 0, "phase={phase}");
+            assert!(
+                stats.avoidable_pixels <= stats.opaque_pixels,
+                "phase={phase}"
+            );
+            assert!(stats.avoidable_rows <= stats.opaque_rows, "phase={phase}");
+            assert!(
+                stats.fully_covered_rows <= stats.avoidable_rows,
+                "phase={phase}"
+            );
+        }
     }
 }

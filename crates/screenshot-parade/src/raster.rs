@@ -314,6 +314,45 @@ impl PreparedScreenshotCard {
         );
     }
 
+    pub(crate) fn visit_opaque_target_spans(
+        &self,
+        screen_width: usize,
+        screen_height: usize,
+        x_fp: i64,
+        y: isize,
+        mut visit: impl FnMut(usize, usize, usize),
+    ) {
+        let quantized = quantize_phase(x_fp);
+        let (image, coverage) = if quantized.phase == 0 {
+            (&self.image, &self.base_coverage)
+        } else {
+            let shifted = &self.shifted_phases[quantized.phase - 1];
+            (&shifted.image, &shifted.coverage)
+        };
+        for source_y in 0..image.height {
+            let target_y = y + source_y as isize;
+            if target_y < 0 || target_y >= screen_height as isize {
+                continue;
+            }
+            let source_x0 = (-quantized.x).max(0) as usize;
+            let source_x1 =
+                (screen_width as isize - quantized.x).clamp(0, image.width as isize) as usize;
+            if source_x1 <= source_x0 {
+                continue;
+            }
+            let command = coverage.rows.get(source_y).copied().unwrap_or_default();
+            let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
+            let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
+            if opaque_end > opaque_start {
+                visit(
+                    target_y as usize,
+                    (quantized.x + opaque_start as isize) as usize,
+                    (quantized.x + opaque_end as isize) as usize,
+                );
+            }
+        }
+    }
+
     #[cold]
     #[inline(never)]
     pub(crate) fn blit_with_coverage_probe(
