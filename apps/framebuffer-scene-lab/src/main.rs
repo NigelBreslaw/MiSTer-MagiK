@@ -44,6 +44,7 @@ mod cpu_profile;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
+const SCREENSHOT_PRESENTATION_WAKE_GUARD: Duration = Duration::from_millis(3);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
@@ -1950,6 +1951,12 @@ fn run_window(
                 frame_evidence.push(evidence);
             }
             presentation_tick = presentation_tick.saturating_add(1);
+            if screenshot_pipeline.is_some() {
+                // The confirmed latch is the authoritative cadence clock. Keep
+                // the userspace wake target tied to it instead of accumulating
+                // nanosleep drift from the original process start.
+                next_frame = Instant::now();
+            }
             if let Some(bounded) = bounded
                 && measurement_started.is_none()
                 && screenshot_pipeline.as_ref().map_or_else(
@@ -2563,7 +2570,14 @@ fn run_window(
             confirmation_sequence_failures = 0;
         }
         next_frame += FRAME_DURATION;
-        if let Some(remaining) = next_frame.checked_duration_since(Instant::now()) {
+        let wake_at = if screenshot_pipeline.is_some() {
+            next_frame
+                .checked_sub(SCREENSHOT_PRESENTATION_WAKE_GUARD)
+                .unwrap_or(next_frame)
+        } else {
+            next_frame
+        };
+        if let Some(remaining) = wake_at.checked_duration_since(Instant::now()) {
             std::thread::sleep(remaining);
         } else {
             next_frame = Instant::now();
