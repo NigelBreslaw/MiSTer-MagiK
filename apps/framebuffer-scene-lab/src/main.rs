@@ -205,6 +205,14 @@ fn write_measurement_evidence(
             .iter()
             .map(|frame| frame.exact_base_background_hits)
             .sum::<usize>();
+        let skipped_opaque_pixels = screenshot_frames
+            .iter()
+            .map(|frame| frame.skipped_opaque_pixels)
+            .sum::<usize>();
+        let skipped_partial_pixels = screenshot_frames
+            .iter()
+            .map(|frame| frame.skipped_partial_pixels)
+            .sum::<usize>();
         serde_json::json!({
             "samples": screenshot_frames.len(),
             "card_adoption_timing": timing_summary_json(
@@ -240,6 +248,8 @@ fn write_measurement_evidence(
                 .count(),
             "partial_edge_pixels": partial_edge_pixels,
             "exact_base_background_hits": exact_base_background_hits,
+            "skipped_opaque_pixels": skipped_opaque_pixels,
+            "skipped_partial_pixels": skipped_partial_pixels,
             "exact_base_background_hit_pct": if partial_edge_pixels == 0 {
                 0.0
             } else {
@@ -1068,6 +1078,8 @@ fn screenshot_frame_stats(
             coverage_probe_sampled: stats.coverage_probe_sampled,
             partial_edge_pixels: stats.partial_edge_pixels,
             exact_base_background_hits: stats.exact_base_background_hits,
+            skipped_opaque_pixels: stats.skipped_opaque_pixels,
+            skipped_partial_pixels: stats.skipped_partial_pixels,
             preparation_overlapped_render: stats.preparation_overlapped_render,
             preparation_decode_overlapped_render: stats.preparation_decode_overlapped_render,
             preparation_activity_transitions: stats.preparation_activity_transitions,
@@ -2258,6 +2270,8 @@ fn run_window(
                 coverage_probe_sampled: screenshot.coverage_probe_sampled,
                 partial_edge_pixels: screenshot.partial_edge_pixels,
                 exact_base_background_hits: screenshot.exact_base_background_hits,
+                skipped_opaque_pixels: screenshot.skipped_opaque_pixels,
+                skipped_partial_pixels: screenshot.skipped_partial_pixels,
                 preparation_overlapped_render: screenshot.preparation_overlapped_render,
                 preparation_decode_overlapped_render: screenshot
                     .preparation_decode_overlapped_render,

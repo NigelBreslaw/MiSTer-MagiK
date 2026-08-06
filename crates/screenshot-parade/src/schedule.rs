@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::raster::{PreparedScreenshotCard, depth_style};
+use crate::raster::{OpaqueDepthMap, PreparedScreenshotCard, depth_style};
 use crate::slack::PreparationSlack;
 use crate::{
     PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotPhaseGeneration, ScreenshotSamplingProfile,
@@ -92,6 +92,8 @@ pub struct ScreenshotParadeStats {
     pub coverage_probe_sampled: bool,
     pub partial_edge_pixels: usize,
     pub exact_base_background_hits: usize,
+    pub skipped_opaque_pixels: usize,
+    pub skipped_partial_pixels: usize,
     pub cards_drawn: usize,
     pub cards_culled: usize,
     pub preparation_overlapped_render: bool,
@@ -197,6 +199,7 @@ pub struct ScreenshotParade {
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
     depth_coverage: Vec<Rect>,
+    opaque_depth: OpaqueDepthMap,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -286,6 +289,7 @@ impl ScreenshotParade {
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             depth_coverage: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
+            opaque_depth: OpaqueDepthMap::new(height),
             deck: (0..asset_keys.len()).collect(),
             cursor: 0,
             rng: config.seed,
@@ -441,6 +445,7 @@ impl ScreenshotParade {
         let draw_order_start = Instant::now();
         self.prepare_draw_order();
         let cards_culled = self.prepare_visible_draw_order();
+        self.prepare_opaque_depth();
         let draw_order_us = draw_order_start.elapsed().as_micros();
 
         let mut raster_held_cards = 0;
@@ -463,39 +468,31 @@ impl ScreenshotParade {
         let mut coverage_composite_calls = 0;
         let mut partial_edge_pixels = 0;
         let mut exact_base_background_hits = 0;
+        let mut skipped_opaque_pixels = 0;
+        let mut skipped_partial_pixels = 0;
         // Destination classification is diagnostic rather than presentation work.
         // Sample it sparsely so the probe cannot materially change the deadline
         // behavior it is intended to measure.
         let coverage_probe_sampled = motion_ticks_fp / TICK_ONE as u64 % 64 == 0;
         let base_background = color565(0, 0, 10);
-        if coverage_probe_sampled {
-            for &tile_index in &self.visible_draw_order {
-                let tile = &self.tiles[tile_index];
-                let blit_stats = tile.raster.blit_with_coverage_probe(
-                    pixels,
-                    width,
-                    height,
-                    self.sampling_profile.for_layer(tile.layer),
-                    tile.x_fp,
-                    tile.y,
-                    base_background,
-                );
-                coverage_composite_calls += blit_stats.composite_calls;
-                partial_edge_pixels += blit_stats.partial_edge_pixels;
-                exact_base_background_hits += blit_stats.exact_base_background_hits;
-            }
-        } else {
-            for &tile_index in &self.visible_draw_order {
-                let tile = &self.tiles[tile_index];
-                tile.raster.blit(
-                    pixels,
-                    width,
-                    height,
-                    self.sampling_profile.for_layer(tile.layer),
-                    tile.x_fp,
-                    tile.y,
-                );
-            }
+        for (owner, &tile_index) in self.visible_draw_order.iter().enumerate() {
+            let tile = &self.tiles[tile_index];
+            let blit_stats = tile.raster.blit_occluded(
+                pixels,
+                width,
+                height,
+                self.sampling_profile.for_layer(tile.layer),
+                tile.x_fp,
+                tile.y,
+                &self.opaque_depth,
+                owner as u8,
+                coverage_probe_sampled.then_some(base_background),
+            );
+            coverage_composite_calls += blit_stats.composite_calls;
+            partial_edge_pixels += blit_stats.partial_edge_pixels;
+            exact_base_background_hits += blit_stats.exact_base_background_hits;
+            skipped_opaque_pixels += blit_stats.skipped_opaque_pixels;
+            skipped_partial_pixels += blit_stats.skipped_partial_pixels;
         }
         let preparation_epoch_end = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_end = self.preparation_stage.load(Ordering::Relaxed);
@@ -524,6 +521,8 @@ impl ScreenshotParade {
             coverage_probe_sampled,
             partial_edge_pixels,
             exact_base_background_hits,
+            skipped_opaque_pixels,
+            skipped_partial_pixels,
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
             preparation_overlapped_render: if self.preparation_slack.is_some() {
@@ -1052,6 +1051,23 @@ impl ScreenshotParade {
         }
         self.visible_draw_order.reverse();
         culled
+    }
+
+    fn prepare_opaque_depth(&mut self) {
+        debug_assert!(self.visible_draw_order.len() <= usize::from(u8::MAX) + 1);
+        self.opaque_depth.clear();
+        for (owner, &tile_index) in self.visible_draw_order.iter().enumerate().rev() {
+            let tile = &self.tiles[tile_index];
+            tile.raster.add_opaque_depth(
+                &mut self.opaque_depth,
+                owner as u8,
+                self.sampling_profile.for_layer(tile.layer),
+                tile.x_fp,
+                tile.y,
+                self.geometry.width(),
+                self.geometry.height(),
+            );
+        }
     }
 
     fn jittered_interval(&mut self, base: u64) -> u64 {
