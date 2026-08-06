@@ -29,6 +29,7 @@ pub enum ScreenshotPhaseGeneration {
     Rgb565TwoTap,
     LinearLanczos3,
     LinearLanczos3Neon,
+    LinearLanczos3DirectNeon,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -258,6 +259,20 @@ struct LinearRgb {
     b: u16,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PolyphaseFilterCommand {
+    sample_start: u32,
+    sample_count: u16,
+    _padding: u16,
+}
+
+struct PolyphaseFilterBank {
+    commands: Vec<PolyphaseFilterCommand>,
+    sample_indices: Vec<u16>,
+    weights: Vec<i16>,
+}
+
 #[derive(Clone)]
 struct LinearImage {
     pixels: Vec<LinearRgb>,
@@ -331,6 +346,61 @@ impl PreparedScreenshotCard {
         let (width, height, tint) = scaled_style(source, speed, screen_height);
         if matches!(
             phase_generation,
+            ScreenshotPhaseGeneration::LinearLanczos3DirectNeon
+        ) && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
+        {
+            validate_direct_neon_phase_kernel();
+            let mut vertical =
+                scale_lanczos3_linear_vertical_tinted(source, height, tint, preparation_slack);
+            apply_depth_cues_linear(&mut vertical, speed, preparation_slack);
+            let direct_source = vertical
+                .pixels
+                .iter()
+                .map(|pixel| [pixel.r, pixel.g, pixel.b, 0])
+                .collect::<Vec<_>>();
+            let coverage = prepare_rounded_coverage(width, height, preparation_slack);
+            let corner_insets = coverage_corner_insets(&coverage, width, height, preparation_slack);
+            let phase_started = std::time::Instant::now();
+            let base = prepare_direct_linear_phase(
+                &direct_source,
+                vertical.width,
+                vertical.height,
+                &coverage,
+                width,
+                0,
+                LinearPhaseKernel::Neon,
+                preparation_slack,
+            );
+            let shifted = std::array::from_fn(|index| {
+                if let Some(slack) = preparation_slack {
+                    slack.checkpoint();
+                }
+                prepare_direct_linear_phase(
+                    &direct_source,
+                    vertical.width,
+                    vertical.height,
+                    &coverage,
+                    width,
+                    index + 1,
+                    LinearPhaseKernel::Neon,
+                    preparation_slack,
+                )
+            });
+            let phase_us = phase_started.elapsed().as_micros();
+            return (
+                Self {
+                    image: base.image,
+                    phases: ParadePhaseSet::SixteenthLinear {
+                        base_coverage: base.coverage,
+                        shifted: Box::new(shifted),
+                    },
+                    corner_insets,
+                },
+                phase_us,
+            );
+        }
+        if matches!(
+            phase_generation,
             ScreenshotPhaseGeneration::LinearLanczos3
                 | ScreenshotPhaseGeneration::LinearLanczos3Neon
         ) && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
@@ -338,7 +408,8 @@ impl PreparedScreenshotCard {
             let kernel = match phase_generation {
                 ScreenshotPhaseGeneration::LinearLanczos3Neon => LinearPhaseKernel::Neon,
                 ScreenshotPhaseGeneration::LinearLanczos3
-                | ScreenshotPhaseGeneration::Rgb565TwoTap => LinearPhaseKernel::Scalar,
+                | ScreenshotPhaseGeneration::Rgb565TwoTap
+                | ScreenshotPhaseGeneration::LinearLanczos3DirectNeon => LinearPhaseKernel::Scalar,
             };
             if matches!(kernel, LinearPhaseKernel::Neon) {
                 validate_neon_phase_kernel();
@@ -831,6 +902,381 @@ fn scale_lanczos3_linear_tinted(
         width: out_width,
         height: out_height,
         stride: out_width,
+    }
+}
+
+fn scale_lanczos3_linear_vertical_tinted(
+    image: &ScreenshotImage,
+    out_height: usize,
+    tint: u8,
+    preparation_slack: Option<&PreparationSlack>,
+) -> LinearImage {
+    if out_height == 0 || image.width == 0 || image.height == 0 {
+        return LinearImage {
+            pixels: Vec::new(),
+            width: image.width,
+            height: out_height,
+            stride: image.width,
+        };
+    }
+    let y_filters = lanczos_filters(image.height, out_height);
+    let srgb_to_linear = srgb_to_linear_table();
+    let mut linear_source = vec![LinearRgb::default(); image.width * image.height];
+    for y in 0..image.height {
+        preparation_checkpoint_row(preparation_slack, y);
+        let source_row = y * image.stride;
+        let linear_row = y * image.width;
+        for x in 0..image.width {
+            linear_source[linear_row + x] =
+                rgb565_to_linear_with_table(image.pixels[source_row + x], srgb_to_linear);
+        }
+    }
+
+    let tint = u64::from(srgb8_to_linear16(tint));
+    let mut pixels = vec![LinearRgb::default(); image.width * out_height];
+    for (target_y, filter) in y_filters.iter().enumerate() {
+        preparation_checkpoint_row(preparation_slack, target_y);
+        for x in 0..image.width {
+            let mut channels = [0_i64; 3];
+            for (tap, weight) in filter.weights.iter().enumerate() {
+                let pixel = linear_source[(filter.start + tap) * image.width + x];
+                let weight = i64::from(*weight);
+                channels[0] += i64::from(pixel.r) * weight;
+                channels[1] += i64::from(pixel.g) * weight;
+                channels[2] += i64::from(pixel.b) * weight;
+            }
+            let tinted = |value: i64| {
+                let value = u64::from(fixed_channel(value));
+                ((value * tint + 32_767) / 65_535).min(65_535) as u16
+            };
+            pixels[target_y * image.width + x] = LinearRgb {
+                r: tinted(channels[0]),
+                g: tinted(channels[1]),
+                b: tinted(channels[2]),
+            };
+        }
+    }
+    LinearImage {
+        pixels,
+        width: image.width,
+        height: out_height,
+        stride: image.width,
+    }
+}
+
+fn direct_lanczos_filter_bank(
+    source_width: usize,
+    target_width: usize,
+    phase: usize,
+) -> Arc<PolyphaseFilterBank> {
+    type FilterCache = Vec<(usize, usize, usize, Arc<PolyphaseFilterBank>)>;
+    static CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
+
+    debug_assert!(source_width > 0);
+    debug_assert!(target_width > 0);
+    debug_assert!(phase <= CRT_PHASE_COUNT);
+    let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    {
+        let entries = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((_, _, _, filters)) =
+            entries.iter().find(|(source, target, cached_phase, _)| {
+                *source == source_width && *target == target_width && *cached_phase == phase
+            })
+        {
+            return Arc::clone(filters);
+        }
+    }
+    let output_width = target_width + usize::from(phase != 0);
+    let scale = target_width as f64 / source_width as f64;
+    let filter_scale = scale.min(1.0);
+    let support = LANCZOS_RADIUS / filter_scale;
+    let delay = phase as f64 / CRT_PHASE_COUNT as f64;
+    let mut commands = Vec::with_capacity(output_width);
+    let mut sample_indices = Vec::new();
+    let mut weights = Vec::new();
+    for output_x in 0..output_width {
+        let center = (output_x as f64 + 0.5 - delay) / scale - 0.5;
+        let first = (center - support).ceil() as isize;
+        let last = (center + support).floor() as isize;
+        let float_weights = (first..=last)
+            .map(|source_x| lanczos3((source_x as f64 - center) * filter_scale) * filter_scale)
+            .collect::<Vec<_>>();
+        let sum = float_weights.iter().sum::<f64>();
+        let mut fixed_weights = float_weights
+            .iter()
+            .map(|weight| (weight / sum * f64::from(LANCZOS_WEIGHT_ONE)).round() as i16)
+            .collect::<Vec<_>>();
+        let fixed_sum = fixed_weights
+            .iter()
+            .map(|weight| i32::from(*weight))
+            .sum::<i32>();
+        let center_tap = fixed_weights.len() / 2;
+        fixed_weights[center_tap] =
+            (i32::from(fixed_weights[center_tap]) + LANCZOS_WEIGHT_ONE - fixed_sum) as i16;
+        let sample_start = weights.len();
+        for (tap, weight) in fixed_weights.into_iter().enumerate() {
+            let source_x = (first + tap as isize).clamp(0, source_width as isize - 1);
+            sample_indices.push(
+                u16::try_from(source_x).expect("screenshot source width exceeds u16 indexing"),
+            );
+            weights.push(weight);
+        }
+        commands.push(PolyphaseFilterCommand {
+            sample_start: u32::try_from(sample_start)
+                .expect("screenshot direct filter bank exceeds u32 indexing"),
+            sample_count: u16::try_from(weights.len() - sample_start)
+                .expect("screenshot direct filter exceeds u16 taps"),
+            _padding: 0,
+        });
+    }
+    let filters = Arc::new(PolyphaseFilterBank {
+        commands,
+        sample_indices,
+        weights,
+    });
+    let mut entries = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, _, _, cached)) = entries.iter().find(|(source, target, cached_phase, _)| {
+        *source == source_width && *target == target_width && *cached_phase == phase
+    }) {
+        return Arc::clone(cached);
+    }
+    entries.push((source_width, target_width, phase, Arc::clone(&filters)));
+    filters
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_direct_linear_phase(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    source_coverage: &[u8],
+    target_width: usize,
+    phase: usize,
+    kernel: LinearPhaseKernel,
+    preparation_slack: Option<&PreparationSlack>,
+) -> PreparedLinearPhase {
+    let filters = direct_lanczos_filter_bank(source_width, target_width, phase);
+    let output_width = filters.commands.len();
+    let mut pixels = vec![Rgb565Pixel(0); output_width * height];
+    let prepared_with_neon = prepare_direct_phase_neon_if_selected(
+        source,
+        source_width,
+        height,
+        &filters,
+        kernel,
+        &mut pixels,
+        preparation_slack,
+    );
+    if !prepared_with_neon {
+        prepare_direct_phase_scalar(
+            source,
+            source_width,
+            height,
+            &filters,
+            &mut pixels,
+            preparation_slack,
+        );
+    }
+    let mut coverage = if phase == 0 {
+        source_coverage.to_vec()
+    } else {
+        shape_preserving_shifted_coverage(
+            source_coverage,
+            target_width,
+            height,
+            phase,
+            preparation_slack,
+        )
+    };
+    if phase != 0 {
+        stabilize_phase_coverage(
+            source_coverage,
+            target_width,
+            height,
+            phase,
+            &mut coverage,
+            preparation_slack,
+        );
+    }
+    let image = ScreenshotImage {
+        pixels,
+        width: output_width,
+        height,
+        stride: output_width,
+    };
+    let coverage = coverage_plane(coverage, &image, preparation_slack);
+    PreparedLinearPhase { image, coverage }
+}
+
+fn prepare_direct_phase_scalar(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    filters: &PolyphaseFilterBank,
+    pixels: &mut [Rgb565Pixel],
+    preparation_slack: Option<&PreparationSlack>,
+) {
+    let linear_to_srgb = linear_to_srgb_table();
+    for y in 0..height {
+        preparation_checkpoint_row(preparation_slack, y);
+        for (output_x, command) in filters.commands.iter().enumerate() {
+            let start = command.sample_start as usize;
+            let end = start + usize::from(command.sample_count);
+            let mut channels = [0_i64; 3];
+            for tap in start..end {
+                let source_x = usize::from(filters.sample_indices[tap]);
+                debug_assert!(source_x < source_width);
+                let source_pixel = source[y * source_width + source_x];
+                let weight = i64::from(filters.weights[tap]);
+                for channel in 0..3 {
+                    channels[channel] += i64::from(source_pixel[channel]) * weight;
+                }
+            }
+            pixels[y * filters.commands.len() + output_x] = linear_to_rgb565_with_table(
+                LinearRgb {
+                    r: fixed_channel(channels[0]),
+                    g: fixed_channel(channels[1]),
+                    b: fixed_channel(channels[2]),
+                },
+                linear_to_srgb,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_direct_phase_neon_if_selected(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    filters: &PolyphaseFilterBank,
+    kernel: LinearPhaseKernel,
+    pixels: &mut [Rgb565Pixel],
+    preparation_slack: Option<&PreparationSlack>,
+) -> bool {
+    if !matches!(kernel, LinearPhaseKernel::Neon) {
+        return false;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        const ROWS_PER_CHECKPOINT: usize = 4;
+        for row_start in (0..height).step_by(ROWS_PER_CHECKPOINT) {
+            if let Some(slack) = preparation_slack {
+                slack.checkpoint();
+            }
+            let rows = (height - row_start).min(ROWS_PER_CHECKPOINT);
+            let source_start = row_start * source_width;
+            let source_end = source_start + rows * source_width;
+            let output_start = row_start * filters.commands.len();
+            let output_end = output_start + rows * filters.commands.len();
+            unsafe {
+                prepare_direct_phase_neon(
+                    &source[source_start..source_end],
+                    source_width,
+                    rows,
+                    filters,
+                    &mut pixels[output_start..output_end],
+                );
+            }
+        }
+        return true;
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (
+            source,
+            source_width,
+            height,
+            filters,
+            pixels,
+            preparation_slack,
+        );
+        false
+    }
+}
+
+fn validate_direct_neon_phase_kernel() {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        use std::sync::OnceLock;
+
+        static VALIDATED: OnceLock<()> = OnceLock::new();
+        VALIDATED.get_or_init(|| {
+            let source_width = 19;
+            let height = 3;
+            let target_width = 11;
+            let source = (0..source_width * height)
+                .map(|index| {
+                    let value = index as u16;
+                    [
+                        value.wrapping_mul(3_641),
+                        value.wrapping_mul(7_919).wrapping_add(65_535),
+                        value.wrapping_mul(13_337).wrapping_add(257),
+                        0,
+                    ]
+                })
+                .collect::<Vec<_>>();
+            for phase in 0..CRT_PHASE_COUNT {
+                let filters = direct_lanczos_filter_bank(source_width, target_width, phase);
+                let mut expected = vec![Rgb565Pixel(0); filters.commands.len() * height];
+                let mut actual = vec![Rgb565Pixel(0); filters.commands.len() * height];
+                prepare_direct_phase_scalar(
+                    &source,
+                    source_width,
+                    height,
+                    &filters,
+                    &mut expected,
+                    None,
+                );
+                unsafe {
+                    prepare_direct_phase_neon(&source, source_width, height, &filters, &mut actual);
+                }
+                assert_eq!(
+                    actual, expected,
+                    "direct NEON phase {phase} differs from scalar"
+                );
+            }
+        });
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+unsafe fn prepare_direct_phase_neon(
+    source: &[[u16; 4]],
+    source_width: usize,
+    height: usize,
+    filters: &PolyphaseFilterBank,
+    pixels: &mut [Rgb565Pixel],
+) {
+    unsafe extern "C" {
+        fn mister_magik_screenshot_direct_phase_neon(
+            source: *const u16,
+            source_width: usize,
+            height: usize,
+            commands: *const PolyphaseFilterCommand,
+            output_width: usize,
+            sample_indices: *const u16,
+            weights: *const i16,
+            linear_to_srgb: *const u8,
+            pixels: *mut u16,
+        );
+    }
+    unsafe {
+        mister_magik_screenshot_direct_phase_neon(
+            source.as_ptr().cast(),
+            source_width,
+            height,
+            filters.commands.as_ptr(),
+            filters.commands.len(),
+            filters.sample_indices.as_ptr(),
+            filters.weights.as_ptr(),
+            linear_to_srgb_table().as_ptr(),
+            pixels.as_mut_ptr().cast(),
+        );
     }
 }
 
@@ -2124,6 +2570,67 @@ mod tests {
             width,
             height,
             stride: width,
+        }
+    }
+
+    fn command_samples<'a>(
+        bank: &'a PolyphaseFilterBank,
+        command: PolyphaseFilterCommand,
+    ) -> (&'a [u16], &'a [i16]) {
+        let start = command.sample_start as usize;
+        let end = start + usize::from(command.sample_count);
+        (&bank.sample_indices[start..end], &bank.weights[start..end])
+    }
+
+    #[test]
+    fn direct_polyphase_filters_are_normalized_and_close_at_phase_sixteen() {
+        for (source_width, target_width) in [(320, 213), (320, 178), (19, 11)] {
+            for phase in 0..CRT_PHASE_COUNT {
+                let bank = direct_lanczos_filter_bank(source_width, target_width, phase);
+                for command in &bank.commands {
+                    let (_, weights) = command_samples(&bank, *command);
+                    assert_eq!(
+                        weights.iter().map(|weight| i32::from(*weight)).sum::<i32>(),
+                        LANCZOS_WEIGHT_ONE,
+                        "source={source_width} target={target_width} phase={phase}"
+                    );
+                }
+            }
+            let base = direct_lanczos_filter_bank(source_width, target_width, 0);
+            let wrapped = direct_lanczos_filter_bank(source_width, target_width, CRT_PHASE_COUNT);
+            for x in 0..target_width {
+                assert_eq!(
+                    command_samples(&wrapped, wrapped.commands[x + 1]),
+                    command_samples(&base, base.commands[x]),
+                    "source={source_width} target={target_width} x={x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_polyphase_constant_field_has_no_phase_ripple() {
+        let source_width = 37;
+        let target_width = 23;
+        let height = 3;
+        let linear = [12_345, 45_678, 23_456, 0];
+        let source = vec![linear; source_width * height];
+        let expected = linear_to_rgb565_with_table(
+            LinearRgb {
+                r: linear[0],
+                g: linear[1],
+                b: linear[2],
+            },
+            linear_to_srgb_table(),
+        );
+        for phase in 0..CRT_PHASE_COUNT {
+            let filters = direct_lanczos_filter_bank(source_width, target_width, phase);
+            let mut pixels = vec![Rgb565Pixel(0); filters.commands.len() * height];
+            prepare_direct_phase_scalar(&source, source_width, height, &filters, &mut pixels, None);
+            assert!(
+                pixels.iter().all(|pixel| *pixel == expected),
+                "phase={phase}"
+            );
         }
     }
 

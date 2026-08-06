@@ -3354,15 +3354,18 @@ impl Options {
                     let value = arguments
                         .next()
                         .ok_or(
-                            "--phase-generation requires two-tap, linear-lanczos3, or linear-lanczos3-neon",
+                            "--phase-generation requires two-tap, linear-lanczos3, linear-lanczos3-neon, or linear-lanczos3-direct-neon",
                         )?;
                     phase_generation = match value.as_str() {
                         "two-tap" => ScreenshotPhaseGeneration::Rgb565TwoTap,
                         "linear-lanczos3" => ScreenshotPhaseGeneration::LinearLanczos3,
                         "linear-lanczos3-neon" => ScreenshotPhaseGeneration::LinearLanczos3Neon,
+                        "linear-lanczos3-direct-neon" => {
+                            ScreenshotPhaseGeneration::LinearLanczos3DirectNeon
+                        }
                         _ => {
                             return Err(format!(
-                                "invalid phase generation {value:?}; expected two-tap, linear-lanczos3, or linear-lanczos3-neon"
+                                "invalid phase generation {value:?}; expected two-tap, linear-lanczos3, linear-lanczos3-neon, or linear-lanczos3-direct-neon"
                             ));
                         }
                     };
