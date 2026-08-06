@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::transport::{AutomationAction, DeviceFailure, Layout};
+use crate::transport::{AutomationAction, AutomationButton, DeviceFailure, Layout};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use rusqlite::backup::Backup;
@@ -635,6 +635,13 @@ impl NativeDevice {
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| profile_installed_catalog_lifecycle(config, output_dir))
+    }
+
+    pub(crate) fn verify_modal_input(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| verify_installed_modal_input(config, output_dir))
     }
 
     pub(crate) fn profile_launch_return(
@@ -4121,6 +4128,7 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
+const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
@@ -4146,6 +4154,321 @@ const PARTICLE_COUNT_STEP: u64 = 1_024;
 const PARTICLE_COUNT_SEED: u64 = 141_312;
 const PARTICLE_COUNT_MAX: u64 = 524_288;
 const PARTICLE_POST_RESERVE_US: u64 = 750;
+
+fn modal_input_action(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    action: AutomationAction,
+) -> Result<u64> {
+    let detail = launcher_automation::send_action(config, nonce, &action)?;
+    let value: Value = serde_json::from_str(&detail)?;
+    let sequence = value
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("modal input action has no sequence")?;
+    launcher_automation::await_presented(config, nonce, sequence, 3_000)?;
+    Ok(sequence)
+}
+
+fn wait_modal_input_snapshot(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    predicate: impl Fn(&Value) -> bool,
+    label: &str,
+) -> Result<Value> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(5);
+    loop {
+        let snapshot = launcher_automation::snapshot(config, nonce)?;
+        if predicate(&snapshot) {
+            return Ok(snapshot);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "modal input verification timed out waiting for {label}; final snapshot={snapshot}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn modal_semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
+    snapshot.pointer(&format!("/semantic/{field}"))
+}
+
+fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let mut nonce: Option<String> = None;
+    let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "modal input isolated fixture",
+            &modal_input_prepare_command(),
+        )?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: modal_input_launcher_env(),
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        let status = read_launcher_status(&session)?;
+        if status.get("catalog_ready").and_then(Value::as_bool) != Some(true) {
+            return Err(format!("isolated modal input catalog is not ready: {status}").into());
+        }
+        let main_status: Value = serde_json::from_str(
+            &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+        )?;
+        let build_version = status
+            .get("build_version")
+            .and_then(Value::as_str)
+            .ok_or("launcher status has no build version")?;
+        let source_revision = status
+            .get("build_source_revision")
+            .and_then(Value::as_str)
+            .ok_or("launcher status has no source revision")?;
+        let main_generation = main_status
+            .get("main_generation")
+            .and_then(Value::as_u64)
+            .ok_or("Main status has no generation")?;
+        let begin = launcher_automation::begin(
+            config,
+            build_version,
+            source_revision,
+            main_generation,
+            60,
+        )?;
+        let begin: Value = serde_json::from_str(&begin)?;
+        nonce = Some(
+            begin
+                .get("nonce")
+                .and_then(Value::as_str)
+                .ok_or("modal input automation has no nonce")?
+                .to_string(),
+        );
+        let active_nonce = nonce.as_deref().expect("nonce assigned above");
+        let dialog = wait_modal_input_snapshot(
+            config,
+            active_nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "overlay").and_then(Value::as_str) == Some("confirm")
+                    && modal_semantic(snapshot, "dialog_title").and_then(Value::as_str)
+                        == Some("Catalog update required")
+                    && modal_semantic(snapshot, "selected_item_id").and_then(Value::as_str)
+                        == Some("menu:arcade")
+            },
+            "catalog recovery dialog over the Arcade tile",
+        )?;
+        let dialog_sequence =
+            modal_input_action(config, active_nonce, AutomationAction::ReleaseAll)?;
+        let dialog_checkpoint = launcher_automation::capture_checkpoint(
+            config,
+            active_nonce,
+            dialog_sequence,
+            "catalog-recovery-dialog",
+            output_dir,
+        )?;
+
+        modal_input_action(
+            config,
+            active_nonce,
+            AutomationAction::Tap(AutomationButton::Right),
+        )?;
+        wait_modal_input_snapshot(
+            config,
+            active_nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "dialog_selected").and_then(Value::as_i64) == Some(1)
+            },
+            "Rebuild selection",
+        )?;
+        let hold_sequence = modal_input_action(
+            config,
+            active_nonce,
+            AutomationAction::Hold {
+                button: AutomationButton::A,
+                duration_ms: 2_000,
+            },
+        )?;
+        let during_hold = wait_modal_input_snapshot(
+            config,
+            active_nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "overlay").and_then(Value::as_str) != Some("confirm")
+            },
+            "dialog dismissal",
+        )?;
+        require_modal_home_state(&during_hold, "during held A")?;
+        let held_checkpoint = launcher_automation::capture_checkpoint(
+            config,
+            active_nonce,
+            hold_sequence,
+            "held-a-dismissal",
+            output_dir,
+        )?;
+
+        modal_input_action(config, active_nonce, AutomationAction::ReleaseAll)?;
+        let after_release = launcher_automation::snapshot(config, active_nonce)?;
+        require_modal_home_state(&after_release, "after release")?;
+        let fresh_sequence = modal_input_action(
+            config,
+            active_nonce,
+            AutomationAction::Tap(AutomationButton::A),
+        )?;
+        let fresh_press = wait_modal_input_snapshot(
+            config,
+            active_nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "return_screen").and_then(Value::as_str) == Some("arcade")
+            },
+            "fresh Arcade activation",
+        )?;
+        let fresh_checkpoint = launcher_automation::capture_checkpoint(
+            config,
+            active_nonce,
+            fresh_sequence,
+            "fresh-a-opens-arcade",
+            output_dir,
+        )?;
+        Ok(json!({
+            "schema": "mister-magik-modal-input-verification-v1",
+            "status": "passed",
+            "dialog": dialog["semantic"],
+            "during_hold": during_hold["semantic"],
+            "after_release": after_release["semantic"],
+            "fresh_press": fresh_press["semantic"],
+            "checkpoints": [
+                serde_json::from_str::<Value>(&dialog_checkpoint)?,
+                serde_json::from_str::<Value>(&held_checkpoint)?,
+                serde_json::from_str::<Value>(&fresh_checkpoint)?,
+            ],
+            "isolation": {"remote_root": MODAL_INPUT_REMOTE_DIR},
+            "boot_id": boot_id,
+            "manifest": parse_manifest_evidence(&manifest),
+        }))
+    })();
+
+    let end_result = nonce
+        .as_deref()
+        .map(|nonce| launcher_automation::end(config, nonce).map(|_| ()))
+        .unwrap_or(Ok(()));
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup_result = exec_checked(
+        &session,
+        "modal input isolated cleanup",
+        &modal_input_cleanup_command(),
+    );
+    end_result?;
+    restart_result?;
+    cleanup_result?;
+    let summary = run_result?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after modal input verification")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during modal input verification".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is missing after modal input verification")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during modal input verification".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        "# Modal input verification\n\nHeld dialog input remained exclusive, and a fresh A press opened Arcade.\n",
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn require_modal_home_state(snapshot: &Value, label: &str) -> Result<()> {
+    let return_screen = modal_semantic(snapshot, "return_screen").and_then(Value::as_str);
+    let menu_id = modal_semantic(snapshot, "menu_id").and_then(Value::as_str);
+    let active_collection =
+        modal_semantic(snapshot, "active_collection_id").and_then(Value::as_str);
+    if return_screen != Some("home")
+        || menu_id != Some("menu:root")
+        || active_collection != Some("")
+    {
+        return Err(
+            format!("modal input leaked to the underlying view {label}: {snapshot}").into(),
+        );
+    }
+    Ok(())
+}
+
+fn modal_input_prepare_command() -> String {
+    format!(
+        "set -eu; root={root}; source=/media/fat/mister-magik-dev/catalog-v3; rm -rf \"$root\"; mkdir -p \"$root\"; test -d \"$source\"; cp -a \"$source\" \"$root/catalog-v3\"; test -d \"$root/catalog-v3\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(MODAL_INPUT_REMOTE_DIR),
+    )
+}
+
+fn modal_input_launcher_env() -> Vec<(String, String)> {
+    let root = MODAL_INPUT_REMOTE_DIR;
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        (
+            "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG".into(),
+            "upgrade".into(),
+        ),
+        (
+            "MISTER_SHARDED_CATALOG_DIR".into(),
+            format!("{root}/catalog-v3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE".into(),
+            format!("{root}/library.sqlite3"),
+        ),
+        (
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            format!("{root}/arcade-bootstrap.nav.lz4b"),
+        ),
+        (
+            "MISTER_LIBRARY_REFRESH_LOCK".into(),
+            format!("{root}/library-refresh.lock"),
+        ),
+        (
+            "MISTER_CATALOG_BUILDER_LOCK".into(),
+            format!("{root}/catalog-builder.lock"),
+        ),
+        (
+            "MISTER_CATALOG_READY_SNAPSHOT".into(),
+            format!("{root}/catalog-ready.snapshot"),
+        ),
+        (
+            "MISTER_CATALOG_DIAGNOSTICS_DIR".into(),
+            format!("{root}/diagnostics"),
+        ),
+    ]
+}
+
+fn modal_input_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(MODAL_INPUT_REMOTE_DIR),
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ParticleBenchmarkRun {
@@ -13588,6 +13911,42 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_input_fixture_is_fixed_isolated_and_cleanup_checks_arming_state() {
+        let environment = modal_input_launcher_env();
+        let isolated_paths = environment
+            .iter()
+            .filter(|(name, _)| {
+                name != "MISTER_CATALOG_REFRESH"
+                    && name != "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG"
+            })
+            .map(|(_, value)| value.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(isolated_paths.len(), 7);
+        assert!(isolated_paths.iter().all(|path| {
+            path.starts_with(&format!("{MODAL_INPUT_REMOTE_DIR}/"))
+                && *path != MODAL_INPUT_REMOTE_DIR
+        }));
+        assert!(environment.iter().any(|(name, value)| {
+            name == "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG" && value == "upgrade"
+        }));
+
+        let prepare = modal_input_prepare_command();
+        assert!(prepare.contains("/media/fat/mister-magik-dev/catalog-v3"));
+        assert!(prepare.contains(MODAL_INPUT_REMOTE_DIR));
+        let cleanup = modal_input_cleanup_command();
+        assert!(cleanup.contains(MODAL_INPUT_REMOTE_DIR));
+        for arming_path in [
+            "/tmp/mister-magik/fs-fault-launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/tmp/mister-magik/fs-fault.json",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+        ] {
+            assert!(cleanup.contains(arming_path));
+        }
+    }
 
     #[test]
     fn launch_return_cleanup_does_not_restart_main_during_game_handoff() {

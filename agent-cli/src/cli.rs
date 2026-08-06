@@ -713,6 +713,7 @@ mod tests {
             "navigation-transitions",
             "launch-return",
             "launch-return-fallback",
+            "modal-input",
             "cold-boot",
             "search",
         ];

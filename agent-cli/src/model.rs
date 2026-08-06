@@ -20,6 +20,7 @@ pub enum BenchmarkScenario {
     CatalogLifecycle,
     LaunchReturn,
     LaunchReturnFallback,
+    ModalInput,
     NavigationTransitions,
     Search,
 }
@@ -38,6 +39,7 @@ impl BenchmarkScenario {
             Self::CatalogLifecycle => "catalog-lifecycle",
             Self::LaunchReturn => "launch-return",
             Self::LaunchReturnFallback => "launch-return-fallback",
+            Self::ModalInput => "modal-input",
             Self::NavigationTransitions => "navigation-transitions",
             Self::Search => "search",
         }

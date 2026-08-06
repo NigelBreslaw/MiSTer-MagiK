@@ -34,6 +34,17 @@ const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
+const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
+const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
+const MODAL_INPUT_TEST_PATH_ENVS: &[&str] = &[
+    "MISTER_SHARDED_CATALOG_DIR",
+    "MISTER_LIBRARY_SQLITE",
+    "MISTER_ARCADE_BOOTSTRAP_INDEX",
+    "MISTER_LIBRARY_REFRESH_LOCK",
+    "MISTER_CATALOG_BUILDER_LOCK",
+    "MISTER_CATALOG_READY_SNAPSHOT",
+    "MISTER_CATALOG_DIAGNOSTICS_DIR",
+];
 
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>) -> Self {
@@ -376,6 +387,43 @@ fn settings_navigation_input_candidate(
         | Screen::Licenses => activated || backed || went_home,
         Screen::Controller | Screen::Arcade => false,
     }
+}
+
+fn absorb_exclusive_input(nav: &mut LauncherNav, now: &PadState) {
+    nav.absorb_input(now);
+}
+
+fn route_lifecycle_dialog_input(
+    nav: &mut LauncherNav,
+    now: &PadState,
+    previous: &PadState,
+    launch_failure_visible: bool,
+    recovery_dialog_visible: bool,
+) -> Option<LauncherLifecycleInput> {
+    let input = if launch_failure_visible {
+        ((now.btn_a && !previous.btn_a)
+            || (now.btn_b && !previous.btn_b)
+            || (now.btn_home && !previous.btn_home))
+            .then_some(LauncherLifecycleInput::LaunchFailureAcknowledge)
+    } else if recovery_dialog_visible {
+        if now.dpad_left && !previous.dpad_left {
+            Some(LauncherLifecycleInput::CatalogRecoveryLeft)
+        } else if now.dpad_right && !previous.dpad_right {
+            Some(LauncherLifecycleInput::CatalogRecoveryRight)
+        } else if now.btn_a && !previous.btn_a {
+            Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
+        } else if (now.btn_b && !previous.btn_b) || (now.btn_home && !previous.btn_home) {
+            Some(LauncherLifecycleInput::CatalogRecoveryCancel)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if launch_failure_visible || recovery_dialog_visible {
+        absorb_exclusive_input(nav, now);
+    }
+    input
 }
 
 fn sync_navigation_transition_active(
@@ -1669,6 +1717,34 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
     file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
+fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
+    let root = Path::new(MODAL_INPUT_TEST_ROOT);
+    paths.into_iter().all(|path| {
+        let path = Path::new(path);
+        path != root && path.starts_with(root)
+    })
+}
+
+fn modal_input_catalog_recovery_test_enabled(catalog_ready: bool, start: Instant) -> bool {
+    if !catalog_ready || std::env::var(MODAL_INPUT_TEST_ENV).as_deref() != Ok("upgrade") {
+        return false;
+    }
+    let paths = MODAL_INPUT_TEST_PATH_ENVS
+        .iter()
+        .map(|name| std::env::var(name).ok())
+        .collect::<Vec<_>>();
+    let isolated = paths.iter().all(Option::is_some)
+        && modal_input_test_paths_are_isolated(paths.iter().filter_map(Option::as_deref));
+    if !isolated {
+        print_startup_event(
+            start,
+            "modal_input_test_rejected",
+            "reason=catalog-paths-not-isolated",
+        );
+    }
+    isolated
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EffectiveLauncherView {
     Launching,
@@ -2753,6 +2829,22 @@ pub(super) fn run_launcher_loop(
     }
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+    if modal_input_catalog_recovery_test_enabled(catalog_ready, start) {
+        lifecycle.handle(
+            LauncherLifecycleInput::CatalogRecoveryRequired {
+                error: "isolated modal input verification".to_string(),
+                has_stale_catalog: true,
+                mode: CatalogRecoveryMode::UpgradeRequired,
+            },
+            &mut lifecycle_effects,
+        );
+        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+        print_startup_event(
+            start,
+            "modal_input_test_dialog",
+            "mode=upgrade-required isolated=1",
+        );
+    }
     window.request_redraw();
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
@@ -3842,6 +3934,7 @@ pub(super) fn run_launcher_loop(
                         setup.advance_to_next_pad(&pad);
                     }
                 }
+                absorb_exclusive_input(&mut nav, &launcher_state);
                 let setup_after = SetupBridgeKey::from_setup(&setup);
                 full_bridge_dirty |= pad_changed || setup_before != setup_after;
             } else if launcher_bench_scenario.is_none()
@@ -3939,34 +4032,14 @@ pub(super) fn run_launcher_loop(
                     .then(|| (nav.screen, nav.navigation_transition_state()));
                     let event = if navigation_transition.is_active() {
                         None
-                    } else if launch_failure_visible {
-                        if (nav_state.btn_a && !input_previous.btn_a)
-                            || (nav_state.btn_b && !input_previous.btn_b)
-                            || (nav_state.btn_home && !input_previous.btn_home)
-                        {
-                            lifecycle.handle(
-                                LauncherLifecycleInput::LaunchFailureAcknowledge,
-                                &mut lifecycle_effects,
-                            );
-                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                            full_bridge_dirty = true;
-                        }
-                        None
-                    } else if recovery_dialog_visible {
-                        let recovery_input = if nav_state.dpad_left && !input_previous.dpad_left {
-                            Some(LauncherLifecycleInput::CatalogRecoveryLeft)
-                        } else if nav_state.dpad_right && !input_previous.dpad_right {
-                            Some(LauncherLifecycleInput::CatalogRecoveryRight)
-                        } else if nav_state.btn_a && !input_previous.btn_a {
-                            Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
-                        } else if (nav_state.btn_b && !input_previous.btn_b)
-                            || (nav_state.btn_home && !input_previous.btn_home)
-                        {
-                            Some(LauncherLifecycleInput::CatalogRecoveryCancel)
-                        } else {
-                            None
-                        };
-                        if let Some(input) = recovery_input {
+                    } else if launch_failure_visible || recovery_dialog_visible {
+                        if let Some(input) = route_lifecycle_dialog_input(
+                            &mut nav,
+                            nav_state,
+                            input_previous,
+                            launch_failure_visible,
+                            recovery_dialog_visible,
+                        ) {
                             lifecycle.handle(input, &mut lifecycle_effects);
                             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
                             full_bridge_dirty = true;
@@ -6567,7 +6640,13 @@ pub(super) fn run_launcher_loop(
                         start,
                         "startup_intro_completed",
                         format!(
-                            "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} expected_refresh_intervals={} dropped_frames={} software_estimated_dropped_frames={} pacing_failures={} max_confirmation_gap_us={} cadence_qualified={} cadence_error={}",
+                            concat!(
+                                "frames={} logical_elapsed_ms=20000 cabinet_wait_frames={} ",
+                                "expected_refresh_intervals={} ",
+                                "dropped_frames={} ",
+                                "software_estimated_dropped_frames={} pacing_failures={} ",
+                                "max_confirmation_gap_us={} cadence_qualified={} cadence_error={}"
+                            ),
                             software_cadence.confirmed_frames,
                             software_cadence.cabinet_wait_frames,
                             software_cadence.expected_refresh_intervals,
@@ -8175,6 +8254,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn modal_input_test_requires_every_path_below_fixed_tmp_root() {
+        assert!(modal_input_test_paths_are_isolated([
+            "/tmp/mister-magik/modal-input-benchmark/catalog-v3",
+            "/tmp/mister-magik/modal-input-benchmark/library.sqlite3",
+            "/tmp/mister-magik/modal-input-benchmark/catalog-ready.snapshot",
+        ]));
+        assert!(!modal_input_test_paths_are_isolated([
+            "/tmp/mister-magik/modal-input-benchmark/catalog-v3",
+            "/media/fat/mister-magik-dev/library.sqlite3",
+        ]));
+        assert!(!modal_input_test_paths_are_isolated([
+            "/tmp/mister-magik/modal-input-benchmark",
+        ]));
+    }
+
+    #[test]
     fn startup_intro_preserves_first_visible_build_planning() {
         assert_eq!(
             startup_intro_catalog_worker_request(CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS),
@@ -8356,6 +8451,67 @@ mod tests {
             settings_page_transition_direction(Screen::Screensaver, Screen::About),
             None
         );
+    }
+
+    #[test]
+    fn catalog_recovery_consumes_a_until_release() {
+        let catalog = catalog_for_media_systems(&["arcade"]);
+        let mut nav = LauncherNav::new();
+        let released = PadState::default();
+        let pressed = pad_state_with(|state| state.btn_a = true);
+        let now = Instant::now();
+
+        let input = route_lifecycle_dialog_input(&mut nav, &pressed, &released, false, true);
+        assert!(matches!(
+            input,
+            Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
+        ));
+        assert!(nav.handle_input(&pressed, now, &catalog).is_none());
+        assert_eq!(nav.screen, Screen::Home);
+
+        assert!(
+            nav.handle_input(&released, now + Duration::from_millis(16), &catalog)
+                .is_none()
+        );
+        assert!(
+            nav.handle_input(&pressed, now + Duration::from_millis(32), &catalog)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn launch_failure_consumes_every_acknowledgement_button() {
+        for pressed in [
+            pad_state_with(|state| state.btn_a = true),
+            pad_state_with(|state| state.btn_b = true),
+            pad_state_with(|state| state.btn_home = true),
+        ] {
+            let catalog = catalog_for_media_systems(&["arcade"]);
+            let mut nav = LauncherNav::new();
+            let input =
+                route_lifecycle_dialog_input(&mut nav, &pressed, &PadState::default(), true, false);
+            assert!(matches!(
+                input,
+                Some(LauncherLifecycleInput::LaunchFailureAcknowledge)
+            ));
+            assert!(
+                nav.handle_input(&pressed, Instant::now(), &catalog)
+                    .is_none()
+            );
+            assert_eq!(nav.screen, Screen::Home);
+        }
+    }
+
+    #[test]
+    fn exclusive_input_absorption_resets_direction_repeat() {
+        let mut nav = LauncherNav::new();
+        let held = pad_state_with(|state| state.dpad_right = true);
+        let now = Instant::now();
+        absorb_exclusive_input(&mut nav, &held);
+
+        let catalog = catalog_for_media_systems(&["arcade"]);
+        assert!(nav.handle_input(&held, now, &catalog).is_none());
+        assert_eq!(nav.selected, 0);
     }
 
     #[test]

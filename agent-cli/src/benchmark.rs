@@ -39,6 +39,7 @@ enum BenchmarkProfile {
     CatalogLifecycle,
     LaunchReturn,
     LaunchReturnFallback,
+    ModalInput,
     ColdBoot,
     NavigationTransitions,
 }
@@ -79,6 +80,7 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::LaunchReturnFallback => {
                 device.profile_launch_return(&output_dir, true)
             }
+            BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
             BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
@@ -155,6 +157,9 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LaunchReturnFallback => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, true)
         }
+        BenchmarkScenario::ModalInput => {
+            execute_modal_input(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::ColdBoot => {
             execute_cold_boot(&mut device, manifest, output_dir, reporter)
         }
@@ -163,6 +168,58 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_modal_input(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "ui-verification",
+        "verifying exclusive modal input on the installed Dev runtime",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::ModalInput, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_modal_input_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_modal_input_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-modal-input-verification-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary
+            .pointer("/during_hold/return_screen")
+            .and_then(Value::as_str)
+            != Some("home")
+        || summary
+            .pointer("/after_release/return_screen")
+            .and_then(Value::as_str)
+            != Some("home")
+        || summary
+            .pointer("/fresh_press/return_screen")
+            .and_then(Value::as_str)
+            != Some("arcade")
+    {
+        return Err("modal input verification did not preserve exclusive dialog input".into());
+    }
+    Ok(())
 }
 
 fn require_active_development_runtime(active: &crate::host::ActiveRuntime) -> AgentResult<()> {
@@ -1011,6 +1068,27 @@ fn u64_field(value: &Value, field: &str, default: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_input_requires_held_release_isolation_and_a_fresh_activation() {
+        let passing = json!({
+            "schema": "mister-magik-modal-input-verification-v1",
+            "status": "passed",
+            "during_hold": {"return_screen": "home"},
+            "after_release": {"return_screen": "home"},
+            "fresh_press": {"return_screen": "arcade"},
+        });
+        assert!(evaluate_modal_input_summary(&passing).is_ok());
+
+        for pointer in ["during_hold", "after_release"] {
+            let mut leaked = passing.clone();
+            leaked[pointer]["return_screen"] = json!("arcade");
+            assert!(evaluate_modal_input_summary(&leaked).is_err());
+        }
+        let mut no_fresh_activation = passing;
+        no_fresh_activation["fresh_press"]["return_screen"] = json!("home");
+        assert!(evaluate_modal_input_summary(&no_fresh_activation).is_err());
+    }
 
     fn passing_run(run: u64) -> Value {
         json!({

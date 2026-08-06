@@ -21,8 +21,22 @@ Supported scenarios:
 - `particle-profile`
 - `catalog-lifecycle`
 - `launch-return`
+- `launch-return-fallback`
+- `modal-input`
 - `navigation-transitions`
 - `search`
+
+`modal-input` restarts the coherently installed Dev launcher with a one-shot,
+fixed test request and a catalog copied below
+`/tmp/mister-magik/modal-input-benchmark`. It presents the real catalog upgrade
+recovery dialog over the selected Arcade tile, selects `Rebuild`, and holds A
+while the dialog closes. The run fails if that held A reaches the underlying
+Home view, then proves that release leaves Home selected and a fresh A press
+opens Arcade. Semantic snapshots and authoritative framebuffer checkpoints are
+retained below `build/agent-benchmarks/modal-input/<timestamp>/`. The isolated
+catalog and all one-shot environment state are removed before the ordinary Dev
+launcher is restored; the installed manifest and device boot ID must remain
+unchanged.
 
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
 Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It
