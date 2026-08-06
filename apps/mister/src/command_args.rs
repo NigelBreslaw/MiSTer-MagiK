@@ -71,6 +71,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("purge-library-data", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     CommandSpec::new("benchmark-capabilities", CommandKind::PreFpga),
+    CommandSpec::new("pmu-probe", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
@@ -244,6 +245,7 @@ mod tests {
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("catalog-v3-inspect"));
         assert!(is_known_command("benchmark-capabilities"));
+        assert!(is_known_command("pmu-probe"));
         assert!(is_known_command("search-bench"));
         assert!(is_known_command("read"));
         assert!(is_known_command("fpga-latch-report"));

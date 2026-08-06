@@ -241,8 +241,8 @@ struct ParticlePmuSample {
 struct ParticlePmu {
     requested: bool,
     initialization_attempted: bool,
-    #[cfg(target_os = "linux")]
-    counters: Option<PerfCounterGroup>,
+    counters: Option<mister_magik_perf_events::CounterGroup>,
+    started: Option<mister_magik_perf_events::CounterSnapshot>,
 }
 
 impl ParticlePmu {
@@ -250,8 +250,8 @@ impl ParticlePmu {
         Self {
             requested: std::env::var_os("MISTER_PARTICLE_PMU").is_some_and(|value| value == "1"),
             initialization_attempted: false,
-            #[cfg(target_os = "linux")]
             counters: None,
+            started: None,
         }
     }
 
@@ -259,180 +259,41 @@ impl ParticlePmu {
         if !self.requested {
             return;
         }
-        #[cfg(target_os = "linux")]
-        {
-            if !self.initialization_attempted {
-                self.initialization_attempted = true;
-                self.counters = PerfCounterGroup::open().ok();
-            }
-            if let Some(counters) = self.counters.as_mut()
-                && counters.begin().is_err()
-            {
-                self.counters = None;
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
+        if !self.initialization_attempted {
             self.initialization_attempted = true;
+            self.counters = mister_magik_perf_events::CounterGroup::open().ok();
+        }
+        self.started = self
+            .counters
+            .as_ref()
+            .and_then(|counters| counters.snapshot().ok());
+        if self.started.is_none() {
+            self.counters = None;
         }
     }
 
     fn finish(&mut self) -> ParticlePmuSample {
-        #[cfg(target_os = "linux")]
-        {
-            let Some(counters) = self.counters.as_mut() else {
-                return ParticlePmuSample::default();
-            };
-            return counters.finish().unwrap_or_default();
-        }
-        #[cfg(not(target_os = "linux"))]
-        ParticlePmuSample::default()
-    }
-}
-
-#[cfg(target_os = "linux")]
-const PERF_EVENT_CONFIGS: [u64; 6] = [0, 1, 2, 3, 4, 5];
-#[cfg(target_os = "linux")]
-const PERF_TYPE_HARDWARE: u32 = 0;
-#[cfg(target_os = "linux")]
-const PERF_FORMAT_GROUP: u64 = 1 << 3;
-#[cfg(target_os = "linux")]
-const PERF_ATTR_DISABLED: u64 = 1;
-#[cfg(target_os = "linux")]
-const PERF_ATTR_EXCLUDE_KERNEL: u64 = 1 << 5;
-#[cfg(target_os = "linux")]
-const PERF_ATTR_EXCLUDE_HYPERVISOR: u64 = 1 << 6;
-#[cfg(target_os = "linux")]
-const PERF_FLAG_FD_CLOEXEC: libc::c_ulong = 1 << 3;
-#[cfg(target_os = "linux")]
-const PERF_EVENT_IOC_ENABLE: libc::c_ulong = 0x2400;
-#[cfg(target_os = "linux")]
-const PERF_EVENT_IOC_DISABLE: libc::c_ulong = 0x2401;
-#[cfg(target_os = "linux")]
-const PERF_EVENT_IOC_RESET: libc::c_ulong = 0x2403;
-#[cfg(target_os = "linux")]
-const PERF_IOC_FLAG_GROUP: libc::c_ulong = 1;
-
-#[cfg(target_os = "linux")]
-#[repr(C)]
-#[derive(Default)]
-struct PerfEventAttr {
-    event_type: u32,
-    size: u32,
-    config: u64,
-    sample_period: u64,
-    sample_type: u64,
-    read_format: u64,
-    flags: u64,
-    wakeup_events: u32,
-    breakpoint_type: u32,
-    config1: u64,
-}
-
-#[cfg(target_os = "linux")]
-struct PerfCounterGroup {
-    descriptors: Vec<libc::c_int>,
-}
-
-#[cfg(target_os = "linux")]
-impl PerfCounterGroup {
-    fn open() -> std::io::Result<Self> {
-        let leader = open_perf_event(PERF_EVENT_CONFIGS[0], -1)?;
-        let mut group = Self {
-            descriptors: vec![leader],
+        let (Some(counters), Some(started)) = (self.counters.as_ref(), self.started.take()) else {
+            return ParticlePmuSample::default();
         };
-        for config in PERF_EVENT_CONFIGS.iter().copied().skip(1) {
-            group
-                .descriptors
-                .push(open_perf_event(config, group.descriptors[0])?);
-        }
-        Ok(group)
-    }
-
-    fn begin(&mut self) -> std::io::Result<()> {
-        perf_group_ioctl(self.descriptors[0], PERF_EVENT_IOC_RESET)?;
-        perf_group_ioctl(self.descriptors[0], PERF_EVENT_IOC_ENABLE)
-    }
-
-    fn finish(&mut self) -> std::io::Result<ParticlePmuSample> {
-        perf_group_ioctl(self.descriptors[0], PERF_EVENT_IOC_DISABLE)?;
-        let mut values = [0_u64; PERF_EVENT_CONFIGS.len() + 1];
-        let expected_bytes = std::mem::size_of_val(&values);
-        // SAFETY: `values` is writable for `expected_bytes` and the descriptor
-        // is owned by this group.
-        let read_bytes = unsafe {
-            libc::read(
-                self.descriptors[0],
-                values.as_mut_ptr().cast(),
-                expected_bytes,
-            )
-        };
-        if read_bytes != expected_bytes as isize || values[0] != PERF_EVENT_CONFIGS.len() as u64 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(ParticlePmuSample {
-            available: true,
-            cycles: values[1],
-            instructions: values[2],
-            cache_references: values[3],
-            cache_misses: values[4],
-            branch_instructions: values[5],
-            branch_misses: values[6],
-        })
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for PerfCounterGroup {
-    fn drop(&mut self) {
-        for descriptor in self.descriptors.drain(..) {
-            // SAFETY: every descriptor was returned by `perf_event_open` and
-            // ownership remains with this group.
-            unsafe {
-                libc::close(descriptor);
+        match counters.snapshot() {
+            Ok(finished) => {
+                let delta = finished.delta_from(started).counters;
+                ParticlePmuSample {
+                    available: true,
+                    cycles: delta.cycles,
+                    instructions: delta.instructions,
+                    cache_references: delta.l1d_accesses,
+                    cache_misses: delta.l1d_refills,
+                    branch_instructions: delta.branches,
+                    branch_misses: delta.branch_mispredicts,
+                }
+            }
+            Err(_) => {
+                self.counters = None;
+                ParticlePmuSample::default()
             }
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn open_perf_event(config: u64, group_descriptor: libc::c_int) -> std::io::Result<libc::c_int> {
-    let attributes = PerfEventAttr {
-        event_type: PERF_TYPE_HARDWARE,
-        size: u32::try_from(std::mem::size_of::<PerfEventAttr>()).unwrap_or(u32::MAX),
-        config,
-        read_format: PERF_FORMAT_GROUP,
-        flags: PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HYPERVISOR,
-        ..PerfEventAttr::default()
-    };
-    // SAFETY: the syscall receives a valid attribute pointer and requests
-    // counters for the calling thread on any CPU.
-    let descriptor = unsafe {
-        libc::syscall(
-            libc::SYS_perf_event_open,
-            &attributes,
-            0,
-            -1,
-            group_descriptor,
-            PERF_FLAG_FD_CLOEXEC,
-        )
-    };
-    let descriptor =
-        libc::c_int::try_from(descriptor).map_err(|_| std::io::Error::last_os_error())?;
-    if descriptor < 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(descriptor)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn perf_group_ioctl(descriptor: libc::c_int, request: libc::c_ulong) -> std::io::Result<()> {
-    // SAFETY: the descriptor is the live leader of the owned event group.
-    if unsafe { libc::ioctl(descriptor, request, PERF_IOC_FLAG_GROUP) } == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
     }
 }
 

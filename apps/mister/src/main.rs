@@ -119,6 +119,7 @@ mod media_http;
 mod media_pack_save;
 mod memory_pressure;
 mod mr_audio;
+mod pmu_probe;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 mod preview_pack_bench;
 mod preview_state;
@@ -368,6 +369,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "purge-library-data" => run_purge_library_data(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
+        "pmu-probe" => pmu_probe::run(),
         "search-bench" => search_bench::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -411,6 +413,7 @@ fn print_benchmark_capabilities() {
         "schema": "mister-magik-benchmark-capabilities-v1",
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
+        "pmu-probe-v1": true,
         "persisted-search-v1": true,
     });
     capabilities
