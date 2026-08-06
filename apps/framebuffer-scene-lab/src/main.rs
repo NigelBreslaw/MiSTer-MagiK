@@ -801,7 +801,7 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
                 "branches": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branches)),
                 "branch_mispredicts": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branch_mispredicts)),
             });
-            (name, summary)
+            (name.to_owned(), summary)
         })
         .collect::<serde_json::Map<_, _>>();
     let mut event_sources = std::fs::read_dir("/sys/bus/event_source/devices")
