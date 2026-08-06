@@ -263,7 +263,6 @@ pub enum SceneLabPhaseGeneration {
     TwoTap,
     LinearLanczos3,
     LinearLanczos3Neon,
-    LinearLanczos3DirectNeon,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -287,7 +286,6 @@ impl SceneLabPhaseGeneration {
             Self::TwoTap => "two-tap",
             Self::LinearLanczos3 => "linear-lanczos3",
             Self::LinearLanczos3Neon => "linear-lanczos3-neon",
-            Self::LinearLanczos3DirectNeon => "linear-lanczos3-direct-neon",
         }
     }
 }
