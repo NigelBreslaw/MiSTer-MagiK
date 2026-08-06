@@ -197,12 +197,6 @@ fn qualification_launcher_env() -> Vec<(String, String)> {
         ("MISTER_LATCH_V5_QUALIFICATION".into(), "1".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
         (
-            "MISTER_SCREENSAVER_RENDERER".into(),
-            "magik-particles".into(),
-        ),
-        ("MISTER_PARTICLE_COUNT".into(), "40000".into()),
-        ("MISTER_PARTICLE_PRESET".into(), "visual".into()),
-        (
             "MISTER_LIBRARY_SQLITE".into(),
             format!("{CATALOG_STATE_REMOTE}/library.sqlite3"),
         ),

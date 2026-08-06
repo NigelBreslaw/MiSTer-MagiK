@@ -29,11 +29,6 @@ trait BenchmarkDevice {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkProfile {
     Screensaver,
-    Particles,
-    ParticleCapacity,
-    ParticleDemo40k,
-    ParticleStep,
-    ParticleCpu,
     Search,
     SearchUi,
     CatalogLifecycle,
@@ -68,11 +63,6 @@ impl BenchmarkDevice for DeviceClient {
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String> {
         self.mutate(|device| match profile {
             BenchmarkProfile::Screensaver => device.profile_screensaver(&output_dir),
-            BenchmarkProfile::Particles => device.profile_particles(&output_dir),
-            BenchmarkProfile::ParticleCapacity => device.profile_particle_capacity(&output_dir),
-            BenchmarkProfile::ParticleDemo40k => device.profile_particle_demo_40k(&output_dir),
-            BenchmarkProfile::ParticleStep => device.profile_particle_step(&output_dir),
-            BenchmarkProfile::ParticleCpu => device.profile_particle_cpu(&output_dir),
             BenchmarkProfile::Search => device.profile_search(&output_dir),
             BenchmarkProfile::SearchUi => device.verify_search_ui(&output_dir),
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
@@ -97,6 +87,10 @@ fn require_clean_installed_commit(
     let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
+    }
+    if let Some(command) = particle_scene_lab_command(scenario) {
+        reporter.emit(EventKind::Warning, "scene-lab-required", command, Some(100))?;
+        return Ok(Outcome::ExternalRequired);
     }
     let mut device = DeviceClient::default();
     reporter.emit(
@@ -133,20 +127,12 @@ fn require_clean_installed_commit(
         BenchmarkScenario::Screensaver => {
             execute_screensaver(&mut device, manifest, output_dir, reporter)
         }
-        BenchmarkScenario::Particles => {
-            execute_particles(&mut device, manifest, output_dir, reporter)
-        }
-        BenchmarkScenario::ParticleCapacity => {
-            execute_particle_capacity(&mut device, manifest, output_dir, reporter)
-        }
-        BenchmarkScenario::ParticleDemo40k => {
-            execute_particle_demo_40k(&mut device, manifest, output_dir, reporter)
-        }
-        BenchmarkScenario::ParticleStep => {
-            execute_particle_step(&mut device, manifest, output_dir, reporter)
-        }
-        BenchmarkScenario::ParticleProfile => {
-            execute_particle_profile(&mut device, manifest, output_dir, reporter)
+        BenchmarkScenario::Particles
+        | BenchmarkScenario::ParticleCapacity
+        | BenchmarkScenario::ParticleDemo40k
+        | BenchmarkScenario::ParticleStep
+        | BenchmarkScenario::ParticleProfile => {
+            unreachable!("particle scenarios are redirected before installed-runtime preflight")
         }
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
@@ -167,6 +153,27 @@ fn require_clean_installed_commit(
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
+    }
+}
+
+fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static str> {
+    match scenario {
+        BenchmarkScenario::Particles => Some(
+            "particle qualification moved to the dedicated lab; sweep --particle-count with: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset visual --particle-count COUNT --seconds 90 --assess --attended",
+        ),
+        BenchmarkScenario::ParticleCapacity => Some(
+            "particle capacity qualification moved to the dedicated lab; sweep --particle-count with: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset capacity --particle-count COUNT --seconds 90 --assess --attended",
+        ),
+        BenchmarkScenario::ParticleDemo40k => Some(
+            "run: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset visual --particle-count 40960 --seconds 90 --assess --attended",
+        ),
+        BenchmarkScenario::ParticleStep => Some(
+            "run: scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset capacity --particle-count 14336 --seconds 90 --assess --attended",
+        ),
+        BenchmarkScenario::ParticleProfile => Some(
+            "particle CPU profiling moved to the dedicated lab; run the required count with scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset PRESET --particle-count COUNT --seconds 90 --assess --attended",
+        ),
+        _ => None,
     }
 }
 
@@ -543,226 +550,6 @@ fn execute_navigation_transitions(
         Some(100),
     )?;
     Ok(Outcome::Passed)
-}
-
-fn execute_particle_profile(
-    device: &mut impl BenchmarkDevice,
-    manifest: String,
-    output_dir: std::path::PathBuf,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "profile",
-        "sampling installed particle renderer CPU stacks",
-        Some(20),
-    )?;
-    let detail = device.profile(BenchmarkProfile::ParticleCpu, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-cpu-profile-v3")
-    {
-        return Err("particle CPU profile summary has the wrong schema".into());
-    }
-    for preset in ["capacity", "visual"] {
-        if summary
-            .pointer(&format!("/presets/{preset}/profile/sample_hits"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-            <= 0
-        {
-            return Err(format!("particle CPU profile produced no {preset} samples").into());
-        }
-        if summary
-            .pointer(&format!("/presets/{preset}/timing/qualified"))
-            .and_then(Value::as_bool)
-            != Some(true)
-            || summary
-                .pointer(&format!(
-                    "/presets/{preset}/timing/physical_refresh/presentation_telemetry/schema"
-                ))
-                .and_then(Value::as_str)
-                != Some("mister-magik-frame-evidence-v5")
-        {
-            return Err(format!(
-                "particle CPU profile has no authoritative {preset} cadence evidence"
-            )
-            .into());
-        }
-    }
-    reporter.emit(
-        EventKind::Progress,
-        "benchmark-result",
-        &serde_json::to_string(&json!({
-            "installed_manifest": manifest,
-            "summary": summary,
-            "output_dir": output_dir,
-        }))
-        .map_err(|error| error.to_string())?,
-        Some(100),
-    )?;
-    Ok(Outcome::Passed)
-}
-
-fn execute_particles(
-    device: &mut impl BenchmarkDevice,
-    manifest: String,
-    output_dir: std::path::PathBuf,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "profile",
-        "measuring installed particle capacity",
-        Some(20),
-    )?;
-    let detail = device.profile(BenchmarkProfile::Particles, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.verify_health()?;
-    evaluate_particle_summary(&summary)?;
-    reporter.emit(
-        EventKind::Progress,
-        "benchmark-result",
-        &serde_json::to_string(&json!({
-            "installed_manifest": manifest,
-            "summary": summary,
-            "output_dir": output_dir,
-        }))
-        .map_err(|error| error.to_string())?,
-        Some(100),
-    )?;
-    Ok(Outcome::Passed)
-}
-
-fn execute_particle_capacity(
-    device: &mut impl BenchmarkDevice,
-    manifest: String,
-    output_dir: std::path::PathBuf,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "profile",
-        "measuring installed capacity-preset particle ceiling",
-        Some(20),
-    )?;
-    let detail = device.profile(BenchmarkProfile::ParticleCapacity, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-particle-capacity-benchmark-v2")
-        || summary
-            .pointer("/presets/capacity/confirmation/qualified")
-            .and_then(Value::as_bool)
-            != Some(true)
-        || summary
-            .pointer(
-                "/presets/capacity/confirmation/physical_refresh/presentation_telemetry/schema",
-            )
-            .and_then(Value::as_str)
-            != Some("mister-magik-frame-evidence-v5")
-    {
-        return Err("particle capacity benchmark did not confirm a ceiling".into());
-    }
-    emit_benchmark_result(reporter, manifest, summary, output_dir)
-}
-
-fn execute_particle_demo_40k(
-    device: &mut impl BenchmarkDevice,
-    manifest: String,
-    output_dir: std::path::PathBuf,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "profile",
-        "measuring fixed 40,960-particle visual trial",
-        Some(20),
-    )?;
-    let detail = device.profile(BenchmarkProfile::ParticleDemo40k, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-demo-40k-v2")
-        || summary.pointer("/demo/qualified").and_then(Value::as_bool) != Some(true)
-        || summary
-            .pointer("/demo/physical_refresh/presentation_telemetry/schema")
-            .and_then(Value::as_str)
-            != Some("mister-magik-frame-evidence-v5")
-    {
-        return Err("fixed 40,960-particle visual trial did not qualify".into());
-    }
-    emit_benchmark_result(reporter, manifest, summary, output_dir)
-}
-
-fn execute_particle_step(
-    device: &mut impl BenchmarkDevice,
-    manifest: String,
-    output_dir: std::path::PathBuf,
-    reporter: &mut Reporter<'_>,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "profile",
-        "measuring fixed 14,336-particle capacity trial",
-        Some(20),
-    )?;
-    let detail = device.profile(BenchmarkProfile::ParticleStep, output_dir.clone())?;
-    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    device.verify_health()?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-step-v2")
-        || summary.pointer("/step/qualified").and_then(Value::as_bool) != Some(true)
-        || summary
-            .pointer("/step/physical_refresh/presentation_telemetry/schema")
-            .and_then(Value::as_str)
-            != Some("mister-magik-frame-evidence-v5")
-    {
-        return Err("fixed particle optimisation trial did not qualify".into());
-    }
-    emit_benchmark_result(reporter, manifest, summary, output_dir)
-}
-
-fn emit_benchmark_result(
-    reporter: &mut Reporter<'_>,
-    manifest: String,
-    summary: Value,
-    output_dir: std::path::PathBuf,
-) -> AgentResult<Outcome> {
-    reporter.emit(
-        EventKind::Progress,
-        "benchmark-result",
-        &serde_json::to_string(&json!({
-            "installed_manifest": manifest,
-            "summary": summary,
-            "output_dir": output_dir,
-        }))
-        .map_err(|error| error.to_string())?,
-        Some(100),
-    )?;
-    Ok(Outcome::Passed)
-}
-
-fn evaluate_particle_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-particle-benchmark-v2") {
-        return Err("particle benchmark summary has the wrong schema".into());
-    }
-    for preset in ["capacity", "visual"] {
-        let result = summary
-            .pointer(&format!("/presets/{preset}"))
-            .ok_or_else(|| format!("particle benchmark has no {preset} result"))?;
-        if result.get("confirmed_count").and_then(Value::as_u64) == Some(0)
-            || result
-                .pointer("/confirmation/qualified")
-                .and_then(Value::as_bool)
-                != Some(true)
-            || result
-                .pointer("/confirmation/physical_refresh/presentation_telemetry/schema")
-                .and_then(Value::as_str)
-                != Some("mister-magik-frame-evidence-v5")
-        {
-            return Err(format!("particle benchmark did not confirm the {preset} ceiling").into());
-        }
-    }
-    Ok(())
 }
 
 fn execute_screensaver(
@@ -1187,33 +974,20 @@ mod tests {
     }
 
     #[test]
-    fn particle_benchmark_requires_both_confirmed_presets() {
-        let mut summary = json!({
-            "schema": "mister-magik-particle-benchmark-v2",
-            "presets": {
-                "capacity": {
-                    "confirmed_count": 131_072,
-                    "confirmation": {
-                        "qualified": true,
-                        "physical_refresh": {"presentation_telemetry": {
-                            "schema": "mister-magik-frame-evidence-v5"
-                        }}
-                    }
-                },
-                "visual": {
-                    "confirmed_count": 65_536,
-                    "confirmation": {
-                        "qualified": true,
-                        "physical_refresh": {"presentation_telemetry": {
-                            "schema": "mister-magik-frame-evidence-v5"
-                        }}
-                    }
-                }
-            }
-        });
-        assert!(evaluate_particle_summary(&summary).is_ok());
-        summary["presets"]["visual"]["confirmation"]["qualified"] = json!(false);
-        assert!(evaluate_particle_summary(&summary).is_err());
+    fn particle_benchmarks_redirect_to_the_dedicated_scene_lab() {
+        for scenario in [
+            BenchmarkScenario::Particles,
+            BenchmarkScenario::ParticleCapacity,
+            BenchmarkScenario::ParticleDemo40k,
+            BenchmarkScenario::ParticleStep,
+            BenchmarkScenario::ParticleProfile,
+        ] {
+            let command = particle_scene_lab_command(scenario).expect("particle lab command");
+            assert!(command.contains("device scene-lab"));
+            assert!(command.contains("--scene magik"));
+            assert!(command.contains("--particle-preset"));
+            assert!(command.contains("--particle-count"));
+        }
     }
 
     #[test]
