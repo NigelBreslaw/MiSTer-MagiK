@@ -893,7 +893,6 @@ version = "0.1.0"
 name = "mister-magik-mister-runtime"
 version = "0.1.0"
 dependencies = [
- "cc",
  "libc",
  "mister-magik-core",
  "mister-magik-latch-contract",

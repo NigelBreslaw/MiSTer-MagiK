@@ -37,7 +37,7 @@ slint = { version = "=1.17.1", optional = true, default-features = false, featur
 [features]
 default = []
 app-runtime = ["dep:mister-magik-catalog"]
-framebuffer-lab = ["dep:cc"]
+framebuffer-lab = []
 ui = [
     "app-runtime",
     "dep:bytemuck",
