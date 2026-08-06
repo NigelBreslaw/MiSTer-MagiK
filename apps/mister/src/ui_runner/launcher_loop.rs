@@ -5507,7 +5507,6 @@ pub(super) fn run_launcher_loop(
                     ui.render_w(),
                     ui.render_h(),
                     screensaver_show_started,
-                    ui.output_route().is_crt(),
                 ));
             }
             let loader = screensaver_loader.as_ref().expect("created above");
@@ -5519,18 +5518,15 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 let requires_direct_hidden = ready.requires_direct_hidden();
-                let direct_hidden_available = if requires_direct_hidden {
-                    launcher_presenter.direct_hidden_framebuffer_slots_available(ui)
-                } else {
-                    launcher_presenter.direct_hidden_slots_available(ui)
-                };
+                let direct_hidden_available = requires_direct_hidden
+                    && launcher_presenter.direct_hidden_framebuffer_slots_available(ui);
                 if requires_direct_hidden && !direct_hidden_available {
                     crate::ui_errln!(
                         "particle experiment requires the direct hidden-slot latch backend"
                     );
                     screensaver.fail_current_activation(Instant::now());
                     screensaver_frame_visible = false;
-                } else if direct_hidden_available {
+                } else if requires_direct_hidden {
                     let launcher_snapshot_view = layer_target.cached_frame_view();
                     let launcher_snapshot = screensaver
                         .is_preview()

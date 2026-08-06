@@ -643,7 +643,7 @@ mod tests {
 
     #[test]
     fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
-        let loader = LauncherScreensaverLoader::start(64, 48, None, false);
+        let loader = LauncherScreensaverLoader::start(64, 48, None);
         let renderer = loader
             .try_ready()
             .expect("renderer is handed off immediately");
@@ -678,7 +678,7 @@ mod tests {
     #[test]
     fn render_ahead_supports_repeated_enter_and_exit() {
         for _ in 0..2 {
-            let renderer = LauncherScreensaverLoader::start(32, 24, None, false)
+            let renderer = LauncherScreensaverLoader::start(32, 24, None)
                 .try_ready()
                 .expect("renderer is handed off immediately");
             let mut pipeline = ScreensaverRenderAhead::start(renderer, 32, 24, 16_667);

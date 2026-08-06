@@ -1408,7 +1408,6 @@ mod macos {
             let cancelled = Arc::new(AtomicBool::new(false));
             let worker_cancelled = Arc::clone(&cancelled);
             let worker_path = path.clone();
-            let crt_output = self.display_profile.is_crt();
             let frame_width = self.frame_width;
             let frame_height = self.frame_height;
             let (sender, receiver) = mpsc::channel();
@@ -1420,7 +1419,6 @@ mod macos {
                         frame_width,
                         frame_height,
                         SCREENSHOT_TILE_SEED,
-                        crt_output,
                     );
                     if !worker_cancelled.load(Ordering::Relaxed) {
                         let _ = sender.send(result);
@@ -1493,7 +1491,6 @@ mod macos {
                 self.frame_width,
                 self.frame_height,
                 SCREENSHOT_TILE_SEED,
-                self.display_profile.is_crt(),
             )?;
             self.production_screensaver = Some(screensaver);
             self.tile_pack_status = format!("tiles:production-parade:{}", path.display());

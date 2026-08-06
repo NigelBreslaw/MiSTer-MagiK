@@ -40,12 +40,6 @@ fn startup_intro_native_hidden_geometry_available(ui: &UiDisplay) -> bool {
     }
 }
 
-fn direct_hidden_scan_geometry_available(ui: &UiDisplay) -> bool {
-    direct_hidden_framebuffer_geometry_available(ui)
-        && ui.render_w() == usize::from(ui.scan_w())
-        && ui.render_h() == usize::from(ui.scan_h())
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LatchAutoRetryState {
     Disabled,
@@ -217,11 +211,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             LauncherPresenterState::Latch(latch) => latch.publish_requested_full_snapshot(),
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => false,
         }
-    }
-
-    pub(in crate::ui_runner) fn direct_hidden_slots_available(&self, ui: &UiDisplay) -> bool {
-        self.direct_hidden_framebuffer_slots_available(ui)
-            && direct_hidden_scan_geometry_available(ui)
     }
 
     pub(in crate::ui_runner) fn direct_hidden_framebuffer_slots_available(
@@ -895,7 +884,6 @@ mod tests {
             (1920, 1080)
         );
         assert!(direct_hidden_framebuffer_geometry_available(&ui));
-        assert!(!direct_hidden_scan_geometry_available(&ui));
     }
 
     #[test]
