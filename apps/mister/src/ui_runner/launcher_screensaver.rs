@@ -19,7 +19,7 @@ use mister_magik_screenshot_parade::{
     ScreenshotParadeConfig, ScreenshotParadeStats,
 };
 #[cfg(target_os = "macos")]
-use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
+use slint::platform::software_renderer::Rgb565Pixel;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -726,7 +726,7 @@ impl LauncherScreensaverLoader {
         }
     }
 
-    pub fn try_ready(&self) -> Option<LauncherScreenshotRuntime> {
+    pub(crate) fn try_ready(&self) -> Option<LauncherScreenshotRuntime> {
         self.ready_rx.try_recv().ok()
     }
 }
