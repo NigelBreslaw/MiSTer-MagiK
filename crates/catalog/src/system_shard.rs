@@ -175,6 +175,7 @@ pub(crate) fn write_system_shard_with_durability(
     durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
+    let navigation_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_NAVIGATION);
     let navigation = {
         let stored = StoredNavigationRef {
             schema_version: NAVIGATION_SCHEMA_VERSION,
@@ -186,6 +187,7 @@ pub(crate) fn write_system_shard_with_durability(
     };
     let navigation_hash = checksum_hex(&navigation);
     let preview_archive_default = common_preview_archive_path(&data.games);
+    drop(navigation_pmu);
     create_parent(sqlite_path)?;
     create_parent(navigation_path)?;
     if sqlite_path.exists() || navigation_path.exists() {
@@ -195,6 +197,8 @@ pub(crate) fn write_system_shard_with_durability(
         ));
     }
 
+    let sqlite_schema_pmu =
+        mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_SQLITE_SCHEMA);
     let mut connection = Connection::open(sqlite_path)
         .map_err(|error| SystemShardError::with("open staging SQLite", error))?;
     let durability_pragmas = match durability {
@@ -243,6 +247,8 @@ pub(crate) fn write_system_shard_with_durability(
     let transaction = connection
         .transaction()
         .map_err(|error| SystemShardError::with("begin shard transaction", error))?;
+    drop(sqlite_schema_pmu);
+    let games_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_GAMES);
     for (key, value) in [
         ("schema_version", SHARD_SCHEMA_VERSION.to_string()),
         (
@@ -324,6 +330,9 @@ pub(crate) fn write_system_shard_with_durability(
                 .map_err(|error| SystemShardError::with("insert shard game", error))?;
         }
     }
+    drop(games_pmu);
+    let search_index_pmu =
+        mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_SEARCH_INDEX);
     let autocomplete_words = crate::persisted_search::populate(&transaction, &data.games)
         .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     for (key, value) in [
@@ -341,6 +350,8 @@ pub(crate) fn write_system_shard_with_durability(
             )
             .map_err(|error| SystemShardError::with("insert search metadata", error))?;
     }
+    drop(search_index_pmu);
+    let commit_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_COMMIT);
     transaction
         .execute(
             "INSERT INTO navigation_payload(singleton,payload) VALUES (1,?1)",
@@ -361,6 +372,7 @@ pub(crate) fn write_system_shard_with_durability(
             .and_then(|file| file.sync_all())
             .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
     }
+    drop(commit_pmu);
     let system_id = data.system_id.clone();
     let generation = data.generation;
     drop(data);
@@ -368,7 +380,10 @@ pub(crate) fn write_system_shard_with_durability(
     unsafe {
         libc::malloc_trim(0);
     }
-    open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits)
+    let validate_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_VALIDATE);
+    let loaded = open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits);
+    drop(validate_pmu);
+    loaded
 }
 
 pub fn open_system_shard(

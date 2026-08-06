@@ -918,6 +918,7 @@ fn run_catalog_builder_in_process(
             &mut state,
         );
     });
+    mister_magik_perf_events::submit_thread_profile("catalog-builder");
     match result {
         Ok(()) if state.handshake_seen && state.terminal_seen => {}
         Ok(()) => {

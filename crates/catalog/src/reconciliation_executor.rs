@@ -617,7 +617,10 @@ fn execute_fresh_pipeline(
             }
             let _background_scope =
                 background.then(crate::cooperative_work::BackgroundScope::enter);
-            publish_staged_shards(storage_root, generation, limits, staged_rx, completed_tx)
+            let result =
+                publish_staged_shards(storage_root, generation, limits, staged_rx, completed_tx);
+            mister_magik_perf_events::submit_thread_profile("catalog-publisher");
+            result
         });
         let mut completed = Vec::with_capacity(rebuilds.len());
         let mut in_flight = 0_usize;
@@ -971,6 +974,7 @@ fn publish_staged_shard(
     let system_id = metadata.system_id.clone();
     let publish_started = Instant::now();
     // The deferred writer has already reopened and fully validated both files.
+    let copy_hash_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::PUBLISH_COPY_HASH);
     let publication = publish_prevalidated_system_artifacts_deferred(
         storage_root,
         &sqlite,
@@ -981,6 +985,7 @@ fn publish_staged_shard(
         limits,
     )
     .map_err(|error| ReconciliationError::new("publish-artifact", error.to_string()));
+    drop(copy_hash_pmu);
     let publication = match publication {
         Ok(publication) => publication,
         Err(error) => {

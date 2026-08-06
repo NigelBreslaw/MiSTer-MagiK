@@ -209,7 +209,10 @@ pub(crate) fn discover_files_pipelined_with_plan(
             let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
+            let walk_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK);
             let dirs = walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
+            drop(walk_pmu);
+            mister_magik_perf_events::submit_thread_profile("library-walker");
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,
@@ -232,7 +235,10 @@ fn discover_files_pipelined_with_role(
             let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
+            let walk_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK);
             let dirs = discover_files_streaming(&roots, profiles, &tx);
+            drop(walk_pmu);
+            mister_magik_perf_events::submit_thread_profile("library-walker");
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,

@@ -82,3 +82,52 @@ pub mod system_shard;
 #[cfg(test)]
 mod test_support;
 pub mod work_coordinator;
+
+pub(crate) mod pmu_phase {
+    pub const WALK: &str = "catalog.walk";
+    #[cfg(feature = "builder")]
+    pub const SHARD_NAVIGATION: &str = "catalog.shard.navigation";
+    #[cfg(feature = "builder")]
+    pub const SHARD_SQLITE_SCHEMA: &str = "catalog.shard.sqlite-schema";
+    #[cfg(feature = "builder")]
+    pub const SHARD_GAMES: &str = "catalog.shard.games";
+    #[cfg(feature = "builder")]
+    pub const SHARD_SEARCH_INDEX: &str = "catalog.shard.search-index";
+    #[cfg(feature = "builder")]
+    pub const SHARD_COMMIT: &str = "catalog.shard.commit";
+    #[cfg(feature = "builder")]
+    pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
+    #[cfg(feature = "builder")]
+    pub const PUBLISH_COPY_HASH: &str = "catalog.publish.copy-hash";
+
+    #[cfg(all(test, feature = "builder"))]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn catalog_pmu_phase_names_are_stable() {
+            assert_eq!(
+                [
+                    WALK,
+                    SHARD_NAVIGATION,
+                    SHARD_SQLITE_SCHEMA,
+                    SHARD_GAMES,
+                    SHARD_SEARCH_INDEX,
+                    SHARD_COMMIT,
+                    SHARD_VALIDATE,
+                    PUBLISH_COPY_HASH,
+                ],
+                [
+                    "catalog.walk",
+                    "catalog.shard.navigation",
+                    "catalog.shard.sqlite-schema",
+                    "catalog.shard.games",
+                    "catalog.shard.search-index",
+                    "catalog.shard.commit",
+                    "catalog.shard.validate",
+                    "catalog.publish.copy-hash",
+                ]
+            );
+        }
+    }
+}
