@@ -60,8 +60,6 @@ use mister_magik_fb::framebuffer::present::{
     copy_direct_preview_rect_to_hidden,
 };
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
-#[cfg(not(target_os = "macos"))]
-use mister_magik_fb::framebuffer::target::brighten_565;
 use mister_magik_fb::framebuffer::target::{
     CachedFrameView, DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry,
     UiFrameTarget, blend_565, build_launcher_present_plan_from_layers, dirty_rect, dirty_rects,

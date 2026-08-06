@@ -341,6 +341,8 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
     }
 }
 
+pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
+
 impl LauncherScreensaver {
     fn particle(renderer: ParticleRenderer, particle_reload: Option<MagikRecipeReload>) -> Self {
         let now = Instant::now();
