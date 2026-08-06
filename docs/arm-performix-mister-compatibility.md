@@ -93,7 +93,17 @@ capture and only while `/proc/PID/exe` still resolves to the uploaded daemon.
 The audited source contract is Arm gator commit
 `f0774012f36dbdb543e082d3e14ca9db20d0432d` (gator 9.7.2). Its maintained
 `build-linux.sh -p arm-glibc` profile targets ARMv7 Linux hard-float; the
-`arm-musl` profile is the static alternative.
+`arm-musl` profile is the static alternative. The pinned source does not build
+unchanged with that profile: its generated `-I daemon` precedes the C library
+headers and shadows `<time.h>`, and its pinned GPU-info submodule exports the
+`libarmgpuinfo` namespace while the daemon expects `libgpuinfo`. The audited
+device capture used generated-build-only `-idirafter daemon` and
+`-Dlibgpuinfo=libarmgpuinfo` workarounds. The source checkout remained
+read-only; these boundaries must be re-audited before changing the pin.
+
+The completed evidence, including capture hashes and the profile-derived
+optimization, is recorded in
+[`history/2026-8-6-armv7-profiling.md`](../history/2026-8-6-armv7-profiling.md).
 
 ## Resume gate
 
