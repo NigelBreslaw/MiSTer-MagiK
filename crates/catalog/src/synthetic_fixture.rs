@@ -66,6 +66,23 @@ pub fn generate_synthetic_fixture(
     Ok(summary)
 }
 
+pub fn add_synthetic_snes_game(root: &Path, index: usize) -> io::Result<PathBuf> {
+    let directory = bucket_path(&root.join("games").join("SNES"), 0, 1);
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(format!("Synthetic SNES {index:08}.sfc"));
+    if path.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("synthetic SNES game already exists: {}", path.display()),
+        ));
+    }
+    fs::write(
+        &path,
+        format!("MISTER-MAGIK-SYNTHETIC-GAME\nSNES\n{index:08}\n"),
+    )?;
+    Ok(path)
+}
+
 fn validate_spec(spec: &SyntheticFixtureSpec) -> io::Result<()> {
     if spec.large_system_depth == 0 || spec.large_system_depth > 16 {
         return Err(io::Error::new(
@@ -179,6 +196,32 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn appending_a_snes_game_is_deterministic_and_non_destructive() {
+        let root = temporary_path("append");
+        generate_synthetic_fixture(
+            &root,
+            &SyntheticFixtureSpec {
+                arcade_games: 0,
+                small_system_games: 1,
+                large_system_games: 0,
+                large_system_depth: 1,
+            },
+        )
+        .unwrap();
+
+        let path = add_synthetic_snes_game(&root, 1).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "MISTER-MAGIK-SYNTHETIC-GAME\nSNES\n00000001\n"
+        );
+        assert_eq!(
+            add_synthetic_snes_game(&root, 1).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn inventory(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
