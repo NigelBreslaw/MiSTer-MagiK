@@ -8688,18 +8688,10 @@ fn wait_for_installed_screenshot_cards(session: &Session, timeout: Duration) -> 
         }
         let status = read_launcher_status(session)?;
         let ready = status
-            .pointer("/frame_budget/recent_frames")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|frame| {
-                frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
-                    && frame
-                        .get("screensaver_active_cards")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        > 0
-            });
+            .get("screensaver_active_cards")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0;
         if ready {
             return Ok(());
         }
@@ -9918,6 +9910,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "status_worker_errors",
         "clock_update_us",
         "screensaver_archive_poll_us",
+        "screensaver_active_cards",
         "screensaver_card_adopt_us",
         "screensaver_parade_advance_us",
         "screensaver_background_us",
@@ -16621,6 +16614,7 @@ H: Handlers=event3 js0"#
                 "clock_update_due": false,
                 "clock_update_us": 0,
                 "screensaver_sampling_profile": "legacy-half",
+                "screensaver_active_cards": 73,
                 "screensaver_archive_poll_us": 0,
                 "screensaver_card_adopt_us": 0,
                 "screensaver_parade_advance_us": 100,
@@ -17087,6 +17081,7 @@ H: Handlers=event3 js0"#
             "screensaver_active": true,
             "screensaver_renderer": "particle-magik",
             "screensaver_sampling_profile": "full",
+            "screensaver_active_cards": 0,
             "screensaver_archive_poll_us": 0,
             "screensaver_card_adopt_us": 0,
             "screensaver_parade_advance_us": 0,
