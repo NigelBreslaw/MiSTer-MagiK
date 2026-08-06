@@ -22,7 +22,6 @@ import {
 } from "hdmi_overlays.slint";
 
 export component HdmiLauncherUi inherits Rectangle {
-    background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
 
     if MisterBridge.screen-mode == 0 : HomeGrid { }
     if MisterBridge.screen-mode == 1 : ControllerPanel { width: 100%; height: 100%; }
