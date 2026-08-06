@@ -321,13 +321,13 @@ impl PreparedScreenshotCard {
         );
     }
 
-    pub(crate) fn visit_opaque_target_spans(
+    pub(crate) fn visit_target_rows(
         &self,
         screen_width: usize,
         screen_height: usize,
         x_fp: i64,
         y: isize,
-        mut visit: impl FnMut(usize, usize, usize),
+        mut visit: impl FnMut(usize, usize, usize, usize, usize, usize, Option<(usize, usize)>),
     ) {
         let quantized = quantize_phase(x_fp);
         let (image, coverage) = if quantized.phase == 0 {
@@ -344,45 +344,10 @@ impl PreparedScreenshotCard {
             let source_x0 = (-quantized.x).max(0) as usize;
             let source_x1 =
                 (screen_width as isize - quantized.x).clamp(0, image.width as isize) as usize;
-            if source_x1 <= source_x0 {
-                continue;
-            }
-            let command = coverage.rows.get(source_y).copied().unwrap_or_default();
-            let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
-            let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
-            if opaque_end > opaque_start {
-                visit(
-                    target_y as usize,
-                    (quantized.x + opaque_start as isize) as usize,
-                    (quantized.x + opaque_end as isize) as usize,
-                );
-            }
-        }
-    }
-
-    pub(crate) fn visit_target_rows(
-        &self,
-        screen_width: usize,
-        screen_height: usize,
-        x_fp: i64,
-        y: isize,
-        mut visit: impl FnMut(usize, usize, usize, usize, usize, usize),
-    ) {
-        let quantized = quantize_phase(x_fp);
-        let image = if quantized.phase == 0 {
-            &self.image
-        } else {
-            &self.shifted_phases[quantized.phase - 1].image
-        };
-        for source_y in 0..image.height {
-            let target_y = y + source_y as isize;
-            if target_y < 0 || target_y >= screen_height as isize {
-                continue;
-            }
-            let source_x0 = (-quantized.x).max(0) as usize;
-            let source_x1 =
-                (screen_width as isize - quantized.x).clamp(0, image.width as isize) as usize;
             if source_x1 > source_x0 {
+                let command = coverage.rows.get(source_y).copied().unwrap_or_default();
+                let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
+                let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
                 visit(
                     source_y,
                     target_y as usize,
@@ -390,6 +355,12 @@ impl PreparedScreenshotCard {
                     source_x1,
                     (quantized.x + source_x0 as isize) as usize,
                     (quantized.x + source_x1 as isize) as usize,
+                    (opaque_end > opaque_start).then(|| {
+                        (
+                            (quantized.x + opaque_start as isize) as usize,
+                            (quantized.x + opaque_end as isize) as usize,
+                        )
+                    }),
                 );
             }
         }
@@ -1708,7 +1679,13 @@ mod tests {
                         screen_height,
                         x_fp,
                         y,
-                        |source_y, target_y, source_x0, source_x1, target_x0, target_x1| {
+                        |source_y,
+                         target_y,
+                         source_x0,
+                         source_x1,
+                         target_x0,
+                         target_x1,
+                         _opaque| {
                             if target_y < foreground.2 || target_y >= foreground.3 {
                                 spans.push(VisibleSpan {
                                     source_y: source_y as u16,
