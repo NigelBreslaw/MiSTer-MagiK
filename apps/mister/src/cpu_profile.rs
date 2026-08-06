@@ -375,7 +375,6 @@ mod imp {
         Waiting,
         Warming {
             started: Instant,
-            trigger: BoundedProfileTrigger,
         },
         Active {
             profiler: CpuProfiler,
@@ -434,14 +433,13 @@ mod imp {
             if !self.warmup.is_zero() {
                 self.state = State::Warming {
                     started: Instant::now(),
-                    trigger,
                 };
                 return;
             }
-            self.start(trigger, first_frame);
+            self.start(first_frame);
         }
 
-        fn start(&mut self, trigger: BoundedProfileTrigger, first_frame: u64) {
+        fn start(&mut self, first_frame: u64) {
             match start_enabled() {
                 Some(profiler) => {
                     self.state = State::Active {
@@ -458,14 +456,12 @@ mod imp {
         }
 
         pub fn poll(&mut self, next_frame: u64) {
-            let warmed_trigger = match &self.state {
-                State::Warming { started, trigger } if started.elapsed() >= self.warmup => {
-                    Some(*trigger)
-                }
-                _ => None,
-            };
-            if let Some(trigger) = warmed_trigger {
-                self.start(trigger, next_frame);
+            let warmed = matches!(
+                &self.state,
+                State::Warming { started } if started.elapsed() >= self.warmup
+            );
+            if warmed {
+                self.start(next_frame);
             }
             let elapsed = match &self.state {
                 State::Active { started, .. } => started.elapsed(),
