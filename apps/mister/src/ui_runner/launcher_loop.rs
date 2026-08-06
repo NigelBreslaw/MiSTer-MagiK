@@ -1725,8 +1725,8 @@ fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a s
     })
 }
 
-fn modal_input_catalog_recovery_test_enabled(catalog_ready: bool, start: Instant) -> bool {
-    if !catalog_ready || std::env::var(MODAL_INPUT_TEST_ENV).as_deref() != Ok("upgrade") {
+fn modal_input_catalog_recovery_test_requested(start: Instant) -> bool {
+    if std::env::var(MODAL_INPUT_TEST_ENV).as_deref() != Ok("upgrade") {
         return false;
     }
     let paths = MODAL_INPUT_TEST_PATH_ENVS
@@ -2829,22 +2829,15 @@ pub(super) fn run_launcher_loop(
     }
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-    if modal_input_catalog_recovery_test_enabled(catalog_ready, start) {
-        lifecycle.handle(
-            LauncherLifecycleInput::CatalogRecoveryRequired {
-                error: "isolated modal input verification".to_string(),
-                has_stale_catalog: true,
-                mode: CatalogRecoveryMode::UpgradeRequired,
-            },
-            &mut lifecycle_effects,
-        );
-        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-        print_startup_event(
-            start,
-            "modal_input_test_dialog",
-            "mode=upgrade-required isolated=1",
-        );
-    }
+    let mut modal_input_test_dialog_pending = modal_input_catalog_recovery_test_requested(start);
+    maybe_present_modal_input_test_dialog(
+        &mut modal_input_test_dialog_pending,
+        catalog_ready,
+        &mut lifecycle,
+        &mut lifecycle_effects,
+        &mut scheduler,
+        start,
+    );
     window.request_redraw();
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
@@ -3419,6 +3412,17 @@ pub(super) fn run_launcher_loop(
         }
         if let Some(trace_start) = catalog_worker_trace_start {
             prepare_trace.catalog_worker_us = trace_start.elapsed().as_micros();
+        }
+        if maybe_present_modal_input_test_dialog(
+            &mut modal_input_test_dialog_pending,
+            catalog_ready,
+            &mut lifecycle,
+            &mut lifecycle_effects,
+            &mut scheduler,
+            start,
+        ) {
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
         }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
@@ -7441,6 +7445,35 @@ fn apply_lifecycle_effects(
             }
         }
     }
+}
+
+fn maybe_present_modal_input_test_dialog(
+    pending: &mut bool,
+    catalog_ready: bool,
+    lifecycle: &mut LauncherLifecycle,
+    lifecycle_effects: &mut LifecycleEffects,
+    scheduler: &mut LauncherScheduler,
+    start: Instant,
+) -> bool {
+    if !*pending || !catalog_ready {
+        return false;
+    }
+    *pending = false;
+    lifecycle.handle(
+        LauncherLifecycleInput::CatalogRecoveryRequired {
+            error: "isolated modal input verification".to_string(),
+            has_stale_catalog: true,
+            mode: CatalogRecoveryMode::UpgradeRequired,
+        },
+        lifecycle_effects,
+    );
+    apply_lifecycle_effects(lifecycle_effects, scheduler, start);
+    print_startup_event(
+        start,
+        "modal_input_test_dialog",
+        "mode=upgrade-required isolated=1",
+    );
+    true
 }
 
 #[allow(clippy::too_many_arguments)]
