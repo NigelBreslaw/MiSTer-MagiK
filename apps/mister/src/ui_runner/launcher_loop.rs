@@ -8507,10 +8507,15 @@ mod tests {
             nav.handle_input(&released, now + Duration::from_millis(16), &catalog)
                 .is_none()
         );
-        assert!(
-            nav.handle_input(&pressed, now + Duration::from_millis(32), &catalog)
-                .is_some()
-        );
+        let event = nav
+            .handle_input_with_navigation_intents(
+                &pressed,
+                now + Duration::from_millis(32),
+                &catalog,
+            )
+            .expect("fresh A should reach the selected Arcade tile");
+        assert_eq!(event.action, LauncherAction::OpenCollection);
+        assert_eq!(event.path.as_deref(), Some("menu:arcade"));
     }
 
     #[test]
