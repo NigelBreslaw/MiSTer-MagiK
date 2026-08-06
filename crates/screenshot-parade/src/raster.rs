@@ -1133,8 +1133,6 @@ fn prepare_direct_phase_scalar(
             let start = command.sample_start as usize;
             let end = start + usize::from(command.sample_count);
             let mut channels = [0_i64; 3];
-            let mut minima = [u16::MAX; 3];
-            let mut maxima = [u16::MIN; 3];
             for tap in start..end {
                 let source_x = usize::from(filters.sample_indices[tap]);
                 debug_assert!(source_x < source_width);
@@ -1142,20 +1140,13 @@ fn prepare_direct_phase_scalar(
                 let weight = i64::from(filters.weights[tap]);
                 for channel in 0..3 {
                     channels[channel] += i64::from(source_pixel[channel]) * weight;
-                    if weight != 0 {
-                        minima[channel] = minima[channel].min(source_pixel[channel]);
-                        maxima[channel] = maxima[channel].max(source_pixel[channel]);
-                    }
                 }
             }
-            let reconstruct = |channel: usize| {
-                fixed_channel(channels[channel]).clamp(minima[channel], maxima[channel])
-            };
             pixels[y * filters.commands.len() + output_x] = linear_to_rgb565_with_table(
                 LinearRgb {
-                    r: reconstruct(0),
-                    g: reconstruct(1),
-                    b: reconstruct(2),
+                    r: fixed_channel(channels[0]),
+                    g: fixed_channel(channels[1]),
+                    b: fixed_channel(channels[2]),
                 },
                 linear_to_srgb,
             );
@@ -2670,75 +2661,6 @@ mod tests {
                 "phase={phase}"
             );
         }
-    }
-
-    #[test]
-    fn direct_polyphase_does_not_invent_channel_extrema() {
-        let source_width = 32;
-        let target_width = 19;
-        let black = [0, 0, 0, 0];
-        let orange = [
-            srgb8_to_linear16(222),
-            srgb8_to_linear16(150),
-            srgb8_to_linear16(82),
-            0,
-        ];
-        let source = (0..source_width)
-            .map(|x| if x < source_width / 2 { black } else { orange })
-            .collect::<Vec<_>>();
-        let orange_565 = linear_to_rgb565_with_table(
-            LinearRgb {
-                r: orange[0],
-                g: orange[1],
-                b: orange[2],
-            },
-            linear_to_srgb_table(),
-        );
-        let channel = |pixel: Rgb565Pixel, shift: u16, mask: u16| (pixel.0 >> shift) & mask;
-        for phase in 0..CRT_PHASE_COUNT {
-            let filters = direct_lanczos_filter_bank(source_width, target_width, phase);
-            let mut pixels = vec![Rgb565Pixel(0); filters.commands.len()];
-            prepare_direct_phase_scalar(&source, source_width, 1, &filters, &mut pixels, None);
-            for (x, pixel) in pixels.into_iter().enumerate() {
-                assert!(
-                    channel(pixel, 11, 0x1f) <= channel(orange_565, 11, 0x1f)
-                        && channel(pixel, 5, 0x3f) <= channel(orange_565, 5, 0x3f)
-                        && channel(pixel, 0, 0x1f) <= channel(orange_565, 0, 0x1f),
-                    "phase={phase} x={x} pixel={pixel:?} orange={orange_565:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn direct_polyphase_zero_weight_taps_do_not_widen_limiter() {
-        let source = [
-            [0; 4],
-            [10_000, 10_000, 10_000, 0],
-            [20_000, 20_000, 20_000, 0],
-        ];
-        let filters = PolyphaseFilterBank {
-            commands: vec![PolyphaseFilterCommand {
-                sample_start: 0,
-                sample_count: 3,
-                _padding: 0,
-            }],
-            sample_indices: vec![0, 1, 2],
-            weights: vec![0, 24_576, -8_192],
-        };
-        let mut pixels = [Rgb565Pixel(0)];
-        prepare_direct_phase_scalar(&source, source.len(), 1, &filters, &mut pixels, None);
-        assert_eq!(
-            pixels[0],
-            linear_to_rgb565_with_table(
-                LinearRgb {
-                    r: 10_000,
-                    g: 10_000,
-                    b: 10_000,
-                },
-                linear_to_srgb_table(),
-            )
-        );
     }
 
     #[allow(clippy::too_many_arguments)]

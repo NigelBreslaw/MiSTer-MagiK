@@ -318,38 +318,27 @@ void mister_magik_screenshot_direct_phase_neon(
     uint16_t *restrict pixels
 ) {
     const int32x4_t rounding = vdupq_n_s32(1 << 13);
+    const int32x4_t minimum = vdupq_n_s32(0);
+    const int32x4_t maximum = vdupq_n_s32(UINT16_MAX);
     for (size_t y = 0; y < height; ++y) {
         const uint16_t *row_source = source + y * source_width * 4;
         uint16_t *row_pixels = pixels + y * output_width;
         for (size_t output_x = 0; output_x < output_width; ++output_x) {
             const mister_magik_polyphase_filter_command command = commands[output_x];
             int32x4_t sums = vdupq_n_s32(0);
-            uint16x4_t minima = vdup_n_u16(UINT16_MAX);
-            uint16x4_t maxima = vdup_n_u16(0);
             const size_t end = command.sample_start + command.sample_count;
             for (size_t tap = command.sample_start; tap < end; ++tap) {
                 const uint16x4_t sample =
                     vld1_u16(row_source + (size_t)sample_indices[tap] * 4);
-                const int16_t weight = weights[tap];
-                if (weight != 0) {
-                    minima = vmin_u16(minima, sample);
-                    maxima = vmax_u16(maxima, sample);
-                }
                 sums = vmlaq_n_s32(
                     sums,
                     vreinterpretq_s32_u32(vmovl_u16(sample)),
-                    weight
+                    weights[tap]
                 );
             }
             int32x4_t reconstructed = vshrq_n_s32(vaddq_s32(sums, rounding), 14);
-            reconstructed = vmaxq_s32(
-                reconstructed,
-                vreinterpretq_s32_u32(vmovl_u16(minima))
-            );
-            reconstructed = vminq_s32(
-                reconstructed,
-                vreinterpretq_s32_u32(vmovl_u16(maxima))
-            );
+            reconstructed = vmaxq_s32(reconstructed, minimum);
+            reconstructed = vminq_s32(reconstructed, maximum);
             const uint16x4_t linear = vmovn_u32(vreinterpretq_u32_s32(reconstructed));
             const uint8_t r = linear_to_srgb8(vget_lane_u16(linear, 0), linear_to_srgb);
             const uint8_t g = linear_to_srgb8(vget_lane_u16(linear, 1), linear_to_srgb);
