@@ -1476,6 +1476,7 @@ fn push_visible_span(spans: &mut Vec<VisibleSpan>, source_y: usize, start: usize
     });
 }
 
+#[cfg(test)]
 fn union_covered_pixels(
     y: usize,
     x0: usize,
