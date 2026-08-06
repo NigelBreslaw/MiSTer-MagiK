@@ -223,7 +223,7 @@ pub struct LatchCopyResult {
     pub path: LatchCopyPath,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub struct LatchPostRequest {
     pub sequence: u16,
     pub slot_index: u8,
