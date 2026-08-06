@@ -341,9 +341,8 @@ pub(crate) fn populate(
     for (ordinal, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
-        let control = normalize_search_text(&crate::arcade_catalog::canonical_control_label(
-            &game.control,
-        ));
+        let control_label = crate::arcade_catalog::canonical_control_label(&game.control);
+        let control = normalize_search_text(&control_label);
         let players = game
             .players
             .map(crate::arcade_catalog::player_count_label)
@@ -373,32 +372,16 @@ pub(crate) fn populate(
             ])
             .map_err(|error| PersistedSearchError::with("insert search row", error))?;
 
-        add_words(&mut words, &game.title, AutocompleteSource::Title);
-        add_words(&mut words, &game.manufacturer, AutocompleteSource::Metadata);
-        add_words(
-            &mut words,
-            &crate::arcade_catalog::canonical_control_label(&game.control),
-            AutocompleteSource::Metadata,
-        );
-        if let Some(players) = game.players {
-            add_word(
-                &mut words,
-                &crate::arcade_catalog::player_count_label(players),
-                AutocompleteSource::Metadata,
-            );
+        add_normalized_words(&mut words, &title, AutocompleteSource::Title);
+        add_normalized_words(&mut words, &manufacturer, AutocompleteSource::Metadata);
+        add_normalized_words(&mut words, &control, AutocompleteSource::Metadata);
+        if !players.is_empty() {
+            add_word(&mut words, &players, AutocompleteSource::Metadata);
         }
-        add_words(
-            &mut words,
-            game_basename(&game.launch_ref),
-            AutocompleteSource::Path,
-        );
-        if let Some(year) = game.year {
-            add_word(&mut words, &year.to_string(), AutocompleteSource::Metadata);
-            add_word(
-                &mut words,
-                &format!("{}0s", year / 10),
-                AutocompleteSource::Metadata,
-            );
+        add_normalized_words(&mut words, &path, AutocompleteSource::Path);
+        if !year.is_empty() {
+            add_normalized_word(&mut words, &year, AutocompleteSource::Metadata);
+            add_normalized_word(&mut words, &decade, AutocompleteSource::Metadata);
         }
     }
     drop(insert_search);
@@ -544,20 +527,29 @@ enum AutocompleteSource {
 }
 
 #[cfg(feature = "builder")]
-#[derive(Default)]
+#[derive(Debug, Default, Eq, PartialEq)]
 struct AutocompleteStats {
     source_rank: u8,
     score: u32,
 }
 
-#[cfg(feature = "builder")]
+#[cfg(all(feature = "builder", test))]
 fn add_words(
     words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
     value: &str,
     source: AutocompleteSource,
 ) {
-    for word in normalize_search_text(value).split_whitespace() {
-        add_word(words, word, source);
+    add_normalized_words(words, &normalize_search_text(value), source);
+}
+
+#[cfg(feature = "builder")]
+fn add_normalized_words(
+    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
+    normalized: &str,
+    source: AutocompleteSource,
+) {
+    for word in normalized.split_whitespace() {
+        add_normalized_word(words, word, source);
     }
 }
 
@@ -568,7 +560,16 @@ fn add_word(
     source: AutocompleteSource,
 ) {
     let word = normalize_search_text(value);
-    if word.len() < 2 || is_noisy_autocomplete_word(&word) {
+    add_normalized_word(words, &word, source);
+}
+
+#[cfg(feature = "builder")]
+fn add_normalized_word(
+    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
+    word: &str,
+    source: AutocompleteSource,
+) {
+    if word.len() < 2 || is_noisy_autocomplete_word(word) {
         return;
     }
     let (score, source_rank) = match source {
@@ -576,7 +577,7 @@ fn add_word(
         AutocompleteSource::Metadata => (4, 2),
         AutocompleteSource::Path => (1, 1),
     };
-    let stats = words.entry(word).or_default();
+    let stats = words.entry(word.to_owned()).or_default();
     stats.score += score;
     stats.source_rank = stats.source_rank.max(source_rank);
 }
@@ -724,6 +725,80 @@ mod tests {
         let result = catalog.search(&["arcade".to_string()], "pacman").unwrap();
         assert_eq!(result.matches[0].ordinal, 0);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn normalized_autocomplete_reuse_matches_the_canonical_path() {
+        for value in [
+            "Street   Fighter-II",
+            "  TÉST™ World  ",
+            "The Adventures of A Hero",
+            "/Games/SNES/Chrono Trigger (USA).sfc",
+            "",
+        ] {
+            for source in [
+                AutocompleteSource::Title,
+                AutocompleteSource::Metadata,
+                AutocompleteSource::Path,
+            ] {
+                let mut canonical = std::collections::BTreeMap::new();
+                add_words(&mut canonical, value, source);
+                let mut reused = std::collections::BTreeMap::new();
+                add_normalized_words(&mut reused, &normalize_search_text(value), source);
+                assert_eq!(reused, canonical, "value={value:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn persisted_rows_and_autocomplete_words_remain_canonical() {
+        let (root, sqlite) = fixture();
+        let connection = Connection::open(&sqlite).unwrap();
+        let first = connection
+            .query_row(
+                "SELECT title,compact_title,manufacturer,compact_manufacturer,path,compact_path
+                 FROM game_search_fts WHERE rowid=1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            first,
+            (
+                "pac man".into(),
+                "pacman".into(),
+                "namco".into(),
+                String::new(),
+                "pac man mra".into(),
+                "pacmanmra".into(),
+            )
+        );
+        let dual_joystick: (u8, u32) = connection
+            .query_row(
+                "SELECT source_rank,score FROM autocomplete_words WHERE word='joystick'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dual_joystick, (2, 4));
+        let noisy_words: u64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM autocomplete_words WHERE word IN ('a','the','world')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(noisy_words, 0);
         fs::remove_dir_all(root).unwrap();
     }
 
