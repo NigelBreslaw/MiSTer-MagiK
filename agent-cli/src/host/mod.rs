@@ -4269,28 +4269,25 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
             },
             "catalog recovery dialog over the Arcade tile",
         )?;
-        let dialog_sequence =
-            modal_input_action(config, active_nonce, AutomationAction::ReleaseAll)?;
-        let dialog_checkpoint = launcher_automation::capture_checkpoint(
-            config,
-            active_nonce,
-            dialog_sequence,
-            "catalog-recovery-dialog",
-            output_dir,
-        )?;
-
-        modal_input_action(
+        let rebuild_sequence = modal_input_action(
             config,
             active_nonce,
             AutomationAction::Tap(AutomationButton::Right),
         )?;
-        wait_modal_input_snapshot(
+        let rebuild_selected = wait_modal_input_snapshot(
             config,
             active_nonce,
             |snapshot| {
                 modal_semantic(snapshot, "dialog_selected").and_then(Value::as_i64) == Some(1)
             },
             "Rebuild selection",
+        )?;
+        let dialog_checkpoint = launcher_automation::capture_checkpoint(
+            config,
+            active_nonce,
+            rebuild_sequence,
+            "catalog-recovery-rebuild-selected",
+            output_dir,
         )?;
         let hold_sequence = modal_input_action(
             config,
@@ -4330,8 +4327,12 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
             active_nonce,
             |snapshot| {
                 modal_semantic(snapshot, "return_screen").and_then(Value::as_str) == Some("arcade")
+                    && matches!(
+                        modal_semantic(snapshot, "composition_state").and_then(Value::as_str),
+                        Some("mixed-arcade" | "full-slint")
+                    )
             },
-            "fresh Arcade activation",
+            "settled fresh Arcade activation",
         )?;
         let fresh_checkpoint = launcher_automation::capture_checkpoint(
             config,
@@ -4344,6 +4345,7 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
             "schema": "mister-magik-modal-input-verification-v1",
             "status": "passed",
             "dialog": dialog["semantic"],
+            "rebuild_selected": rebuild_selected["semantic"],
             "during_hold": during_hold["semantic"],
             "after_release": after_release["semantic"],
             "fresh_press": fresh_press["semantic"],

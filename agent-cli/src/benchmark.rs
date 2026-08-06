@@ -216,6 +216,10 @@ fn evaluate_modal_input_summary(summary: &Value) -> AgentResult<()> {
             .pointer("/fresh_press/return_screen")
             .and_then(Value::as_str)
             != Some("arcade")
+        || summary
+            .pointer("/rebuild_selected/dialog_selected")
+            .and_then(Value::as_i64)
+            != Some(1)
     {
         return Err("modal input verification did not preserve exclusive dialog input".into());
     }
@@ -1077,6 +1081,7 @@ mod tests {
             "during_hold": {"return_screen": "home"},
             "after_release": {"return_screen": "home"},
             "fresh_press": {"return_screen": "arcade"},
+            "rebuild_selected": {"dialog_selected": 1},
         });
         assert!(evaluate_modal_input_summary(&passing).is_ok());
 
@@ -1085,6 +1090,9 @@ mod tests {
             leaked[pointer]["return_screen"] = json!("arcade");
             assert!(evaluate_modal_input_summary(&leaked).is_err());
         }
+        let mut no_rebuild_selection = passing.clone();
+        no_rebuild_selection["rebuild_selected"]["dialog_selected"] = json!(0);
+        assert!(evaluate_modal_input_summary(&no_rebuild_selection).is_err());
         let mut no_fresh_activation = passing;
         no_fresh_activation["fresh_press"]["return_screen"] = json!("home");
         assert!(evaluate_modal_input_summary(&no_fresh_activation).is_err());
