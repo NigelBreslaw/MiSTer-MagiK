@@ -1146,14 +1146,6 @@ fn prepare_linear_phase(
             phase,
             preparation_slack,
         );
-        stabilize_phase_coverage(
-            source_coverage,
-            image.width,
-            image.height,
-            phase,
-            &mut coverage,
-            preparation_slack,
-        );
     }
     let image = ScreenshotImage {
         pixels,
@@ -1195,160 +1187,6 @@ fn shape_preserving_shifted_coverage(
         debug_assert_eq!(remainder, 0);
     }
     shifted
-}
-
-fn coverage_mass_and_moment(
-    values: &[u8],
-    stride: usize,
-    preparation_slack: Option<&PreparationSlack>,
-) -> (u64, u64) {
-    let mut mass = 0_u64;
-    let mut moment = 0_u64;
-    for (y, row) in values.chunks_exact(stride).enumerate() {
-        preparation_checkpoint_row(preparation_slack, y);
-        for (x, coverage) in row.iter().enumerate() {
-            let coverage = u64::from(*coverage);
-            mass += coverage;
-            moment += coverage * x as u64;
-        }
-    }
-    (mass, moment)
-}
-
-fn row_edge_candidates(row: &[u8], add: bool) -> Vec<usize> {
-    let Some(first) = row.iter().position(|coverage| *coverage > 0) else {
-        return Vec::new();
-    };
-    let last = row
-        .iter()
-        .rposition(|coverage| *coverage > 0)
-        .unwrap_or(first);
-    let candidates = if add {
-        [
-            first.saturating_sub(1),
-            first,
-            last,
-            (last + 1).min(row.len() - 1),
-        ]
-    } else {
-        [first, first, last, last]
-    };
-    let mut result = Vec::with_capacity(4);
-    for x in candidates {
-        let adjustable = if add { row[x] < 255 } else { row[x] > 0 };
-        if adjustable && !result.contains(&x) {
-            result.push(x);
-        }
-    }
-    result
-}
-
-fn stabilize_phase_coverage(
-    source: &[u8],
-    source_width: usize,
-    height: usize,
-    phase: usize,
-    shifted: &mut [u8],
-    preparation_slack: Option<&PreparationSlack>,
-) {
-    let stride = source_width + 1;
-    debug_assert_eq!(source.len(), source_width * height);
-    debug_assert_eq!(shifted.len(), stride * height);
-    let (target_mass, source_moment) =
-        coverage_mass_and_moment(source, source_width, preparation_slack);
-    if target_mass == 0 {
-        shifted.fill(0);
-        return;
-    }
-    let target_moment = (u128::from(source_moment) * CRT_PHASE_COUNT as u128
-        + u128::from(target_mass) * phase as u128
-        + (CRT_PHASE_COUNT / 2) as u128)
-        / CRT_PHASE_COUNT as u128;
-    let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
-    let (mut mass, mut moment) = coverage_mass_and_moment(shifted, stride, preparation_slack);
-
-    while mass != target_mass {
-        if let Some(slack) = preparation_slack {
-            slack.checkpoint();
-        }
-        let add = mass < target_mass;
-        let amount_needed = mass.abs_diff(target_mass);
-        let moment_needed = if add {
-            i128::from(target_moment) - i128::from(moment)
-        } else {
-            i128::from(moment) - i128::from(target_moment)
-        };
-        let desired_x = (moment_needed / i128::from(amount_needed)).clamp(0, stride as i128 - 1);
-        let mut candidates = Vec::with_capacity(height.saturating_mul(4));
-        for y in 0..height {
-            preparation_checkpoint_row(preparation_slack, y);
-            candidates.extend(
-                row_edge_candidates(&shifted[y * stride..(y + 1) * stride], add)
-                    .into_iter()
-                    .map(|x| (y * stride + x, x)),
-            );
-        }
-        candidates
-            .sort_by_key(|(_, x)| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs());
-        let mut adjusted = false;
-        for (index, x) in candidates {
-            if mass == target_mass {
-                break;
-            }
-            if add && shifted[index] < 255 {
-                shifted[index] += 1;
-                mass += 1;
-                moment += x as u64;
-                adjusted = true;
-            } else if !add && shifted[index] > 0 {
-                shifted[index] -= 1;
-                mass -= 1;
-                moment -= x as u64;
-                adjusted = true;
-            }
-        }
-        assert!(adjusted, "phase coverage has no adjustable edge");
-    }
-
-    while moment != target_moment {
-        if let Some(slack) = preparation_slack {
-            slack.checkpoint();
-        }
-        let move_right = moment < target_moment;
-        let mut adjusted = false;
-        for y in 0..height {
-            preparation_checkpoint_row(preparation_slack, y);
-            let row = &mut shifted[y * stride..(y + 1) * stride];
-            let candidate = if move_right {
-                (0..stride - 1)
-                    .rev()
-                    .find(|x| row[*x] > 0 && row[*x + 1] < 255)
-                    .map(|x| (x, x + 1))
-            } else {
-                (1..stride)
-                    .find(|x| row[*x] > 0 && row[*x - 1] < 255)
-                    .map(|x| (x, x - 1))
-            };
-            if let Some((from, to)) = candidate {
-                row[from] -= 1;
-                row[to] += 1;
-                if move_right {
-                    moment += 1;
-                } else {
-                    moment -= 1;
-                }
-                adjusted = true;
-                if moment == target_moment {
-                    break;
-                }
-            }
-        }
-        assert!(adjusted, "phase coverage moment cannot reach target");
-    }
-    debug_assert_eq!(
-        coverage_mass_and_moment(shifted, stride, preparation_slack),
-        (target_mass, target_moment)
-    );
 }
 
 #[inline(always)]
@@ -2501,6 +2339,47 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == background)
         );
+    }
+
+    #[test]
+    fn shifted_coverage_never_creates_pixels_outside_the_rounded_support() {
+        for (width, height) in [(8, 6), (32, 24), (90, 60)] {
+            let source = prepare_rounded_coverage(width, height, None);
+            for phase in 1..CRT_PHASE_COUNT {
+                let shifted =
+                    shape_preserving_shifted_coverage(&source, width, height, phase, None);
+                let stride = width + 1;
+                for y in 0..height {
+                    let source_row = &source[y * width..(y + 1) * width];
+                    let shifted_row = &shifted[y * stride..(y + 1) * stride];
+                    assert_eq!(
+                        shifted_row
+                            .iter()
+                            .map(|value| u64::from(*value))
+                            .sum::<u64>(),
+                        source_row
+                            .iter()
+                            .map(|value| u64::from(*value))
+                            .sum::<u64>(),
+                        "width={width} height={height} phase={phase} y={y} mass",
+                    );
+                    for (x, value) in shifted_row.iter().copied().enumerate() {
+                        let left = x
+                            .checked_sub(1)
+                            .and_then(|source_x| source_row.get(source_x))
+                            .copied()
+                            .unwrap_or(0);
+                        let right = source_row.get(x).copied().unwrap_or(0);
+                        if left == 0 && right == 0 {
+                            assert_eq!(
+                                value, 0,
+                                "width={width} height={height} phase={phase} x={x} y={y}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
