@@ -586,6 +586,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_pmu(config, output_dir))
     }
 
+    pub(crate) fn profile_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_streamline(config, output_dir))
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -4549,6 +4556,180 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
         format!("{}\n", serde_json::to_string_pretty(&suite)?),
     )?;
     serde_json::to_string(&suite).map_err(Into::into)
+}
+
+const STREAMLINE_REMOTE_ROOT: &str = "/tmp/mister-magik/streamline-capture";
+const STREAMLINE_REMOTE_GATORD: &str = "/tmp/mister-magik/streamline-capture/gatord";
+const STREAMLINE_REMOTE_APC: &str = "/tmp/mister-magik/streamline-capture/mister-magik.apc";
+const STREAMLINE_REMOTE_ARCHIVE: &str =
+    "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
+
+fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let archive = output_dir.join("mister-magik.apc.tar.gz");
+    let session = connect_with(&config.connection, 30)?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before Streamline capture")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before Streamline capture")?;
+
+    exec_checked(
+        &session,
+        "prepare Streamline capture",
+        &streamline_prepare_command(),
+    )?;
+    let run_result = (|| -> Result<(String, String)> {
+        put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
+        let version = exec_checked_output(
+            &session,
+            "inspect gatord version",
+            &format!(
+                "chmod 700 {gatord}; {gatord} --version",
+                gatord = sh(STREAMLINE_REMOTE_GATORD)
+            ),
+        )?;
+        let output = exec(&session, &streamline_capture_command(), true)?;
+        let mut capture_log = output.stdout.clone();
+        capture_log.push_str(&output.stderr);
+        fs::write(output_dir.join("gatord.log"), &capture_log)?;
+        if let Some(message) = exec_failure_message("bounded Streamline capture", &output) {
+            return Err(message.into());
+        }
+        exec_checked(
+            &session,
+            "package Streamline capture",
+            &streamline_package_command(),
+        )?;
+        get(&session, STREAMLINE_REMOTE_ARCHIVE, &archive)?;
+        let remote_archive_sha256 = exec_checked_output(
+            &session,
+            "hash Streamline capture",
+            &format!(
+                "sha256sum {} | cut -d' ' -f1",
+                sh(STREAMLINE_REMOTE_ARCHIVE)
+            ),
+        )?
+        .stdout
+        .trim()
+        .to_owned();
+        let local_archive_sha256 = file_sha256(archive.clone())?;
+        if remote_archive_sha256.len() != 64 || remote_archive_sha256 != local_archive_sha256 {
+            return Err("Streamline capture archive changed during transfer".into());
+        }
+        extract_streamline_archive(&archive, output_dir)?;
+        let mut gatord_version = version.stdout;
+        gatord_version.push_str(&version.stderr);
+        Ok((gatord_version.trim().to_owned(), local_archive_sha256))
+    })();
+
+    let cleanup_result = exec_checked(
+        &session,
+        "clean Streamline capture",
+        &streamline_cleanup_command(),
+    );
+    cleanup_result?;
+    let (gatord_version, archive_sha256) = run_result?;
+
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after Streamline capture")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during Streamline capture".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after Streamline capture")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during Streamline capture".into());
+    }
+    let summary = json!({
+        "schema": "mister-magik-streamline-capture-v1",
+        "status": "passed",
+        "gatord_version": gatord_version,
+        "gatord_sha256": gatord_sha256,
+        "archive_sha256": archive_sha256,
+        "capture": "mister-magik.apc",
+        "archive": "mister-magik.apc.tar.gz",
+        "workload": "pmu-profile screensaver",
+        "max_duration_seconds": 10,
+        "sample_rate": "low",
+        "exclude_kernel": false,
+        "call_stack_unwinding": false,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn streamline_gatord_path(value: Option<std::ffi::OsString>) -> Result<PathBuf> {
+    let path = value.ok_or(
+        "benchmark streamline requires MISTER_GATORD_PATH to an Armv7 hard-float gatord binary",
+    )?;
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err("MISTER_GATORD_PATH must be an absolute path".into());
+    }
+    Ok(path)
+}
+
+fn streamline_prepare_command() -> String {
+    format!(
+        "set -eu; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(STREAMLINE_REMOTE_ROOT),
+    )
+}
+
+fn streamline_capture_command() -> String {
+    format!(
+        "set +e; {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app /media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
+        gatord = sh(STREAMLINE_REMOTE_GATORD),
+        apc = sh(STREAMLINE_REMOTE_APC),
+        pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
+    )
+}
+
+fn streamline_package_command() -> String {
+    format!(
+        "set -eu; test -d {apc}; tar -czf {archive} -C {root} mister-magik.apc; test -s {archive}",
+        apc = sh(STREAMLINE_REMOTE_APC),
+        archive = sh(STREAMLINE_REMOTE_ARCHIVE),
+        root = sh(STREAMLINE_REMOTE_ROOT),
+    )
+}
+
+fn streamline_cleanup_command() -> String {
+    format!(
+        "set -eu; pid_file={pid_file}; if test -f \"$pid_file\"; then pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; if test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; then kill \"$pid\"; fi; fi; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
+        gatord = sh(STREAMLINE_REMOTE_GATORD),
+        root = sh(STREAMLINE_REMOTE_ROOT),
+    )
+}
+
+fn extract_streamline_archive(archive: &Path, output_dir: &Path) -> Result<()> {
+    let status = Command::new("tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(output_dir)
+        .status()?;
+    if !status.success() {
+        return Err("host tar failed to extract the Streamline capture".into());
+    }
+    let capture = output_dir.join("mister-magik.apc");
+    if !capture.is_dir() || fs::read_dir(&capture)?.next().is_none() {
+        return Err("extracted Streamline capture is empty".into());
+    }
+    Ok(())
 }
 
 fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
@@ -12624,6 +12805,46 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamline_capture_is_fixed_bounded_and_pmuv1_compatible() {
+        let command = streamline_capture_command();
+        assert!(command.contains("--max-duration 10"));
+        assert!(command.contains("--sample-rate low"));
+        assert!(command.contains("--system-wide no"));
+        assert!(command.contains("--exclude-kernel no"));
+        assert!(command.contains("--call-stack-unwinding no"));
+        assert!(command.contains("--stop-on-exit yes"));
+        assert!(command.ends_with("exit \"$rc\""));
+        assert!(command.contains("pmu-profile screensaver"));
+    }
+
+    #[test]
+    fn streamline_cleanup_owns_only_its_pid_and_checks_arming_state() {
+        let cleanup = streamline_cleanup_command();
+        assert!(cleanup.contains("/proc/$pid/exe"));
+        assert!(cleanup.contains(STREAMLINE_REMOTE_GATORD));
+        assert!(!cleanup.contains("pidof gatord"));
+        for arming_path in [
+            "/tmp/mister-magik/fs-fault-launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/tmp/mister-magik/fs-fault.json",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+        ] {
+            assert!(cleanup.contains(arming_path));
+        }
+    }
+
+    #[test]
+    fn streamline_requires_an_absolute_host_binary_path() {
+        assert!(streamline_gatord_path(None).is_err());
+        assert!(streamline_gatord_path(Some("gatord".into())).is_err());
+        assert_eq!(
+            streamline_gatord_path(Some("/tmp/gatord".into())).unwrap(),
+            PathBuf::from("/tmp/gatord")
+        );
+    }
 
     #[test]
     fn modal_input_fixture_is_fixed_isolated_and_cleanup_checks_arming_state() {

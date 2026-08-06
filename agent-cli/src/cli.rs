@@ -665,6 +665,7 @@ mod tests {
             "modal-input",
             "cold-boot",
             "search",
+            "streamline",
         ];
         assert!(Cli::try_parse_from(["agent-cli", "benchmark"]).is_ok());
         for scenario in accepted {

@@ -1,6 +1,6 @@
 # Arm Performix and MiSTer compatibility
 
-Status: Performix incompatible; Cortex-A9 PMU investigation active, corrected
+Status: Performix incompatible; Cortex-A9 PMU and Streamline paths validated
 2026-08-06.
 
 ## Conclusion
@@ -34,9 +34,8 @@ Streamline and gator sources:
 
 ## Reproduction
 
-The exact installed Dev runtime was built from commit
-`bc62e2ddc91e256af41c9e9dc6bc5258e29b2c2a` and delivered through
-`scripts/agent deliver`. The authoritative entry point was then run through:
+The exact installed Dev runtime is delivered through `scripts/agent deliver`.
+The authoritative counter entry point is then run through:
 
 ```text
 scripts/agent benchmark pmu-profile
@@ -67,13 +66,39 @@ The former group variants all failed while opening
 }
 ```
 
-The suite rejects this result. It does not convert missing events into zero
-counters, run the remaining workloads, or emit a passing baseline.
+The corrected group then exposed one further Linux 4.19 compatibility boundary:
+`PERF_EVENT_IOC_ID` returns `ENOTTY`. The collector now falls back to ordered
+group reads only for `EINVAL`, `ENOTTY`, or `EOPNOTSUPP`; other failures remain
+fatal. The resulting suite reports real Cortex-A9 cycles, instructions, L1D
+accesses/refills, branches, and branch mispredicts.
+
+## Bounded Streamline capture
+
+The repository deliberately does not download or redistribute Arm's prebuilt
+`gatord`, or accept an Arm product EULA. Supply an audited ARMv7 hard-float
+binary explicitly:
+
+```text
+MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark streamline
+```
+
+The typed workflow is Dev-only. It uploads to `/tmp`, captures the fixed
+`pmu-profile screensaver` workload for at most ten seconds, uses the low sample
+rate, includes kernel execution because this PMUv1 rejects privilege exclusion,
+and disables call-stack unwinding. It retrieves both an extracted
+`mister-magik.apc` directory and its SHA-256-verified archive, then removes the
+remote daemon and capture. Cleanup may terminate only the PID recorded by this
+capture and only while `/proc/PID/exe` still resolves to the uploaded daemon.
+
+The audited source contract is Arm gator commit
+`f0774012f36dbdb543e082d3e14ca9db20d0432d` (gator 9.7.2). Its maintained
+`build-linux.sh -p arm-glibc` profile targets ARMv7 Linux hard-float; the
+`arm-musl` profile is the static alternative.
 
 ## Resume gate
 
-Do not resume the PMU baseline or the dependent optimization commits until all
-of these conditions hold:
+The PMU baseline and dependent optimization may proceed only while all of these
+conditions hold:
 
 - the runtime reports `ARMv7_Cortex_A9` in its perf event sources;
 - `pmu-probe` reports non-zero cycles and instructions with its collection mode;

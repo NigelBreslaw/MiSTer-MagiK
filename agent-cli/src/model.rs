@@ -24,6 +24,7 @@ pub enum BenchmarkScenario {
     NavigationTransitions,
     PmuProfile,
     Search,
+    Streamline,
 }
 
 impl BenchmarkScenario {
@@ -44,6 +45,7 @@ impl BenchmarkScenario {
             Self::NavigationTransitions => "navigation-transitions",
             Self::PmuProfile => "pmu-profile",
             Self::Search => "search",
+            Self::Streamline => "streamline",
         }
     }
 }
