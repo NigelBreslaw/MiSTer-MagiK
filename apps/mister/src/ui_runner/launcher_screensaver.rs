@@ -627,8 +627,8 @@ impl LauncherScreensaver {
     fn render_at_target_with_lookahead(
         &mut self,
         dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
+        _w: usize,
+        _h: usize,
         hidden_slot: Option<u8>,
         elapsed: Duration,
         next_elapsed: Option<Duration>,
