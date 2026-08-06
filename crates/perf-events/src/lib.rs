@@ -140,6 +140,7 @@ impl PmuFailure {
         }
     }
 
+    #[cfg(any(target_os = "linux", test))]
     fn malformed(message: impl Into<String>) -> Self {
         Self {
             stage: "decode-group-read".to_owned(),
@@ -176,6 +177,7 @@ pub struct CounterValues {
 }
 
 impl CounterValues {
+    #[cfg(any(target_os = "linux", test))]
     fn set(&mut self, event: HardwareEvent, value: u64) {
         match event {
             HardwareEvent::Cycles => self.cycles = value,
@@ -502,6 +504,7 @@ impl CounterGroup {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn decode_group_read(
     words: &[u64],
     event_ids: &BTreeMap<u64, HardwareEvent>,

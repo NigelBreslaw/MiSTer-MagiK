@@ -64,8 +64,10 @@ pub fn search_system_shards(
 ) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
     let total_started = Instant::now();
     let prepare_started = Instant::now();
+    let manifest_pmu = mister_magik_perf_events::sampled_span("search.manifest");
     let manifest = crate::shard_registry::read_latest_manifest_lazy(storage_root, limits)
         .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
+    drop(manifest_pmu);
     let manifest_prepare_us = elapsed_us(prepare_started);
     let mut result = PersistedCollectionSearchResult::default();
     for system_id in system_ids {
@@ -132,10 +134,12 @@ pub fn search_system_shard(
 ) -> Result<PersistedSearchResult, PersistedSearchError> {
     let total_started = Instant::now();
     let prepare_started = Instant::now();
+    let prepare_pmu = mister_magik_perf_events::sampled_span("search.prepare");
     let match_query = fts_match_query(query);
     let fragment = current_search_word(query);
     let autocomplete_prefix = normalize_search_text(fragment);
     let rust_prepare_us = elapsed_us(prepare_started);
+    drop(prepare_pmu);
 
     if match_query.is_empty() {
         return Ok(PersistedSearchResult {
@@ -149,6 +153,7 @@ pub fn search_system_shard(
     }
 
     let sqlite_started = Instant::now();
+    let sqlite_pmu = mister_magik_perf_events::sampled_span("search.sqlite");
     let connection = open_read_only(sqlite_path)?;
     let sql = format!(
         "SELECT rowid - 1, bm25(game_search_fts,{SEARCH_WEIGHTS})
@@ -194,8 +199,10 @@ pub fn search_system_shard(
         None
     };
     let sqlite_us = elapsed_us(sqlite_started);
+    drop(sqlite_pmu);
 
     let finalize_started = Instant::now();
+    let finalize_pmu = mister_magik_perf_events::sampled_span("search.finalize");
     let matches = raw_matches
         .into_iter()
         .map(|(ordinal, rank)| {
@@ -205,6 +212,7 @@ pub fn search_system_shard(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let rust_finalize_us = elapsed_us(finalize_started);
+    drop(finalize_pmu);
 
     Ok(PersistedSearchResult {
         matches,

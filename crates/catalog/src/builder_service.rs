@@ -344,6 +344,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
     if !background_from_start {
         apply_runtime_thread_policy(build_role);
     }
+    let bootstrap_pmu = mister_magik_perf_events::sampled_span("catalog.bootstrap");
     let bootstrap = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut progress = |title: &str, detail: &str| {
@@ -364,6 +365,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
         })
     }
     .map_err(|error| fail(protocol, "bootstrap", error, emit))?;
+    drop(bootstrap_pmu);
     let first_visible_published = bootstrap.is_some();
     let background_build = background_from_start
         || full_build_runs_in_background(operation)
@@ -433,6 +435,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
     // CatalogReady has been emitted and the retained index has been published
     // does the complete pipeline enter the CPU0 background scope.
     let _background_scope = background_build.then(crate::cooperative_work::BackgroundScope::enter);
+    let scan_pmu = mister_magik_perf_events::sampled_span("catalog.scan");
     let scanned = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut scan_progress = |title: &str, detail: &str| {
@@ -453,8 +456,10 @@ fn run_with_backend_policy<B: BuilderBackend>(
         })
     }
     .map_err(|error| fail(protocol, "scan", error, emit))?;
+    drop(scan_pmu);
     emit_timings(protocol, scanned.timings, emit);
     wait_for_background_heavy_work_enabled(background_build);
+    let prepare_pmu = mister_magik_perf_events::sampled_span("catalog.prepare");
     let prepared = {
         let protocol_output = RefCell::new(&mut *emit);
         let mut prepare_progress = |title: &str, detail: &str| {
@@ -470,6 +475,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
             .prepare(scanned.value, &mut prepare_progress)
             .map_err(|error| fail(protocol, "prepare-catalog", error, emit))?
     };
+    drop(prepare_pmu);
     emit_timings(protocol, prepared.timings, emit);
     let games = backend.games(&prepared.value);
     wait_for_background_heavy_work_enabled(background_build);
@@ -547,6 +553,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
         build_role
     });
     wait_for_background_heavy_work_enabled(background_build);
+    let persist_pmu = mister_magik_perf_events::sampled_span("catalog.persist");
     let persist_result = {
         let shared_emit = RefCell::new(&mut *emit);
         let mut progress = |title: &str, detail: &str| {
@@ -563,6 +570,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
         };
         backend.persist(prepared.value, &mut progress, &mut lifecycle)
     };
+    drop(persist_pmu);
     let summary = persist_result.map_err(|error| fail(protocol, "persist", error, emit))?;
     let completed_build_seconds = backend
         .write_build_duration(&config.sqlite_path, run_started.elapsed())

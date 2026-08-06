@@ -848,6 +848,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "memmap2",
+ "mister-magik-perf-events",
  "quick-xml 0.41.0",
  "rusqlite",
  "serde",
@@ -913,6 +914,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mister-magik-perf-events"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+]
+
+[[package]]
 name = "mister-magik-scanout-contract"
 version = "0.1.0"
 
@@ -923,6 +932,7 @@ dependencies = [
  "cc",
  "mister-magik-catalog",
  "mister-magik-framebuffer-scenes",
+ "mister-magik-perf-events",
 ]
 
 [[package]]

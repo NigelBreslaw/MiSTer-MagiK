@@ -90,6 +90,7 @@ dependencies = [
  "libc",
  "lz4_flex",
  "memmap2",
+ "mister-magik-perf-events",
  "quick-xml",
  "rusqlite",
  "serde",

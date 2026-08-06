@@ -90,11 +90,20 @@ dependencies = [
  "libc",
  "lz4_flex",
  "memmap2",
+ "mister-magik-perf-events",
  "quick-xml",
  "rusqlite",
  "serde",
  "serde_json",
  "walkdir",
+]
+
+[[package]]
+name = "mister-magik-perf-events"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
 ]
 
 [[package]]
