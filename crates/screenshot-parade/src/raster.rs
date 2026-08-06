@@ -375,7 +375,7 @@ impl PreparedScreenshotCard {
                 if let Some(slack) = preparation_slack {
                     slack.checkpoint();
                 }
-                let mut shifted = prepare_direct_linear_phase(
+                prepare_direct_linear_phase(
                     &direct_source,
                     vertical.width,
                     vertical.height,
@@ -384,9 +384,7 @@ impl PreparedScreenshotCard {
                     index + 1,
                     LinearPhaseKernel::Neon,
                     preparation_slack,
-                );
-                extrude_leading_edge_color(&base.image, &mut shifted.image);
-                shifted
+                )
             });
             let phase_us = phase_started.elapsed().as_micros();
             return (
@@ -1118,16 +1116,6 @@ fn prepare_direct_linear_phase(
     };
     let coverage = coverage_plane(coverage, &image, preparation_slack);
     PreparedLinearPhase { image, coverage }
-}
-
-fn extrude_leading_edge_color(base: &ScreenshotImage, shifted: &mut ScreenshotImage) {
-    debug_assert_eq!(base.height, shifted.height);
-    if base.width == 0 || shifted.width == 0 {
-        return;
-    }
-    for y in 0..base.height.min(shifted.height) {
-        shifted.pixels[y * shifted.stride] = base.pixels[y * base.stride];
-    }
 }
 
 fn prepare_direct_phase_scalar(
@@ -2672,30 +2660,6 @@ mod tests {
                 pixels.iter().all(|pixel| *pixel == expected),
                 "phase={phase}"
             );
-        }
-    }
-
-    #[test]
-    fn direct_shifted_phases_keep_a_stable_leading_edge_color() {
-        let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            180,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3DirectNeon,
-        );
-        let (_, shifted) = linear_phases(&card);
-        for (phase, shifted) in shifted.iter().enumerate() {
-            assert_eq!(shifted.image.width, card.image.width + 1);
-            for y in 0..card.image.height {
-                assert_eq!(
-                    shifted.image.pixels[y * shifted.image.stride],
-                    card.image.pixels[y * card.image.stride],
-                    "phase={} y={y}",
-                    phase + 1,
-                );
-            }
         }
     }
 
