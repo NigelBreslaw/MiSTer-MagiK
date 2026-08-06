@@ -35,6 +35,13 @@ pub enum HardwareEvent {
     BranchMispredicts,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GroupReadFormat {
+    IdsAndTimes,
+    OrderedValues,
+}
+
 impl HardwareEvent {
     #[must_use]
     pub const fn perf_config(self) -> u64 {
@@ -494,6 +501,18 @@ impl CounterGroup {
         }
     }
 
+    #[must_use]
+    pub fn read_format(&self) -> GroupReadFormat {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.read_format()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            GroupReadFormat::OrderedValues
+        }
+    }
+
     pub fn span(&self, name: impl Into<String>) -> Result<NamedSpan<'_>, PmuFailure> {
         let started = self.snapshot()?;
         Ok(NamedSpan {
@@ -550,9 +569,34 @@ fn decode_group_read(
     })
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn decode_ordered_group_read(words: &[u64]) -> Result<CounterSnapshot, PmuFailure> {
+    if words.len() != EVENT_SET.len() + 1 || words[0] != EVENT_SET.len() as u64 {
+        return Err(PmuFailure::malformed(format!(
+            "ordered group read reported {} words and {} events, expected {} words and {} events",
+            words.len(),
+            words.first().copied().unwrap_or(0),
+            EVENT_SET.len() + 1,
+            EVENT_SET.len()
+        )));
+    }
+    let mut counters = CounterValues::default();
+    for (event, value) in EVENT_SET.into_iter().zip(words[1..].iter().copied()) {
+        counters.set(event, value);
+    }
+    Ok(CounterSnapshot {
+        time_enabled_ns: 0,
+        time_running_ns: 0,
+        counters,
+    })
+}
+
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{CounterSnapshot, EVENT_SET, HardwareEvent, PmuFailure, decode_group_read};
+    use super::{
+        CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuFailure, decode_group_read,
+        decode_ordered_group_read,
+    };
     use std::collections::BTreeMap;
 
     const PERF_TYPE_HARDWARE: u32 = 0;
@@ -593,26 +637,39 @@ mod linux {
     pub(super) struct LinuxCounterGroup {
         descriptors: Vec<Descriptor>,
         event_ids: BTreeMap<u64, HardwareEvent>,
+        read_format: GroupReadFormat,
     }
 
     impl LinuxCounterGroup {
         pub(super) fn open() -> Result<Self, PmuFailure> {
+            match Self::open_with_format(GroupReadFormat::IdsAndTimes) {
+                Err(failure) if failure.errno == Some(libc::EINVAL) => {
+                    Self::open_with_format(GroupReadFormat::OrderedValues)
+                }
+                result => result,
+            }
+        }
+
+        fn open_with_format(read_format: GroupReadFormat) -> Result<Self, PmuFailure> {
             debug_assert_eq!(std::mem::size_of::<PerfEventAttr>(), 64);
-            let leader = open_event(HardwareEvent::Cycles, -1)?;
+            let leader = open_event(HardwareEvent::Cycles, -1, read_format)?;
             let mut group = Self {
                 descriptors: vec![Descriptor { fd: leader }],
                 event_ids: BTreeMap::new(),
+                read_format,
             };
             for event in EVENT_SET.iter().copied().skip(1) {
-                let descriptor = open_event(event, leader)?;
+                let descriptor = open_event(event, leader, read_format)?;
                 group.descriptors.push(Descriptor { fd: descriptor });
             }
-            for (descriptor, event) in group.descriptors.iter().zip(EVENT_SET) {
-                let id = event_id(descriptor.fd, event)?;
-                if group.event_ids.insert(id, event).is_some() {
-                    return Err(PmuFailure::malformed(format!(
-                        "duplicate kernel event id {id}"
-                    )));
+            if read_format == GroupReadFormat::IdsAndTimes {
+                for (descriptor, event) in group.descriptors.iter().zip(EVENT_SET) {
+                    let id = event_id(descriptor.fd, event)?;
+                    if group.event_ids.insert(id, event).is_some() {
+                        return Err(PmuFailure::malformed(format!(
+                            "duplicate kernel event id {id}"
+                        )));
+                    }
                 }
             }
             group.ioctl_group(PERF_EVENT_IOC_RESET, "reset-group")?;
@@ -621,6 +678,17 @@ mod linux {
         }
 
         pub(super) fn snapshot(&self) -> Result<CounterSnapshot, PmuFailure> {
+            match self.read_format {
+                GroupReadFormat::IdsAndTimes => self.snapshot_with_ids_and_times(),
+                GroupReadFormat::OrderedValues => self.snapshot_ordered_values(),
+            }
+        }
+
+        pub(super) const fn read_format(&self) -> GroupReadFormat {
+            self.read_format
+        }
+
+        fn snapshot_with_ids_and_times(&self) -> Result<CounterSnapshot, PmuFailure> {
             let mut words = [0_u64; GROUP_READ_WORDS];
             let expected_bytes = std::mem::size_of_val(&words);
             // SAFETY: `words` is writable for exactly `expected_bytes`, and the
@@ -645,6 +713,33 @@ mod linux {
                 )));
             }
             decode_group_read(&words, &self.event_ids)
+        }
+
+        fn snapshot_ordered_values(&self) -> Result<CounterSnapshot, PmuFailure> {
+            let mut words = [0_u64; EVENT_SET.len() + 1];
+            let expected_bytes = std::mem::size_of_val(&words);
+            // SAFETY: `words` is writable for exactly `expected_bytes`, and the
+            // leader descriptor remains owned by this group for the call.
+            let read_bytes = unsafe {
+                libc::read(
+                    self.descriptors[0].fd,
+                    words.as_mut_ptr().cast(),
+                    expected_bytes,
+                )
+            };
+            if read_bytes < 0 {
+                return Err(PmuFailure::io(
+                    "read-group",
+                    None,
+                    std::io::Error::last_os_error(),
+                ));
+            }
+            if read_bytes as usize != expected_bytes {
+                return Err(PmuFailure::malformed(format!(
+                    "ordered group read returned {read_bytes} bytes, expected {expected_bytes}"
+                )));
+            }
+            decode_ordered_group_read(&words)
         }
 
         fn ioctl_group(
@@ -687,15 +782,21 @@ mod linux {
     fn open_event(
         event: HardwareEvent,
         group_descriptor: libc::c_int,
+        read_format: GroupReadFormat,
     ) -> Result<libc::c_int, PmuFailure> {
         let attributes = PerfEventAttr {
             event_type: PERF_TYPE_HARDWARE,
             size: 64,
             config: event.perf_config(),
-            read_format: PERF_FORMAT_TOTAL_TIME_ENABLED
-                | PERF_FORMAT_TOTAL_TIME_RUNNING
-                | PERF_FORMAT_ID
-                | PERF_FORMAT_GROUP,
+            read_format: match read_format {
+                GroupReadFormat::IdsAndTimes => {
+                    PERF_FORMAT_TOTAL_TIME_ENABLED
+                        | PERF_FORMAT_TOTAL_TIME_RUNNING
+                        | PERF_FORMAT_ID
+                        | PERF_FORMAT_GROUP
+                }
+                GroupReadFormat::OrderedValues => PERF_FORMAT_GROUP,
+            },
             flags: PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HYPERVISOR,
             ..PerfEventAttr::default()
         };
@@ -774,6 +875,18 @@ mod tests {
         assert!(decode_group_read(&wrong_count, &ids()).is_err());
         let unknown = [6, 1, 1, 1, 999, 1, 100, 1, 101, 1, 102, 1, 103, 1, 104];
         assert!(decode_group_read(&unknown, &ids()).is_err());
+    }
+
+    #[test]
+    fn legacy_ordered_group_reads_preserve_declared_event_order() {
+        let snapshot = decode_ordered_group_read(&[6, 60, 45, 30, 4, 20, 3]).unwrap();
+        assert_eq!(snapshot.counters.cycles, 60);
+        assert_eq!(snapshot.counters.instructions, 45);
+        assert_eq!(snapshot.counters.l1d_accesses, 30);
+        assert_eq!(snapshot.counters.l1d_refills, 4);
+        assert_eq!(snapshot.counters.branches, 20);
+        assert_eq!(snapshot.counters.branch_mispredicts, 3);
+        assert!(decode_ordered_group_read(&[5, 1, 2, 3, 4, 5]).is_err());
     }
 
     #[test]

@@ -17,7 +17,7 @@ pub fn run() {
 
 pub(crate) fn probe() -> Value {
     match measure_probe() {
-        Ok((delta, checksum)) if valid_probe(delta) => json!({
+        Ok((delta, checksum, read_format)) if valid_probe(delta) => json!({
             "schema": "mister-magik-pmu-probe-v1",
             "status": "ok",
             "target": {
@@ -26,6 +26,7 @@ pub(crate) fn probe() -> Value {
                 "scope": "calling-thread-user-space",
                 "grouped": true,
                 "multiplexed": false,
+                "read_format": read_format,
             },
             "events": event_metadata(),
             "workload": {
@@ -36,7 +37,7 @@ pub(crate) fn probe() -> Value {
             "sample": sample_json(delta),
             "failure": Value::Null,
         }),
-        Ok((delta, checksum)) => json!({
+        Ok((delta, checksum, read_format)) => json!({
             "schema": "mister-magik-pmu-probe-v1",
             "status": "failed",
             "target": {
@@ -45,6 +46,7 @@ pub(crate) fn probe() -> Value {
                 "scope": "calling-thread-user-space",
                 "grouped": true,
                 "multiplexed": false,
+                "read_format": read_format,
             },
             "events": event_metadata(),
             "workload": {
@@ -57,15 +59,17 @@ pub(crate) fn probe() -> Value {
                 "stage": "validate-sample",
                 "event": Value::Null,
                 "errno": Value::Null,
-                "message": "probe produced zero running time, cycles, or instructions",
+                "message": "probe produced zero cycles or instructions",
             },
         }),
         Err(failure) => failed_probe(failure),
     }
 }
 
-fn measure_probe() -> Result<(CounterDelta, u64), PmuFailure> {
+fn measure_probe()
+-> Result<(CounterDelta, u64, mister_magik_perf_events::GroupReadFormat), PmuFailure> {
     let group = CounterGroup::open()?;
+    let read_format = group.read_format();
     let span = group.span("pmu-probe")?;
     let mut words = vec![0x9e37_79b9_u32; PROBE_WORDS];
     let mut state = 0x243f_6a88_85a3_08d3_u64;
@@ -86,11 +90,11 @@ fn measure_probe() -> Result<(CounterDelta, u64), PmuFailure> {
         .iter()
         .fold(state, |total, value| total.wrapping_add(u64::from(*value)));
     std::hint::black_box(checksum);
-    Ok((span.finish()?.counters, checksum))
+    Ok((span.finish()?.counters, checksum, read_format))
 }
 
 fn valid_probe(delta: CounterDelta) -> bool {
-    delta.time_running_ns > 0 && delta.counters.cycles > 0 && delta.counters.instructions > 0
+    delta.counters.cycles > 0 && delta.counters.instructions > 0
 }
 
 fn sample_json(delta: CounterDelta) -> Value {
