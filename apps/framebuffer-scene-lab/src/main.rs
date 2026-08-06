@@ -768,7 +768,16 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
         SCREENSHOT_PMU_WIDTH,
     )
     .map_err(|error| error.to_string())?;
-    let mut renderer = screenshot_scene(archive_path, SCREENSHOT_PMU_SEED, true, geometry)?;
+    let archive = mister_magik_catalog::preview_worker::ResidentPreviewArchive::open(archive_path)?;
+    let mut renderer = ScreenshotParade::new_offline_prepared(
+        archive,
+        ScreenshotParadeConfig {
+            geometry,
+            seed: SCREENSHOT_PMU_SEED,
+            worker_start: None,
+            preparation_slack: None,
+        },
+    )?;
     let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
     let started = Instant::now();
     let mut last_stats = None;
