@@ -11,7 +11,7 @@ use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, LauncherFramePacingInput, LauncherFramePacingPolicy,
     LauncherPacingTrace, LauncherPhaseAlignment,
 };
-use super::launcher_screensaver::{LauncherScreensaverReady, ScreensaverFrameTrace};
+use super::launcher_screensaver::ScreensaverFrameTrace;
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -1809,48 +1809,6 @@ enum ScreensaverStartMode {
     PreviewWhenReady,
 }
 
-#[derive(Debug)]
-struct DirectParticleActivationHandoff {
-    black_posts_remaining: u8,
-}
-
-impl DirectParticleActivationHandoff {
-    const REQUIRED_BLACK_POSTS: u8 = 2;
-
-    fn new(particle_requested: bool, start_mode: ScreensaverStartMode) -> Self {
-        Self {
-            black_posts_remaining: if particle_requested
-                && start_mode == ScreensaverStartMode::IdleWhenReady
-            {
-                Self::REQUIRED_BLACK_POSTS
-            } else {
-                0
-            },
-        }
-    }
-
-    fn holding_black(&self, screensaver_active: bool, screensaver_frame_visible: bool) -> bool {
-        screensaver_active && !screensaver_frame_visible && self.black_posts_remaining != 0
-    }
-
-    fn renderer_start_allowed(&self) -> bool {
-        self.black_posts_remaining == 0
-    }
-
-    fn observe_present(
-        &mut self,
-        accepted_and_active_confirmed: bool,
-        screensaver_active: bool,
-        screensaver_frame_visible: bool,
-    ) {
-        if accepted_and_active_confirmed
-            && self.holding_black(screensaver_active, screensaver_frame_visible)
-        {
-            self.black_posts_remaining -= 1;
-        }
-    }
-}
-
 fn screensaver_start_mode(
     idle_when_ready: bool,
     preview_when_ready: bool,
@@ -2045,12 +2003,8 @@ impl ScreensaverControl {
     }
 }
 
-const fn screensaver_catalog_busy(
-    worker_running: bool,
-    refresh_done: bool,
-    particle_renderer_requested: bool,
-) -> bool {
-    !particle_renderer_requested && (worker_running || !refresh_done)
+const fn screensaver_catalog_busy(worker_running: bool, refresh_done: bool) -> bool {
+    worker_running || !refresh_done
 }
 
 fn preview_archive_warm_skip_enabled() -> bool {
@@ -2085,12 +2039,7 @@ pub(super) fn run_launcher_loop(
     );
     let screensaver_preview_waits_for_analytics =
         launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS");
-    let particle_screensaver_requested = launcher_screensaver::particle_renderer_requested();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
-    let mut particle_activation_handoff = DirectParticleActivationHandoff::new(
-        particle_screensaver_requested,
-        screensaver_start_mode,
-    );
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
     let mut screensaver_direct_pipeline: Option<ScreensaverDirectRenderAhead> = None;
@@ -3820,7 +3769,6 @@ pub(super) fn run_launcher_loop(
         let catalog_build_busy = screensaver_catalog_busy(
             scheduler.catalog_worker_running(),
             catalog_session.refresh_done(),
-            particle_screensaver_requested,
         );
         screensaver.set_qualification_particles(
             loop_start,
@@ -3835,7 +3783,7 @@ pub(super) fn run_launcher_loop(
             Duration::from_secs(u64::from(nav.settings.screensaver_delay_minutes) * 60),
             catalog_build_busy,
             screensaver_preview_start_ready(
-                catalog_ready || particle_screensaver_requested,
+                catalog_ready,
                 screensaver_preview_waits_for_analytics,
                 frame_accounting.frame_analytics_mode(),
             ),
@@ -5494,7 +5442,7 @@ pub(super) fn run_launcher_loop(
             screensaver_direct_pipeline.is_some(),
             direct_hidden_exit_pending,
             retiring_direct_pipelines.len(),
-            particle_activation_handoff.renderer_start_allowed(),
+            true,
         ) {
             if screensaver_loader.is_none() {
                 if let Some(started) = screensaver_show_started {
@@ -5517,44 +5465,7 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                match ready {
-                    LauncherScreensaverReady::Screenshot(runtime) => {
-                        screensaver_pipeline = Some(ScreensaverRenderAhead::start(runtime));
-                    }
-                    LauncherScreensaverReady::Direct(renderer) => {
-                        if !launcher_presenter.direct_hidden_framebuffer_slots_available(ui) {
-                            crate::ui_errln!(
-                                "particle experiment requires the direct hidden-slot latch backend"
-                            );
-                            screensaver.fail_current_activation(Instant::now());
-                            screensaver_frame_visible = false;
-                        } else {
-                            let launcher_snapshot_view = layer_target.cached_frame_view();
-                            let launcher_snapshot = screensaver
-                                .is_preview()
-                                .then(|| launcher_snapshot_view.pixels());
-                            match launcher_presenter.take_direct_hidden_frame_buffers() {
-                                Ok(buffers) => {
-                                    screensaver_direct_pipeline =
-                                        Some(ScreensaverDirectRenderAhead::start(
-                                            renderer,
-                                            buffers,
-                                            ui.render_w(),
-                                            ui.render_h(),
-                                            pacer.period_us(),
-                                            launcher_snapshot,
-                                            screensaver.preview_fade_started,
-                                        ));
-                                }
-                                Err(failure) => {
-                                    launcher_presenter.fail_latch_completion(failure);
-                                    screensaver.fail_current_activation(Instant::now());
-                                    screensaver_frame_visible = false;
-                                }
-                            }
-                        }
-                    }
-                }
+                screensaver_pipeline = Some(ScreensaverRenderAhead::start(ready));
                 screensaver_render_sequence = 0;
                 screensaver_starvation_count = 0;
                 screensaver_superseded_frames = 0;
@@ -5881,10 +5792,6 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             }
-        } else if particle_activation_handoff
-            .holding_black(screensaver.active, screensaver_frame_visible)
-        {
-            Some(layer_target.render_black())
         } else if screensaver.active {
             None
         } else if startup_intro_suppress_launcher_ui {
@@ -6778,11 +6685,6 @@ pub(super) fn run_launcher_loop(
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
-        );
-        particle_activation_handoff.observe_present(
-            accepted_and_active_confirmed,
-            screensaver.active,
-            screensaver_frame_visible,
         );
         let preview_present_confirmed = if latch_trace_flush_deferred {
             accepted_and_active_confirmed
@@ -11148,10 +11050,9 @@ mod tests {
     }
 
     #[test]
-    fn particle_screensaver_does_not_wait_for_catalog_work() {
-        assert!(screensaver_catalog_busy(true, false, false));
-        assert!(!screensaver_catalog_busy(true, false, true));
-        assert!(!screensaver_catalog_busy(false, true, false));
+    fn screenshot_screensaver_waits_for_catalog_work() {
+        assert!(screensaver_catalog_busy(true, false));
+        assert!(!screensaver_catalog_busy(false, true));
     }
 
     #[test]
@@ -11175,34 +11076,6 @@ mod tests {
             0,
             true,
         ));
-    }
-
-    #[test]
-    fn direct_particle_activation_posts_black_to_both_slots_before_renderer_start() {
-        let mut handoff =
-            DirectParticleActivationHandoff::new(true, ScreensaverStartMode::IdleWhenReady);
-
-        assert!(handoff.holding_black(true, false));
-        assert!(!handoff.renderer_start_allowed());
-        handoff.observe_present(false, true, false);
-        assert!(!handoff.renderer_start_allowed());
-        handoff.observe_present(true, true, false);
-        assert!(handoff.holding_black(true, false));
-        assert!(!handoff.renderer_start_allowed());
-        handoff.observe_present(true, true, false);
-        assert!(!handoff.holding_black(true, false));
-        assert!(handoff.renderer_start_allowed());
-    }
-
-    #[test]
-    fn particle_preview_and_normal_launcher_do_not_arm_black_handoff() {
-        for handoff in [
-            DirectParticleActivationHandoff::new(true, ScreensaverStartMode::PreviewWhenReady),
-            DirectParticleActivationHandoff::new(false, ScreensaverStartMode::IdleWhenReady),
-        ] {
-            assert!(!handoff.holding_black(true, false));
-            assert!(handoff.renderer_start_allowed());
-        }
     }
 
     #[test]

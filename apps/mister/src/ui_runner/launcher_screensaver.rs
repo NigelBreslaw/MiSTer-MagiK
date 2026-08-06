@@ -619,40 +619,14 @@ impl LauncherScreensaver {
     }
 }
 
-pub(crate) enum LauncherScreensaverReady {
-    Screenshot(LauncherScreenshotRuntime),
-    Direct(LauncherScreensaver),
-}
-
 pub struct LauncherScreensaverLoader {
-    ready_rx: Receiver<LauncherScreensaverReady>,
+    ready_rx: Receiver<LauncherScreenshotRuntime>,
     cancelled: Arc<AtomicBool>,
 }
 
 impl LauncherScreensaverLoader {
     pub fn start(w: usize, h: usize, startup_started_at: Option<Instant>) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        if magik_particle_renderer_requested() {
-            match particle_config_from_env(w, h).and_then(|config| {
-                let renderer = ParticleRenderer::new_magik(config)?;
-                let reload =
-                    MagikRecipeReload::for_layout(DeviceLayout::current(), w, h, config.preset)?;
-                Ok((renderer, reload))
-            }) {
-                Ok((renderer, reload)) => {
-                    let _ = ready_tx.send(LauncherScreensaverReady::Direct(
-                        LauncherScreensaver::particle(renderer, reload),
-                    ));
-                }
-                Err(error) => {
-                    crate::ui_errln!("particle renderer initialization failed: {error}");
-                }
-            }
-            return Self {
-                ready_rx,
-                cancelled: Arc::new(AtomicBool::new(false)),
-            };
-        }
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
         std::thread::Builder::new()
@@ -666,7 +640,7 @@ impl LauncherScreensaverLoader {
                     std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
                     DeviceLayout::current(),
                 );
-                let result: Result<Option<LauncherScreensaverReady>, String> = (|| {
+                let result: Result<Option<LauncherScreenshotRuntime>, String> = (|| {
                     let archive = preview_worker::ResidentPreviewArchive::open(&path)
                         .map_err(|error| format!("path={} error={error}", path.display()))?;
                     if worker_cancelled.load(Ordering::Relaxed) {
@@ -716,7 +690,7 @@ impl LauncherScreensaverLoader {
                             started.elapsed().as_micros()
                         );
                     }
-                    Ok(Some(LauncherScreensaverReady::Screenshot(runtime)))
+                    Ok(Some(runtime))
                 })();
                 match result {
                     Ok(Some(saver)) if !worker_cancelled.load(Ordering::Relaxed) => {
@@ -733,7 +707,7 @@ impl LauncherScreensaverLoader {
         }
     }
 
-    pub fn try_ready(&self) -> Option<LauncherScreensaverReady> {
+    pub fn try_ready(&self) -> Option<LauncherScreenshotRuntime> {
         self.ready_rx.try_recv().ok()
     }
 }
@@ -744,17 +718,8 @@ impl Drop for LauncherScreensaverLoader {
     }
 }
 
-pub fn particle_renderer_requested() -> bool {
-    let value = std::env::var("MISTER_SCREENSAVER_RENDERER").ok();
-    particle_renderer_label_requested(value.as_deref())
-}
-
 fn particle_renderer_label_requested(value: Option<&str>) -> bool {
     value.is_some_and(|value| value.trim().eq_ignore_ascii_case(PARTICLE_RENDERER_LABEL))
-}
-
-fn magik_particle_renderer_requested() -> bool {
-    particle_renderer_label_requested(std::env::var("MISTER_SCREENSAVER_RENDERER").ok().as_deref())
 }
 
 fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfig, String> {
