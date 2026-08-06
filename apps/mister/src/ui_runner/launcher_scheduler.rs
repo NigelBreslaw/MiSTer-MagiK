@@ -3,6 +3,7 @@
 
 use super::*;
 use std::collections::{BTreeSet, VecDeque};
+use std::sync::{Arc, Mutex};
 
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
 pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
@@ -121,6 +122,14 @@ pub(super) struct LauncherScheduler {
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
     pending_search_query: Option<launcher::ArcadeSearchRequest>,
+    search_catalog: Arc<
+        Mutex<
+            Option<(
+                usize,
+                mister_magik_catalog::persisted_search::PersistedSearchCatalog,
+            )>,
+        >,
+    >,
     system_shard: SystemShardJobState,
     system_shard_attempted: BTreeSet<String>,
     system_shard_queue: VecDeque<SystemShardRequest>,
@@ -137,6 +146,7 @@ impl LauncherScheduler {
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
             pending_search_query: None,
+            search_catalog: Arc::new(Mutex::new(None)),
             system_shard: SystemShardJobState::Idle,
             system_shard_attempted: BTreeSet::new(),
             system_shard_queue: VecDeque::new(),
@@ -344,6 +354,7 @@ impl LauncherScheduler {
             return;
         };
         let worker_request = request.clone();
+        let search_catalog = Arc::clone(&self.search_catalog);
         let (tx, rx) = mpsc::channel();
         self.search_query = SearchQueryJobState::Running(rx);
         if std::thread::Builder::new()
@@ -353,13 +364,15 @@ impl LauncherScheduler {
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
                 );
                 let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-                let message = match mister_magik_catalog::persisted_search::search_system_shards(
+                let result = cached_search_catalog(
+                    &search_catalog,
+                    worker_request.catalog_version,
                     &storage,
-                    &worker_request.system_ids,
-                    &worker_request.query,
-                    mister_magik_catalog::production_sharded_projection::production_registry_limits(
-                    ),
-                ) {
+                )
+                .and_then(|catalog| {
+                    catalog.search(&worker_request.system_ids, &worker_request.query)
+                });
+                let message = match result {
                     Ok(result) => CatalogWorkerMessage::SearchQueryReady {
                         request: worker_request,
                         result,
@@ -851,6 +864,45 @@ impl LauncherScheduler {
     }
 }
 
+fn cached_search_catalog(
+    cache: &Mutex<
+        Option<(
+            usize,
+            mister_magik_catalog::persisted_search::PersistedSearchCatalog,
+        )>,
+    >,
+    catalog_version: usize,
+    storage: &std::path::Path,
+) -> Result<
+    mister_magik_catalog::persisted_search::PersistedSearchCatalog,
+    mister_magik_catalog::persisted_search::PersistedSearchError,
+> {
+    versioned_cache_value(cache, catalog_version, || {
+        mister_magik_catalog::persisted_search::PersistedSearchCatalog::open(
+            storage,
+            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        )
+    })
+}
+
+fn versioned_cache_value<T: Clone, E>(
+    cache: &Mutex<Option<(usize, T)>>,
+    version: usize,
+    load: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((cached_version, value)) = cache.as_ref()
+        && *cached_version == version
+    {
+        return Ok(value.clone());
+    }
+    let value = load()?;
+    *cache = Some((version, value.clone()));
+    Ok(value)
+}
+
 #[cfg(not(test))]
 fn emit_catalog_progress(
     episode_id: String,
@@ -869,6 +921,22 @@ fn emit_catalog_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn versioned_cache_reuses_and_invalidates_values() {
+        let cache = Mutex::new(None);
+        let first = versioned_cache_value::<_, ()>(&cache, 7, || Ok("first".to_string())).unwrap();
+        let reused = versioned_cache_value::<_, ()>(&cache, 7, || {
+            panic!("matching versions must not reload")
+        })
+        .unwrap();
+        let replaced =
+            versioned_cache_value::<_, ()>(&cache, 8, || Ok("second".to_string())).unwrap();
+
+        assert_eq!(first, "first");
+        assert_eq!(reused, "first");
+        assert_eq!(replaced, "second");
+    }
 
     #[test]
     fn event_buffers_are_reused_without_shrinking() {

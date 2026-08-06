@@ -1,8 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_catalog::persisted_search::{PersistedSearchTiming, search_system_shards};
-use mister_magik_catalog::shard_registry::{production_registry_limits, read_latest_manifest_lazy};
+use mister_magik_catalog::persisted_search::{PersistedSearchCatalog, PersistedSearchTiming};
+use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -23,13 +23,9 @@ pub fn run() {
 pub(crate) fn benchmark(storage_root: impl AsRef<Path>) -> Result<Value, String> {
     let storage_root = storage_root.as_ref();
     let limits = production_registry_limits();
-    let manifest =
-        read_latest_manifest_lazy(storage_root, limits).map_err(|error| error.to_string())?;
-    if !manifest
-        .systems
-        .iter()
-        .any(|system| system.system_id.as_str() == "arcade")
-    {
+    let search_catalog =
+        PersistedSearchCatalog::open(storage_root, limits).map_err(|error| error.to_string())?;
+    if !search_catalog.contains_system("arcade") {
         return Err("active catalog has no arcade system shard".to_string());
     }
     let system_ids = vec!["arcade".to_string()];
@@ -37,16 +33,19 @@ pub(crate) fn benchmark(storage_root: impl AsRef<Path>) -> Result<Value, String>
     let mut all_samples = TimingSamples::default();
 
     for query in QUERIES {
-        let first = search_system_shards(storage_root, &system_ids, query, limits)
+        let first = search_catalog
+            .search(&system_ids, query)
             .map_err(|error| error.to_string())?;
         for _ in 0..WARMUP_ITERATIONS {
-            search_system_shards(storage_root, &system_ids, query, limits)
+            search_catalog
+                .search(&system_ids, query)
                 .map_err(|error| error.to_string())?;
         }
 
         let mut samples = TimingSamples::default();
         for _ in 0..MEASURED_ITERATIONS {
-            let result = search_system_shards(storage_root, &system_ids, query, limits)
+            let result = search_catalog
+                .search(&system_ids, query)
                 .map_err(|error| error.to_string())?;
             samples.push(result.timing);
             all_samples.push(result.timing);

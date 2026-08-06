@@ -8,6 +8,8 @@ use std::cmp::Ordering;
 use std::error::Error;
 use std::fmt;
 use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub const SEARCH_SCHEMA_VERSION: u32 = 1;
@@ -56,6 +58,53 @@ pub struct PersistedCollectionSearchResult {
     pub timing: PersistedSearchTiming,
 }
 
+/// An immutable, already validated view of the active search shards.
+///
+/// Callers own freshness: create a new snapshot whenever their catalog
+/// generation changes. Searches through one snapshot never reread or reparse
+/// the dual-slot registry manifest.
+#[derive(Clone, Debug)]
+pub struct PersistedSearchCatalog {
+    storage_root: PathBuf,
+    manifest: Arc<crate::shard_registry::CatalogManifest>,
+}
+
+impl PersistedSearchCatalog {
+    pub fn open(
+        storage_root: &Path,
+        limits: crate::shard_registry::RegistryLimits,
+    ) -> Result<Self, PersistedSearchError> {
+        let manifest = crate::shard_registry::read_latest_manifest_lazy(storage_root, limits)
+            .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
+        Ok(Self {
+            storage_root: storage_root.to_path_buf(),
+            manifest: Arc::new(manifest),
+        })
+    }
+
+    pub fn contains_system(&self, system_id: &str) -> bool {
+        self.manifest
+            .systems
+            .iter()
+            .any(|system| system.system_id.as_str() == system_id)
+    }
+
+    pub fn search(
+        &self,
+        system_ids: &[String],
+        query: &str,
+    ) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
+        search_system_shards_in_manifest(
+            &self.storage_root,
+            &self.manifest,
+            system_ids,
+            query,
+            Instant::now(),
+            0,
+        )
+    }
+}
+
 pub fn search_system_shards(
     storage_root: &Path,
     system_ids: &[String],
@@ -69,6 +118,24 @@ pub fn search_system_shards(
         .map_err(|error| PersistedSearchError::with("open catalog manifest", error))?;
     drop(manifest_pmu);
     let manifest_prepare_us = elapsed_us(prepare_started);
+    search_system_shards_in_manifest(
+        storage_root,
+        &manifest,
+        system_ids,
+        query,
+        total_started,
+        manifest_prepare_us,
+    )
+}
+
+fn search_system_shards_in_manifest(
+    storage_root: &Path,
+    manifest: &crate::shard_registry::CatalogManifest,
+    system_ids: &[String],
+    query: &str,
+    total_started: Instant,
+    manifest_prepare_us: u64,
+) -> Result<PersistedCollectionSearchResult, PersistedSearchError> {
     let mut result = PersistedCollectionSearchResult::default();
     for system_id in system_ids {
         let system = manifest
@@ -578,6 +645,7 @@ impl<T> OptionalRow<T> for Result<T, rusqlite::Error> {
 #[cfg(all(test, feature = "builder"))]
 mod tests {
     use super::*;
+    use crate::shard_registry::{CatalogManifest, ManifestSystem, PublishedGeneration};
     use crate::system_shard::{SystemGame, SystemShardData, SystemShardLimits, write_system_shard};
     use crate::{catalog_classify::SystemId, system_shard::SystemLaunchPlan};
     use std::fs;
@@ -617,6 +685,45 @@ mod tests {
                 .autocomplete
                 .is_none()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn snapshot_search_reuses_the_supplied_manifest() {
+        let (root, sqlite) = fixture();
+        let sqlite_bytes = fs::metadata(&sqlite).unwrap().len();
+        let catalog = PersistedSearchCatalog {
+            storage_root: root.clone(),
+            manifest: Arc::new(CatalogManifest {
+                format: None,
+                generation: 1,
+                systems: vec![ManifestSystem {
+                    system_id: SystemId::parse("arcade").unwrap(),
+                    display_title: "Arcade".to_string(),
+                    section: "Arcade".to_string(),
+                    family: "Arcade".to_string(),
+                    order: 0,
+                    producers: Vec::new(),
+                    active: PublishedGeneration {
+                        generation: 1,
+                        sqlite_path: sqlite.file_name().unwrap().into(),
+                        navigation_path: "1.nav.lz4b".into(),
+                        sqlite_bytes,
+                        navigation_bytes: 0,
+                        sqlite_hash: String::new(),
+                        navigation_hash: String::new(),
+                        games: 2,
+                    },
+                    previous: None,
+                }],
+            }),
+        };
+
+        assert!(catalog.contains_system("arcade"));
+        assert!(!catalog.contains_system("console"));
+        let result = catalog.search(&["arcade".to_string()], "pacman").unwrap();
+        assert_eq!(result.matches[0].ordinal, 0);
+
         fs::remove_dir_all(root).unwrap();
     }
 
