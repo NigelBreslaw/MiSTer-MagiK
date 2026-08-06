@@ -782,19 +782,8 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
     let started = Instant::now();
     let mut last_stats = None;
     let mut reference_pixel_hash = None;
-    let mut opaque_pixels = 0_usize;
-    let mut opaque_rows = 0_usize;
-    let mut union_avoidable_opaque_pixels = 0_usize;
-    let mut union_avoidable_opaque_rows = 0_usize;
-    let mut union_fully_covered_opaque_rows = 0_usize;
     for tick in 0..SCREENSHOT_PMU_FRAMES {
-        let stats = renderer.render_at_presentation_tick(&mut pixels, tick)?;
-        opaque_pixels += stats.opaque_pixels;
-        opaque_rows += stats.opaque_rows;
-        union_avoidable_opaque_pixels += stats.union_avoidable_opaque_pixels;
-        union_avoidable_opaque_rows += stats.union_avoidable_opaque_rows;
-        union_fully_covered_opaque_rows += stats.union_fully_covered_opaque_rows;
-        last_stats = Some(stats);
+        last_stats = Some(renderer.render_at_presentation_tick(&mut pixels, tick)?);
         if tick == 0 {
             reference_pixel_hash = Some(frame_hash(&pixels));
         }
@@ -891,19 +880,6 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
             "active_cards": stats.active_cards,
             "cards_drawn": stats.cards_drawn,
             "cards_culled": stats.cards_culled,
-            "opaque_pixels": opaque_pixels,
-            "opaque_rows": opaque_rows,
-            "union_avoidable_opaque_pixels": union_avoidable_opaque_pixels,
-            "union_avoidable_opaque_rows": union_avoidable_opaque_rows,
-            "union_fully_covered_opaque_rows": union_fully_covered_opaque_rows,
-            "union_avoidable_opaque_pixel_pct": percent(
-                union_avoidable_opaque_pixels,
-                opaque_pixels,
-            ),
-            "union_avoidable_opaque_row_pct": percent(
-                union_avoidable_opaque_rows,
-                opaque_rows,
-            ),
             "phase_bank_resident_bytes": stats.phase_bank_resident_bytes,
         },
         "phase_summaries": phase_summaries,
@@ -943,14 +919,6 @@ fn pmu_counter_summary(samples: impl Iterator<Item = u64>) -> serde_json::Value 
         "min": samples.first().copied().unwrap_or(0),
         "max": samples.last().copied().unwrap_or(0),
     })
-}
-
-fn percent(part: usize, whole: usize) -> f64 {
-    if whole == 0 {
-        0.0
-    } else {
-        part as f64 * 100.0 / whole as f64
-    }
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
