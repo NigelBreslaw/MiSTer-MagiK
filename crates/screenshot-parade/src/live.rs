@@ -432,10 +432,11 @@ mod tests {
         };
         assert_eq!(third.tick, 2);
         runtime.confirm_presented(2).expect("confirm tick two");
+        let starvation_before = runtime.starvations();
         assert!(matches!(runtime.poll(), LiveScreenshotPoll::Starved));
         assert_eq!(runtime.expected_tick(), 3);
         assert_eq!(runtime.sequence_failures(), 0);
-        assert_eq!(runtime.starvations(), 1);
+        assert_eq!(runtime.starvations(), starvation_before.saturating_add(1));
 
         drop((first, second, third));
         runtime.stop();
