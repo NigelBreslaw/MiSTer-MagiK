@@ -342,6 +342,7 @@ impl PreparedScreenshotCard {
                 .sum::<usize>()
     }
 
+    #[cfg(test)]
     pub(crate) fn blit(
         &self,
         dst: &mut [Rgb565Pixel],
@@ -421,6 +422,7 @@ impl PreparedScreenshotCard {
         }
     }
 
+    #[cfg(test)]
     #[cold]
     #[inline(never)]
     pub(crate) fn blit_with_coverage_probe(
