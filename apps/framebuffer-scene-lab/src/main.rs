@@ -146,6 +146,17 @@ fn finish_frame_evidence(
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn timing_summary_json(samples: impl Iterator<Item = u64>) -> serde_json::Value {
+    let mut samples = samples.collect::<Vec<_>>();
+    let (average_us, p99_us, max_us) = sample_summary(&mut samples);
+    serde_json::json!({
+        "average_us": average_us,
+        "p99_us": p99_us,
+        "max_us": max_us,
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 fn write_measurement_evidence(
     assessment: &MeasurementEvidence,
     frames: &[FrameEvidence],
@@ -184,8 +195,66 @@ fn write_measurement_evidence(
         .filter_map(|frame| frame.screenshot.as_ref())
         .collect::<Vec<_>>();
     let screenshot_summary = (!screenshot_frames.is_empty()).then(|| {
+        let partial_edge_pixels = screenshot_frames
+            .iter()
+            .map(|frame| frame.partial_edge_pixels)
+            .sum::<usize>();
+        let exact_base_background_hits = screenshot_frames
+            .iter()
+            .map(|frame| frame.exact_base_background_hits)
+            .sum::<usize>();
         serde_json::json!({
             "samples": screenshot_frames.len(),
+            "card_adoption_timing": timing_summary_json(
+                screenshot_frames.iter().map(|frame| frame.card_adopt_us)
+            ),
+            "parade_advance_timing": timing_summary_json(
+                screenshot_frames.iter().map(|frame| frame.parade_advance_us)
+            ),
+            "background_timing": timing_summary_json(
+                screenshot_frames.iter().map(|frame| frame.background_us)
+            ),
+            "draw_order_timing": timing_summary_json(
+                screenshot_frames.iter().map(|frame| frame.draw_order_us)
+            ),
+            "tile_blit_timing": timing_summary_json(
+                screenshot_frames.iter().map(|frame| frame.tile_blit_us)
+            ),
+            "cards_adopted": screenshot_frames
+                .iter()
+                .map(|frame| frame.cards_adopted)
+                .sum::<usize>(),
+            "cards_culled": screenshot_frames
+                .iter()
+                .map(|frame| frame.cards_culled)
+                .sum::<usize>(),
+            "coverage_composite_calls": screenshot_frames
+                .iter()
+                .map(|frame| frame.coverage_composite_calls)
+                .sum::<usize>(),
+            "coverage_probe_frames": screenshot_frames
+                .iter()
+                .filter(|frame| frame.coverage_probe_sampled)
+                .count(),
+            "partial_edge_pixels": partial_edge_pixels,
+            "exact_base_background_hits": exact_base_background_hits,
+            "exact_base_background_hit_pct": if partial_edge_pixels == 0 {
+                0.0
+            } else {
+                exact_base_background_hits as f64 * 100.0 / partial_edge_pixels as f64
+            },
+            "preparation_overlap_frames": screenshot_frames
+                .iter()
+                .filter(|frame| frame.preparation_overlapped_render)
+                .count(),
+            "preparation_activity_transitions": screenshot_frames
+                .iter()
+                .map(|frame| u64::from(frame.preparation_activity_transitions))
+                .sum::<u64>(),
+            "preparation_stage_mask": screenshot_frames.iter().fold(0_u8, |mask, frame| {
+                mask | (1_u8 << frame.preparation_stage_start.min(7))
+                    | (1_u8 << frame.preparation_stage_end.min(7))
+            }),
             "phase_bank_resident_bytes": screenshot_frames
                 .iter()
                 .map(|frame| frame.phase_bank_resident_bytes)
@@ -954,6 +1023,21 @@ fn screenshot_frame_stats(
         cabinet_stages: None,
         intro_stages: None,
         screenshot: Some(mister_magik_framebuffer_scene_lab::ScreenshotFrameStats {
+            card_adopt_us: stats.card_adopt_us.min(u128::from(u64::MAX)) as u64,
+            cards_adopted: stats.cards_adopted,
+            parade_advance_us: stats.parade_advance_us.min(u128::from(u64::MAX)) as u64,
+            background_us: stats.background_us.min(u128::from(u64::MAX)) as u64,
+            draw_order_us: stats.draw_order_us.min(u128::from(u64::MAX)) as u64,
+            tile_blit_us: stats.tile_blit_us.min(u128::from(u64::MAX)) as u64,
+            cards_culled: stats.cards_culled,
+            coverage_composite_calls: stats.coverage_composite_calls,
+            coverage_probe_sampled: stats.coverage_probe_sampled,
+            partial_edge_pixels: stats.partial_edge_pixels,
+            exact_base_background_hits: stats.exact_base_background_hits,
+            preparation_overlapped_render: stats.preparation_overlapped_render,
+            preparation_activity_transitions: stats.preparation_activity_transitions,
+            preparation_stage_start: stats.preparation_stage_start,
+            preparation_stage_end: stats.preparation_stage_end,
             raster_held_cards: stats.raster_held_cards,
             raster_moved_cards: stats.raster_moved_cards,
             raster_hold_layer_mask: stats.raster_hold_layer_mask,
@@ -1586,6 +1670,14 @@ fn run_window(
                 if warmup_unit_flip_streak >= 3 {
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
+                        // Starting SIGPROF briefly stalls presentation while the profiler
+                        // installs its handler. Keep that work outside every measurement
+                        // bracket so FPGA repeats describe the sampled scene, not profiler
+                        // initialization.
+                        #[cfg(feature = "profile")]
+                        if profiler_requested {
+                            profiler = Some(cpu_profile::start(renderer.effect().label())?);
+                        }
                         let raw_telemetry_start =
                             presenter.presentation_telemetry().map_err(|error| {
                                 format!("read start FPGA presentation telemetry: {error}")
@@ -1625,10 +1717,6 @@ fn run_window(
                         next_rss_sample = Some(measured_at);
                         if measurement_evidence.is_some() {
                             vsync_observer = Some(vsync_observer::VsyncObserver::start()?);
-                        }
-                        #[cfg(feature = "profile")]
-                        if profiler_requested {
-                            profiler = Some(cpu_profile::start(renderer.effect().label())?);
                         }
                         println!(
                             "scene-lab-measurement state=started scene={} seconds={} warmup_seconds={}",
@@ -1743,6 +1831,21 @@ fn run_window(
             evidence.full_restore = copy.full_restore;
             evidence.visible_count = Some(stats.visible);
             evidence.screenshot = stats.screenshot.map(|screenshot| ScreenshotFrameDetails {
+                card_adopt_us: screenshot.card_adopt_us,
+                cards_adopted: screenshot.cards_adopted,
+                parade_advance_us: screenshot.parade_advance_us,
+                background_us: screenshot.background_us,
+                draw_order_us: screenshot.draw_order_us,
+                tile_blit_us: screenshot.tile_blit_us,
+                cards_culled: screenshot.cards_culled,
+                coverage_composite_calls: screenshot.coverage_composite_calls,
+                coverage_probe_sampled: screenshot.coverage_probe_sampled,
+                partial_edge_pixels: screenshot.partial_edge_pixels,
+                exact_base_background_hits: screenshot.exact_base_background_hits,
+                preparation_overlapped_render: screenshot.preparation_overlapped_render,
+                preparation_activity_transitions: screenshot.preparation_activity_transitions,
+                preparation_stage_start: screenshot.preparation_stage_start,
+                preparation_stage_end: screenshot.preparation_stage_end,
                 raster_held_cards: screenshot.raster_held_cards,
                 raster_moved_cards: screenshot.raster_moved_cards,
                 raster_hold_layer_mask: screenshot.raster_hold_layer_mask,
@@ -1855,7 +1958,7 @@ fn run_window(
                 telemetry,
             );
             println!(
-                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} software_estimated_dropped_frames={} ownership_losses={} telemetry_invariant={} telemetry_plausible={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_repeated_vblanks={} software_estimated_dropped_frames={} ownership_losses={} telemetry_invariant={} telemetry_plausible={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 renderer.effect().label(),
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
@@ -2194,6 +2297,10 @@ fn run_card_flip_mister(
                     let bounded = bounded.expect("bounded card run has duration");
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
+                        #[cfg(feature = "profile")]
+                        if profiler_requested {
+                            profiler = Some(cpu_profile::start("card-flip")?);
+                        }
                         let raw_telemetry_start =
                             presenter.presentation_telemetry().map_err(|error| {
                                 format!("read start FPGA presentation telemetry: {error}")
@@ -2231,10 +2338,6 @@ fn run_card_flip_mister(
                         next_rss_sample = Some(measured_at);
                         if assessment.is_some() {
                             vsync_observer = Some(vsync_observer::VsyncObserver::start()?);
-                        }
-                        #[cfg(feature = "profile")]
-                        if profiler_requested {
-                            profiler = Some(cpu_profile::start("card-flip")?);
                         }
                         println!(
                             "card-flip-measurement pass={} state=measuring seconds={} warmup_seconds={} warmup_full_slot_restores={} warmup_unit_flip_streak={}",
@@ -2595,7 +2698,7 @@ fn run_card_flip_mister(
                 telemetry,
             );
             println!(
-                "card-flip-cadence profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} dropped_frames={} software_estimated_dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "card-flip-cadence profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_repeated_vblanks={} software_estimated_dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
                 cadence.cadence_source,

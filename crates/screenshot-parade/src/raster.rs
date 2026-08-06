@@ -212,6 +212,13 @@ struct LinearPhaseRef<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct CoverageBlitStats {
+    pub composite_calls: usize,
+    pub partial_edge_pixels: usize,
+    pub exact_base_background_hits: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LinearRgb {
     r: u16,
     g: u16,
@@ -378,7 +385,7 @@ impl PreparedScreenshotCard {
         self.phases.resident_bytes()
     }
 
-    pub fn blit(
+    pub(crate) fn blit(
         &self,
         dst: &mut [Rgb565Pixel],
         screen_width: usize,
@@ -408,6 +415,36 @@ impl PreparedScreenshotCard {
                 x_fp,
                 y,
             ),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn blit_with_coverage_probe(
+        &self,
+        dst: &mut [Rgb565Pixel],
+        screen_width: usize,
+        screen_height: usize,
+        profile: ScreenshotSamplingProfile,
+        x_fp: i64,
+        y: isize,
+        base_background: Rgb565Pixel,
+    ) -> CoverageBlitStats {
+        if profile == ScreenshotSamplingProfile::CrtSixteenth {
+            blit_sixteenth_phase_probed(
+                dst,
+                screen_width,
+                screen_height,
+                &self.image,
+                &self.phases,
+                &self.corner_insets,
+                x_fp,
+                y,
+                base_background,
+            )
+        } else {
+            self.blit(dst, screen_width, screen_height, profile, x_fp, y);
+            CoverageBlitStats::default()
         }
     }
 }
@@ -1589,6 +1626,60 @@ fn blit_sixteenth_phase(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cold]
+#[inline(never)]
+fn blit_sixteenth_phase_probed(
+    dst: &mut [Rgb565Pixel],
+    screen_width: usize,
+    screen_height: usize,
+    image: &ScreenshotImage,
+    phase_set: &ParadePhaseSet,
+    corner_insets: &[u8],
+    x_fp: i64,
+    y: isize,
+    base_background: Rgb565Pixel,
+) -> CoverageBlitStats {
+    let quantized = quantize_phase(x_fp);
+    if let Some(base_coverage) = phase_set.base_coverage() {
+        if quantized.phase == 0 {
+            return blit_coverage_phase_probed(
+                dst,
+                screen_width,
+                screen_height,
+                image,
+                base_coverage,
+                quantized.x,
+                y,
+                base_background,
+            );
+        }
+        if let Some(shifted) = phase_set.linear_phase(quantized.phase) {
+            return blit_coverage_phase_probed(
+                dst,
+                screen_width,
+                screen_height,
+                shifted.image,
+                shifted.coverage,
+                quantized.x,
+                y,
+                base_background,
+            );
+        }
+    }
+    blit_sixteenth_phase(
+        dst,
+        screen_width,
+        screen_height,
+        image,
+        phase_set,
+        corner_insets,
+        x_fp,
+        y,
+    );
+    CoverageBlitStats::default()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn blit_coverage_phase(
     dst: &mut [Rgb565Pixel],
     screen_width: usize,
@@ -1647,6 +1738,85 @@ fn blit_coverage_phase(
             );
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cold]
+#[inline(never)]
+fn blit_coverage_phase_probed(
+    dst: &mut [Rgb565Pixel],
+    screen_width: usize,
+    screen_height: usize,
+    image: &ScreenshotImage,
+    coverage: &CoveragePlane,
+    x: isize,
+    y: isize,
+    base_background: Rgb565Pixel,
+) -> CoverageBlitStats {
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
+    let mut stats = CoverageBlitStats::default();
+    for source_y in 0..image.height {
+        let target_y = y + source_y as isize;
+        if target_y < 0 || target_y >= screen_height as isize {
+            continue;
+        }
+        let source_x0 = (-x).max(0) as usize;
+        let source_x1 = (screen_width as isize - x).clamp(0, image.width as isize) as usize;
+        if source_x1 <= source_x0 {
+            continue;
+        }
+        let source_row = source_y * image.stride;
+        let coverage_row = source_y * coverage.stride;
+        let target_row = target_y as usize * screen_width;
+        let span = coverage
+            .opaque_spans
+            .get(source_y)
+            .copied()
+            .unwrap_or_default();
+        let opaque_start = usize::from(span.start).clamp(source_x0, source_x1);
+        let opaque_end = usize::from(span.end).clamp(opaque_start, source_x1);
+        stats.composite_calls += (opaque_start - source_x0).saturating_add(source_x1 - opaque_end);
+        for source_x in source_x0..opaque_start {
+            let target = target_row + (x + source_x as isize) as usize;
+            let alpha = coverage.values[coverage_row + source_x];
+            if alpha != 0 && alpha != 255 {
+                stats.partial_edge_pixels += 1;
+                stats.exact_base_background_hits += usize::from(dst[target] == base_background);
+            }
+            composite_coverage_pixel(
+                dst,
+                target,
+                image.pixels[source_row + source_x],
+                alpha,
+                srgb_to_linear,
+                linear_to_srgb,
+            );
+        }
+        if opaque_end > opaque_start {
+            let target_start = target_row + (x + opaque_start as isize) as usize;
+            let copy_len = opaque_end - opaque_start;
+            dst[target_start..target_start + copy_len]
+                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+        }
+        for source_x in opaque_end..source_x1 {
+            let target = target_row + (x + source_x as isize) as usize;
+            let alpha = coverage.values[coverage_row + source_x];
+            if alpha != 0 && alpha != 255 {
+                stats.partial_edge_pixels += 1;
+                stats.exact_base_background_hits += usize::from(dst[target] == base_background);
+            }
+            composite_coverage_pixel(
+                dst,
+                target,
+                image.pixels[source_row + source_x],
+                alpha,
+                srgb_to_linear,
+                linear_to_srgb,
+            );
+        }
+    }
+    stats
 }
 
 fn composite_coverage_pixel(

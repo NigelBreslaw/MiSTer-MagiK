@@ -12,6 +12,7 @@ use mister_magik_framebuffer_scenes::{
 };
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -81,8 +82,16 @@ pub struct ScreenshotParadeStats {
     pub background_us: u128,
     pub draw_order_us: u128,
     pub tile_blit_us: u128,
+    pub coverage_composite_calls: usize,
+    pub coverage_probe_sampled: bool,
+    pub partial_edge_pixels: usize,
+    pub exact_base_background_hits: usize,
     pub cards_drawn: usize,
     pub cards_culled: usize,
+    pub preparation_overlapped_render: bool,
+    pub preparation_activity_transitions: u32,
+    pub preparation_stage_start: u8,
+    pub preparation_stage_end: u8,
     pub raster_held_cards: usize,
     pub raster_moved_cards: usize,
     pub raster_hold_layer_mask: u8,
@@ -199,6 +208,8 @@ pub struct ScreenshotParade {
     scale_tx: Sender<ScaleJob>,
     scale_rx: Receiver<ScaleResult>,
     scale_worker_connected: bool,
+    preparation_epoch: Arc<AtomicU32>,
+    preparation_stage: Arc<AtomicU8>,
     scale_queue_depth: usize,
     scale_queue_max: usize,
     layer_targets: [usize; SPEED_COUNT],
@@ -230,6 +241,10 @@ impl ScreenshotParade {
         let compressed_bytes = archive.compressed_bytes();
         let (scale_tx, job_rx) = mpsc::channel::<ScaleJob>();
         let (result_tx, scale_rx) = mpsc::channel::<ScaleResult>();
+        let preparation_epoch = Arc::new(AtomicU32::new(0));
+        let preparation_stage = Arc::new(AtomicU8::new(0));
+        let worker_preparation_epoch = Arc::clone(&preparation_epoch);
+        let worker_preparation_stage = Arc::clone(&preparation_stage);
         let worker_start = config.worker_start.clone();
         std::thread::Builder::new()
             .name("screenshot-parade-scale".to_owned())
@@ -237,7 +252,13 @@ impl ScreenshotParade {
                 if let Some(callback) = worker_start {
                     callback();
                 }
-                run_scale_worker(archive, job_rx, result_tx);
+                run_scale_worker(
+                    archive,
+                    job_rx,
+                    result_tx,
+                    worker_preparation_epoch,
+                    worker_preparation_stage,
+                );
             })
             .map_err(|error| format!("spawn screenshot parade scale worker: {error}"))?;
         let layer_targets = layer_targets(width, height);
@@ -269,6 +290,8 @@ impl ScreenshotParade {
             scale_tx,
             scale_rx,
             scale_worker_connected: true,
+            preparation_epoch,
+            preparation_stage,
             scale_queue_depth: 0,
             scale_queue_max: 0,
             layer_targets,
@@ -388,6 +411,8 @@ impl ScreenshotParade {
         self.previous_motion_ticks_fp = motion_ticks_fp;
         let width = self.geometry.width();
         let height = self.geometry.height();
+        let preparation_epoch_start = self.preparation_epoch.load(Ordering::Relaxed);
+        let preparation_stage_start = self.preparation_stage.load(Ordering::Relaxed);
 
         let background_start = Instant::now();
         render_background(pixels, width, height, motion_ticks_fp);
@@ -416,17 +441,45 @@ impl ScreenshotParade {
             raster_moved_cards += usize::from(tile.raster_moved_this_frame);
         }
         let tile_blit_start = Instant::now();
-        for &tile_index in &self.visible_draw_order {
-            let tile = &self.tiles[tile_index];
-            tile.raster.blit(
-                pixels,
-                width,
-                height,
-                self.sampling_profile.for_layer(tile.layer),
-                tile.x_fp,
-                tile.y,
-            );
+        let mut coverage_composite_calls = 0;
+        let mut partial_edge_pixels = 0;
+        let mut exact_base_background_hits = 0;
+        // Destination classification is diagnostic rather than presentation work.
+        // Sample it sparsely so the probe cannot materially change the deadline
+        // behavior it is intended to measure.
+        let coverage_probe_sampled = motion_ticks_fp / TICK_ONE as u64 % 64 == 0;
+        let base_background = color565(0, 0, 10);
+        if coverage_probe_sampled {
+            for &tile_index in &self.visible_draw_order {
+                let tile = &self.tiles[tile_index];
+                let blit_stats = tile.raster.blit_with_coverage_probe(
+                    pixels,
+                    width,
+                    height,
+                    self.sampling_profile.for_layer(tile.layer),
+                    tile.x_fp,
+                    tile.y,
+                    base_background,
+                );
+                coverage_composite_calls += blit_stats.composite_calls;
+                partial_edge_pixels += blit_stats.partial_edge_pixels;
+                exact_base_background_hits += blit_stats.exact_base_background_hits;
+            }
+        } else {
+            for &tile_index in &self.visible_draw_order {
+                let tile = &self.tiles[tile_index];
+                tile.raster.blit(
+                    pixels,
+                    width,
+                    height,
+                    self.sampling_profile.for_layer(tile.layer),
+                    tile.x_fp,
+                    tile.y,
+                );
+            }
         }
+        let preparation_epoch_end = self.preparation_epoch.load(Ordering::Relaxed);
+        let preparation_stage_end = self.preparation_stage.load(Ordering::Relaxed);
         self.stats = ScreenshotParadeStats {
             card_adopt_us,
             cards_adopted,
@@ -434,8 +487,18 @@ impl ScreenshotParade {
             background_us,
             draw_order_us,
             tile_blit_us: tile_blit_start.elapsed().as_micros(),
+            coverage_composite_calls,
+            coverage_probe_sampled,
+            partial_edge_pixels,
+            exact_base_background_hits,
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
+            preparation_overlapped_render: preparation_epoch_start & 1 != 0
+                || preparation_epoch_end != preparation_epoch_start,
+            preparation_activity_transitions: preparation_epoch_end
+                .wrapping_sub(preparation_epoch_start),
+            preparation_stage_start,
+            preparation_stage_end,
             raster_held_cards,
             raster_moved_cards,
             raster_hold_layer_mask,
@@ -1022,10 +1085,15 @@ fn run_scale_worker(
     mut archive: ResidentPreviewArchive,
     jobs: Receiver<ScaleJob>,
     results: Sender<ScaleResult>,
+    preparation_epoch: Arc<AtomicU32>,
+    preparation_stage: Arc<AtomicU8>,
 ) {
     while let Ok(job) = jobs.recv() {
+        preparation_stage.store(1, Ordering::Relaxed);
+        preparation_epoch.fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
         let card = archive.load_pixels_at(job.image_index).map(|pixels| {
+            preparation_stage.store(2, Ordering::Relaxed);
             let source = ScreenshotImage::from_preview(pixels);
             let (raster, phase_us) = PreparedScreenshotCard::prepare_timed(
                 &source,
@@ -1041,6 +1109,8 @@ fn run_scale_worker(
                 phase_us,
             }
         });
+        preparation_stage.store(0, Ordering::Relaxed);
+        preparation_epoch.fetch_add(1, Ordering::Relaxed);
         if results
             .send(ScaleResult {
                 tile_index: job.tile_index,

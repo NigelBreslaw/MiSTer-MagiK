@@ -378,6 +378,21 @@ pub struct FrameStats {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScreenshotFrameStats {
+    pub card_adopt_us: u64,
+    pub cards_adopted: usize,
+    pub parade_advance_us: u64,
+    pub background_us: u64,
+    pub draw_order_us: u64,
+    pub tile_blit_us: u64,
+    pub cards_culled: usize,
+    pub coverage_composite_calls: usize,
+    pub coverage_probe_sampled: bool,
+    pub partial_edge_pixels: usize,
+    pub exact_base_background_hits: usize,
+    pub preparation_overlapped_render: bool,
+    pub preparation_activity_transitions: u32,
+    pub preparation_stage_start: u8,
+    pub preparation_stage_end: u8,
     pub raster_held_cards: usize,
     pub raster_moved_cards: usize,
     pub raster_hold_layer_mask: u8,
