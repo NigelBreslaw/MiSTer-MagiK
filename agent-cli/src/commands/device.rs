@@ -222,10 +222,6 @@ pub struct SceneLabArgs {
     #[arg(long)]
     pub(crate) seed: Option<String>,
     #[arg(long, value_enum)]
-    pub(crate) sampling_profile: Option<SceneLabSamplingProfile>,
-    #[arg(long, value_enum)]
-    pub(crate) phase_generation: Option<SceneLabPhaseGeneration>,
-    #[arg(long, value_enum)]
     pub(crate) replacement_mode: Option<SceneLabReplacementMode>,
     #[arg(long)]
     pub(crate) case: Option<String>,
@@ -242,30 +238,6 @@ pub struct SceneLabArgs {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabSamplingProfile {
-    #[value(alias = "hdmi")]
-    LegacyHalf,
-    #[value(alias = "crt")]
-    Sixteenth,
-}
-
-impl SceneLabSamplingProfile {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::LegacyHalf => "legacy-half",
-            Self::Sixteenth => "sixteenth",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabPhaseGeneration {
-    TwoTap,
-    LinearLanczos3,
-    LinearLanczos3Neon,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum SceneLabReplacementMode {
     Prepare,
     Recycle,
@@ -276,16 +248,6 @@ impl SceneLabReplacementMode {
         match self {
             Self::Prepare => "prepare",
             Self::Recycle => "recycle",
-        }
-    }
-}
-
-impl SceneLabPhaseGeneration {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::TwoTap => "two-tap",
-            Self::LinearLanczos3 => "linear-lanczos3",
-            Self::LinearLanczos3Neon => "linear-lanczos3-neon",
         }
     }
 }
@@ -410,8 +372,6 @@ pub fn run_scene_lab(
             recipe: args.recipe.as_deref(),
             fixture: args.fixture.as_deref(),
             seed,
-            sampling_profile: args.sampling_profile.map(SceneLabSamplingProfile::as_str),
-            phase_generation: args.phase_generation.map(SceneLabPhaseGeneration::as_str),
             replacement_mode: args.replacement_mode.map(SceneLabReplacementMode::as_str),
             case: args.case.as_deref(),
             seconds: args.seconds,

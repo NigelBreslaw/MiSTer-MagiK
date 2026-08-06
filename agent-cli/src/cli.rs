@@ -530,39 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_scene_lab_accepts_semantic_profiles_and_compatibility_aliases() {
-        for profile in ["legacy-half", "sixteenth", "hdmi", "crt"] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "device",
-                    "scene-lab",
-                    "--scene",
-                    "screenshot-screensaver",
-                    "--sampling-profile",
-                    profile,
-                    "--attended",
-                ])
-                .is_ok(),
-                "profile={profile}",
-            );
-        }
-        for generation in ["two-tap", "linear-lanczos3"] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "device",
-                    "scene-lab",
-                    "--scene",
-                    "screenshot-screensaver",
-                    "--phase-generation",
-                    generation,
-                    "--attended",
-                ])
-                .is_ok(),
-                "generation={generation}",
-            );
-        }
+    fn screenshot_scene_lab_accepts_replacement_modes() {
         for replacement_mode in ["prepare", "recycle"] {
             assert!(
                 Cli::try_parse_from([

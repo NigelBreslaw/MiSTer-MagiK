@@ -18,8 +18,7 @@ use mister_magik_particles::reload::{
 };
 use mister_magik_screenshot_parade::{
     ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats, ScreenshotPhaseGeneration,
-    ScreenshotSamplingProfile,
+    ScreenshotParadeStartup, ScreenshotParadeStats,
 };
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
@@ -454,13 +453,6 @@ pub struct ScreensaverFrameTrace {
     pub(super) particle_renderer_scratch_bytes: usize,
 }
 
-fn shared_sampling_profile(profile: ParadeSamplingProfile) -> ScreenshotSamplingProfile {
-    match profile {
-        ParadeSamplingProfile::LegacyHalf => ScreenshotSamplingProfile::HdmiLegacyHalf,
-        ParadeSamplingProfile::CrtSixteenth => ScreenshotSamplingProfile::CrtSixteenth,
-    }
-}
-
 fn shared_parade_trace(
     stats: ScreenshotParadeStats,
     profile: ParadeSamplingProfile,
@@ -835,8 +827,6 @@ impl LauncherScreensaver {
                     ScreenshotParadeConfig {
                         geometry,
                         seed: self.parade_seed,
-                        sampling_profile: shared_sampling_profile(self.parade_sampling_profile),
-                        phase_generation: ScreenshotPhaseGeneration::LinearLanczos3Neon,
                         startup: ScreenshotParadeStartup::Streaming,
                         replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                         worker_start: Some(worker_start),
@@ -926,8 +916,6 @@ impl LauncherScreensaver {
             ScreenshotParadeConfig {
                 geometry,
                 seed,
-                sampling_profile: shared_sampling_profile(sampling_profile),
-                phase_generation: ScreenshotPhaseGeneration::LinearLanczos3Neon,
                 startup: ScreenshotParadeStartup::Streaming,
                 replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
@@ -4444,106 +4432,6 @@ mod tests {
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&pixels);
         std::fs::write(path, bytes).expect("write production screensaver archive fixture");
-    }
-
-    fn write_parade_archive(path: &std::path::Path, count: usize) {
-        let names = (0..count)
-            .map(|index| format!("fixture-{index:03}.rgb565"))
-            .collect::<Vec<_>>();
-        let header_len = 8 + 4;
-        let entry_len = |name: &str| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
-        let index_len = header_len + names.iter().map(|name| entry_len(name)).sum::<usize>();
-        let mut offset = index_len as u64;
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"MMPX2B1\0");
-        bytes.extend_from_slice(&(count as u32).to_le_bytes());
-        for name in &names {
-            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-            bytes.extend_from_slice(&4_u32.to_le_bytes());
-            bytes.extend_from_slice(&4_u32.to_le_bytes());
-            bytes.extend_from_slice(&8_u32.to_le_bytes());
-            bytes.extend_from_slice(&32_u32.to_le_bytes());
-            bytes.push(1);
-            bytes.extend_from_slice(&32_u32.to_le_bytes());
-            bytes.extend_from_slice(&offset.to_le_bytes());
-            bytes.extend_from_slice(name.as_bytes());
-            offset += 32;
-        }
-        for image in 0..count {
-            for pixel in 0..16_u16 {
-                let value = (image as u16).wrapping_mul(97).wrapping_add(pixel * 31);
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        std::fs::write(path, bytes).expect("write screenshot parade archive fixture");
-    }
-
-    #[test]
-    fn shared_parade_matches_private_renderer_at_fixed_seeds_and_times() {
-        let path = std::env::temp_dir().join(format!(
-            "mister-magik-shared-parade-parity-{}.mmlz4b",
-            std::process::id()
-        ));
-        write_parade_archive(&path, 220);
-        let seed = 0x4d61_6769_4b54_696c;
-        for (width, height, profile) in [
-            (960, 540, ParadeSamplingProfile::LegacyHalf),
-            (640, 480, ParadeSamplingProfile::CrtSixteenth),
-        ] {
-            let archive = preview_worker::ResidentPreviewArchive::open(&path).unwrap();
-            let keys = archive.asset_keys().to_vec();
-            let mut private = ParadeState::new_with_archive(seed, archive, profile);
-            assert!(private.ensure_archive_initialized_cancellable(
-                keys,
-                width,
-                height,
-                &AtomicBool::new(false)
-            ));
-            let archive = preview_worker::ResidentPreviewArchive::open(&path).unwrap();
-            let geometry = SceneGeometry::new(width, height, width).unwrap();
-            let mut shared = ScreenshotParade::new(
-                archive,
-                ScreenshotParadeConfig {
-                    geometry,
-                    seed,
-                    sampling_profile: shared_sampling_profile(profile),
-                    // This is a migration-parity fixture for the retired private
-                    // two-tap rasterizer. Production high-precision reconstruction
-                    // has separate scalar/NEON identity coverage in the shared crate.
-                    phase_generation: ScreenshotPhaseGeneration::Rgb565TwoTap,
-                    startup: ScreenshotParadeStartup::Prepared,
-                    replacement_mode: ScreenshotParadeReplacementMode::Prepare,
-                    worker_start: None,
-                    preparation_slack: None,
-                },
-            )
-            .unwrap();
-            let mut private_pixels = vec![Rgb565Pixel(0); width * height];
-            let mut shared_pixels = vec![SharedRgb565Pixel(0); width * height];
-            let mut previous_ticks = 0_u64;
-            for milliseconds in [0_u64, 17, 33, 250, 1_000] {
-                let elapsed = Duration::from_millis(milliseconds);
-                let ticks = parade_tick_delta_fp(elapsed) as u64;
-                let _ = render_archive_parade(
-                    &mut private_pixels,
-                    &mut private,
-                    width,
-                    height,
-                    ticks,
-                    ticks.saturating_sub(previous_ticks) as i64,
-                );
-                shared.render_at(&mut shared_pixels, elapsed).unwrap();
-                assert!(
-                    private_pixels
-                        .iter()
-                        .zip(&shared_pixels)
-                        .all(|(private, shared)| private.0 == shared.0),
-                    "parade pixels differ at {width}x{height} time={milliseconds}ms"
-                );
-                previous_ticks = ticks;
-            }
-        }
-        let _ = std::fs::remove_file(path);
     }
 
     fn test_images(count: usize) -> Vec<SaverImage> {

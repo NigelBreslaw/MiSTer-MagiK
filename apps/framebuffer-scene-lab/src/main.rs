@@ -29,8 +29,7 @@ use mister_magik_particles::cabinet::{
 };
 use mister_magik_screenshot_parade::{
     PreparationSlack, ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats, ScreenshotPhaseGeneration,
-    ScreenshotSamplingProfile,
+    ScreenshotParadeStartup, ScreenshotParadeStats,
 };
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use mister_magik_screenshot_parade::{
@@ -376,8 +375,6 @@ fn main() -> Result<(), String> {
             let scene = screenshot_scene(
                 archive,
                 options.seed,
-                options.sampling_profile,
-                options.phase_generation,
                 options.replacement_mode,
                 ScreenshotParadeStartup::Prepared,
                 SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
@@ -396,8 +393,6 @@ fn main() -> Result<(), String> {
             return render_screenshot_headless(
                 archive,
                 options.seed,
-                options.sampling_profile,
-                options.phase_generation,
                 options.replacement_mode,
                 options
                     .time_ms
@@ -409,8 +404,6 @@ fn main() -> Result<(), String> {
             SceneSource::Screenshot {
                 archive: archive.to_path_buf(),
                 seed: options.seed,
-                sampling_profile: options.sampling_profile,
-                phase_generation: options.phase_generation,
                 replacement_mode: options.replacement_mode,
             },
             None,
@@ -698,8 +691,6 @@ enum SceneSource {
     Screenshot {
         archive: PathBuf,
         seed: u64,
-        sampling_profile: ScreenshotSamplingProfile,
-        phase_generation: ScreenshotPhaseGeneration,
         replacement_mode: ScreenshotParadeReplacementMode,
     },
 }
@@ -707,8 +698,6 @@ enum SceneSource {
 fn screenshot_scene(
     archive_path: &Path,
     seed: u64,
-    sampling_profile: ScreenshotSamplingProfile,
-    phase_generation: ScreenshotPhaseGeneration,
     replacement_mode: ScreenshotParadeReplacementMode,
     startup: ScreenshotParadeStartup,
     geometry: SceneGeometry,
@@ -719,8 +708,6 @@ fn screenshot_scene(
         ScreenshotParadeConfig {
             geometry,
             seed,
-            sampling_profile,
-            phase_generation,
             startup,
             replacement_mode,
             worker_start: Some(std::sync::Arc::new(|| {
@@ -736,8 +723,6 @@ fn screenshot_scene(
 fn render_screenshot_headless(
     archive_path: &Path,
     seed: u64,
-    sampling_profile: ScreenshotSamplingProfile,
-    phase_generation: ScreenshotPhaseGeneration,
     replacement_mode: ScreenshotParadeReplacementMode,
     time_ms: u64,
     output: &Path,
@@ -745,8 +730,6 @@ fn render_screenshot_headless(
     let mut renderer = screenshot_scene(
         archive_path,
         seed,
-        sampling_profile,
-        phase_generation,
         replacement_mode,
         ScreenshotParadeStartup::Prepared,
         SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
@@ -896,14 +879,10 @@ impl LabScene {
             SceneSource::Screenshot {
                 archive,
                 seed,
-                sampling_profile,
-                phase_generation,
                 replacement_mode,
             } => screenshot_scene(
                 &archive,
                 seed,
-                sampling_profile,
-                phase_generation,
                 replacement_mode,
                 match replacement_mode {
                     ScreenshotParadeReplacementMode::Prepare => ScreenshotParadeStartup::Streaming,
@@ -3276,10 +3255,6 @@ struct Options {
     fixture: Option<NavigationFixture>,
     seed: u64,
     seed_requested: bool,
-    sampling_profile: ScreenshotSamplingProfile,
-    sampling_profile_requested: bool,
-    phase_generation: ScreenshotPhaseGeneration,
-    phase_generation_requested: bool,
     replacement_mode: ScreenshotParadeReplacementMode,
     replacement_mode_requested: bool,
     time_ms: Option<u64>,
@@ -3303,10 +3278,6 @@ impl Options {
         let mut fixture = None;
         let mut seed = DEFAULT_SCREENSHOT_SEED;
         let mut seed_requested = false;
-        let mut sampling_profile = ScreenshotSamplingProfile::HdmiLegacyHalf;
-        let mut sampling_profile_requested = false;
-        let mut phase_generation = ScreenshotPhaseGeneration::LinearLanczos3;
-        let mut phase_generation_requested = false;
         let mut replacement_mode = ScreenshotParadeReplacementMode::Prepare;
         let mut replacement_mode_requested = false;
         let mut scene = None;
@@ -3340,39 +3311,6 @@ impl Options {
                     let value = arguments.next().ok_or("--seed requires an integer")?;
                     seed = parse_seed(&value)?;
                     seed_requested = true;
-                }
-                "--sampling-profile" => {
-                    let value = arguments
-                        .next()
-                        .ok_or("--sampling-profile requires legacy-half or sixteenth")?;
-                    sampling_profile = match value.as_str() {
-                        "legacy-half" | "hdmi" => ScreenshotSamplingProfile::HdmiLegacyHalf,
-                        "sixteenth" | "crt" => ScreenshotSamplingProfile::CrtSixteenth,
-                        _ => {
-                            return Err(format!(
-                                "invalid sampling profile {value:?}; expected legacy-half or sixteenth"
-                            ));
-                        }
-                    };
-                    sampling_profile_requested = true;
-                }
-                "--phase-generation" => {
-                    let value = arguments
-                        .next()
-                        .ok_or(
-                            "--phase-generation requires two-tap, linear-lanczos3, or linear-lanczos3-neon",
-                        )?;
-                    phase_generation = match value.as_str() {
-                        "two-tap" => ScreenshotPhaseGeneration::Rgb565TwoTap,
-                        "linear-lanczos3" => ScreenshotPhaseGeneration::LinearLanczos3,
-                        "linear-lanczos3-neon" => ScreenshotPhaseGeneration::LinearLanczos3Neon,
-                        _ => {
-                            return Err(format!(
-                                "invalid phase generation {value:?}; expected two-tap, linear-lanczos3, or linear-lanczos3-neon"
-                            ));
-                        }
-                    };
-                    phase_generation_requested = true;
                 }
                 "--replacement-mode" => {
                     let value = arguments
@@ -3498,10 +3436,6 @@ impl Options {
             fixture,
             seed,
             seed_requested,
-            sampling_profile,
-            sampling_profile_requested,
-            phase_generation,
-            phase_generation_requested,
             replacement_mode,
             replacement_mode_requested,
             time_ms,
@@ -3554,14 +3488,10 @@ impl Options {
             return Err("--duration-ms and --direction are valid only for card-flip".into());
         }
         if self.scene != EffectKind::ScreenshotScreensaver
-            && (self.archive.is_some()
-                || self.seed_requested
-                || self.sampling_profile_requested
-                || self.phase_generation_requested
-                || self.replacement_mode_requested)
+            && (self.archive.is_some() || self.seed_requested || self.replacement_mode_requested)
         {
             return Err(
-                "--archive, --seed, --sampling-profile, --phase-generation, and --replacement-mode are valid only for screenshot-screensaver".into(),
+                "--archive, --seed, and --replacement-mode are valid only for screenshot-screensaver".into(),
             );
         }
         match self.scene {
@@ -3633,7 +3563,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--sampling-profile legacy-half|sixteenth] [--phase-generation two-tap|linear-lanczos3] [--replacement-mode prepare|recycle]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--replacement-mode prepare|recycle]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
@@ -4221,73 +4151,23 @@ mod tests {
             PathBuf::from("/tmp/card-assessment")
         );
 
-        for (profile, expected) in [
-            ("legacy-half", ScreenshotSamplingProfile::HdmiLegacyHalf),
-            ("hdmi", ScreenshotSamplingProfile::HdmiLegacyHalf),
-            ("sixteenth", ScreenshotSamplingProfile::CrtSixteenth),
-            ("crt", ScreenshotSamplingProfile::CrtSixteenth),
-        ] {
-            let screenshot = Options::parse(
-                [
-                    "--scene",
-                    "screenshot-screensaver",
-                    "--archive",
-                    "screenshots.mmlz4b",
-                    "--seed",
-                    "0x1234",
-                    "--sampling-profile",
-                    profile,
-                ]
-                .map(String::from),
-            )
-            .unwrap();
-            assert_eq!(
-                screenshot.archive,
-                Some(PathBuf::from("screenshots.mmlz4b"))
-            );
-            assert_eq!(screenshot.seed, 0x1234);
-            assert_eq!(screenshot.sampling_profile, expected, "profile={profile}");
-            assert_eq!(
-                screenshot.phase_generation,
-                ScreenshotPhaseGeneration::LinearLanczos3
-            );
-        }
-        let two_tap = Options::parse(
+        let screenshot = Options::parse(
             [
                 "--scene",
                 "screenshot-screensaver",
                 "--archive",
                 "screenshots.mmlz4b",
-                "--sampling-profile",
-                "sixteenth",
-                "--phase-generation",
-                "two-tap",
+                "--seed",
+                "0x1234",
             ]
             .map(String::from),
         )
         .unwrap();
         assert_eq!(
-            two_tap.phase_generation,
-            ScreenshotPhaseGeneration::Rgb565TwoTap
+            screenshot.archive,
+            Some(PathBuf::from("screenshots.mmlz4b"))
         );
-        let neon = Options::parse(
-            [
-                "--scene",
-                "screenshot-screensaver",
-                "--archive",
-                "screenshots.mmlz4b",
-                "--sampling-profile",
-                "sixteenth",
-                "--phase-generation",
-                "linear-lanczos3-neon",
-            ]
-            .map(String::from),
-        )
-        .unwrap();
-        assert_eq!(
-            neon.phase_generation,
-            ScreenshotPhaseGeneration::LinearLanczos3Neon
-        );
+        assert_eq!(screenshot.seed, 0x1234);
     }
 
     #[test]

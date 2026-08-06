@@ -8,10 +8,7 @@ mod reservoir;
 mod schedule;
 mod slack;
 
-pub use raster::{
-    PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotPhaseGeneration,
-    ScreenshotSamplingProfile,
-};
+pub use raster::{PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage};
 pub use reservoir::{
     STRICT_READY_CAPACITY, STRICT_RENDER_BUFFER_COUNT, StrictFrameConsumer, StrictFramePoll,
     StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,

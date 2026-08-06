@@ -50,8 +50,6 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) recipe: Option<&'a Path>,
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
-    pub(crate) sampling_profile: Option<&'static str>,
-    pub(crate) phase_generation: Option<&'static str>,
     pub(crate) replacement_mode: Option<&'static str>,
     pub(crate) case: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
@@ -80,8 +78,6 @@ struct RemoteLabRequest {
 struct RemoteScreenshotArgs {
     archive: &'static str,
     seed: u64,
-    sampling_profile: &'static str,
-    phase_generation: &'static str,
     replacement_mode: &'static str,
     fingerprint: String,
 }
@@ -113,8 +109,6 @@ pub(super) fn run(
                     recipe: Some(recipe),
                     fixture: None,
                     seed: None,
-                    sampling_profile: None,
-                    phase_generation: None,
                     replacement_mode: None,
                     case: None,
                     seconds: None,
@@ -150,8 +144,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         recipe,
         fixture,
         seed,
-        sampling_profile,
-        phase_generation,
         replacement_mode,
         case,
         seconds,
@@ -168,8 +160,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         Some(RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
-            sampling_profile: sampling_profile.unwrap_or("sixteenth"),
-            phase_generation: phase_generation.unwrap_or("linear-lanczos3"),
             replacement_mode: replacement_mode.unwrap_or("prepare"),
             fingerprint,
         })
@@ -843,8 +833,8 @@ fn prepare_scene_evidence_output(
         "screenshot_pack": screenshot.map(|screenshot| json!({
             "path": screenshot.archive,
             "fingerprint": screenshot.fingerprint,
-            "sampling_profile": screenshot.sampling_profile,
-            "phase_generation": screenshot.phase_generation,
+            "sampling_profile": "sixteenth",
+            "phase_generation": "linear-lanczos3-neon-with-scalar-fallback",
             "replacement_mode": screenshot.replacement_mode,
         })),
         "fixture": fixture,
@@ -1690,12 +1680,10 @@ fn remote_scene_arguments(
         format!("--scene {} --fixture {}", sh(scene), sh(fixture))
     } else if let Some(screenshot) = screenshot {
         format!(
-            "--scene {} --archive {} --seed {} --sampling-profile {} --phase-generation {} --replacement-mode {}",
+            "--scene {} --archive {} --seed {} --replacement-mode {}",
             sh(scene),
             sh(screenshot.archive),
             screenshot.seed,
-            sh(screenshot.sampling_profile),
-            sh(screenshot.phase_generation),
             sh(screenshot.replacement_mode)
         )
     } else {
@@ -1912,12 +1900,10 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_lab_uses_installed_pack_seed_and_route_profile() {
+    fn screenshot_lab_uses_installed_pack_seed_and_replacement_mode() {
         let screenshot = RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 0x1234,
-            sampling_profile: "crt",
-            phase_generation: "linear-lanczos3",
             replacement_mode: "recycle",
             fingerprint: "bytes=1 sha256=test".into(),
         };
@@ -1935,8 +1921,6 @@ mod tests {
         );
         assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
         assert!(run.contains("--seed 4660"));
-        assert!(run.contains(&format!("--sampling-profile {}", sh("crt"))));
-        assert!(run.contains(&format!("--phase-generation {}", sh("linear-lanczos3"))));
         assert!(run.contains(&format!("--replacement-mode {}", sh("recycle"))));
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
@@ -1985,8 +1969,6 @@ mod tests {
         let screenshot = RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 7,
-            sampling_profile: "hdmi",
-            phase_generation: "two-tap",
             replacement_mode: "prepare",
             fingerprint: "bytes=1 sha256=test".into(),
         };

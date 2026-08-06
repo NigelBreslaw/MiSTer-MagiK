@@ -19,33 +19,9 @@ const COVERAGE_SAMPLES_PER_AXIS: usize = 8;
 const COVERAGE_SAMPLE_COUNT: usize = COVERAGE_SAMPLES_PER_AXIS * COVERAGE_SAMPLES_PER_AXIS;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScreenshotSamplingProfile {
-    HdmiLegacyHalf,
-    CrtSixteenth,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScreenshotPhaseGeneration {
-    Rgb565TwoTap,
-    LinearLanczos3,
-    LinearLanczos3Neon,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinearPhaseKernel {
     Scalar,
     Neon,
-}
-
-impl ScreenshotSamplingProfile {
-    #[must_use]
-    pub const fn for_layer(self, layer: usize) -> Self {
-        if matches!(self, Self::CrtSixteenth) || layer == PARADE_MIN_TILE_SPEED {
-            Self::CrtSixteenth
-        } else {
-            Self::HdmiLegacyHalf
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,8 +63,6 @@ impl ScreenshotImage {
 
 #[derive(Clone)]
 enum ParadePhaseSet {
-    LegacyHalf(ScreenshotImage),
-    SixteenthTwoTap(Box<[ScreenshotImage; CRT_SHIFTED_PHASE_COUNT]>),
     SixteenthLinear {
         base_coverage: CoveragePlane,
         shifted: Box<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]>,
@@ -96,46 +70,8 @@ enum ParadePhaseSet {
 }
 
 impl ParadePhaseSet {
-    fn prepare_two_tap(image: &ScreenshotImage, profile: ScreenshotSamplingProfile) -> Self {
-        match profile {
-            ScreenshotSamplingProfile::HdmiLegacyHalf => {
-                Self::LegacyHalf(prepare_fractional_shifted(image, 128))
-            }
-            ScreenshotSamplingProfile::CrtSixteenth => {
-                let phases = std::array::from_fn(|index| {
-                    prepare_fractional_shifted(image, ((index + 1) * CRT_PHASE_STEP) as u8)
-                });
-                Self::SixteenthTwoTap(Box::new(phases))
-            }
-        }
-    }
-
-    fn legacy_half(&self) -> &ScreenshotImage {
-        match self {
-            Self::LegacyHalf(image) => image,
-            Self::SixteenthTwoTap(phases) => &phases[CRT_PHASE_COUNT / 2 - 1],
-            Self::SixteenthLinear { shifted, .. } => &shifted[CRT_PHASE_COUNT / 2 - 1].image,
-        }
-    }
-
-    fn two_tap_phase(&self, phase: usize) -> Option<&ScreenshotImage> {
-        if phase == 0 || phase >= CRT_PHASE_COUNT {
-            return None;
-        }
-        match self {
-            Self::SixteenthTwoTap(phases) => phases.get(phase - 1),
-            Self::LegacyHalf(_) | Self::SixteenthLinear { .. } => None,
-        }
-    }
-
     fn linear_phase(&self, phase: usize) -> Option<LinearPhaseRef<'_>> {
-        let Self::SixteenthLinear {
-            base_coverage: _,
-            shifted,
-        } = self
-        else {
-            return None;
-        };
+        let Self::SixteenthLinear { shifted, .. } = self;
         if phase == 0 {
             None
         } else {
@@ -146,20 +82,13 @@ impl ParadePhaseSet {
         }
     }
 
-    fn base_coverage(&self) -> Option<&CoveragePlane> {
-        match self {
-            Self::SixteenthLinear { base_coverage, .. } => Some(base_coverage),
-            Self::LegacyHalf(_) | Self::SixteenthTwoTap(_) => None,
-        }
+    fn base_coverage(&self) -> &CoveragePlane {
+        let Self::SixteenthLinear { base_coverage, .. } = self;
+        base_coverage
     }
 
     fn resident_bytes(&self) -> usize {
         match self {
-            Self::LegacyHalf(image) => image.pixels.len() * size_of::<Rgb565Pixel>(),
-            Self::SixteenthTwoTap(phases) => phases
-                .iter()
-                .map(|image| image.pixels.len() * size_of::<Rgb565Pixel>())
-                .sum(),
             Self::SixteenthLinear {
                 base_coverage,
                 shifted,
@@ -275,53 +204,58 @@ pub struct PreparedScreenshotCard {
 
 impl PreparedScreenshotCard {
     #[must_use]
-    pub fn prepare(
-        source: &ScreenshotImage,
-        speed: usize,
-        screen_height: usize,
-        profile: ScreenshotSamplingProfile,
-    ) -> Self {
-        Self::prepare_with_generation(
-            source,
-            speed,
-            screen_height,
-            profile,
-            ScreenshotPhaseGeneration::Rgb565TwoTap,
-        )
+    pub fn prepare(source: &ScreenshotImage, speed: usize, screen_height: usize) -> Self {
+        Self::prepare_timed(source, speed, screen_height, None).0
     }
 
-    #[must_use]
-    pub fn prepare_with_generation(
+    #[cfg(test)]
+    fn prepare_with_kernel(
         source: &ScreenshotImage,
         speed: usize,
         screen_height: usize,
-        profile: ScreenshotSamplingProfile,
-        phase_generation: ScreenshotPhaseGeneration,
+        kernel: LinearPhaseKernel,
     ) -> Self {
-        Self::prepare_timed(
-            source,
-            speed,
-            screen_height,
-            profile,
-            phase_generation,
-            None,
-        )
-        .0
+        Self::prepare_timed_with_kernel(source, speed, screen_height, kernel, None).0
     }
 
     pub(crate) fn prepare_timed(
         source: &ScreenshotImage,
         speed: usize,
         screen_height: usize,
-        profile: ScreenshotSamplingProfile,
-        phase_generation: ScreenshotPhaseGeneration,
+        preparation_slack: Option<&PreparationSlack>,
+    ) -> (Self, u128) {
+        Self::prepare_timed_with_kernel(
+            source,
+            speed,
+            screen_height,
+            LinearPhaseKernel::Neon,
+            preparation_slack,
+        )
+    }
+
+    fn prepare_timed_with_kernel(
+        source: &ScreenshotImage,
+        speed: usize,
+        screen_height: usize,
+        kernel: LinearPhaseKernel,
         preparation_slack: Option<&PreparationSlack>,
     ) -> (Self, u128) {
         if source.width == 0 || source.height == 0 {
             let image = ScreenshotImage::empty();
+            let empty_phase = PreparedLinearPhase {
+                image: image.clone(),
+                coverage: CoveragePlane {
+                    rows: Vec::new(),
+                    partial_samples: Vec::new(),
+                    width: 0,
+                },
+            };
             return (
                 Self {
-                    phases: ParadePhaseSet::prepare_two_tap(&image, profile),
+                    phases: ParadePhaseSet::SixteenthLinear {
+                        base_coverage: empty_phase.coverage.clone(),
+                        shifted: Box::new(std::array::from_fn(|_| empty_phase.clone())),
+                    },
                     image,
                     corner_insets: Vec::new(),
                 },
@@ -329,75 +263,49 @@ impl PreparedScreenshotCard {
             );
         }
         let (width, height, tint) = scaled_style(source, speed, screen_height);
-        if matches!(
-            phase_generation,
-            ScreenshotPhaseGeneration::LinearLanczos3
-                | ScreenshotPhaseGeneration::LinearLanczos3Neon
-        ) && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
-        {
-            let kernel = match phase_generation {
-                ScreenshotPhaseGeneration::LinearLanczos3Neon => LinearPhaseKernel::Neon,
-                ScreenshotPhaseGeneration::LinearLanczos3
-                | ScreenshotPhaseGeneration::Rgb565TwoTap => LinearPhaseKernel::Scalar,
-            };
-            if matches!(kernel, LinearPhaseKernel::Neon) {
-                validate_neon_phase_kernel();
+        if matches!(kernel, LinearPhaseKernel::Neon) {
+            validate_neon_phase_kernel();
+        }
+        let mut styled =
+            scale_lanczos3_linear_tinted(source, width, height, tint, preparation_slack);
+        apply_depth_cues_linear(&mut styled, speed, preparation_slack);
+        let coverage = prepare_rounded_coverage(width, height, preparation_slack);
+        let corner_insets = coverage_corner_insets(&coverage, width, height, preparation_slack);
+        let phase_started = std::time::Instant::now();
+        let premultiplied = premultiply_linear_source(&styled, &coverage, preparation_slack);
+        let source_opaque_spans =
+            coverage_opaque_spans(&coverage, width, height, preparation_slack);
+        let base = prepare_linear_phase(
+            &styled,
+            &coverage,
+            &source_opaque_spans,
+            &premultiplied,
+            0,
+            kernel,
+            preparation_slack,
+        );
+        let shifted = std::array::from_fn(|index| {
+            if let Some(slack) = preparation_slack {
+                slack.checkpoint();
             }
-            let mut styled =
-                scale_lanczos3_linear_tinted(source, width, height, tint, preparation_slack);
-            apply_depth_cues_linear(&mut styled, speed, preparation_slack);
-            let coverage = prepare_rounded_coverage(width, height, preparation_slack);
-            let corner_insets = coverage_corner_insets(&coverage, width, height, preparation_slack);
-            let phase_started = std::time::Instant::now();
-            let premultiplied = premultiply_linear_source(&styled, &coverage, preparation_slack);
-            let source_opaque_spans =
-                coverage_opaque_spans(&coverage, width, height, preparation_slack);
-            let base = prepare_linear_phase(
+            prepare_linear_phase(
                 &styled,
                 &coverage,
                 &source_opaque_spans,
                 &premultiplied,
-                0,
+                index + 1,
                 kernel,
                 preparation_slack,
-            );
-            let shifted = std::array::from_fn(|index| {
-                if let Some(slack) = preparation_slack {
-                    slack.checkpoint();
-                }
-                prepare_linear_phase(
-                    &styled,
-                    &coverage,
-                    &source_opaque_spans,
-                    &premultiplied,
-                    index + 1,
-                    kernel,
-                    preparation_slack,
-                )
-            });
-            let phase_us = phase_started.elapsed().as_micros();
-            return (
-                Self {
-                    image: base.image,
-                    phases: ParadePhaseSet::SixteenthLinear {
-                        base_coverage: base.coverage,
-                        shifted: Box::new(shifted),
-                    },
-                    corner_insets,
-                },
-                phase_us,
-            );
-        }
-        let mut image = scale_lanczos3_rgb565_tinted(source, width, height, tint);
-        apply_depth_cues(&mut image, speed);
-        let corner_insets = prepare_corner_insets(image.width, image.height);
-        let phase_started = std::time::Instant::now();
-        let phases = ParadePhaseSet::prepare_two_tap(&image, profile);
+            )
+        });
         let phase_us = phase_started.elapsed().as_micros();
         (
             Self {
-                image,
-                phases,
+                image: base.image,
+                phases: ParadePhaseSet::SixteenthLinear {
+                    base_coverage: base.coverage,
+                    shifted: Box::new(shifted),
+                },
                 corner_insets,
             },
             phase_us,
@@ -439,32 +347,18 @@ impl PreparedScreenshotCard {
         dst: &mut [Rgb565Pixel],
         screen_width: usize,
         screen_height: usize,
-        profile: ScreenshotSamplingProfile,
         x_fp: i64,
         y: isize,
     ) {
-        match profile {
-            ScreenshotSamplingProfile::HdmiLegacyHalf => blit_half_phase(
-                dst,
-                screen_width,
-                screen_height,
-                &self.image,
-                self.phases.legacy_half(),
-                &self.corner_insets,
-                x_fp,
-                y,
-            ),
-            ScreenshotSamplingProfile::CrtSixteenth => blit_sixteenth_phase(
-                dst,
-                screen_width,
-                screen_height,
-                &self.image,
-                &self.phases,
-                &self.corner_insets,
-                x_fp,
-                y,
-            ),
-        }
+        blit_sixteenth_phase(
+            dst,
+            screen_width,
+            screen_height,
+            &self.image,
+            &self.phases,
+            x_fp,
+            y,
+        );
     }
 
     #[cold]
@@ -474,27 +368,20 @@ impl PreparedScreenshotCard {
         dst: &mut [Rgb565Pixel],
         screen_width: usize,
         screen_height: usize,
-        profile: ScreenshotSamplingProfile,
         x_fp: i64,
         y: isize,
         base_background: Rgb565Pixel,
     ) -> CoverageBlitStats {
-        if profile == ScreenshotSamplingProfile::CrtSixteenth {
-            blit_sixteenth_phase_probed(
-                dst,
-                screen_width,
-                screen_height,
-                &self.image,
-                &self.phases,
-                &self.corner_insets,
-                x_fp,
-                y,
-                base_background,
-            )
-        } else {
-            self.blit(dst, screen_width, screen_height, profile, x_fp, y);
-            CoverageBlitStats::default()
-        }
+        blit_sixteenth_phase_probed(
+            dst,
+            screen_width,
+            screen_height,
+            &self.image,
+            &self.phases,
+            x_fp,
+            y,
+            base_background,
+        )
     }
 }
 
@@ -505,22 +392,6 @@ struct LanczosFilter {
 
 fn color565(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel((u16::from(r) >> 3) << 11 | (u16::from(g) >> 2) << 5 | (u16::from(b) >> 3))
-}
-
-fn blend_565(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
-    let from = u32::from(from.0);
-    let to = u32::from(to.0);
-    let alpha = ((u32::from(alpha) + 4) >> 3).min(32);
-    if alpha == 0 {
-        return Rgb565Pixel(from as u16);
-    }
-    if alpha >= 32 {
-        return Rgb565Pixel(to as u16);
-    }
-    let inverse = 32 - alpha;
-    let rb = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
-    let g = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
-    Rgb565Pixel((rb | g) as u16)
 }
 
 fn scale_dimension(reference: usize, screen_height: usize) -> usize {
@@ -627,105 +498,6 @@ fn lanczos_filters(source_len: usize, target_len: usize) -> Arc<[LanczosFilter]>
     }
     entries.push((source_len, target_len, Arc::clone(&filters)));
     filters
-}
-
-fn scale_lanczos3_rgb565_tinted(
-    image: &ScreenshotImage,
-    out_width: usize,
-    out_height: usize,
-    tint: u8,
-) -> ScreenshotImage {
-    if out_width == 0 || out_height == 0 || image.width == 0 || image.height == 0 {
-        return ScreenshotImage {
-            pixels: Vec::new(),
-            width: out_width,
-            height: out_height,
-            stride: out_width,
-        };
-    }
-    let x_filters = lanczos_filters(image.width, out_width);
-    let y_filters = lanczos_filters(image.height, out_height);
-    let mut horizontal = vec![0_u32; out_width * image.height];
-    for source_y in 0..image.height {
-        let source_row = source_y * image.stride;
-        let target_row = source_y * out_width;
-        for (target_x, filter) in x_filters.iter().enumerate() {
-            let mut r = 0_i32;
-            let mut g = 0_i32;
-            let mut b = 0_i32;
-            for (tap, weight) in filter.weights.iter().enumerate() {
-                let pixel = image.pixels[source_row + filter.start + tap].0;
-                let weight = i32::from(*weight);
-                r += (i32::from((pixel >> 11) & 0x1f) * 255 / 31) * weight;
-                g += (i32::from((pixel >> 5) & 0x3f) * 255 / 63) * weight;
-                b += (i32::from(pixel & 0x1f) * 255 / 31) * weight;
-            }
-            let r = ((r + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255) as u32;
-            let g = ((g + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255) as u32;
-            let b = ((b + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255) as u32;
-            horizontal[target_row + target_x] = (r << 16) | (g << 8) | b;
-        }
-    }
-
-    let mut pixels = vec![Rgb565Pixel(0); out_width * out_height];
-    for (target_y, filter) in y_filters.iter().enumerate() {
-        for target_x in 0..out_width {
-            let mut r = 0_i32;
-            let mut g = 0_i32;
-            let mut b = 0_i32;
-            for (tap, weight) in filter.weights.iter().enumerate() {
-                let pixel = horizontal[(filter.start + tap) * out_width + target_x];
-                let weight = i32::from(*weight);
-                r += i32::try_from((pixel >> 16) & 0xff).unwrap_or_default() * weight;
-                g += i32::try_from((pixel >> 8) & 0xff).unwrap_or_default() * weight;
-                b += i32::try_from(pixel & 0xff).unwrap_or_default() * weight;
-            }
-            let tint = i32::from(tint);
-            let r =
-                (((((r + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
-            let g =
-                (((((g + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
-            let b =
-                (((((b + LANCZOS_WEIGHT_ONE / 2) >> 14).clamp(0, 255)) * tint + 127) / 255) as u8;
-            pixels[target_y * out_width + target_x] = color565(r, g, b);
-        }
-    }
-    ScreenshotImage {
-        pixels,
-        width: out_width,
-        height: out_height,
-        stride: out_width,
-    }
-}
-
-fn srgb_to_linear_table() -> &'static [u16; 256] {
-    static TABLE: OnceLock<[u16; 256]> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        std::array::from_fn(|index| {
-            let encoded = index as f64 / 255.0;
-            let linear = if encoded <= 0.04045 {
-                encoded / 12.92
-            } else {
-                ((encoded + 0.055) / 1.055).powf(2.4)
-            };
-            (linear * 65535.0).round() as u16
-        })
-    })
-}
-
-fn linear_to_srgb_table() -> &'static [u8; 4097] {
-    static TABLE: OnceLock<[u8; 4097]> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        std::array::from_fn(|index| {
-            let linear = index as f64 / 4096.0;
-            let encoded = if linear <= 0.003_130_8 {
-                linear * 12.92
-            } else {
-                1.055 * linear.powf(1.0 / 2.4) - 0.055
-            };
-            (encoded * 255.0).round().clamp(0.0, 255.0) as u8
-        })
-    })
 }
 
 fn srgb8_to_linear16(value: u8) -> u16 {
@@ -1449,109 +1221,6 @@ unsafe fn prepare_linear_phase_neon(
     }
 }
 
-fn apply_depth_cues(image: &mut ScreenshotImage, speed: usize) {
-    let depth = speed
-        .saturating_sub(PARADE_MIN_TILE_SPEED)
-        .min(PARADE_SPEED_COUNT - 1);
-    let atmosphere = [20_u32, 14, 8, 3, 0][depth];
-    let desaturation = [25_u32, 16, 8, 3, 0][depth];
-    for pixel in &mut image.pixels {
-        let packed = pixel.0;
-        let mut r = u32::from((packed >> 11) & 0x1f) * 255 / 31;
-        let mut g = u32::from((packed >> 5) & 0x3f) * 255 / 63;
-        let mut b = u32::from(packed & 0x1f) * 255 / 31;
-        let luminance = (77 * r + 150 * g + 29 * b + 128) >> 8;
-        r = (r * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        g = (g * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        b = (b * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        r = (r * (100 - atmosphere) + 50) / 100;
-        g = (g * (100 - atmosphere) + 50) / 100;
-        b = (b * (100 - atmosphere) + 10 * atmosphere + 50) / 100;
-        *pixel = color565(r as u8, g as u8, b as u8);
-    }
-}
-
-fn prepare_corner_insets(width: usize, height: usize) -> Vec<u8> {
-    let radius = (width.min(height) / 10).clamp(2, 10);
-    let mut insets = vec![0_u8; height];
-    for y in 0..radius.min(height / 2) {
-        let distance = radius.saturating_sub(y + 1) as f64;
-        let inside = ((radius * radius) as f64 - distance * distance)
-            .max(0.0)
-            .sqrt() as usize;
-        let inset = radius.saturating_sub(inside).min(usize::from(u8::MAX)) as u8;
-        insets[y] = inset;
-        insets[height - 1 - y] = inset;
-    }
-    insets
-}
-
-fn prepare_fractional_shifted(image: &ScreenshotImage, phase_alpha: u8) -> ScreenshotImage {
-    debug_assert!(phase_alpha > 0);
-    let width = image.width + 1;
-    let mut pixels = vec![Rgb565Pixel(0); width * image.height];
-    for y in 0..image.height {
-        let source = y * image.stride;
-        let target = y * width;
-        for x in 1..image.width {
-            pixels[target + x] = blend_565(
-                image.pixels[source + x - 1],
-                image.pixels[source + x],
-                255 - phase_alpha,
-            );
-        }
-    }
-    ScreenshotImage {
-        pixels,
-        width,
-        height: image.height,
-        stride: width,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn blit_half_phase(
-    dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
-    image: &ScreenshotImage,
-    half_shifted: &ScreenshotImage,
-    corner_insets: &[u8],
-    x_fp: i64,
-    y: isize,
-) {
-    let x = x_fp.div_euclid(PARADE_SUBPIXEL_ONE) as isize;
-    let fraction = x_fp.rem_euclid(PARADE_SUBPIXEL_ONE) as u8;
-    if fraction == 0 {
-        blit_rounded(dst, screen_width, screen_height, image, corner_insets, x, y);
-        return;
-    }
-    if fraction == 128 {
-        blit_fractional(
-            dst,
-            screen_width,
-            screen_height,
-            image,
-            half_shifted,
-            corner_insets,
-            x,
-            y,
-            128,
-        );
-        return;
-    }
-    let snapped_x = if fraction < 128 { x } else { x + 1 };
-    blit_rounded(
-        dst,
-        screen_width,
-        screen_height,
-        image,
-        corner_insets,
-        snapped_x,
-        y,
-    );
-}
-
 #[derive(Clone, Copy)]
 struct QuantizedPhase {
     x: isize,
@@ -1576,74 +1245,34 @@ fn blit_sixteenth_phase(
     screen_height: usize,
     image: &ScreenshotImage,
     phase_set: &ParadePhaseSet,
-    corner_insets: &[u8],
     x_fp: i64,
     y: isize,
 ) {
     let quantized = quantize_phase(x_fp);
-    if let Some(base_coverage) = phase_set.base_coverage() {
-        if quantized.phase == 0 {
-            blit_coverage_phase(
-                dst,
-                screen_width,
-                screen_height,
-                image,
-                base_coverage,
-                quantized.x,
-                y,
-            );
-            return;
-        }
-        if let Some(shifted) = phase_set.linear_phase(quantized.phase) {
-            blit_coverage_phase(
-                dst,
-                screen_width,
-                screen_height,
-                shifted.image,
-                shifted.coverage,
-                quantized.x,
-                y,
-            );
-            return;
-        }
-        debug_assert!(false, "linear card missing sixteenth-pixel phase");
-    }
     if quantized.phase == 0 {
-        blit_rounded(
+        blit_coverage_phase(
             dst,
             screen_width,
             screen_height,
             image,
-            corner_insets,
+            phase_set.base_coverage(),
             quantized.x,
             y,
         );
         return;
     }
-    let Some(shifted) = phase_set.two_tap_phase(quantized.phase) else {
-        debug_assert!(false, "CRT card missing sixteenth-pixel phases");
-        blit_half_phase(
-            dst,
-            screen_width,
-            screen_height,
-            image,
-            phase_set.legacy_half(),
-            corner_insets,
-            x_fp,
-            y,
-        );
+    let Some(shifted) = phase_set.linear_phase(quantized.phase) else {
+        debug_assert!(false, "linear card missing sixteenth-pixel phase");
         return;
     };
-    blit_fractional(
+    blit_coverage_phase(
         dst,
         screen_width,
         screen_height,
-        image,
-        shifted,
-        corner_insets,
+        shifted.image,
+        shifted.coverage,
         quantized.x,
         y,
-        (quantized.phase * CRT_PHASE_STEP) as u8,
     );
 }
 
@@ -1656,49 +1285,37 @@ fn blit_sixteenth_phase_probed(
     screen_height: usize,
     image: &ScreenshotImage,
     phase_set: &ParadePhaseSet,
-    corner_insets: &[u8],
     x_fp: i64,
     y: isize,
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
     let quantized = quantize_phase(x_fp);
-    if let Some(base_coverage) = phase_set.base_coverage() {
-        if quantized.phase == 0 {
-            return blit_coverage_phase_probed(
-                dst,
-                screen_width,
-                screen_height,
-                image,
-                base_coverage,
-                quantized.x,
-                y,
-                base_background,
-            );
-        }
-        if let Some(shifted) = phase_set.linear_phase(quantized.phase) {
-            return blit_coverage_phase_probed(
-                dst,
-                screen_width,
-                screen_height,
-                shifted.image,
-                shifted.coverage,
-                quantized.x,
-                y,
-                base_background,
-            );
-        }
+    if quantized.phase == 0 {
+        return blit_coverage_phase_probed(
+            dst,
+            screen_width,
+            screen_height,
+            image,
+            phase_set.base_coverage(),
+            quantized.x,
+            y,
+            base_background,
+        );
     }
-    blit_sixteenth_phase(
+    let Some(shifted) = phase_set.linear_phase(quantized.phase) else {
+        debug_assert!(false, "linear card missing sixteenth-pixel phase");
+        return CoverageBlitStats::default();
+    };
+    blit_coverage_phase_probed(
         dst,
         screen_width,
         screen_height,
-        image,
-        phase_set,
-        corner_insets,
-        x_fp,
+        shifted.image,
+        shifted.coverage,
+        quantized.x,
         y,
-    );
-    CoverageBlitStats::default()
+        base_background,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1858,91 +1475,6 @@ fn composite_coverage_pixel(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn blit_fractional(
-    dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
-    image: &ScreenshotImage,
-    shifted: &ScreenshotImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-    phase_alpha: u8,
-) {
-    for source_y in 0..image.height {
-        let target_y = y + source_y as isize;
-        if target_y < 0 || target_y >= screen_height as isize {
-            continue;
-        }
-        let target_row = target_y as usize * screen_width;
-        let source_row = source_y * image.stride;
-        let shifted_row = source_y * shifted.stride;
-        let inset = corner_insets.get(source_y).copied().unwrap_or(0) as usize;
-        let source_end = image.width.saturating_sub(inset);
-        if inset >= source_end {
-            continue;
-        }
-        let left = x + inset as isize;
-        if left >= 0 && left < screen_width as isize {
-            dst[target_row + left as usize] = blend_565(
-                dst[target_row + left as usize],
-                image.pixels[source_row + inset],
-                255 - phase_alpha,
-            );
-        }
-        let copy_x0 = (left + 1).max(0) as usize;
-        let copy_x1 = (x + source_end as isize).clamp(0, screen_width as isize) as usize;
-        if copy_x1 > copy_x0 {
-            let source_x0 = (copy_x0 as isize - x) as usize;
-            dst[target_row + copy_x0..target_row + copy_x1].copy_from_slice(
-                &shifted.pixels
-                    [shifted_row + source_x0..shifted_row + source_x0 + copy_x1 - copy_x0],
-            );
-        }
-        let right = x + source_end as isize;
-        if right >= 0 && right < screen_width as isize {
-            dst[target_row + right as usize] = blend_565(
-                dst[target_row + right as usize],
-                image.pixels[source_row + source_end - 1],
-                phase_alpha,
-            );
-        }
-    }
-}
-
-fn blit_rounded(
-    dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
-    image: &ScreenshotImage,
-    corner_insets: &[u8],
-    x: isize,
-    y: isize,
-) {
-    for source_y in 0..image.height {
-        let target_y = y + source_y as isize;
-        if target_y < 0 || target_y >= screen_height as isize {
-            continue;
-        }
-        let inset = corner_insets.get(source_y).copied().unwrap_or(0) as usize;
-        let source_end = image.width.saturating_sub(inset);
-        if inset >= source_end {
-            continue;
-        }
-        let target_x0 = (x + inset as isize).max(0) as usize;
-        let target_x1 = (x + source_end as isize).clamp(0, screen_width as isize) as usize;
-        if target_x1 <= target_x0 {
-            continue;
-        }
-        let source_x0 = (target_x0 as isize - x) as usize;
-        let source_row = source_y * image.stride + source_x0;
-        let target_row = target_y as usize * screen_width + target_x0;
-        let copy_len = target_x1 - target_x0;
-        dst[target_row..target_row + copy_len]
-            .copy_from_slice(&image.pixels[source_row..source_row + copy_len]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2008,13 +1540,7 @@ mod tests {
     #[test]
     fn sparse_coverage_commands_match_dense_reference_for_all_phases() {
         let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            180,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 5, 180);
         let (base, shifted) = linear_phases(&card);
         let screen_width = 96;
         let screen_height = 72;
@@ -2256,36 +1782,20 @@ mod tests {
             height: 6,
             stride: 8,
         };
-        for generation in [
-            ScreenshotPhaseGeneration::Rgb565TwoTap,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        ] {
-            let card = PreparedScreenshotCard::prepare_with_generation(
-                &source,
-                5,
-                135,
-                ScreenshotSamplingProfile::CrtSixteenth,
-                generation,
-            );
-            assert!(
-                card.image
-                    .pixels
-                    .iter()
-                    .all(|pixel| *pixel == card.image.pixels[0]),
-                "{generation:?} decorated the scaled card edge"
-            );
-        }
+        let card = PreparedScreenshotCard::prepare(&source, 5, 135);
+        assert!(
+            card.image
+                .pixels
+                .iter()
+                .all(|pixel| *pixel == card.image.pixels[0]),
+            "prepared card decorated the scaled edge"
+        );
     }
 
     #[test]
     fn prepared_card_has_all_crt_phases_and_bounded_memory() {
         let source = test_image(8, 6);
-        let card = PreparedScreenshotCard::prepare(
-            &source,
-            5,
-            540,
-            ScreenshotSamplingProfile::CrtSixteenth,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 5, 540);
         assert_eq!(card.width(), 160);
         assert_eq!(card.height(), 120);
         assert!(card.resident_bytes() >= card.width() * card.height() * 2 * CRT_PHASE_COUNT);
@@ -2294,22 +1804,10 @@ mod tests {
     #[test]
     fn integer_blit_preserves_pixels_and_rounded_corners() {
         let source = test_image(8, 6);
-        let card = PreparedScreenshotCard::prepare(
-            &source,
-            1,
-            135,
-            ScreenshotSamplingProfile::HdmiLegacyHalf,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 1, 135);
         let background = color565(4, 8, 12);
         let mut frame = vec![background; 32 * 24];
-        card.blit(
-            &mut frame,
-            32,
-            24,
-            ScreenshotSamplingProfile::HdmiLegacyHalf,
-            3 * PARADE_SUBPIXEL_ONE,
-            2,
-        );
+        card.blit(&mut frame, 32, 24, 3 * PARADE_SUBPIXEL_ONE, 2);
         assert_eq!(frame[2 * 32 + 3], background);
         assert_ne!(frame[3 * 32 + 4], background);
     }
@@ -2317,19 +1815,13 @@ mod tests {
     #[test]
     fn fractional_blits_do_not_paint_outside_the_card_rows() {
         let source = test_image(8, 6);
-        let card = PreparedScreenshotCard::prepare(
-            &source,
-            1,
-            135,
-            ScreenshotSamplingProfile::CrtSixteenth,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 1, 135);
         let background = color565(4, 8, 12);
         let mut frame = vec![background; 32 * 24];
         card.blit(
             &mut frame,
             32,
             24,
-            ScreenshotSamplingProfile::CrtSixteenth,
             3 * PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
             2,
         );
@@ -2385,13 +1877,7 @@ mod tests {
     #[test]
     fn linear_lanczos_phases_keep_coverage_centroid_within_one_thirty_second_pixel() {
         let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            135,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 5, 135);
         let (base, shifted) = linear_phases(&card);
         let base_centroid = coverage_centroid(base, card.width(), card.height());
         for phase in 1..CRT_PHASE_COUNT {
@@ -2412,13 +1898,7 @@ mod tests {
     #[test]
     fn linear_lanczos_phases_preserve_coverage_and_edge_energy() {
         let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            135,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 5, 135);
         let (base, shifted) = linear_phases(&card);
         let base_coverage = total_coverage(base);
         let base_energy = horizontal_edge_energy(base, card.width(), card.height());
@@ -2441,13 +1921,7 @@ mod tests {
     #[test]
     fn linear_lanczos_card_has_antialiased_corners_and_bounded_storage() {
         let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            540,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        );
+        let card = PreparedScreenshotCard::prepare(&source, 5, 540);
         let (base, shifted) = linear_phases(&card);
         assert!(!base.partial_samples.is_empty());
         assert_eq!(base.alpha_at(card.width() / 2, card.height() / 2), 255);
@@ -2463,15 +1937,7 @@ mod tests {
     #[test]
     fn linear_lanczos_phase_generation_is_deterministic() {
         let source = test_image(32, 24);
-        let prepare = || {
-            PreparedScreenshotCard::prepare_with_generation(
-                &source,
-                4,
-                270,
-                ScreenshotSamplingProfile::CrtSixteenth,
-                ScreenshotPhaseGeneration::LinearLanczos3,
-            )
-        };
+        let prepare = || PreparedScreenshotCard::prepare(&source, 4, 270);
         let first = prepare();
         let second = prepare();
         assert_eq!(first.image, second.image);
@@ -2487,17 +1953,9 @@ mod tests {
     #[test]
     fn neon_linear_lanczos_backend_is_pixel_identical_to_scalar() {
         let source = test_image(32, 24);
-        let prepare = |generation| {
-            PreparedScreenshotCard::prepare_with_generation(
-                &source,
-                4,
-                270,
-                ScreenshotSamplingProfile::CrtSixteenth,
-                generation,
-            )
-        };
-        let scalar = prepare(ScreenshotPhaseGeneration::LinearLanczos3);
-        let neon = prepare(ScreenshotPhaseGeneration::LinearLanczos3Neon);
+        let prepare = |kernel| PreparedScreenshotCard::prepare_with_kernel(&source, 4, 270, kernel);
+        let scalar = prepare(LinearPhaseKernel::Scalar);
+        let neon = prepare(LinearPhaseKernel::Neon);
         assert_eq!(scalar.image, neon.image);
         let (scalar_base, scalar_shifted) = linear_phases(&scalar);
         let (neon_base, neon_shifted) = linear_phases(&neon);
