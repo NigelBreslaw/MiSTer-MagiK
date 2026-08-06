@@ -8582,46 +8582,6 @@ fn mean_frame_field(frames: &[&Value], key: &str) -> f64 {
         / frames.len() as f64
 }
 
-fn max_frame_field(frames: &[&Value], key: &str) -> u64 {
-    frames
-        .iter()
-        .map(|frame| frame_u64(frame, key))
-        .max()
-        .unwrap_or(0)
-}
-
-fn sum_frame_field(frames: &[&Value], key: &str) -> u64 {
-    frames.iter().map(|frame| frame_u64(frame, key)).sum()
-}
-
-fn percentile_99_frame_field(frames: &[&Value], key: &str) -> u64 {
-    let mut values = frames
-        .iter()
-        .map(|frame| frame_u64(frame, key))
-        .collect::<Vec<_>>();
-    values.sort_unstable();
-    percentile_99(&values)
-}
-
-fn mean_frame_difference(frames: &[&Value], minuend: &str, subtrahend: &str) -> f64 {
-    if frames.is_empty() {
-        return 0.0;
-    }
-    frames
-        .iter()
-        .map(|frame| frame_u64(frame, minuend).saturating_sub(frame_u64(frame, subtrahend)) as f64)
-        .sum::<f64>()
-        / frames.len() as f64
-}
-
-fn ratio(numerator: u64, denominator: u64) -> f64 {
-    if denominator == 0 {
-        0.0
-    } else {
-        numerator as f64 / denominator as f64
-    }
-}
-
 fn raster_cadence_summary(frames: &[&Value]) -> Value {
     let mut held_frames = 0_u64;
     let mut held_cards = 0_u64;
