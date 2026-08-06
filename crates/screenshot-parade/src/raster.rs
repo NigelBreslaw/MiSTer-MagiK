@@ -222,6 +222,7 @@ struct CoverageSample {
     x: u16,
     alpha: u8,
     _padding: u8,
+    base_composite: Rgb565Pixel,
 }
 
 #[derive(Clone)]
@@ -923,10 +924,15 @@ fn coverage_opaque_spans(values: &[u8], stride: usize, height: usize) -> Vec<Opa
         .collect()
 }
 
-fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlane {
+fn coverage_plane(values: Vec<u8>, image: &ScreenshotImage) -> CoveragePlane {
+    let stride = image.stride;
+    let height = image.height;
     let opaque_spans = coverage_opaque_spans(&values, stride, height);
     let mut rows = Vec::with_capacity(height);
     let mut partial_samples = Vec::with_capacity(height.saturating_mul(4));
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
+    let base_background = color565(0, 0, 10);
     for (y, opaque) in opaque_spans.into_iter().enumerate() {
         let partial_start = partial_samples.len();
         for (x, alpha) in values[y * stride..(y + 1) * stride]
@@ -935,10 +941,20 @@ fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlan
             .enumerate()
         {
             if (1..255).contains(&alpha) {
+                let mut composite = [base_background];
+                composite_coverage_pixel(
+                    &mut composite,
+                    0,
+                    image.pixels[y * stride + x],
+                    alpha,
+                    srgb_to_linear,
+                    linear_to_srgb,
+                );
                 partial_samples.push(CoverageSample {
                     x: u16::try_from(x).expect("screenshot coverage row exceeds u16 width"),
                     alpha,
                     _padding: 0,
+                    base_composite: composite[0],
                 });
             }
         }
@@ -953,7 +969,7 @@ fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlan
     CoveragePlane {
         rows,
         partial_samples,
-        width: stride,
+        width: image.width,
     }
 }
 
@@ -1060,15 +1076,14 @@ fn prepare_linear_phase(
             &mut coverage,
         );
     }
-    PreparedLinearPhase {
-        image: ScreenshotImage {
-            pixels,
-            width,
-            height: image.height,
-            stride: width,
-        },
-        coverage: coverage_plane(coverage, width, image.height),
-    }
+    let image = ScreenshotImage {
+        pixels,
+        width,
+        height: image.height,
+        stride: width,
+    };
+    let coverage = coverage_plane(coverage, &image);
+    PreparedLinearPhase { image, coverage }
 }
 
 fn shape_preserving_shifted_coverage(
@@ -1747,6 +1762,7 @@ fn blit_coverage_phase(
 ) {
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
+    let base_background = color565(0, 0, 10);
     for source_y in 0..image.height {
         let target_y = y + source_y as isize;
         if target_y < 0 || target_y >= screen_height as isize {
@@ -1767,14 +1783,19 @@ fn blit_coverage_phase(
             if !(source_x0..source_x1).contains(&source_x) {
                 continue;
             }
-            composite_coverage_pixel(
-                dst,
-                target_row + (x + source_x as isize) as usize,
-                image.pixels[source_row + source_x],
-                sample.alpha,
-                srgb_to_linear,
-                linear_to_srgb,
-            );
+            let target = target_row + (x + source_x as isize) as usize;
+            if dst[target] == base_background {
+                dst[target] = sample.base_composite;
+            } else {
+                composite_coverage_pixel(
+                    dst,
+                    target,
+                    image.pixels[source_row + source_x],
+                    sample.alpha,
+                    srgb_to_linear,
+                    linear_to_srgb,
+                );
+            }
         }
         let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
         let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
@@ -1826,15 +1847,19 @@ fn blit_coverage_phase_probed(
             let target = target_row + (x + source_x as isize) as usize;
             stats.composite_calls += 1;
             stats.partial_edge_pixels += 1;
-            stats.exact_base_background_hits += usize::from(dst[target] == base_background);
-            composite_coverage_pixel(
-                dst,
-                target,
-                image.pixels[source_row + source_x],
-                sample.alpha,
-                srgb_to_linear,
-                linear_to_srgb,
-            );
+            if dst[target] == base_background {
+                stats.exact_base_background_hits += 1;
+                dst[target] = sample.base_composite;
+            } else {
+                composite_coverage_pixel(
+                    dst,
+                    target,
+                    image.pixels[source_row + source_x],
+                    sample.alpha,
+                    srgb_to_linear,
+                    linear_to_srgb,
+                );
+            }
         }
         let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
         let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
@@ -2042,8 +2067,15 @@ mod tests {
         let (base, shifted) = linear_phases(&card);
         let screen_width = 96;
         let screen_height = 72;
+        let base_background = color565(0, 0, 10);
         let background = (0..screen_width * screen_height)
-            .map(|index| color565(index as u8, (index * 7) as u8, (index * 19) as u8))
+            .map(|index| {
+                if index % 3 == 0 {
+                    base_background
+                } else {
+                    color565(index as u8, (index * 7) as u8, (index * 19) as u8)
+                }
+            })
             .collect::<Vec<_>>();
         for phase in 0..CRT_PHASE_COUNT {
             let (image, coverage) = if phase == 0 {
