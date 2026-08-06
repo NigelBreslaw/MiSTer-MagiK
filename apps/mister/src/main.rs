@@ -411,12 +411,17 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
 }
 
 fn print_benchmark_capabilities() {
+    crate::ui_logln!("{}", benchmark_capabilities());
+}
+
+fn benchmark_capabilities() -> serde_json::Value {
     let mut capabilities = serde_json::json!({
         "schema": "mister-magik-benchmark-capabilities-v1",
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
         "pmu-probe-v1": true,
         "pmu-profile-v1": true,
+        "pmu-profile-v2": true,
         "persisted-search-v1": true,
     });
     capabilities
@@ -426,7 +431,7 @@ fn print_benchmark_capabilities() {
             mister_magik_agent_protocol::SCREENSAVER_FRAME_EVIDENCE_CAPABILITY.to_owned(),
             serde_json::Value::Bool(cfg!(feature = "profile")),
         );
-    crate::ui_logln!("{}", capabilities);
+    capabilities
 }
 
 fn run_catalog_v3_inspect() {
@@ -2891,5 +2896,12 @@ mod tests {
             format_latch_readiness_tsv(&report),
             "latch_readiness_tsv\tvalid=1\tstate=ready\tstage=none\treason=none\tdetail=live platform ready flip_count=4 post_count=5 drop_count=0"
         );
+    }
+
+    #[test]
+    fn benchmark_capabilities_preserve_pmu_v1_and_advertise_v2() {
+        let capabilities = benchmark_capabilities();
+        assert_eq!(capabilities["pmu-profile-v1"], true);
+        assert_eq!(capabilities["pmu-profile-v2"], true);
     }
 }

@@ -4489,10 +4489,14 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+const CATALOG_PMU_REMOTE_DIR: &str = "/tmp/mister-magik/pmu-catalog-benchmark";
+
 fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
-    const WORKLOADS: [&str; 3] = ["probe", "screensaver", "search"];
+    const WORKLOADS: [&str; 4] = ["probe", "screensaver", "search", "catalog"];
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is missing before PMU profiling")?;
     let capability = exec_checked_output(
         &session,
         "installed benchmark capability",
@@ -4500,62 +4504,184 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
-    if capability.get("pmu-profile-v1").and_then(Value::as_bool) != Some(true) {
-        return Err("installed app does not support pmu-profile-v1".into());
+    if capability.get("pmu-profile-v1").and_then(Value::as_bool) != Some(true)
+        || capability.get("pmu-profile-v2").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("installed app does not support pmu-profile-v2".into());
     }
-
-    let mut summaries = Vec::with_capacity(WORKLOADS.len());
-    for workload in WORKLOADS {
-        let command = format!(
-            "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 /media/fat/mister-magik-dev/mister-magik-fb pmu-profile {}",
-            sh(workload)
-        );
-        let output = exec(&session, &command, true)?;
-        let mut log = output.stdout.clone();
-        log.push_str(&output.stderr);
-        fs::write(output_dir.join(format!("{workload}.log")), &log)?;
-        if let Some(message) = exec_failure_message("installed PMU workload", &output) {
-            return Err(format!("{workload}: {message}").into());
-        }
-        let summary = last_json_line(&output.stdout)
-            .ok_or_else(|| format!("installed PMU workload {workload} returned no JSON"))?;
-        if workload == "probe" {
-            if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-probe-v1")
-                || summary.get("status").and_then(Value::as_str) != Some("ok")
-            {
-                return Err("installed PMU probe did not produce authoritative counters".into());
-            }
-        } else if summary.get("schema").and_then(Value::as_str)
-            != Some("mister-magik-pmu-workload-v1")
-            || summary.get("status").and_then(Value::as_str) != Some("ok")
-            || summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
-            || summary
-                .pointer("/profile/records")
-                .and_then(Value::as_array)
-                .is_none_or(Vec::is_empty)
-        {
-            return Err(
-                format!("installed PMU workload {workload} returned unusable evidence").into(),
+    exec_checked(
+        &session,
+        "catalog PMU preparation",
+        &catalog_pmu_prepare_command(),
+    )?;
+    let run_result = (|| -> Result<Value> {
+        let mut summaries = Vec::with_capacity(WORKLOADS.len());
+        for workload in WORKLOADS {
+            let command = format!(
+                "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 /media/fat/mister-magik-dev/mister-magik-fb pmu-profile {}",
+                sh(workload)
             );
+            let output = exec(&session, &command, true)?;
+            let mut log = output.stdout.clone();
+            log.push_str(&output.stderr);
+            fs::write(output_dir.join(format!("{workload}.log")), &log)?;
+            if let Some(message) = exec_failure_message("installed PMU workload", &output) {
+                return Err(format!("{workload}: {message}").into());
+            }
+            let summary = last_json_line(&output.stdout)
+                .ok_or_else(|| format!("installed PMU workload {workload} returned no JSON"))?;
+            validate_installed_pmu_workload(workload, &summary)?;
+            fs::write(
+                output_dir.join(format!("{workload}.json")),
+                format!("{}\n", serde_json::to_string_pretty(&summary)?),
+            )?;
+            summaries.push(summary);
         }
-        fs::write(
-            output_dir.join(format!("{workload}.json")),
-            format!("{}\n", serde_json::to_string_pretty(&summary)?),
-        )?;
-        summaries.push(summary);
+        Ok(json!({
+            "schema": "mister-magik-pmu-suite-v2",
+            "status": "passed",
+            "sample_every": 1,
+            "record_limit": 4096,
+            "workloads": summaries,
+        }))
+    })();
+    let cleanup_result = exec_checked(
+        &session,
+        "catalog PMU cleanup",
+        &catalog_pmu_cleanup_command(),
+    );
+    let suite = run_result?;
+    cleanup_result?;
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is missing after PMU profiling")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during PMU profiling".into());
     }
-    let suite = json!({
-        "schema": "mister-magik-pmu-suite-v1",
-        "status": "passed",
-        "sample_every": 1,
-        "record_limit": 4096,
-        "workloads": summaries,
-    });
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&suite)?),
     )?;
     serde_json::to_string(&suite).map_err(Into::into)
+}
+
+fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()> {
+    if workload == "probe" {
+        if summary.get("schema").and_then(Value::as_str) == Some("mister-magik-pmu-probe-v1")
+            && summary.get("status").and_then(Value::as_str) == Some("ok")
+        {
+            return Ok(());
+        }
+        return Err("installed PMU probe did not produce authoritative counters".into());
+    }
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-workload-v1")
+        || summary.get("workload").and_then(Value::as_str) != Some(workload)
+        || summary.get("status").and_then(Value::as_str) != Some("ok")
+    {
+        return Err(format!("installed PMU workload {workload} returned unusable evidence").into());
+    }
+    if workload == "catalog" {
+        return validate_catalog_pmu_workload(summary);
+    }
+    if summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
+        || summary
+            .pointer("/profile/records")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    {
+        return Err(format!("installed PMU workload {workload} returned unusable evidence").into());
+    }
+    Ok(())
+}
+
+fn validate_catalog_pmu_workload(summary: &Value) -> Result<()> {
+    if summary
+        .pointer("/configuration/root")
+        .and_then(Value::as_str)
+        != Some(CATALOG_PMU_REMOTE_DIR)
+        || summary
+            .pointer("/validation/isolated")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/validation/incremental_game_delta")
+            .and_then(Value::as_u64)
+            != Some(1)
+        || summary
+            .pointer("/validation/rebuild_all_preserved_counts")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("catalog PMU workload failed its isolation or catalog validation".into());
+    }
+    let operations = summary
+        .get("operations")
+        .and_then(Value::as_array)
+        .ok_or("catalog PMU workload has no operations")?;
+    if operations.len() != 3 {
+        return Err("catalog PMU workload must report three operations".into());
+    }
+    for (operation, expected) in operations
+        .iter()
+        .zip(["fresh-build", "rebuild", "rebuild-all"])
+    {
+        if operation.get("operation").and_then(Value::as_str) != Some(expected)
+            || operation.get("status").and_then(Value::as_str) != Some("ok")
+            || operation
+                .get("peak_rss_kib")
+                .and_then(Value::as_u64)
+                .is_none()
+            || operation
+                .pointer("/profile/dropped_profiles")
+                .and_then(Value::as_u64)
+                != Some(0)
+        {
+            return Err(format!("catalog PMU operation {expected} is incomplete").into());
+        }
+        let profiles = operation
+            .pointer("/profile/profiles")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("catalog PMU operation {expected} has no thread profiles"))?;
+        if profiles.is_empty()
+            || profiles.iter().any(|entry| {
+                entry.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
+                    || !entry
+                        .pointer("/profile/failure")
+                        .is_some_and(Value::is_null)
+                    || entry
+                        .pointer("/profile/dropped_spans")
+                        .and_then(Value::as_u64)
+                        != Some(0)
+                    || entry
+                        .pointer("/profile/records")
+                        .and_then(Value::as_array)
+                        .is_none_or(Vec::is_empty)
+            })
+        {
+            return Err(format!("catalog PMU operation {expected} lost PMU evidence").into());
+        }
+    }
+    if operations[1]
+        .get("rebuilt_systems")
+        .and_then(Value::as_array)
+        .is_none_or(|systems| systems.len() != 1 || systems[0].as_str() != Some("snes"))
+    {
+        return Err("catalog PMU incremental operation did not rebuild exactly snes".into());
+    }
+    Ok(())
+}
+
+fn catalog_pmu_prepare_command() -> String {
+    format!(
+        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(CATALOG_PMU_REMOTE_DIR),
+    )
+}
+
+fn catalog_pmu_cleanup_command() -> String {
+    format!(
+        "set -eu; root={root}; rm -rf \"$root\"; test ! -e \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(CATALOG_PMU_REMOTE_DIR),
+    )
 }
 
 const STREAMLINE_REMOTE_ROOT: &str = "/tmp/mister-magik/streamline-capture";
@@ -12817,6 +12943,79 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn passing_catalog_pmu_summary() -> Value {
+        let profile = json!({
+            "dropped_profiles": 0,
+            "profiles": [{
+                "label": "catalog-builder",
+                "profile": {
+                    "enabled": true,
+                    "failure": null,
+                    "dropped_spans": 0,
+                    "records": [{"name": "catalog.scan"}],
+                },
+            }],
+        });
+        let operation = |name: &str, rebuilt: Value| {
+            json!({
+                "operation": name,
+                "status": "ok",
+                "peak_rss_kib": 1024,
+                "rebuilt_systems": rebuilt,
+                "profile": profile.clone(),
+            })
+        };
+        json!({
+            "schema": "mister-magik-pmu-workload-v1",
+            "workload": "catalog",
+            "status": "ok",
+            "configuration": {"root": CATALOG_PMU_REMOTE_DIR},
+            "operations": [
+                operation("fresh-build", json!(["arcade", "snes"])),
+                operation("rebuild", json!(["snes"])),
+                operation("rebuild-all", json!(["arcade", "snes"])),
+            ],
+            "validation": {
+                "isolated": true,
+                "incremental_game_delta": 1,
+                "rebuild_all_preserved_counts": true,
+            },
+        })
+    }
+
+    #[test]
+    fn catalog_pmu_validation_requires_three_complete_operations() {
+        let passing = passing_catalog_pmu_summary();
+        validate_catalog_pmu_workload(&passing).unwrap();
+
+        let mut dropped = passing.clone();
+        dropped["operations"][0]["profile"]["dropped_profiles"] = json!(1);
+        assert!(validate_catalog_pmu_workload(&dropped).is_err());
+
+        let mut wrong_delta = passing;
+        wrong_delta["operations"][1]["rebuilt_systems"] = json!(["snes", "c64"]);
+        assert!(validate_catalog_pmu_workload(&wrong_delta).is_err());
+    }
+
+    #[test]
+    fn catalog_pmu_cleanup_is_bounded_and_checks_arming_state() {
+        let prepare = catalog_pmu_prepare_command();
+        let cleanup = catalog_pmu_cleanup_command();
+        assert!(prepare.contains(CATALOG_PMU_REMOTE_DIR));
+        assert!(cleanup.contains(CATALOG_PMU_REMOTE_DIR));
+        assert!(!prepare.contains("/media/fat/mister-magik/catalog-v3"));
+        for arming_path in [
+            "/media/fat/mister-magik/launcher.env",
+            "/media/fat/mister-magik-dev/launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+        ] {
+            assert!(prepare.contains(arming_path));
+            assert!(cleanup.contains(arming_path));
+        }
+    }
 
     #[test]
     fn streamline_capture_is_fixed_bounded_and_pmuv1_compatible() {

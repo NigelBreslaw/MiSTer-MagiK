@@ -229,18 +229,18 @@ fn execute_pmu(
 }
 
 fn evaluate_pmu_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-suite-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-suite-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("PMU suite summary is not a passing v1 report".into());
+        return Err("PMU suite summary is not a passing v2 report".into());
     }
     let workloads = summary
         .get("workloads")
         .and_then(Value::as_array)
         .ok_or("PMU suite summary has no workloads")?;
-    if workloads.len() != 3 {
+    if workloads.len() != 4 {
         return Err(format!(
-            "PMU suite expected three workloads, received {}",
+            "PMU suite expected four workloads, received {}",
             workloads.len()
         )
         .into());
@@ -1097,14 +1097,15 @@ mod tests {
     }
 
     #[test]
-    fn pmu_suite_requires_three_passing_workloads() {
+    fn pmu_suite_requires_four_passing_workloads() {
         let passing = json!({
-            "schema": "mister-magik-pmu-suite-v1",
+            "schema": "mister-magik-pmu-suite-v2",
             "status": "passed",
             "workloads": [
                 {"workload": "probe", "status": "ok"},
                 {"workload": "screensaver", "status": "ok"},
                 {"workload": "search", "status": "ok"},
+                {"workload": "catalog", "status": "ok"},
             ],
         });
         evaluate_pmu_summary(&passing).unwrap();
