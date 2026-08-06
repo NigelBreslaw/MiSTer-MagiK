@@ -4132,9 +4132,12 @@ const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
-const SCREENSAVER_STARTUP_WARMUP_FRAMES: usize = 3;
-const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 45;
-const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 = SCREENSAVER_PROFILE_DURATION_SECS + 20;
+const SCREENSAVER_BENCHMARK_SEED: u64 = 5_575_851_515_594_434_924;
+const SCREENSAVER_WARMUP_SECS: u64 = 30;
+const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 90;
+const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 =
+    SCREENSAVER_WARMUP_SECS + SCREENSAVER_PROFILE_DURATION_SECS + 20;
+const PARTICLE_STARTUP_WARMUP_FRAMES: usize = 3;
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
 // Search trials are deliberately short: they only bracket/refine the limit.
 // The candidate is still required to pass a complete 30-second confirmation
@@ -7402,7 +7405,7 @@ fn summarize_particle_trial_for_renderer(
         }
     }
     let frames = frame_map.values().collect::<Vec<_>>();
-    if frames.len() <= SCREENSAVER_STARTUP_WARMUP_FRAMES {
+    if frames.len() <= PARTICLE_STARTUP_WARMUP_FRAMES {
         failures.push(json!({"kind": "insufficient-particle-frames", "frames": frames.len()}));
     }
     for frame in &frames {
@@ -7413,7 +7416,7 @@ fn summarize_particle_trial_for_renderer(
         }
     }
     let steady = frames
-        .get(SCREENSAVER_STARTUP_WARMUP_FRAMES..)
+        .get(PARTICLE_STARTUP_WARMUP_FRAMES..)
         .unwrap_or_default();
     for pair in steady.windows(2) {
         let previous = pair[0];
@@ -8225,7 +8228,7 @@ fn particle_benchmark_report(summary: &Value) -> String {
 }
 
 fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
-    const DISPLAY_MODE: &str = "hdmi-1280x720p60";
+    const DISPLAY_MODE: &str = "hdmi-1920x1200p60";
     let benchmark_mode = DISPLAY_MATRIX_MODES
         .iter()
         .find(|mode| mode.id == DISPLAY_MODE)
@@ -8312,19 +8315,25 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        if framebuffer_size != "1280x720" || framebuffer_bits_per_pixel != "16" {
+        if framebuffer_size != "960x600" || framebuffer_bits_per_pixel != "16" {
             return Err(format!(
-                "screensaver benchmark display is {framebuffer_size} at {framebuffer_bits_per_pixel} bpp, expected 1280x720 at 16 bpp"
+                "screensaver benchmark display is {framebuffer_size} at {framebuffer_bits_per_pixel} bpp, expected 960x600 at 16 bpp for 1920x1200 output"
             )
             .into());
         }
         drop(session);
-        let mut summaries = Vec::new();
-        for run in 1..=1 {
-            if attended_operation_interrupted() {
-                return Err("screensaver benchmark interrupted".into());
-            }
-            summaries.push(profile_installed_screensaver_run(config, output_dir, run)?);
+        let mut summaries = vec![
+            measure_installed_screensaver_cadence(config, output_dir, 1)?,
+            profile_installed_screensaver_run(config, output_dir, 2)?,
+        ];
+        for summary in &mut summaries {
+            summary["screenshot_runtime"]["geometry"] = json!({
+                "render": {"width": 960, "height": 600},
+                "framebuffer": {"width": 960, "height": 600},
+                "scan": {"width": 1920, "height": 1200},
+                "output": {"width": 1920, "height": 1200},
+                "bits_per_pixel": 16,
+            });
         }
         Ok((
             summaries,
@@ -8360,10 +8369,14 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     let benchmark_ini = benchmark_ini.ok_or("benchmark mode INI evidence is unavailable")?;
     let benchmark_ini_sha256 = encode_hex(&Sha256::digest(benchmark_ini.as_bytes()));
     let summary = json!({
-        "schema": "mister-magik-installed-screensaver-benchmark-v6",
+        "schema": "mister-magik-installed-screensaver-benchmark-v7",
         "benchmark_contract": {
-            "startup_warmup_frames": SCREENSAVER_STARTUP_WARMUP_FRAMES,
-            "startup_frames_are_informational": true,
+            "seed": SCREENSAVER_BENCHMARK_SEED,
+            "warmup_seconds": SCREENSAVER_WARMUP_SECS,
+            "measurement_seconds": SCREENSAVER_PROFILE_DURATION_SECS,
+            "passes": ["cadence", "profile"],
+            "cadence_pass_is_authoritative": true,
+            "profile_pass_is_attribution_only": true,
             "steady_state_requires_every_physical_refresh": true,
             "wall_overruns_are_informational": true,
             "retains_benchmark_display": true,
@@ -8568,7 +8581,7 @@ fn finalize_benchmark_state(
     if let Some(expected_ini) = expected_ini
         && final_ini != expected_ini
     {
-        return Err("MiSTer.ini changed after the confirmed 720p benchmark baseline".into());
+        return Err("MiSTer.ini changed after the confirmed 1920x1200 benchmark baseline".into());
     }
     exec_checked(
         &session,
@@ -8583,9 +8596,9 @@ fn validate_benchmark_display_geometry(session: &Session) -> Result<()> {
         .ok_or("device framebuffer size is unavailable")?;
     let bits_per_pixel = remote_read(session, "/sys/class/graphics/fb0/bits_per_pixel")
         .ok_or("device framebuffer depth is unavailable")?;
-    if framebuffer.trim().replace(',', "x") != "1280x720" || bits_per_pixel.trim() != "16" {
+    if framebuffer.trim().replace(',', "x") != "960x600" || bits_per_pixel.trim() != "16" {
         return Err(format!(
-            "screensaver benchmark display is {} at {} bpp, expected 1280x720 at 16 bpp",
+            "screensaver benchmark display is {} at {} bpp, expected 960x600 at 16 bpp for 1920x1200 output",
             framebuffer.trim().replace(',', "x"),
             bits_per_pixel.trim()
         )
@@ -8602,6 +8615,141 @@ fn combine_benchmark_cleanup(first: Result<()>, second: Result<()>) -> Result<()
             Err(format!("{first}; final-state verification failed: {second}").into())
         }
     }
+}
+
+fn measure_installed_screensaver_cadence(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    run: usize,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                (
+                    "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY".into(),
+                    "1".into(),
+                ),
+                (
+                    "MISTER_SCREENSAVER_SEED".into(),
+                    SCREENSAVER_BENCHMARK_SEED.to_string(),
+                ),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_for_installed_screenshot_cards(&session, Duration::from_secs(60))?;
+    drop(session);
+
+    thread::sleep(Duration::from_secs(SCREENSAVER_WARMUP_SECS));
+    let telemetry = agent_telemetry_for_duration(
+        config.agent()?,
+        Duration::from_secs(SCREENSAVER_PROFILE_DURATION_SECS),
+    )?;
+    let (first_frame, last_frame) = installed_screensaver_measurement_bounds(&telemetry)?;
+    let metadata = json!({
+        "schema": "mister-magik-screensaver-cadence-v1",
+        "trigger": "screensaver",
+        "state": "complete",
+        "pass": "cadence",
+        "cadence_authoritative": true,
+        "profiler_enabled": false,
+        "warmup_secs": SCREENSAVER_WARMUP_SECS,
+        "duration_secs": SCREENSAVER_PROFILE_DURATION_SECS,
+        "first_frame": first_frame,
+        "last_frame": last_frame,
+    });
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        output_dir.join(format!("run-{run}-cadence-telemetry.jsonl")),
+        format!("{telemetry_text}\n"),
+    )?;
+    fs::write(
+        output_dir.join(format!("run-{run}-cadence.json")),
+        format!("{}\n", serde_json::to_string_pretty(&metadata)?),
+    )?;
+    summarize_screensaver_telemetry(run, &telemetry, metadata)
+}
+
+fn wait_for_installed_screenshot_cards(session: &Session, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        if attended_operation_interrupted() {
+            return Err("screensaver benchmark interrupted".into());
+        }
+        let status = read_launcher_status(session)?;
+        let ready = status
+            .pointer("/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|frame| {
+                frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
+                    && frame
+                        .get("screensaver_active_cards")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        > 0
+            });
+        if ready {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+    Err("screensaver benchmark did not produce a real screenshot card before warmup".into())
+}
+
+fn installed_screensaver_measurement_bounds(telemetry: &[Value]) -> Result<(u64, u64)> {
+    let first_capture_us = telemetry
+        .iter()
+        .find_map(parse_host_presentation_snapshot)
+        .map(|snapshot| snapshot.captured_monotonic_us)
+        .ok_or("screensaver cadence has no initial FPGA telemetry timestamp")?;
+    let last_capture_us = telemetry
+        .iter()
+        .filter_map(parse_host_presentation_snapshot)
+        .next_back()
+        .map(|snapshot| snapshot.captured_monotonic_us)
+        .filter(|timestamp| *timestamp > first_capture_us)
+        .ok_or("screensaver cadence has no final FPGA telemetry timestamp")?;
+    let mut frames = std::collections::BTreeMap::new();
+    for sample in telemetry {
+        if let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        {
+            for frame in recent {
+                let completion_us = frame_u64(frame, "completion_monotonic_us");
+                if completion_us >= first_capture_us
+                    && completion_us <= last_capture_us
+                    && frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
+                    && frame_u64(frame, "screensaver_active_cards") > 0
+                    && let Some(id) = frame.get("frame").and_then(Value::as_u64)
+                {
+                    frames.insert(id, frame);
+                }
+            }
+        }
+    }
+    let first = frames
+        .first_key_value()
+        .map(|(frame, _)| *frame)
+        .ok_or("screensaver cadence has no completed screenshot frames")?;
+    let last = frames
+        .last_key_value()
+        .map(|(frame, _)| *frame)
+        .filter(|frame| *frame > first)
+        .ok_or("screensaver cadence has insufficient completed screenshot frames")?;
+    Ok((first, last))
 }
 
 fn profile_installed_screensaver_run(
@@ -8638,11 +8786,19 @@ fn profile_installed_screensaver_run(
                     "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS".into(),
                     "1".into(),
                 ),
+                (
+                    "MISTER_SCREENSAVER_SEED".into(),
+                    SCREENSAVER_BENCHMARK_SEED.to_string(),
+                ),
                 ("MISTER_PPROF".into(), "1".into()),
                 ("MISTER_PPROF_TRIGGER".into(), "screensaver".into()),
                 (
                     "MISTER_PPROF_DURATION_SECS".into(),
                     SCREENSAVER_PROFILE_DURATION_SECS.to_string(),
+                ),
+                (
+                    "MISTER_PPROF_WARMUP_SECS".into(),
+                    SCREENSAVER_WARMUP_SECS.to_string(),
                 ),
                 ("MISTER_PPROF_HZ".into(), "99".into()),
                 ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
@@ -8663,7 +8819,7 @@ fn profile_installed_screensaver_run(
     let session = connect_with(&config.connection, 10)?;
     let metadata = remote_read(&session, &remote_complete)
         .ok_or("screensaver profile completion metadata is missing")?;
-    let metadata_value: Value = serde_json::from_str(metadata.trim())?;
+    let mut metadata_value: Value = serde_json::from_str(metadata.trim())?;
     if metadata_value.get("state").and_then(Value::as_str) != Some("complete")
         || metadata_value
             .get("sample_hits")
@@ -8673,6 +8829,10 @@ fn profile_installed_screensaver_run(
     {
         return Err(format!("screensaver profile run {run} produced no CPU samples").into());
     }
+    metadata_value["pass"] = json!("profile");
+    metadata_value["cadence_authoritative"] = json!(false);
+    metadata_value["profiler_enabled"] = json!(true);
+    metadata_value["warmup_secs"] = json!(SCREENSAVER_WARMUP_SECS);
     let svg = remote_read(&session, &remote_svg)
         .filter(|text| !text.is_empty())
         .ok_or("screensaver profile SVG is missing")?;
@@ -8828,15 +8988,17 @@ fn summarize_screensaver_telemetry(
     telemetry: &[Value],
     metadata: Value,
 ) -> Result<Value> {
+    let cadence_pass = metadata.get("pass").and_then(Value::as_str) == Some("cadence");
     let active = telemetry
         .iter()
         .filter(|sample| {
-            matches!(
-                sample
-                    .pointer("/launcher/screensaver_profile_state")
-                    .and_then(Value::as_str),
-                Some("active" | "complete")
-            )
+            cadence_pass
+                || matches!(
+                    sample
+                        .pointer("/launcher/screensaver_profile_state")
+                        .and_then(Value::as_str),
+                    Some("active" | "complete")
+                )
         })
         .collect::<Vec<_>>();
     if active.is_empty() {
@@ -8907,13 +9069,14 @@ fn summarize_screensaver_telemetry(
         }
         screensaver_frames.push(frame);
     }
-    if screensaver_frames.len() <= SCREENSAVER_STARTUP_WARMUP_FRAMES {
+    if screensaver_frames.is_empty() {
         return Err(format!(
             "screensaver profile run {run} has no steady-state screensaver frame telemetry"
         )
         .into());
     }
-    let (startup, steady) = screensaver_frames.split_at(SCREENSAVER_STARTUP_WARMUP_FRAMES);
+    let startup: &[&Value] = &[];
+    let steady = screensaver_frames.as_slice();
     let mut wall = steady
         .iter()
         .map(|frame| frame_u64(frame, "wall_us"))
@@ -8941,9 +9104,7 @@ fn summarize_screensaver_telemetry(
         })
         .count();
     let mut presentation_failures = Vec::new();
-    for pair_index in SCREENSAVER_STARTUP_WARMUP_FRAMES.saturating_sub(1)
-        ..screensaver_frames.len().saturating_sub(1)
-    {
+    for pair_index in 0..screensaver_frames.len().saturating_sub(1) {
         let previous = screensaver_frames[pair_index];
         let current = screensaver_frames[pair_index + 1];
         let frame_id = current.get("frame").and_then(Value::as_u64).unwrap_or(0);
@@ -9160,8 +9321,11 @@ fn summarize_screensaver_telemetry(
         .filter(|failure| failure.get("kind").and_then(Value::as_str) == Some("latch-drop"))
         .map(|failure| failure.get("delta").and_then(Value::as_u64).unwrap_or(0))
         .sum::<u64>();
+    let screenshot_runtime = normalized_production_screenshot_runtime(steady, &physical_refresh);
     let mut result = json!({
         "run": run,
+        "pass": metadata.get("pass").cloned().unwrap_or(Value::Null),
+        "cadence_authoritative": cadence_pass,
         "captured_frames": frames.len(),
         "screensaver_frames": screensaver_frames.len(),
         "measurement_window": {
@@ -9194,6 +9358,7 @@ fn summarize_screensaver_telemetry(
         "periodic_timing": periodic,
         "raster_cadence": raster,
         "render_ahead": render_ahead,
+        "screenshot_runtime": screenshot_runtime,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
         "steady_state_present_bytes": {
@@ -10097,6 +10262,67 @@ fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
     })
 }
 
+fn normalized_frame_timing(frames: &[&Value], key: &str) -> Value {
+    let mut values = frames
+        .iter()
+        .map(|frame| frame_u64(frame, key))
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    json!({
+        "average_us": mean_u64(&values),
+        "p99_us": percentile_99(&values),
+        "max_us": values.last().copied().unwrap_or(0),
+    })
+}
+
+fn normalized_production_screenshot_runtime(frames: &[&Value], physical: &Value) -> Value {
+    let population = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "screensaver_active_cards"))
+        .collect::<Vec<_>>();
+    let fifo_depth = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "screensaver_render_ahead_queue_depth"))
+        .collect::<Vec<_>>();
+    let counter_delta = |key: &str| {
+        frames
+            .last()
+            .map(|frame| frame_u64(frame, key))
+            .unwrap_or(0)
+            .saturating_sub(
+                frames
+                    .first()
+                    .map(|frame| frame_u64(frame, key))
+                    .unwrap_or(0),
+            )
+    };
+    let sequence_failures = frames
+        .windows(2)
+        .filter(|pair| {
+            frame_u64(pair[1], "screensaver_render_ahead_sequence")
+                != frame_u64(pair[0], "screensaver_render_ahead_sequence").saturating_add(1)
+        })
+        .count();
+    json!({
+        "geometry": Value::Null,
+        "population": {
+            "minimum": population.iter().copied().min().unwrap_or(0),
+            "average": mean_u64(&population),
+            "maximum": population.iter().copied().max().unwrap_or(0),
+        },
+        "render": normalized_frame_timing(frames, "screensaver_render_ahead_render_wall_us"),
+        "transfer": normalized_frame_timing(frames, "main_present_hidden_copy_us"),
+        "fifo": {
+            "ready_depth_minimum": fifo_depth.iter().copied().min().unwrap_or(0),
+            "ready_depth_average": mean_u64(&fifo_depth),
+            "ready_depth_maximum": fifo_depth.iter().copied().max().unwrap_or(0),
+            "starvations": counter_delta("screensaver_render_ahead_starvation_count"),
+            "sequence_failures": sequence_failures,
+        },
+        "fpga": physical,
+    })
+}
+
 fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
     let mut failures = Vec::new();
     let presentation_failures = run
@@ -10206,7 +10432,7 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
     use std::fmt::Write as _;
 
     let mut report = String::new();
-    writeln!(report, "# 720p Screensaver Benchmark\n")?;
+    writeln!(report, "# 1920x1200 Screensaver Benchmark\n")?;
     writeln!(
         report,
         "Installed revision: `{}`  ",
@@ -16537,14 +16763,14 @@ H: Handlers=event3 js0"#
             }),
         )
         .unwrap();
-        assert_eq!(summary["startup"]["ignored_frames"], 3);
+        assert_eq!(summary["startup"]["ignored_frames"], 0);
         assert_eq!(summary["captured_frames"], 6);
         assert_eq!(summary["measurement_window"]["last_frame"], 5);
-        assert_eq!(summary["startup"]["max_wall_us"], 500_000);
-        assert_eq!(summary["startup"]["over_budget_frames"], 3);
-        assert_eq!(summary["steady_state"]["frames"], 2);
-        assert_eq!(summary["steady_state"]["average_fps"], 2.0);
-        assert_eq!(summary["steady_state"]["over_budget_frames"], 0);
+        assert_eq!(summary["startup"]["max_wall_us"], 0);
+        assert_eq!(summary["startup"]["over_budget_frames"], 0);
+        assert_eq!(summary["steady_state"]["frames"], 5);
+        assert_eq!(summary["steady_state"]["average_fps"], 5.0);
+        assert_eq!(summary["steady_state"]["over_budget_frames"], 3);
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);

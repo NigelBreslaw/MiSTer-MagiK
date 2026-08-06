@@ -974,7 +974,7 @@ fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
 
 fn evaluate_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-installed-screensaver-benchmark-v6")
+        != Some("mister-magik-installed-screensaver-benchmark-v7")
     {
         return Err("screensaver benchmark summary has the wrong schema".into());
     }
@@ -982,12 +982,25 @@ fn evaluate_summary(summary: &Value) -> AgentResult<()> {
         .get("runs")
         .and_then(Value::as_array)
         .ok_or("screensaver benchmark summary has no runs")?;
-    if runs.len() != 1 {
+    if runs.len() != 2 {
         return Err(format!(
-            "screensaver benchmark expected one run, received {}",
+            "screensaver benchmark expected paired cadence/profile runs, received {}",
             runs.len()
         )
         .into());
+    }
+    if runs[0].get("pass").and_then(Value::as_str) != Some("cadence")
+        || runs[0]
+            .get("cadence_authoritative")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || runs[1].get("pass").and_then(Value::as_str) != Some("profile")
+        || runs[1]
+            .get("cadence_authoritative")
+            .and_then(Value::as_bool)
+            != Some(false)
+    {
+        return Err("screensaver benchmark pass authority is invalid".into());
     }
     for run in runs {
         evaluate_run(run)?;
@@ -1098,9 +1111,11 @@ mod tests {
         assert!(evaluate_modal_input_summary(&no_fresh_activation).is_err());
     }
 
-    fn passing_run(run: u64) -> Value {
+    fn passing_run(run: u64, pass: &str, cadence_authoritative: bool) -> Value {
         json!({
             "run": run,
+            "pass": pass,
+            "cadence_authoritative": cadence_authoritative,
             "startup": {
                 "ignored_frames": 3,
                 "max_wall_us": 500_000
@@ -1141,25 +1156,31 @@ mod tests {
     }
 
     #[test]
-    fn installed_screensaver_requires_exactly_one_passing_run() {
+    fn installed_screensaver_requires_paired_passing_runs() {
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v6",
-                "runs": [passing_run(1)]
+                "schema": "mister-magik-installed-screensaver-benchmark-v7",
+                "runs": [
+                    passing_run(1, "cadence", true),
+                    passing_run(2, "profile", false),
+                ]
             }))
             .is_ok()
         );
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v6",
-                "runs": [passing_run(1), passing_run(2)]
+                "schema": "mister-magik-installed-screensaver-benchmark-v7",
+                "runs": [passing_run(1, "cadence", true)]
             }))
             .is_err()
         );
         assert!(
             evaluate_summary(&json!({
-                "schema": "mister-magik-installed-screensaver-benchmark-v5",
-                "runs": [passing_run(1)]
+                "schema": "mister-magik-installed-screensaver-benchmark-v6",
+                "runs": [
+                    passing_run(1, "cadence", true),
+                    passing_run(2, "profile", false),
+                ]
             }))
             .is_err()
         );
@@ -1197,26 +1218,26 @@ mod tests {
 
     #[test]
     fn installed_screensaver_rejects_performance_or_platform_errors() {
-        let mut slow = passing_run(1);
+        let mut slow = passing_run(1, "cadence", true);
         slow["steady_state"]["physical_refresh"]["unique_fps"] = json!(40.0);
         assert!(evaluate_run(&slow).is_err());
-        let mut latch_dropped = passing_run(1);
+        let mut latch_dropped = passing_run(1, "cadence", true);
         latch_dropped["latch_drop_delta"] = json!(1);
         assert!(evaluate_run(&latch_dropped).is_err());
-        let mut late_start = passing_run(1);
+        let mut late_start = passing_run(1, "cadence", true);
         late_start["startup"]["max_wall_us"] = json!(5_000_000);
         assert!(evaluate_run(&late_start).is_ok());
-        let mut timing_overrun = passing_run(1);
+        let mut timing_overrun = passing_run(1, "cadence", true);
         timing_overrun["steady_state"]["over_budget_frames"] = json!(1);
         assert!(evaluate_run(&timing_overrun).is_ok());
-        let mut presentation_failure = passing_run(1);
+        let mut presentation_failure = passing_run(1, "cadence", true);
         presentation_failure["steady_state"]["presentation_failures"] =
             json!([{"frame": 42, "kind": "sequence-gap"}]);
         assert!(evaluate_run(&presentation_failure).is_err());
-        let mut dropped = passing_run(1);
+        let mut dropped = passing_run(1, "cadence", true);
         dropped["steady_state"]["physical_refresh"]["dropped_frames"] = json!(1);
         assert!(evaluate_run(&dropped).is_err());
-        let mut legacy = passing_run(1);
+        let mut legacy = passing_run(1, "cadence", true);
         legacy["steady_state"]["physical_refresh"]
             .as_object_mut()
             .unwrap()
@@ -1224,11 +1245,11 @@ mod tests {
         // dropped-frame-legacy-fixture: old evidence must fail closed.
         legacy["steady_state"]["physical_refresh"]["repeated_refreshes"] = json!(0);
         assert!(evaluate_run(&legacy).is_err());
-        let mut long_gap = passing_run(1);
+        let mut long_gap = passing_run(1, "cadence", true);
         long_gap["steady_state"]["physical_refresh"]["software_refresh_diagnostics"]["long_completion_intervals"] =
             json!([{"frame": 42, "interval_us": 33_334}]);
         assert!(evaluate_run(&long_gap).is_ok());
-        let mut blocking_status = passing_run(1);
+        let mut blocking_status = passing_run(1, "cadence", true);
         blocking_status["status_publishing"]["enqueue_p99_us"] = json!(250);
         assert!(evaluate_run(&blocking_status).is_err());
     }

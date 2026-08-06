@@ -660,11 +660,11 @@ pub(crate) fn agent_telemetry_for_duration(
     let mut samples = Vec::new();
     while started.elapsed() < duration {
         if super::attended_operation_interrupted() {
-            return Err("particle benchmark interrupted".into());
+            return Err("device telemetry collection interrupted".into());
         }
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => return Err("MiSTer telemetry stream closed during particle trial".into()),
+            Ok(0) => return Err("MiSTer telemetry stream closed during bounded collection".into()),
             Ok(_) => samples.push(parse_device_telemetry_sample(&line)?),
             Err(error)
                 if matches!(
@@ -675,7 +675,7 @@ pub(crate) fn agent_telemetry_for_duration(
         }
     }
     if samples.is_empty() {
-        return Err("particle benchmark collected no telemetry samples".into());
+        return Err("bounded device telemetry collection produced no samples".into());
     }
     Ok(samples)
 }

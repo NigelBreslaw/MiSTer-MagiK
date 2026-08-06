@@ -1250,6 +1250,7 @@ fn summarize_scene_assessment(
     } else {
         "dropped frames occurred in the unprofiled control; inspect dropped-frame contexts and CPU stacks"
     };
+    let screenshot_runtime = normalized_lab_screenshot_runtime(&cadence, cadence_frames);
     Ok(json!({
         "schema": "mister-magik-scene-lab-assessment-v3",
         "cadence_pass": cadence,
@@ -1262,9 +1263,77 @@ fn summarize_scene_assessment(
         "profile_long_confirmation_gaps": card_long_confirmation_gaps(profile_frames),
         "cadence_pre_post_outliers": card_pre_post_outliers(cadence_frames),
         "profile_pre_post_outliers": card_pre_post_outliers(profile_frames),
+        "screenshot_runtime": screenshot_runtime,
         "attribution": attribution,
         "qualification_failures": failures,
     }))
+}
+
+fn normalized_lab_screenshot_runtime(pass: &Value, frames: &[Value]) -> Value {
+    let phase_timings = card_phase_summary(frames);
+    let display = pass.get("display").cloned().unwrap_or(Value::Null);
+    let population = frames
+        .iter()
+        .filter_map(|frame| frame.get("visible_count").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let fifo_depth = frames
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .pointer("/screenshot/fifo_ready_depth")
+                .and_then(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    let mean = |values: &[u64]| {
+        if values.is_empty() {
+            0.0
+        } else {
+            values.iter().sum::<u64>() as f64 / values.len() as f64
+        }
+    };
+    let final_counter = |field: &str| {
+        frames
+            .iter()
+            .filter_map(|frame| frame.pointer(field).and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0)
+    };
+    json!({
+        "geometry": {
+            "render": {
+                "width": display.get("render_w").cloned().unwrap_or(Value::Null),
+                "height": display.get("render_h").cloned().unwrap_or(Value::Null),
+            },
+            "framebuffer": {
+                "width": display.get("framebuffer_w").cloned().unwrap_or(Value::Null),
+                "height": display.get("framebuffer_h").cloned().unwrap_or(Value::Null),
+            },
+            "scan": {
+                "width": display.get("scan_w").cloned().unwrap_or(Value::Null),
+                "height": display.get("scan_h").cloned().unwrap_or(Value::Null),
+            },
+            "output": {
+                "width": display.get("output_w").cloned().unwrap_or(Value::Null),
+                "height": display.get("output_h").cloned().unwrap_or(Value::Null),
+            },
+            "bits_per_pixel": 16,
+        },
+        "population": {
+            "minimum": population.iter().copied().min().unwrap_or(0),
+            "average": mean(&population),
+            "maximum": population.iter().copied().max().unwrap_or(0),
+        },
+        "render": phase_timings.get("render_wall_us").cloned().unwrap_or(Value::Null),
+        "transfer": phase_timings.get("transfer_wall_us").cloned().unwrap_or(Value::Null),
+        "fifo": {
+            "ready_depth_minimum": fifo_depth.iter().copied().min().unwrap_or(0),
+            "ready_depth_average": mean(&fifo_depth),
+            "ready_depth_maximum": fifo_depth.iter().copied().max().unwrap_or(0),
+            "starvations": final_counter("/screenshot/fifo_starvations"),
+            "sequence_failures": final_counter("/screenshot/fifo_sequence_failures"),
+        },
+        "fpga": pass.get("cadence").cloned().unwrap_or(Value::Null),
+    })
 }
 
 fn value_u64(value: &Value, field: &str) -> u64 {

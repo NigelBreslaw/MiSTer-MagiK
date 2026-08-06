@@ -122,6 +122,19 @@ fn screensaver_profile_duration() -> Duration {
     )
 }
 
+fn screensaver_profile_warmup() -> Duration {
+    screensaver_profile_warmup_from_value(std::env::var("MISTER_PPROF_WARMUP_SECS").ok().as_deref())
+}
+
+fn screensaver_profile_warmup_from_value(value: Option<&str>) -> Duration {
+    Duration::from_secs(
+        value
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(0)
+            .clamp(0, 300),
+    )
+}
+
 fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
     Duration::from_secs(
         value
@@ -149,7 +162,7 @@ pub struct CpuProfileSummary {
 mod imp {
     use super::{
         BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
-        screensaver_profile_duration, screensaver_profile_frame_bounds,
+        screensaver_profile_duration, screensaver_profile_frame_bounds, screensaver_profile_warmup,
         set_screensaver_profile_state,
     };
     use serde_json::json;
@@ -360,6 +373,10 @@ mod imp {
     enum State {
         Disabled,
         Waiting,
+        Warming {
+            started: Instant,
+            trigger: BoundedProfileTrigger,
+        },
         Active {
             profiler: CpuProfiler,
             started: Instant,
@@ -372,6 +389,7 @@ mod imp {
     pub struct ScreensaverProfiler {
         state: State,
         trigger: Option<BoundedProfileTrigger>,
+        warmup: Duration,
         duration: Duration,
         complete_path: Option<String>,
     }
@@ -395,6 +413,7 @@ mod imp {
             Self {
                 state,
                 trigger,
+                warmup: screensaver_profile_warmup(),
                 duration: screensaver_profile_duration(),
                 complete_path: std::env::var("MISTER_PPROF_COMPLETE").ok(),
             }
@@ -412,6 +431,17 @@ mod imp {
             if self.trigger != Some(trigger) || !matches!(self.state, State::Waiting) {
                 return;
             }
+            if !self.warmup.is_zero() {
+                self.state = State::Warming {
+                    started: Instant::now(),
+                    trigger,
+                };
+                return;
+            }
+            self.start(trigger, first_frame);
+        }
+
+        fn start(&mut self, trigger: BoundedProfileTrigger, first_frame: u64) {
             match start_enabled() {
                 Some(profiler) => {
                     self.state = State::Active {
@@ -428,6 +458,15 @@ mod imp {
         }
 
         pub fn poll(&mut self, next_frame: u64) {
+            let warmed_trigger = match &self.state {
+                State::Warming { started, trigger } if started.elapsed() >= self.warmup => {
+                    Some(*trigger)
+                }
+                _ => None,
+            };
+            if let Some(trigger) = warmed_trigger {
+                self.start(trigger, next_frame);
+            }
             let elapsed = match &self.state {
                 State::Active { started, .. } => started.elapsed(),
                 _ => return,
@@ -595,6 +634,19 @@ mod tests {
             screensaver_profile_duration_from_value(None),
             Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn screensaver_profile_warmup_is_optional_and_bounded() {
+        assert_eq!(
+            screensaver_profile_warmup_from_value(Some("30")),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            screensaver_profile_warmup_from_value(Some("999")),
+            Duration::from_secs(300)
+        );
+        assert_eq!(screensaver_profile_warmup_from_value(None), Duration::ZERO);
     }
 
     #[test]
