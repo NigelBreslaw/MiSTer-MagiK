@@ -2830,16 +2830,14 @@ pub(super) fn run_launcher_loop(
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
     let mut modal_input_test_dialog_pending = modal_input_catalog_recovery_test_requested(start);
-    if maybe_present_modal_input_test_dialog(
+    let mut modal_input_test_bridge_sync_pending = maybe_present_modal_input_test_dialog(
         &mut modal_input_test_dialog_pending,
         catalog_ready,
         &mut lifecycle,
         &mut lifecycle_effects,
         &mut scheduler,
         start,
-    ) {
-        full_bridge_dirty = true;
-    }
+    );
     window.request_redraw();
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
@@ -2968,7 +2966,8 @@ pub(super) fn run_launcher_loop(
             slint::platform::update_timers_and_animations();
         }
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
-        let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending);
+        let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
+            || std::mem::take(&mut modal_input_test_bridge_sync_pending);
         if let Some(collection_id) = deferred_navigation_hydration_finish.take() {
             nav.catalog_system_hydration_finished(&collection_id);
             full_bridge_dirty = true;
