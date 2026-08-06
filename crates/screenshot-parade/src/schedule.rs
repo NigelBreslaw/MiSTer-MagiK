@@ -290,7 +290,7 @@ impl ScreenshotParade {
             tiles: Vec::new(),
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
-            visible_spans: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum() * 128),
+            visible_spans: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum::<usize>() * 128),
             depth_coverage: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             coverage_intervals: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             deck: (0..asset_keys.len()).collect(),
