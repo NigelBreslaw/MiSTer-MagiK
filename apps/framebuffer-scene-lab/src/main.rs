@@ -28,10 +28,14 @@ use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
 };
 use mister_magik_screenshot_parade::{
-    PreparationSlack, STRICT_READY_CAPACITY, ScreenshotParade, ScreenshotParadeConfig,
-    ScreenshotParadeReplacementMode, ScreenshotParadeStartup, ScreenshotParadeStats,
-    ScreenshotPhaseGeneration, ScreenshotSamplingProfile, StrictFrameConsumer, StrictFramePoll,
-    StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
+    PreparationSlack, ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
+    ScreenshotParadeStartup, ScreenshotParadeStats, ScreenshotPhaseGeneration,
+    ScreenshotSamplingProfile,
+};
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+use mister_magik_screenshot_parade::{
+    STRICT_READY_CAPACITY, StrictFrameConsumer, StrictFramePoll, StrictFrameProducer,
+    StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -44,6 +48,7 @@ mod cpu_profile;
 
 const FRAME_RATE: u64 = 60;
 const FRAME_DURATION: Duration = Duration::from_nanos(1_000_000_000 / FRAME_RATE);
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 const SCREENSHOT_PRESENTATION_WAKE_GUARD: Duration = Duration::from_millis(3);
 const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
@@ -952,6 +957,7 @@ impl LabScene {
         }
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
     fn preparation_slack(&self) -> Option<std::sync::Arc<PreparationSlack>> {
         match self {
             Self::Screenshot(renderer) => renderer.preparation_slack(),
