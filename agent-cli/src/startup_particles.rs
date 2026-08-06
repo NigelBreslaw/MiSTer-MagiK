@@ -417,13 +417,24 @@ pub fn execute_scene_device(
     if args.assess && args.profile {
         return Err("scene-lab --assess cannot be combined with --profile".into());
     }
+    if args.pmu
+        && (args.scene != DeviceSceneLabScene::ScreenshotScreensaver
+            || args.seconds.is_some()
+            || args.warmup_seconds > 0
+            || args.profile
+            || args.assess)
+    {
+        return Err(
+            "scene-lab --pmu requires screenshot-screensaver without timed/profile options".into(),
+        );
+    }
     let spec = if args.profile || args.assess {
         BuildSpec::framebuffer_scene_lab_analysis()
     } else {
         BuildSpec::framebuffer_scene_lab_device()
     };
     execute(repository, &spec, reporter)?;
-    let output_dir = args.seconds.map(|_| {
+    let output_dir = (args.seconds.is_some() || args.pmu).then(|| {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock must be after Unix epoch")

@@ -31,6 +31,7 @@ scripts/agent device scene-lab --scene magik --recipe RECIPE --attended
 scripts/agent device scene-lab --scene navigation-transition --fixture home-arcade --attended
 scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
+scripts/agent device scene-lab --scene screenshot-screensaver --pmu --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
@@ -117,6 +118,10 @@ cadence/profile frame and summary files plus a combined report. Display geometry
 is detected and recorded but never changed. Card-flip keeps its optional
 progress, face, direction, and dirty-region metrics; `--duration-ms` controls
 the animation and remains independent of `--seconds`.
+
+The screenshot-only `--pmu` mode runs the fixed 960x600, 180-frame seeded
+workload synchronously in the disposable lab binary. It retains authoritative
+Cortex-A9 counters as `pmu.json` without replacing the installed launcher.
 
 The timing fields are deliberately disjoint. `render` covers projection and
 rasterization, `transfer` covers only `prepare_cached`, `present` runs from the

@@ -52,6 +52,7 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) warmup_seconds: u64,
     pub(crate) profile: bool,
     pub(crate) assess: bool,
+    pub(crate) pmu: bool,
     pub(crate) output_dir: Option<&'a Path>,
 }
 
@@ -69,6 +70,7 @@ struct RemoteLabRequest {
     warmup_seconds: u64,
     profile: bool,
     assess: bool,
+    pmu: bool,
     output_dir: Option<PathBuf>,
 }
 
@@ -104,6 +106,7 @@ pub(super) fn run(
             warmup_seconds: 0,
             profile: false,
             assess: false,
+            pmu: false,
             output_dir: None,
         },
     )
@@ -137,6 +140,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         warmup_seconds,
         profile,
         assess,
+        pmu,
         output_dir,
     } = request;
     let has_recipe = recipe.is_some();
@@ -163,7 +167,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         let cleanup = remove_volatile_directory(&session);
         return combine_results(Err(error), cleanup);
     }
-    if let Some(seconds) = seconds {
+    if seconds.is_some() || pmu {
         let Some(output_dir) = output_dir else {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(
@@ -185,6 +189,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             particle_preset,
             profile,
             assess,
+            pmu,
         ) {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(Err(error), cleanup);
@@ -227,6 +232,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     warmup_seconds,
                     profile,
                     assess,
+                    pmu,
                     output_dir,
                 },
             )
@@ -556,6 +562,7 @@ fn run_remote_lab(
         warmup_seconds,
         profile,
         assess,
+        pmu,
         output_dir,
     } = request;
     let session = connect_with(config, 10)?;
@@ -574,9 +581,15 @@ fn run_remote_lab(
             warmup_seconds,
             profile,
             assess,
+            pmu,
         ),
     );
-    let evidence_result = if seconds.is_some() {
+    let evidence_result = if pmu {
+        let output_dir = output_dir
+            .as_deref()
+            .ok_or("PMU scene-lab output directory is missing")?;
+        retrieve_pmu_evidence(&session, output_dir, &scene)
+    } else if seconds.is_some() {
         let output_dir = output_dir
             .as_deref()
             .ok_or("bounded scene-lab output directory is missing")?;
@@ -623,7 +636,7 @@ fn prepare_scene_evidence_output(
     output_dir: &Path,
     binary: &Path,
     scene: &str,
-    seconds: u64,
+    seconds: Option<u64>,
     warmup_seconds: u64,
     screenshot: Option<&RemoteScreenshotArgs>,
     recipe: Option<&Path>,
@@ -633,6 +646,7 @@ fn prepare_scene_evidence_output(
     particle_preset: Option<&str>,
     profile: bool,
     assess: bool,
+    pmu: bool,
 ) -> Result<()> {
     fs::create_dir_all(output_dir)?;
     let receipt_path = PathBuf::from(format!("{}.build-receipt.tsv", binary.display()));
@@ -658,7 +672,12 @@ fn prepare_scene_evidence_output(
         "warmup_seconds": warmup_seconds,
         "profile": profile,
         "assess": assess,
-        "seed": screenshot.map(|screenshot| screenshot.seed),
+        "pmu": pmu,
+        "seed": if pmu {
+            Some(0x4d61_6769_4b50_4d55_u64)
+        } else {
+            screenshot.map(|screenshot| screenshot.seed)
+        },
         "screenshot_pack": screenshot.map(|screenshot| json!({
             "path": screenshot.archive,
             "fingerprint": screenshot.fingerprint,
@@ -748,6 +767,96 @@ fn retrieve_scene_evidence(
         )
         .into());
     }
+    Ok(())
+}
+
+fn retrieve_pmu_evidence(session: &Session, output_dir: &Path, scene: &str) -> Result<()> {
+    if scene != "screenshot-screensaver" {
+        return Err("PMU scene-lab evidence is restricted to screenshot-screensaver".into());
+    }
+    fs::create_dir_all(output_dir)?;
+    let contents =
+        require_remote_artifact(session, &format!("{REMOTE_SCENE_EVIDENCE_DIR}/pmu.json"))?;
+    let summary: Value = serde_json::from_str(contents.trim())?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-scene-lab-pmu-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("ok")
+        || summary
+            .pointer("/configuration/frames")
+            .and_then(Value::as_u64)
+            != Some(180)
+        || summary
+            .pointer("/configuration/width")
+            .and_then(Value::as_u64)
+            != Some(960)
+        || summary
+            .pointer("/configuration/height")
+            .and_then(Value::as_u64)
+            != Some(600)
+        || summary
+            .pointer("/configuration/seed")
+            .and_then(Value::as_u64)
+            != Some(0x4d61_6769_4b50_4d55)
+        || summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
+        || !summary
+            .pointer("/profile/failure")
+            .is_some_and(Value::is_null)
+        || summary
+            .pointer("/profile/attempted_spans")
+            .and_then(Value::as_u64)
+            != Some(720)
+        || summary
+            .pointer("/profile/dropped_spans")
+            .and_then(Value::as_u64)
+            != Some(0)
+        || summary
+            .pointer("/profile/read_format")
+            .and_then(Value::as_str)
+            != Some("ordered-values")
+        || summary.pointer("/profile/scope").and_then(Value::as_str)
+            != Some("calling-thread-any-cpu")
+        || summary
+            .pointer("/target/event_sources")
+            .and_then(Value::as_array)
+            .is_none_or(|sources| {
+                !sources
+                    .iter()
+                    .any(|source| source.as_str() == Some("armv7_cortex_a9"))
+            })
+    {
+        return Err("scene-lab PMU evidence is not authoritative Cortex-A9 data".into());
+    }
+    for phase in [
+        "screensaver.background",
+        "screensaver.advance",
+        "screensaver.draw-order",
+        "screensaver.tile-blit",
+    ] {
+        let phase = &summary["phase_summaries"][phase];
+        if phase.get("samples").and_then(Value::as_u64) != Some(180)
+            || phase
+                .pointer("/cycles/mean")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+            || phase
+                .pointer("/instructions/mean")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+        {
+            return Err("scene-lab PMU phase summary is incomplete".into());
+        }
+    }
+    let pixel_hash = summary
+        .get("pixel_hash")
+        .and_then(Value::as_str)
+        .filter(|hash| hash.len() == 16)
+        .ok_or("scene-lab PMU result has no deterministic pixel hash")?;
+    fs::write(output_dir.join("pmu.json"), &contents)?;
+    println!(
+        "screenshot-screensaver PMU evidence: {} hash={pixel_hash}",
+        output_dir.display()
+    );
     Ok(())
 }
 
@@ -1592,6 +1701,7 @@ fn remote_run_lab_command(
     warmup_seconds: u64,
     profile: bool,
     assess: bool,
+    pmu: bool,
 ) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
@@ -1620,7 +1730,15 @@ fn remote_run_lab_command(
             },
         )
     });
-    let invocation = if assess {
+    let invocation = if pmu {
+        format!(
+            "rm -rf {evidence}; mkdir -p {evidence}; MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {environment} {binary} {scene_arguments} --pmu --evidence-dir {evidence}",
+            evidence = sh(REMOTE_SCENE_EVIDENCE_DIR),
+            environment = environment,
+            binary = sh(REMOTE_BINARY),
+            scene_arguments = scene_arguments,
+        )
+    } else if assess {
         let cadence_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/cadence");
         let profile_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/profile");
         format!(
@@ -1738,6 +1856,7 @@ mod tests {
             0,
             false,
             false,
+            false,
         );
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
@@ -1765,6 +1884,7 @@ mod tests {
             0,
             false,
             false,
+            false,
         );
         assert!(run.contains("--particle-count 40000"));
         assert!(run.contains(&format!("--particle-preset {}", sh("visual"))));
@@ -1783,6 +1903,7 @@ mod tests {
             None,
             None,
             0,
+            false,
             false,
             false,
         );
@@ -1809,6 +1930,7 @@ mod tests {
             None,
             None,
             0,
+            false,
             false,
             false,
         );
@@ -1839,6 +1961,7 @@ mod tests {
             0,
             false,
             false,
+            false,
         );
         assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
         assert!(run.contains("--seed 4660"));
@@ -1846,6 +1969,35 @@ mod tests {
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
+    }
+
+    #[test]
+    fn screenshot_pmu_lab_is_fixed_and_does_not_install_runtime() {
+        let screenshot = RemoteScreenshotArgs {
+            archive: DEV_SCREENSHOT_ARCHIVE,
+            seed: 0x1234,
+            fingerprint: "bytes=1 sha256=test".into(),
+        };
+        let run = remote_run_lab_command(
+            &hdmi_contracts(),
+            "screenshot-screensaver",
+            false,
+            None,
+            Some(&screenshot),
+            None,
+            None,
+            None,
+            None,
+            0,
+            false,
+            false,
+            true,
+        );
+        assert!(run.contains("MISTER_PMU_PROFILE=1"));
+        assert!(run.contains("MISTER_PMU_SAMPLE_EVERY=1"));
+        assert!(run.contains("MISTER_PMU_RECORD_LIMIT=4096"));
+        assert!(run.contains("--pmu --evidence-dir"));
+        assert!(!run.contains("/media/fat/mister-magik-dev/mister-magik-fb"));
     }
 
     #[test]
@@ -1863,6 +2015,7 @@ mod tests {
             0,
             false,
             true,
+            false,
         );
         assert!(run.contains("--assessment-pass cadence"));
         assert!(run.contains("--assessment-pass profile"));
@@ -1884,6 +2037,7 @@ mod tests {
             None,
             Some(5),
             1,
+            false,
             false,
             false,
         );
@@ -1909,6 +2063,7 @@ mod tests {
             0,
             false,
             true,
+            false,
         );
         assert_eq!(
             assessment
@@ -2096,6 +2251,7 @@ mod tests {
             None,
             None,
             0,
+            false,
             false,
             false,
         );

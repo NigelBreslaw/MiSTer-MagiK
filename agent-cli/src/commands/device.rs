@@ -227,6 +227,8 @@ pub struct SceneLabArgs {
     pub(crate) profile: bool,
     #[arg(long)]
     pub(crate) assess: bool,
+    #[arg(long)]
+    pub(crate) pmu: bool,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -370,6 +372,7 @@ pub fn run_scene_lab(
             warmup_seconds: args.warmup_seconds,
             profile: args.profile,
             assess: args.assess,
+            pmu: args.pmu,
             output_dir,
         })
     })

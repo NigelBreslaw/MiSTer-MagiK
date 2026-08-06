@@ -39,7 +39,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(all(feature = "profile", target_os = "linux", target_arch = "arm"))]
 mod cpu_profile;
@@ -52,6 +52,10 @@ const CABINET_DEFAULT_PARTICLES: usize = 39_936;
 const CABINET_MIN_PARTICLES: usize = 1_024;
 const CABINET_PARTICLE_STEP: usize = 1_024;
 const DEFAULT_SCREENSHOT_SEED: u64 = 0x4d61_6769_4b54_696c;
+const SCREENSHOT_PMU_SEED: u64 = 0x4d61_6769_4b50_4d55;
+const SCREENSHOT_PMU_WIDTH: usize = 960;
+const SCREENSHOT_PMU_HEIGHT: usize = 600;
+const SCREENSHOT_PMU_FRAMES: u64 = 180;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BoundedRun {
@@ -383,6 +387,15 @@ fn main() -> Result<(), String> {
                 options.seed
             );
             return Ok(());
+        }
+        if options.pmu {
+            return run_screenshot_pmu(
+                archive,
+                options
+                    .evidence_dir
+                    .as_deref()
+                    .expect("PMU option validation requires an evidence directory"),
+            );
         }
         if let Some(output) = options.output.as_deref() {
             return render_screenshot_headless(
@@ -745,6 +758,148 @@ fn render_screenshot_headless(
         frame_hash(&pixels)
     );
     Ok(())
+}
+
+fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), String> {
+    let _ = mister_magik_screenshot_parade::take_render_pmu_profile();
+    let geometry = SceneGeometry::new(
+        SCREENSHOT_PMU_WIDTH,
+        SCREENSHOT_PMU_HEIGHT,
+        SCREENSHOT_PMU_WIDTH,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut renderer = screenshot_scene(archive_path, SCREENSHOT_PMU_SEED, true, geometry)?;
+    let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
+    let started = Instant::now();
+    let mut last_stats = None;
+    for tick in 0..SCREENSHOT_PMU_FRAMES {
+        last_stats = Some(renderer.render_at_presentation_tick(&mut pixels, tick)?);
+    }
+    let elapsed_us = started.elapsed().as_micros();
+    let profile = mister_magik_screenshot_parade::take_render_pmu_profile();
+    let stats = last_stats.ok_or("screenshot PMU workload rendered no frames")?;
+    let phase_names = [
+        "screensaver.background",
+        "screensaver.advance",
+        "screensaver.draw-order",
+        "screensaver.tile-blit",
+    ];
+    let phase_summaries = phase_names
+        .into_iter()
+        .map(|name| {
+            let records = profile
+                .records
+                .iter()
+                .filter(|record| record.name == name)
+                .collect::<Vec<_>>();
+            let summary = serde_json::json!({
+                "samples": records.len(),
+                "cycles": pmu_counter_summary(records.iter().map(|record| record.counters.counters.cycles)),
+                "instructions": pmu_counter_summary(records.iter().map(|record| record.counters.counters.instructions)),
+                "l1d_accesses": pmu_counter_summary(records.iter().map(|record| record.counters.counters.l1d_accesses)),
+                "l1d_refills": pmu_counter_summary(records.iter().map(|record| record.counters.counters.l1d_refills)),
+                "branches": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branches)),
+                "branch_mispredicts": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branch_mispredicts)),
+            });
+            (name, summary)
+        })
+        .collect::<serde_json::Map<_, _>>();
+    let mut event_sources = std::fs::read_dir("/sys/bus/event_source/devices")
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    event_sources.sort();
+    let profile_json = serde_json::to_value(&profile).map_err(|error| error.to_string())?;
+    let authoritative = profile.enabled
+        && profile.failure.is_none()
+        && profile.dropped_spans == 0
+        && profile.attempted_spans == SCREENSHOT_PMU_FRAMES * phase_names.len() as u64
+        && phase_names.iter().all(|name| {
+            profile
+                .records
+                .iter()
+                .filter(|record| record.name == *name)
+                .count()
+                == SCREENSHOT_PMU_FRAMES as usize
+        })
+        && profile.records.iter().all(|record| {
+            record.counters.counters.cycles > 0 && record.counters.counters.instructions > 0
+        })
+        && profile_json
+            .get("read_format")
+            .and_then(serde_json::Value::as_str)
+            == Some("ordered-values")
+        && profile_json
+            .get("scope")
+            .and_then(serde_json::Value::as_str)
+            == Some("calling-thread-any-cpu")
+        && event_sources
+            .iter()
+            .any(|source| source == "armv7_cortex_a9");
+    let summary = serde_json::json!({
+        "schema": "mister-magik-scene-lab-pmu-v1",
+        "status": if authoritative { "ok" } else { "failed" },
+        "configuration": {
+            "frames": SCREENSHOT_PMU_FRAMES,
+            "width": SCREENSHOT_PMU_WIDTH,
+            "height": SCREENSHOT_PMU_HEIGHT,
+            "seed": SCREENSHOT_PMU_SEED,
+            "archive_path": archive_path,
+        },
+        "target": {
+            "architecture": std::env::consts::ARCH,
+            "operating_system": std::env::consts::OS,
+            "event_sources": event_sources,
+        },
+        "elapsed_us": elapsed_us,
+        "pixel_hash": format!("{:016x}", frame_hash(&pixels)),
+        "result": {
+            "active_cards": stats.active_cards,
+            "cards_drawn": stats.cards_drawn,
+            "cards_culled": stats.cards_culled,
+            "phase_bank_resident_bytes": stats.phase_bank_resident_bytes,
+        },
+        "phase_summaries": phase_summaries,
+        "profile": profile,
+    });
+    std::fs::create_dir_all(evidence_dir)
+        .map_err(|error| format!("create PMU evidence directory: {error}"))?;
+    let path = evidence_dir.join("pmu.json");
+    let mut bytes = serde_json::to_vec_pretty(&summary).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    std::fs::write(&path, bytes).map_err(|error| format!("write {}: {error}", path.display()))?;
+    println!("{summary}");
+    if authoritative {
+        Ok(())
+    } else {
+        Err("screenshot PMU workload did not produce authoritative Cortex-A9 counters".into())
+    }
+}
+
+fn pmu_counter_summary(samples: impl Iterator<Item = u64>) -> serde_json::Value {
+    let mut samples = samples.collect::<Vec<_>>();
+    samples.sort_unstable();
+    let mean = samples
+        .iter()
+        .copied()
+        .map(u128::from)
+        .sum::<u128>()
+        .checked_div(samples.len() as u128)
+        .unwrap_or(0);
+    let p50 = samples
+        .get(samples.len().saturating_sub(1) / 2)
+        .copied()
+        .unwrap_or(0);
+    serde_json::json!({
+        "mean": mean,
+        "p50": p50,
+        "min": samples.first().copied().unwrap_or(0),
+        "max": samples.last().copied().unwrap_or(0),
+    })
 }
 
 fn render_headless(recipe_path: &Path, time_ms: u64, output: &Path) -> Result<(), String> {
@@ -3074,6 +3229,7 @@ struct Options {
     seconds: Option<u64>,
     warmup_seconds: u64,
     profile: bool,
+    pmu: bool,
     assessment_pass: Option<MeasurementPass>,
     evidence_dir: Option<PathBuf>,
     duration_ms: Option<u64>,
@@ -3098,6 +3254,7 @@ impl Options {
         let mut seconds = None;
         let mut warmup_seconds = 0;
         let mut profile = false;
+        let mut pmu = false;
         let mut assessment_pass = None;
         let mut evidence_dir = None;
         let mut duration_ms = None;
@@ -3195,6 +3352,7 @@ impl Options {
                         })?;
                 }
                 "--profile" => profile = true,
+                "--pmu" => pmu = true,
                 "--assessment-pass" => {
                     let value = arguments
                         .next()
@@ -3261,6 +3419,7 @@ impl Options {
             seconds,
             warmup_seconds,
             profile,
+            pmu,
             assessment_pass,
             evidence_dir,
             duration_ms,
@@ -3307,8 +3466,26 @@ impl Options {
         if (self.profile || self.assessment_pass.is_some()) && self.seconds.is_none() {
             return Err("profiling and assessment require --seconds".into());
         }
-        if self.assessment_pass.is_some() != self.evidence_dir.is_some() {
+        if self.pmu
+            && (self.scene != EffectKind::ScreenshotScreensaver
+                || self.seconds.is_some()
+                || self.warmup_seconds > 0
+                || self.profile
+                || self.assessment_pass.is_some()
+                || self.check
+                || self.output.is_some()
+                || self.evidence_dir.is_none())
+        {
+            return Err(
+                "--pmu requires screenshot-screensaver and --evidence-dir without timed/profile/capture options"
+                    .into(),
+            );
+        }
+        if !self.pmu && self.assessment_pass.is_some() != self.evidence_dir.is_some() {
             return Err("measurement requires both --assessment-pass and --evidence-dir".into());
+        }
+        if !self.pmu && self.assessment_pass.is_none() && self.evidence_dir.is_some() {
+            return Err("--evidence-dir requires --pmu or --assessment-pass".into());
         }
         if self.assessment_pass.is_some() && (self.profile || self.check || self.output.is_some()) {
             return Err("--assessment-pass requires an interactive run without --profile".into());
@@ -3401,7 +3578,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene magik --recipe FILE.json --particle-count N --particle-preset capacity|visual --seconds N\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene magik --recipe FILE.json --particle-count N --particle-preset capacity|visual --seconds N\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE --pmu --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
@@ -4034,6 +4211,22 @@ mod tests {
             Some(PathBuf::from("screenshots.mmlz4b"))
         );
         assert_eq!(screenshot.seed, 0x1234);
+
+        let pmu = Options::parse(
+            [
+                "--scene",
+                "screenshot-screensaver",
+                "--archive",
+                "screenshots.mmlz4b",
+                "--pmu",
+                "--evidence-dir",
+                "/tmp/screenshot-pmu",
+            ]
+            .map(String::from),
+        )
+        .unwrap();
+        assert!(pmu.pmu);
+        assert_eq!(pmu.evidence_dir, Some(PathBuf::from("/tmp/screenshot-pmu")));
     }
 
     #[test]
