@@ -537,7 +537,6 @@ impl CounterGroup {
         }
     }
 
-    #[must_use]
     pub fn open_with_diagnostics() -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
         #[cfg(target_os = "linux")]
         {
