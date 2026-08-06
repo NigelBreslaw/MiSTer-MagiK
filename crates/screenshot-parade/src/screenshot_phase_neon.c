@@ -299,20 +299,3 @@ void mister_magik_screenshot_phase_neon(
         }
     }
 }
-
-void mister_magik_rgb565_copy_neon(
-    const uint16_t *restrict source,
-    uint16_t *restrict destination,
-    size_t pixel_count
-) {
-    while (pixel_count >= 8) {
-        vst1q_u16(destination, vld1q_u16(source));
-        source += 8;
-        destination += 8;
-        pixel_count -= 8;
-    }
-    while (pixel_count != 0) {
-        *destination++ = *source++;
-        --pixel_count;
-    }
-}

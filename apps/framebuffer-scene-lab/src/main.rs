@@ -33,8 +33,7 @@ use mister_magik_screenshot_parade::{
     LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, STRICT_READY_CAPACITY,
 };
 use mister_magik_screenshot_parade::{
-    OpaqueRowCopyBackend, PreparationSlack, ScreenshotParade, ScreenshotParadeConfig,
-    ScreenshotParadeStats,
+    PreparationSlack, ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -396,7 +395,6 @@ fn main() -> Result<(), String> {
                     .evidence_dir
                     .as_deref()
                     .expect("PMU option validation requires an evidence directory"),
-                options.row_copy.unwrap_or_default(),
             );
         }
         if let Some(output) = options.output.as_deref() {
@@ -762,11 +760,7 @@ fn render_screenshot_headless(
     Ok(())
 }
 
-fn run_screenshot_pmu(
-    archive_path: &Path,
-    evidence_dir: &Path,
-    row_copy: OpaqueRowCopyBackend,
-) -> Result<(), String> {
+fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), String> {
     let _ = mister_magik_screenshot_parade::take_render_pmu_profile();
     let geometry = SceneGeometry::new(
         SCREENSHOT_PMU_WIDTH,
@@ -784,7 +778,6 @@ fn run_screenshot_pmu(
             preparation_slack: None,
         },
     )?;
-    renderer.set_row_copy_backend(row_copy);
     let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
     let started = Instant::now();
     let mut last_stats = None;
@@ -881,10 +874,6 @@ fn run_screenshot_pmu(
             "height": SCREENSHOT_PMU_HEIGHT,
             "seed": SCREENSHOT_PMU_SEED,
             "pixel_hash_tick": 0,
-            "row_copy": match row_copy {
-                OpaqueRowCopyBackend::Libc => "libc",
-                OpaqueRowCopyBackend::Neon => "neon",
-            },
             "archive_path": archive_path,
         },
         "target": {
@@ -3292,7 +3281,6 @@ struct Options {
     warmup_seconds: u64,
     profile: bool,
     pmu: bool,
-    row_copy: Option<OpaqueRowCopyBackend>,
     assessment_pass: Option<MeasurementPass>,
     evidence_dir: Option<PathBuf>,
     duration_ms: Option<u64>,
@@ -3318,7 +3306,6 @@ impl Options {
         let mut warmup_seconds = 0;
         let mut profile = false;
         let mut pmu = false;
-        let mut row_copy = None;
         let mut assessment_pass = None;
         let mut evidence_dir = None;
         let mut duration_ms = None;
@@ -3417,18 +3404,6 @@ impl Options {
                 }
                 "--profile" => profile = true,
                 "--pmu" => pmu = true,
-                "--row-copy" => {
-                    let value = arguments.next().ok_or("--row-copy requires libc or neon")?;
-                    row_copy = Some(match value.as_str() {
-                        "libc" => OpaqueRowCopyBackend::Libc,
-                        "neon" => OpaqueRowCopyBackend::Neon,
-                        _ => {
-                            return Err(format!(
-                                "invalid --row-copy {value:?}; expected libc or neon"
-                            ));
-                        }
-                    });
-                }
                 "--assessment-pass" => {
                     let value = arguments
                         .next()
@@ -3496,7 +3471,6 @@ impl Options {
             warmup_seconds,
             profile,
             pmu,
-            row_copy,
             assessment_pass,
             evidence_dir,
             duration_ms,
@@ -3563,9 +3537,6 @@ impl Options {
         }
         if !self.pmu && self.assessment_pass.is_none() && self.evidence_dir.is_some() {
             return Err("--evidence-dir requires --pmu or --assessment-pass".into());
-        }
-        if self.row_copy.is_some() && !self.pmu {
-            return Err("--row-copy requires screenshot-screensaver --pmu".into());
         }
         if self.assessment_pass.is_some() && (self.profile || self.check || self.output.is_some()) {
             return Err("--assessment-pass requires an interactive run without --profile".into());
@@ -3658,7 +3629,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene magik --recipe FILE.json --particle-count N --particle-preset capacity|visual --seconds N\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE --pmu [--row-copy libc|neon] --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene magik --recipe FILE.json --particle-count N --particle-preset capacity|visual --seconds N\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE --pmu --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {

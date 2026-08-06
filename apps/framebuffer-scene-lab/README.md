@@ -32,8 +32,6 @@ scripts/agent device scene-lab --scene navigation-transition --fixture home-arca
 scripts/agent device scene-lab --scene card-flip --attended
 scripts/agent device scene-lab --scene screenshot-screensaver [--seed SEED] --attended
 scripts/agent device scene-lab --scene screenshot-screensaver --pmu --attended
-scripts/agent device scene-lab --scene screenshot-screensaver --pmu --row-copy libc --attended
-scripts/agent device scene-lab --scene screenshot-screensaver --pmu --row-copy neon --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --profile --attended
 scripts/agent device scene-lab --scene SCENE --seconds N --assess --attended
@@ -127,9 +125,6 @@ Cortex-A9 counters as `pmu.json` without replacing the installed launcher. The
 pixel identity is the fixed tick-zero reference frame; the final workload-frame
 hash is retained separately because asynchronous successor preparation may
 change which later card is ready without changing the measured render contract.
-The lab-only `--row-copy libc|neon` selector supports paired PMU comparison from
-one binary; production rendering remains on libc until the measured gate selects
-a winner.
 
 The timing fields are deliberately disjoint. `render` covers projection and
 rasterization, `transfer` covers only `prepare_cached`, `present` runs from the

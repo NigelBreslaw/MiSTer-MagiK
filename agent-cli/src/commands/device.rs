@@ -229,8 +229,6 @@ pub struct SceneLabArgs {
     pub(crate) assess: bool,
     #[arg(long)]
     pub(crate) pmu: bool,
-    #[arg(long, value_enum)]
-    pub(crate) row_copy: Option<SceneLabRowCopy>,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -243,21 +241,6 @@ pub enum SceneLabScene {
     NavigationTransition,
     CardFlip,
     ScreenshotScreensaver,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabRowCopy {
-    Libc,
-    Neon,
-}
-
-impl SceneLabRowCopy {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Libc => "libc",
-            Self::Neon => "neon",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -390,7 +373,6 @@ pub fn run_scene_lab(
             profile: args.profile,
             assess: args.assess,
             pmu: args.pmu,
-            row_copy: args.row_copy.map(SceneLabRowCopy::as_str),
             output_dir,
         })
     })
