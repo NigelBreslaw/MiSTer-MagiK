@@ -280,14 +280,6 @@ fn log_shared_parade_stats(parade: &ScreenshotParade) {
 }
 
 fn slint_rgb565_as_shared_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
-    assert_eq!(
-        std::mem::size_of::<Rgb565Pixel>(),
-        std::mem::size_of::<SharedRgb565Pixel>()
-    );
-    assert_eq!(
-        std::mem::align_of::<Rgb565Pixel>(),
-        std::mem::align_of::<SharedRgb565Pixel>()
-    );
     // SAFETY: both RGB565 pixel types are transparent `u16` wrappers with equal
     // size/alignment, and the mutable slice retains the input slice's lifetime.
     unsafe {
@@ -298,29 +290,54 @@ fn slint_rgb565_as_shared_mut(destination: &mut [Rgb565Pixel]) -> &mut [SharedRg
     }
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<Rgb565Pixel>() == std::mem::size_of::<SharedRgb565Pixel>());
+    assert!(std::mem::align_of::<Rgb565Pixel>() == std::mem::align_of::<SharedRgb565Pixel>());
+};
+
+fn shared_rgb565_into_slint(mut pixels: Vec<SharedRgb565Pixel>) -> Vec<Rgb565Pixel> {
+    let length = pixels.len();
+    let capacity = pixels.capacity();
+    let pointer = pixels.as_mut_ptr().cast::<Rgb565Pixel>();
+    std::mem::forget(pixels);
+    // SAFETY: the compile-time assertions above establish identical layout.
+    unsafe { Vec::from_raw_parts(pointer, length, capacity) }
+}
+
+fn slint_rgb565_into_shared(mut pixels: Vec<Rgb565Pixel>) -> Vec<SharedRgb565Pixel> {
+    let length = pixels.len();
+    let capacity = pixels.capacity();
+    let pointer = pixels.as_mut_ptr().cast::<SharedRgb565Pixel>();
+    std::mem::forget(pixels);
+    // SAFETY: the compile-time assertions above establish identical layout.
+    unsafe { Vec::from_raw_parts(pointer, length, capacity) }
+}
+
 pub(crate) struct LauncherScreenshotBuffer {
-    pixels: Vec<Rgb565Pixel>,
+    pixels: Vec<SharedRgb565Pixel>,
 }
 
 impl LauncherScreenshotBuffer {
     pub(crate) fn new(width: usize, height: usize) -> Self {
         Self {
-            pixels: vec![Rgb565Pixel(0); width.saturating_mul(height)],
+            pixels: vec![SharedRgb565Pixel(0); width.saturating_mul(height)],
         }
     }
 
     pub(crate) fn into_pixels(self) -> Vec<Rgb565Pixel> {
-        self.pixels
+        shared_rgb565_into_slint(self.pixels)
     }
 
     pub(crate) fn from_pixels(pixels: Vec<Rgb565Pixel>) -> Self {
-        Self { pixels }
+        Self {
+            pixels: slint_rgb565_into_shared(pixels),
+        }
     }
 }
 
 impl ScreenshotBuffer for LauncherScreenshotBuffer {
     fn pixels_mut(&mut self) -> &mut [SharedRgb565Pixel] {
-        slint_rgb565_as_shared_mut(&mut self.pixels)
+        &mut self.pixels
     }
 }
 
