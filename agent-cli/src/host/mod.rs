@@ -4230,11 +4230,11 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
             &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
         )?;
         let build_version = status
-            .get("build_version")
+            .pointer("/build/version")
             .and_then(Value::as_str)
             .ok_or("launcher status has no build version")?;
         let source_revision = status
-            .get("build_source_revision")
+            .pointer("/build/source_revision")
             .and_then(Value::as_str)
             .ok_or("launcher status has no source revision")?;
         let main_generation = main_status
