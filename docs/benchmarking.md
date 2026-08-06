@@ -24,6 +24,7 @@ Supported scenarios:
 - `launch-return-fallback`
 - `modal-input`
 - `navigation-transitions`
+- `pmu-profile`
 - `search`
 
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
@@ -254,6 +255,71 @@ Evidence is written under
 `build/agent-benchmarks/catalog-lifecycle/<timestamp>/` as the lifecycle and
 diagnostic log, final launcher status, catalog inspection TSV, structured
 summary, and Markdown report.
+
+## Catalog PMU attribution
+
+`pmu-profile` is the fixed Cortex-A9 hardware-counter attribution suite. Its v2
+report requires the `probe`, `screensaver`, `search`, and `catalog` workloads
+from the exact coherently installed Dev runtime. Sampling is fixed at every
+span with a 4,096-record per-thread limit. Missing counters, PMU open/read
+failures, dropped spans, dropped thread profiles, empty profiles, an installed
+manifest change, or failed cleanup invalidate the suite.
+
+The catalog workload owns only
+`/tmp/mister-magik/pmu-catalog-benchmark`. It reads the normal library sources,
+adds one deterministic synthetic SNES source beneath that isolated root, and
+redirects every writable catalog path there. It performs, in order:
+
+1. a fresh build;
+2. a changed-input rebuild after adding exactly one synthetic SNES game;
+3. a rebuild of every published system.
+
+The changed-input operation must rebuild only `snes` and increase the manifest
+game count by one. Rebuild-all must rebuild every published system without
+changing the post-increment system or game counts. The workload reopens and
+fully validates the manifest and every referenced shard after each operation.
+It removes the isolated root on success and failure; production catalog and
+source paths are never written.
+
+Catalog profiles combine the builder, library-walker, and foreground publisher
+threads. Stable phases cover the outer bootstrap, scan, prepare, and persist
+work plus filesystem walking, navigation encoding, SQLite schema creation,
+game insertion, search-index population, transaction commit, shard validation,
+and artifact copy/hash. Evidence is retained under
+`build/agent-benchmarks/pmu-profile/<timestamp>/` as per-workload logs and JSON
+plus the v2 suite summary.
+
+Derived ratios use the grouped counters from one calling thread and interval:
+
+- IPC is `instructions / cycles`.
+- L1D refill ratio is `L1D refills / L1D accesses`.
+- Branch-mispredict ratio is `branch mispredicts / branches`.
+
+PMU counters attribute CPU work; wall time remains the optimization outcome.
+Filesystem and SQLite waits can dominate elapsed time without accumulating
+corresponding calling-thread cycles. The PMU-enabled workload is therefore not
+a cadence or final correctness qualification. Two PMU-off `catalog-lifecycle`
+runs with zero FPGA repeated-vblank drops remain the final device gate.
+
+Catalog optimization campaigns use two clean baseline PMU suites. Each
+single-hypothesis commit receives one screening run and, only if promising, two
+additional clean confirmation runs. A screen requires at least 5% improvement
+in its target phase, 2% in the affected operation, supporting PMU movement, no
+operation regression above 2%, exact catalog results, and peak RSS within 5%
+or 8 MiB. The three-run candidate median must retain those thresholds and each
+confirmation must retain at least 3% of the target-phase improvement. A failed
+candidate is removed by a new revert commit; published or local experiment
+history is never rewritten.
+
+NEON is eligible only for a byte-exact, contiguous integer loop accounting for
+at least 10% of fresh or rebuild-all cycles, averaging at least four 128-bit
+vectors per call, and projecting at least a 2% whole-operation improvement.
+Filesystem traversal, SQLite calls, sequential hashes, serde, Unicode
+iteration, and short strings do not qualify by themselves. Any NEON trial must
+retain a scalar fallback and inspect the exact delivered ARM release symbol
+with `nm` and `objdump`; build flags alone are not evidence that vector machine
+instructions exist. Failed code generation or performance requires an explicit
+revert commit.
 
 ## Installed screensaver profile
 
