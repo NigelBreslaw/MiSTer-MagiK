@@ -16,7 +16,7 @@ export { MenuItem, MenuItemKind } from "launcher_menu.slint";
 export component Launcher inherits MisterWindow {
     default-font-family: "Press Start 2P";
     title: "MiSTer MagiK Launcher";
-    background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
+    background: black;
 
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
