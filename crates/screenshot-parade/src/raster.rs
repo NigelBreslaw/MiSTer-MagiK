@@ -365,7 +365,7 @@ impl PreparedScreenshotCard {
                 if let Some(slack) = preparation_slack {
                     slack.checkpoint();
                 }
-                let mut shifted = prepare_linear_phase(
+                prepare_linear_phase(
                     &styled,
                     &coverage,
                     &source_opaque_spans,
@@ -373,9 +373,7 @@ impl PreparedScreenshotCard {
                     index + 1,
                     kernel,
                     preparation_slack,
-                );
-                extrude_leading_edge_color(&base.image, &mut shifted.image);
-                shifted
+                )
             });
             let phase_us = phase_started.elapsed().as_micros();
             return (
@@ -1165,16 +1163,6 @@ fn prepare_linear_phase(
     };
     let coverage = coverage_plane(coverage, &image, preparation_slack);
     PreparedLinearPhase { image, coverage }
-}
-
-fn extrude_leading_edge_color(base: &ScreenshotImage, shifted: &mut ScreenshotImage) {
-    debug_assert_eq!(base.height, shifted.height);
-    if base.width == 0 || shifted.width == 0 {
-        return;
-    }
-    for y in 0..base.height.min(shifted.height) {
-        shifted.pixels[y * shifted.stride] = base.pixels[y * base.stride];
-    }
 }
 
 fn shape_preserving_shifted_coverage(
@@ -2614,30 +2602,6 @@ mod tests {
         for (first, second) in first_shifted.iter().zip(second_shifted) {
             assert_eq!(first.image, second.image);
             assert_eq!(first.coverage, second.coverage);
-        }
-    }
-
-    #[test]
-    fn shifted_linear_phases_keep_the_base_leading_edge_color() {
-        let source = test_image(32, 24);
-        let card = PreparedScreenshotCard::prepare_with_generation(
-            &source,
-            5,
-            180,
-            ScreenshotSamplingProfile::CrtSixteenth,
-            ScreenshotPhaseGeneration::LinearLanczos3,
-        );
-        let (_, shifted) = linear_phases(&card);
-        for (phase, shifted) in shifted.iter().enumerate() {
-            assert_eq!(shifted.image.width, card.image.width + 1);
-            for y in 0..card.image.height {
-                assert_eq!(
-                    shifted.image.pixels[y * shifted.image.stride],
-                    card.image.pixels[y * card.image.stride],
-                    "phase={} y={y}",
-                    phase + 1,
-                );
-            }
         }
     }
 
