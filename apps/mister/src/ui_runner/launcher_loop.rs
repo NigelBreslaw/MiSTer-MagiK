@@ -5735,7 +5735,7 @@ pub(super) fn run_launcher_loop(
             }
         } else if startup_intro.is_none() && screensaver.active {
             let render_ahead_poll = screensaver_pipeline
-                .as_ref()
+                .as_mut()
                 .map(ScreensaverRenderAhead::try_next)
                 .unwrap_or(RenderAheadPoll::Empty);
             match render_ahead_poll {
@@ -5781,6 +5781,31 @@ pub(super) fn run_launcher_loop(
                     }
                 }
                 RenderAheadPoll::Empty => {}
+                RenderAheadPoll::SequenceFailure {
+                    expected_tick,
+                    actual_tick,
+                    frame,
+                } => {
+                    crate::ui_errln!(
+                        "screensaver: strict render-ahead sequence failure expected_tick={} actual_tick={}",
+                        expected_tick,
+                        actual_tick,
+                    );
+                    if let Some(pipeline) = screensaver_pipeline.as_ref() {
+                        let _ = pipeline.recycle(frame.pixels);
+                    }
+                    screensaver.fail_current_activation(Instant::now());
+                    if let Some(pipeline) = screensaver_pipeline.take() {
+                        pipeline.cancel();
+                        retiring_screensaver_pipelines.push(pipeline);
+                    }
+                    screensaver_frame_visible = false;
+                    screensaver_active_cards = 0;
+                    screensaver_archive_loading = false;
+                    screensaver_has_rendered_card = false;
+                    window.request_redraw();
+                    full_frame_present = true;
+                }
                 RenderAheadPoll::Disconnected => {
                     crate::ui_errln!(
                         "screensaver: render-ahead pipeline disconnected; suppressing reactivation until fresh user activity"
@@ -5833,24 +5858,26 @@ pub(super) fn run_launcher_loop(
                     x1: ui.render_w(),
                     y1: ui.render_h(),
                 })
-            } else if accepted_screensaver_frame
-                && screensaver_fade_alpha.is_some_and(|alpha| alpha < 255)
-            {
-                Some(
-                    layer_target.blend_screensaver_crossfade(
-                        screensaver_launcher_frame
-                            .as_deref()
-                            .expect("launcher frame retained by first buffer swap"),
-                        screensaver_fade_alpha.expect("checked above"),
-                    ),
-                )
+            } else if accepted_screensaver_frame {
+                if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
+                    Some(
+                        layer_target.blend_screensaver_crossfade(
+                            screensaver_launcher_frame
+                                .as_deref()
+                                .expect("launcher frame retained by first buffer swap"),
+                            screensaver_fade_alpha.expect("checked above"),
+                        ),
+                    )
+                } else {
+                    Some(DirtyRect {
+                        x0: 0,
+                        y0: 0,
+                        x1: ui.render_w(),
+                        y1: ui.render_h(),
+                    })
+                }
             } else {
-                Some(DirtyRect {
-                    x0: 0,
-                    y0: 0,
-                    x1: ui.render_w(),
-                    y1: ui.render_h(),
-                })
+                None
             }
         } else if particle_activation_handoff
             .holding_black(screensaver.active, screensaver_frame_visible)
@@ -6271,12 +6298,6 @@ pub(super) fn run_launcher_loop(
             }
             screensaver_frame_visible = false;
             window.request_redraw();
-        }
-        if screensaver.active
-            && screensaver_frame_visible
-            && let Some(pipeline) = screensaver_pipeline.as_ref()
-        {
-            pipeline.note_presented_period();
         }
         if screensaver.active
             && screensaver_frame_visible

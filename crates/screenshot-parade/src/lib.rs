@@ -4,11 +4,16 @@
 //! Slint-free screenshot parade rendering shared by production and scene labs.
 
 mod raster;
+mod reservoir;
 mod schedule;
 
 pub use raster::{
     PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotPhaseGeneration,
     ScreenshotSamplingProfile,
+};
+pub use reservoir::{
+    STRICT_READY_CAPACITY, STRICT_RENDER_BUFFER_COUNT, StrictFrameConsumer, StrictFramePoll,
+    StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
 };
 pub use schedule::{
     ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
