@@ -248,6 +248,9 @@ pub struct LogicalStatusReadBudget {
     reads: u8,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LogicalStatusReadBudgetExhausted;
+
 impl LogicalStatusReadBudget {
     const MAX_READS: u8 = 3;
 
@@ -255,9 +258,9 @@ impl LogicalStatusReadBudget {
         Self { reads: 0 }
     }
 
-    pub fn consume(&mut self) -> Result<(), ()> {
+    pub fn consume(&mut self) -> Result<(), LogicalStatusReadBudgetExhausted> {
         if self.reads >= Self::MAX_READS {
-            return Err(());
+            return Err(LogicalStatusReadBudgetExhausted);
         }
         self.reads += 1;
         Ok(())
@@ -526,7 +529,7 @@ pub fn read_post_status(
                     let terminal_decision = terminal.decision;
                     diagnostics.append(&terminal);
                     diagnostics.decision = terminal_decision;
-                    failure.wire_diagnostics = Some(diagnostics);
+                    failure.wire_diagnostics = Some(Box::new(diagnostics));
                 }
                 return Err(failure);
             }
@@ -610,7 +613,7 @@ mod tests {
         assert_eq!(budget.consume(), Ok(()));
         assert_eq!(budget.consume(), Ok(()));
         assert_eq!(budget.consume(), Ok(()));
-        assert_eq!(budget.consume(), Err(()));
+        assert_eq!(budget.consume(), Err(LogicalStatusReadBudgetExhausted));
         assert!(budget.exhausted());
     }
 }

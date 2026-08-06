@@ -333,9 +333,9 @@ pub struct LatchFailure {
     pub reason: LatchFailureReason,
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wire_diagnostics: Option<LatchWireDiagnostics>,
+    pub wire_diagnostics: Option<Box<LatchWireDiagnostics>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_diagnostics: Option<LatchPostDiagnostics>,
+    pub post_diagnostics: Option<Box<LatchPostDiagnostics>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_observation: Option<LatchStatusObservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -378,12 +378,12 @@ impl LatchFailure {
     }
 
     pub fn with_wire_diagnostics(mut self, diagnostics: LatchWireDiagnostics) -> Self {
-        self.wire_diagnostics = Some(diagnostics);
+        self.wire_diagnostics = Some(Box::new(diagnostics));
         self
     }
 
     pub fn with_post_diagnostics(mut self, diagnostics: LatchPostDiagnostics) -> Self {
-        self.post_diagnostics = Some(diagnostics);
+        self.post_diagnostics = Some(Box::new(diagnostics));
         self
     }
 
@@ -510,10 +510,10 @@ impl From<&LatchFailure> for LatchFailureEvidence {
             attempt_count: 0,
             latest_result: "not-attempted".to_string(),
             recovery_state: "output-frozen".to_string(),
-            first_wire_diagnostics: failure.wire_diagnostics.clone(),
-            wire_diagnostics: failure.wire_diagnostics.clone(),
-            first_post_diagnostics: failure.post_diagnostics,
-            post_diagnostics: failure.post_diagnostics,
+            first_wire_diagnostics: failure.wire_diagnostics.as_deref().cloned(),
+            wire_diagnostics: failure.wire_diagnostics.as_deref().cloned(),
+            first_post_diagnostics: failure.post_diagnostics.as_deref().copied(),
+            post_diagnostics: failure.post_diagnostics.as_deref().copied(),
             first_status_observation: failure.status_observation,
             status_observation: failure.status_observation,
             first_rejection_observation: failure.rejection_observation,
@@ -545,10 +545,10 @@ impl LatchFailureEvidence {
             attempt_count,
             latest_result: latest_result.into(),
             recovery_state: recovery_state.into(),
-            first_wire_diagnostics: first.wire_diagnostics.clone(),
-            wire_diagnostics: latest.wire_diagnostics.clone(),
-            first_post_diagnostics: first.post_diagnostics,
-            post_diagnostics: latest.post_diagnostics,
+            first_wire_diagnostics: first.wire_diagnostics.as_deref().cloned(),
+            wire_diagnostics: latest.wire_diagnostics.as_deref().cloned(),
+            first_post_diagnostics: first.post_diagnostics.as_deref().copied(),
+            post_diagnostics: latest.post_diagnostics.as_deref().copied(),
             first_status_observation: first.status_observation,
             status_observation: latest.status_observation,
             first_rejection_observation: first.rejection_observation,
