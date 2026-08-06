@@ -42,6 +42,13 @@ pub enum GroupReadFormat {
     OrderedValues,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CounterScope {
+    CallingThreadAnyCpu,
+    CallingThreadPinnedCpu,
+}
+
 impl HardwareEvent {
     #[must_use]
     pub const fn perf_config(self) -> u64 {
@@ -287,6 +294,8 @@ pub struct ThreadProfile {
     pub dropped_spans: u64,
     pub records: Vec<SpanRecord>,
     pub failure: Option<PmuFailure>,
+    pub read_format: Option<GroupReadFormat>,
+    pub scope: Option<CounterScope>,
 }
 
 struct ThreadCollector {
@@ -299,6 +308,8 @@ struct ThreadCollector {
     records: Vec<SpanRecord>,
     failure: Option<PmuFailure>,
     group: Option<CounterGroup>,
+    read_format: Option<GroupReadFormat>,
+    scope: Option<CounterScope>,
 }
 
 impl ThreadCollector {
@@ -325,6 +336,8 @@ impl ThreadCollector {
             records: Vec::new(),
             failure: None,
             group: None,
+            read_format: None,
+            scope: None,
         }
     }
 
@@ -340,7 +353,11 @@ impl ThreadCollector {
         }
         if self.group.is_none() {
             match CounterGroup::open() {
-                Ok(group) => self.group = Some(group),
+                Ok(group) => {
+                    self.read_format = Some(group.read_format());
+                    self.scope = Some(group.scope());
+                    self.group = Some(group);
+                }
                 Err(failure) => {
                     self.failure = Some(failure);
                     return None;
@@ -383,6 +400,8 @@ impl ThreadCollector {
             dropped_spans: self.dropped_spans,
             records: std::mem::take(&mut self.records),
             failure: self.failure.clone(),
+            read_format: self.read_format,
+            scope: self.scope,
         };
         self.attempted_spans = 0;
         self.dropped_spans = 0;
@@ -513,6 +532,18 @@ impl CounterGroup {
         }
     }
 
+    #[must_use]
+    pub fn scope(&self) -> CounterScope {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.scope()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            CounterScope::CallingThreadAnyCpu
+        }
+    }
+
     pub fn span(&self, name: impl Into<String>) -> Result<NamedSpan<'_>, PmuFailure> {
         let started = self.snapshot()?;
         Ok(NamedSpan {
@@ -594,8 +625,8 @@ fn decode_ordered_group_read(words: &[u64]) -> Result<CounterSnapshot, PmuFailur
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuFailure, decode_group_read,
-        decode_ordered_group_read,
+        CounterScope, CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuFailure,
+        decode_group_read, decode_ordered_group_read,
     };
     use std::collections::BTreeMap;
 
@@ -638,31 +669,87 @@ mod linux {
         descriptors: Vec<Descriptor>,
         event_ids: BTreeMap<u64, HardwareEvent>,
         read_format: GroupReadFormat,
+        scope: CounterScope,
+    }
+
+    #[derive(Clone, Copy)]
+    struct OpenOptions {
+        read_format: GroupReadFormat,
+        scope: CounterScope,
+        cpu: libc::c_int,
+        perf_flags: libc::c_ulong,
+        exclude_hypervisor: bool,
     }
 
     impl LinuxCounterGroup {
         pub(super) fn open() -> Result<Self, PmuFailure> {
-            match Self::open_with_format(GroupReadFormat::IdsAndTimes) {
-                Err(failure) if failure.errno == Some(libc::EINVAL) => {
-                    Self::open_with_format(GroupReadFormat::OrderedValues)
-                }
-                result => result,
+            let current_cpu = unsafe { libc::sched_getcpu() };
+            let mut options = vec![
+                OpenOptions {
+                    read_format: GroupReadFormat::IdsAndTimes,
+                    scope: CounterScope::CallingThreadAnyCpu,
+                    cpu: -1,
+                    perf_flags: PERF_FLAG_FD_CLOEXEC,
+                    exclude_hypervisor: true,
+                },
+                OpenOptions {
+                    read_format: GroupReadFormat::OrderedValues,
+                    scope: CounterScope::CallingThreadAnyCpu,
+                    cpu: -1,
+                    perf_flags: PERF_FLAG_FD_CLOEXEC,
+                    exclude_hypervisor: true,
+                },
+                OpenOptions {
+                    read_format: GroupReadFormat::OrderedValues,
+                    scope: CounterScope::CallingThreadAnyCpu,
+                    cpu: -1,
+                    perf_flags: 0,
+                    exclude_hypervisor: true,
+                },
+                OpenOptions {
+                    read_format: GroupReadFormat::OrderedValues,
+                    scope: CounterScope::CallingThreadAnyCpu,
+                    cpu: -1,
+                    perf_flags: 0,
+                    exclude_hypervisor: false,
+                },
+            ];
+            if current_cpu >= 0 {
+                options.push(OpenOptions {
+                    read_format: GroupReadFormat::OrderedValues,
+                    scope: CounterScope::CallingThreadPinnedCpu,
+                    cpu: current_cpu,
+                    perf_flags: 0,
+                    exclude_hypervisor: false,
+                });
             }
+            let mut last_failure = None;
+            for options in options {
+                match Self::open_with_options(options) {
+                    Ok(group) => return Ok(group),
+                    Err(failure) if failure.errno == Some(libc::EINVAL) => {
+                        last_failure = Some(failure);
+                    }
+                    Err(failure) => return Err(failure),
+                }
+            }
+            Err(last_failure.expect("PMU open matrix is nonempty"))
         }
 
-        fn open_with_format(read_format: GroupReadFormat) -> Result<Self, PmuFailure> {
+        fn open_with_options(options: OpenOptions) -> Result<Self, PmuFailure> {
             debug_assert_eq!(std::mem::size_of::<PerfEventAttr>(), 64);
-            let leader = open_event(HardwareEvent::Cycles, -1, read_format)?;
+            let leader = open_event(HardwareEvent::Cycles, -1, options)?;
             let mut group = Self {
                 descriptors: vec![Descriptor { fd: leader }],
                 event_ids: BTreeMap::new(),
-                read_format,
+                read_format: options.read_format,
+                scope: options.scope,
             };
             for event in EVENT_SET.iter().copied().skip(1) {
-                let descriptor = open_event(event, leader, read_format)?;
+                let descriptor = open_event(event, leader, options)?;
                 group.descriptors.push(Descriptor { fd: descriptor });
             }
-            if read_format == GroupReadFormat::IdsAndTimes {
+            if options.read_format == GroupReadFormat::IdsAndTimes {
                 for (descriptor, event) in group.descriptors.iter().zip(EVENT_SET) {
                     let id = event_id(descriptor.fd, event)?;
                     if group.event_ids.insert(id, event).is_some() {
@@ -686,6 +773,10 @@ mod linux {
 
         pub(super) const fn read_format(&self) -> GroupReadFormat {
             self.read_format
+        }
+
+        pub(super) const fn scope(&self) -> CounterScope {
+            self.scope
         }
 
         fn snapshot_with_ids_and_times(&self) -> Result<CounterSnapshot, PmuFailure> {
@@ -782,13 +873,13 @@ mod linux {
     fn open_event(
         event: HardwareEvent,
         group_descriptor: libc::c_int,
-        read_format: GroupReadFormat,
+        options: OpenOptions,
     ) -> Result<libc::c_int, PmuFailure> {
         let attributes = PerfEventAttr {
             event_type: PERF_TYPE_HARDWARE,
             size: 64,
             config: event.perf_config(),
-            read_format: match read_format {
+            read_format: match options.read_format {
                 GroupReadFormat::IdsAndTimes => {
                     PERF_FORMAT_TOTAL_TIME_ENABLED
                         | PERF_FORMAT_TOTAL_TIME_RUNNING
@@ -797,7 +888,13 @@ mod linux {
                 }
                 GroupReadFormat::OrderedValues => PERF_FORMAT_GROUP,
             },
-            flags: PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HYPERVISOR,
+            flags: PERF_ATTR_DISABLED
+                | PERF_ATTR_EXCLUDE_KERNEL
+                | if options.exclude_hypervisor {
+                    PERF_ATTR_EXCLUDE_HYPERVISOR
+                } else {
+                    0
+                },
             ..PerfEventAttr::default()
         };
         // SAFETY: the syscall receives a valid version-zero attribute structure
@@ -807,9 +904,9 @@ mod linux {
                 libc::SYS_perf_event_open,
                 &attributes,
                 0,
-                -1,
+                options.cpu,
                 group_descriptor,
-                PERF_FLAG_FD_CLOEXEC,
+                options.perf_flags,
             )
         };
         if raw < 0 {
@@ -819,9 +916,19 @@ mod linux {
                 std::io::Error::last_os_error(),
             ));
         }
-        libc::c_int::try_from(raw).map_err(|_| {
+        let descriptor = libc::c_int::try_from(raw).map_err(|_| {
             PmuFailure::malformed(format!("descriptor for {} exceeds c_int", event.label()))
-        })
+        })?;
+        if options.perf_flags == 0 {
+            // SAFETY: the descriptor was returned by perf_event_open and the
+            // integer fcntl command does not dereference a pointer.
+            if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe { libc::close(descriptor) };
+                return Err(PmuFailure::io("set-close-on-exec", Some(event), error));
+            }
+        }
+        Ok(descriptor)
     }
 
     fn event_id(fd: libc::c_int, event: HardwareEvent) -> Result<u64, PmuFailure> {

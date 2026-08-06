@@ -120,6 +120,8 @@ mod tests {
             dropped_spans: 0,
             records: Vec::new(),
             failure: None,
+            read_format: None,
+            scope: None,
         };
         assert_eq!(profile_status(&empty), "failed");
     }
