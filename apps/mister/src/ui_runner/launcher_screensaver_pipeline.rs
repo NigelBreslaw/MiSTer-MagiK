@@ -130,22 +130,35 @@ mod tests {
             "mister-magik-render-ahead-{}-{width}x{height}.mmlz4b",
             std::process::id()
         ));
-        let name = b"fixture.rgb565";
+        const IMAGE_COUNT: usize = 5;
         let pixels = [0x00_u8, 0xf8, 0xe0, 0x07, 0x1f, 0x00, 0xff, 0xff];
-        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let names = (0..IMAGE_COUNT)
+            .map(|index| format!("fixture-{index}.rgb565").into_bytes())
+            .collect::<Vec<_>>();
+        let index_len = 8
+            + 4
+            + names
+                .iter()
+                .map(|name| 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len())
+                .sum::<usize>();
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"MMPX2B1\0");
-        bytes.extend_from_slice(&1_u32.to_le_bytes());
-        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&2_u32.to_le_bytes());
-        bytes.extend_from_slice(&2_u32.to_le_bytes());
-        bytes.extend_from_slice(&4_u32.to_le_bytes());
-        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
-        bytes.push(1);
-        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
-        bytes.extend_from_slice(name);
-        bytes.extend_from_slice(&pixels);
+        bytes.extend_from_slice(&(IMAGE_COUNT as u32).to_le_bytes());
+        for (index, name) in names.iter().enumerate() {
+            bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            bytes.extend_from_slice(&2_u32.to_le_bytes());
+            bytes.extend_from_slice(&2_u32.to_le_bytes());
+            bytes.extend_from_slice(&4_u32.to_le_bytes());
+            bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+            bytes.push(1);
+            bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+            let offset = index_len + index * pixels.len();
+            bytes.extend_from_slice(&(offset as u64).to_le_bytes());
+            bytes.extend_from_slice(name);
+        }
+        for _ in 0..IMAGE_COUNT {
+            bytes.extend_from_slice(&pixels);
+        }
         std::fs::write(&path, bytes).expect("write render-ahead fixture");
         let archive =
             crate::preview_worker::ResidentPreviewArchive::open(&path).expect("open fixture");
