@@ -680,103 +680,6 @@ pub(crate) fn agent_telemetry_for_duration(
     Ok(samples)
 }
 
-pub(crate) fn agent_telemetry_for_particle_trial(
-    endpoint: &AgentEndpoint,
-    preset: &str,
-    count: u64,
-    duration: Duration,
-    startup_timeout: Duration,
-) -> Result<Vec<Value>> {
-    agent_telemetry_for_particle_renderer_trial(
-        endpoint,
-        "particle-magik",
-        preset,
-        count,
-        duration,
-        startup_timeout,
-    )
-}
-
-pub(crate) fn agent_telemetry_for_particle_renderer_trial(
-    endpoint: &AgentEndpoint,
-    renderer: &str,
-    preset: &str,
-    count: u64,
-    duration: Duration,
-    startup_timeout: Duration,
-) -> Result<Vec<Value>> {
-    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
-        .to_socket_addrs()?
-        .next()
-        .ok_or("could not resolve MiSTer agent host")?;
-    let request = agent_protocol::request(
-        &endpoint.token,
-        1,
-        "device_telemetry_stream_v2",
-        json!({"analytics_mode": "process", "cadence_ms": 250}),
-    );
-    let started = Instant::now();
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
-    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    writeln!(stream, "{request}")?;
-    stream.flush()?;
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-    parse_agent_response_line(line, started)?;
-
-    let mut samples = Vec::new();
-    let mut measurement_started: Option<Instant> = None;
-    let mut last_sample = Value::Null;
-    loop {
-        if super::attended_operation_interrupted() {
-            return Err("particle benchmark interrupted".into());
-        }
-        if measurement_started.is_none() && started.elapsed() >= startup_timeout {
-            let screen = last_sample
-                .pointer("/launcher/screen")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let pid = last_sample
-                .pointer("/processes/mister-magik-fb/pids/0")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            return Err(format!(
-                "particle trial did not attest renderer={renderer} preset={preset} count={count} within {}ms; last screen={screen} pid={pid}",
-                startup_timeout.as_millis()
-            )
-            .into());
-        }
-        if measurement_started.is_some_and(|ready| ready.elapsed() >= duration) {
-            return Ok(samples);
-        }
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err("MiSTer telemetry stream closed during particle trial".into()),
-            Ok(_) => {
-                let sample = parse_device_telemetry_sample(&line)?;
-                if measurement_started.is_none()
-                    && telemetry_contains_particle_frame(&sample, renderer, preset, count)
-                {
-                    measurement_started = Some(Instant::now());
-                    samples.clear();
-                }
-                if measurement_started.is_some() {
-                    samples.push(sample.clone());
-                }
-                last_sample = sample;
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-}
-
 fn parse_device_telemetry_sample(line: &str) -> Result<Value> {
     let sample: Value = serde_json::from_str(line.trim())?;
     if sample.get("schema").and_then(Value::as_str) != Some("mister-magik-device-telemetry-v2")
@@ -792,25 +695,6 @@ fn parse_device_telemetry_sample(line: &str) -> Result<Value> {
         return Err("MiSTer agent returned non-authoritative device telemetry".into());
     }
     Ok(sample)
-}
-
-fn telemetry_contains_particle_frame(
-    sample: &Value,
-    renderer: &str,
-    preset: &str,
-    count: u64,
-) -> bool {
-    sample
-        .pointer("/launcher/frame_budget/recent_frames")
-        .and_then(Value::as_array)
-        .is_some_and(|frames| {
-            frames.iter().any(|frame| {
-                frame.get("screensaver_active").and_then(Value::as_bool) == Some(true)
-                    && frame.get("screensaver_renderer").and_then(Value::as_str) == Some(renderer)
-                    && frame.get("particle_preset").and_then(Value::as_str) == Some(preset)
-                    && frame.get("particle_count").and_then(Value::as_u64) == Some(count)
-            })
-        })
 }
 
 #[cfg(test)]
@@ -899,46 +783,6 @@ mod tests {
         .expect("success response");
 
         assert_eq!(response.response["result"]["value"], 42);
-    }
-
-    #[test]
-    fn particle_telemetry_attestation_requires_the_requested_trial() {
-        let sample = json!({
-            "launcher": {
-                "frame_budget": {
-                    "recent_frames": [{
-                        "screensaver_active": true,
-                        "screensaver_renderer": "particle-magik",
-                        "particle_preset": "capacity",
-                        "particle_count": 65_536
-                    }]
-                }
-            }
-        });
-        assert!(telemetry_contains_particle_frame(
-            &sample,
-            "particle-magik",
-            "capacity",
-            65_536
-        ));
-        assert!(!telemetry_contains_particle_frame(
-            &sample,
-            "particle-demos",
-            "capacity",
-            65_536
-        ));
-        assert!(!telemetry_contains_particle_frame(
-            &sample,
-            "particle-magik",
-            "visual",
-            65_536
-        ));
-        assert!(!telemetry_contains_particle_frame(
-            &sample,
-            "particle-magik",
-            "capacity",
-            66_560
-        ));
     }
 
     #[test]

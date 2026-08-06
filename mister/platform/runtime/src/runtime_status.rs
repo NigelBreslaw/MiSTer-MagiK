@@ -318,39 +318,6 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_render_ahead_superseded_frames: u64,
     pub screensaver_render_ahead_reused_frames: u64,
     pub screensaver_render_ahead_cancelled: bool,
-    pub particle_preset: &'static str,
-    pub particle_phase: &'static str,
-    pub particle_simulation_backend: &'static str,
-    pub particle_projection_backend: &'static str,
-    pub particle_count: u64,
-    pub particle_visible: u64,
-    pub particle_simulation_us: u64,
-    pub particle_simulation_cpu_us: u64,
-    pub particle_projection_us: u64,
-    pub particle_projection_cpu_us: u64,
-    pub particle_preparation_wait_us: u64,
-    pub particle_prepared_frame_age_us: u64,
-    pub particle_lookahead_mismatch_count: u64,
-    pub particle_preparation_queue_depth: u64,
-    pub particle_worker_wake_latency_us: u64,
-    pub particle_clear_us: u64,
-    pub particle_clear_cpu_us: u64,
-    pub particle_raster_us: u64,
-    pub particle_raster_cpu_us: u64,
-    pub particle_render_cpu_start: u64,
-    pub particle_render_cpu_end: u64,
-    pub particle_voluntary_context_switches: u64,
-    pub particle_involuntary_context_switches: u64,
-    pub particle_pmu_available: bool,
-    pub particle_pmu_cycles: u64,
-    pub particle_pmu_instructions: u64,
-    pub particle_pmu_cache_references: u64,
-    pub particle_pmu_cache_misses: u64,
-    pub particle_pmu_branch_instructions: u64,
-    pub particle_pmu_branch_misses: u64,
-    pub particle_rotation_y_millidegrees: u64,
-    pub particle_simulation_bytes: u64,
-    pub particle_renderer_scratch_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -1379,87 +1346,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "screensaver_render_ahead_cancelled",
         frame.screensaver_render_ahead_cancelled
     );
-    field!("particle_preset", frame.particle_preset);
-    field!("particle_phase", frame.particle_phase);
-    field!(
-        "particle_simulation_backend",
-        frame.particle_simulation_backend
-    );
-    field!(
-        "particle_projection_backend",
-        frame.particle_projection_backend
-    );
-    field!("particle_count", frame.particle_count);
-    field!("particle_visible", frame.particle_visible);
-    field!("particle_simulation_us", frame.particle_simulation_us);
-    field!(
-        "particle_simulation_cpu_us",
-        frame.particle_simulation_cpu_us
-    );
-    field!("particle_projection_us", frame.particle_projection_us);
-    field!(
-        "particle_projection_cpu_us",
-        frame.particle_projection_cpu_us
-    );
-    field!(
-        "particle_preparation_wait_us",
-        frame.particle_preparation_wait_us
-    );
-    field!(
-        "particle_prepared_frame_age_us",
-        frame.particle_prepared_frame_age_us
-    );
-    field!(
-        "particle_lookahead_mismatch_count",
-        frame.particle_lookahead_mismatch_count
-    );
-    field!(
-        "particle_preparation_queue_depth",
-        frame.particle_preparation_queue_depth
-    );
-    field!(
-        "particle_worker_wake_latency_us",
-        frame.particle_worker_wake_latency_us
-    );
-    field!("particle_clear_us", frame.particle_clear_us);
-    field!("particle_clear_cpu_us", frame.particle_clear_cpu_us);
-    field!("particle_raster_us", frame.particle_raster_us);
-    field!("particle_raster_cpu_us", frame.particle_raster_cpu_us);
-    field!("particle_render_cpu_start", frame.particle_render_cpu_start);
-    field!("particle_render_cpu_end", frame.particle_render_cpu_end);
-    field!(
-        "particle_voluntary_context_switches",
-        frame.particle_voluntary_context_switches
-    );
-    field!(
-        "particle_involuntary_context_switches",
-        frame.particle_involuntary_context_switches
-    );
-    field!("particle_pmu_available", frame.particle_pmu_available);
-    field!("particle_pmu_cycles", frame.particle_pmu_cycles);
-    field!("particle_pmu_instructions", frame.particle_pmu_instructions);
-    field!(
-        "particle_pmu_cache_references",
-        frame.particle_pmu_cache_references
-    );
-    field!("particle_pmu_cache_misses", frame.particle_pmu_cache_misses);
-    field!(
-        "particle_pmu_branch_instructions",
-        frame.particle_pmu_branch_instructions
-    );
-    field!(
-        "particle_pmu_branch_misses",
-        frame.particle_pmu_branch_misses
-    );
-    field!(
-        "particle_rotation_y_millidegrees",
-        frame.particle_rotation_y_millidegrees
-    );
-    field!("particle_simulation_bytes", frame.particle_simulation_bytes);
-    field!(
-        "particle_renderer_scratch_bytes",
-        frame.particle_renderer_scratch_bytes
-    );
     Value::Object(object)
 }
 
@@ -1797,7 +1683,7 @@ mod tests {
                     recent_frames: vec![FrameBudgetRecentFrame {
                         frame: 42,
                         screensaver_active: true,
-                        screensaver_renderer: "particle-magik",
+                        screensaver_renderer: "parade",
                         wall_us: 18_000,
                         prepare_us: 100,
                         render_us: 2_000,
@@ -1826,34 +1712,6 @@ mod tests {
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,
                         screensaver_raster_visible_layer_mask: 3,
-                        particle_preset: "visual",
-                        particle_phase: "hold",
-                        particle_simulation_backend: "armv7-neon",
-                        particle_projection_backend: "armv7-neon-corrected",
-                        particle_count: 16_384,
-                        particle_visible: 16_000,
-                        particle_simulation_us: 2_100,
-                        particle_simulation_cpu_us: 2_000,
-                        particle_projection_us: 800,
-                        particle_projection_cpu_us: 750,
-                        particle_clear_us: 120,
-                        particle_clear_cpu_us: 100,
-                        particle_raster_us: 900,
-                        particle_raster_cpu_us: 850,
-                        particle_render_cpu_start: 0,
-                        particle_render_cpu_end: 0,
-                        particle_voluntary_context_switches: 1,
-                        particle_involuntary_context_switches: 2,
-                        particle_pmu_available: true,
-                        particle_pmu_cycles: 12_000,
-                        particle_pmu_instructions: 10_000,
-                        particle_pmu_cache_references: 1_000,
-                        particle_pmu_cache_misses: 100,
-                        particle_pmu_branch_instructions: 500,
-                        particle_pmu_branch_misses: 25,
-                        particle_rotation_y_millidegrees: 45_000,
-                        particle_simulation_bytes: 540_672,
-                        particle_renderer_scratch_bytes: 262_144,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -1946,51 +1804,7 @@ mod tests {
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["screensaver_renderer"],
-            "particle-magik"
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_count"],
-            16_384
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_phase"],
-            "hold"
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_simulation_backend"],
-            "armv7-neon"
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_projection_backend"],
-            "armv7-neon-corrected"
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_simulation_cpu_us"],
-            2_000
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_projection_cpu_us"],
-            750
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_involuntary_context_switches"],
-            2
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_pmu_cycles"],
-            12_000
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_rotation_y_millidegrees"],
-            45_000
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_simulation_bytes"],
-            540_672
-        );
-        assert_eq!(
-            value["frame_budget"]["recent_frames"][0]["particle_renderer_scratch_bytes"],
-            262_144
+            "parade"
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(

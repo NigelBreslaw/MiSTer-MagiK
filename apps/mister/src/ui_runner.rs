@@ -107,7 +107,6 @@ mod launcher_screensaver;
 mod launcher_screensaver_pipeline;
 mod launcher_startup_intro;
 mod launcher_worker_intents;
-mod particle_renderer;
 mod raw565_preview_renderer;
 mod screenshot_media_update_session;
 mod tear_pattern_loop;

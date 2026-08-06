@@ -7,13 +7,7 @@
 use super::*;
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
-use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
 use mister_magik_framebuffer_scenes::{Rgb565Pixel as SharedRgb565Pixel, SceneGeometry};
-use mister_magik_particles::recipes::{embedded_magik_recipe, parse_magik_recipe};
-use mister_magik_particles::reload::{
-    LastGoodRecipeFile, ReloadAction, StartupParticleRecipe, StartupParticleStatus,
-    publish_startup_particle_status,
-};
 use mister_magik_screenshot_parade::{
     LiveScreenshotConfig, LiveScreenshotParade, ScreenshotBuffer, ScreenshotParade,
     ScreenshotParadeConfig, ScreenshotParadeStats,
@@ -21,150 +15,18 @@ use mister_magik_screenshot_parade::{
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-use super::particle_renderer::ParticleRenderer;
-
-const PARTICLE_RENDERER_LABEL: &str = "particle-magik";
-const DEV_MAGIK_RECIPE_PATH: &str = "/tmp/mister-magik/startup-particles/magik.json";
-const DEV_MAGIK_STATUS_PATH: &str = "/tmp/mister-magik/startup-particles/status.json";
-
 pub struct LauncherScreensaver {
     parade: Option<ScreenshotParade>,
-    particle: Option<ParticleRenderer>,
-    particle_reload: Option<MagikRecipeReload>,
     startup_started_at: Option<Instant>,
     frame: u64,
     motion_started_at: Instant,
-}
-
-struct MagikRecipeReload {
-    watcher: LastGoodRecipeFile<ParticleRenderer>,
-    embedded_spare: Option<ParticleRenderer>,
-    retire_tx: Option<Sender<ParticleRenderer>>,
-    retire_worker: Option<std::thread::JoinHandle<()>>,
-    current_embedded: bool,
-    logical_origin: Duration,
-}
-
-impl MagikRecipeReload {
-    fn for_layout(
-        layout: DeviceLayout,
-        width: usize,
-        height: usize,
-        preset: ParticlePreset,
-    ) -> Result<Option<Self>, String> {
-        if layout != DeviceLayout::Dev {
-            return Ok(None);
-        }
-        publish_startup_particle_status(
-            Path::new(DEV_MAGIK_STATUS_PATH),
-            &StartupParticleStatus::embedded(0, StartupParticleRecipe::Magik),
-        )?;
-        let watcher =
-            LastGoodRecipeFile::spawn(PathBuf::from(DEV_MAGIK_RECIPE_PATH), move |bytes| {
-                ParticleRenderer::from_magik_recipe(
-                    width,
-                    height,
-                    preset,
-                    parse_magik_recipe(bytes)?,
-                )
-            })?;
-        let (retire_tx, retire_rx) = mpsc::channel::<ParticleRenderer>();
-        let retire_worker = std::thread::Builder::new()
-            .name("particle-retire".into())
-            .spawn(move || {
-                while let Ok(renderer) = retire_rx.recv() {
-                    drop(renderer);
-                }
-            })
-            .map_err(|error| format!("spawn particle retirement worker: {error}"))?;
-        Ok(Some(Self {
-            watcher,
-            embedded_spare: None,
-            retire_tx: Some(retire_tx),
-            retire_worker: Some(retire_worker),
-            current_embedded: true,
-            logical_origin: Duration::ZERO,
-        }))
-    }
-
-    fn apply_latest(&mut self, renderer: &mut ParticleRenderer, elapsed: Duration) {
-        let Some(attempt) = self.watcher.take_latest() else {
-            return;
-        };
-        let generation = attempt.generation;
-        let status = match attempt.action {
-            ReloadAction::Apply(mut candidate) => {
-                if self.current_embedded {
-                    std::mem::swap(renderer, &mut candidate);
-                    self.embedded_spare = Some(candidate);
-                } else {
-                    let retired = std::mem::replace(renderer, candidate);
-                    self.retire(retired);
-                }
-                self.current_embedded = false;
-                self.logical_origin = elapsed;
-                StartupParticleStatus::applied(generation, StartupParticleRecipe::Magik)
-            }
-            ReloadAction::ResetToEmbedded if self.current_embedded => {
-                self.logical_origin = elapsed;
-                StartupParticleStatus::embedded(generation, StartupParticleRecipe::Magik)
-            }
-            ReloadAction::ResetToEmbedded => {
-                let Some(mut embedded) = self.embedded_spare.take() else {
-                    let status = StartupParticleStatus::rejected(
-                        generation,
-                        StartupParticleRecipe::Magik,
-                        "embedded Magik renderer is unavailable",
-                    );
-                    Self::publish(&status);
-                    return;
-                };
-                std::mem::swap(renderer, &mut embedded);
-                self.retire(embedded);
-                self.current_embedded = true;
-                self.logical_origin = elapsed;
-                StartupParticleStatus::embedded(generation, StartupParticleRecipe::Magik)
-            }
-            ReloadAction::Reject(error) => {
-                StartupParticleStatus::rejected(generation, StartupParticleRecipe::Magik, &error)
-            }
-        };
-        Self::publish(&status);
-    }
-
-    fn publish(status: &StartupParticleStatus) {
-        if let Err(error) =
-            publish_startup_particle_status(Path::new(DEV_MAGIK_STATUS_PATH), status)
-        {
-            crate::ui_errln!("particle recipe status failed: {error}");
-        }
-    }
-
-    fn retire(&self, renderer: ParticleRenderer) {
-        if let Some(retire_tx) = self.retire_tx.as_ref() {
-            let _ = retire_tx.send(renderer);
-        }
-    }
-
-    fn logical_elapsed(&self, elapsed: Duration) -> Duration {
-        elapsed.saturating_sub(self.logical_origin)
-    }
-}
-
-impl Drop for MagikRecipeReload {
-    fn drop(&mut self) {
-        self.retire_tx.take();
-        if let Some(worker) = self.retire_worker.take() {
-            let _ = worker.join();
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -193,39 +55,6 @@ pub struct ScreensaverFrameTrace {
     pub(super) render_ahead_superseded_frames: u64,
     pub(super) render_ahead_reused_frames: u64,
     pub(super) render_ahead_cancelled: bool,
-    pub(super) particle_preset: &'static str,
-    pub(super) particle_phase: &'static str,
-    pub(super) particle_simulation_backend: &'static str,
-    pub(super) particle_projection_backend: &'static str,
-    pub(super) particle_count: usize,
-    pub(super) particle_visible: usize,
-    pub(super) particle_simulation_us: u128,
-    pub(super) particle_simulation_cpu_us: u128,
-    pub(super) particle_projection_us: u128,
-    pub(super) particle_projection_cpu_us: u128,
-    pub(super) particle_preparation_wait_us: u128,
-    pub(super) particle_prepared_frame_age_us: u128,
-    pub(super) particle_lookahead_mismatch_count: u64,
-    pub(super) particle_preparation_queue_depth: usize,
-    pub(super) particle_worker_wake_latency_us: u128,
-    pub(super) particle_clear_us: u128,
-    pub(super) particle_clear_cpu_us: u128,
-    pub(super) particle_raster_us: u128,
-    pub(super) particle_raster_cpu_us: u128,
-    pub(super) particle_render_cpu_start: u64,
-    pub(super) particle_render_cpu_end: u64,
-    pub(super) particle_voluntary_context_switches: u64,
-    pub(super) particle_involuntary_context_switches: u64,
-    pub(super) particle_pmu_available: bool,
-    pub(super) particle_pmu_cycles: u64,
-    pub(super) particle_pmu_instructions: u64,
-    pub(super) particle_pmu_cache_references: u64,
-    pub(super) particle_pmu_cache_misses: u64,
-    pub(super) particle_pmu_branch_instructions: u64,
-    pub(super) particle_pmu_branch_misses: u64,
-    pub(super) particle_rotation_y_millidegrees: u32,
-    pub(super) particle_simulation_bytes: usize,
-    pub(super) particle_renderer_scratch_bytes: usize,
 }
 
 pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverFrameTrace {
@@ -341,18 +170,6 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
 pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
 
 impl LauncherScreensaver {
-    fn particle(renderer: ParticleRenderer, particle_reload: Option<MagikRecipeReload>) -> Self {
-        let now = Instant::now();
-        Self {
-            parade: None,
-            particle: Some(renderer),
-            particle_reload,
-            startup_started_at: None,
-            frame: 0,
-            motion_started_at: now,
-        }
-    }
-
     pub fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) -> ScreensaverFrameTrace {
         let now = Instant::now();
         self.render_at(
@@ -370,7 +187,7 @@ impl LauncherScreensaver {
         h: usize,
         elapsed: Duration,
     ) -> ScreensaverFrameTrace {
-        self.render_at_target(dst, w, h, None, elapsed)
+        self.render_at_target(dst, w, h, elapsed, None)
     }
 
     pub fn render_at_presentation_tick(
@@ -381,142 +198,17 @@ impl LauncherScreensaver {
         presentation_tick: u64,
         fallback_elapsed: Duration,
     ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(
-            dst,
-            w,
-            h,
-            None,
-            fallback_elapsed,
-            None,
-            Some(presentation_tick),
-        )
-    }
-
-    pub fn render_at_hidden_slot(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-        hidden_slot: u8,
-        elapsed: Duration,
-        next_elapsed: Option<Duration>,
-    ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(
-            dst,
-            w,
-            h,
-            Some(hidden_slot),
-            elapsed,
-            next_elapsed,
-            None,
-        )
-    }
-
-    pub fn render_at_hidden_slot_presentation_tick(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-        hidden_slot: u8,
-        presentation_tick: u64,
-        fallback_elapsed: Duration,
-        next_elapsed: Option<Duration>,
-    ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(
-            dst,
-            w,
-            h,
-            Some(hidden_slot),
-            fallback_elapsed,
-            next_elapsed,
-            Some(presentation_tick),
-        )
+        self.render_at_target(dst, w, h, fallback_elapsed, Some(presentation_tick))
     }
 
     fn render_at_target(
         &mut self,
         dst: &mut [Rgb565Pixel],
-        w: usize,
-        h: usize,
-        hidden_slot: Option<u8>,
-        elapsed: Duration,
-    ) -> ScreensaverFrameTrace {
-        self.render_at_target_with_lookahead(dst, w, h, hidden_slot, elapsed, None, None)
-    }
-
-    fn render_at_target_with_lookahead(
-        &mut self,
-        dst: &mut [Rgb565Pixel],
         _w: usize,
         _h: usize,
-        hidden_slot: Option<u8>,
         elapsed: Duration,
-        next_elapsed: Option<Duration>,
         presentation_tick: Option<u64>,
     ) -> ScreensaverFrameTrace {
-        if let Some(particle) = self.particle.as_mut() {
-            let particle_elapsed = if let Some(reload) = self.particle_reload.as_mut() {
-                reload.apply_latest(particle, elapsed);
-                reload.logical_elapsed(elapsed)
-            } else {
-                elapsed
-            };
-            return match hidden_slot
-                .ok_or_else(|| "particle renderer requires a direct hidden slot".into())
-                .and_then(|hidden_slot| {
-                    let next_elapsed = next_elapsed
-                        .map(|next| next.saturating_sub(elapsed.saturating_sub(particle_elapsed)));
-                    particle.render_with_lookahead(dst, hidden_slot, particle_elapsed, next_elapsed)
-                }) {
-                Ok(stats) => ScreensaverFrameTrace {
-                    renderer: PARTICLE_RENDERER_LABEL,
-                    particle_preset: particle.preset().label(),
-                    particle_phase: stats.phase.label(),
-                    particle_simulation_backend: stats.simulation_backend,
-                    particle_projection_backend: stats.projection_backend,
-                    particle_count: stats.count,
-                    particle_visible: stats.visible,
-                    particle_simulation_us: stats.simulation_us,
-                    particle_simulation_cpu_us: stats.simulation_cpu_us,
-                    particle_projection_us: stats.projection_us,
-                    particle_projection_cpu_us: stats.projection_cpu_us,
-                    particle_preparation_wait_us: stats.preparation_wait_us,
-                    particle_prepared_frame_age_us: stats.prepared_frame_age_us,
-                    particle_lookahead_mismatch_count: stats.lookahead_mismatch_count,
-                    particle_preparation_queue_depth: stats.preparation_queue_depth,
-                    particle_worker_wake_latency_us: stats.worker_wake_latency_us,
-                    particle_clear_us: stats.clear_us,
-                    particle_clear_cpu_us: stats.clear_cpu_us,
-                    particle_raster_us: stats.raster_us,
-                    particle_raster_cpu_us: stats.raster_cpu_us,
-                    particle_render_cpu_start: stats.render_cpu_start,
-                    particle_render_cpu_end: stats.render_cpu_end,
-                    particle_voluntary_context_switches: stats.voluntary_context_switches,
-                    particle_involuntary_context_switches: stats.involuntary_context_switches,
-                    particle_pmu_available: stats.pmu_available,
-                    particle_pmu_cycles: stats.pmu_cycles,
-                    particle_pmu_instructions: stats.pmu_instructions,
-                    particle_pmu_cache_references: stats.pmu_cache_references,
-                    particle_pmu_cache_misses: stats.pmu_cache_misses,
-                    particle_pmu_branch_instructions: stats.pmu_branch_instructions,
-                    particle_pmu_branch_misses: stats.pmu_branch_misses,
-                    particle_rotation_y_millidegrees: stats.rotation_y_millidegrees,
-                    particle_simulation_bytes: stats.simulation_bytes,
-                    particle_renderer_scratch_bytes: stats.renderer_scratch_bytes,
-                    ..ScreensaverFrameTrace::default()
-                },
-                Err(error) => {
-                    dst.fill(Rgb565Pixel(0));
-                    crate::ui_errln!("particle renderer failed: {error}");
-                    ScreensaverFrameTrace {
-                        renderer: "particle-error",
-                        particle_preset: particle.preset().label(),
-                        particle_count: particle.particle_count(),
-                        ..ScreensaverFrameTrace::default()
-                    }
-                }
-            };
-        }
         let mut trace = if let Some(parade) = self.parade.as_mut() {
             let render_result = match presentation_tick {
                 Some(tick) => {
@@ -557,16 +249,7 @@ impl LauncherScreensaver {
         trace
     }
 
-    pub fn invalidate_hidden_slot(&mut self, hidden_slot: u8) {
-        if let Some(particle) = self.particle.as_mut() {
-            particle.invalidate_hidden_slot(hidden_slot);
-        }
-    }
-
     pub fn has_rendered_card(&self) -> bool {
-        if self.particle.is_some() {
-            return true;
-        }
         self.parade.as_ref().is_some_and(ScreenshotParade::is_ready)
     }
 
@@ -575,9 +258,6 @@ impl LauncherScreensaver {
     }
 
     pub fn active_card_count(&self) -> usize {
-        if self.particle.is_some() {
-            return 0;
-        }
         self.parade
             .as_ref()
             .map_or(0, ScreenshotParade::active_card_count)
@@ -595,10 +275,6 @@ impl LauncherScreensaver {
         self.parade
             .as_ref()
             .and_then(ScreenshotParade::preparation_slack)
-    }
-
-    pub fn requires_direct_hidden(&self) -> bool {
-        self.particle.is_some()
     }
 }
 
@@ -624,8 +300,6 @@ impl LauncherScreensaver {
         let now = Instant::now();
         Ok(Self {
             parade: Some(parade),
-            particle: None,
-            particle_reload: None,
             startup_started_at: None,
             frame: 0,
             motion_started_at: now,
@@ -730,54 +404,6 @@ impl Drop for LauncherScreensaverLoader {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
     }
-}
-
-fn particle_renderer_label_requested(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value.trim().eq_ignore_ascii_case(PARTICLE_RENDERER_LABEL))
-}
-
-fn particle_config_from_env(width: usize, height: usize) -> Result<ParticleConfig, String> {
-    if (width, height) != (960, 540) {
-        return Err(format!(
-            "particle experiment requires 960x540, received {width}x{height}"
-        ));
-    }
-    let embedded = embedded_magik_recipe()
-        .map_err(|error| format!("embedded Magik particle recipe is invalid: {error}"))?;
-    let count = std::env::var("MISTER_PARTICLE_COUNT")
-        .ok()
-        .map(|value| {
-            value
-                .parse::<usize>()
-                .map_err(|error| format!("invalid MISTER_PARTICLE_COUNT={value:?}: {error}"))
-        })
-        .transpose()?
-        .unwrap_or(embedded.particle_count);
-    let preset = std::env::var("MISTER_PARTICLE_PRESET")
-        .ok()
-        .map(|value| {
-            ParticlePreset::parse(&value)
-                .ok_or_else(|| format!("invalid MISTER_PARTICLE_PRESET={value:?}"))
-        })
-        .transpose()?
-        .unwrap_or(ParticlePreset::Visual);
-    let seed = std::env::var("MISTER_PARTICLE_SEED")
-        .ok()
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| format!("invalid MISTER_PARTICLE_SEED={value:?}: {error}"))
-        })
-        .transpose()?
-        .unwrap_or(embedded.seed);
-    ParticleConfig {
-        count,
-        width,
-        height,
-        seed,
-        preset,
-    }
-    .validate()
 }
 
 fn screensaver_archive_path(asset_dir: Option<&OsStr>, layout: DeviceLayout) -> PathBuf {
@@ -889,40 +515,5 @@ mod tests {
         assert_eq!(parse_screensaver_seed("0X2A"), Some(42));
         assert_eq!(parse_screensaver_seed(""), None);
         assert_eq!(parse_screensaver_seed("seed"), None);
-    }
-
-    #[test]
-    fn particle_renderer_is_selected_only_by_its_explicit_label() {
-        assert!(particle_renderer_label_requested(Some("particle-magik")));
-        assert!(particle_renderer_label_requested(Some(" PARTICLE-MAGIK ")));
-        assert!(!particle_renderer_label_requested(None));
-        assert!(!particle_renderer_label_requested(Some("")));
-        assert!(!particle_renderer_label_requested(Some("parade")));
-    }
-
-    #[test]
-    fn public_layout_never_constructs_the_mutable_recipe_watcher() {
-        assert!(
-            MagikRecipeReload::for_layout(DeviceLayout::Public, 960, 540, ParticlePreset::Visual)
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn particle_renderer_requires_the_direct_hidden_pipeline() {
-        let renderer = ParticleRenderer::new_magik(ParticleConfig {
-            count: 1_024,
-            width: 960,
-            height: 540,
-            seed: 7,
-            preset: ParticlePreset::Capacity,
-        })
-        .unwrap();
-        let screensaver = LauncherScreensaver::particle(renderer, None);
-        assert!(screensaver.requires_direct_hidden());
-        assert!(!screensaver.is_loading_archive());
-        assert!(screensaver.has_rendered_card());
-        assert_eq!(screensaver.active_card_count(), 0);
     }
 }

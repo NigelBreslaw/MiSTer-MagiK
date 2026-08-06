@@ -35,8 +35,8 @@ pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
-    agent_telemetry_for_duration, agent_telemetry_for_particle_trial,
-    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
+    agent_telemetry_for_duration, agent_telemetry_until_screensaver_profile_complete,
+    bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -8415,34 +8415,6 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_render_ahead_starvation_count",
         "screensaver_render_ahead_superseded_frames",
         "screensaver_render_ahead_reused_frames",
-        "particle_count",
-        "particle_visible",
-        "particle_simulation_us",
-        "particle_simulation_cpu_us",
-        "particle_projection_us",
-        "particle_projection_cpu_us",
-        "particle_preparation_wait_us",
-        "particle_prepared_frame_age_us",
-        "particle_lookahead_mismatch_count",
-        "particle_preparation_queue_depth",
-        "particle_worker_wake_latency_us",
-        "particle_clear_us",
-        "particle_clear_cpu_us",
-        "particle_raster_us",
-        "particle_raster_cpu_us",
-        "particle_render_cpu_start",
-        "particle_render_cpu_end",
-        "particle_voluntary_context_switches",
-        "particle_involuntary_context_switches",
-        "particle_pmu_cycles",
-        "particle_pmu_instructions",
-        "particle_pmu_cache_references",
-        "particle_pmu_cache_misses",
-        "particle_pmu_branch_instructions",
-        "particle_pmu_branch_misses",
-        "particle_rotation_y_millidegrees",
-        "particle_simulation_bytes",
-        "particle_renderer_scratch_bytes",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -8450,17 +8422,12 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "status_write_due",
         "clock_update_due",
         "screensaver_render_ahead_cancelled",
-        "particle_pmu_available",
     ];
     const STRING_FIELDS: &[&str] = &[
         "vsync_source",
         "main_present_status",
         "status_publish_mode",
         "screensaver_renderer",
-        "particle_preset",
-        "particle_phase",
-        "particle_simulation_backend",
-        "particle_projection_backend",
     ];
     for key in U64_FIELDS {
         if frame.get(*key).and_then(Value::as_u64).is_none() {
@@ -15099,41 +15066,6 @@ H: Handlers=event3 js0"#
                 "screensaver_raster_visible_layer_mask": 31,
                 "screensaver_renderer": "parade",
             });
-            let particle = json!({
-                "particle_preset": "capacity",
-                "particle_phase": "static",
-                "particle_simulation_backend": "scalar",
-                "particle_projection_backend": "scalar-exact",
-                "particle_count": 0,
-                "particle_visible": 0,
-                "particle_simulation_us": 0,
-                "particle_simulation_cpu_us": 0,
-                "particle_projection_us": 0,
-                "particle_projection_cpu_us": 0,
-                "particle_preparation_wait_us": 0,
-                "particle_prepared_frame_age_us": 0,
-                "particle_lookahead_mismatch_count": 0,
-                "particle_preparation_queue_depth": 0,
-                "particle_worker_wake_latency_us": 0,
-                "particle_clear_us": 0,
-                "particle_clear_cpu_us": 0,
-                "particle_raster_us": 0,
-                "particle_raster_cpu_us": 0,
-                "particle_render_cpu_start": 0,
-                "particle_render_cpu_end": 0,
-                "particle_voluntary_context_switches": 0,
-                "particle_involuntary_context_switches": 0,
-                "particle_pmu_available": false,
-                "particle_pmu_cycles": 0,
-                "particle_pmu_instructions": 0,
-                "particle_pmu_cache_references": 0,
-                "particle_pmu_cache_misses": 0,
-                "particle_pmu_branch_instructions": 0,
-                "particle_pmu_branch_misses": 0,
-                "particle_rotation_y_millidegrees": 0,
-                "particle_simulation_bytes": 0,
-                "particle_renderer_scratch_bytes": 0
-            });
             frame
                 .as_object_mut()
                 .expect("screensaver evidence must be an object")
@@ -15141,15 +15073,6 @@ H: Handlers=event3 js0"#
                     remaining
                         .as_object()
                         .expect("remaining screensaver evidence must be an object")
-                        .clone(),
-                );
-            frame
-                .as_object_mut()
-                .expect("screensaver evidence must be an object")
-                .extend(
-                    particle
-                        .as_object()
-                        .expect("particle evidence must be an object")
                         .clone(),
                 );
             frame["screensaver_render_ahead_sequence"] = json!(id);

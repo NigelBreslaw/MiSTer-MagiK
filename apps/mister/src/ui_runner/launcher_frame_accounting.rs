@@ -22,8 +22,6 @@ const FRAME_ANALYTICS_LEASE_PATH: &str = "/tmp/mister-magik/realtime-frame-analy
 const FRAME_ANALYTICS_LEASE_MAX_AGE: Duration = Duration::from_secs(3);
 const FRAME_ANALYTICS_SAMPLE_CAP: usize = 75;
 const FRAME_SLOW_SAMPLE_CAP: usize = 32;
-const PARTICLE_STATUS_MIN_SLACK_US: u128 = 2_000;
-const PARTICLE_STATUS_MAX_DEFER: Duration = Duration::from_millis(250);
 const AUTOMATION_STATE_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 const PREVIEW_SCROLL_TRACE_FLUSH_ROWS: usize = 60;
@@ -1387,8 +1385,7 @@ impl LauncherFrameAccounting {
             frame.preview_cache_state,
             &frame.composition_status,
         );
-        let runtime_status_write_deferred =
-            should_defer_runtime_status_write(frame, self.last_status_write.elapsed());
+        let runtime_status_write_deferred = should_defer_runtime_status_write(frame);
         let status_write_now = frame.status_write_due && !runtime_status_write_deferred;
         if status_write_now {
             self.refresh_frame_analytics_mode();
@@ -2003,97 +2000,6 @@ impl LauncherFrameAccounting {
                 screensaver_render_ahead_cancelled: frame
                     .screensaver_frame_trace
                     .render_ahead_cancelled,
-                particle_preset: frame.screensaver_frame_trace.particle_preset,
-                particle_phase: frame.screensaver_frame_trace.particle_phase,
-                particle_simulation_backend: frame
-                    .screensaver_frame_trace
-                    .particle_simulation_backend,
-                particle_projection_backend: frame
-                    .screensaver_frame_trace
-                    .particle_projection_backend,
-                particle_count: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_count,
-                ),
-                particle_visible: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_visible,
-                ),
-                particle_simulation_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_simulation_us,
-                ),
-                particle_simulation_cpu_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_simulation_cpu_us,
-                ),
-                particle_projection_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_projection_us,
-                ),
-                particle_projection_cpu_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_projection_cpu_us,
-                ),
-                particle_preparation_wait_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_preparation_wait_us,
-                ),
-                particle_prepared_frame_age_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_prepared_frame_age_us,
-                ),
-                particle_lookahead_mismatch_count: frame
-                    .screensaver_frame_trace
-                    .particle_lookahead_mismatch_count,
-                particle_preparation_queue_depth: usize_to_u64_saturating(
-                    frame
-                        .screensaver_frame_trace
-                        .particle_preparation_queue_depth,
-                ),
-                particle_worker_wake_latency_us: u128_to_u64_saturating(
-                    frame
-                        .screensaver_frame_trace
-                        .particle_worker_wake_latency_us,
-                ),
-                particle_clear_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_clear_us,
-                ),
-                particle_clear_cpu_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_clear_cpu_us,
-                ),
-                particle_raster_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_raster_us,
-                ),
-                particle_raster_cpu_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_raster_cpu_us,
-                ),
-                particle_render_cpu_start: frame.screensaver_frame_trace.particle_render_cpu_start,
-                particle_render_cpu_end: frame.screensaver_frame_trace.particle_render_cpu_end,
-                particle_voluntary_context_switches: frame
-                    .screensaver_frame_trace
-                    .particle_voluntary_context_switches,
-                particle_involuntary_context_switches: frame
-                    .screensaver_frame_trace
-                    .particle_involuntary_context_switches,
-                particle_pmu_available: frame.screensaver_frame_trace.particle_pmu_available,
-                particle_pmu_cycles: frame.screensaver_frame_trace.particle_pmu_cycles,
-                particle_pmu_instructions: frame.screensaver_frame_trace.particle_pmu_instructions,
-                particle_pmu_cache_references: frame
-                    .screensaver_frame_trace
-                    .particle_pmu_cache_references,
-                particle_pmu_cache_misses: frame.screensaver_frame_trace.particle_pmu_cache_misses,
-                particle_pmu_branch_instructions: frame
-                    .screensaver_frame_trace
-                    .particle_pmu_branch_instructions,
-                particle_pmu_branch_misses: frame
-                    .screensaver_frame_trace
-                    .particle_pmu_branch_misses,
-                particle_rotation_y_millidegrees: u64::from(
-                    frame
-                        .screensaver_frame_trace
-                        .particle_rotation_y_millidegrees,
-                ),
-                particle_simulation_bytes: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.particle_simulation_bytes,
-                ),
-                particle_renderer_scratch_bytes: usize_to_u64_saturating(
-                    frame
-                        .screensaver_frame_trace
-                        .particle_renderer_scratch_bytes,
-                ),
             });
     }
 
@@ -2644,28 +2550,8 @@ fn vsync_source_label(source: Option<VsyncPaceSource>) -> &'static str {
     }
 }
 
-fn frame_tail_slack_us(frame: &LauncherPresentedFrame) -> u128 {
-    let frame_wall_us = (frame.frame_t4 - frame.loop_start).as_micros();
-    u128::from(frame.vsync_period_us).saturating_sub(frame_wall_us)
-}
-
-fn should_defer_runtime_status_write(
-    frame: &LauncherPresentedFrame,
-    last_status_write_age: Duration,
-) -> bool {
-    if frame.status_write_due && frame.composition_status.state == "navigation-transition" {
-        return true;
-    }
-    let trace = frame.screensaver_frame_trace;
-    let preparation_age_limit_us = u128::from(frame.vsync_period_us).saturating_mul(3) / 2;
-    frame.status_write_due
-        && frame.screensaver_active
-        && trace.particle_count > 0
-        && frame.main_present_backend == LauncherPresentBackend::FpgaVblankLatchHidden
-        && frame_tail_slack_us(frame) < PARTICLE_STATUS_MIN_SLACK_US
-        && (trace.particle_preparation_queue_depth < 2
-            || trace.particle_prepared_frame_age_us < preparation_age_limit_us)
-        && last_status_write_age < Duration::from_secs(1) + PARTICLE_STATUS_MAX_DEFER
+fn should_defer_runtime_status_write(frame: &LauncherPresentedFrame) -> bool {
+    frame.status_write_due && frame.composition_status.state == "navigation-transition"
 }
 
 fn frame_analytics_mode_label(mode: FrameAnalyticsMode) -> &'static str {
@@ -3280,65 +3166,12 @@ mod tests {
     }
 
     #[test]
-    fn particle_deadline_deferral_is_bounded_and_latch_only() {
-        let start = Instant::now();
-        let mut low_slack = presented_frame(46, start, 15_500);
-        low_slack.status_write_due = true;
-        low_slack.screensaver_active = true;
-        low_slack.screensaver_frame_trace.particle_count = 40_960;
-        low_slack
-            .screensaver_frame_trace
-            .particle_preparation_queue_depth = 1;
-        low_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
-
-        assert_eq!(frame_tail_slack_us(&low_slack), 1_167);
-        assert!(should_defer_runtime_status_write(
-            &low_slack,
-            Duration::from_millis(1_100)
-        ));
-        assert!(!should_defer_runtime_status_write(
-            &low_slack,
-            Duration::from_millis(1_250)
-        ));
-
-        let mut enough_slack = presented_frame(47, start, 14_000);
-        enough_slack.status_write_due = true;
-        enough_slack.screensaver_active = true;
-        enough_slack.screensaver_frame_trace.particle_count = 40_960;
-        enough_slack
-            .screensaver_frame_trace
-            .particle_preparation_queue_depth = 1;
-        enough_slack.main_present_backend = LauncherPresentBackend::FpgaVblankLatchHidden;
-        assert_eq!(frame_tail_slack_us(&enough_slack), 2_667);
-        assert!(!should_defer_runtime_status_write(
-            &enough_slack,
-            Duration::from_millis(1_100)
-        ));
-
-        let mut non_latch = presented_frame(48, start, 15_500);
-        non_latch.status_write_due = true;
-        non_latch.screensaver_active = true;
-        non_latch.screensaver_frame_trace.particle_count = 40_960;
-        non_latch
-            .screensaver_frame_trace
-            .particle_preparation_queue_depth = 1;
-        non_latch.main_present_backend = LauncherPresentBackend::Fb0Dirty;
-        assert!(!should_defer_runtime_status_write(
-            &non_latch,
-            Duration::from_millis(1_100)
-        ));
-    }
-
-    #[test]
     fn navigation_transition_defers_status_without_consuming_the_deadline() {
         let start = Instant::now();
         let mut frame = presented_frame(49, start, 8_000);
         frame.status_write_due = true;
         frame.composition_status.state = "navigation-transition";
-        assert!(should_defer_runtime_status_write(
-            &frame,
-            Duration::from_secs(5)
-        ));
+        assert!(should_defer_runtime_status_write(&frame));
     }
 
     #[test]
