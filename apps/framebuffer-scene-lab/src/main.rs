@@ -315,9 +315,6 @@ fn write_measurement_evidence(
             "raster_visible_layer_mask": screenshot_frames
                 .iter()
                 .fold(0_u8, |mask, frame| mask | frame.raster_visible_layer_mask),
-            "sixteenth_phase_layer_mask": screenshot_frames
-                .iter()
-                .fold(0_u8, |mask, frame| mask | frame.sixteenth_phase_layer_mask),
         })
     });
     let summary = serde_json::json!({
@@ -1041,7 +1038,6 @@ fn screenshot_frame_stats(
             raster_moved_cards: stats.raster_moved_cards,
             raster_hold_layer_mask: stats.raster_hold_layer_mask,
             raster_visible_layer_mask: stats.raster_visible_layer_mask,
-            sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
             phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
             scale_count: stats.scale_count,
             scale_total_us: stats.scale_total_us.min(u128::from(u64::MAX)) as u64,
@@ -2046,7 +2042,6 @@ fn run_window(
                 raster_moved_cards: screenshot.raster_moved_cards,
                 raster_hold_layer_mask: screenshot.raster_hold_layer_mask,
                 raster_visible_layer_mask: screenshot.raster_visible_layer_mask,
-                sixteenth_phase_layer_mask: screenshot.sixteenth_phase_layer_mask,
                 phase_bank_resident_bytes: screenshot.phase_bank_resident_bytes,
                 scale_count: screenshot.scale_count,
                 scale_total_us: screenshot.scale_total_us,
@@ -2304,12 +2299,11 @@ fn run_window(
                 || "screenshot_metrics=not_applicable".to_owned(),
                 |screenshot| {
                     format!(
-                        "screenshot_held={} screenshot_moved={} screenshot_hold_mask=0b{:05b} screenshot_visible_mask=0b{:05b} screenshot_sixteenth_mask=0b{:05b} screenshot_phase_bank_bytes={}",
+                        "screenshot_held={} screenshot_moved={} screenshot_hold_mask=0b{:05b} screenshot_visible_mask=0b{:05b} screenshot_phase_bank_bytes={}",
                         screenshot.raster_held_cards,
                         screenshot.raster_moved_cards,
                         screenshot.raster_hold_layer_mask,
                         screenshot.raster_visible_layer_mask,
-                        screenshot.sixteenth_phase_layer_mask,
                         screenshot.phase_bank_resident_bytes,
                     )
                 },

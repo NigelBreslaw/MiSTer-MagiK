@@ -1974,9 +1974,6 @@ impl LauncherFrameAccounting {
                 screensaver_raster_visible_layer_mask: frame
                     .screensaver_frame_trace
                     .raster_visible_layer_mask,
-                screensaver_sixteenth_phase_layer_mask: frame
-                    .screensaver_frame_trace
-                    .sixteenth_phase_layer_mask,
                 screensaver_phase_bank_bytes: usize_to_u64_saturating(
                     frame.screensaver_frame_trace.phase_bank_resident_bytes,
                 ),
@@ -3368,7 +3365,6 @@ mod tests {
         frame.screensaver_frame_trace.raster_moved_cards = 8;
         frame.screensaver_frame_trace.raster_hold_layer_mask = 1;
         frame.screensaver_frame_trace.raster_visible_layer_mask = 3;
-        frame.screensaver_frame_trace.sixteenth_phase_layer_mask = 1;
         frame.screensaver_frame_trace.phase_bank_resident_bytes = 12_345;
 
         accounting.accumulate_frame_budget(&frame, 321);
@@ -3392,7 +3388,6 @@ mod tests {
         assert_eq!(recent.screensaver_raster_held_cards, 2);
         assert_eq!(recent.screensaver_raster_hold_layer_mask, 1);
         assert_eq!(recent.screensaver_raster_visible_layer_mask, 3);
-        assert_eq!(recent.screensaver_sixteenth_phase_layer_mask, 1);
         assert_eq!(recent.screensaver_phase_bank_bytes, 12_345);
     }
 

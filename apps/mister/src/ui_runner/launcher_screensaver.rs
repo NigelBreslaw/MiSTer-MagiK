@@ -397,7 +397,6 @@ pub struct ScreensaverFrameTrace {
     pub(super) raster_moved_cards: usize,
     pub(super) raster_hold_layer_mask: u8,
     pub(super) raster_visible_layer_mask: u8,
-    pub(super) sixteenth_phase_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
     pub(super) render_ahead_sequence: u64,
     pub(super) render_ahead_queue_depth: usize,
@@ -458,7 +457,6 @@ pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverFr
         raster_moved_cards: stats.raster_moved_cards,
         raster_hold_layer_mask: stats.raster_hold_layer_mask,
         raster_visible_layer_mask: stats.raster_visible_layer_mask,
-        sixteenth_phase_layer_mask: stats.sixteenth_phase_layer_mask,
         phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
         ..ScreensaverFrameTrace::default()
     }

@@ -83,7 +83,6 @@ pub struct ScreenshotParadeStats {
     pub raster_moved_cards: usize,
     pub raster_hold_layer_mask: u8,
     pub raster_visible_layer_mask: u8,
-    pub sixteenth_phase_layer_mask: u8,
     pub phase_bank_resident_bytes: usize,
     pub image_cache_resident_bytes: usize,
     pub scale_count: u64,
@@ -516,7 +515,6 @@ impl ScreenshotParade {
             raster_moved_cards,
             raster_hold_layer_mask,
             raster_visible_layer_mask,
-            sixteenth_phase_layer_mask: self.sixteenth_phase_layer_mask(),
             phase_bank_resident_bytes: self.phase_bank_resident_bytes(),
             image_cache_resident_bytes: self.image_cache_resident_bytes(),
             scale_count: self.scale_count,
@@ -1000,10 +998,6 @@ impl ScreenshotParade {
 
     fn random_below(&mut self, upper: usize) -> usize {
         advance_rng(&mut self.rng) as usize % upper.max(1)
-    }
-
-    fn sixteenth_phase_layer_mask(&self) -> u8 {
-        (1_u8 << SPEED_COUNT) - 1
     }
 
     fn phase_bank_resident_bytes(&self) -> usize {

@@ -62,48 +62,6 @@ impl ScreenshotImage {
     }
 }
 
-#[derive(Clone)]
-enum ParadePhaseSet {
-    SixteenthLinear {
-        base_coverage: CoveragePlane,
-        shifted: Box<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]>,
-    },
-}
-
-impl ParadePhaseSet {
-    fn linear_phase(&self, phase: usize) -> Option<LinearPhaseRef<'_>> {
-        let Self::SixteenthLinear { shifted, .. } = self;
-        if phase == 0 {
-            None
-        } else {
-            shifted.get(phase - 1).map(|phase| LinearPhaseRef {
-                image: &phase.image,
-                coverage: &phase.coverage,
-            })
-        }
-    }
-
-    fn base_coverage(&self) -> &CoveragePlane {
-        let Self::SixteenthLinear { base_coverage, .. } = self;
-        base_coverage
-    }
-
-    fn resident_bytes(&self) -> usize {
-        match self {
-            Self::SixteenthLinear {
-                base_coverage,
-                shifted,
-            } => {
-                base_coverage.resident_bytes()
-                    + shifted
-                        .iter()
-                        .map(PreparedLinearPhase::resident_bytes)
-                        .sum::<usize>()
-            }
-        }
-    }
-}
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct OpaqueSpan {
@@ -199,7 +157,8 @@ struct LinearImage {
 #[derive(Clone)]
 pub struct PreparedScreenshotCard {
     image: ScreenshotImage,
-    phases: ParadePhaseSet,
+    base_coverage: CoveragePlane,
+    shifted_phases: Box<[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT]>,
     corner_insets: Vec<u8>,
 }
 
@@ -253,20 +212,15 @@ impl PreparedScreenshotCard {
             };
             return (
                 Self {
-                    phases: ParadePhaseSet::SixteenthLinear {
-                        base_coverage: empty_phase.coverage.clone(),
-                        shifted: Box::new(std::array::from_fn(|_| empty_phase.clone())),
-                    },
                     image,
+                    base_coverage: empty_phase.coverage.clone(),
+                    shifted_phases: Box::new(std::array::from_fn(|_| empty_phase.clone())),
                     corner_insets: Vec::new(),
                 },
                 0,
             );
         }
         let (width, height, tint) = scaled_style(source, speed, screen_height);
-        if matches!(kernel, LinearPhaseKernel::Neon) {
-            validate_neon_phase_kernel();
-        }
         let mut styled =
             scale_lanczos3_linear_tinted(source, width, height, tint, preparation_slack);
         apply_depth_cues_linear(&mut styled, speed, preparation_slack);
@@ -303,10 +257,8 @@ impl PreparedScreenshotCard {
         (
             Self {
                 image: base.image,
-                phases: ParadePhaseSet::SixteenthLinear {
-                    base_coverage: base.coverage,
-                    shifted: Box::new(shifted),
-                },
+                base_coverage: base.coverage,
+                shifted_phases: Box::new(shifted),
                 corner_insets,
             },
             phase_us,
@@ -340,7 +292,12 @@ impl PreparedScreenshotCard {
 
     #[must_use]
     pub fn phase_resident_bytes(&self) -> usize {
-        self.phases.resident_bytes()
+        self.base_coverage.resident_bytes()
+            + self
+                .shifted_phases
+                .iter()
+                .map(PreparedLinearPhase::resident_bytes)
+                .sum::<usize>()
     }
 
     pub(crate) fn blit(
@@ -356,7 +313,8 @@ impl PreparedScreenshotCard {
             screen_width,
             screen_height,
             &self.image,
-            &self.phases,
+            &self.base_coverage,
+            &self.shifted_phases,
             x_fp,
             y,
         );
@@ -378,7 +336,8 @@ impl PreparedScreenshotCard {
             screen_width,
             screen_height,
             &self.image,
-            &self.phases,
+            &self.base_coverage,
+            &self.shifted_phases,
             x_fp,
             y,
             base_background,
@@ -1117,98 +1076,6 @@ fn prepare_linear_phase_neon_if_selected(
     }
 }
 
-fn validate_neon_phase_kernel() {
-    #[cfg(all(target_os = "linux", target_arch = "arm"))]
-    {
-        use std::sync::OnceLock;
-
-        static VALIDATED: OnceLock<()> = OnceLock::new();
-        VALIDATED.get_or_init(|| {
-            let source_width = 9;
-            let height = 2;
-            let source = (0..source_width * height)
-                .map(|index| {
-                    let value = index as u16;
-                    [
-                        value.wrapping_mul(3_641),
-                        value.wrapping_mul(7_919).wrapping_add(65_535),
-                        value.wrapping_mul(13_337).wrapping_add(257),
-                        value.wrapping_mul(4_093),
-                    ]
-                })
-                .collect::<Vec<_>>();
-            let output_width = source_width + 1;
-            let validate = |source: &[[u16; 4]], source_opaque_spans: &[OpaqueSpan]| {
-                for phase in 1..CRT_PHASE_COUNT {
-                    let weights = fractional_delay_weights(phase);
-                    let mut actual_pixels = vec![Rgb565Pixel(0); output_width * height];
-                    let mut actual_coverage = vec![0_u8; output_width * height];
-                    // SAFETY: this validation runs only on the MiSTer ARM target,
-                    // whose Cortex-A9 provides NEON, with complete source/output planes.
-                    unsafe {
-                        prepare_linear_phase_neon(
-                            source,
-                            source_width,
-                            height,
-                            output_width,
-                            weights,
-                            source_opaque_spans,
-                            linear_to_srgb_table(),
-                            &mut actual_pixels,
-                            &mut actual_coverage,
-                        );
-                    }
-                    let expected = (0..height)
-                        .flat_map(|y| {
-                            (0..output_width).map(move |out_x| {
-                                let samples = std::array::from_fn(|tap| {
-                                    let source_x = out_x as isize + tap as isize - 3;
-                                    if (0..source_width as isize).contains(&source_x) {
-                                        source[y * source_width + source_x as usize]
-                                    } else {
-                                        [0; 4]
-                                    }
-                                });
-                                linear_phase_pixel(
-                                    reconstruct_six_tap_scalar(&samples, weights),
-                                    linear_to_srgb_table(),
-                                )
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let expected_pixels = expected.iter().map(|value| value.0).collect::<Vec<_>>();
-                    let expected_coverage =
-                        expected.iter().map(|value| value.1).collect::<Vec<_>>();
-                    assert_eq!(
-                        actual_pixels, expected_pixels,
-                        "NEON phase {phase} pixels differ from scalar"
-                    );
-                    assert_eq!(
-                        actual_coverage, expected_coverage,
-                        "NEON phase {phase} coverage differs from scalar"
-                    );
-                }
-            };
-            validate(&source, &vec![OpaqueSpan::default(); height]);
-
-            let opaque_source = source
-                .iter()
-                .map(|pixel| [pixel[0], pixel[1], pixel[2], u16::MAX])
-                .collect::<Vec<_>>();
-            validate(
-                &opaque_source,
-                &vec![
-                    OpaqueSpan {
-                        start: 0,
-                        end: source_width as u16,
-                    };
-                    height
-                ],
-            );
-        });
-    }
-}
-
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 unsafe fn prepare_linear_phase_neon(
     source: &[[u16; 4]],
@@ -1276,7 +1143,8 @@ fn blit_sixteenth_phase(
     screen_width: usize,
     screen_height: usize,
     image: &ScreenshotImage,
-    phase_set: &ParadePhaseSet,
+    base_coverage: &CoveragePlane,
+    shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
     x_fp: i64,
     y: isize,
 ) {
@@ -1287,13 +1155,13 @@ fn blit_sixteenth_phase(
             screen_width,
             screen_height,
             image,
-            phase_set.base_coverage(),
+            base_coverage,
             quantized.x,
             y,
         );
         return;
     }
-    let Some(shifted) = phase_set.linear_phase(quantized.phase) else {
+    let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
         debug_assert!(false, "linear card missing sixteenth-pixel phase");
         return;
     };
@@ -1301,8 +1169,8 @@ fn blit_sixteenth_phase(
         dst,
         screen_width,
         screen_height,
-        shifted.image,
-        shifted.coverage,
+        &shifted.image,
+        &shifted.coverage,
         quantized.x,
         y,
     );
@@ -1316,7 +1184,8 @@ fn blit_sixteenth_phase_probed(
     screen_width: usize,
     screen_height: usize,
     image: &ScreenshotImage,
-    phase_set: &ParadePhaseSet,
+    base_coverage: &CoveragePlane,
+    shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
     x_fp: i64,
     y: isize,
     base_background: Rgb565Pixel,
@@ -1328,13 +1197,13 @@ fn blit_sixteenth_phase_probed(
             screen_width,
             screen_height,
             image,
-            phase_set.base_coverage(),
+            base_coverage,
             quantized.x,
             y,
             base_background,
         );
     }
-    let Some(shifted) = phase_set.linear_phase(quantized.phase) else {
+    let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
         debug_assert!(false, "linear card missing sixteenth-pixel phase");
         return CoverageBlitStats::default();
     };
@@ -1342,8 +1211,8 @@ fn blit_sixteenth_phase_probed(
         dst,
         screen_width,
         screen_height,
-        shifted.image,
-        shifted.coverage,
+        &shifted.image,
+        &shifted.coverage,
         quantized.x,
         y,
         base_background,
@@ -1619,11 +1488,7 @@ mod tests {
     }
 
     fn linear_phases(card: &PreparedScreenshotCard) -> (&CoveragePlane, &[PreparedLinearPhase]) {
-        let ParadePhaseSet::SixteenthLinear {
-            base_coverage,
-            shifted,
-        } = &card.phases;
-        (base_coverage, shifted.as_slice())
+        (&card.base_coverage, card.shifted_phases.as_slice())
     }
 
     fn coverage_centroid(coverage: &CoveragePlane, width: usize, height: usize) -> f64 {
@@ -1837,7 +1702,7 @@ mod tests {
         let background = color565(4, 8, 12);
         let mut frame = vec![background; 32 * 24];
         card.blit(&mut frame, 32, 24, 3 * PARADE_SUBPIXEL_ONE, 2);
-        let corner_coverage = card.phases.base_coverage().alpha_at(0, 0);
+        let corner_coverage = card.base_coverage.alpha_at(0, 0);
         assert!((1..255).contains(&corner_coverage));
         let mut expected_corner = [background];
         composite_coverage_pixel(

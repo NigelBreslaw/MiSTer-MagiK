@@ -184,7 +184,6 @@ pub struct ScreenshotFrameDetails {
     pub raster_moved_cards: usize,
     pub raster_hold_layer_mask: u8,
     pub raster_visible_layer_mask: u8,
-    pub sixteenth_phase_layer_mask: u8,
     pub phase_bank_resident_bytes: usize,
     pub scale_count: u64,
     pub scale_total_us: u64,
