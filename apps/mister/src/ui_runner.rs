@@ -124,8 +124,6 @@ use catalog_worker::*;
 use controller_loop::*;
 use controller_setup_input_session::*;
 use crt_trial_loop::*;
-#[cfg(all(mister_experiments, not(target_os = "macos")))]
-use experiments::effects::run_screensaver_loop;
 #[cfg(mister_experiments)]
 use experiments::effects::{
     run_camera_effects_loop, run_raster_effects_loop, run_sprite_effects_loop,
@@ -180,8 +178,6 @@ fn screen_label(screen: Screen) -> &'static str {
 
 pub const UI_SCENES: &[&str] = &[
     "launcher",
-    #[cfg(mister_experiments)]
-    "screensaver",
     #[cfg(mister_experiments)]
     "camera-effects",
     #[cfg(mister_experiments)]
@@ -346,12 +342,6 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
             boot_analytics::event("set_audio_volume_failed", format!("error={e}"));
         }
     }
-    #[cfg(all(mister_experiments, not(target_os = "macos")))]
-    if scene == "screensaver" {
-        run_screensaver_loop(secs, &ui, f, &mut display_session);
-        return;
-    }
-
     #[cfg(mister_experiments)]
     if scene == "camera-effects" {
         run_camera_effects_loop(secs, &ui, &mut disp);
