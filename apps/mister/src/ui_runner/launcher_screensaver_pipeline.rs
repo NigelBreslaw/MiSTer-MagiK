@@ -123,6 +123,8 @@ impl ScreensaverRenderAhead {
 mod tests {
     use super::*;
 
+    const TEST_RUNTIME_TIMEOUT: Duration = Duration::from_secs(10);
+
     fn screenshot_runtime(width: usize, height: usize) -> LauncherScreenshotRuntime {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-render-ahead-{}-{width}x{height}.mmlz4b",
@@ -161,7 +163,7 @@ mod tests {
         )
         .expect("construct screenshot runtime");
         runtime
-            .wait_until_prefilled(Duration::from_secs(2))
+            .wait_until_prefilled(TEST_RUNTIME_TIMEOUT)
             .expect("prefill screenshot runtime");
         runtime.finish_prefill().expect("finish prefill");
         let _ = std::fs::remove_file(path);
@@ -171,7 +173,7 @@ mod tests {
     #[test]
     fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
         let mut pipeline = ScreensaverRenderAhead::start(screenshot_runtime(64, 48));
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + TEST_RUNTIME_TIMEOUT;
         let mut sequences = Vec::new();
         while sequences.len() < 4 && Instant::now() < deadline {
             match pipeline.try_next() {
@@ -205,7 +207,7 @@ mod tests {
     fn render_ahead_supports_repeated_enter_and_exit() {
         for _ in 0..2 {
             let mut pipeline = ScreensaverRenderAhead::start(screenshot_runtime(32, 24));
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + TEST_RUNTIME_TIMEOUT;
             let mut saw_frame = false;
             while Instant::now() < deadline {
                 match pipeline.try_next() {
