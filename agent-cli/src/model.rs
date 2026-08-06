@@ -22,6 +22,7 @@ pub enum BenchmarkScenario {
     LaunchReturnFallback,
     ModalInput,
     NavigationTransitions,
+    PmuProfile,
     Search,
 }
 
@@ -41,6 +42,7 @@ impl BenchmarkScenario {
             Self::LaunchReturnFallback => "launch-return-fallback",
             Self::ModalInput => "modal-input",
             Self::NavigationTransitions => "navigation-transitions",
+            Self::PmuProfile => "pmu-profile",
             Self::Search => "search",
         }
     }

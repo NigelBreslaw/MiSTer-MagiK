@@ -20,7 +20,7 @@ pub fn run() {
     }
 }
 
-fn benchmark(storage_root: impl AsRef<Path>) -> Result<Value, String> {
+pub(crate) fn benchmark(storage_root: impl AsRef<Path>) -> Result<Value, String> {
     let storage_root = storage_root.as_ref();
     let limits = production_registry_limits();
     let manifest =

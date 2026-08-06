@@ -579,6 +579,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_search(config, output_dir))
     }
 
+    pub(crate) fn profile_pmu(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_pmu(config, output_dir))
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -4473,6 +4480,75 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+    const WORKLOADS: [&str; 3] = ["probe", "screensaver", "search"];
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability.get("pmu-profile-v1").and_then(Value::as_bool) != Some(true) {
+        return Err("installed app does not support pmu-profile-v1".into());
+    }
+
+    let mut summaries = Vec::with_capacity(WORKLOADS.len());
+    for workload in WORKLOADS {
+        let command = format!(
+            "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 /media/fat/mister-magik-dev/mister-magik-fb pmu-profile {}",
+            sh(workload)
+        );
+        let output = exec(&session, &command, true)?;
+        let mut log = output.stdout.clone();
+        log.push_str(&output.stderr);
+        fs::write(output_dir.join(format!("{workload}.log")), &log)?;
+        if let Some(message) = exec_failure_message("installed PMU workload", &output) {
+            return Err(format!("{workload}: {message}").into());
+        }
+        let summary = last_json_line(&output.stdout)
+            .ok_or_else(|| format!("installed PMU workload {workload} returned no JSON"))?;
+        if workload == "probe" {
+            if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-probe-v1")
+                || summary.get("status").and_then(Value::as_str) != Some("ok")
+            {
+                return Err("installed PMU probe did not produce authoritative counters".into());
+            }
+        } else if summary.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-pmu-workload-v1")
+            || summary.get("status").and_then(Value::as_str) != Some("ok")
+            || summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
+            || summary
+                .pointer("/profile/records")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        {
+            return Err(
+                format!("installed PMU workload {workload} returned unusable evidence").into(),
+            );
+        }
+        fs::write(
+            output_dir.join(format!("{workload}.json")),
+            format!("{}\n", serde_json::to_string_pretty(&summary)?),
+        )?;
+        summaries.push(summary);
+    }
+    let suite = json!({
+        "schema": "mister-magik-pmu-suite-v1",
+        "status": "passed",
+        "sample_every": 1,
+        "record_limit": 4096,
+        "workloads": summaries,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&suite)?),
+    )?;
+    serde_json::to_string(&suite).map_err(Into::into)
 }
 
 fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {

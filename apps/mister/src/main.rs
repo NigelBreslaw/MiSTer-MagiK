@@ -120,6 +120,7 @@ mod media_pack_save;
 mod memory_pressure;
 mod mr_audio;
 mod pmu_probe;
+mod pmu_profile;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 mod preview_pack_bench;
 mod preview_state;
@@ -370,6 +371,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
         "pmu-probe" => pmu_probe::run(),
+        "pmu-profile" => pmu_profile::run(args),
         "search-bench" => search_bench::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -414,6 +416,7 @@ fn print_benchmark_capabilities() {
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
         "pmu-probe-v1": true,
+        "pmu-profile-v1": true,
         "persisted-search-v1": true,
     });
     capabilities

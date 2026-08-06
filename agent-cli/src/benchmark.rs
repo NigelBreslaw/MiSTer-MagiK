@@ -37,6 +37,7 @@ enum BenchmarkProfile {
     ModalInput,
     ColdBoot,
     NavigationTransitions,
+    Pmu,
 }
 
 impl BenchmarkDevice for DeviceClient {
@@ -75,6 +76,7 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
             }
+            BenchmarkProfile::Pmu => device.profile_pmu(&output_dir),
         })
     }
 }
@@ -152,8 +154,64 @@ fn require_clean_installed_commit(
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::PmuProfile => execute_pmu(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
     }
+}
+
+fn execute_pmu(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling fixed Cortex-A9 PMU workloads",
+        Some(30),
+    )?;
+    let detail = device.profile(BenchmarkProfile::Pmu, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_pmu_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_pmu_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-pmu-suite-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("PMU suite summary is not a passing v1 report".into());
+    }
+    let workloads = summary
+        .get("workloads")
+        .and_then(Value::as_array)
+        .ok_or("PMU suite summary has no workloads")?;
+    if workloads.len() != 3 {
+        return Err(format!(
+            "PMU suite expected three workloads, received {}",
+            workloads.len()
+        )
+        .into());
+    }
+    for workload in workloads {
+        if workload.get("status").and_then(Value::as_str) != Some("ok") {
+            return Err("PMU suite contains a failed workload".into());
+        }
+    }
+    Ok(())
 }
 
 fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static str> {
@@ -988,6 +1046,23 @@ mod tests {
             assert!(command.contains("--particle-preset"));
             assert!(command.contains("--particle-count"));
         }
+    }
+
+    #[test]
+    fn pmu_suite_requires_three_passing_workloads() {
+        let passing = json!({
+            "schema": "mister-magik-pmu-suite-v1",
+            "status": "passed",
+            "workloads": [
+                {"workload": "probe", "status": "ok"},
+                {"workload": "screensaver", "status": "ok"},
+                {"workload": "search", "status": "ok"},
+            ],
+        });
+        evaluate_pmu_summary(&passing).unwrap();
+        let mut failed = passing;
+        failed["workloads"][1]["status"] = json!("failed");
+        assert!(evaluate_pmu_summary(&failed).is_err());
     }
 
     #[test]

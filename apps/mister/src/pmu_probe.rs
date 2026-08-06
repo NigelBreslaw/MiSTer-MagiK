@@ -15,7 +15,7 @@ pub fn run() {
     }
 }
 
-fn probe() -> Value {
+pub(crate) fn probe() -> Value {
     match measure_probe() {
         Ok((delta, checksum)) if valid_probe(delta) => json!({
             "schema": "mister-magik-pmu-probe-v1",
