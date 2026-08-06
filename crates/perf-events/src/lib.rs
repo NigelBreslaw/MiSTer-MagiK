@@ -799,7 +799,7 @@ mod linux {
                         }
                         return Ok(group);
                     }
-                    Err(failure) if failure.errno == Some(libc::EINVAL) => {
+                    Err(failure) if compatibility_failure(&failure) => {
                         if let Some(attempts) = attempts.as_deref_mut() {
                             attempts.push(group_attempt(options, Some(failure.clone())));
                         }
@@ -926,6 +926,13 @@ mod linux {
                 Err(PmuFailure::io(stage, None, std::io::Error::last_os_error()))
             }
         }
+    }
+
+    fn compatibility_failure(failure: &PmuFailure) -> bool {
+        matches!(
+            failure.errno,
+            Some(libc::EINVAL | libc::ENOTTY | libc::EOPNOTSUPP)
+        )
     }
 
     fn read_environment() -> PmuEnvironment {
