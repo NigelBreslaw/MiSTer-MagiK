@@ -1000,7 +1000,13 @@ fn direct_lanczos_filter_bank(
         let center = (output_x as f64 + 0.5 - delay) / scale - 0.5;
         let first = (center - support).ceil() as isize;
         let last = (center + support).floor() as isize;
-        let float_weights = (first..=last)
+        // Match the established scaler's boundary policy: discard taps outside
+        // the source image, then renormalize the remaining support. Clamping
+        // every out-of-range tap onto column zero duplicates its contribution
+        // and creates a visibly different first output column.
+        let start = first.max(0);
+        let end = last.min(source_width as isize - 1).max(start);
+        let float_weights = (start..=end)
             .map(|source_x| lanczos3((source_x as f64 - center) * filter_scale) * filter_scale)
             .collect::<Vec<_>>();
         let sum = float_weights.iter().sum::<f64>();
@@ -1017,7 +1023,7 @@ fn direct_lanczos_filter_bank(
             (i32::from(fixed_weights[center_tap]) + LANCZOS_WEIGHT_ONE - fixed_sum) as i16;
         let sample_start = weights.len();
         for (tap, weight) in fixed_weights.into_iter().enumerate() {
-            let source_x = (first + tap as isize).clamp(0, source_width as isize - 1);
+            let source_x = start + tap as isize;
             sample_indices.push(
                 u16::try_from(source_x).expect("screenshot source width exceeds u16 indexing"),
             );
@@ -2603,6 +2609,29 @@ mod tests {
                     command_samples(&wrapped, wrapped.commands[x + 1]),
                     command_samples(&base, base.commands[x]),
                     "source={source_width} target={target_width} x={x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn direct_phase_zero_matches_established_lanczos_filters_at_edges() {
+        for (source_width, target_width) in [(320, 213), (320, 178), (19, 11)] {
+            let established = lanczos_filters(source_width, target_width);
+            let direct = direct_lanczos_filter_bank(source_width, target_width, 0);
+            assert_eq!(direct.commands.len(), established.len());
+            for (x, filter) in established.iter().enumerate() {
+                let (indices, weights) = command_samples(&direct, direct.commands[x]);
+                assert_eq!(
+                    indices,
+                    (filter.start..filter.start + filter.weights.len())
+                        .map(|source_x| source_x as u16)
+                        .collect::<Vec<_>>(),
+                    "source={source_width} target={target_width} x={x} indices"
+                );
+                assert_eq!(
+                    weights, filter.weights,
+                    "source={source_width} target={target_width} x={x} weights"
                 );
             }
         }
