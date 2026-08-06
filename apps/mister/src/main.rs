@@ -371,7 +371,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
         "pmu-probe" => pmu_probe::run(),
-        "pmu-profile" => pmu_profile::run(args),
+        "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
