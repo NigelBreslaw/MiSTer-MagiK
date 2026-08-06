@@ -180,17 +180,48 @@ struct OpaqueSpan {
     end: u16,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct CoveragePlane {
-    values: Vec<u8>,
-    opaque_spans: Vec<OpaqueSpan>,
-    stride: usize,
+    rows: Vec<CoverageRowCommand>,
+    partial_samples: Vec<CoverageSample>,
+    width: usize,
 }
 
 impl CoveragePlane {
     fn resident_bytes(&self) -> usize {
-        self.values.len() * size_of::<u8>() + self.opaque_spans.len() * size_of::<OpaqueSpan>()
+        self.rows.len() * size_of::<CoverageRowCommand>()
+            + self.partial_samples.len() * size_of::<CoverageSample>()
     }
+
+    #[cfg(test)]
+    fn alpha_at(&self, x: usize, y: usize) -> u8 {
+        let Some(row) = self.rows.get(y) else {
+            return 0;
+        };
+        if (usize::from(row.opaque.start)..usize::from(row.opaque.end)).contains(&x) {
+            return 255;
+        }
+        self.partial_samples[row.partial_start as usize..row.partial_end as usize]
+            .iter()
+            .find_map(|sample| (usize::from(sample.x) == x).then_some(sample.alpha))
+            .unwrap_or(0)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CoverageRowCommand {
+    opaque: OpaqueSpan,
+    partial_start: u32,
+    partial_end: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct CoverageSample {
+    x: u16,
+    alpha: u8,
+    _padding: u8,
 }
 
 #[derive(Clone)]
@@ -894,10 +925,35 @@ fn coverage_opaque_spans(values: &[u8], stride: usize, height: usize) -> Vec<Opa
 
 fn coverage_plane(values: Vec<u8>, stride: usize, height: usize) -> CoveragePlane {
     let opaque_spans = coverage_opaque_spans(&values, stride, height);
+    let mut rows = Vec::with_capacity(height);
+    let mut partial_samples = Vec::with_capacity(height.saturating_mul(4));
+    for (y, opaque) in opaque_spans.into_iter().enumerate() {
+        let partial_start = partial_samples.len();
+        for (x, alpha) in values[y * stride..(y + 1) * stride]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            if (1..255).contains(&alpha) {
+                partial_samples.push(CoverageSample {
+                    x: u16::try_from(x).expect("screenshot coverage row exceeds u16 width"),
+                    alpha,
+                    _padding: 0,
+                });
+            }
+        }
+        rows.push(CoverageRowCommand {
+            opaque,
+            partial_start: u32::try_from(partial_start)
+                .expect("screenshot coverage sample bank exceeds u32"),
+            partial_end: u32::try_from(partial_samples.len())
+                .expect("screenshot coverage sample bank exceeds u32"),
+        });
+    }
     CoveragePlane {
-        values,
-        opaque_spans,
-        stride,
+        rows,
+        partial_samples,
+        width: stride,
     }
 }
 
@@ -1702,40 +1758,31 @@ fn blit_coverage_phase(
             continue;
         }
         let source_row = source_y * image.stride;
-        let coverage_row = source_y * coverage.stride;
         let target_row = target_y as usize * screen_width;
-        let span = coverage
-            .opaque_spans
-            .get(source_y)
-            .copied()
-            .unwrap_or_default();
-        let opaque_start = usize::from(span.start).clamp(source_x0, source_x1);
-        let opaque_end = usize::from(span.end).clamp(opaque_start, source_x1);
-        for source_x in source_x0..opaque_start {
+        let command = coverage.rows.get(source_y).copied().unwrap_or_default();
+        for sample in
+            &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
+        {
+            let source_x = usize::from(sample.x);
+            if !(source_x0..source_x1).contains(&source_x) {
+                continue;
+            }
             composite_coverage_pixel(
                 dst,
                 target_row + (x + source_x as isize) as usize,
                 image.pixels[source_row + source_x],
-                coverage.values[coverage_row + source_x],
+                sample.alpha,
                 srgb_to_linear,
                 linear_to_srgb,
             );
         }
+        let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
+        let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
         if opaque_end > opaque_start {
             let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
             dst[target_start..target_start + copy_len]
                 .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
-        }
-        for source_x in opaque_end..source_x1 {
-            composite_coverage_pixel(
-                dst,
-                target_row + (x + source_x as isize) as usize,
-                image.pixels[source_row + source_x],
-                coverage.values[coverage_row + source_x],
-                srgb_to_linear,
-                linear_to_srgb,
-            );
         }
     }
 }
@@ -1767,53 +1814,35 @@ fn blit_coverage_phase_probed(
             continue;
         }
         let source_row = source_y * image.stride;
-        let coverage_row = source_y * coverage.stride;
         let target_row = target_y as usize * screen_width;
-        let span = coverage
-            .opaque_spans
-            .get(source_y)
-            .copied()
-            .unwrap_or_default();
-        let opaque_start = usize::from(span.start).clamp(source_x0, source_x1);
-        let opaque_end = usize::from(span.end).clamp(opaque_start, source_x1);
-        stats.composite_calls += (opaque_start - source_x0).saturating_add(source_x1 - opaque_end);
-        for source_x in source_x0..opaque_start {
-            let target = target_row + (x + source_x as isize) as usize;
-            let alpha = coverage.values[coverage_row + source_x];
-            if alpha != 0 && alpha != 255 {
-                stats.partial_edge_pixels += 1;
-                stats.exact_base_background_hits += usize::from(dst[target] == base_background);
+        let command = coverage.rows.get(source_y).copied().unwrap_or_default();
+        for sample in
+            &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
+        {
+            let source_x = usize::from(sample.x);
+            if !(source_x0..source_x1).contains(&source_x) {
+                continue;
             }
+            let target = target_row + (x + source_x as isize) as usize;
+            stats.composite_calls += 1;
+            stats.partial_edge_pixels += 1;
+            stats.exact_base_background_hits += usize::from(dst[target] == base_background);
             composite_coverage_pixel(
                 dst,
                 target,
                 image.pixels[source_row + source_x],
-                alpha,
+                sample.alpha,
                 srgb_to_linear,
                 linear_to_srgb,
             );
         }
+        let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
+        let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
         if opaque_end > opaque_start {
             let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
             dst[target_start..target_start + copy_len]
                 .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
-        }
-        for source_x in opaque_end..source_x1 {
-            let target = target_row + (x + source_x as isize) as usize;
-            let alpha = coverage.values[coverage_row + source_x];
-            if alpha != 0 && alpha != 255 {
-                stats.partial_edge_pixels += 1;
-                stats.exact_base_background_hits += usize::from(dst[target] == base_background);
-            }
-            composite_coverage_pixel(
-                dst,
-                target,
-                image.pixels[source_row + source_x],
-                alpha,
-                srgb_to_linear,
-                linear_to_srgb,
-            );
         }
     }
     stats
@@ -1960,6 +1989,94 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn blit_coverage_phase_dense_reference(
+        dst: &mut [Rgb565Pixel],
+        screen_width: usize,
+        screen_height: usize,
+        image: &ScreenshotImage,
+        coverage: &CoveragePlane,
+        x: isize,
+        y: isize,
+    ) {
+        let srgb_to_linear = srgb_to_linear_table();
+        let linear_to_srgb = linear_to_srgb_table();
+        for source_y in 0..image.height {
+            let target_y = y + source_y as isize;
+            if target_y < 0 || target_y >= screen_height as isize {
+                continue;
+            }
+            let source_x0 = (-x).max(0) as usize;
+            let source_x1 = (screen_width as isize - x).clamp(0, image.width as isize) as usize;
+            let source_row = source_y * image.stride;
+            let target_row = target_y as usize * screen_width;
+            for source_x in source_x0..source_x1 {
+                let alpha = coverage.alpha_at(source_x, source_y);
+                let target = target_row + (x + source_x as isize) as usize;
+                if alpha == 255 {
+                    dst[target] = image.pixels[source_row + source_x];
+                } else if alpha != 0 {
+                    composite_coverage_pixel(
+                        dst,
+                        target,
+                        image.pixels[source_row + source_x],
+                        alpha,
+                        srgb_to_linear,
+                        linear_to_srgb,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sparse_coverage_commands_match_dense_reference_for_all_phases() {
+        let source = test_image(32, 24);
+        let card = PreparedScreenshotCard::prepare_with_generation(
+            &source,
+            5,
+            180,
+            ScreenshotSamplingProfile::CrtSixteenth,
+            ScreenshotPhaseGeneration::LinearLanczos3,
+        );
+        let (base, shifted) = linear_phases(&card);
+        let screen_width = 96;
+        let screen_height = 72;
+        let background = (0..screen_width * screen_height)
+            .map(|index| color565(index as u8, (index * 7) as u8, (index * 19) as u8))
+            .collect::<Vec<_>>();
+        for phase in 0..CRT_PHASE_COUNT {
+            let (image, coverage) = if phase == 0 {
+                (&card.image, base)
+            } else {
+                (&shifted[phase - 1].image, &shifted[phase - 1].coverage)
+            };
+            let mut expected = background.clone();
+            let mut actual = background.clone();
+            for (x, y) in [(-(image.width as isize) / 3, -2), (31, 18)] {
+                blit_coverage_phase_dense_reference(
+                    &mut expected,
+                    screen_width,
+                    screen_height,
+                    image,
+                    coverage,
+                    x,
+                    y,
+                );
+                blit_coverage_phase(
+                    &mut actual,
+                    screen_width,
+                    screen_height,
+                    image,
+                    coverage,
+                    x,
+                    y,
+                );
+            }
+            assert_eq!(actual, expected, "phase={phase}");
+        }
+    }
+
     fn linear_phases(card: &PreparedScreenshotCard) -> (&CoveragePlane, &[PreparedLinearPhase]) {
         let ParadePhaseSet::SixteenthLinear {
             base_coverage,
@@ -1972,11 +2089,12 @@ mod tests {
     }
 
     fn coverage_centroid(coverage: &CoveragePlane, width: usize, height: usize) -> f64 {
+        assert_eq!(coverage.width, width);
         let mut weighted = 0_f64;
         let mut total = 0_f64;
         for y in 0..height {
             for x in 0..width {
-                let value = f64::from(coverage.values[y * coverage.stride + x]);
+                let value = f64::from(coverage.alpha_at(x, y));
                 weighted += (x as f64 + 0.5) * value;
                 total += value;
             }
@@ -1985,15 +2103,25 @@ mod tests {
     }
 
     fn total_coverage(coverage: &CoveragePlane) -> u64 {
-        coverage.values.iter().map(|value| u64::from(*value)).sum()
+        let opaque = coverage
+            .rows
+            .iter()
+            .map(|row| u64::from(row.opaque.end.saturating_sub(row.opaque.start)) * 255);
+        opaque.sum::<u64>()
+            + coverage
+                .partial_samples
+                .iter()
+                .map(|sample| u64::from(sample.alpha))
+                .sum::<u64>()
     }
 
     fn horizontal_edge_energy(coverage: &CoveragePlane, width: usize, height: usize) -> u64 {
+        assert_eq!(coverage.width, width);
         let mut energy = 0_u64;
         for y in 0..height {
             let mut previous = 0_i32;
             for x in 0..width {
-                let current = i32::from(coverage.values[y * coverage.stride + x]);
+                let current = i32::from(coverage.alpha_at(x, y));
                 energy += u64::from(current.abs_diff(previous));
                 previous = current;
             }
@@ -2297,16 +2425,13 @@ mod tests {
             ScreenshotPhaseGeneration::LinearLanczos3,
         );
         let (base, shifted) = linear_phases(&card);
+        assert!(!base.partial_samples.is_empty());
+        assert_eq!(base.alpha_at(card.width() / 2, card.height() / 2), 255);
         assert!(
-            base.values
+            base.rows
                 .iter()
-                .any(|coverage| (1..255).contains(coverage))
+                .all(|row| row.opaque.end > row.opaque.start)
         );
-        assert_eq!(
-            base.values[(card.height() / 2) * base.stride + card.width() / 2],
-            255
-        );
-        assert!(base.opaque_spans.iter().all(|span| span.end > span.start));
         assert_eq!(shifted.len(), CRT_SHIFTED_PHASE_COUNT);
         assert!(card.phase_resident_bytes() < 1_000_000);
     }
@@ -2328,12 +2453,10 @@ mod tests {
         assert_eq!(first.image, second.image);
         let (first_base, first_shifted) = linear_phases(&first);
         let (second_base, second_shifted) = linear_phases(&second);
-        assert_eq!(first_base.values, second_base.values);
-        assert_eq!(first_base.opaque_spans, second_base.opaque_spans);
+        assert_eq!(first_base, second_base);
         for (first, second) in first_shifted.iter().zip(second_shifted) {
             assert_eq!(first.image, second.image);
-            assert_eq!(first.coverage.values, second.coverage.values);
-            assert_eq!(first.coverage.opaque_spans, second.coverage.opaque_spans);
+            assert_eq!(first.coverage, second.coverage);
         }
     }
 
@@ -2354,12 +2477,10 @@ mod tests {
         assert_eq!(scalar.image, neon.image);
         let (scalar_base, scalar_shifted) = linear_phases(&scalar);
         let (neon_base, neon_shifted) = linear_phases(&neon);
-        assert_eq!(scalar_base.values, neon_base.values);
-        assert_eq!(scalar_base.opaque_spans, neon_base.opaque_spans);
+        assert_eq!(scalar_base, neon_base);
         for (scalar, neon) in scalar_shifted.iter().zip(neon_shifted) {
             assert_eq!(scalar.image, neon.image);
-            assert_eq!(scalar.coverage.values, neon.coverage.values);
-            assert_eq!(scalar.coverage.opaque_spans, neon.coverage.opaque_spans);
+            assert_eq!(scalar.coverage, neon.coverage);
         }
     }
 
