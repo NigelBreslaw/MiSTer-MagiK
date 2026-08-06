@@ -391,12 +391,6 @@ fn other_slot(slot_index: u8) -> u8 {
     }
 }
 
-fn extend_without_covered_rects(target: &mut DirtyRectList, source: &DirtyRectList) {
-    for rect in source.iter() {
-        push_without_covered_rect(target, rect);
-    }
-}
-
 fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) {
     if !target.iter().any(|existing| existing.contains(rect)) {
         target.push(rect);
