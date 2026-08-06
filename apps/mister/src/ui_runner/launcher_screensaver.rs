@@ -893,7 +893,7 @@ impl LauncherScreensaverLoader {
                     std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
                     DeviceLayout::current(),
                 );
-                let result = (|| {
+                let result: Result<Option<LauncherScreensaverReady>, String> = (|| {
                     let archive = preview_worker::ResidentPreviewArchive::open(&path)
                         .map_err(|error| format!("path={} error={error}", path.display()))?;
                     if worker_cancelled.load(Ordering::Relaxed) {
