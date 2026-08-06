@@ -133,13 +133,6 @@ pub(crate) struct CoverageBlitStats {
     pub exact_base_background_hits: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct VisibleSpan {
-    pub source_y: u16,
-    pub start: u16,
-    pub end: u16,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct LinearRgb {
     r: u16,
@@ -321,13 +314,13 @@ impl PreparedScreenshotCard {
         );
     }
 
-    pub(crate) fn visit_target_rows(
+    pub(crate) fn visit_opaque_target_spans(
         &self,
         screen_width: usize,
         screen_height: usize,
         x_fp: i64,
         y: isize,
-        mut visit: impl FnMut(usize, usize, usize, usize, usize, usize, Option<(usize, usize)>),
+        mut visit: impl FnMut(usize, usize, usize),
     ) {
         let quantized = quantize_phase(x_fp);
         let (image, coverage) = if quantized.phase == 0 {
@@ -344,73 +337,20 @@ impl PreparedScreenshotCard {
             let source_x0 = (-quantized.x).max(0) as usize;
             let source_x1 =
                 (screen_width as isize - quantized.x).clamp(0, image.width as isize) as usize;
-            if source_x1 > source_x0 {
-                let command = coverage.rows.get(source_y).copied().unwrap_or_default();
-                let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
-                let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
+            if source_x1 <= source_x0 {
+                continue;
+            }
+            let command = coverage.rows.get(source_y).copied().unwrap_or_default();
+            let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
+            let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
+            if opaque_end > opaque_start {
                 visit(
-                    source_y,
                     target_y as usize,
-                    source_x0,
-                    source_x1,
-                    (quantized.x + source_x0 as isize) as usize,
-                    (quantized.x + source_x1 as isize) as usize,
-                    (opaque_end > opaque_start).then(|| {
-                        (
-                            (quantized.x + opaque_start as isize) as usize,
-                            (quantized.x + opaque_end as isize) as usize,
-                        )
-                    }),
+                    (quantized.x + opaque_start as isize) as usize,
+                    (quantized.x + opaque_end as isize) as usize,
                 );
             }
         }
-    }
-
-    pub(crate) fn blit_visible_spans(
-        &self,
-        dst: &mut [Rgb565Pixel],
-        screen_width: usize,
-        x_fp: i64,
-        y: isize,
-        spans: &[VisibleSpan],
-    ) {
-        blit_sixteenth_phase_spans(
-            dst,
-            screen_width,
-            &self.image,
-            &self.base_coverage,
-            &self.shifted_phases,
-            x_fp,
-            y,
-            spans,
-            None,
-        );
-    }
-
-    #[cold]
-    #[inline(never)]
-    pub(crate) fn blit_visible_spans_with_coverage_probe(
-        &self,
-        dst: &mut [Rgb565Pixel],
-        screen_width: usize,
-        x_fp: i64,
-        y: isize,
-        spans: &[VisibleSpan],
-        base_background: Rgb565Pixel,
-    ) -> CoverageBlitStats {
-        let mut stats = CoverageBlitStats::default();
-        blit_sixteenth_phase_spans(
-            dst,
-            screen_width,
-            &self.image,
-            &self.base_coverage,
-            &self.shifted_phases,
-            x_fp,
-            y,
-            spans,
-            Some((&mut stats, base_background)),
-        );
-        stats
     }
 
     #[cold]
@@ -1313,81 +1253,6 @@ fn blit_sixteenth_phase_probed(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn blit_sixteenth_phase_spans(
-    dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    image: &ScreenshotImage,
-    base_coverage: &CoveragePlane,
-    shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
-    x_fp: i64,
-    y: isize,
-    spans: &[VisibleSpan],
-    mut probe: Option<(&mut CoverageBlitStats, Rgb565Pixel)>,
-) {
-    let quantized = quantize_phase(x_fp);
-    let (image, coverage) = if quantized.phase == 0 {
-        (image, base_coverage)
-    } else {
-        let shifted = &shifted_phases[quantized.phase - 1];
-        (&shifted.image, &shifted.coverage)
-    };
-    let srgb_to_linear = srgb_to_linear_table();
-    let linear_to_srgb = linear_to_srgb_table();
-    debug_assert_eq!(dst.len() % screen_width, 0);
-    debug_assert!(image.stride >= image.width);
-    debug_assert_eq!(coverage.rows.len(), image.height);
-    for span in spans {
-        let source_y = usize::from(span.source_y);
-        let source_x0 = usize::from(span.start);
-        let source_x1 = usize::from(span.end);
-        debug_assert!(source_y < image.height);
-        debug_assert!(source_x0 < source_x1 && source_x1 <= image.width);
-        let target_y = y + source_y as isize;
-        let target_x0 = quantized.x + source_x0 as isize;
-        debug_assert!(target_y >= 0 && target_y < (dst.len() / screen_width) as isize);
-        debug_assert!(target_x0 >= 0);
-        debug_assert!(quantized.x + source_x1 as isize <= screen_width as isize);
-        let source_row = source_y * image.stride;
-        let target_row = target_y as usize * screen_width;
-        let command = coverage.rows[source_y];
-        for sample in
-            &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
-        {
-            let source_x = usize::from(sample.x);
-            if !(source_x0..source_x1).contains(&source_x) {
-                continue;
-            }
-            let target = target_row + (quantized.x + source_x as isize) as usize;
-            if let Some((stats, base_background)) = probe.as_mut() {
-                stats.composite_calls += 1;
-                stats.partial_edge_pixels += 1;
-                if dst[target] == *base_background {
-                    stats.exact_base_background_hits += 1;
-                    dst[target] = sample.base_composite;
-                    continue;
-                }
-            }
-            composite_coverage_pixel(
-                dst,
-                target,
-                image.pixels[source_row + source_x],
-                sample.alpha,
-                srgb_to_linear,
-                linear_to_srgb,
-            );
-        }
-        let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
-        let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
-        if opaque_end > opaque_start {
-            let target_start = target_row + (quantized.x + opaque_start as isize) as usize;
-            let copy_len = opaque_end - opaque_start;
-            dst[target_start..target_start + copy_len]
-                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 fn blit_coverage_phase(
     dst: &mut [Rgb565Pixel],
     screen_width: usize,
@@ -1652,103 +1517,6 @@ mod tests {
                 );
             }
             assert_eq!(actual, expected, "phase={phase}");
-        }
-    }
-
-    #[test]
-    fn conservative_visible_spans_match_foreground_overdraw_for_all_phases() {
-        let source = test_image(32, 24);
-        for (screen_width, screen_height) in [(960, 540), (960, 600)] {
-            let card = PreparedScreenshotCard::prepare(&source, 5, screen_height);
-            for phase in 0..CRT_PHASE_COUNT {
-                for x in [-24, screen_width as isize - card.width() as isize / 2] {
-                    let x_fp = x as i64 * PARADE_SUBPIXEL_ONE + (phase * CRT_PHASE_STEP) as i64;
-                    let y = -5;
-                    let quantized = quantize_phase(x_fp);
-                    let foreground = (
-                        (quantized.x + card.width() as isize / 3).clamp(0, screen_width as isize)
-                            as usize,
-                        (quantized.x + card.width() as isize * 2 / 3)
-                            .clamp(0, screen_width as isize) as usize,
-                        0,
-                        (card.height() * 2 / 3).min(screen_height),
-                    );
-                    let mut spans = Vec::new();
-                    card.visit_target_rows(
-                        screen_width,
-                        screen_height,
-                        x_fp,
-                        y,
-                        |source_y,
-                         target_y,
-                         source_x0,
-                         source_x1,
-                         target_x0,
-                         target_x1,
-                         _opaque| {
-                            if target_y < foreground.2 || target_y >= foreground.3 {
-                                spans.push(VisibleSpan {
-                                    source_y: source_y as u16,
-                                    start: source_x0 as u16,
-                                    end: source_x1 as u16,
-                                });
-                                return;
-                            }
-                            let covered_start = foreground.0.max(target_x0).min(target_x1);
-                            let covered_end = foreground.1.max(target_x0).min(target_x1);
-                            if covered_start > target_x0 {
-                                spans.push(VisibleSpan {
-                                    source_y: source_y as u16,
-                                    start: source_x0 as u16,
-                                    end: (source_x0 + covered_start - target_x0) as u16,
-                                });
-                            }
-                            if covered_end < target_x1 {
-                                spans.push(VisibleSpan {
-                                    source_y: source_y as u16,
-                                    start: (source_x0 + covered_end - target_x0) as u16,
-                                    end: source_x1 as u16,
-                                });
-                            }
-                        },
-                    );
-                    let background = vec![color565(3, 17, 29); screen_width * screen_height];
-                    let foreground_color = color565(240, 180, 40);
-                    let mut expected = background.clone();
-                    card.blit(&mut expected, screen_width, screen_height, x_fp, y);
-                    fill_test_rect(&mut expected, screen_width, foreground, foreground_color);
-                    let mut actual = background.clone();
-                    card.blit_visible_spans(&mut actual, screen_width, x_fp, y, &spans);
-                    fill_test_rect(&mut actual, screen_width, foreground, foreground_color);
-                    assert_eq!(
-                        actual, expected,
-                        "geometry={screen_width}x{screen_height} phase={phase} x={x}"
-                    );
-
-                    let mut probed = background;
-                    card.blit_visible_spans_with_coverage_probe(
-                        &mut probed,
-                        screen_width,
-                        x_fp,
-                        y,
-                        &spans,
-                        color565(0, 0, 10),
-                    );
-                    fill_test_rect(&mut probed, screen_width, foreground, foreground_color);
-                    assert_eq!(probed, expected, "probed phase={phase} x={x}");
-                }
-            }
-        }
-    }
-
-    fn fill_test_rect(
-        pixels: &mut [Rgb565Pixel],
-        width: usize,
-        rect: (usize, usize, usize, usize),
-        color: Rgb565Pixel,
-    ) {
-        for y in rect.2..rect.3 {
-            pixels[y * width + rect.0..y * width + rect.1].fill(color);
         }
     }
 

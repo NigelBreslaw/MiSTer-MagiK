@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::raster::{PreparedScreenshotCard, VisibleSpan, depth_style};
+use crate::raster::{PreparedScreenshotCard, depth_style};
 use crate::slack::PreparationSlack;
 use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
@@ -178,22 +178,13 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VisibleCard {
-    tile_index: usize,
-    span_start: usize,
-    span_end: usize,
-    restricted: bool,
-}
-
 pub struct ScreenshotParade {
     geometry: SceneGeometry,
     tiles: Vec<Tile>,
     draw_order: Vec<usize>,
-    visible_draw_order: Vec<VisibleCard>,
-    visible_spans: Vec<VisibleSpan>,
+    visible_draw_order: Vec<usize>,
     depth_coverage: Vec<Rect>,
-    depth_coverage_rows: Vec<Vec<(usize, usize)>>,
+    coverage_intervals: Vec<(usize, usize)>,
     deck: Vec<usize>,
     cursor: usize,
     rng: u64,
@@ -286,9 +277,8 @@ impl ScreenshotParade {
             tiles: Vec::new(),
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
-            visible_spans: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum::<usize>() * 128),
             depth_coverage: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
-            depth_coverage_rows: (0..height).map(|_| Vec::with_capacity(8)).collect(),
+            coverage_intervals: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             deck: (0..asset_keys.len()).collect(),
             cursor: 0,
             rng: config.seed,
@@ -453,8 +443,8 @@ impl ScreenshotParade {
         let mut raster_moved_cards = 0;
         let mut raster_hold_layer_mask = 0_u8;
         let mut raster_visible_layer_mask = 0_u8;
-        for visible in &self.visible_draw_order {
-            let tile = &self.tiles[visible.tile_index];
+        for &tile_index in &self.visible_draw_order {
+            let tile = &self.tiles[tile_index];
             let layer_index = tile.layer.saturating_sub(MIN_TILE_SPEED);
             if layer_index < u8::BITS as usize {
                 raster_visible_layer_mask |= 1_u8 << layer_index;
@@ -476,45 +466,24 @@ impl ScreenshotParade {
         let coverage_probe_sampled = (motion_ticks_fp / TICK_ONE as u64).is_multiple_of(64);
         let base_background = color565(0, 0, 10);
         if coverage_probe_sampled {
-            for visible in &self.visible_draw_order {
-                let tile = &self.tiles[visible.tile_index];
-                let blit_stats = if visible.restricted {
-                    tile.raster.blit_visible_spans_with_coverage_probe(
-                        pixels,
-                        width,
-                        tile.x_fp,
-                        tile.y,
-                        &self.visible_spans[visible.span_start..visible.span_end],
-                        base_background,
-                    )
-                } else {
-                    tile.raster.blit_with_coverage_probe(
-                        pixels,
-                        width,
-                        height,
-                        tile.x_fp,
-                        tile.y,
-                        base_background,
-                    )
-                };
+            for &tile_index in &self.visible_draw_order {
+                let tile = &self.tiles[tile_index];
+                let blit_stats = tile.raster.blit_with_coverage_probe(
+                    pixels,
+                    width,
+                    height,
+                    tile.x_fp,
+                    tile.y,
+                    base_background,
+                );
                 coverage_composite_calls += blit_stats.composite_calls;
                 partial_edge_pixels += blit_stats.partial_edge_pixels;
                 exact_base_background_hits += blit_stats.exact_base_background_hits;
             }
         } else {
-            for visible in &self.visible_draw_order {
-                let tile = &self.tiles[visible.tile_index];
-                if visible.restricted {
-                    tile.raster.blit_visible_spans(
-                        pixels,
-                        width,
-                        tile.x_fp,
-                        tile.y,
-                        &self.visible_spans[visible.span_start..visible.span_end],
-                    );
-                } else {
-                    tile.raster.blit(pixels, width, height, tile.x_fp, tile.y);
-                }
+            for &tile_index in &self.visible_draw_order {
+                let tile = &self.tiles[tile_index];
+                tile.raster.blit(pixels, width, height, tile.x_fp, tile.y);
             }
         }
         drop(tile_blit_pmu);
@@ -1022,11 +991,7 @@ impl ScreenshotParade {
 
     fn prepare_visible_draw_order(&mut self) -> (usize, UnionOcclusionStats) {
         self.visible_draw_order.clear();
-        self.visible_spans.clear();
         self.depth_coverage.clear();
-        for row in &mut self.depth_coverage_rows {
-            row.clear();
-        }
         let mut culled = 0;
         let mut union_occlusion = UnionOcclusionStats::default();
         for &tile_index in self.draw_order.iter().rev() {
@@ -1044,39 +1009,23 @@ impl ScreenshotParade {
                 culled += 1;
                 continue;
             }
-            let span_start = self.visible_spans.len();
-            let (measured, restricted) = prepare_union_visibility(
+            let measured = measure_union_occlusion(
                 tile,
                 self.geometry.width(),
                 self.geometry.height(),
-                &self.depth_coverage_rows,
-                &mut self.visible_spans,
+                &self.depth_coverage,
+                &mut self.coverage_intervals,
             );
             union_occlusion.opaque_pixels += measured.opaque_pixels;
             union_occlusion.opaque_rows += measured.opaque_rows;
             union_occlusion.avoidable_pixels += measured.avoidable_pixels;
             union_occlusion.avoidable_rows += measured.avoidable_rows;
             union_occlusion.fully_covered_rows += measured.fully_covered_rows;
-            let mut span_end = self.visible_spans.len();
-            if restricted && span_end == span_start {
-                culled += 1;
-                continue;
-            }
-            if !restricted {
-                self.visible_spans.truncate(span_start);
-                span_end = span_start;
-            }
-            self.visible_draw_order.push(VisibleCard {
-                tile_index,
-                span_start,
-                span_end,
-                restricted,
-            });
+            self.visible_draw_order.push(tile_index);
             if let Some(opaque_bounds) =
                 tile_opaque_bounds(tile, self.geometry.width(), self.geometry.height())
             {
                 self.depth_coverage.push(opaque_bounds);
-                add_rect_to_union_rows(&mut self.depth_coverage_rows, opaque_bounds);
             }
         }
         self.visible_draw_order.reverse();
@@ -1376,107 +1325,32 @@ fn tile_opaque_bounds(tile: &Tile, screen_width: usize, screen_height: usize) ->
     )
 }
 
-fn prepare_union_visibility(
+fn measure_union_occlusion(
     tile: &Tile,
     screen_width: usize,
     screen_height: usize,
-    coverage_rows: &[Vec<(usize, usize)>],
-    spans: &mut Vec<VisibleSpan>,
-) -> (UnionOcclusionStats, bool) {
+    coverage: &[Rect],
+    intervals: &mut Vec<(usize, usize)>,
+) -> UnionOcclusionStats {
     let mut stats = UnionOcclusionStats::default();
-    let mut restricted = false;
-    tile.raster.visit_target_rows(
+    tile.raster.visit_opaque_target_spans(
         screen_width,
         screen_height,
         tile.x_fp,
         tile.y,
-        |source_y, target_y, source_x0, source_x1, target_x0, target_x1, opaque| {
-            let row = &coverage_rows[target_y];
-            if let Some((opaque_x0, opaque_x1)) = opaque {
-                let opaque_pixels = opaque_x1 - opaque_x0;
-                let covered = row
-                    .iter()
-                    .map(|&(start, end)| end.min(opaque_x1).saturating_sub(start.max(opaque_x0)))
-                    .sum::<usize>();
-                stats.opaque_pixels += opaque_pixels;
-                stats.opaque_rows += 1;
-                stats.avoidable_pixels += covered;
-                stats.avoidable_rows += usize::from(covered > 0);
-                stats.fully_covered_rows += usize::from(covered == opaque_pixels);
-            }
-            let mut target_cursor = target_x0;
-            for &(start, end) in row {
-                if end <= target_x0 {
-                    continue;
-                }
-                if start >= target_x1 {
-                    break;
-                }
-                restricted = true;
-                let covered_start = start.max(target_x0);
-                let covered_end = end.min(target_x1);
-                if covered_start > target_cursor {
-                    push_visible_span(
-                        spans,
-                        source_y,
-                        source_x0 + target_cursor - target_x0,
-                        source_x0 + covered_start - target_x0,
-                    );
-                }
-                target_cursor = target_cursor.max(covered_end);
-                if target_cursor == target_x1 {
-                    break;
-                }
-            }
-            if target_cursor < target_x1 {
-                push_visible_span(
-                    spans,
-                    source_y,
-                    source_x0 + target_cursor - target_x0,
-                    source_x1,
-                );
-            }
+        |target_y, target_x0, target_x1| {
+            let opaque_pixels = target_x1 - target_x0;
+            stats.opaque_pixels += opaque_pixels;
+            stats.opaque_rows += 1;
+            let covered = union_covered_pixels(target_y, target_x0, target_x1, coverage, intervals);
+            stats.avoidable_pixels += covered;
+            stats.avoidable_rows += usize::from(covered > 0);
+            stats.fully_covered_rows += usize::from(covered == opaque_pixels);
         },
     );
-    (stats, restricted)
+    stats
 }
 
-fn add_rect_to_union_rows(rows: &mut [Vec<(usize, usize)>], rect: Rect) {
-    for row in &mut rows[rect.y0..rect.y1] {
-        insert_union_interval(row, rect.x0, rect.x1);
-    }
-}
-
-fn insert_union_interval(row: &mut Vec<(usize, usize)>, mut start: usize, mut end: usize) {
-    let first = row.partition_point(|&(_, existing_end)| existing_end < start);
-    let mut after = first;
-    while after < row.len() && row[after].0 <= end {
-        start = start.min(row[after].0);
-        end = end.max(row[after].1);
-        after += 1;
-    }
-    if first == after {
-        row.insert(first, (start, end));
-    } else {
-        row[first] = (start, end);
-        row.drain(first + 1..after);
-    }
-}
-
-fn push_visible_span(spans: &mut Vec<VisibleSpan>, source_y: usize, start: usize, end: usize) {
-    if end <= start {
-        return;
-    }
-    debug_assert!(source_y <= u16::MAX as usize);
-    debug_assert!(end <= u16::MAX as usize);
-    spans.push(VisibleSpan {
-        source_y: source_y as u16,
-        start: start as u16,
-        end: end as u16,
-    });
-}
-
-#[cfg(test)]
 fn union_covered_pixels(
     y: usize,
     x0: usize,
@@ -1833,13 +1707,6 @@ mod tests {
             },
         ];
         assert_eq!(union_covered_pixels(0, 0, 10, &joint, &mut intervals), 10);
-
-        let mut row = Vec::new();
-        insert_union_interval(&mut row, 12, 18);
-        insert_union_interval(&mut row, 2, 7);
-        insert_union_interval(&mut row, 6, 14);
-        insert_union_interval(&mut row, 18, 21);
-        assert_eq!(row, vec![(2, 21)]);
     }
 
     #[test]
