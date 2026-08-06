@@ -293,9 +293,6 @@ impl PreparedScreenshotCard {
                 | ScreenshotPhaseGeneration::LinearLanczos3Neon
         ) && matches!(profile, ScreenshotSamplingProfile::CrtSixteenth)
         {
-            // Build the exact RGB565 coverage tables on the preparation worker,
-            // before the scene can enter its measured presentation window.
-            let _ = coverage_blend_tables();
             let kernel = match phase_generation {
                 ScreenshotPhaseGeneration::LinearLanczos3Neon => LinearPhaseKernel::Neon,
                 ScreenshotPhaseGeneration::LinearLanczos3
@@ -704,82 +701,6 @@ fn linear_to_rgb565_with_table(pixel: LinearRgb, linear_to_srgb: &[u8; 4097]) ->
         linear_to_srgb[index.min(4096)]
     };
     color565(convert(pixel.r), convert(pixel.g), convert(pixel.b))
-}
-
-const COVERAGE_LUT5_LEN: usize = 256 * 32 * 32;
-const COVERAGE_LUT6_LEN: usize = 256 * 64 * 64;
-
-struct CoverageBlendTables {
-    component5: Box<[u8]>,
-    component6: Box<[u8]>,
-}
-
-impl CoverageBlendTables {
-    #[inline(always)]
-    fn blend5(&self, alpha: u8, foreground: u16, background: u16) -> u16 {
-        let index =
-            (usize::from(alpha) << 10) | (usize::from(foreground) << 5) | usize::from(background);
-        u16::from(self.component5[index])
-    }
-
-    #[inline(always)]
-    fn blend6(&self, alpha: u8, foreground: u16, background: u16) -> u16 {
-        let index =
-            (usize::from(alpha) << 12) | (usize::from(foreground) << 6) | usize::from(background);
-        u16::from(self.component6[index])
-    }
-}
-
-fn coverage_blend_tables() -> &'static CoverageBlendTables {
-    static TABLES: OnceLock<CoverageBlendTables> = OnceLock::new();
-    TABLES.get_or_init(|| {
-        let mut component5 = vec![0_u8; COVERAGE_LUT5_LEN];
-        let mut component6 = vec![0_u8; COVERAGE_LUT6_LEN];
-        for alpha in 0_u16..=255 {
-            for foreground in 0_u16..32 {
-                for background in 0_u16..32 {
-                    let index = (usize::from(alpha) << 10)
-                        | (usize::from(foreground) << 5)
-                        | usize::from(background);
-                    component5[index] =
-                        blend_component_scalar(alpha as u8, foreground, background, 31, 3);
-                }
-            }
-            for foreground in 0_u16..64 {
-                for background in 0_u16..64 {
-                    let index = (usize::from(alpha) << 12)
-                        | (usize::from(foreground) << 6)
-                        | usize::from(background);
-                    component6[index] =
-                        blend_component_scalar(alpha as u8, foreground, background, 63, 2);
-                }
-            }
-        }
-        CoverageBlendTables {
-            component5: component5.into_boxed_slice(),
-            component6: component6.into_boxed_slice(),
-        }
-    })
-}
-
-fn blend_component_scalar(
-    alpha: u8,
-    foreground: u16,
-    background: u16,
-    maximum: u16,
-    output_shift: u8,
-) -> u8 {
-    let srgb_to_linear = srgb_to_linear_table();
-    let linear_to_srgb = linear_to_srgb_table();
-    let expand = |component: u16| (component * 255 / maximum) as u8;
-    let foreground = srgb_to_linear[usize::from(expand(foreground))];
-    let background = srgb_to_linear[usize::from(expand(background))];
-    let alpha = u64::from(alpha);
-    let inverse = 255 - alpha;
-    let linear = ((u64::from(background) * inverse + u64::from(foreground) * alpha + 127) / 255)
-        .min(65_535) as u16;
-    let index = (usize::from(linear) + 8).min(65_535) >> 4;
-    linear_to_srgb[index.min(4096)] >> output_shift
 }
 
 fn scale_lanczos3_linear_tinted(
@@ -1768,7 +1689,8 @@ fn blit_coverage_phase(
     x: isize,
     y: isize,
 ) {
-    let blend_tables = coverage_blend_tables();
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
     for source_y in 0..image.height {
         let target_y = y + source_y as isize;
         if target_y < 0 || target_y >= screen_height as isize {
@@ -1795,7 +1717,8 @@ fn blit_coverage_phase(
                 target_row + (x + source_x as isize) as usize,
                 image.pixels[source_row + source_x],
                 coverage.values[coverage_row + source_x],
-                blend_tables,
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
         if opaque_end > opaque_start {
@@ -1810,7 +1733,8 @@ fn blit_coverage_phase(
                 target_row + (x + source_x as isize) as usize,
                 image.pixels[source_row + source_x],
                 coverage.values[coverage_row + source_x],
-                blend_tables,
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
     }
@@ -1829,7 +1753,8 @@ fn blit_coverage_phase_probed(
     y: isize,
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
-    let blend_tables = coverage_blend_tables();
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
     let mut stats = CoverageBlitStats::default();
     for source_y in 0..image.height {
         let target_y = y + source_y as isize;
@@ -1864,7 +1789,8 @@ fn blit_coverage_phase_probed(
                 target,
                 image.pixels[source_row + source_x],
                 alpha,
-                blend_tables,
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
         if opaque_end > opaque_start {
@@ -1885,7 +1811,8 @@ fn blit_coverage_phase_probed(
                 target,
                 image.pixels[source_row + source_x],
                 alpha,
-                blend_tables,
+                srgb_to_linear,
+                linear_to_srgb,
             );
         }
     }
@@ -1897,7 +1824,8 @@ fn composite_coverage_pixel(
     target: usize,
     foreground: Rgb565Pixel,
     coverage: u8,
-    blend_tables: &CoverageBlendTables,
+    srgb_to_linear: &[u16; 256],
+    linear_to_srgb: &[u8; 4097],
 ) {
     if coverage == 0 {
         return;
@@ -1906,30 +1834,6 @@ fn composite_coverage_pixel(
         dst[target] = foreground;
         return;
     }
-    let background = dst[target].0;
-    let foreground = foreground.0;
-    let red = blend_tables.blend5(coverage, (foreground >> 11) & 0x1f, background >> 11);
-    let green = blend_tables.blend6(coverage, (foreground >> 5) & 0x3f, (background >> 5) & 0x3f);
-    let blue = blend_tables.blend5(coverage, foreground & 0x1f, background & 0x1f);
-    dst[target] = Rgb565Pixel((red << 11) | (green << 5) | blue);
-}
-
-#[cfg(test)]
-fn composite_coverage_pixel_scalar(
-    dst: &mut [Rgb565Pixel],
-    target: usize,
-    foreground: Rgb565Pixel,
-    coverage: u8,
-) {
-    if coverage == 0 {
-        return;
-    }
-    if coverage == 255 {
-        dst[target] = foreground;
-        return;
-    }
-    let srgb_to_linear = srgb_to_linear_table();
-    let linear_to_srgb = linear_to_srgb_table();
     let background = rgb565_to_linear_with_table(dst[target], srgb_to_linear);
     let foreground = rgb565_to_linear_with_table(foreground, srgb_to_linear);
     let alpha = u64::from(coverage);
@@ -2037,64 +1941,6 @@ fn blit_rounded(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn coverage_component_tables_are_exhaustively_scalar_exact() {
-        let tables = coverage_blend_tables();
-        for alpha in 0_u16..=255 {
-            for foreground in 0_u16..32 {
-                for background in 0_u16..32 {
-                    assert_eq!(
-                        tables.blend5(alpha as u8, foreground, background),
-                        u16::from(blend_component_scalar(
-                            alpha as u8,
-                            foreground,
-                            background,
-                            31,
-                            3,
-                        )),
-                        "5-bit alpha={alpha} foreground={foreground} background={background}",
-                    );
-                }
-            }
-            for foreground in 0_u16..64 {
-                for background in 0_u16..64 {
-                    assert_eq!(
-                        tables.blend6(alpha as u8, foreground, background),
-                        u16::from(blend_component_scalar(
-                            alpha as u8,
-                            foreground,
-                            background,
-                            63,
-                            2,
-                        )),
-                        "6-bit alpha={alpha} foreground={foreground} background={background}",
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn packed_coverage_table_compositor_matches_scalar_oracle() {
-        let tables = coverage_blend_tables();
-        for alpha in 0_u16..=255 {
-            for sample in 0_u16..=255 {
-                let foreground = Rgb565Pixel(sample.wrapping_mul(257));
-                let background =
-                    Rgb565Pixel(sample.wrapping_mul(4051).rotate_left(u32::from(alpha & 15)));
-                let mut expected = [background];
-                let mut actual = [background];
-                composite_coverage_pixel_scalar(&mut expected, 0, foreground, alpha as u8);
-                composite_coverage_pixel(&mut actual, 0, foreground, alpha as u8, tables);
-                assert_eq!(
-                    actual, expected,
-                    "alpha={alpha} foreground={} background={}",
-                    foreground.0, background.0,
-                );
-            }
-        }
-    }
 
     fn test_image(width: usize, height: usize) -> ScreenshotImage {
         let pixels = (0..width * height)
