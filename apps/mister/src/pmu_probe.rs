@@ -26,7 +26,7 @@ pub(crate) fn probe() -> Value {
             "target": {
                 "architecture": std::env::consts::ARCH,
                 "operating_system": std::env::consts::OS,
-                "scope": "calling-thread-user-space",
+                "scope": "calling-thread-user-and-kernel",
                 "grouped": true,
                 "multiplexed": false,
                 "read_format": read_format,
@@ -48,7 +48,7 @@ pub(crate) fn probe() -> Value {
             "target": {
                 "architecture": std::env::consts::ARCH,
                 "operating_system": std::env::consts::OS,
-                "scope": "calling-thread-user-space",
+                "scope": "calling-thread-user-and-kernel",
                 "grouped": true,
                 "multiplexed": false,
                 "read_format": read_format,
@@ -135,7 +135,7 @@ fn failed_probe(failure: PmuFailure, diagnostics: PmuOpenDiagnostics) -> Value {
         "target": {
             "architecture": std::env::consts::ARCH,
             "operating_system": std::env::consts::OS,
-            "scope": "calling-thread-user-space",
+            "scope": "calling-thread-user-and-kernel",
             "grouped": true,
             "multiplexed": false,
         },

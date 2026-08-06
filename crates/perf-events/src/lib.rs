@@ -727,7 +727,6 @@ mod linux {
         scope: CounterScope,
         cpu: libc::c_int,
         perf_flags: libc::c_ulong,
-        exclude_hypervisor: bool,
     }
 
     impl LinuxCounterGroup {
@@ -777,28 +776,18 @@ mod linux {
                     scope: CounterScope::CallingThreadAnyCpu,
                     cpu: -1,
                     perf_flags: PERF_FLAG_FD_CLOEXEC,
-                    exclude_hypervisor: true,
                 },
                 OpenOptions {
                     read_format: GroupReadFormat::OrderedValues,
                     scope: CounterScope::CallingThreadAnyCpu,
                     cpu: -1,
                     perf_flags: PERF_FLAG_FD_CLOEXEC,
-                    exclude_hypervisor: true,
                 },
                 OpenOptions {
                     read_format: GroupReadFormat::OrderedValues,
                     scope: CounterScope::CallingThreadAnyCpu,
                     cpu: -1,
                     perf_flags: 0,
-                    exclude_hypervisor: true,
-                },
-                OpenOptions {
-                    read_format: GroupReadFormat::OrderedValues,
-                    scope: CounterScope::CallingThreadAnyCpu,
-                    cpu: -1,
-                    perf_flags: 0,
-                    exclude_hypervisor: false,
                 },
             ];
             let mut last_failure = None;
@@ -1009,12 +998,10 @@ mod linux {
             name: match (
                 options.read_format,
                 options.perf_flags == PERF_FLAG_FD_CLOEXEC,
-                options.exclude_hypervisor,
             ) {
-                (GroupReadFormat::IdsAndTimes, true, true) => "group-ids-times",
-                (GroupReadFormat::OrderedValues, true, true) => "group-ordered",
-                (GroupReadFormat::OrderedValues, false, true) => "group-legacy-flags",
-                (GroupReadFormat::OrderedValues, false, false) => "group-include-hypervisor",
+                (GroupReadFormat::IdsAndTimes, true) => "group-ids-times",
+                (GroupReadFormat::OrderedValues, true) => "group-ordered",
+                (GroupReadFormat::OrderedValues, false) => "group-legacy-flags",
                 _ => "group-other",
             }
             .to_owned(),
@@ -1023,8 +1010,8 @@ mod linux {
             cpu: options.cpu,
             perf_flags: options.perf_flags as u64,
             disabled: true,
-            exclude_kernel: true,
-            exclude_hypervisor: options.exclude_hypervisor,
+            exclude_kernel: false,
+            exclude_hypervisor: false,
             grouped: true,
             success: failure.is_none(),
             failure,
@@ -1067,13 +1054,7 @@ mod linux {
                 }
                 GroupReadFormat::OrderedValues => PERF_FORMAT_GROUP,
             },
-            flags: PERF_ATTR_DISABLED
-                | PERF_ATTR_EXCLUDE_KERNEL
-                | if options.exclude_hypervisor {
-                    PERF_ATTR_EXCLUDE_HYPERVISOR
-                } else {
-                    0
-                },
+            flags: PERF_ATTR_DISABLED,
             ..PerfEventAttr::default()
         };
         let descriptor = perf_event_open(

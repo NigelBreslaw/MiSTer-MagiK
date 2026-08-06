@@ -18,12 +18,12 @@ The installed MiSTer kernel does register its Cortex-A9 PMU. Its boot log report
 perf events, hardware perf events, profiling, high-resolution timers, tracing,
 and `CONFIG_ARM_PMU`, while the SoCFPGA device tree supplies both PMU interrupts.
 
-The repository's direct `perf_event_open` probe still returns `EINVAL` while
-opening its cycle event. That result blocks authoritative cycles, instructions,
-L1D, and branch measurements, but it does not establish that the kernel lacks a
-PMU. The probe now records the kernel event sources, perf security setting, a
-minimal cycle request, and every grouped compatibility request so the remaining
-userspace or runtime compatibility issue can be isolated.
+The repository's diagnostic isolated the earlier `EINVAL`: the Cortex-A9 PMU
+accepts disabled and grouped events, but rejects privilege filtering through
+`exclude_kernel`. The counter group therefore measures the calling thread in
+both user and kernel mode, which matches this PMUv1 implementation's supported
+scope. Failed exclusion requests remain in the diagnostic evidence rather than
+being mistaken for an absent PMU.
 
 Arm product source:
 <https://developer.arm.com/servers-and-cloud-computing/arm-performix>
@@ -51,11 +51,12 @@ The original probe attempted a bounded compatibility matrix:
 5. ordered values bound to the calling thread's current CPU.
 
 The fifth request did not actually pin the thread and has been removed. The
-diagnostic now starts with a leader-only cycle event having no grouping, read
-format, exclusion, or disabled flags, followed by the four calling-thread group
-requests.
+diagnostic now starts with leader-only cycle requests that isolate the disabled,
+group-format, and privilege-exclusion attributes. It then opens calling-thread
+groups without unsupported privilege filters.
 
-Every variant failed while opening `PERF_COUNT_HW_CPU_CYCLES`:
+The former group variants all failed while opening
+`PERF_COUNT_HW_CPU_CYCLES` because each requested `exclude_kernel`:
 
 ```json
 {
