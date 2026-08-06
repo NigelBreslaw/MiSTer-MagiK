@@ -1182,31 +1182,28 @@ fn blit_sixteenth_phase(
     y: isize,
 ) {
     let quantized = quantize_phase(x_fp);
-    if quantized.phase == 0 {
+    let (image, coverage) = if quantized.phase == 0 {
+        (image, base_coverage)
+    } else {
+        let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
+            debug_assert!(false, "linear card missing sixteenth-pixel phase");
+            return;
+        };
+        (&shifted.image, &shifted.coverage)
+    };
+    if card_is_fully_in_bounds(image, screen_width, screen_height, quantized.x, y) {
+        blit_coverage_phase_in_bounds(dst, screen_width, image, coverage, quantized.x, y);
+    } else {
         blit_coverage_phase(
             dst,
             screen_width,
             screen_height,
             image,
-            base_coverage,
+            coverage,
             quantized.x,
             y,
         );
-        return;
     }
-    let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
-        debug_assert!(false, "linear card missing sixteenth-pixel phase");
-        return;
-    };
-    blit_coverage_phase(
-        dst,
-        screen_width,
-        screen_height,
-        &shifted.image,
-        &shifted.coverage,
-        quantized.x,
-        y,
-    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1250,6 +1247,85 @@ fn blit_sixteenth_phase_probed(
         y,
         base_background,
     )
+}
+
+fn card_is_fully_in_bounds(
+    image: &ScreenshotImage,
+    screen_width: usize,
+    screen_height: usize,
+    x: isize,
+    y: isize,
+) -> bool {
+    x >= 0
+        && y >= 0
+        && (x as usize).saturating_add(image.width) <= screen_width
+        && (y as usize).saturating_add(image.height) <= screen_height
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_coverage_phase_in_bounds(
+    dst: &mut [Rgb565Pixel],
+    screen_width: usize,
+    image: &ScreenshotImage,
+    coverage: &CoveragePlane,
+    x: isize,
+    y: isize,
+) {
+    debug_assert!(x >= 0 && y >= 0);
+    debug_assert_eq!(coverage.rows.len(), image.height);
+    debug_assert!(image.stride >= image.width);
+    debug_assert!(
+        image.height == 0 || image.pixels.len() >= (image.height - 1) * image.stride + image.width
+    );
+    debug_assert!(
+        image.height == 0
+            || target_row_end(
+                y as usize,
+                image.height,
+                screen_width,
+                x as usize,
+                image.width
+            ) <= dst.len()
+    );
+    let srgb_to_linear = srgb_to_linear_table();
+    let linear_to_srgb = linear_to_srgb_table();
+    let base_background = color565(0, 0, 10);
+    let target_origin = y as usize * screen_width + x as usize;
+    for source_y in 0..image.height {
+        let source_row = source_y * image.stride;
+        let target_row = target_origin + source_y * screen_width;
+        let command = coverage.rows[source_y];
+        for sample in
+            &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
+        {
+            let source_x = usize::from(sample.x);
+            let target = target_row + source_x;
+            if dst[target] == base_background {
+                dst[target] = sample.base_composite;
+            } else {
+                composite_coverage_pixel(
+                    dst,
+                    target,
+                    image.pixels[source_row + source_x],
+                    sample.alpha,
+                    srgb_to_linear,
+                    linear_to_srgb,
+                );
+            }
+        }
+        let opaque_start = usize::from(command.opaque.start);
+        let opaque_end = usize::from(command.opaque.end);
+        if opaque_end > opaque_start {
+            let target_start = target_row + opaque_start;
+            let copy_len = opaque_end - opaque_start;
+            dst[target_start..target_start + copy_len]
+                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+        }
+    }
+}
+
+fn target_row_end(y: usize, height: usize, screen_width: usize, x: usize, width: usize) -> usize {
+    (y + height - 1) * screen_width + x + width
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1517,6 +1593,66 @@ mod tests {
                 );
             }
             assert_eq!(actual, expected, "phase={phase}");
+        }
+    }
+
+    #[test]
+    fn in_bounds_path_matches_general_path_for_all_phases_and_spans() {
+        let source = test_image(32, 24);
+        let card = PreparedScreenshotCard::prepare(&source, 5, 180);
+        let (base, shifted) = linear_phases(&card);
+        for phase in 0..CRT_PHASE_COUNT {
+            let (image, coverage) = if phase == 0 {
+                (&card.image, base)
+            } else {
+                (&shifted[phase - 1].image, &shifted[phase - 1].coverage)
+            };
+            let mut empty = coverage.clone();
+            for row in &mut empty.rows {
+                row.opaque = OpaqueSpan::default();
+            }
+            let mut short = coverage.clone();
+            for row in &mut short.rows {
+                if row.opaque.end > row.opaque.start {
+                    row.opaque.end = row.opaque.start + 1;
+                }
+            }
+            let screen_width = image.width + 48;
+            let screen_height = image.height + 36;
+            for coverage in [coverage, &empty, &short] {
+                for (x, y) in [
+                    (0, 0),
+                    (17, 11),
+                    (
+                        (screen_width - image.width) as isize,
+                        (screen_height - image.height) as isize,
+                    ),
+                ] {
+                    let background = (0..screen_width * screen_height)
+                        .map(|index| color565(index as u8, (index * 7) as u8, 29))
+                        .collect::<Vec<_>>();
+                    let mut expected = background.clone();
+                    blit_coverage_phase(
+                        &mut expected,
+                        screen_width,
+                        screen_height,
+                        image,
+                        coverage,
+                        x,
+                        y,
+                    );
+                    let mut actual = background;
+                    assert!(card_is_fully_in_bounds(
+                        image,
+                        screen_width,
+                        screen_height,
+                        x,
+                        y,
+                    ));
+                    blit_coverage_phase_in_bounds(&mut actual, screen_width, image, coverage, x, y);
+                    assert_eq!(actual, expected, "phase={phase} x={x} y={y}");
+                }
+            }
         }
     }
 
