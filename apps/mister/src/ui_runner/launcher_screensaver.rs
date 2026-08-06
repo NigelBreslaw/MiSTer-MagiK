@@ -6,7 +6,7 @@
 #[cfg(not(target_os = "macos"))]
 use super::*;
 #[cfg(target_os = "macos")]
-use crate::framebuffer::target::{DirtyRect, blend_565, brighten_565};
+use crate::framebuffer::target::{blend_565, brighten_565};
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
 use mister_magik_fb::particle_engine::{ParticleConfig, ParticlePreset};
