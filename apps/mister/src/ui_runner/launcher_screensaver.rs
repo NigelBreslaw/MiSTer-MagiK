@@ -28,7 +28,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
@@ -249,11 +249,8 @@ struct ScreensaverRenderState {
 
 pub struct LauncherScreensaver {
     parade: Option<ScreenshotParade>,
-    parade_seed: u64,
     particle: Option<ParticleRenderer>,
     particle_reload: Option<MagikRecipeReload>,
-    archive_rx: Option<Receiver<ArchiveLoadResult>>,
-    archive_cancelled: Arc<AtomicBool>,
     startup_started_at: Option<Instant>,
     frame: u64,
     motion_started_at: Instant,
@@ -524,39 +521,12 @@ struct ParadeAdvanceTrace {
 }
 
 impl LauncherScreensaver {
-    fn loading(
-        archive_rx: Receiver<ArchiveLoadResult>,
-        archive_cancelled: Arc<AtomicBool>,
-        startup_started_at: Option<Instant>,
-    ) -> Self {
-        let now = Instant::now();
-        let parade_seed = random_seed();
-        Self {
-            parade: None,
-            parade_seed,
-            particle: None,
-            particle_reload: None,
-            archive_rx: Some(archive_rx),
-            archive_cancelled,
-            startup_started_at,
-            frame: 0,
-            motion_started_at: now,
-        }
-    }
-
-    fn particle(
-        renderer: ParticleRenderer,
-        particle_reload: Option<MagikRecipeReload>,
-        archive_cancelled: Arc<AtomicBool>,
-    ) -> Self {
+    fn particle(renderer: ParticleRenderer, particle_reload: Option<MagikRecipeReload>) -> Self {
         let now = Instant::now();
         Self {
             parade: None,
-            parade_seed: random_seed(),
             particle: Some(renderer),
             particle_reload,
-            archive_rx: None,
-            archive_cancelled,
             startup_started_at: None,
             frame: 0,
             motion_started_at: now,
@@ -729,9 +699,6 @@ impl LauncherScreensaver {
                 }
             };
         }
-        let archive_poll_start = Instant::now();
-        self.poll_archive(w, h);
-        let archive_poll_us = archive_poll_start.elapsed().as_micros();
         let mut trace = if let Some(parade) = self.parade.as_mut() {
             let render_result = match presentation_tick {
                 Some(tick) => {
@@ -763,7 +730,6 @@ impl LauncherScreensaver {
             ScreensaverFrameTrace::default()
         };
         trace.renderer = "parade";
-        trace.archive_poll_us = archive_poll_us;
         if self.frame > 0 && self.frame % 600 == 0 {
             if let Some(parade) = self.parade.as_ref() {
                 log_shared_parade_stats(parade);
@@ -779,65 +745,6 @@ impl LauncherScreensaver {
         }
     }
 
-    fn poll_archive(&mut self, w: usize, h: usize) {
-        let Some(rx) = self.archive_rx.as_ref() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(loaded)) => {
-                crate::ui_logln!(
-                    "screensaver_loader path={} pack_bytes={} entries={}",
-                    loaded.path.display(),
-                    loaded.archive.compressed_bytes(),
-                    loaded.asset_keys.len()
-                );
-                crate::ui_logln!(
-                    "screensaver_loader_timing archive_open_us={} initial_cards_us=0 total_us={} cards=0",
-                    loaded.open_us,
-                    loaded.open_us
-                );
-                let geometry = match SceneGeometry::new(w, h, w) {
-                    Ok(geometry) => geometry,
-                    Err(error) => {
-                        crate::ui_errln!("screensaver geometry failed: {error}");
-                        self.archive_rx = None;
-                        return;
-                    }
-                };
-                let worker_start = Arc::new(|| {
-                    mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                        mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
-                    );
-                });
-                match ScreenshotParade::new(
-                    loaded.archive,
-                    ScreenshotParadeConfig {
-                        geometry,
-                        seed: self.parade_seed,
-                        startup: ScreenshotParadeStartup::Streaming,
-                        replacement_mode: ScreenshotParadeReplacementMode::Prepare,
-                        worker_start: Some(worker_start),
-                        preparation_slack: Some(Arc::new(
-                            mister_magik_screenshot_parade::PreparationSlack::new(),
-                        )),
-                    },
-                ) {
-                    Ok(parade) => self.parade = Some(parade),
-                    Err(error) => crate::ui_errln!("screensaver initialization failed: {error}"),
-                }
-                self.archive_rx = None;
-            }
-            Ok(Err(error)) => {
-                crate::ui_errln!("screensaver_loader error={error}");
-                self.archive_rx = None;
-            }
-            Err(TryRecvError::Disconnected) => {
-                self.archive_rx = None;
-            }
-            Err(TryRecvError::Empty) => {}
-        }
-    }
-
     pub fn has_rendered_card(&self) -> bool {
         if self.particle.is_some() {
             return true;
@@ -846,10 +753,7 @@ impl LauncherScreensaver {
     }
 
     pub fn is_loading_archive(&self) -> bool {
-        if self.particle.is_some() {
-            return false;
-        }
-        self.archive_rx.is_some()
+        false
     }
 
     pub fn active_card_count(&self) -> usize {
@@ -880,12 +784,6 @@ impl LauncherScreensaver {
     }
 }
 
-impl Drop for LauncherScreensaver {
-    fn drop(&mut self) {
-        self.archive_cancelled.store(true, Ordering::Relaxed);
-    }
-}
-
 impl LauncherScreensaver {
     pub fn from_archive_path(
         path: &std::path::Path,
@@ -910,11 +808,8 @@ impl LauncherScreensaver {
         let now = Instant::now();
         Ok(Self {
             parade: Some(parade),
-            parade_seed: seed,
             particle: None,
             particle_reload: None,
-            archive_rx: None,
-            archive_cancelled: Arc::new(AtomicBool::new(false)),
             startup_started_at: None,
             frame: 0,
             motion_started_at: now,
@@ -929,17 +824,15 @@ struct LoadedScreensaverArchive {
     open_us: u128,
 }
 
-type ArchiveLoadResult = Result<LoadedScreensaverArchive, String>;
-
 pub struct LauncherScreensaverLoader {
     ready_rx: Receiver<LauncherScreensaver>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl LauncherScreensaverLoader {
     pub fn start(w: usize, h: usize, startup_started_at: Option<Instant>) -> Self {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         if magik_particle_renderer_requested() {
-            let archive_cancelled = Arc::new(AtomicBool::new(false));
             match particle_config_from_env(w, h).and_then(|config| {
                 let renderer = ParticleRenderer::new_magik(config)?;
                 let reload =
@@ -947,23 +840,19 @@ impl LauncherScreensaverLoader {
                 Ok((renderer, reload))
             }) {
                 Ok((renderer, reload)) => {
-                    let _ = ready_tx.send(LauncherScreensaver::particle(
-                        renderer,
-                        reload,
-                        archive_cancelled,
-                    ));
+                    let _ = ready_tx.send(LauncherScreensaver::particle(renderer, reload));
                 }
                 Err(error) => {
                     crate::ui_errln!("particle renderer initialization failed: {error}");
                 }
             }
-            return Self { ready_rx };
+            return Self {
+                ready_rx,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            };
         }
-        let (archive_tx, archive_rx) = mpsc::sync_channel(1);
-        let archive_cancelled = Arc::new(AtomicBool::new(false));
-        let worker_cancelled = Arc::clone(&archive_cancelled);
-        let saver = LauncherScreensaver::loading(archive_rx, archive_cancelled, startup_started_at);
-        let _ = ready_tx.send(saver);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
         std::thread::Builder::new()
             .name("screensaver-load".into())
             .spawn(move || {
@@ -975,30 +864,95 @@ impl LauncherScreensaverLoader {
                     std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
                     DeviceLayout::current(),
                 );
-                let result = match preview_worker::ResidentPreviewArchive::open(&path) {
-                    Ok(archive) if !worker_cancelled.load(Ordering::Relaxed) => {
-                        Ok(LoadedScreensaverArchive {
-                            asset_keys: archive.asset_keys().to_vec(),
-                            archive,
-                            path,
-                            open_us: started.elapsed().as_micros(),
-                        })
+                let result = (|| {
+                    let archive = preview_worker::ResidentPreviewArchive::open(&path)
+                        .map_err(|error| format!("path={} error={error}", path.display()))?;
+                    if worker_cancelled.load(Ordering::Relaxed) {
+                        return Ok(None);
                     }
-                    Ok(_) => return,
-                    Err(error) => Err(format!("path={} error={error}", path.display())),
-                };
-                if worker_cancelled.load(Ordering::Relaxed) {
-                    return;
+                    let loaded = LoadedScreensaverArchive {
+                        asset_keys: archive.asset_keys().to_vec(),
+                        archive,
+                        path,
+                        open_us: started.elapsed().as_micros(),
+                    };
+                    let seed = random_seed();
+                    build_loaded_screensaver(loaded, w, h, seed, startup_started_at).map(Some)
+                })();
+                match result {
+                    Ok(Some(saver)) if !worker_cancelled.load(Ordering::Relaxed) => {
+                        let _ = ready_tx.send(saver);
+                    }
+                    Ok(_) => {}
+                    Err(error) => crate::ui_errln!("screensaver_loader error={error}"),
                 }
-                let _ = archive_tx.send(result);
             })
             .expect("spawn screensaver loader");
-        Self { ready_rx }
+        Self {
+            ready_rx,
+            cancelled,
+        }
     }
 
     pub fn try_ready(&self) -> Option<LauncherScreensaver> {
         self.ready_rx.try_recv().ok()
     }
+}
+
+impl Drop for LauncherScreensaverLoader {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+fn build_loaded_screensaver(
+    loaded: LoadedScreensaverArchive,
+    width: usize,
+    height: usize,
+    seed: u64,
+    startup_started_at: Option<Instant>,
+) -> Result<LauncherScreensaver, String> {
+    crate::ui_logln!(
+        "screensaver_loader path={} pack_bytes={} entries={}",
+        loaded.path.display(),
+        loaded.archive.compressed_bytes(),
+        loaded.asset_keys.len()
+    );
+    let geometry = SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?;
+    let preparation_slack = Arc::new(mister_magik_screenshot_parade::PreparationSlack::new());
+    let worker_start = Arc::new(|| {
+        mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+            mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+        );
+    });
+    let construction_started = Instant::now();
+    let parade = ScreenshotParade::new(
+        loaded.archive,
+        ScreenshotParadeConfig {
+            geometry,
+            seed,
+            startup: ScreenshotParadeStartup::Streaming,
+            replacement_mode: ScreenshotParadeReplacementMode::Prepare,
+            worker_start: Some(worker_start),
+            preparation_slack: Some(preparation_slack),
+        },
+    )?;
+    crate::ui_logln!(
+        "screensaver_loader_timing archive_open_us={} parade_construct_us={} total_us={} cards=0",
+        loaded.open_us,
+        construction_started.elapsed().as_micros(),
+        loaded
+            .open_us
+            .saturating_add(construction_started.elapsed().as_micros())
+    );
+    Ok(LauncherScreensaver {
+        parade: Some(parade),
+        particle: None,
+        particle_reload: None,
+        startup_started_at,
+        frame: 0,
+        motion_started_at: Instant::now(),
+    })
 }
 
 pub fn particle_renderer_requested() -> bool {
@@ -2534,8 +2488,7 @@ mod tests {
             preset: ParticlePreset::Capacity,
         })
         .unwrap();
-        let screensaver =
-            LauncherScreensaver::particle(renderer, None, Arc::new(AtomicBool::new(false)));
+        let screensaver = LauncherScreensaver::particle(renderer, None);
         assert!(screensaver.requires_direct_hidden());
         assert!(!screensaver.is_loading_archive());
         assert!(screensaver.has_rendered_card());

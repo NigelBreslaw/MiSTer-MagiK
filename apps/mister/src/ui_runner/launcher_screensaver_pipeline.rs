@@ -540,28 +540,36 @@ fn run_render_ahead_worker(
         sequence = sequence.wrapping_add(1);
         motion_tick = motion_tick.saturating_add(1);
         elapsed_us = elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1));
-        let render_pause =
-            preparation_slack.map(|slack| slack.begin_render(Duration::from_millis(2)));
-        let wall_started = Instant::now();
-        let cpu_started = thread_cpu_us();
-        let trace = renderer.render_at_presentation_tick(
-            &mut pixels,
-            width,
-            height,
-            motion_tick,
-            Duration::from_micros(elapsed_us),
-        );
-        drop(render_pause);
+        let (trace, render_wall_us, render_cpu_us) = loop {
+            let render_pause =
+                preparation_slack.map(|slack| slack.begin_render(Duration::from_millis(2)));
+            let wall_started = Instant::now();
+            let cpu_started = thread_cpu_us();
+            let trace = renderer.render_at_presentation_tick(
+                &mut pixels,
+                width,
+                height,
+                motion_tick,
+                Duration::from_micros(elapsed_us),
+            );
+            drop(render_pause);
+            let render_wall_us = wall_started
+                .elapsed()
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            let render_cpu_us = elapsed_thread_cpu_us(cpu_started);
+            if renderer.has_rendered_card() || producer.is_cancelled() {
+                break (trace, render_wall_us, render_cpu_us);
+            }
+            std::thread::park_timeout(RENDER_AHEAD_IDLE_WAIT);
+        };
         let frame = RenderedScreensaverFrame {
             pixels,
             sequence,
             completed_at: Instant::now(),
-            render_wall_us: wall_started
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX),
-            render_cpu_us: elapsed_thread_cpu_us(cpu_started),
+            render_wall_us,
+            render_cpu_us,
             active_cards: renderer.active_card_count(),
             archive_loading: renderer.is_loading_archive(),
             has_rendered_card: renderer.has_rendered_card(),
@@ -616,7 +624,34 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_runner::launcher_screensaver::LauncherScreensaverLoader;
+
+    fn screenshot_renderer(width: usize, height: usize) -> LauncherScreensaver {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-render-ahead-{}-{width}x{height}.mmlz4b",
+            std::process::id()
+        ));
+        let name = b"fixture.rgb565";
+        let pixels = [0x00_u8, 0xf8, 0xe0, 0x07, 0x1f, 0x00, 0xff, 0xff];
+        let index_len = 8 + 4 + 2 + 4 + 4 + 4 + 4 + 1 + 4 + 8 + name.len();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"MMPX2B1\0");
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u32.to_le_bytes());
+        bytes.extend_from_slice(&4_u32.to_le_bytes());
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&(pixels.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&(index_len as u64).to_le_bytes());
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(&pixels);
+        std::fs::write(&path, bytes).expect("write render-ahead fixture");
+        let renderer = LauncherScreensaver::from_archive_path(&path, width, height, 0x1234)
+            .expect("construct screenshot renderer");
+        let _ = std::fs::remove_file(path);
+        renderer
+    }
 
     fn direct_frame(sequence: u64) -> RenderedDirectScreensaverFrame {
         RenderedDirectScreensaverFrame {
@@ -643,10 +678,7 @@ mod tests {
 
     #[test]
     fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
-        let loader = LauncherScreensaverLoader::start(64, 48, None);
-        let renderer = loader
-            .try_ready()
-            .expect("renderer is handed off immediately");
+        let renderer = screenshot_renderer(64, 48);
         let mut pipeline = ScreensaverRenderAhead::start(renderer, 64, 48, 20_000);
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut sequences = Vec::new();
@@ -678,9 +710,7 @@ mod tests {
     #[test]
     fn render_ahead_supports_repeated_enter_and_exit() {
         for _ in 0..2 {
-            let renderer = LauncherScreensaverLoader::start(32, 24, None)
-                .try_ready()
-                .expect("renderer is handed off immediately");
+            let renderer = screenshot_renderer(32, 24);
             let mut pipeline = ScreensaverRenderAhead::start(renderer, 32, 24, 16_667);
             let deadline = Instant::now() + Duration::from_secs(2);
             let mut saw_frame = false;
