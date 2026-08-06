@@ -18,8 +18,7 @@ use mister_magik_particles::reload::{
 };
 use mister_magik_screenshot_parade::{
     LiveScreenshotConfig, LiveScreenshotParade, ScreenshotBuffer, ScreenshotParade,
-    ScreenshotParadeConfig, ScreenshotParadeReplacementMode, ScreenshotParadeStartup,
-    ScreenshotParadeStats,
+    ScreenshotParadeConfig, ScreenshotParadeStats,
 };
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::{Rgb565Pixel, TargetPixel};
@@ -828,8 +827,6 @@ impl LauncherScreensaver {
             ScreenshotParadeConfig {
                 geometry,
                 seed,
-                startup: ScreenshotParadeStartup::Streaming,
-                replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
                 preparation_slack: None,
             },

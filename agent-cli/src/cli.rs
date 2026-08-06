@@ -530,26 +530,6 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_scene_lab_accepts_replacement_modes() {
-        for replacement_mode in ["prepare", "recycle"] {
-            assert!(
-                Cli::try_parse_from([
-                    "agent-cli",
-                    "device",
-                    "scene-lab",
-                    "--scene",
-                    "screenshot-screensaver",
-                    "--replacement-mode",
-                    replacement_mode,
-                    "--attended",
-                ])
-                .is_ok(),
-                "replacement_mode={replacement_mode}",
-            );
-        }
-    }
-
-    #[test]
     fn compile_time_commands_require_closed_targets_and_explicit_paths() {
         assert!(
             Cli::try_parse_from([

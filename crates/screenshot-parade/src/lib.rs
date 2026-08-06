@@ -19,7 +19,6 @@ pub use reservoir::{
     StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
 };
 pub use schedule::{
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats, WorkerStartCallback,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats, WorkerStartCallback,
 };
 pub use slack::{PreparationSlack, RenderPauseReceipt};

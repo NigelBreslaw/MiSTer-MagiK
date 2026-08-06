@@ -221,8 +221,6 @@ pub struct SceneLabArgs {
     pub(crate) fixture: Option<String>,
     #[arg(long)]
     pub(crate) seed: Option<String>,
-    #[arg(long, value_enum)]
-    pub(crate) replacement_mode: Option<SceneLabReplacementMode>,
     #[arg(long)]
     pub(crate) case: Option<String>,
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=600))]
@@ -235,21 +233,6 @@ pub struct SceneLabArgs {
     pub(crate) assess: bool,
     #[arg(long, required = true)]
     attended: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum SceneLabReplacementMode {
-    Prepare,
-    Recycle,
-}
-
-impl SceneLabReplacementMode {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Prepare => "prepare",
-            Self::Recycle => "recycle",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -372,7 +355,6 @@ pub fn run_scene_lab(
             recipe: args.recipe.as_deref(),
             fixture: args.fixture.as_deref(),
             seed,
-            replacement_mode: args.replacement_mode.map(SceneLabReplacementMode::as_str),
             case: args.case.as_deref(),
             seconds: args.seconds,
             warmup_seconds: args.warmup_seconds,

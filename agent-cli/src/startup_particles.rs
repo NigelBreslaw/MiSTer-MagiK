@@ -389,9 +389,6 @@ pub fn execute_scene_device(
             }
         }
     }
-    if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.replacement_mode.is_some() {
-        return Err("scene-lab --replacement-mode is valid only for screenshot-screensaver".into());
-    }
     if args.scene != DeviceSceneLabScene::ScreenshotScreensaver && args.seed.is_some() {
         return Err("scene-lab --seed is valid only for screenshot-screensaver".into());
     }

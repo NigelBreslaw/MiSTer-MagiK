@@ -50,7 +50,6 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) recipe: Option<&'a Path>,
     pub(crate) fixture: Option<&'a str>,
     pub(crate) seed: Option<u64>,
-    pub(crate) replacement_mode: Option<&'static str>,
     pub(crate) case: Option<&'a str>,
     pub(crate) seconds: Option<u64>,
     pub(crate) warmup_seconds: u64,
@@ -78,7 +77,6 @@ struct RemoteLabRequest {
 struct RemoteScreenshotArgs {
     archive: &'static str,
     seed: u64,
-    replacement_mode: &'static str,
     fingerprint: String,
 }
 
@@ -109,7 +107,6 @@ pub(super) fn run(
                     recipe: Some(recipe),
                     fixture: None,
                     seed: None,
-                    replacement_mode: None,
                     case: None,
                     seconds: None,
                     warmup_seconds: 0,
@@ -144,7 +141,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         recipe,
         fixture,
         seed,
-        replacement_mode,
         case,
         seconds,
         warmup_seconds,
@@ -160,7 +156,6 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         Some(RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
-            replacement_mode: replacement_mode.unwrap_or("prepare"),
             fingerprint,
         })
     } else {
@@ -835,7 +830,6 @@ fn prepare_scene_evidence_output(
             "fingerprint": screenshot.fingerprint,
             "sampling_profile": "sixteenth",
             "phase_generation": "linear-lanczos3-neon-with-scalar-fallback",
-            "replacement_mode": screenshot.replacement_mode,
         })),
         "fixture": fixture,
         "case": case,
@@ -1749,11 +1743,10 @@ fn remote_scene_arguments(
         format!("--scene {} --fixture {}", sh(scene), sh(fixture))
     } else if let Some(screenshot) = screenshot {
         format!(
-            "--scene {} --archive {} --seed {} --replacement-mode {}",
+            "--scene {} --archive {} --seed {}",
             sh(scene),
             sh(screenshot.archive),
             screenshot.seed,
-            sh(screenshot.replacement_mode)
         )
     } else {
         format!("--scene {}", sh(scene))
@@ -1969,11 +1962,10 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_lab_uses_installed_pack_seed_and_replacement_mode() {
+    fn screenshot_lab_uses_installed_pack_and_seed() {
         let screenshot = RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 0x1234,
-            replacement_mode: "recycle",
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let run = remote_run_lab_command(
@@ -1990,7 +1982,7 @@ mod tests {
         );
         assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
         assert!(run.contains("--seed 4660"));
-        assert!(run.contains(&format!("--replacement-mode {}", sh("recycle"))));
+        assert!(!run.contains("--replacement-mode"));
         assert!(!run.contains("--recipe"));
         assert!(run.contains("mister_magik_suspend"));
         assert!(run.contains("mister_magik_resume"));
@@ -2038,7 +2030,6 @@ mod tests {
         let screenshot = RemoteScreenshotArgs {
             archive: DEV_SCREENSHOT_ARCHIVE,
             seed: 7,
-            replacement_mode: "prepare",
             fingerprint: "bytes=1 sha256=test".into(),
         };
         let assessment = remote_run_lab_command(

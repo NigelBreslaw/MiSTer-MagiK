@@ -8,8 +8,7 @@ use crate::reservoir::{
     StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
 };
 use crate::schedule::{
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats, WorkerStartCallback,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats, WorkerStartCallback,
 };
 use crate::slack::{PreparationSlack, RenderPauseReceipt};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
@@ -110,8 +109,6 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
             ScreenshotParadeConfig {
                 geometry: config.geometry,
                 seed: config.seed,
-                startup: ScreenshotParadeStartup::Streaming,
-                replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: config.scale_worker_start,
                 preparation_slack: Some(Arc::clone(&preparation_slack)),
             },

@@ -31,8 +31,7 @@ use mister_magik_particles::cabinet::{
 use mister_magik_screenshot_parade::STRICT_READY_CAPACITY;
 use mister_magik_screenshot_parade::{
     LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, PreparationSlack,
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -373,8 +372,7 @@ fn main() -> Result<(), String> {
             let scene = screenshot_scene(
                 archive,
                 options.seed,
-                options.replacement_mode,
-                ScreenshotParadeStartup::Prepared,
+                true,
                 SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
                     .map_err(|error| error.to_string())?,
             )?;
@@ -391,7 +389,6 @@ fn main() -> Result<(), String> {
             return render_screenshot_headless(
                 archive,
                 options.seed,
-                options.replacement_mode,
                 options
                     .time_ms
                     .expect("option parser requires time with output"),
@@ -402,7 +399,6 @@ fn main() -> Result<(), String> {
             SceneSource::Screenshot {
                 archive: archive.to_path_buf(),
                 seed: options.seed,
-                replacement_mode: options.replacement_mode,
             },
             None,
             options.profile,
@@ -686,50 +682,43 @@ enum SceneSource {
     Particle(PathBuf),
     Navigation(NavigationFixture),
     CardFlip(Duration),
-    Screenshot {
-        archive: PathBuf,
-        seed: u64,
-        replacement_mode: ScreenshotParadeReplacementMode,
-    },
+    Screenshot { archive: PathBuf, seed: u64 },
 }
 
 fn screenshot_scene(
     archive_path: &Path,
     seed: u64,
-    replacement_mode: ScreenshotParadeReplacementMode,
-    startup: ScreenshotParadeStartup,
+    offline_prepared: bool,
     geometry: SceneGeometry,
 ) -> Result<ScreenshotParade, String> {
     let archive = mister_magik_catalog::preview_worker::ResidentPreviewArchive::open(archive_path)?;
-    ScreenshotParade::new(
-        archive,
-        ScreenshotParadeConfig {
-            geometry,
-            seed,
-            startup,
-            replacement_mode,
-            worker_start: Some(std::sync::Arc::new(|| {
-                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
-                );
-            })),
-            preparation_slack: Some(std::sync::Arc::new(PreparationSlack::new())),
-        },
-    )
+    let config = ScreenshotParadeConfig {
+        geometry,
+        seed,
+        worker_start: Some(std::sync::Arc::new(|| {
+            mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+            );
+        })),
+        preparation_slack: Some(std::sync::Arc::new(PreparationSlack::new())),
+    };
+    if offline_prepared {
+        ScreenshotParade::new_offline_prepared(archive, config)
+    } else {
+        ScreenshotParade::new(archive, config)
+    }
 }
 
 fn render_screenshot_headless(
     archive_path: &Path,
     seed: u64,
-    replacement_mode: ScreenshotParadeReplacementMode,
     time_ms: u64,
     output: &Path,
 ) -> Result<(), String> {
     let mut renderer = screenshot_scene(
         archive_path,
         seed,
-        replacement_mode,
-        ScreenshotParadeStartup::Prepared,
+        true,
         SceneGeometry::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_WIDTH)
             .map_err(|error| error.to_string())?,
     )?;
@@ -874,18 +863,10 @@ impl LabScene {
                 renderer.set_duration(duration);
                 Ok(Self::CardFlip(Box::new(renderer)))
             }
-            SceneSource::Screenshot {
-                archive,
-                seed,
-                replacement_mode,
-            } => screenshot_scene(
+            SceneSource::Screenshot { archive, seed } => screenshot_scene(
                 &archive,
                 seed,
-                replacement_mode,
-                match replacement_mode {
-                    ScreenshotParadeReplacementMode::Prepare => ScreenshotParadeStartup::Streaming,
-                    ScreenshotParadeReplacementMode::Recycle => ScreenshotParadeStartup::Prepared,
-                },
+                false,
                 SceneGeometry::new(width, height, width).map_err(|error| error.to_string())?,
             )
             .map(Box::new)
@@ -1578,16 +1559,7 @@ fn run_window(
         return run_card_flip_mister(*duration, plan, profile, measurement_evidence, bounded);
     }
     let screenshot_request = match &source {
-        SceneSource::Screenshot {
-            archive,
-            seed,
-            replacement_mode,
-        } => {
-            if *replacement_mode != ScreenshotParadeReplacementMode::Prepare {
-                return Err("live screenshot labs require prepared unique replacements".into());
-            }
-            Some((archive.clone(), *seed))
-        }
+        SceneSource::Screenshot { archive, seed } => Some((archive.clone(), *seed)),
         _ => None,
     };
     let mut renderer = if screenshot_request.is_none() {
@@ -3088,8 +3060,6 @@ struct Options {
     fixture: Option<NavigationFixture>,
     seed: u64,
     seed_requested: bool,
-    replacement_mode: ScreenshotParadeReplacementMode,
-    replacement_mode_requested: bool,
     time_ms: Option<u64>,
     output: Option<PathBuf>,
     check: bool,
@@ -3111,8 +3081,6 @@ impl Options {
         let mut fixture = None;
         let mut seed = DEFAULT_SCREENSHOT_SEED;
         let mut seed_requested = false;
-        let mut replacement_mode = ScreenshotParadeReplacementMode::Prepare;
-        let mut replacement_mode_requested = false;
         let mut scene = None;
         let mut time_ms = None;
         let mut output = None;
@@ -3144,21 +3112,6 @@ impl Options {
                     let value = arguments.next().ok_or("--seed requires an integer")?;
                     seed = parse_seed(&value)?;
                     seed_requested = true;
-                }
-                "--replacement-mode" => {
-                    let value = arguments
-                        .next()
-                        .ok_or("--replacement-mode requires prepare or recycle")?;
-                    replacement_mode = match value.as_str() {
-                        "prepare" => ScreenshotParadeReplacementMode::Prepare,
-                        "recycle" => ScreenshotParadeReplacementMode::Recycle,
-                        _ => {
-                            return Err(format!(
-                                "invalid replacement mode {value:?}; expected prepare or recycle"
-                            ));
-                        }
-                    };
-                    replacement_mode_requested = true;
                 }
                 "--fixture" => {
                     let value = arguments.next().ok_or("--fixture requires a name")?;
@@ -3269,8 +3222,6 @@ impl Options {
             fixture,
             seed,
             seed_requested,
-            replacement_mode,
-            replacement_mode_requested,
             time_ms,
             output,
             check,
@@ -3321,11 +3272,9 @@ impl Options {
             return Err("--duration-ms and --direction are valid only for card-flip".into());
         }
         if self.scene != EffectKind::ScreenshotScreensaver
-            && (self.archive.is_some() || self.seed_requested || self.replacement_mode_requested)
+            && (self.archive.is_some() || self.seed_requested)
         {
-            return Err(
-                "--archive, --seed, and --replacement-mode are valid only for screenshot-screensaver".into(),
-            );
+            return Err("--archive and --seed are valid only for screenshot-screensaver".into());
         }
         match self.scene {
             EffectKind::Magik | EffectKind::Cabinet | EffectKind::Intro => {
@@ -3396,7 +3345,7 @@ impl Options {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED] [--replacement-mode prepare|recycle]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
+    "usage:\n  mister-magik-framebuffer-scene-lab --scene magik|cabinet|intro --recipe FILE.json\n  mister-magik-framebuffer-scene-lab --scene cabinet --recipe FILE.json --case NAME --seconds N [--profile]\n  mister-magik-framebuffer-scene-lab --scene navigation-transition --fixture home-arcade|home-consoles|consoles-system\n  mister-magik-framebuffer-scene-lab --scene card-flip [--duration-ms N]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N [--warmup-seconds N] [--profile]\n  mister-magik-framebuffer-scene-lab --scene SCENE --seconds N --assessment-pass cadence|profile --evidence-dir DIR\n  mister-magik-framebuffer-scene-lab --scene card-flip --direction forward|reverse --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene screenshot-screensaver --archive FILE [--seed SEED]\n  mister-magik-framebuffer-scene-lab --scene SCENE (--recipe FILE.json|--fixture FIXTURE|--archive FILE) --time-ms N --output FILE.ppm\n  mister-magik-framebuffer-scene-lab --scene SCENE --check"
 }
 
 fn parse_seed(value: &str) -> Result<u64, String> {
