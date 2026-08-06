@@ -199,16 +199,8 @@ pub struct LiveParticlesArgs {
 #[derive(Debug, Args)]
 pub struct StartupParticlesArgs {
     pub(crate) recipe: PathBuf,
-    #[arg(long, value_enum)]
-    pub(crate) runtime: StartupParticleRuntime,
     #[arg(long, required = true)]
     attended: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub enum StartupParticleRuntime {
-    Lab,
-    DevLauncher,
 }
 
 #[derive(Debug, Args)]
@@ -329,12 +321,9 @@ pub fn run_live_particles(args: &LiveParticlesArgs, binary: &Path) -> AgentResul
     device.mutate(|device| device.run_live_particles(binary, &args.family, &args.demo))
 }
 
-pub fn run_startup_particles(
-    args: &StartupParticlesArgs,
-    binary: Option<&Path>,
-) -> AgentResult<()> {
+pub fn run_startup_particles(args: &StartupParticlesArgs, binary: &Path) -> AgentResult<()> {
     let mut device = crate::device::DeviceClient::default();
-    device.mutate(|device| device.run_startup_particles(binary, &args.recipe, args.runtime))
+    device.mutate(|device| device.run_startup_particles(binary, &args.recipe))
 }
 
 pub fn run_scene_lab(

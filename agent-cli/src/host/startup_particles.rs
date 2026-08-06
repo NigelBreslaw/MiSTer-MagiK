@@ -5,12 +5,10 @@
 
 use super::remote::{connect_with, put, shell_quote as sh};
 use super::{
-    AttendedOperationSignalGuard, DeviceAccess, DeviceFailure, LauncherRestartOptions,
-    NativeDevice, Result, acknowledged_main_command, attended_operation_interrupted,
-    device_failure, exec_checked, file_sha256, install_prepared_device_environment, remote_read,
-    restart_launcher_with_one_shot_env, wait_launcher_ready,
+    AttendedOperationSignalGuard, DeviceAccess, DeviceFailure, NativeDevice, Result,
+    acknowledged_main_command, attended_operation_interrupted, device_failure, exec_checked,
+    file_sha256, install_prepared_device_environment, remote_read, wait_launcher_ready,
 };
-use crate::commands::device::StartupParticleRuntime;
 use serde_json::Value;
 use serde_json::json;
 use ssh2::{ExtendedData, Session};
@@ -27,13 +25,10 @@ const REMOTE_BINARY: &str =
 const DEV_SCREENSHOT_ARCHIVE: &str =
     "/media/fat/mister-magik-dev/assets/arcade-screenshots-320x320.mmlz4b";
 const REMOTE_LAB_RECIPE: &str = "/tmp/mister-magik/startup-particles/recipe.json";
-const REMOTE_MAGIK_RECIPE: &str = "/tmp/mister-magik/startup-particles/magik.json";
 const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
 const REMOTE_SCENE_EVIDENCE_DIR: &str = "/tmp/mister-magik/scene-lab-evidence";
-const DEVELOPMENT_LAUNCHER_ENV: &str = "/media/fat/mister-magik-dev/launcher.env";
 const WATCH_INTERVAL: Duration = Duration::from_millis(100);
 const ACK_DEADLINE: Duration = Duration::from_secs(1);
-const LAUNCHER_START_DEADLINE: Duration = Duration::from_secs(45);
 const MAGIK_SCHEMA: &str = "mister-magik-particle-magik-v1";
 const CABINET_SCHEMA: &str = "mister-magik-particle-cabinet-v1";
 
@@ -82,42 +77,30 @@ struct RemoteScreenshotArgs {
 
 pub(super) fn run(
     device: &mut NativeDevice,
-    binary: Option<&Path>,
+    binary: &Path,
     recipe: &Path,
-    runtime: StartupParticleRuntime,
 ) -> std::result::Result<(), DeviceFailure> {
     validate_local_input(recipe, "startup particle recipe").map_err(device_failure)?;
-    if let Some(binary) = binary {
-        validate_local_input(binary, "startup particle lab binary").map_err(device_failure)?;
-    }
+    validate_local_input(binary, "startup particle lab binary").map_err(device_failure)?;
     let prepared = device.prepare(DeviceAccess::SSH_MUTATION)?;
     install_prepared_device_environment(&prepared.config);
-    match runtime {
-        StartupParticleRuntime::Lab => {
-            let scene = local_recipe_scene(recipe).map_err(device_failure)?;
-            run_lab(
-                &prepared,
-                SceneLabRequest {
-                    binary: binary.ok_or_else(|| {
-                        DeviceFailure::InvalidRequest(
-                            "lab runtime requires a built lab binary".into(),
-                        )
-                    })?,
-                    scene,
-                    recipe: Some(recipe),
-                    fixture: None,
-                    seed: None,
-                    case: None,
-                    seconds: None,
-                    warmup_seconds: 0,
-                    profile: false,
-                    assess: false,
-                    output_dir: None,
-                },
-            )
-        }
-        StartupParticleRuntime::DevLauncher => run_dev_launcher(&prepared, recipe),
-    }
+    let scene = local_recipe_scene(recipe).map_err(device_failure)?;
+    run_lab(
+        &prepared,
+        SceneLabRequest {
+            binary,
+            scene,
+            recipe: Some(recipe),
+            fixture: None,
+            seed: None,
+            case: None,
+            seconds: None,
+            warmup_seconds: 0,
+            profile: false,
+            assess: false,
+            output_dir: None,
+        },
+    )
     .map_err(device_failure)
 }
 
@@ -344,84 +327,6 @@ pub(super) fn active_lab_display_contracts(session: &Session) -> Result<LabDispl
     })
 }
 
-fn run_dev_launcher(prepared: &super::PreparedDevice, recipe: &Path) -> Result<()> {
-    let session = connect_with(&prepared.config.connection, 10)?;
-    exec_checked(
-        &session,
-        "startup particle Dev launcher preflight",
-        &dev_preflight_command(),
-    )?;
-    let _signal_guard = AttendedOperationSignalGuard::install();
-    let restart_result = restart_launcher_with_one_shot_env(
-        &session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                (
-                    "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY".into(),
-                    "1".into(),
-                ),
-                (
-                    "MISTER_SCREENSAVER_RENDERER".into(),
-                    "particle-magik".into(),
-                ),
-            ],
-            timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV.into(),
-            ..LauncherRestartOptions::default()
-        },
-    );
-
-    let run_result = restart_result.and_then(|()| {
-        let embedded = wait_status_state(&session, "embedded", LAUNCHER_START_DEADLINE)?;
-        let embedded_generation = status_generation(&embedded)?;
-        publish_recipe(&session, recipe, REMOTE_MAGIK_RECIPE)?;
-        let initial = wait_status_after(&session, embedded_generation, ACK_DEADLINE)?;
-        require_status(&initial, "applied")?;
-        let mut publisher = RecipePublisher::with_generation(
-            recipe,
-            REMOTE_MAGIK_RECIPE,
-            status_generation(&initial)?,
-        )?;
-        while !attended_operation_interrupted() {
-            thread::sleep(WATCH_INTERVAL);
-            publisher.poll(&session)?;
-        }
-        Ok(publisher)
-    });
-
-    let cleanup_result = cleanup_dev_launcher(&session, run_result.as_ref().ok());
-    match (run_result, cleanup_result) {
-        (Ok(_), Ok(())) => Ok(()),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(format!("Dev launcher cleanup failed: {error}").into()),
-        (Err(run_error), Err(cleanup_error)) => {
-            Err(format!("{run_error}; Dev launcher cleanup also failed: {cleanup_error}").into())
-        }
-    }
-}
-
-fn wait_status_state(session: &Session, expected: &str, timeout: Duration) -> Result<Value> {
-    let started = Instant::now();
-    loop {
-        if let Some(text) = remote_read(session, REMOTE_STATUS)
-            && let Ok(status) = serde_json::from_str::<Value>(text.trim())
-            && status.get("state").and_then(Value::as_str) == Some(expected)
-        {
-            status_generation(&status)?;
-            return Ok(status);
-        }
-        if started.elapsed() >= timeout {
-            return Err(format!(
-                "startup particle status did not reach {expected:?} within {} ms",
-                timeout.as_millis()
-            )
-            .into());
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
 fn validate_local_input(path: &Path, label: &str) -> Result<()> {
     if !path.is_file() {
         return Err(format!("{label} is missing: {}", path.display()).into());
@@ -567,7 +472,7 @@ fn wait_status_after(session: &Session, generation: u64, timeout: Duration) -> R
     loop {
         if let Some(text) = remote_read(session, REMOTE_STATUS)
             && let Ok(status) = serde_json::from_str::<Value>(text.trim())
-            && status_is_after(&status, generation, None)
+            && status_generation(&status).is_ok_and(|candidate| candidate > generation)
         {
             return Ok(status);
         }
@@ -580,37 +485,6 @@ fn wait_status_after(session: &Session, generation: u64, timeout: Duration) -> R
         }
         thread::sleep(Duration::from_millis(50));
     }
-}
-
-fn wait_status_state_after(
-    session: &Session,
-    generation: u64,
-    expected: &str,
-    timeout: Duration,
-) -> Result<Value> {
-    let started = Instant::now();
-    loop {
-        if let Some(text) = remote_read(session, REMOTE_STATUS)
-            && let Ok(status) = serde_json::from_str::<Value>(text.trim())
-            && status_is_after(&status, generation, Some(expected))
-        {
-            return Ok(status);
-        }
-        if started.elapsed() >= timeout {
-            return Err(format!(
-                "startup particle status did not reach {expected:?} after generation {generation} within {} ms",
-                timeout.as_millis()
-            )
-            .into());
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn status_is_after(status: &Value, generation: u64, expected: Option<&str>) -> bool {
-    status_generation(status).is_ok_and(|candidate| candidate > generation)
-        && expected
-            .is_none_or(|expected| status.get("state").and_then(Value::as_str) == Some(expected))
 }
 
 fn status_generation(status: &Value) -> Result<u64> {
@@ -650,65 +524,6 @@ fn report_status(status: &Value) {
     } else {
         println!("startup particle recipe {state} generation={generation}");
     }
-}
-
-fn cleanup_dev_launcher(session: &Session, publisher: Option<&RecipePublisher<'_>>) -> Result<()> {
-    let publisher_generation = publisher.map_or(0, |publisher| publisher.generation);
-    let current_status = remote_read(session, REMOTE_STATUS)
-        .and_then(|text| serde_json::from_str::<Value>(text.trim()).ok());
-    let generation = current_status
-        .as_ref()
-        .and_then(|status| status_generation(status).ok())
-        .unwrap_or_default()
-        .max(publisher_generation);
-    let already_embedded = current_status
-        .as_ref()
-        .is_some_and(|status| status.get("state").and_then(Value::as_str) == Some("embedded"));
-    let removal = super::exec_checked_output(
-        session,
-        "remove Dev launcher startup particle recipe",
-        &format!(
-            "if test -e {recipe}; then rm -f {recipe}; printf 'removed=1\\n'; else printf 'removed=0\\n'; fi",
-            recipe = sh(REMOTE_MAGIK_RECIPE),
-        ),
-    )
-    .and_then(|reply| parse_recipe_removal(&reply.stdout));
-    let acknowledgement_required = removal
-        .as_ref()
-        .is_ok_and(|removed| cleanup_requires_embedded_ack(*removed, already_embedded));
-    let acknowledgement_result = if acknowledgement_required {
-        wait_status_state_after(session, generation, "embedded", ACK_DEADLINE).map(|_| ())
-    } else {
-        Ok(())
-    };
-    let removal_result = removal.map(|_| ());
-    let volatile_result = exec_checked(
-        session,
-        "clean startup particle Dev files",
-        &format!(
-            "set -eu; rm -f {} {}; rmdir {} 2>/dev/null || true",
-            sh(REMOTE_STATUS),
-            sh(&format!("{REMOTE_MAGIK_RECIPE}.next")),
-            sh(REMOTE_DIR)
-        ),
-    );
-    let safety_result = verify_safety_clear(session);
-    combine_results(
-        combine_results(removal_result, acknowledgement_result),
-        combine_results(volatile_result, safety_result),
-    )
-}
-
-fn parse_recipe_removal(output: &str) -> Result<bool> {
-    match output.trim() {
-        "removed=1" => Ok(true),
-        "removed=0" => Ok(false),
-        other => Err(format!("invalid startup particle removal reply {other:?}").into()),
-    }
-}
-
-const fn cleanup_requires_embedded_ack(recipe_removed: bool, already_embedded: bool) -> bool {
-    recipe_removed || !already_embedded
 }
 
 fn run_remote_lab(
@@ -1672,15 +1487,6 @@ fn lab_preflight_command() -> String {
     )
 }
 
-fn dev_preflight_command() -> String {
-    format!(
-        "set -eu; set -- $(pidof MiSTer_MagiKDev); test \"$#\" -eq 1; main_pid=$1; test \"$(readlink /proc/$main_pid/exe)\" = /media/fat/MiSTer_MagiKDev; set -- $(pidof mister-magik-fb); test \"$#\" -eq 1; launcher_pid=$1; test \"$(readlink /proc/$launcher_pid/exe)\" = /media/fat/mister-magik-dev/mister-magik-fb; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; {}; rm -rf {}; mkdir -p {}",
-        safety_clear_checks(),
-        sh(REMOTE_DIR),
-        sh(REMOTE_DIR)
-    )
-}
-
 fn safety_clear_checks() -> &'static str {
     "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\"; done"
 }
@@ -2190,15 +1996,6 @@ mod tests {
     }
 
     #[test]
-    fn dev_launcher_requires_the_exact_development_runtime() {
-        let preflight = dev_preflight_command();
-        assert!(preflight.contains("pidof MiSTer_MagiKDev"));
-        assert!(preflight.contains("/media/fat/MiSTer_MagiKDev"));
-        assert!(!preflight.contains("pidof MiSTer_MagiK "));
-        assert!(!preflight.contains("/media/fat/mister-magik/mister-magik-fb"));
-    }
-
-    #[test]
     fn every_persistent_arming_file_is_rejected() {
         let checks = safety_clear_checks();
         for path in [
@@ -2223,17 +2020,6 @@ mod tests {
     }
 
     #[test]
-    fn embedded_cleanup_acknowledgement_rejects_stale_and_wrong_states() {
-        let stale_embedded = serde_json::json!({"generation": 4, "state": "embedded"});
-        let newer_rejected = serde_json::json!({"generation": 6, "state": "rejected"});
-        let newer_embedded = serde_json::json!({"generation": 6, "state": "embedded"});
-
-        assert!(!status_is_after(&stale_embedded, 4, Some("embedded")));
-        assert!(!status_is_after(&newer_rejected, 4, Some("embedded")));
-        assert!(status_is_after(&newer_embedded, 4, Some("embedded")));
-    }
-
-    #[test]
     fn crt_contracts_are_forwarded_without_lab_geometry() {
         let contracts = LabDisplayContracts {
             settings: "schema=1&output=crt-240p60".into(),
@@ -2255,20 +2041,5 @@ mod tests {
         assert!(run.contains("schema=1&mode=auto"));
         assert!(!run.contains("960"));
         assert!(!run.contains("540"));
-    }
-
-    #[test]
-    fn recipe_removal_reply_is_closed() {
-        assert!(parse_recipe_removal("removed=1\n").unwrap());
-        assert!(!parse_recipe_removal("removed=0\n").unwrap());
-        assert!(parse_recipe_removal("maybe").is_err());
-    }
-
-    #[test]
-    fn cleanup_waits_until_an_absent_recipe_is_confirmed_embedded() {
-        assert!(cleanup_requires_embedded_ack(true, false));
-        assert!(cleanup_requires_embedded_ack(true, true));
-        assert!(cleanup_requires_embedded_ack(false, false));
-        assert!(!cleanup_requires_embedded_ack(false, true));
     }
 }

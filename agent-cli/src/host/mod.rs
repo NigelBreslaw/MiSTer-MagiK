@@ -288,11 +288,10 @@ impl NativeDevice {
 
     pub(crate) fn run_startup_particles(
         &mut self,
-        binary: Option<&Path>,
+        binary: &Path,
         recipe: &Path,
-        runtime: crate::commands::device::StartupParticleRuntime,
     ) -> std::result::Result<(), DeviceFailure> {
-        startup_particles::run(self, binary, recipe, runtime)
+        startup_particles::run(self, binary, recipe)
     }
 
     pub(crate) fn run_scene_lab(

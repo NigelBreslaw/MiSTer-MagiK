@@ -5,8 +5,7 @@
 
 use crate::build::{BuildSpec, execute};
 use crate::commands::device::{
-    SceneLabArgs, SceneLabScene as DeviceSceneLabScene, StartupParticleRuntime,
-    StartupParticlesArgs,
+    SceneLabArgs, SceneLabScene as DeviceSceneLabScene, StartupParticlesArgs,
 };
 use crate::error::AgentResult;
 use crate::process;
@@ -332,13 +331,9 @@ pub fn execute_device(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
     require_attended_terminal()?;
-    if args.runtime == StartupParticleRuntime::DevLauncher {
-        validate_magik_recipe(&args.recipe)?;
-        return crate::commands::device::run_startup_particles(args, None);
-    }
     let spec = BuildSpec::framebuffer_scene_lab_device();
     execute(repository, &spec, reporter)?;
-    crate::commands::device::run_startup_particles(args, Some(&repository.join(spec.artifact())))
+    crate::commands::device::run_startup_particles(args, &repository.join(spec.artifact()))
 }
 
 pub fn execute_scene_device(
@@ -635,14 +630,4 @@ fn validate_recipe_file(path: &Path) -> AgentResult<Vec<u8>> {
     }
     std::fs::read(path)
         .map_err(|error| format!("cannot read particle recipe {}: {error}", path.display()).into())
-}
-
-fn validate_magik_recipe(path: &Path) -> AgentResult<()> {
-    let bytes = validate_recipe_file(path)?;
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid Magik recipe {}: {error}", path.display()))?;
-    if value.get("schema").and_then(serde_json::Value::as_str) != Some(MAGIK_SCHEMA) {
-        return Err("the dev launcher accepts only Magik V1 recipes".into());
-    }
-    Ok(())
 }
