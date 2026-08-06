@@ -20,6 +20,7 @@ const COVERAGE_SAMPLE_COUNT: usize = COVERAGE_SAMPLES_PER_AXIS * COVERAGE_SAMPLE
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinearPhaseKernel {
+    #[cfg(test)]
     Scalar,
     Neon,
 }
@@ -1050,12 +1051,13 @@ struct LinearPhaseNeonRequest<'a> {
 
 fn prepare_linear_phase_neon_if_selected(
     request: LinearPhaseNeonRequest<'_>,
-    kernel: LinearPhaseKernel,
+    _kernel: LinearPhaseKernel,
     pixels: &mut [Rgb565Pixel],
     coverage: &mut [u8],
     preparation_slack: Option<&PreparationSlack>,
 ) -> bool {
-    if !matches!(kernel, LinearPhaseKernel::Neon) {
+    #[cfg(test)]
+    if !matches!(_kernel, LinearPhaseKernel::Neon) {
         return false;
     }
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
