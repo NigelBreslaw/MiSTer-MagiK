@@ -27,14 +27,12 @@ use mister_magik_framebuffer_scenes::SceneGeometry;
 use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
 };
-use mister_magik_screenshot_parade::{
-    PreparationSlack, ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
-    ScreenshotParadeStartup, ScreenshotParadeStats,
-};
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
+use mister_magik_screenshot_parade::STRICT_READY_CAPACITY;
 use mister_magik_screenshot_parade::{
-    STRICT_READY_CAPACITY, StrictFrameConsumer, StrictFramePoll, StrictFrameProducer,
-    StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
+    LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, PreparationSlack,
+    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
+    ScreenshotParadeStartup, ScreenshotParadeStats,
 };
 use std::env;
 use std::fs::OpenOptions;
@@ -1535,237 +1533,6 @@ const fn hud_glyph(character: char) -> [u8; 7] {
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct ScreenshotLabRenderFrame {
-    pixels: Vec<Rgb565Pixel>,
-    tick: u64,
-    render_started: std::time::Instant,
-    process_cpu_started: Duration,
-    render_wall_us: u64,
-    render_cpu_us: u64,
-    stats: mister_magik_framebuffer_scene_lab::FrameStats,
-    measurement_ready: bool,
-    state_label: String,
-    last_error: Option<String>,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct ScreenshotLabRenderAhead {
-    reservoir: StrictFrameConsumer<Vec<Rgb565Pixel>, ScreenshotLabRenderFrame>,
-    preparation_slack: std::sync::Arc<PreparationSlack>,
-    stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    join: Option<std::thread::JoinHandle<()>>,
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-impl ScreenshotLabRenderAhead {
-    fn start(mut renderer: LabScene, width: usize, height: usize) -> Self {
-        let preparation_slack = renderer
-            .preparation_slack()
-            .expect("screenshot scene owns a preparation slack gate");
-        let worker_preparation_slack = std::sync::Arc::clone(&preparation_slack);
-        let buffers = std::array::from_fn(|_| vec![Rgb565Pixel(0); width * height]);
-        let (producer, reservoir) = strict_render_reservoir(buffers, 0);
-        let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let worker_stopped = std::sync::Arc::clone(&stopped);
-        let join = std::thread::Builder::new()
-            .name("scene-lab-screenshot-render".into())
-            .spawn(move || {
-                let _completion = ScreenshotLabCompletionGuard(worker_stopped);
-                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
-                );
-                run_screenshot_lab_render_worker(
-                    &mut renderer,
-                    producer,
-                    &worker_preparation_slack,
-                );
-            })
-            .expect("spawn screenshot scene-lab render worker");
-        Self {
-            reservoir,
-            preparation_slack,
-            stopped,
-            join: Some(join),
-        }
-    }
-
-    fn wait_until_prefilled(&self, timeout: Duration) -> Result<(), String> {
-        let deadline = std::time::Instant::now() + timeout;
-        while self.reservoir.ready_depth() < STRICT_READY_CAPACITY {
-            if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
-                return Err("screenshot render FIFO stopped before prefill".into());
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "screenshot render FIFO prefill timed out depth={}",
-                    self.reservoir.ready_depth()
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        self.preparation_slack
-            .set_ready_depth(self.reservoir.ready_depth());
-        Ok(())
-    }
-
-    fn begin_live(&self) {
-        self.preparation_slack.begin_live();
-    }
-
-    fn try_next(&mut self) -> StrictFramePoll<ScreenshotLabRenderFrame> {
-        let poll = match self.reservoir.try_next() {
-            StrictFramePoll::Frame(frame) => StrictFramePoll::Frame(StrictReadyFrame {
-                tick: frame.tick,
-                payload: frame.payload,
-            }),
-            StrictFramePoll::Empty => {
-                self.reservoir.record_starvation();
-                StrictFramePoll::Empty
-            }
-            StrictFramePoll::Disconnected => StrictFramePoll::Disconnected,
-            StrictFramePoll::SequenceFailure {
-                expected_tick,
-                frame,
-            } => StrictFramePoll::SequenceFailure {
-                expected_tick,
-                frame: StrictReadyFrame {
-                    tick: frame.tick,
-                    payload: frame.payload,
-                },
-            },
-        };
-        self.preparation_slack
-            .set_ready_depth(self.reservoir.ready_depth());
-        poll
-    }
-
-    fn recycle(&self, pixels: Vec<Rgb565Pixel>) -> bool {
-        self.reservoir.recycle(pixels)
-    }
-
-    fn ready_depth(&self) -> usize {
-        self.reservoir.ready_depth()
-    }
-
-    fn starvations(&self) -> u64 {
-        self.reservoir.starvations()
-    }
-
-    fn sequence_failures(&self) -> u64 {
-        self.reservoir.sequence_failures()
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-impl Drop for ScreenshotLabRenderAhead {
-    fn drop(&mut self) {
-        self.reservoir.cancel();
-        if self.stopped.load(std::sync::atomic::Ordering::Acquire)
-            && let Some(join) = self.join.take()
-        {
-            let _ = join.join();
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-struct ScreenshotLabCompletionGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-impl Drop for ScreenshotLabCompletionGuard {
-    fn drop(&mut self) {
-        self.0.store(true, std::sync::atomic::Ordering::Release);
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn run_screenshot_lab_render_worker(
-    renderer: &mut LabScene,
-    producer: StrictFrameProducer<Vec<Rgb565Pixel>, ScreenshotLabRenderFrame>,
-    preparation_slack: &PreparationSlack,
-) {
-    let mut tick = 0_u64;
-    while !producer.is_cancelled() {
-        let mut pixels = match producer.take_free_timeout(Duration::from_millis(2)) {
-            StrictFreeBufferPoll::Buffer(pixels) => pixels,
-            StrictFreeBufferPoll::Timeout => continue,
-            StrictFreeBufferPoll::Disconnected => break,
-        };
-        let elapsed = Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(tick));
-        let render_pause = preparation_slack.begin_render(Duration::from_millis(2));
-        let render_pause_receipt = render_pause.receipt();
-        let render_started = std::time::Instant::now();
-        let process_cpu_started = process_cpu_time();
-        let thread_cpu_started = scene_lab_thread_cpu_us();
-        let mut stats = match renderer.render_buffer(
-            &mut pixels,
-            (tick % 3) as u8,
-            elapsed,
-            Some(elapsed.saturating_add(FRAME_DURATION)),
-            Some(tick),
-        ) {
-            Ok(stats) => stats,
-            Err(error) => {
-                eprintln!("screenshot scene-lab render worker failed: {error}");
-                break;
-            }
-        };
-        drop(render_pause);
-        if let Some(screenshot) = stats.screenshot.as_mut() {
-            screenshot.preparation_pause_response_us = render_pause_receipt.waited_us;
-            screenshot.preparation_pause_waited = render_pause_receipt.waited;
-            screenshot.preparation_pause_timed_out = render_pause_receipt.timed_out;
-        }
-        let render_wall_us = render_started.elapsed().as_micros() as u64;
-        let render_cpu_us = scene_lab_elapsed_thread_cpu_us(thread_cpu_started);
-        let frame = ScreenshotLabRenderFrame {
-            pixels,
-            tick,
-            render_started,
-            process_cpu_started,
-            render_wall_us,
-            render_cpu_us,
-            stats,
-            measurement_ready: renderer.measurement_ready(),
-            state_label: renderer.state_label(),
-            last_error: renderer.last_error().map(str::to_owned),
-        };
-        if !producer.publish(StrictReadyFrame {
-            tick,
-            payload: frame,
-        }) {
-            break;
-        }
-        preparation_slack.set_ready_depth(producer.ready_depth());
-        tick = tick.saturating_add(1);
-    }
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn scene_lab_thread_cpu_us() -> Option<u64> {
-    let mut time = std::mem::MaybeUninit::<libc::timespec>::uninit();
-    // SAFETY: clock_gettime initializes the provided timespec on success.
-    let result = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
-    if result != 0 {
-        return None;
-    }
-    let time = unsafe { time.assume_init() };
-    Some(
-        u64::try_from(time.tv_sec)
-            .unwrap_or(0)
-            .saturating_mul(1_000_000)
-            .saturating_add(u64::try_from(time.tv_nsec).unwrap_or(0) / 1_000),
-    )
-}
-
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn scene_lab_elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
-    start
-        .and_then(|start| scene_lab_thread_cpu_us().map(|end| end.saturating_sub(start)))
-        .unwrap_or(0)
-}
-
 #[cfg(target_os = "macos")]
 fn run_window(
     source: SceneSource,
@@ -1810,24 +1577,65 @@ fn run_window(
     if let SceneSource::CardFlip(duration) = &source {
         return run_card_flip_mister(*duration, plan, profile, measurement_evidence, bounded);
     }
-    let mut renderer = Some(LabScene::start(source, case, plan.render_w, plan.render_h)?);
-    let scene_effect = renderer
-        .as_ref()
-        .expect("scene renderer was just created")
-        .effect();
+    let screenshot_request = match &source {
+        SceneSource::Screenshot {
+            archive,
+            seed,
+            replacement_mode,
+        } => {
+            if *replacement_mode != ScreenshotParadeReplacementMode::Prepare {
+                return Err("live screenshot labs require prepared unique replacements".into());
+            }
+            Some((archive.clone(), *seed))
+        }
+        _ => None,
+    };
+    let mut renderer = if screenshot_request.is_none() {
+        Some(LabScene::start(source, case, plan.render_w, plan.render_h)?)
+    } else {
+        None
+    };
+    let scene_effect = if screenshot_request.is_some() {
+        EffectKind::ScreenshotScreensaver
+    } else {
+        renderer
+            .as_ref()
+            .expect("non-screenshot scene renderer was just created")
+            .effect()
+    };
     let mut controls =
         (case.is_none() && scene_effect == EffectKind::Cabinet).then(CabinetLabControls::new);
-    let mut screenshot_pipeline = (scene_effect == EffectKind::ScreenshotScreensaver).then(|| {
-        ScreenshotLabRenderAhead::start(
-            renderer
-                .take()
-                .expect("screenshot renderer moves to strict render worker"),
-            plan.render_w,
-            plan.render_h,
-        )
-    });
-    if let Some(pipeline) = screenshot_pipeline.as_ref() {
+    let mut screenshot_pipeline = screenshot_request
+        .map(|(archive_path, seed)| {
+            let archive = mister_magik_catalog::preview_worker::ResidentPreviewArchive::open(
+                &archive_path,
+            )?;
+            let buffers =
+                std::array::from_fn(|_| vec![Rgb565Pixel(0); plan.render_w * plan.render_h]);
+            LiveScreenshotParade::start(
+                archive,
+                LiveScreenshotConfig {
+                    geometry: SceneGeometry::new(plan.render_w, plan.render_h, plan.render_w)
+                        .map_err(|error| error.to_string())?,
+                    seed,
+                    scale_worker_start: Some(std::sync::Arc::new(|| {
+                        mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                            mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+                        );
+                    })),
+                    render_worker_start: Some(std::sync::Arc::new(|| {
+                        mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                            mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
+                        );
+                    })),
+                },
+                buffers,
+            )
+        })
+        .transpose()?;
+    if let Some(pipeline) = screenshot_pipeline.as_mut() {
         pipeline.wait_until_prefilled(Duration::from_secs(30))?;
+        pipeline.finish_prefill()?;
     }
     let mut input = FramebufferLabInput::open();
     let mut presenter = CachedHiddenLatchPresenter::open(plan)
@@ -1872,6 +1680,7 @@ fn run_window(
     let mut cpu_started = process_cpu_time();
     let mut status_frames = 0_u64;
     let mut presentation_tick = 0_u64;
+    let mut pending_screenshot_tick = None::<u64>;
     let mut render_samples_us = Vec::with_capacity(64);
     let mut clear_samples_us = Vec::with_capacity(64);
     let mut simulation_samples_us = Vec::with_capacity(64);
@@ -1925,6 +1734,18 @@ fn run_window(
             }
             last_sequence = Some(receipt.sequence);
             latch_drop_count = receipt.drop_count;
+            if let Some(tick) = pending_screenshot_tick.take() {
+                screenshot_pipeline
+                    .as_mut()
+                    .expect("pending screenshot tick belongs to shared runtime")
+                    .confirm_presented(tick)
+                    .map_err(|failure| {
+                        format!(
+                            "shared screenshot confirmation sequence failure expected_tick={} actual_tick={}",
+                            failure.expected_tick, failure.actual_tick
+                        )
+                    })?;
+            }
             if let Some(pending) = pending_evidence.take() {
                 let evidence = finish_frame_evidence(
                     pending,
@@ -1975,8 +1796,8 @@ fn run_window(
                 if warmup_unit_flip_streak >= 3 {
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
-                        if let Some(pipeline) = screenshot_pipeline.as_ref() {
-                            pipeline.begin_live();
+                        if let Some(pipeline) = screenshot_pipeline.as_mut() {
+                            pipeline.begin_live()?;
                         }
                         // Starting SIGPROF briefly stalls presentation while the profiler
                         // installs its handler. Keep that work outside every measurement
@@ -2054,55 +1875,53 @@ fn run_window(
         let mut fifo_tick = presentation_tick;
         let (pixels, stats, render_started, render_cpu_started, render_wall_us, render_cpu_us) =
             if let Some(pipeline) = screenshot_pipeline.as_mut() {
-                let ready = match pipeline.try_next() {
-                    StrictFramePoll::Frame(frame) => frame,
-                    StrictFramePoll::Empty => {
+                let ready = match pipeline.poll() {
+                    LiveScreenshotPoll::Frame(frame) => frame,
+                    LiveScreenshotPoll::Prefilling => {
+                        return Err(
+                            "shared screenshot runtime exposed an incomplete prefill".into()
+                        );
+                    }
+                    LiveScreenshotPoll::Starved => {
                         return Err(format!(
                             "strict screenshot render FIFO starved expected_tick={} ready_depth={} starvations={}",
-                            presentation_tick,
+                            pipeline.expected_tick(),
                             pipeline.ready_depth(),
                             pipeline.starvations(),
                         ));
                     }
-                    StrictFramePoll::Disconnected => {
+                    LiveScreenshotPoll::Stopped => {
                         return Err("strict screenshot render FIFO disconnected".into());
                     }
-                    StrictFramePoll::SequenceFailure {
-                        expected_tick,
-                        frame,
-                    } => {
+                    LiveScreenshotPoll::SequenceFailure(failure) => {
                         return Err(format!(
                             "strict screenshot render FIFO sequence failure expected_tick={} actual_tick={}",
-                            expected_tick, frame.tick,
+                            failure.expected_tick, failure.actual_tick,
                         ));
                     }
                 };
-                let ScreenshotLabRenderFrame {
-                    pixels: rendered_pixels,
-                    tick,
-                    render_started,
-                    process_cpu_started,
-                    render_wall_us,
-                    render_cpu_us,
-                    stats,
-                    measurement_ready,
-                    state_label,
-                    last_error,
-                } = ready.payload;
-                fifo_tick = tick;
-                screenshot_measurement_ready = measurement_ready;
-                last_state_label = state_label;
-                last_render_error = last_error;
-                ahead_pixels = Some(rendered_pixels);
+                fifo_tick = ready.tick;
+                screenshot_measurement_ready = true;
+                last_state_label = "ready".to_owned();
+                last_render_error = None;
+                let mut stats = screenshot_frame_stats(ready.stats, ready.buffer.len());
+                if let Some(screenshot) = stats.screenshot.as_mut() {
+                    screenshot.preparation_pause_response_us = ready.pause.waited_us;
+                    screenshot.preparation_pause_waited = ready.pause.waited;
+                    screenshot.preparation_pause_timed_out = ready.pause.timed_out;
+                }
+                let render_started = ready.render_started;
+                let render_wall_us = ready.timing.wall_us;
+                ahead_pixels = Some(ready.buffer);
                 (
                     ahead_pixels
                         .as_mut()
                         .expect("strict frame pixels retained through cached copy"),
                     stats,
                     render_started,
-                    process_cpu_started,
+                    process_cpu_time(),
                     render_wall_us,
-                    render_cpu_us,
+                    0,
                 )
             } else {
                 let pixels = &mut render_slots
@@ -2187,7 +2006,7 @@ fn run_window(
             && !screenshot_pipeline
                 .as_ref()
                 .expect("strict frame came from screenshot pipeline")
-                .recycle(rendered_pixels)
+                .recycle_buffer(rendered_pixels)
         {
             return Err("strict screenshot render FIFO rejected recycled buffer".into());
         }
@@ -2196,6 +2015,9 @@ fn run_window(
         let post = presenter
             .post_prepared()
             .map_err(|error| format!("post hidden RGB565 startup particle frame: {error}"))?;
+        if screenshot_pipeline.is_some() {
+            pending_screenshot_tick = Some(fifo_tick);
+        }
         let post_wall_us = post_started.elapsed().as_micros() as u64;
         let post_cpu_us = process_cpu_time()
             .saturating_sub(post_cpu_started)
@@ -2222,13 +2044,13 @@ fn run_window(
                 presentation_tick: fifo_tick,
                 fifo_ready_depth: screenshot_pipeline
                     .as_ref()
-                    .map_or(0, ScreenshotLabRenderAhead::ready_depth),
+                    .map_or(0, LiveScreenshotParade::ready_depth),
                 fifo_starvations: screenshot_pipeline
                     .as_ref()
-                    .map_or(0, ScreenshotLabRenderAhead::starvations),
+                    .map_or(0, LiveScreenshotParade::starvations),
                 fifo_sequence_failures: screenshot_pipeline
                     .as_ref()
-                    .map_or(0, ScreenshotLabRenderAhead::sequence_failures),
+                    .map_or(0, LiveScreenshotParade::sequence_failures),
                 preparation_pause_response_us: screenshot.preparation_pause_response_us,
                 preparation_pause_waited: screenshot.preparation_pause_waited,
                 preparation_pause_timed_out: screenshot.preparation_pause_timed_out,
@@ -2297,6 +2119,18 @@ fn run_window(
                 confirmation_sequence_failures = confirmation_sequence_failures.saturating_add(1);
             }
             latch_drop_count = receipt.drop_count;
+            if let Some(tick) = pending_screenshot_tick.take() {
+                screenshot_pipeline
+                    .as_mut()
+                    .expect("pending screenshot tick belongs to shared runtime")
+                    .confirm_presented(tick)
+                    .map_err(|failure| {
+                        format!(
+                            "shared screenshot final confirmation sequence failure expected_tick={} actual_tick={}",
+                            failure.expected_tick, failure.actual_tick
+                        )
+                    })?;
+            }
             if let Some(pending) = pending_evidence.take() {
                 let evidence = finish_frame_evidence(
                     pending,
@@ -2460,13 +2294,13 @@ fn run_window(
                     latch_drop_count,
                     screenshot_pipeline
                         .as_ref()
-                        .map_or(0, ScreenshotLabRenderAhead::ready_depth),
+                        .map_or(0, LiveScreenshotParade::ready_depth),
                     screenshot_pipeline
                         .as_ref()
-                        .map_or(0, ScreenshotLabRenderAhead::starvations),
+                        .map_or(0, LiveScreenshotParade::starvations),
                     screenshot_pipeline
                         .as_ref()
-                        .map_or(0, ScreenshotLabRenderAhead::sequence_failures),
+                        .map_or(0, LiveScreenshotParade::sequence_failures),
                     rss_samples_kib
                         .iter()
                         .copied()

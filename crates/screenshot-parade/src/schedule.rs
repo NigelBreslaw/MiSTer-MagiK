@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const WIDE_LAYER_TARGETS: [usize; 5] = [28, 21, 17, 14, 10];
@@ -202,8 +203,9 @@ pub struct ScreenshotParade {
     phase_max_us: u128,
     decode_successes: u64,
     decode_failures: u64,
-    scale_tx: Sender<ScaleJob>,
+    scale_tx: Option<Sender<ScaleJob>>,
     scale_rx: Receiver<ScaleResult>,
+    scale_worker: Option<JoinHandle<()>>,
     scale_worker_connected: bool,
     preparation_epoch: Arc<AtomicU32>,
     preparation_stage: Arc<AtomicU8>,
@@ -249,7 +251,7 @@ impl ScreenshotParade {
         let worker_preparation_stage = Arc::clone(&preparation_stage);
         let worker_start = config.worker_start.clone();
         let worker_preparation_slack = config.preparation_slack.clone();
-        std::thread::Builder::new()
+        let scale_worker = std::thread::Builder::new()
             .name("screenshot-parade-scale".to_owned())
             .spawn(move || {
                 if let Some(callback) = worker_start {
@@ -289,8 +291,9 @@ impl ScreenshotParade {
             phase_max_us: 0,
             decode_successes: 0,
             decode_failures: 0,
-            scale_tx,
+            scale_tx: Some(scale_tx),
             scale_rx,
+            scale_worker: Some(scale_worker),
             scale_worker_connected: true,
             preparation_epoch,
             preparation_stage,
@@ -845,6 +848,8 @@ impl ScreenshotParade {
         speed: usize,
     ) -> Result<(), String> {
         self.scale_tx
+            .as_ref()
+            .ok_or_else(|| "screenshot parade scale worker stopped".to_owned())?
             .send(ScaleJob {
                 tile_index,
                 image_index,
@@ -1153,6 +1158,10 @@ impl Drop for ScreenshotParade {
     fn drop(&mut self) {
         if let Some(slack) = self.preparation_slack.as_deref() {
             slack.cancel();
+        }
+        self.scale_tx.take();
+        if let Some(worker) = self.scale_worker.take() {
+            let _ = worker.join();
         }
     }
 }
