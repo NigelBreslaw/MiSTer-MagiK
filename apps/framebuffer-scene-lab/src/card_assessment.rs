@@ -161,6 +161,7 @@ pub struct ScreenshotFrameDetails {
     pub fifo_ready_depth: usize,
     pub fifo_starvations: u64,
     pub fifo_sequence_failures: u64,
+    pub preparation_pause_response_us: u64,
     pub card_adopt_us: u64,
     pub cards_adopted: usize,
     pub parade_advance_us: u64,

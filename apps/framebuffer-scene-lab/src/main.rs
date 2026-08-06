@@ -248,6 +248,11 @@ fn write_measurement_evidence(
                 .iter()
                 .filter(|frame| frame.preparation_overlapped_render)
                 .count(),
+            "preparation_pause_response_timing": timing_summary_json(
+                screenshot_frames
+                    .iter()
+                    .map(|frame| frame.preparation_pause_response_us)
+            ),
             "preparation_activity_transitions": screenshot_frames
                 .iter()
                 .map(|frame| u64::from(frame.preparation_activity_transitions))
@@ -1036,6 +1041,7 @@ fn screenshot_frame_stats(
         cabinet_stages: None,
         intro_stages: None,
         screenshot: Some(mister_magik_framebuffer_scene_lab::ScreenshotFrameStats {
+            preparation_pause_response_us: 0,
             card_adopt_us: stats.card_adopt_us.min(u128::from(u64::MAX)) as u64,
             cards_adopted: stats.cards_adopted,
             parade_advance_us: stats.parade_advance_us.min(u128::from(u64::MAX)) as u64,
@@ -1689,8 +1695,11 @@ fn run_screenshot_lab_render_worker(
         let render_started = std::time::Instant::now();
         let process_cpu_started = process_cpu_time();
         let thread_cpu_started = scene_lab_thread_cpu_us();
-        preparation_slack.set_render_active(true);
-        let stats = match renderer.render_buffer(
+        let preparation_pause_response_us = preparation_slack
+            .begin_render()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        let mut stats = match renderer.render_buffer(
             &mut pixels,
             (tick % 3) as u8,
             elapsed,
@@ -1699,12 +1708,15 @@ fn run_screenshot_lab_render_worker(
         ) {
             Ok(stats) => stats,
             Err(error) => {
-                preparation_slack.set_render_active(false);
+                preparation_slack.finish_render();
                 eprintln!("screenshot scene-lab render worker failed: {error}");
                 break;
             }
         };
-        preparation_slack.set_render_active(false);
+        preparation_slack.finish_render();
+        if let Some(screenshot) = stats.screenshot.as_mut() {
+            screenshot.preparation_pause_response_us = preparation_pause_response_us;
+        }
         let render_wall_us = render_started.elapsed().as_micros() as u64;
         let render_cpu_us = scene_lab_elapsed_thread_cpu_us(thread_cpu_started);
         let frame = ScreenshotLabRenderFrame {
@@ -2205,6 +2217,7 @@ fn run_window(
                 fifo_sequence_failures: screenshot_pipeline
                     .as_ref()
                     .map_or(0, ScreenshotLabRenderAhead::sequence_failures),
+                preparation_pause_response_us: screenshot.preparation_pause_response_us,
                 card_adopt_us: screenshot.card_adopt_us,
                 cards_adopted: screenshot.cards_adopted,
                 parade_advance_us: screenshot.parade_advance_us,

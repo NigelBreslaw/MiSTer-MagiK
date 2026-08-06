@@ -378,6 +378,7 @@ pub struct FrameStats {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScreenshotFrameStats {
+    pub preparation_pause_response_us: u64,
     pub card_adopt_us: u64,
     pub cards_adopted: usize,
     pub parade_advance_us: u64,

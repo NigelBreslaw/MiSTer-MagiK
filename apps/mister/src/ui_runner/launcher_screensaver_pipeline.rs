@@ -543,7 +543,7 @@ fn run_render_ahead_worker(
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
         if let Some(slack) = preparation_slack {
-            slack.set_render_active(true);
+            slack.begin_render();
         }
         let trace = renderer.render_at_presentation_tick(
             &mut pixels,
@@ -553,7 +553,7 @@ fn run_render_ahead_worker(
             Duration::from_micros(elapsed_us),
         );
         if let Some(slack) = preparation_slack {
-            slack.set_render_active(false);
+            slack.finish_render();
         }
         let frame = RenderedScreensaverFrame {
             pixels,
