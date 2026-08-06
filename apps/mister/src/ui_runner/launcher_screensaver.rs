@@ -840,6 +840,9 @@ impl LauncherScreensaver {
                         startup: ScreenshotParadeStartup::Streaming,
                         replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                         worker_start: Some(worker_start),
+                        preparation_slack: Some(Arc::new(
+                            mister_magik_screenshot_parade::PreparationSlack::new(),
+                        )),
                     },
                 ) {
                     Ok(parade) => self.parade = Some(parade),
@@ -887,6 +890,14 @@ impl LauncherScreensaver {
             .is_some_and(ScreenshotParade::has_pending_work)
     }
 
+    pub fn preparation_slack(
+        &self,
+    ) -> Option<Arc<mister_magik_screenshot_parade::PreparationSlack>> {
+        self.parade
+            .as_ref()
+            .and_then(ScreenshotParade::preparation_slack)
+    }
+
     pub fn requires_direct_hidden(&self) -> bool {
         self.particle.is_some()
     }
@@ -920,6 +931,7 @@ impl LauncherScreensaver {
                 startup: ScreenshotParadeStartup::Streaming,
                 replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
+                preparation_slack: None,
             },
         )?;
         let now = Instant::now();
@@ -4502,6 +4514,7 @@ mod tests {
                     startup: ScreenshotParadeStartup::Prepared,
                     replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                     worker_start: None,
+                    preparation_slack: None,
                 },
             )
             .unwrap();

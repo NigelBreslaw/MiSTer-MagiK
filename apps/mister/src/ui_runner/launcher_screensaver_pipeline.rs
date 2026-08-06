@@ -4,8 +4,8 @@
 use super::launcher_screensaver::{LauncherScreensaver, ScreensaverFrameTrace};
 use super::*;
 use mister_magik_screenshot_parade::{
-    STRICT_READY_CAPACITY, StrictFrameConsumer, StrictFramePoll, StrictFrameProducer,
-    StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
+    PreparationSlack, STRICT_READY_CAPACITY, StrictFrameConsumer, StrictFramePoll,
+    StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -93,6 +93,7 @@ pub(crate) enum DirectRenderAheadPoll {
 
 pub(crate) struct ScreensaverRenderAhead {
     reservoir: StrictFrameConsumer<Vec<Rgb565Pixel>, RenderedScreensaverFrame>,
+    preparation_slack: Option<Arc<PreparationSlack>>,
     period_us: Arc<AtomicU64>,
     prefilling: bool,
     stopped: Arc<AtomicBool>,
@@ -106,6 +107,8 @@ impl ScreensaverRenderAhead {
         height: usize,
         period_us: u64,
     ) -> Self {
+        let preparation_slack = renderer.preparation_slack();
+        let worker_preparation_slack = preparation_slack.clone();
         let buffers = std::array::from_fn(|_| allocate_render_ahead_buffer(width, height));
         let (producer, reservoir) = strict_render_reservoir(buffers, 1);
         let period_us = Arc::new(AtomicU64::new(period_us.max(1)));
@@ -119,11 +122,19 @@ impl ScreensaverRenderAhead {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
-                run_render_ahead_worker(renderer, width, height, producer, &worker_period_us);
+                run_render_ahead_worker(
+                    renderer,
+                    width,
+                    height,
+                    producer,
+                    &worker_period_us,
+                    worker_preparation_slack.as_deref(),
+                );
             })
             .expect("spawn screensaver render-ahead worker");
         Self {
             reservoir,
+            preparation_slack,
             period_us,
             prefilling: true,
             stopped,
@@ -141,8 +152,12 @@ impl ScreensaverRenderAhead {
                 return RenderAheadPoll::Empty;
             }
             self.prefilling = false;
+            if let Some(slack) = self.preparation_slack.as_deref() {
+                slack.set_ready_depth(self.reservoir.ready_depth());
+                slack.begin_live();
+            }
         }
-        match self.reservoir.try_next() {
+        let poll = match self.reservoir.try_next() {
             StrictFramePoll::Frame(frame) => RenderAheadPoll::Frame(frame.payload),
             StrictFramePoll::Empty => {
                 self.reservoir.record_starvation();
@@ -157,7 +172,11 @@ impl ScreensaverRenderAhead {
                 actual_tick: frame.tick,
                 frame: frame.payload,
             },
+        };
+        if let Some(slack) = self.preparation_slack.as_deref() {
+            slack.set_ready_depth(self.reservoir.ready_depth());
         }
+        poll
     }
 
     pub(crate) fn recycle(&self, pixels: Vec<Rgb565Pixel>) -> bool {
@@ -507,6 +526,7 @@ fn run_render_ahead_worker(
     height: usize,
     producer: StrictFrameProducer<Vec<Rgb565Pixel>, RenderedScreensaverFrame>,
     period_us: &AtomicU64,
+    preparation_slack: Option<&PreparationSlack>,
 ) {
     let mut sequence = 0u64;
     let mut elapsed_us = 0u64;
@@ -522,6 +542,9 @@ fn run_render_ahead_worker(
         elapsed_us = elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1));
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
+        if let Some(slack) = preparation_slack {
+            slack.set_render_active(true);
+        }
         let trace = renderer.render_at_presentation_tick(
             &mut pixels,
             width,
@@ -529,6 +552,9 @@ fn run_render_ahead_worker(
             motion_tick,
             Duration::from_micros(elapsed_us),
         );
+        if let Some(slack) = preparation_slack {
+            slack.set_render_active(false);
+        }
         let frame = RenderedScreensaverFrame {
             pixels,
             sequence,
@@ -550,6 +576,9 @@ fn run_render_ahead_worker(
             payload: frame,
         }) {
             break;
+        }
+        if let Some(slack) = preparation_slack {
+            slack.set_ready_depth(producer.ready_depth());
         }
     }
 }

@@ -47,6 +47,10 @@ pub struct StrictFrameProducer<B, F> {
 }
 
 impl<B, F> StrictFrameProducer<B, F> {
+    pub fn ready_depth(&self) -> usize {
+        self.ready_depth.load(Ordering::Acquire)
+    }
+
     pub fn take_free_timeout(&self, timeout: Duration) -> StrictFreeBufferPoll<B> {
         match self.free_rx.recv_timeout(timeout) {
             Ok(buffer) => StrictFreeBufferPoll::Buffer(buffer),

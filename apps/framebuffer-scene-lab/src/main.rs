@@ -28,7 +28,7 @@ use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
 };
 use mister_magik_screenshot_parade::{
-    STRICT_READY_CAPACITY, ScreenshotParade, ScreenshotParadeConfig,
+    PreparationSlack, STRICT_READY_CAPACITY, ScreenshotParade, ScreenshotParadeConfig,
     ScreenshotParadeReplacementMode, ScreenshotParadeStartup, ScreenshotParadeStats,
     ScreenshotPhaseGeneration, ScreenshotSamplingProfile, StrictFrameConsumer, StrictFramePoll,
     StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
@@ -700,7 +700,12 @@ fn screenshot_scene(
             phase_generation,
             startup,
             replacement_mode,
-            worker_start: None,
+            worker_start: Some(std::sync::Arc::new(|| {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverScaler,
+                );
+            })),
+            preparation_slack: Some(std::sync::Arc::new(PreparationSlack::new())),
         },
     )
 }
@@ -926,6 +931,13 @@ impl LabScene {
             Self::Navigation(_) => EffectKind::NavigationTransition,
             Self::CardFlip(_) => EffectKind::CardFlip,
             Self::Screenshot(_) => EffectKind::ScreenshotScreensaver,
+        }
+    }
+
+    fn preparation_slack(&self) -> Option<std::sync::Arc<PreparationSlack>> {
+        match self {
+            Self::Screenshot(renderer) => renderer.preparation_slack(),
+            _ => None,
         }
     }
 
@@ -1533,6 +1545,7 @@ struct ScreenshotLabRenderFrame {
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 struct ScreenshotLabRenderAhead {
     reservoir: StrictFrameConsumer<Vec<Rgb565Pixel>, ScreenshotLabRenderFrame>,
+    preparation_slack: std::sync::Arc<PreparationSlack>,
     stopped: std::sync::Arc<std::sync::atomic::AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
@@ -1540,6 +1553,10 @@ struct ScreenshotLabRenderAhead {
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 impl ScreenshotLabRenderAhead {
     fn start(mut renderer: LabScene, width: usize, height: usize) -> Self {
+        let preparation_slack = renderer
+            .preparation_slack()
+            .expect("screenshot scene owns a preparation slack gate");
+        let worker_preparation_slack = std::sync::Arc::clone(&preparation_slack);
         let buffers = std::array::from_fn(|_| vec![Rgb565Pixel(0); width * height]);
         let (producer, reservoir) = strict_render_reservoir(buffers, 0);
         let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1551,11 +1568,16 @@ impl ScreenshotLabRenderAhead {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
                 );
-                run_screenshot_lab_render_worker(&mut renderer, producer);
+                run_screenshot_lab_render_worker(
+                    &mut renderer,
+                    producer,
+                    &worker_preparation_slack,
+                );
             })
             .expect("spawn screenshot scene-lab render worker");
         Self {
             reservoir,
+            preparation_slack,
             stopped,
             join: Some(join),
         }
@@ -1575,11 +1597,17 @@ impl ScreenshotLabRenderAhead {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
+        self.preparation_slack
+            .set_ready_depth(self.reservoir.ready_depth());
         Ok(())
     }
 
+    fn begin_live(&self) {
+        self.preparation_slack.begin_live();
+    }
+
     fn try_next(&mut self) -> StrictFramePoll<ScreenshotLabRenderFrame> {
-        match self.reservoir.try_next() {
+        let poll = match self.reservoir.try_next() {
             StrictFramePoll::Frame(frame) => StrictFramePoll::Frame(StrictReadyFrame {
                 tick: frame.tick,
                 payload: frame.payload,
@@ -1599,7 +1627,10 @@ impl ScreenshotLabRenderAhead {
                     payload: frame.payload,
                 },
             },
-        }
+        };
+        self.preparation_slack
+            .set_ready_depth(self.reservoir.ready_depth());
+        poll
     }
 
     fn recycle(&self, pixels: Vec<Rgb565Pixel>) -> bool {
@@ -1645,6 +1676,7 @@ impl Drop for ScreenshotLabCompletionGuard {
 fn run_screenshot_lab_render_worker(
     renderer: &mut LabScene,
     producer: StrictFrameProducer<Vec<Rgb565Pixel>, ScreenshotLabRenderFrame>,
+    preparation_slack: &PreparationSlack,
 ) {
     let mut tick = 0_u64;
     while !producer.is_cancelled() {
@@ -1657,6 +1689,7 @@ fn run_screenshot_lab_render_worker(
         let render_started = std::time::Instant::now();
         let process_cpu_started = process_cpu_time();
         let thread_cpu_started = scene_lab_thread_cpu_us();
+        preparation_slack.set_render_active(true);
         let stats = match renderer.render_buffer(
             &mut pixels,
             (tick % 3) as u8,
@@ -1666,10 +1699,12 @@ fn run_screenshot_lab_render_worker(
         ) {
             Ok(stats) => stats,
             Err(error) => {
+                preparation_slack.set_render_active(false);
                 eprintln!("screenshot scene-lab render worker failed: {error}");
                 break;
             }
         };
+        preparation_slack.set_render_active(false);
         let render_wall_us = render_started.elapsed().as_micros() as u64;
         let render_cpu_us = scene_lab_elapsed_thread_cpu_us(thread_cpu_started);
         let frame = ScreenshotLabRenderFrame {
@@ -1690,6 +1725,7 @@ fn run_screenshot_lab_render_worker(
         }) {
             break;
         }
+        preparation_slack.set_ready_depth(producer.ready_depth());
         tick = tick.saturating_add(1);
     }
 }
@@ -1915,6 +1951,9 @@ fn run_window(
                 if warmup_unit_flip_streak >= 3 {
                     let ready_at = *warmup_started.get_or_insert_with(Instant::now);
                     if ready_at.elapsed() >= bounded.warmup {
+                        if let Some(pipeline) = screenshot_pipeline.as_ref() {
+                            pipeline.begin_live();
+                        }
                         // Starting SIGPROF briefly stalls presentation while the profiler
                         // installs its handler. Keep that work outside every measurement
                         // bracket so FPGA repeats describe the sampled scene, not profiler

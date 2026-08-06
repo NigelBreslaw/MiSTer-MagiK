@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::slack::PreparationSlack;
 use mister_magik_catalog::preview_worker::PreviewPixels;
 use mister_magik_framebuffer_scenes::Rgb565Pixel;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -297,7 +298,15 @@ impl PreparedScreenshotCard {
         profile: ScreenshotSamplingProfile,
         phase_generation: ScreenshotPhaseGeneration,
     ) -> Self {
-        Self::prepare_timed(source, speed, screen_height, profile, phase_generation).0
+        Self::prepare_timed(
+            source,
+            speed,
+            screen_height,
+            profile,
+            phase_generation,
+            None,
+        )
+        .0
     }
 
     pub(crate) fn prepare_timed(
@@ -306,6 +315,7 @@ impl PreparedScreenshotCard {
         screen_height: usize,
         profile: ScreenshotSamplingProfile,
         phase_generation: ScreenshotPhaseGeneration,
+        preparation_slack: Option<&PreparationSlack>,
     ) -> (Self, u128) {
         if source.width == 0 || source.height == 0 {
             let image = ScreenshotImage::empty();
@@ -333,7 +343,8 @@ impl PreparedScreenshotCard {
             if matches!(kernel, LinearPhaseKernel::Neon) {
                 validate_neon_phase_kernel();
             }
-            let mut styled = scale_lanczos3_linear_tinted(source, width, height, tint);
+            let mut styled =
+                scale_lanczos3_linear_tinted(source, width, height, tint, preparation_slack);
             apply_depth_cues_linear(&mut styled, speed);
             let coverage = prepare_rounded_coverage(width, height);
             let corner_insets = coverage_corner_insets(&coverage, width, height);
@@ -347,8 +358,12 @@ impl PreparedScreenshotCard {
                 &premultiplied,
                 0,
                 kernel,
+                preparation_slack,
             );
             let shifted = std::array::from_fn(|index| {
+                if let Some(slack) = preparation_slack {
+                    slack.checkpoint();
+                }
                 prepare_linear_phase(
                     &styled,
                     &coverage,
@@ -356,6 +371,7 @@ impl PreparedScreenshotCard {
                     &premultiplied,
                     index + 1,
                     kernel,
+                    preparation_slack,
                 )
             });
             let phase_us = phase_started.elapsed().as_micros();
@@ -740,6 +756,7 @@ fn scale_lanczos3_linear_tinted(
     out_width: usize,
     out_height: usize,
     tint: u8,
+    preparation_slack: Option<&PreparationSlack>,
 ) -> LinearImage {
     if out_width == 0 || out_height == 0 || image.width == 0 || image.height == 0 {
         return LinearImage {
@@ -754,6 +771,7 @@ fn scale_lanczos3_linear_tinted(
     let srgb_to_linear = srgb_to_linear_table();
     let mut linear_source = vec![LinearRgb::default(); image.width * image.height];
     for y in 0..image.height {
+        preparation_checkpoint_row(preparation_slack, y);
         let source_row = y * image.stride;
         let linear_row = y * image.width;
         for x in 0..image.width {
@@ -763,6 +781,7 @@ fn scale_lanczos3_linear_tinted(
     }
     let mut horizontal = vec![LinearRgb::default(); out_width * image.height];
     for source_y in 0..image.height {
+        preparation_checkpoint_row(preparation_slack, source_y);
         let source_row = source_y * image.width;
         let target_row = source_y * out_width;
         for (target_x, filter) in x_filters.iter().enumerate() {
@@ -785,6 +804,7 @@ fn scale_lanczos3_linear_tinted(
     let tint = u64::from(srgb8_to_linear16(tint));
     let mut pixels = vec![LinearRgb::default(); out_width * out_height];
     for (target_y, filter) in y_filters.iter().enumerate() {
+        preparation_checkpoint_row(preparation_slack, target_y);
         for target_x in 0..out_width {
             let mut channels = [0_i64; 3];
             for (tap, weight) in filter.weights.iter().enumerate() {
@@ -810,6 +830,15 @@ fn scale_lanczos3_linear_tinted(
         width: out_width,
         height: out_height,
         stride: out_width,
+    }
+}
+
+#[inline]
+fn preparation_checkpoint_row(slack: Option<&PreparationSlack>, row: usize) {
+    if row % 8 == 0
+        && let Some(slack) = slack
+    {
+        slack.checkpoint();
     }
 }
 
@@ -1016,6 +1045,7 @@ fn prepare_linear_phase(
     premultiplied_source: &[[u16; 4]],
     phase: usize,
     kernel: LinearPhaseKernel,
+    preparation_slack: Option<&PreparationSlack>,
 ) -> PreparedLinearPhase {
     let width = image.width + usize::from(phase != 0);
     let mut pixels = vec![Rgb565Pixel(0); width * image.height];
@@ -1023,6 +1053,7 @@ fn prepare_linear_phase(
     let linear_to_srgb = linear_to_srgb_table();
     if phase == 0 {
         for y in 0..image.height {
+            preparation_checkpoint_row(preparation_slack, y);
             for x in 0..image.width {
                 let index = y * image.width + x;
                 coverage[index] = source_coverage[index];
@@ -1045,9 +1076,11 @@ fn prepare_linear_phase(
             kernel,
             &mut pixels,
             &mut coverage,
+            preparation_slack,
         );
         if !prepared_with_neon {
             for y in 0..image.height {
+                preparation_checkpoint_row(preparation_slack, y);
                 for out_x in 0..width {
                     let samples = std::array::from_fn(|tap| {
                         let source_x = out_x as isize + tap as isize - 3;
@@ -1313,26 +1346,37 @@ fn prepare_linear_phase_neon_if_selected(
     kernel: LinearPhaseKernel,
     pixels: &mut [Rgb565Pixel],
     coverage: &mut [u8],
+    preparation_slack: Option<&PreparationSlack>,
 ) -> bool {
     if !matches!(kernel, LinearPhaseKernel::Neon) {
         return false;
     }
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
-        // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Both slices describe
-        // the complete source and final destination planes passed to the kernel.
-        unsafe {
-            prepare_linear_phase_neon(
-                request.source,
-                request.source_width,
-                request.height,
-                request.output_width,
-                request.weights,
-                request.source_opaque_spans,
-                request.linear_to_srgb,
-                pixels,
-                coverage,
-            );
+        for row_start in (0..request.height).step_by(8) {
+            if let Some(slack) = preparation_slack {
+                slack.checkpoint();
+            }
+            let rows = (request.height - row_start).min(8);
+            let source_start = row_start * request.source_width;
+            let source_end = source_start + rows * request.source_width;
+            let output_start = row_start * request.output_width;
+            let output_end = output_start + rows * request.output_width;
+            // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Each slice is a
+            // complete, disjoint eight-row-or-smaller portion of the planes.
+            unsafe {
+                prepare_linear_phase_neon(
+                    &request.source[source_start..source_end],
+                    request.source_width,
+                    rows,
+                    request.output_width,
+                    request.weights,
+                    &request.source_opaque_spans[row_start..row_start + rows],
+                    request.linear_to_srgb,
+                    &mut pixels[output_start..output_end],
+                    &mut coverage[output_start..output_end],
+                );
+            }
         }
         return true;
     }
@@ -1357,6 +1401,7 @@ fn prepare_linear_phase_neon_if_selected(
             linear_to_srgb,
             pixels,
             coverage,
+            preparation_slack,
         );
         false
     }
@@ -2284,7 +2329,7 @@ mod tests {
     #[test]
     fn predecoded_linear_scaling_is_exact() {
         let source = test_image(23, 17);
-        let actual = scale_lanczos3_linear_tinted(&source, 11, 9, 198);
+        let actual = scale_lanczos3_linear_tinted(&source, 11, 9, 198, None);
         let expected = scale_linear_repeated_decode_reference(&source, 11, 9, 198);
         assert_eq!(actual.pixels, expected.pixels);
     }

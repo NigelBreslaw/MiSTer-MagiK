@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::raster::{PreparedScreenshotCard, depth_style};
+use crate::slack::PreparationSlack;
 use crate::{
     PARADE_SUBPIXEL_ONE, ScreenshotImage, ScreenshotPhaseGeneration, ScreenshotSamplingProfile,
 };
@@ -54,6 +55,7 @@ pub struct ScreenshotParadeConfig {
     pub startup: ScreenshotParadeStartup,
     pub replacement_mode: ScreenshotParadeReplacementMode,
     pub worker_start: Option<WorkerStartCallback>,
+    pub preparation_slack: Option<Arc<PreparationSlack>>,
 }
 
 impl std::fmt::Debug for ScreenshotParadeConfig {
@@ -69,6 +71,10 @@ impl std::fmt::Debug for ScreenshotParadeConfig {
             .field(
                 "worker_start",
                 &self.worker_start.as_ref().map(|_| "callback"),
+            )
+            .field(
+                "preparation_slack",
+                &self.preparation_slack.as_ref().map(|_| "checkpoint"),
             )
             .finish()
     }
@@ -210,6 +216,7 @@ pub struct ScreenshotParade {
     scale_worker_connected: bool,
     preparation_epoch: Arc<AtomicU32>,
     preparation_stage: Arc<AtomicU8>,
+    preparation_slack: Option<Arc<PreparationSlack>>,
     scale_queue_depth: usize,
     scale_queue_max: usize,
     layer_targets: [usize; SPEED_COUNT],
@@ -220,6 +227,10 @@ pub struct ScreenshotParade {
 }
 
 impl ScreenshotParade {
+    pub fn preparation_slack(&self) -> Option<Arc<PreparationSlack>> {
+        self.preparation_slack.clone()
+    }
+
     pub fn new(
         archive: ResidentPreviewArchive,
         config: ScreenshotParadeConfig,
@@ -246,6 +257,7 @@ impl ScreenshotParade {
         let worker_preparation_epoch = Arc::clone(&preparation_epoch);
         let worker_preparation_stage = Arc::clone(&preparation_stage);
         let worker_start = config.worker_start.clone();
+        let worker_preparation_slack = config.preparation_slack.clone();
         std::thread::Builder::new()
             .name("screenshot-parade-scale".to_owned())
             .spawn(move || {
@@ -258,6 +270,7 @@ impl ScreenshotParade {
                     result_tx,
                     worker_preparation_epoch,
                     worker_preparation_stage,
+                    worker_preparation_slack,
                 );
             })
             .map_err(|error| format!("spawn screenshot parade scale worker: {error}"))?;
@@ -292,6 +305,7 @@ impl ScreenshotParade {
             scale_worker_connected: true,
             preparation_epoch,
             preparation_stage,
+            preparation_slack: config.preparation_slack,
             scale_queue_depth: 0,
             scale_queue_max: 0,
             layer_targets,
@@ -413,6 +427,10 @@ impl ScreenshotParade {
         let height = self.geometry.height();
         let preparation_epoch_start = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_start = self.preparation_stage.load(Ordering::Relaxed);
+        let preparation_active_start = self
+            .preparation_slack
+            .as_deref()
+            .is_some_and(PreparationSlack::preparation_active);
 
         let background_start = Instant::now();
         render_background(pixels, width, height, motion_ticks_fp);
@@ -480,6 +498,10 @@ impl ScreenshotParade {
         }
         let preparation_epoch_end = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_end = self.preparation_stage.load(Ordering::Relaxed);
+        let preparation_active_end = self
+            .preparation_slack
+            .as_deref()
+            .is_some_and(PreparationSlack::preparation_active);
         self.stats = ScreenshotParadeStats {
             card_adopt_us,
             cards_adopted,
@@ -493,8 +515,11 @@ impl ScreenshotParade {
             exact_base_background_hits,
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
-            preparation_overlapped_render: preparation_epoch_start & 1 != 0
-                || preparation_epoch_end != preparation_epoch_start,
+            preparation_overlapped_render: if self.preparation_slack.is_some() {
+                preparation_active_start || preparation_active_end
+            } else {
+                preparation_epoch_start & 1 != 0 || preparation_epoch_end != preparation_epoch_start
+            },
             preparation_activity_transitions: preparation_epoch_end
                 .wrapping_sub(preparation_epoch_start),
             preparation_stage_start,
@@ -1087,8 +1112,12 @@ fn run_scale_worker(
     results: Sender<ScaleResult>,
     preparation_epoch: Arc<AtomicU32>,
     preparation_stage: Arc<AtomicU8>,
+    preparation_slack: Option<Arc<PreparationSlack>>,
 ) {
     while let Ok(job) = jobs.recv() {
+        if let Some(slack) = preparation_slack.as_deref() {
+            slack.checkpoint();
+        }
         preparation_stage.store(1, Ordering::Relaxed);
         preparation_epoch.fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
@@ -1101,6 +1130,7 @@ fn run_scale_worker(
                 job.screen_height,
                 job.sampling_profile,
                 job.phase_generation,
+                preparation_slack.as_deref(),
             );
             PreparedCard {
                 image_index: job.image_index,
@@ -1109,6 +1139,9 @@ fn run_scale_worker(
                 phase_us,
             }
         });
+        if let Some(slack) = preparation_slack.as_deref() {
+            slack.finish_preparation();
+        }
         preparation_stage.store(0, Ordering::Relaxed);
         preparation_epoch.fetch_add(1, Ordering::Relaxed);
         if results
@@ -1120,6 +1153,14 @@ fn run_scale_worker(
             .is_err()
         {
             break;
+        }
+    }
+}
+
+impl Drop for ScreenshotParade {
+    fn drop(&mut self) {
+        if let Some(slack) = self.preparation_slack.as_deref() {
+            slack.cancel();
         }
     }
 }
@@ -1399,6 +1440,7 @@ mod tests {
                 startup: ScreenshotParadeStartup::Prepared,
                 replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
+                preparation_slack: None,
             },
         )
         .expect("prepare screenshot parade")
@@ -1475,6 +1517,7 @@ mod tests {
                 startup: ScreenshotParadeStartup::Streaming,
                 replacement_mode: ScreenshotParadeReplacementMode::Prepare,
                 worker_start: None,
+                preparation_slack: None,
             },
         )
         .unwrap();
@@ -1502,6 +1545,7 @@ mod tests {
                 startup: ScreenshotParadeStartup::Prepared,
                 replacement_mode: ScreenshotParadeReplacementMode::Recycle,
                 worker_start: None,
+                preparation_slack: None,
             },
         )
         .unwrap();

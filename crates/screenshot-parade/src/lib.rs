@@ -6,6 +6,7 @@
 mod raster;
 mod reservoir;
 mod schedule;
+mod slack;
 
 pub use raster::{
     PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage, ScreenshotPhaseGeneration,
@@ -19,3 +20,4 @@ pub use schedule::{
     ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeReplacementMode,
     ScreenshotParadeStartup, ScreenshotParadeStats, WorkerStartCallback,
 };
+pub use slack::PreparationSlack;
