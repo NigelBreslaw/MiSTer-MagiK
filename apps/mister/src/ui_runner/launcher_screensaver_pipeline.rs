@@ -116,13 +116,13 @@ impl ScreensaverRenderAhead {
         }
         match self.runtime.poll() {
             LiveScreenshotPoll::Frame(frame) => {
-                let active_cards = frame.stats.active_cards;
-                let trace = shared_parade_trace(frame.stats);
+                let active_cards = frame.telemetry.stats.active_cards;
+                let trace = shared_parade_trace(frame.telemetry.stats);
                 RenderAheadPoll::Frame(RenderedScreensaverFrame {
                     pixels: frame.buffer.into_pixels(),
                     sequence: frame.tick,
                     completed_at: Instant::now(),
-                    render_wall_us: frame.timing.wall_us,
+                    render_wall_us: frame.telemetry.timing.wall_us,
                     render_cpu_us: 0,
                     active_cards,
                     archive_loading: false,

@@ -11,7 +11,7 @@ mod slack;
 
 pub use live::{
     LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, ReadyScreenshotFrame,
-    ScreenshotBuffer, ScreenshotRenderTiming, ScreenshotSequenceFailure,
+    ScreenshotBuffer, ScreenshotFrameTelemetry, ScreenshotRenderTiming, ScreenshotSequenceFailure,
 };
 pub use raster::{PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage};
 pub use reservoir::{

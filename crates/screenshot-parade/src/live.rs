@@ -51,6 +51,15 @@ pub struct ReadyScreenshotFrame<B> {
     pub tick: u64,
     pub buffer: B,
     pub render_started: Instant,
+    pub telemetry: ScreenshotFrameTelemetry,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ScreenshotFrameTelemetry {
+    pub tick: u64,
+    pub fifo_ready_depth: usize,
+    pub fifo_starvations: u64,
+    pub fifo_sequence_failures: u64,
     pub timing: ScreenshotRenderTiming,
     pub pause: RenderPauseReceipt,
     pub stats: ScreenshotParadeStats,
@@ -192,9 +201,15 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
                     tick: frame.tick,
                     buffer: frame.payload.buffer,
                     render_started: frame.payload.render_started,
-                    timing: frame.payload.timing,
-                    pause: frame.payload.pause,
-                    stats: frame.payload.stats,
+                    telemetry: ScreenshotFrameTelemetry {
+                        tick: frame.tick,
+                        fifo_ready_depth: self.reservoir.ready_depth(),
+                        fifo_starvations: self.reservoir.starvations(),
+                        fifo_sequence_failures: self.reservoir.sequence_failures(),
+                        timing: frame.payload.timing,
+                        pause: frame.payload.pause,
+                        stats: frame.payload.stats,
+                    },
                 })
             }
             StrictFramePoll::Frame(frame) => {

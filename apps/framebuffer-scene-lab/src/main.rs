@@ -1656,6 +1656,7 @@ fn run_window(
     };
     let mut last_render_error = None::<String>;
     let mut screenshot_measurement_ready = false;
+    let mut screenshot_frame_telemetry = None;
     let full_damage = DirtyRectList::from_one(DirtyRect {
         x0: 0,
         y0: 0,
@@ -1904,14 +1905,15 @@ fn run_window(
                 screenshot_measurement_ready = true;
                 last_state_label = "ready".to_owned();
                 last_render_error = None;
-                let mut stats = screenshot_frame_stats(ready.stats, ready.buffer.len());
+                screenshot_frame_telemetry = Some(ready.telemetry);
+                let mut stats = screenshot_frame_stats(ready.telemetry.stats, ready.buffer.len());
                 if let Some(screenshot) = stats.screenshot.as_mut() {
-                    screenshot.preparation_pause_response_us = ready.pause.waited_us;
-                    screenshot.preparation_pause_waited = ready.pause.waited;
-                    screenshot.preparation_pause_timed_out = ready.pause.timed_out;
+                    screenshot.preparation_pause_response_us = ready.telemetry.pause.waited_us;
+                    screenshot.preparation_pause_waited = ready.telemetry.pause.waited;
+                    screenshot.preparation_pause_timed_out = ready.telemetry.pause.timed_out;
                 }
                 let render_started = ready.render_started;
-                let render_wall_us = ready.timing.wall_us;
+                let render_wall_us = ready.telemetry.timing.wall_us;
                 ahead_pixels = Some(ready.buffer);
                 (
                     ahead_pixels
@@ -2042,15 +2044,12 @@ fn run_window(
             evidence.visible_count = Some(stats.visible);
             evidence.screenshot = stats.screenshot.map(|screenshot| ScreenshotFrameDetails {
                 presentation_tick: fifo_tick,
-                fifo_ready_depth: screenshot_pipeline
-                    .as_ref()
-                    .map_or(0, LiveScreenshotParade::ready_depth),
-                fifo_starvations: screenshot_pipeline
-                    .as_ref()
-                    .map_or(0, LiveScreenshotParade::starvations),
-                fifo_sequence_failures: screenshot_pipeline
-                    .as_ref()
-                    .map_or(0, LiveScreenshotParade::sequence_failures),
+                fifo_ready_depth: screenshot_frame_telemetry
+                    .map_or(0, |telemetry| telemetry.fifo_ready_depth),
+                fifo_starvations: screenshot_frame_telemetry
+                    .map_or(0, |telemetry| telemetry.fifo_starvations),
+                fifo_sequence_failures: screenshot_frame_telemetry
+                    .map_or(0, |telemetry| telemetry.fifo_sequence_failures),
                 preparation_pause_response_us: screenshot.preparation_pause_response_us,
                 preparation_pause_waited: screenshot.preparation_pause_waited,
                 preparation_pause_timed_out: screenshot.preparation_pause_timed_out,
