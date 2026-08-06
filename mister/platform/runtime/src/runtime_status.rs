@@ -283,6 +283,7 @@ pub struct FrameBudgetRecentFrame {
     pub main_present_completion_poll_count: u16,
     pub main_present_completion_poll_wall_us: u64,
     pub main_present_completion_poll_cpu_us: u64,
+    pub main_present_hidden_copy_us: u64,
     pub main_present_flip_count: u16,
     pub main_present_drop_count: u16,
     pub status_write_due: bool,

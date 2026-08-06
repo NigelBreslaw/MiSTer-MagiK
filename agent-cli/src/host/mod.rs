@@ -9572,7 +9572,6 @@ fn authoritative_presentation_window(
             snapshot.captured_monotonic_us >= first_completion_us
                 && snapshot.captured_monotonic_us <= last_completion_us
                 && snapshot.magik_ownership
-                && !snapshot.pending
                 && snapshot.owned_vblank_count
                     == snapshot
                         .presented_vblank_count
@@ -9590,9 +9589,20 @@ fn authoritative_presentation_window(
         .checked_sub(start.captured_monotonic_us)
         .filter(|elapsed| *elapsed > 0)
         .ok_or_else(|| format!("FPGA cadence run {run} has insufficient snapshot separation"))?;
+    // The counters describe completed physical refreshes even when a new post is
+    // pending. Normalize only the endpoint protocol bit for the cumulative-window
+    // validator and retain the observed pending state in the evidence below.
+    let settled_start = HostPresentationTelemetrySnapshot {
+        pending: false,
+        ..start
+    };
+    let settled_end = HostPresentationTelemetrySnapshot {
+        pending: false,
+        ..end
+    };
     let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
-        start,
-        end,
+        settled_start,
+        settled_end,
         elapsed_us,
         refresh_period_us,
     )
@@ -9609,6 +9619,9 @@ fn authoritative_presentation_window(
         "dropped_frames": delta.repeated_vblank_delta,
         "start_captured_monotonic_us": start.captured_monotonic_us,
         "end_captured_monotonic_us": end.captured_monotonic_us,
+        "start_pending": start.pending,
+        "end_pending": end.pending,
+        "endpoints_settled": !start.pending && !end.pending,
     }))
 }
 
@@ -9899,6 +9912,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "vsync_accepted_hit_age_us",
         "main_present_sequence",
         "main_present_active_sequence",
+        "main_present_hidden_copy_us",
         "main_present_flip_count",
         "main_present_drop_count",
         "runtime_status_write_us",
@@ -16605,6 +16619,7 @@ H: Handlers=event3 js0"#
                 "main_present_sequence": id,
                 "main_present_active_sequence": id,
                 "main_present_pending": false,
+                "main_present_hidden_copy_us": 1_500,
                 "main_present_flip_count": id + 10,
                 "main_present_drop_count": 2,
             });
@@ -17063,6 +17078,7 @@ H: Handlers=event3 js0"#
             "main_present_sequence": frame,
             "main_present_active_sequence": frame,
             "main_present_pending": false,
+            "main_present_hidden_copy_us": 1_500,
             "main_present_flip_count": frame,
             "main_present_drop_count": 0,
             "status_write_due": false,

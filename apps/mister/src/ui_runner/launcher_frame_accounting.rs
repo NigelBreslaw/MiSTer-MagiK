@@ -1926,6 +1926,9 @@ impl LauncherFrameAccounting {
                 main_present_completion_poll_count: frame.main_present_completion_poll_count,
                 main_present_completion_poll_wall_us: frame.main_present_completion_poll_wall_us,
                 main_present_completion_poll_cpu_us: frame.main_present_completion_poll_cpu_us,
+                main_present_hidden_copy_us: u128_to_u64_saturating(
+                    frame.main_present_hidden_copy_us,
+                ),
                 main_present_flip_count: frame.main_present_flip_count,
                 main_present_drop_count: frame.main_present_drop_count,
                 status_write_due: frame.status_write_due,
