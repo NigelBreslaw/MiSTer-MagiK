@@ -7,6 +7,7 @@
 //! attributes. This module validates the reported regions before the launcher
 //! uses them as Main-flippable hidden RGB565 buffers.
 
+use crate::framebuffer::copy::copy_rgb565_words;
 use crate::framebuffer::hidden_scanout::HiddenScanoutFramebuffer;
 pub use crate::framebuffer::hidden_scanout::{
     HiddenRgb565BufferIndex, HiddenScanoutError as ScanoutSlotsError, SCANOUT_SLOT_CAPACITY_BYTES,
@@ -275,7 +276,20 @@ fn copy_full_frame_pixels(
 ) {
     if src_stride_pixels == width && dst_stride_pixels == width {
         let len = width * height;
-        dst[..len].copy_from_slice(&src[..len]);
+        debug_assert_eq!(
+            std::mem::size_of::<Rgb565Pixel>(),
+            std::mem::size_of::<u16>()
+        );
+        debug_assert_eq!(
+            std::mem::align_of::<Rgb565Pixel>(),
+            std::mem::align_of::<u16>()
+        );
+        // SAFETY: Slint's RGB565 pixel is a transparent native u16 word; the
+        // slices retain their original exclusive/shared access and length.
+        let destination =
+            unsafe { std::slice::from_raw_parts_mut(dst.as_mut_ptr().cast::<u16>(), len) };
+        let source = unsafe { std::slice::from_raw_parts(src.as_ptr().cast::<u16>(), len) };
+        copy_rgb565_words(destination, source);
         return;
     }
     for y in 0..height {

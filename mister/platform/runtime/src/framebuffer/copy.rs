@@ -1,6 +1,42 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::framebuffer::rgb565::Rgb565;
+
+/// Copy one contiguous native RGB565 frame into a scanout mapping.
+///
+/// The MiSTer path uses wide NEON stores and bounded source prefetch. Other
+/// targets retain the platform `memcpy`, which is also the test oracle.
+pub(crate) fn copy_rgb565_contiguous(destination: &mut [Rgb565], source: &[Rgb565]) {
+    assert_eq!(destination.len(), source.len());
+    // SAFETY: `Rgb565` is transparent over `u16`; both slices keep their
+    // original lifetimes and exclusive/shared access respectively.
+    let destination = unsafe {
+        std::slice::from_raw_parts_mut(destination.as_mut_ptr().cast::<u16>(), destination.len())
+    };
+    let source = unsafe { std::slice::from_raw_parts(source.as_ptr().cast::<u16>(), source.len()) };
+    copy_rgb565_words(destination, source);
+}
+
+pub(crate) fn copy_rgb565_words(destination: &mut [u16], source: &[u16]) {
+    assert_eq!(destination.len(), source.len());
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    // SAFETY: MiSTer's Cortex-A9 provides NEON, the slices are equal-length and
+    // non-overlapping, and the kernel handles arbitrary alignment and tails.
+    unsafe {
+        unsafe extern "C" {
+            fn mister_magik_copy_rgb565_neon(
+                destination: *mut u16,
+                source: *const u16,
+                count: usize,
+            );
+        }
+        mister_magik_copy_rgb565_neon(destination.as_mut_ptr(), source.as_ptr(), source.len());
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    destination.copy_from_slice(source);
+}
+
 /// Copy a source rectangle into a destination buffer, nearest-neighbor scaled.
 // Flat rectangle parameters keep framebuffer call sites allocation-free and easy
 // to inline in copy-heavy paths.
@@ -184,6 +220,29 @@ fn copy_2x_u32_row(dst: &mut [u32], src: &[u32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contiguous_rgb565_copy_matches_scalar_for_alignment_blocks_and_tails() {
+        for len in [0, 1, 7, 8, 9, 63, 64, 65, 127, 128, 129, 4097] {
+            for (source_offset, destination_offset) in [(0, 0), (1, 3), (3, 1)] {
+                let source_storage = (0..len + source_offset + 3)
+                    .map(|index| Rgb565((index as u16).wrapping_mul(4051).rotate_left(3)))
+                    .collect::<Vec<_>>();
+                let source = &source_storage[source_offset..source_offset + len];
+                let mut expected = vec![Rgb565(0xa55a); len + destination_offset + 3];
+                let mut actual = expected.clone();
+                expected[destination_offset..destination_offset + len].copy_from_slice(source);
+                copy_rgb565_contiguous(
+                    &mut actual[destination_offset..destination_offset + len],
+                    source,
+                );
+                assert_eq!(
+                    actual, expected,
+                    "len={len} source_offset={source_offset} destination_offset={destination_offset}"
+                );
+            }
+        }
+    }
 
     fn src() -> Vec<u8> {
         vec![

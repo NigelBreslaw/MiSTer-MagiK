@@ -6,6 +6,7 @@
 use crate::fpga::{
     Fpga, LatchedFbufGeometry, LatchedFbufStatus, MAGIK_FBUF_CAPS_MAGIC, MAGIK_FBUF_LATCH_MAGIC,
 };
+use crate::framebuffer::copy::copy_rgb565_contiguous;
 use crate::framebuffer::damage::{DirtyRect, DirtyRectList, TwoSlotDamageLedger};
 use crate::framebuffer::format::rgb565_stride_bytes;
 use crate::framebuffer::hidden_scanout::{
@@ -459,27 +460,36 @@ impl CachedHiddenLatchPresenter {
         };
         let mut destination_bytes = 0usize;
         let mut destination_rect_count = 0_u32;
-        for rect in restore.iter() {
-            let copied = match self.transform.copy_rect(
-                source_view,
-                VerticalRect {
-                    x0: rect.x0,
-                    y0: rect.y0,
-                    x1: rect.x1,
-                    y1: rect.y1,
-                },
-                destination,
-                destination_stride,
-            ) {
-                Ok(copied) => copied,
-                Err(error) => {
-                    self.ledger.mark_attempt_failed(slot_index);
-                    return Err(HiddenLatchError::Unsupported(error.into()));
+        if full_restore
+            && self.transform.source_height() == self.transform.destination_height()
+            && destination_stride == self.render_width
+        {
+            copy_rgb565_contiguous(&mut destination[..needed], &source[..needed]);
+            destination_rect_count = 1;
+            destination_bytes = needed * std::mem::size_of::<Rgb565>();
+        } else {
+            for rect in restore.iter() {
+                let copied = match self.transform.copy_rect(
+                    source_view,
+                    VerticalRect {
+                        x0: rect.x0,
+                        y0: rect.y0,
+                        x1: rect.x1,
+                        y1: rect.y1,
+                    },
+                    destination,
+                    destination_stride,
+                ) {
+                    Ok(copied) => copied,
+                    Err(error) => {
+                        self.ledger.mark_attempt_failed(slot_index);
+                        return Err(HiddenLatchError::Unsupported(error.into()));
+                    }
+                };
+                if let Some(copied) = copied {
+                    destination_rect_count = destination_rect_count.saturating_add(1);
+                    destination_bytes = destination_bytes.saturating_add(copied.bytes);
                 }
-            };
-            if let Some(copied) = copied {
-                destination_rect_count = destination_rect_count.saturating_add(1);
-                destination_bytes = destination_bytes.saturating_add(copied.bytes);
             }
         }
         self.prepared_slot = Some(slot_index);
