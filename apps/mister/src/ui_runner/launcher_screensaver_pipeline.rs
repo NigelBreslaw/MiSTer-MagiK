@@ -1,12 +1,12 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::launcher_screensaver::{LauncherScreensaver, ScreensaverFrameTrace};
-use super::*;
-use mister_magik_screenshot_parade::{
-    PreparationSlack, STRICT_READY_CAPACITY, StrictFrameConsumer, StrictFramePoll,
-    StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,
+use super::launcher_screensaver::{
+    LauncherScreensaver, LauncherScreenshotBuffer, LauncherScreenshotRuntime,
+    ScreensaverFrameTrace, shared_parade_trace,
 };
+use super::*;
+use mister_magik_screenshot_parade::LiveScreenshotPoll;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{
@@ -92,115 +92,90 @@ pub(crate) enum DirectRenderAheadPoll {
 }
 
 pub(crate) struct ScreensaverRenderAhead {
-    reservoir: StrictFrameConsumer<Vec<Rgb565Pixel>, RenderedScreensaverFrame>,
-    preparation_slack: Option<Arc<PreparationSlack>>,
-    period_us: Arc<AtomicU64>,
-    prefilling: bool,
-    stopped: Arc<AtomicBool>,
-    join: Option<JoinHandle<()>>,
+    runtime: LauncherScreenshotRuntime,
+    live: bool,
 }
 
 impl ScreensaverRenderAhead {
-    pub(crate) fn start(
-        renderer: LauncherScreensaver,
-        width: usize,
-        height: usize,
-        period_us: u64,
-    ) -> Self {
-        let preparation_slack = renderer.preparation_slack();
-        let worker_preparation_slack = preparation_slack.clone();
-        let buffers = std::array::from_fn(|_| allocate_render_ahead_buffer(width, height));
-        let (producer, reservoir) = strict_render_reservoir(buffers, 1);
-        let period_us = Arc::new(AtomicU64::new(period_us.max(1)));
-        let stopped = Arc::new(AtomicBool::new(false));
-        let worker_period_us = Arc::clone(&period_us);
-        let worker_stopped = Arc::clone(&stopped);
-        let join = std::thread::Builder::new()
-            .name("screensaver-render".into())
-            .spawn(move || {
-                let _completion = RenderAheadCompletionGuard(worker_stopped);
-                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverRenderer,
-                );
-                run_render_ahead_worker(
-                    renderer,
-                    width,
-                    height,
-                    producer,
-                    &worker_period_us,
-                    worker_preparation_slack.as_deref(),
-                );
-            })
-            .expect("spawn screensaver render-ahead worker");
+    pub(crate) const fn start(runtime: LauncherScreenshotRuntime) -> Self {
         Self {
-            reservoir,
-            preparation_slack,
-            period_us,
-            prefilling: true,
-            stopped,
-            join: Some(join),
+            runtime,
+            live: false,
         }
     }
 
-    pub(crate) fn update_period_us(&self, period_us: u64) {
-        self.period_us.store(period_us.max(1), Ordering::Relaxed);
-    }
+    pub(crate) fn update_period_us(&self, _period_us: u64) {}
 
     pub(crate) fn try_next(&mut self) -> RenderAheadPoll {
-        if self.prefilling {
-            if self.reservoir.ready_depth() < STRICT_READY_CAPACITY {
+        if !self.live {
+            if let Err(error) = self.runtime.begin_live() {
+                crate::ui_errln!("screensaver: shared runtime could not begin live: {error}");
                 return RenderAheadPoll::Empty;
             }
-            self.prefilling = false;
-            if let Some(slack) = self.preparation_slack.as_deref() {
-                slack.set_ready_depth(self.reservoir.ready_depth());
-                slack.begin_live();
-            }
+            self.live = true;
         }
-        let poll = match self.reservoir.try_next() {
-            StrictFramePoll::Frame(frame) => RenderAheadPoll::Frame(frame.payload),
-            StrictFramePoll::Empty => {
-                self.reservoir.record_starvation();
-                RenderAheadPoll::Empty
+        match self.runtime.poll() {
+            LiveScreenshotPoll::Frame(frame) => {
+                let active_cards = frame.stats.active_cards;
+                let trace = shared_parade_trace(frame.stats);
+                RenderAheadPoll::Frame(RenderedScreensaverFrame {
+                    pixels: frame.buffer.into_pixels(),
+                    sequence: frame.tick,
+                    completed_at: Instant::now(),
+                    render_wall_us: frame.timing.wall_us,
+                    render_cpu_us: 0,
+                    active_cards,
+                    archive_loading: false,
+                    has_rendered_card: true,
+                    superseded_frames: 0,
+                    trace,
+                })
             }
-            StrictFramePoll::Disconnected => RenderAheadPoll::Disconnected,
-            StrictFramePoll::SequenceFailure {
-                expected_tick,
-                frame,
-            } => RenderAheadPoll::SequenceFailure {
-                expected_tick,
-                actual_tick: frame.tick,
-                frame: frame.payload,
+            LiveScreenshotPoll::Prefilling | LiveScreenshotPoll::Starved => RenderAheadPoll::Empty,
+            LiveScreenshotPoll::Stopped => RenderAheadPoll::Disconnected,
+            LiveScreenshotPoll::SequenceFailure(failure) => RenderAheadPoll::SequenceFailure {
+                expected_tick: failure.expected_tick,
+                actual_tick: failure.actual_tick,
+                frame: RenderedScreensaverFrame {
+                    pixels: Vec::new(),
+                    sequence: failure.actual_tick,
+                    completed_at: Instant::now(),
+                    render_wall_us: 0,
+                    render_cpu_us: 0,
+                    active_cards: 0,
+                    archive_loading: false,
+                    has_rendered_card: false,
+                    superseded_frames: 0,
+                    trace: ScreensaverFrameTrace::default(),
+                },
             },
-        };
-        if let Some(slack) = self.preparation_slack.as_deref() {
-            slack.set_ready_depth(self.reservoir.ready_depth());
         }
-        poll
     }
 
     pub(crate) fn recycle(&self, pixels: Vec<Rgb565Pixel>) -> bool {
-        self.reservoir.recycle(pixels)
+        self.runtime
+            .recycle_buffer(LauncherScreenshotBuffer::from_pixels(pixels))
+    }
+
+    pub(crate) fn confirm_presented(&mut self, tick: u64) -> Result<(), String> {
+        self.runtime.confirm_presented(tick).map_err(|failure| {
+            format!(
+                "expected_tick={} actual_tick={}",
+                failure.expected_tick, failure.actual_tick
+            )
+        })
     }
 
     pub(crate) fn ready_depth(&self) -> usize {
-        self.reservoir.ready_depth()
+        self.runtime.ready_depth()
     }
 
     pub(crate) fn cancel(&self) {
-        self.reservoir.cancel();
+        self.runtime.cancel();
     }
 
     pub(crate) fn poll_stopped(&mut self) -> bool {
-        if !self.stopped.load(Ordering::Acquire)
-            && !self.join.as_ref().is_some_and(JoinHandle::is_finished)
-        {
-            return false;
-        }
-        if let Some(join) = self.join.take() {
-            let _ = join.join();
-        }
-        true
+        self.runtime.poll_stopped()
     }
 }
 
@@ -209,17 +184,6 @@ struct RenderAheadCompletionGuard(Arc<AtomicBool>);
 impl Drop for RenderAheadCompletionGuard {
     fn drop(&mut self) {
         self.0.store(true, Ordering::Release);
-    }
-}
-
-impl Drop for ScreensaverRenderAhead {
-    fn drop(&mut self) {
-        self.cancel();
-        if self.stopped.load(Ordering::Acquire) {
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
-            }
-        }
     }
 }
 
@@ -520,74 +484,6 @@ fn send_direct_ready_frame(
     }
 }
 
-fn run_render_ahead_worker(
-    mut renderer: LauncherScreensaver,
-    width: usize,
-    height: usize,
-    producer: StrictFrameProducer<Vec<Rgb565Pixel>, RenderedScreensaverFrame>,
-    period_us: &AtomicU64,
-    preparation_slack: Option<&PreparationSlack>,
-) {
-    let mut sequence = 0u64;
-    let mut elapsed_us = 0u64;
-    let mut motion_tick = 0u64;
-    while !producer.is_cancelled() {
-        let mut pixels = match producer.take_free_timeout(RENDER_AHEAD_IDLE_WAIT) {
-            StrictFreeBufferPoll::Buffer(pixels) => pixels,
-            StrictFreeBufferPoll::Timeout => continue,
-            StrictFreeBufferPoll::Disconnected => break,
-        };
-        sequence = sequence.wrapping_add(1);
-        motion_tick = motion_tick.saturating_add(1);
-        elapsed_us = elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1));
-        let (trace, render_wall_us, render_cpu_us) = loop {
-            let render_pause =
-                preparation_slack.map(|slack| slack.begin_render(Duration::from_millis(2)));
-            let wall_started = Instant::now();
-            let cpu_started = thread_cpu_us();
-            let trace = renderer.render_at_presentation_tick(
-                &mut pixels,
-                width,
-                height,
-                motion_tick,
-                Duration::from_micros(elapsed_us),
-            );
-            drop(render_pause);
-            let render_wall_us = wall_started
-                .elapsed()
-                .as_micros()
-                .try_into()
-                .unwrap_or(u64::MAX);
-            let render_cpu_us = elapsed_thread_cpu_us(cpu_started);
-            if renderer.has_rendered_card() || producer.is_cancelled() {
-                break (trace, render_wall_us, render_cpu_us);
-            }
-            std::thread::park_timeout(RENDER_AHEAD_IDLE_WAIT);
-        };
-        let frame = RenderedScreensaverFrame {
-            pixels,
-            sequence,
-            completed_at: Instant::now(),
-            render_wall_us,
-            render_cpu_us,
-            active_cards: renderer.active_card_count(),
-            archive_loading: renderer.is_loading_archive(),
-            has_rendered_card: renderer.has_rendered_card(),
-            superseded_frames: 0,
-            trace,
-        };
-        if !producer.publish(StrictReadyFrame {
-            tick: sequence,
-            payload: frame,
-        }) {
-            break;
-        }
-        if let Some(slack) = preparation_slack {
-            slack.set_ready_depth(producer.ready_depth());
-        }
-    }
-}
-
 fn next_render_motion_tick(last_rendered_tick: u64, presented_periods: u64) -> u64 {
     last_rendered_tick
         .saturating_add(1)
@@ -625,7 +521,7 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
 mod tests {
     use super::*;
 
-    fn screenshot_renderer(width: usize, height: usize) -> LauncherScreensaver {
+    fn screenshot_runtime(width: usize, height: usize) -> LauncherScreenshotRuntime {
         let path = std::env::temp_dir().join(format!(
             "mister-magik-render-ahead-{}-{width}x{height}.mmlz4b",
             std::process::id()
@@ -647,10 +543,25 @@ mod tests {
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&pixels);
         std::fs::write(&path, bytes).expect("write render-ahead fixture");
-        let renderer = LauncherScreensaver::from_archive_path(&path, width, height, 0x1234)
-            .expect("construct screenshot renderer");
+        let archive = preview_worker::ResidentPreviewArchive::open(&path).expect("open fixture");
+        let buffers = std::array::from_fn(|_| LauncherScreenshotBuffer::new(width, height));
+        let mut runtime = mister_magik_screenshot_parade::LiveScreenshotParade::start(
+            archive,
+            mister_magik_screenshot_parade::LiveScreenshotConfig {
+                geometry: SceneGeometry::new(width, height, width).unwrap(),
+                seed: 0x1234,
+                scale_worker_start: None,
+                render_worker_start: None,
+            },
+            buffers,
+        )
+        .expect("construct screenshot runtime");
+        runtime
+            .wait_until_prefilled(Duration::from_secs(2))
+            .expect("prefill screenshot runtime");
+        runtime.finish_prefill().expect("finish prefill");
         let _ = std::fs::remove_file(path);
-        renderer
+        runtime
     }
 
     fn direct_frame(sequence: u64) -> RenderedDirectScreensaverFrame {
@@ -678,8 +589,7 @@ mod tests {
 
     #[test]
     fn render_ahead_sequences_recycle_and_cancel_without_blocking() {
-        let renderer = screenshot_renderer(64, 48);
-        let mut pipeline = ScreensaverRenderAhead::start(renderer, 64, 48, 20_000);
+        let mut pipeline = ScreensaverRenderAhead::start(screenshot_runtime(64, 48));
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut sequences = Vec::new();
         while sequences.len() < 4 && Instant::now() < deadline {
@@ -687,7 +597,10 @@ mod tests {
                 RenderAheadPoll::Frame(frame) => {
                     sequences.push(frame.sequence);
                     assert_eq!(frame.pixels.len(), 64 * 48);
-                    assert!(pipeline.ready_depth() <= STRICT_READY_CAPACITY);
+                    assert!(pipeline.ready_depth() <= 2);
+                    pipeline
+                        .confirm_presented(frame.sequence)
+                        .expect("confirm frame");
                     assert!(pipeline.recycle(frame.pixels));
                 }
                 RenderAheadPoll::Empty => std::thread::yield_now(),
@@ -698,7 +611,7 @@ mod tests {
             }
         }
 
-        assert_eq!(sequences, vec![1, 2, 3, 4]);
+        assert_eq!(sequences, vec![0, 1, 2, 3]);
         pipeline.update_period_us(16_667);
         pipeline.cancel();
         while !pipeline.poll_stopped() && Instant::now() < deadline {
@@ -710,8 +623,7 @@ mod tests {
     #[test]
     fn render_ahead_supports_repeated_enter_and_exit() {
         for _ in 0..2 {
-            let renderer = screenshot_renderer(32, 24);
-            let mut pipeline = ScreensaverRenderAhead::start(renderer, 32, 24, 16_667);
+            let mut pipeline = ScreensaverRenderAhead::start(screenshot_runtime(32, 24));
             let deadline = Instant::now() + Duration::from_secs(2);
             let mut saw_frame = false;
             while Instant::now() < deadline {

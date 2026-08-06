@@ -87,6 +87,7 @@ pub struct ScreenshotParadeStats {
     pub coverage_probe_sampled: bool,
     pub partial_edge_pixels: usize,
     pub exact_base_background_hits: usize,
+    pub active_cards: usize,
     pub cards_drawn: usize,
     pub cards_culled: usize,
     pub preparation_overlapped_render: bool,
@@ -507,6 +508,7 @@ impl ScreenshotParade {
             coverage_probe_sampled,
             partial_edge_pixels,
             exact_base_background_hits,
+            active_cards: self.tiles.iter().filter(|tile| tile.active).count(),
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
             preparation_overlapped_render: if self.preparation_slack.is_some() {

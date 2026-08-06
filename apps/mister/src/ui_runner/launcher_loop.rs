@@ -11,7 +11,7 @@ use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, LauncherFramePacingInput, LauncherFramePacingPolicy,
     LauncherPacingTrace, LauncherPhaseAlignment,
 };
-use super::launcher_screensaver::ScreensaverFrameTrace;
+use super::launcher_screensaver::{LauncherScreensaverReady, ScreensaverFrameTrace};
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -5517,46 +5517,43 @@ pub(super) fn run_launcher_loop(
                         started.elapsed().as_micros()
                     );
                 }
-                let requires_direct_hidden = ready.requires_direct_hidden();
-                let direct_hidden_available = requires_direct_hidden
-                    && launcher_presenter.direct_hidden_framebuffer_slots_available(ui);
-                if requires_direct_hidden && !direct_hidden_available {
-                    crate::ui_errln!(
-                        "particle experiment requires the direct hidden-slot latch backend"
-                    );
-                    screensaver.fail_current_activation(Instant::now());
-                    screensaver_frame_visible = false;
-                } else if requires_direct_hidden {
-                    let launcher_snapshot_view = layer_target.cached_frame_view();
-                    let launcher_snapshot = screensaver
-                        .is_preview()
-                        .then(|| launcher_snapshot_view.pixels());
-                    match launcher_presenter.take_direct_hidden_frame_buffers() {
-                        Ok(buffers) => {
-                            screensaver_direct_pipeline =
-                                Some(ScreensaverDirectRenderAhead::start(
-                                    ready,
-                                    buffers,
-                                    ui.render_w(),
-                                    ui.render_h(),
-                                    pacer.period_us(),
-                                    launcher_snapshot,
-                                    screensaver.preview_fade_started,
-                                ));
-                        }
-                        Err(failure) => {
-                            launcher_presenter.fail_latch_completion(failure);
+                match ready {
+                    LauncherScreensaverReady::Screenshot(runtime) => {
+                        screensaver_pipeline = Some(ScreensaverRenderAhead::start(runtime));
+                    }
+                    LauncherScreensaverReady::Direct(renderer) => {
+                        if !launcher_presenter.direct_hidden_framebuffer_slots_available(ui) {
+                            crate::ui_errln!(
+                                "particle experiment requires the direct hidden-slot latch backend"
+                            );
                             screensaver.fail_current_activation(Instant::now());
                             screensaver_frame_visible = false;
+                        } else {
+                            let launcher_snapshot_view = layer_target.cached_frame_view();
+                            let launcher_snapshot = screensaver
+                                .is_preview()
+                                .then(|| launcher_snapshot_view.pixels());
+                            match launcher_presenter.take_direct_hidden_frame_buffers() {
+                                Ok(buffers) => {
+                                    screensaver_direct_pipeline =
+                                        Some(ScreensaverDirectRenderAhead::start(
+                                            renderer,
+                                            buffers,
+                                            ui.render_w(),
+                                            ui.render_h(),
+                                            pacer.period_us(),
+                                            launcher_snapshot,
+                                            screensaver.preview_fade_started,
+                                        ));
+                                }
+                                Err(failure) => {
+                                    launcher_presenter.fail_latch_completion(failure);
+                                    screensaver.fail_current_activation(Instant::now());
+                                    screensaver_frame_visible = false;
+                                }
+                            }
                         }
                     }
-                } else {
-                    screensaver_pipeline = Some(ScreensaverRenderAhead::start(
-                        ready,
-                        ui.render_w(),
-                        ui.render_h(),
-                        pacer.period_us(),
-                    ));
                 }
                 screensaver_render_sequence = 0;
                 screensaver_starvation_count = 0;
@@ -5780,16 +5777,13 @@ pub(super) fn run_launcher_loop(
                 RenderAheadPoll::SequenceFailure {
                     expected_tick,
                     actual_tick,
-                    frame,
+                    frame: _,
                 } => {
                     crate::ui_errln!(
                         "screensaver: strict render-ahead sequence failure expected_tick={} actual_tick={}",
                         expected_tick,
                         actual_tick,
                     );
-                    if let Some(pipeline) = screensaver_pipeline.as_ref() {
-                        let _ = pipeline.recycle(frame.pixels);
-                    }
                     screensaver.fail_current_activation(Instant::now());
                     if let Some(pipeline) = screensaver_pipeline.take() {
                         pipeline.cancel();
@@ -5829,9 +5823,21 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
-        if screensaver.active && screensaver_frame_visible && !accepted_screensaver_frame {
+        if screensaver.active
+            && screensaver_frame_visible
+            && !accepted_screensaver_frame
+            && screensaver_pipeline.is_some()
+        {
             screensaver_starvation_count = screensaver_starvation_count.saturating_add(1);
-            screensaver_reused_frames = screensaver_reused_frames.saturating_add(1);
+            crate::ui_errln!("screensaver: shared screenshot runtime starved; restoring launcher");
+            screensaver.fail_current_activation(Instant::now());
+            if let Some(pipeline) = screensaver_pipeline.take() {
+                pipeline.cancel();
+                retiring_screensaver_pipelines.push(pipeline);
+            }
+            screensaver_frame_visible = false;
+            window.request_redraw();
+            full_frame_present = true;
         }
         screensaver_frame_trace.render_ahead_sequence = screensaver_render_sequence;
         screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
@@ -6300,6 +6306,24 @@ pub(super) fn run_launcher_loop(
             && let Some(pipeline) = screensaver_direct_pipeline.as_ref()
         {
             pipeline.note_presented_period();
+        }
+        if accepted_screensaver_frame
+            && screensaver_pipeline.is_some()
+            && presentation.main_present_backend.is_latch()
+            && presentation.main_present_status == LauncherPresentStatus::Ok
+            && let Some(pipeline) = screensaver_pipeline.as_mut()
+            && let Err(error) = pipeline.confirm_presented(screensaver_render_sequence)
+        {
+            crate::ui_errln!(
+                "screensaver: shared screenshot confirmation failed: {error}; restoring launcher"
+            );
+            screensaver.fail_current_activation(Instant::now());
+            if let Some(pipeline) = screensaver_pipeline.take() {
+                pipeline.cancel();
+                retiring_screensaver_pipelines.push(pipeline);
+            }
+            screensaver_frame_visible = false;
+            window.request_redraw();
         }
         if let Some(pixels) = screensaver_buffer_to_recycle_after_present.take()
             && let Some(pipeline) = screensaver_pipeline.as_ref()

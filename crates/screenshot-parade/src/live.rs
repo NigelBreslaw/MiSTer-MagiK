@@ -253,11 +253,30 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
     }
 
     pub fn stop(&mut self) {
-        self.reservoir.cancel();
-        self.preparation_slack.cancel();
+        self.cancel();
         if let Some(worker) = self.render_worker.take() {
             let _ = worker.join();
         }
+    }
+
+    pub fn cancel(&self) {
+        self.reservoir.cancel();
+        self.preparation_slack.cancel();
+    }
+
+    pub fn poll_stopped(&mut self) -> bool {
+        if !self.stopped.load(Ordering::Acquire)
+            && !self
+                .render_worker
+                .as_ref()
+                .is_some_and(JoinHandle::is_finished)
+        {
+            return false;
+        }
+        if let Some(worker) = self.render_worker.take() {
+            let _ = worker.join();
+        }
+        true
     }
 }
 
