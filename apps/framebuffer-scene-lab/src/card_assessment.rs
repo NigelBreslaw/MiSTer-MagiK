@@ -175,8 +175,6 @@ pub struct ScreenshotFrameDetails {
     pub coverage_probe_sampled: bool,
     pub partial_edge_pixels: usize,
     pub exact_base_background_hits: usize,
-    pub skipped_opaque_pixels: usize,
-    pub skipped_partial_pixels: usize,
     pub preparation_overlapped_render: bool,
     pub preparation_decode_overlapped_render: bool,
     pub preparation_activity_transitions: u32,
