@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use mister_magik_perf_events::{CounterDelta, CounterGroup, PmuFailure, event_metadata};
+use mister_magik_perf_events::{
+    CounterDelta, CounterGroup, PmuFailure, PmuOpenDiagnostics, event_metadata,
+};
 use serde_json::{Value, json};
 
 const PROBE_ITERATIONS: usize = 1_000_000;
@@ -16,7 +18,8 @@ pub fn run() {
 }
 
 pub(crate) fn probe() -> Value {
-    match measure_probe() {
+    let (group, diagnostics) = CounterGroup::open_with_diagnostics();
+    match measure_probe(group) {
         Ok((delta, checksum, read_format, scope)) if valid_probe(delta) => json!({
             "schema": "mister-magik-pmu-probe-v1",
             "status": "ok",
@@ -36,6 +39,7 @@ pub(crate) fn probe() -> Value {
                 "checksum": checksum,
             },
             "sample": sample_json(delta),
+            "diagnostics": diagnostics,
             "failure": Value::Null,
         }),
         Ok((delta, checksum, read_format, scope)) => json!({
@@ -57,6 +61,7 @@ pub(crate) fn probe() -> Value {
                 "checksum": checksum,
             },
             "sample": sample_json(delta),
+            "diagnostics": diagnostics,
             "failure": {
                 "stage": "validate-sample",
                 "event": Value::Null,
@@ -64,11 +69,13 @@ pub(crate) fn probe() -> Value {
                 "message": "probe produced zero cycles or instructions",
             },
         }),
-        Err(failure) => failed_probe(failure),
+        Err(failure) => failed_probe(failure, diagnostics),
     }
 }
 
-fn measure_probe() -> Result<
+fn measure_probe(
+    group: Result<CounterGroup, PmuFailure>,
+) -> Result<
     (
         CounterDelta,
         u64,
@@ -77,7 +84,7 @@ fn measure_probe() -> Result<
     ),
     PmuFailure,
 > {
-    let group = CounterGroup::open()?;
+    let group = group?;
     let read_format = group.read_format();
     let scope = group.scope();
     let span = group.span("pmu-probe")?;
@@ -121,7 +128,7 @@ fn sample_json(delta: CounterDelta) -> Value {
     })
 }
 
-fn failed_probe(failure: PmuFailure) -> Value {
+fn failed_probe(failure: PmuFailure, diagnostics: PmuOpenDiagnostics) -> Value {
     json!({
         "schema": "mister-magik-pmu-probe-v1",
         "status": "failed",
@@ -138,6 +145,7 @@ fn failed_probe(failure: PmuFailure) -> Value {
             "words": PROBE_WORDS,
         },
         "sample": Value::Null,
+        "diagnostics": diagnostics,
         "failure": failure,
     })
 }
@@ -164,12 +172,15 @@ mod tests {
 
     #[test]
     fn failure_report_preserves_structured_details() {
-        let report = failed_probe(PmuFailure {
-            stage: "open-event".to_owned(),
-            event: Some(mister_magik_perf_events::HardwareEvent::Cycles),
-            errno: Some(13),
-            message: "permission denied".to_owned(),
-        });
+        let report = failed_probe(
+            PmuFailure {
+                stage: "open-event".to_owned(),
+                event: Some(mister_magik_perf_events::HardwareEvent::Cycles),
+                errno: Some(13),
+                message: "permission denied".to_owned(),
+            },
+            PmuOpenDiagnostics::default(),
+        );
         assert_eq!(report["status"], "failed");
         assert_eq!(report["failure"]["stage"], "open-event");
         assert_eq!(report["failure"]["errno"], 13);

@@ -46,7 +46,33 @@ pub enum GroupReadFormat {
 #[serde(rename_all = "kebab-case")]
 pub enum CounterScope {
     CallingThreadAnyCpu,
-    CallingThreadPinnedCpu,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PmuOpenAttempt {
+    pub name: String,
+    pub read_format: Option<GroupReadFormat>,
+    pub scope: CounterScope,
+    pub cpu: i32,
+    pub perf_flags: u64,
+    pub disabled: bool,
+    pub exclude_kernel: bool,
+    pub exclude_hypervisor: bool,
+    pub grouped: bool,
+    pub success: bool,
+    pub failure: Option<PmuFailure>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PmuEnvironment {
+    pub event_sources: Vec<String>,
+    pub perf_event_paranoid: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct PmuOpenDiagnostics {
+    pub environment: PmuEnvironment,
+    pub attempts: Vec<PmuOpenAttempt>,
 }
 
 impl HardwareEvent {
@@ -228,12 +254,8 @@ impl CounterSnapshot {
     #[must_use]
     pub fn delta_from(self, earlier: Self) -> CounterDelta {
         CounterDelta {
-            time_enabled_ns: self
-                .time_enabled_ns
-                .saturating_sub(earlier.time_enabled_ns),
-            time_running_ns: self
-                .time_running_ns
-                .saturating_sub(earlier.time_running_ns),
+            time_enabled_ns: self.time_enabled_ns.saturating_sub(earlier.time_enabled_ns),
+            time_running_ns: self.time_running_ns.saturating_sub(earlier.time_running_ns),
             counters: self.counters.saturating_sub(earlier.counters),
         }
     }
@@ -315,7 +337,8 @@ struct ThreadCollector {
 impl ThreadCollector {
     fn from_env() -> Self {
         let enabled = std::env::var_os("MISTER_PMU_PROFILE").is_some_and(|value| value == "1");
-        let sample_every = bounded_env_u64("MISTER_PMU_SAMPLE_EVERY", DEFAULT_SAMPLE_EVERY, 1, 10_000);
+        let sample_every =
+            bounded_env_u64("MISTER_PMU_SAMPLE_EVERY", DEFAULT_SAMPLE_EVERY, 1, 10_000);
         let record_limit = bounded_env_u64(
             "MISTER_PMU_RECORD_LIMIT",
             DEFAULT_RECORD_LIMIT as u64,
@@ -364,7 +387,12 @@ impl ThreadCollector {
                 }
             }
         }
-        match self.group.as_ref().expect("PMU group initialized").snapshot() {
+        match self
+            .group
+            .as_ref()
+            .expect("PMU group initialized")
+            .snapshot()
+        {
             Ok(snapshot) => Some(snapshot),
             Err(failure) => {
                 self.failure = Some(failure);
@@ -379,10 +407,12 @@ impl ThreadCollector {
             return;
         };
         match group.snapshot() {
-            Ok(finished) if self.records.len() < self.record_limit => self.records.push(SpanRecord {
-                name: name.to_owned(),
-                counters: finished.delta_from(started),
-            }),
+            Ok(finished) if self.records.len() < self.record_limit => {
+                self.records.push(SpanRecord {
+                    name: name.to_owned(),
+                    counters: finished.delta_from(started),
+                })
+            }
             Ok(_) => self.dropped_spans = self.dropped_spans.saturating_add(1),
             Err(failure) => {
                 self.failure = Some(failure);
@@ -507,6 +537,24 @@ impl CounterGroup {
         }
     }
 
+    #[must_use]
+    pub fn open_with_diagnostics() -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
+        #[cfg(target_os = "linux")]
+        {
+            let (inner, diagnostics) = linux::LinuxCounterGroup::open_with_diagnostics();
+            (inner.map(|inner| Self { inner }), diagnostics)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            (
+                Err(PmuFailure::unsupported(
+                    "Linux perf_event_open is unavailable on this platform",
+                )),
+                PmuOpenDiagnostics::default(),
+            )
+        }
+    }
+
     pub fn snapshot(&self) -> Result<CounterSnapshot, PmuFailure> {
         #[cfg(target_os = "linux")]
         {
@@ -625,8 +673,9 @@ fn decode_ordered_group_read(words: &[u64]) -> Result<CounterSnapshot, PmuFailur
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        CounterScope, CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuFailure,
-        decode_group_read, decode_ordered_group_read,
+        CounterScope, CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuEnvironment,
+        PmuFailure, PmuOpenAttempt, PmuOpenDiagnostics, decode_group_read,
+        decode_ordered_group_read,
     };
     use std::collections::BTreeMap;
 
@@ -683,8 +732,21 @@ mod linux {
 
     impl LinuxCounterGroup {
         pub(super) fn open() -> Result<Self, PmuFailure> {
-            let current_cpu = unsafe { libc::sched_getcpu() };
-            let mut options = vec![
+            Self::open_matrix(None)
+        }
+
+        pub(super) fn open_with_diagnostics() -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
+            let mut diagnostics = PmuOpenDiagnostics {
+                environment: read_environment(),
+                attempts: Vec::new(),
+            };
+            diagnostics.attempts.push(minimal_cycle_attempt());
+            let group = Self::open_matrix(Some(&mut diagnostics.attempts));
+            (group, diagnostics)
+        }
+
+        fn open_matrix(mut attempts: Option<&mut Vec<PmuOpenAttempt>>) -> Result<Self, PmuFailure> {
+            let options = [
                 OpenOptions {
                     read_format: GroupReadFormat::IdsAndTimes,
                     scope: CounterScope::CallingThreadAnyCpu,
@@ -714,23 +776,27 @@ mod linux {
                     exclude_hypervisor: false,
                 },
             ];
-            if current_cpu >= 0 {
-                options.push(OpenOptions {
-                    read_format: GroupReadFormat::OrderedValues,
-                    scope: CounterScope::CallingThreadPinnedCpu,
-                    cpu: current_cpu,
-                    perf_flags: 0,
-                    exclude_hypervisor: false,
-                });
-            }
             let mut last_failure = None;
             for options in options {
                 match Self::open_with_options(options) {
-                    Ok(group) => return Ok(group),
+                    Ok(group) => {
+                        if let Some(attempts) = attempts.as_deref_mut() {
+                            attempts.push(group_attempt(options, None));
+                        }
+                        return Ok(group);
+                    }
                     Err(failure) if failure.errno == Some(libc::EINVAL) => {
+                        if let Some(attempts) = attempts.as_deref_mut() {
+                            attempts.push(group_attempt(options, Some(failure.clone())));
+                        }
                         last_failure = Some(failure);
                     }
-                    Err(failure) => return Err(failure),
+                    Err(failure) => {
+                        if let Some(attempts) = attempts.as_deref_mut() {
+                            attempts.push(group_attempt(options, Some(failure.clone())));
+                        }
+                        return Err(failure);
+                    }
                 }
             }
             Err(last_failure.expect("PMU open matrix is nonempty"))
@@ -843,12 +909,94 @@ mod linux {
             if unsafe { libc::ioctl(self.descriptors[0].fd, request, PERF_IOC_FLAG_GROUP) } == 0 {
                 Ok(())
             } else {
+                Err(PmuFailure::io(stage, None, std::io::Error::last_os_error()))
+            }
+        }
+    }
+
+    fn read_environment() -> PmuEnvironment {
+        let mut event_sources = std::fs::read_dir("/sys/bus/event_source/devices")
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect::<Vec<_>>();
+        event_sources.sort();
+        let perf_event_paranoid = std::fs::read_to_string("/proc/sys/kernel/perf_event_paranoid")
+            .ok()
+            .map(|value| value.trim().to_owned());
+        PmuEnvironment {
+            event_sources,
+            perf_event_paranoid,
+        }
+    }
+
+    fn minimal_cycle_attempt() -> PmuOpenAttempt {
+        let attributes = PerfEventAttr {
+            event_type: PERF_TYPE_HARDWARE,
+            size: std::mem::size_of::<PerfEventAttr>() as u32,
+            config: HardwareEvent::Cycles.perf_config(),
+            ..PerfEventAttr::default()
+        };
+        let result = perf_event_open(
+            &attributes,
+            HardwareEvent::Cycles,
+            -1,
+            -1,
+            PERF_FLAG_FD_CLOEXEC,
+        )
+        .and_then(|descriptor| {
+            // SAFETY: the descriptor is uniquely owned by this diagnostic attempt.
+            if unsafe { libc::close(descriptor) } == 0 {
+                Ok(())
+            } else {
                 Err(PmuFailure::io(
-                    stage,
-                    None,
+                    "close-minimal-event",
+                    Some(HardwareEvent::Cycles),
                     std::io::Error::last_os_error(),
                 ))
             }
+        });
+        PmuOpenAttempt {
+            name: "minimal-cycle".to_owned(),
+            read_format: None,
+            scope: CounterScope::CallingThreadAnyCpu,
+            cpu: -1,
+            perf_flags: PERF_FLAG_FD_CLOEXEC as u64,
+            disabled: false,
+            exclude_kernel: false,
+            exclude_hypervisor: false,
+            grouped: false,
+            success: result.is_ok(),
+            failure: result.err(),
+        }
+    }
+
+    fn group_attempt(options: OpenOptions, failure: Option<PmuFailure>) -> PmuOpenAttempt {
+        PmuOpenAttempt {
+            name: match (
+                options.read_format,
+                options.perf_flags == PERF_FLAG_FD_CLOEXEC,
+                options.exclude_hypervisor,
+            ) {
+                (GroupReadFormat::IdsAndTimes, true, true) => "group-ids-times",
+                (GroupReadFormat::OrderedValues, true, true) => "group-ordered",
+                (GroupReadFormat::OrderedValues, false, true) => "group-legacy-flags",
+                (GroupReadFormat::OrderedValues, false, false) => "group-include-hypervisor",
+                _ => "group-other",
+            }
+            .to_owned(),
+            read_format: Some(options.read_format),
+            scope: options.scope,
+            cpu: options.cpu,
+            perf_flags: options.perf_flags as u64,
+            disabled: true,
+            exclude_kernel: true,
+            exclude_hypervisor: options.exclude_hypervisor,
+            grouped: true,
+            success: failure.is_none(),
+            failure,
         }
     }
 
@@ -897,28 +1045,13 @@ mod linux {
                 },
             ..PerfEventAttr::default()
         };
-        // SAFETY: the syscall receives a valid version-zero attribute structure
-        // and requests counters for the calling thread on any CPU.
-        let raw = unsafe {
-            libc::syscall(
-                libc::SYS_perf_event_open,
-                &attributes,
-                0,
-                options.cpu,
-                group_descriptor,
-                options.perf_flags,
-            )
-        };
-        if raw < 0 {
-            return Err(PmuFailure::io(
-                "open-event",
-                Some(event),
-                std::io::Error::last_os_error(),
-            ));
-        }
-        let descriptor = libc::c_int::try_from(raw).map_err(|_| {
-            PmuFailure::malformed(format!("descriptor for {} exceeds c_int", event.label()))
-        })?;
+        let descriptor = perf_event_open(
+            &attributes,
+            event,
+            options.cpu,
+            group_descriptor,
+            options.perf_flags,
+        )?;
         if options.perf_flags == 0 {
             // SAFETY: the descriptor was returned by perf_event_open and the
             // integer fcntl command does not dereference a pointer.
@@ -928,6 +1061,37 @@ mod linux {
                 return Err(PmuFailure::io("set-close-on-exec", Some(event), error));
             }
         }
+        Ok(descriptor)
+    }
+
+    fn perf_event_open(
+        attributes: &PerfEventAttr,
+        event: HardwareEvent,
+        cpu: libc::c_int,
+        group_descriptor: libc::c_int,
+        perf_flags: libc::c_ulong,
+    ) -> Result<libc::c_int, PmuFailure> {
+        // SAFETY: the syscall receives a valid version-zero attribute structure
+        // and requests counters for the calling thread on any CPU.
+        let raw = unsafe {
+            libc::syscall(
+                libc::SYS_perf_event_open,
+                attributes,
+                0,
+                cpu,
+                group_descriptor,
+                perf_flags,
+            )
+        };
+        if raw < 0 {
+            return Err(PmuFailure::io(
+                "open-event",
+                Some(event),
+                std::io::Error::last_os_error(),
+            ));
+        }
+        let descriptor = libc::c_int::try_from(raw)
+            .map_err(|_| PmuFailure::malformed("perf event descriptor exceeds c_int"))?;
         Ok(descriptor)
     }
 
@@ -1061,10 +1225,7 @@ mod tests {
                 ..CounterValues::default()
             },
         };
-        assert_eq!(
-            inner_end.delta_from(inner_start).counters.cycles,
-            80
-        );
+        assert_eq!(inner_end.delta_from(inner_start).counters.cycles, 80);
         assert_eq!(outer_end.delta_from(outer_start).counters.cycles, 240);
     }
 
