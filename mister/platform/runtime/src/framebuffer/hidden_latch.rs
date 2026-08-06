@@ -3,11 +3,13 @@
 
 //! Minimal two-slot RGB565 presenter for standalone framebuffer tools.
 
-use crate::fpga::{
-    Fpga, LatchedFbufGeometry, LatchedFbufStatus, MAGIK_FBUF_CAPS_MAGIC, MAGIK_FBUF_LATCH_MAGIC,
-};
+use crate::fpga::{Fpga, LatchedFbufGeometry, LatchedFbufStatus, MAGIK_FBUF_CAPS_MAGIC};
 use crate::framebuffer::damage::{DirtyRect, DirtyRectList, TwoSlotDamageLedger};
 use crate::framebuffer::format::rgb565_stride_bytes;
+use crate::framebuffer::full_frame_latch::{
+    LatchPostRequest, LogicalStatusReadBudget, latch_status_read_failure,
+    post_confirm_prepared_frame, read_status_sample, wait_for_latch_completion,
+};
 use crate::framebuffer::hidden_scanout::{
     HiddenRgb565BufferIndex, HiddenScanoutError, HiddenScanoutFramebuffer,
 };
@@ -15,6 +17,7 @@ use crate::framebuffer::rgb565::Rgb565;
 use crate::framebuffer::route::FramebufferRouteMode;
 use crate::framebuffer::route::LauncherFramebufferRoute;
 use crate::framebuffer::vertical_scale::{Rgb565FrameView, VerticalRect, VerticalRgb565Transform};
+use crate::latch_readiness::{LatchFailure, LatchFailureStage};
 use mister_magik_core::display::ResolvedDisplayPlan;
 use std::io;
 use std::time::{Duration, Instant};
@@ -29,6 +32,7 @@ pub enum HiddenLatchError {
     Unsupported(String),
     NoWritableSlot(String),
     PostNotObserved(String),
+    Protocol(LatchFailure),
 }
 
 impl std::fmt::Display for HiddenLatchError {
@@ -41,6 +45,7 @@ impl std::fmt::Display for HiddenLatchError {
             Self::PostNotObserved(message) => {
                 write!(output, "latch post was not observed: {message}")
             }
+            Self::Protocol(error) => error.fmt(output),
         }
     }
 }
@@ -50,6 +55,7 @@ impl std::error::Error for HiddenLatchError {
         match self {
             Self::Scanout(error) => Some(error),
             Self::Transport(error) => Some(error),
+            Self::Protocol(error) => Some(error),
             Self::Unsupported(_) | Self::NoWritableSlot(_) | Self::PostNotObserved(_) => None,
         }
     }
@@ -64,6 +70,12 @@ impl From<HiddenScanoutError> for HiddenLatchError {
 impl From<io::Error> for HiddenLatchError {
     fn from(value: io::Error) -> Self {
         Self::Transport(value)
+    }
+}
+
+impl From<LatchFailure> for HiddenLatchError {
+    fn from(value: LatchFailure) -> Self {
+        Self::Protocol(value)
     }
 }
 
@@ -292,25 +304,27 @@ impl HiddenLatchPresenter {
         let Some(pending) = self.pending else {
             return Ok(None);
         };
-        let started = Instant::now();
-        let (after, status_reads) = wait_for_posted_status(
-            &mut self.fpga,
-            self.settle_timeout,
-            pending.sequence,
-            pending.base,
-        )?;
+        let completion =
+            wait_for_latch_completion(&mut self.fpga, pending.sequence, self.settle_timeout)?;
+        let after = completion.status;
+        if after.active_base != pending.base {
+            return Err(HiddenLatchError::PostNotObserved(format!(
+                "posted sequence={} base=0x{:08x}; active base=0x{:08x}",
+                pending.sequence, pending.base, after.active_base
+            )));
+        }
         self.pipeline_stats.status_reads = self
             .pipeline_stats
             .status_reads
-            .saturating_add(status_reads);
+            .saturating_add(u64::from(completion.poll_count));
         self.pipeline_stats.poll_reads = self
             .pipeline_stats
             .poll_reads
-            .saturating_add(status_reads.saturating_sub(1));
+            .saturating_add(u64::from(completion.poll_count.saturating_sub(1)));
         self.pipeline_stats.settle_us = self
             .pipeline_stats
             .settle_us
-            .saturating_add(started.elapsed().as_micros() as u64);
+            .saturating_add(completion.wall_us);
         self.pending = None;
         self.writable_slot = 1 - self.writable_slot;
         Ok(Some(HiddenLatchPresentReceipt {
@@ -335,24 +349,33 @@ impl HiddenLatchPresenter {
         self.sequence = next_sequence(sequence);
         let slot_index = self.writable_slot as u8 + 1;
         let base = self.bases[self.writable_slot];
-        let _guard = self.fpga.lock_latch_transaction()?;
-        let post = self
-            .fpga
-            .post_magik_latched_fbuf_rgb565_observed(
+        let bases = self.bases;
+        let width = self.width;
+        let height = self.height;
+        let receipt = post_confirm_prepared_frame(
+            &mut self.fpga,
+            LatchPostRequest {
                 sequence,
-                base,
-                self.width,
-                self.height,
-                self.geometry,
-                None,
-            )
-            .map_err(|error| HiddenLatchError::Transport(error.into_io()))?;
-        if post.ack_high != MAGIK_FBUF_LATCH_MAGIC && post.ack_low != MAGIK_FBUF_LATCH_MAGIC {
-            return Err(HiddenLatchError::Unsupported(format!(
-                "SET acknowledgement 0x{:04x}/0x{:04x}",
-                post.ack_high, post.ack_low
-            )));
-        }
+                slot_index,
+                base_addr: base,
+                width: self.width,
+                height: self.height,
+                geometry: self.geometry,
+            },
+            |hardware, budget| read_lab_status(hardware, budget, bases, width, height),
+        )?;
+        self.pipeline_stats.status_reads = self
+            .pipeline_stats
+            .status_reads
+            .saturating_add(1 + u64::from(receipt.status_reads));
+        self.pipeline_stats.poll_reads = self
+            .pipeline_stats
+            .poll_reads
+            .saturating_add(u64::from(receipt.status_reads.saturating_sub(1)));
+        self.pipeline_stats.settle_us = self
+            .pipeline_stats
+            .settle_us
+            .saturating_add(receipt.status_us);
         self.pending = Some(PendingPresentation {
             slot_index,
             sequence,
@@ -624,35 +647,45 @@ fn wait_for_settled_status(
     }
 }
 
-fn wait_for_posted_status(
-    fpga: &mut Fpga,
-    timeout: Duration,
-    sequence: u16,
-    base: u32,
-) -> Result<(LatchedFbufStatus, u64), HiddenLatchError> {
-    let started = Instant::now();
-    let mut status_reads = 0_u64;
-    loop {
-        let status = fpga.read_magik_latched_fbuf_status()?;
-        status_reads = status_reads.saturating_add(1);
-        if status.supported()
-            && !status.pending()
-            && status.active_sequence == sequence
-            && status.active_base == base
-        {
-            return Ok((status, status_reads));
-        }
-        if started.elapsed() >= timeout {
-            return Err(HiddenLatchError::PostNotObserved(format!(
-                "posted sequence={sequence} base=0x{base:08x}; active sequence={} base=0x{:08x} pending={} pending_sequence={}",
-                status.active_sequence,
-                status.active_base,
-                status.pending(),
-                status.pending_sequence
-            )));
-        }
-        std::thread::sleep(STATUS_POLL_BACKOFF);
+fn read_lab_status(
+    hardware: &mut Fpga,
+    budget: &mut LogicalStatusReadBudget,
+    bases: [u32; 2],
+    width: u16,
+    height: u16,
+) -> Result<crate::fpga::LatchedFbufStatusSample, LatchFailure> {
+    budget.consume().map_err(|_| {
+        LatchFailure::runtime(
+            LatchFailureStage::PostVerification,
+            crate::latch_readiness::LatchFailureReason::FpgaTransportFailed,
+            "latch status exhausted its bounded read budget",
+        )
+    })?;
+    let capabilities = hardware.negotiated_magik_latch_capabilities();
+    let sample = read_status_sample(hardware, capabilities)
+        .map_err(|error| latch_status_read_failure(LatchFailureStage::FpgaStatus, error))?;
+    let status = sample.status;
+    if status.active_enabled()
+        && bases.contains(&status.active_base)
+        && (status.active_width != width
+            || status.active_height != height
+            || status.active_stride != rgb565_stride_bytes(usize::from(width)) as u16)
+    {
+        return Err(LatchFailure::runtime(
+            LatchFailureStage::PostVerification,
+            crate::latch_readiness::LatchFailureReason::ActiveGeometryMismatch,
+            format!(
+                "latched framebuffer geometry mismatch active={}x{} stride={} expected={}x{} stride={}",
+                status.active_width,
+                status.active_height,
+                status.active_stride,
+                width,
+                height,
+                rgb565_stride_bytes(usize::from(width))
+            ),
+        ));
     }
+    Ok(sample)
 }
 
 fn writable_slot_for_status(

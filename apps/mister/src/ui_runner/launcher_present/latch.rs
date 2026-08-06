@@ -23,6 +23,10 @@ use mister_magik_fb::framebuffer::full_frame_latch::{
     post_confirm_prepared_frame, posted_sequence_observed, read_post_status, read_status_sample,
     rejected_wire_diagnostics, wait_for_latch_completion,
 };
+#[cfg(test)]
+use mister_magik_fb::framebuffer::full_frame_latch::{
+    dev_latch_post_skip_for, dev_latch_timeout_for,
+};
 use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
 use mister_magik_fb::latch_readiness::{
     LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision, LatchWireDiagnostics,
@@ -30,117 +34,6 @@ use mister_magik_fb::latch_readiness::{
 use std::io;
 
 const TRANSIENT_PENDING_SETTLE_TIMEOUT: Duration = Duration::from_millis(100);
-const DEV_LATCH_TIMEOUT_ENV: &str = "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT";
-const DEV_LATCH_POST_SKIP_ENV: &str = "MISTER_MAGIK_DEV_LATCH_POST_SKIP_WORD_INDEX";
-
-static DEV_LATCH_STATUS_READS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static DEV_LATCH_TIMEOUT_AT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-static DEV_LATCH_POST_SKIP_INDEX: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
-static DEV_LATCH_POST_SKIP_USED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-impl LatchHardware for Fpga {
-    fn lock_latch_transaction(&mut self) -> io::Result<Option<crate::fpga::FpgaUioGuard>> {
-        Fpga::lock_latch_transaction(self)
-    }
-
-    fn read_latch_capabilities(
-        &mut self,
-    ) -> io::Result<(u16, u16, mister_magik_latch_contract::LatchCapabilities)> {
-        self.read_magik_latched_fbuf_capabilities()
-    }
-
-    fn read_latched_status(
-        &mut self,
-    ) -> Result<crate::fpga::LatchedFbufStatusSample, crate::fpga::LatchedFbufStatusReadError> {
-        let read_number =
-            DEV_LATCH_STATUS_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if dev_latch_timeout_at() == Some(read_number) {
-            return Err(crate::fpga::LatchedFbufStatusReadError::from_io(
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!(
-                        "FPGA SPI timeout waiting for ACK high on word 0x0058 \
-                     (development injection read {read_number})"
-                    ),
-                ),
-            ));
-        }
-        self.read_magik_latched_fbuf_status_sample()
-    }
-
-    fn negotiated_latch_capabilities(
-        &self,
-    ) -> Option<mister_magik_latch_contract::LatchCapabilities> {
-        self.negotiated_magik_latch_capabilities()
-    }
-
-    fn post_latched_rgb565(
-        &mut self,
-        sequence: u16,
-        base_addr: u32,
-        fb_width: u16,
-        fb_height: u16,
-        geometry: crate::fpga::LatchedFbufGeometry,
-    ) -> Result<crate::fpga::LatchedFbufPostAttempt, crate::fpga::LatchedFbufPostError> {
-        self.post_magik_latched_fbuf_rgb565_observed(
-            sequence,
-            base_addr,
-            fb_width,
-            fb_height,
-            geometry,
-            dev_latch_post_skip_word_index(),
-        )
-    }
-
-    fn read_latch_rejection_diagnostics(
-        &mut self,
-    ) -> io::Result<Option<mister_magik_fb::latch_readiness::LatchRejectionObservation>> {
-        self.read_magik_latched_fbuf_rejection_diagnostics()
-    }
-}
-
-fn dev_latch_timeout_at() -> Option<u64> {
-    *DEV_LATCH_TIMEOUT_AT.get_or_init(|| {
-        let executable = std::env::current_exe().ok()?;
-        dev_latch_timeout_for(
-            &executable,
-            std::env::var(DEV_LATCH_TIMEOUT_ENV).ok().as_deref(),
-        )
-    })
-}
-
-fn dev_latch_timeout_for(executable: &std::path::Path, configured: Option<&str>) -> Option<u64> {
-    (mister_magik_catalog::device_layout::DeviceLayout::for_executable(executable)
-        == mister_magik_catalog::device_layout::DeviceLayout::Dev)
-        .then_some(())?;
-    configured?.parse::<u64>().ok().filter(|read| *read > 0)
-}
-
-fn dev_latch_post_skip_word_index() -> Option<usize> {
-    let configured = *DEV_LATCH_POST_SKIP_INDEX.get_or_init(|| {
-        let executable = std::env::current_exe().ok()?;
-        dev_latch_post_skip_for(
-            &executable,
-            std::env::var(DEV_LATCH_POST_SKIP_ENV).ok().as_deref(),
-        )
-    });
-    configured
-        .filter(|_| !DEV_LATCH_POST_SKIP_USED.swap(true, std::sync::atomic::Ordering::Relaxed))
-}
-
-fn dev_latch_post_skip_for(
-    executable: &std::path::Path,
-    configured: Option<&str>,
-) -> Option<usize> {
-    (mister_magik_catalog::device_layout::DeviceLayout::for_executable(executable)
-        == mister_magik_catalog::device_layout::DeviceLayout::Dev)
-        .then_some(())?;
-    configured?
-        .parse::<usize>()
-        .ok()
-        .filter(|index| *index < mister_magik_latch_contract::V5_SET_WORDS)
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct HiddenSlotRenderGrant {
