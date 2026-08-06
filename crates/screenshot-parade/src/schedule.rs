@@ -454,7 +454,7 @@ impl ScreenshotParade {
         // Destination classification is diagnostic rather than presentation work.
         // Sample it sparsely so the probe cannot materially change the deadline
         // behavior it is intended to measure.
-        let coverage_probe_sampled = motion_ticks_fp / TICK_ONE as u64 % 64 == 0;
+        let coverage_probe_sampled = (motion_ticks_fp / TICK_ONE as u64).is_multiple_of(64);
         let base_background = color565(0, 0, 10);
         if coverage_probe_sampled {
             for &tile_index in &self.visible_draw_order {

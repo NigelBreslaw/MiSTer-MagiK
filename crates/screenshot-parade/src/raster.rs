@@ -640,7 +640,7 @@ fn scale_lanczos3_linear_tinted(
 #[inline]
 fn preparation_checkpoint_row(slack: Option<&PreparationSlack>, row: usize) {
     const ROWS_PER_CHECKPOINT: usize = 4;
-    if row % ROWS_PER_CHECKPOINT == 0
+    if row.is_multiple_of(ROWS_PER_CHECKPOINT)
         && let Some(slack) = slack
     {
         slack.checkpoint();
@@ -1622,10 +1622,7 @@ mod tests {
         let ParadePhaseSet::SixteenthLinear {
             base_coverage,
             shifted,
-        } = &card.phases
-        else {
-            panic!("card did not use linear Lanczos phases");
-        };
+        } = &card.phases;
         (base_coverage, shifted.as_slice())
     }
 
