@@ -71,6 +71,9 @@ pub struct ScreenshotSequenceFailure {
 }
 
 #[derive(Debug)]
+// The frame variant intentionally carries complete telemetry inline. Boxing it
+// would add a heap allocation to every 60 Hz presentation tick.
+#[allow(clippy::large_enum_variant)]
 pub enum LiveScreenshotPoll<B> {
     Prefilling,
     Frame(ReadyScreenshotFrame<B>),
