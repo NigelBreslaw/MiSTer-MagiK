@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
-const WIDE_LAYER_TARGETS: [usize; 5] = [33, 24, 20, 16, 12];
+const WIDE_LAYER_TARGETS: [usize; 5] = [28, 21, 17, 14, 10];
 const COMPACT_LAYER_TARGETS: [usize; 5] = [25, 18, 15, 12, 9];
 const REFERENCE_HEIGHT: usize = 540;
 // Preserve edge-to-edge travel time at every geometry, using velocities that
