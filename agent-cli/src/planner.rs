@@ -889,6 +889,27 @@ fn add_path_operations(
             ],
         ));
     }
+    if path.starts_with("apps/mister/ui")
+        || path.starts_with("apps/mister/ui-generated")
+        || path == Path::new("scripts/tests/test-slint-build-contract.py")
+    {
+        let mut contract = with_inputs(
+            op(
+                "scripts.slint-build-contract",
+                "Test Slint build dependency tracking",
+                "python3",
+                &["scripts/tests/test-slint-build-contract.py"],
+                "Slint UI or build glue changed",
+            ),
+            &[
+                "apps/mister/ui",
+                "apps/mister/ui-generated",
+                "scripts/tests/test-slint-build-contract.py",
+            ],
+        );
+        contract.phase = WorkflowPhase::Expensive;
+        add(contract);
+    }
     if path.starts_with(".github") || path.starts_with(".githooks") {
         add(builtin(
             "repo.workflow-contract",
@@ -1523,6 +1544,37 @@ mod tests {
             test_operations[0].args,
             ["scripts/tests/test-pixel-text-contract.py"]
         );
+    }
+
+    #[test]
+    fn imported_slint_changes_select_compilation_and_dependency_contract_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/ui/components/combo_box.slint".into(),
+                "apps/mister/ui-generated/build.rs".into(),
+                "scripts/tests/test-slint-build-contract.py".into(),
+            ],
+        )
+        .unwrap();
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "app.ui-check")
+        );
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.id == "scripts.slint-build-contract")
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(
+            operations[0].args,
+            ["scripts/tests/test-slint-build-contract.py"]
+        );
+        assert_eq!(operations[0].phase, WorkflowPhase::Expensive);
     }
 
     #[test]
