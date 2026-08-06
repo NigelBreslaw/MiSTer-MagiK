@@ -41,7 +41,6 @@ import {
     AppState,
     DeviceState,
     RealtimeCpuCore,
-    RealtimeFrameSample,
     RealtimeHealthTile,
     RealtimeState,
 } from "../api.slint";
@@ -521,7 +520,6 @@ component MemoryPieChart inherits Rectangle {
 }
 
 component RealtimeFrameBudgetChart inherits Rectangle {
-    in property <[RealtimeFrameSample]> samples;
     in property <int> budget-us: 16667;
     in property <int> max-us: 33334;
     private property <length> plot-x: 46px;
@@ -529,6 +527,17 @@ component RealtimeFrameBudgetChart inherits Rectangle {
     private property <length> plot-w: self.width - 58px;
     private property <length> plot-h: self.height - 34px;
     private property <length> budget-y: root.plot-y + root.plot-h - root.plot-h * root.budget-us / root.max-us;
+
+    function report-size() {
+        Actions.realtime-frame-chart-resized(
+            max(0, round(root.plot-w / 1px)),
+            max(0, round(root.plot-h / 1px)),
+        );
+    }
+
+    init => { root.report-size(); }
+    changed plot-w => { root.report-size(); }
+    changed plot-h => { root.report-size(); }
 
     width: 100%;
     height: 156px;
@@ -562,7 +571,7 @@ component RealtimeFrameBudgetChart inherits Rectangle {
         font-size: 9px;
     }
 
-    plot := Rectangle {
+    frame-budget-plot := Rectangle {
         x: root.plot-x;
         y: root.plot-y;
         width: root.plot-w;
@@ -596,116 +605,19 @@ component RealtimeFrameBudgetChart inherits Rectangle {
             opacity: 0.55;
         }
 
-        for sample[ix] in root.samples : Rectangle {
-            private property <length> prepare-h: max(1px, parent.height * sample.prepare-us / root.max-us);
-            private property <length> render-h: max(1px, parent.height * sample.render-us / root.max-us);
-            private property <length> custom-h: max(1px, parent.height * sample.custom-draw-us / root.max-us);
-            private property <length> vsync-h: max(1px, parent.height * sample.vsync-us / root.max-us);
-            private property <length> present-h: max(1px, parent.height * sample.present-us / root.max-us);
-            private property <length> cpu-prepare-h: parent.height * sample.cpu-prepare-us / root.max-us;
-            private property <length> cpu-render-h: parent.height * sample.cpu-render-us / root.max-us;
-            private property <length> cpu-custom-h: parent.height * sample.cpu-custom-draw-us / root.max-us;
-            private property <length> cpu-vsync-h: parent.height * sample.cpu-vsync-us / root.max-us;
-            private property <length> cpu-present-h: parent.height * sample.cpu-present-us / root.max-us;
-            private property <length> process-y: parent.height - parent.height * sample.process-cpu-us / root.max-us;
-
-            x: parent.width - root.samples.length * 1px + ix * 1px;
-            width: 1px;
+        frame-budget-raster := Image {
+            width: parent.width;
             height: parent.height;
-
-            if sample.idle: Rectangle {
-                y: parent.height - 1px;
-                width: 1px;
-                height: 1px;
-                background: #1a7f37;
-                opacity: 0.8;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.prepare-h;
-                width: 1px;
-                height: parent.prepare-h;
-                background: #6b7280;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.prepare-h - parent.render-h;
-                width: 1px;
-                height: parent.render-h;
-                background: #2563eb;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h;
-                width: 1px;
-                height: parent.custom-h;
-                background: #a855f7;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h;
-                width: 1px;
-                height: parent.vsync-h;
-                background: #f59e0b;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.prepare-h - parent.render-h - parent.custom-h - parent.vsync-h - parent.present-h;
-                width: 1px;
-                height: parent.present-h;
-                background: #06b6d4;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.cpu-prepare-h;
-                width: 1px;
-                height: max(0px, parent.cpu-prepare-h);
-                background: #ffffff;
-                opacity: 0.45;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h;
-                width: 1px;
-                height: max(0px, parent.cpu-render-h);
-                background: #ffffff;
-                opacity: 0.45;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h;
-                width: 1px;
-                height: max(0px, parent.cpu-custom-h);
-                background: #ffffff;
-                opacity: 0.45;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h;
-                width: 1px;
-                height: max(0px, parent.cpu-vsync-h);
-                background: #ffffff;
-                opacity: 0.45;
-            }
-
-            if !sample.idle: Rectangle {
-                y: parent.height - parent.cpu-prepare-h - parent.cpu-render-h - parent.cpu-custom-h - parent.cpu-vsync-h - parent.cpu-present-h;
-                width: 1px;
-                height: max(0px, parent.cpu-present-h);
-                background: #ffffff;
-                opacity: 0.45;
-            }
-
-            if !sample.idle: Rectangle {
-                y: min(max(0px, parent.process-y), parent.height - 2px);
-                width: 1px;
-                height: 2px;
-                background: #111827;
-            }
+            source: RealtimeState.frame-chart-image;
+            image-fit: fill;
+            image-rendering: pixelated;
+            visible: RealtimeState.frame-chart-has-data;
+            accessible-role: image;
+            accessible-label: "Rasterized realtime frame budget chart";
         }
     }
 
-    if root.samples.length == 0: Text {
+    if !RealtimeState.frame-chart-has-data: Text {
         x: root.plot-x + 10px;
         y: root.plot-y + 10px;
         text: "No per-frame samples in the current stream.";
@@ -834,8 +746,7 @@ component RealTimePanel inherits VerticalLayout {
                 width: 100%;
                 spacing: 8px;
 
-                RealtimeFrameBudgetChart {
-                    samples: RealtimeState.frame-samples;
+                frame-budget-chart := RealtimeFrameBudgetChart {
                 }
             }
         }

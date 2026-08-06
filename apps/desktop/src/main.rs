@@ -14,6 +14,7 @@ mod macos_display_clock;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod platform_lifecycle;
+mod realtime_frame_chart;
 mod sd_card;
 mod stream_lifecycle;
 
@@ -25,6 +26,7 @@ use agent_client::{
 };
 use app_state::{DEFAULT_HOST, DashboardSnapshot};
 use framebuffer_cadence::{CadenceEventKind, FramebufferCadenceTrace};
+use realtime_frame_chart::{FrameChartState, FrameSample, RenderedFrameChart};
 use sd_card::SdCardBrowser;
 #[cfg(feature = "compiled-ui")]
 use sd_card::SdTreeRow;
@@ -50,6 +52,7 @@ type SharedLiveStreamGeneration = Arc<AtomicU64>;
 type SharedFramebufferStreamControl = Arc<Mutex<Option<(u64, FramebufferStreamControl)>>>;
 type SharedRealtimeStreamGeneration = Arc<AtomicU64>;
 type SharedRealtimeStreamControl = Arc<Mutex<Option<(u64, DeviceTelemetryStreamControl)>>>;
+type SharedRealtimeFrameChart = Arc<Mutex<FrameChartState>>;
 type SharedDisplayClockCallback = Rc<RefCell<Box<dyn FnMut(FramebufferDisplayClockTick)>>>;
 
 const DIRTY_RECT_LINGER_FRAMES: usize = 8;
@@ -774,7 +777,7 @@ struct RealtimeViewState {
     storage_write_path: String,
     frame_history: Vec<RealtimeChartPoint>,
     phases: Vec<RealtimeFramePhaseView>,
-    frame_samples: Vec<RealtimeFrameSampleView>,
+    frame_samples: Vec<FrameSample>,
     health_tiles: Vec<RealtimeHealthTileView>,
 }
 
@@ -790,25 +793,6 @@ struct RealtimeFramePhaseView {
     us: u64,
     start_us: u64,
     color_index: i32,
-}
-
-#[derive(Clone, Debug)]
-struct RealtimeFrameSampleView {
-    frame: u64,
-    wall_us: u64,
-    prepare_us: u64,
-    render_us: u64,
-    custom_draw_us: u64,
-    vsync_us: u64,
-    present_us: u64,
-    cpu_prepare_us: u64,
-    cpu_render_us: u64,
-    cpu_custom_draw_us: u64,
-    cpu_vsync_us: u64,
-    cpu_present_us: u64,
-    process_cpu_us: u64,
-    over_budget: bool,
-    idle: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1370,13 +1354,13 @@ fn realtime_view_from_history(
 
 fn realtime_frame_samples_from_telemetry(
     sample: &DeviceTelemetrySample,
-) -> Vec<RealtimeFrameSampleView> {
+) -> Vec<FrameSample> {
     let budget_us = sample.frame_budget.budget_us.max(1);
     let frames = sample
         .frame_budget
         .recent_frames
         .iter()
-        .map(|frame| RealtimeFrameSampleView {
+        .map(|frame| FrameSample {
             frame: frame.frame,
             wall_us: frame.wall_us,
             prepare_us: frame.prepare_us,
@@ -1399,7 +1383,7 @@ fn realtime_frame_samples_from_telemetry(
     }
 
     (0..REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE)
-        .map(|ix| RealtimeFrameSampleView {
+        .map(|ix| FrameSample {
             frame: sample
                 .seq
                 .saturating_mul(REALTIME_IDLE_FRAME_COLUMNS_PER_SAMPLE)
@@ -1705,6 +1689,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         run_framebuffer_stream_bench(mode, limit)?;
         return Ok(());
     }
+    let frame_chart_fixture = realtime_frame_chart_fixture_args()?;
 
     if std::env::var_os("SLINT_BACKEND").is_none() {
         // SAFETY: this is still single-threaded process initialization before
@@ -1715,18 +1700,88 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     #[cfg(feature = "live-ui")]
     {
-        run_live_ui()
+        run_live_ui(frame_chart_fixture)
     }
 
     #[cfg(all(not(feature = "live-ui"), feature = "compiled-ui"))]
     {
-        run_compiled_ui()
+        run_compiled_ui(frame_chart_fixture)
     }
 
     #[cfg(all(not(feature = "live-ui"), not(feature = "compiled-ui")))]
     {
         compile_error!("enable either live-ui or compiled-ui");
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RealtimeFrameChartFixture {
+    Small,
+    Large,
+}
+
+fn realtime_frame_chart_fixture_args(
+) -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>> {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    parse_realtime_frame_chart_fixture_args(&args)
+}
+
+fn parse_realtime_frame_chart_fixture_args(
+    args: &[String],
+) -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>> {
+    if args.first().map(String::as_str) != Some("--realtime-frame-chart-fixture") {
+        return Ok(None);
+    }
+    if args.len() != 2 {
+        return Err("--realtime-frame-chart-fixture requires exactly small or large".into());
+    }
+    match args[1].as_str() {
+        "small" => Ok(Some(RealtimeFrameChartFixture::Small)),
+        "large" => Ok(Some(RealtimeFrameChartFixture::Large)),
+        value => Err(format!("invalid realtime frame chart fixture: {value}").into()),
+    }
+}
+
+fn realtime_frame_chart_fixture_view(fixture: RealtimeFrameChartFixture) -> RealtimeViewState {
+    let count = match fixture {
+        RealtimeFrameChartFixture::Small => 12,
+        RealtimeFrameChartFixture::Large => 12_000,
+    };
+    let mut frame_samples = (0..count)
+        .map(|frame| {
+            let pulse = 800 + (frame % 17) as u64 * 70;
+            FrameSample {
+                frame: frame as u64,
+                wall_us: 12_000 + pulse,
+                prepare_us: 700 + pulse / 4,
+                render_us: 2_800 + pulse,
+                custom_draw_us: 1_100 + pulse / 2,
+                vsync_us: 5_500 + pulse,
+                present_us: 800 + pulse / 3,
+                cpu_prepare_us: 260 + pulse / 8,
+                cpu_render_us: 1_200 + pulse / 3,
+                cpu_custom_draw_us: 500 + pulse / 5,
+                cpu_vsync_us: 120 + pulse / 16,
+                cpu_present_us: 300 + pulse / 10,
+                process_cpu_us: 4_200 + pulse,
+                over_budget: false,
+                idle: false,
+            }
+        })
+        .collect::<Vec<_>>();
+    let spike = frame_samples.len() / 2;
+    frame_samples[spike].wall_us = 31_500;
+    frame_samples[spike].custom_draw_us = 19_500;
+    frame_samples[spike].process_cpu_us = 24_000;
+    frame_samples[spike].over_budget = true;
+    let last = frame_samples.len() - 1;
+    frame_samples[last].idle = true;
+
+    let mut view = realtime_view_from_history(&RealtimeHistory::default(), false, "");
+    view.status = "Deterministic frame chart inspection fixture.".to_string();
+    view.frame_summary = format!("{count} fixture frames with spike, CPU, and idle markers");
+    view.frame_samples = frame_samples;
+    view
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1982,14 +2037,17 @@ fn select_backend() -> Result<(), slint::PlatformError> {
 }
 
 #[cfg(feature = "live-ui")]
-fn run_live_ui() -> Result<(), Box<dyn Error>> {
+fn run_live_ui(
+    frame_chart_fixture: Option<RealtimeFrameChartFixture>,
+) -> Result<(), Box<dyn Error>> {
     let ui_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("ui/main.slint");
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
 
     loop {
         let reload_requested = Arc::new(AtomicBool::new(false));
         let stop_watcher = Arc::new(AtomicBool::new(false));
-        let (instance, _render_metrics) = create_live_instance(&ui_path, &host)?;
+        let (instance, _render_metrics) =
+            create_live_instance(&ui_path, &host, frame_chart_fixture)?;
         start_reload_watcher(
             &ui_path,
             Arc::clone(&reload_requested),
@@ -2566,6 +2624,7 @@ fn print_framebuffer_display_bench(
 fn create_live_instance(
     ui_path: &Path,
     host: &str,
+    frame_chart_fixture: Option<RealtimeFrameChartFixture>,
 ) -> Result<
     (
         slint_interpreter::ComponentInstance,
@@ -2596,6 +2655,7 @@ fn create_live_instance(
     let live_display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayController>));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
+    let realtime_frame_chart = Arc::new(Mutex::new(FrameChartState::default()));
     let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
     let realtime_debug_tab_index = Arc::new(AtomicI32::new(0));
 
@@ -2612,6 +2672,7 @@ fn create_live_instance(
     let select_instance = instance.as_weak();
     let select_realtime_generation = Arc::clone(&realtime_stream_generation);
     let select_realtime_control = Arc::clone(&realtime_stream_control);
+    let select_frame_chart = Arc::clone(&realtime_frame_chart);
     let select_realtime_page_active = Arc::clone(&realtime_debug_page_active);
     let select_realtime_tab_index = Arc::clone(&realtime_debug_tab_index);
     let select_realtime_host = host.to_string();
@@ -2629,6 +2690,8 @@ fn create_live_instance(
                     select_instance.clone(),
                     Arc::clone(&select_realtime_generation),
                     Arc::clone(&select_realtime_control),
+                    Arc::clone(&select_frame_chart),
+                    frame_chart_fixture,
                     select_realtime_host.clone(),
                     debug_active && select_realtime_tab_index.load(Ordering::SeqCst) == 1,
                 );
@@ -2641,6 +2704,7 @@ fn create_live_instance(
     let debug_tab_host = host.to_string();
     let debug_tab_generation = Arc::clone(&realtime_stream_generation);
     let debug_tab_control = Arc::clone(&realtime_stream_control);
+    let debug_tab_frame_chart = Arc::clone(&realtime_frame_chart);
     let debug_tab_page_active = Arc::clone(&realtime_debug_page_active);
     let debug_tab_index_state = Arc::clone(&realtime_debug_tab_index);
     instance.set_global_callback("Actions", "debug-tab-changed", move |args| {
@@ -2654,6 +2718,8 @@ fn create_live_instance(
             debug_tab_instance.clone(),
             Arc::clone(&debug_tab_generation),
             Arc::clone(&debug_tab_control),
+            Arc::clone(&debug_tab_frame_chart),
+            frame_chart_fixture,
             debug_tab_host.clone(),
             active,
         );
@@ -2664,6 +2730,7 @@ fn create_live_instance(
     let realtime_host = host.to_string();
     let realtime_generation = Arc::clone(&realtime_stream_generation);
     let realtime_control = Arc::clone(&realtime_stream_control);
+    let realtime_frame_chart_for_stream = Arc::clone(&realtime_frame_chart);
     instance.set_global_callback("Actions", "realtime-stream-changed", move |args| {
         let Some(Value::Bool(active)) = args.first() else {
             return Value::Void;
@@ -2672,9 +2739,32 @@ fn create_live_instance(
             realtime_instance.clone(),
             Arc::clone(&realtime_generation),
             Arc::clone(&realtime_control),
+            Arc::clone(&realtime_frame_chart_for_stream),
+            frame_chart_fixture,
             realtime_host.clone(),
             *active,
         );
+        Value::Void
+    })?;
+
+    let resize_instance = instance.as_weak();
+    let resize_frame_chart_state = Arc::clone(&realtime_frame_chart);
+    instance.set_global_callback("Actions", "realtime-frame-chart-resized", move |args| {
+        let (Some(Value::Number(width)), Some(Value::Number(height))) =
+            (args.first(), args.get(1))
+        else {
+            return Value::Void;
+        };
+        if let (Some(instance), Some(rendered)) = (
+            resize_instance.upgrade(),
+            resize_frame_chart(
+                &resize_frame_chart_state,
+                *width as i32,
+                *height as i32,
+            ),
+        ) {
+            apply_live_frame_chart(&instance, rendered);
+        }
         Value::Void
     })?;
 
@@ -3001,10 +3091,22 @@ fn create_live_instance(
         Value::Void
     })?;
 
-    let snapshot = fetch_dashboard(host);
+    let snapshot = if frame_chart_fixture.is_some() {
+        DashboardSnapshot::initial(host)
+    } else {
+        fetch_dashboard(host)
+    };
     apply_live_snapshot(&instance, &snapshot);
     apply_live_sd_state(&instance, &sd_browser);
     apply_live_library_state(&instance, &library_browser);
+    if let Some(fixture) = frame_chart_fixture {
+        let _ = instance.set_global_property("AppState", "debug-tab-index", Value::Number(1.0));
+        apply_live_realtime_view(
+            &instance,
+            &realtime_frame_chart_fixture_view(fixture),
+            &realtime_frame_chart,
+        );
+    }
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_live_instance(&instance);
     Ok((instance, framebuffer_render_metrics))
@@ -3667,7 +3769,9 @@ fn live_sd_metadata_rows(rows: &[sd_card::SdMetadataRow]) -> Vec<slint_interpret
 }
 
 #[cfg(feature = "compiled-ui")]
-fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
+fn run_compiled_ui(
+    frame_chart_fixture: Option<RealtimeFrameChartFixture>,
+) -> Result<(), Box<dyn Error>> {
     use slint::ComponentHandle;
 
     let host = std::env::var("MISTER_IP").unwrap_or_else(|_| DEFAULT_HOST.to_string());
@@ -3682,6 +3786,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let live_display_clock = Rc::new(RefCell::new(None::<FramebufferDisplayController>));
     let realtime_stream_generation = Arc::new(AtomicU64::new(0));
     let realtime_stream_control = Arc::new(Mutex::new(None));
+    let realtime_frame_chart = Arc::new(Mutex::new(FrameChartState::default()));
     let realtime_debug_page_active = Arc::new(AtomicBool::new(true));
     let realtime_debug_tab_index = Arc::new(AtomicI32::new(0));
     let refresh_ui = ui.as_weak();
@@ -3696,6 +3801,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let select_ui = ui.as_weak();
     let select_realtime_generation = Arc::clone(&realtime_stream_generation);
     let select_realtime_control = Arc::clone(&realtime_stream_control);
+    let select_frame_chart = Arc::clone(&realtime_frame_chart);
     let select_realtime_page_active = Arc::clone(&realtime_debug_page_active);
     let select_realtime_tab_index = Arc::clone(&realtime_debug_tab_index);
     let select_realtime_host = host.clone();
@@ -3708,6 +3814,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
                 select_ui.clone(),
                 Arc::clone(&select_realtime_generation),
                 Arc::clone(&select_realtime_control),
+                Arc::clone(&select_frame_chart),
+                frame_chart_fixture,
                 select_realtime_host.clone(),
                 debug_active && select_realtime_tab_index.load(Ordering::SeqCst) == 1,
             );
@@ -3718,6 +3826,7 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let debug_tab_host = host.clone();
     let debug_tab_generation = Arc::clone(&realtime_stream_generation);
     let debug_tab_control = Arc::clone(&realtime_stream_control);
+    let debug_tab_frame_chart = Arc::clone(&realtime_frame_chart);
     let debug_tab_page_active = Arc::clone(&realtime_debug_page_active);
     let debug_tab_index_state = Arc::clone(&realtime_debug_tab_index);
     ui.global::<Actions>().on_debug_tab_changed(move |index| {
@@ -3726,6 +3835,8 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
             debug_tab_ui.clone(),
             Arc::clone(&debug_tab_generation),
             Arc::clone(&debug_tab_control),
+            Arc::clone(&debug_tab_frame_chart),
+            frame_chart_fixture,
             debug_tab_host.clone(),
             debug_tab_page_active.load(Ordering::SeqCst) && index == 1,
         );
@@ -3735,15 +3846,30 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
     let realtime_host = host.clone();
     let realtime_generation = Arc::clone(&realtime_stream_generation);
     let realtime_control = Arc::clone(&realtime_stream_control);
+    let realtime_frame_chart_for_stream = Arc::clone(&realtime_frame_chart);
     ui.global::<Actions>()
         .on_realtime_stream_changed(move |active| {
             start_or_stop_compiled_realtime(
                 realtime_ui.clone(),
                 Arc::clone(&realtime_generation),
                 Arc::clone(&realtime_control),
+                Arc::clone(&realtime_frame_chart_for_stream),
+                frame_chart_fixture,
                 realtime_host.clone(),
                 active,
             );
+        });
+
+    let resize_ui = ui.as_weak();
+    let resize_frame_chart_state = Arc::clone(&realtime_frame_chart);
+    ui.global::<Actions>()
+        .on_realtime_frame_chart_resized(move |width, height| {
+            if let (Some(ui), Some(rendered)) = (
+                resize_ui.upgrade(),
+                resize_frame_chart(&resize_frame_chart_state, width, height),
+            ) {
+                apply_compiled_frame_chart(&ui, rendered);
+            }
         });
 
     let capture_ui = ui.as_weak();
@@ -4031,10 +4157,22 @@ fn run_compiled_ui() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let snapshot = fetch_dashboard(&host);
+    let snapshot = if frame_chart_fixture.is_some() {
+        DashboardSnapshot::initial(&host)
+    } else {
+        fetch_dashboard(&host)
+    };
     apply_compiled_snapshot(&ui, &snapshot);
     apply_compiled_sd_state(&ui, &sd_browser);
     apply_compiled_library_state(&ui, &library_browser);
+    if let Some(fixture) = frame_chart_fixture {
+        ui.global::<AppState>().set_debug_tab_index(1);
+        apply_compiled_realtime_view(
+            &ui,
+            &realtime_frame_chart_fixture_view(fixture),
+            &realtime_frame_chart,
+        );
+    }
     #[cfg(target_os = "macos")]
     setup_macos_titlebar_for_compiled_ui(&ui);
     ui.run()?;
@@ -4504,14 +4642,30 @@ fn start_or_stop_live_realtime(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     stream_generation: SharedRealtimeStreamGeneration,
     stream_control: SharedRealtimeStreamControl,
+    frame_chart: SharedRealtimeFrameChart,
+    fixture: Option<RealtimeFrameChartFixture>,
     host: String,
     active: bool,
 ) {
     let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
     cancel_realtime_stream(&stream_control);
+    if let Some(fixture) = fixture {
+        if let Some(instance) = instance.upgrade() {
+            if active {
+                apply_live_realtime_view(
+                    &instance,
+                    &realtime_frame_chart_fixture_view(fixture),
+                    &frame_chart,
+                );
+            } else {
+                apply_live_realtime_off(&instance, &frame_chart);
+            }
+        }
+        return;
+    }
     if !active {
         if let Some(instance) = instance.upgrade() {
-            apply_live_realtime_off(&instance);
+            apply_live_realtime_off(&instance, &frame_chart);
         }
         return;
     }
@@ -4519,12 +4673,14 @@ fn start_or_stop_live_realtime(
         apply_live_realtime_view(
             &instance,
             &realtime_view_from_history(&RealtimeHistory::default(), true, ""),
+            &frame_chart,
         );
     }
     spawn_live_realtime_stream(
         instance,
         stream_generation,
         stream_control,
+        frame_chart,
         host,
         generation,
     );
@@ -4535,14 +4691,30 @@ fn start_or_stop_compiled_realtime(
     ui: slint::Weak<AppWindow>,
     stream_generation: SharedRealtimeStreamGeneration,
     stream_control: SharedRealtimeStreamControl,
+    frame_chart: SharedRealtimeFrameChart,
+    fixture: Option<RealtimeFrameChartFixture>,
     host: String,
     active: bool,
 ) {
     let generation = stream_generation.fetch_add(1, Ordering::SeqCst) + 1;
     cancel_realtime_stream(&stream_control);
+    if let Some(fixture) = fixture {
+        if let Some(ui) = ui.upgrade() {
+            if active {
+                apply_compiled_realtime_view(
+                    &ui,
+                    &realtime_frame_chart_fixture_view(fixture),
+                    &frame_chart,
+                );
+            } else {
+                apply_compiled_realtime_off(&ui, &frame_chart);
+            }
+        }
+        return;
+    }
     if !active {
         if let Some(ui) = ui.upgrade() {
-            apply_compiled_realtime_off(&ui);
+            apply_compiled_realtime_off(&ui, &frame_chart);
         }
         return;
     }
@@ -4550,9 +4722,17 @@ fn start_or_stop_compiled_realtime(
         apply_compiled_realtime_view(
             &ui,
             &realtime_view_from_history(&RealtimeHistory::default(), true, ""),
+            &frame_chart,
         );
     }
-    spawn_compiled_realtime_stream(ui, stream_generation, stream_control, host, generation);
+    spawn_compiled_realtime_stream(
+        ui,
+        stream_generation,
+        stream_control,
+        frame_chart,
+        host,
+        generation,
+    );
 }
 
 fn record_applied_frame(
@@ -4732,9 +4912,57 @@ fn clear_compiled_dirty_rects(ui: &AppWindow) {
 }
 
 #[cfg(feature = "live-ui")]
+fn apply_live_frame_chart(
+    instance: &slint_interpreter::ComponentInstance,
+    rendered: RenderedFrameChart,
+) {
+    use slint_interpreter::Value;
+
+    let _ = instance.set_global_property(
+        "RealtimeState",
+        "frame-chart-image",
+        Value::Image(rendered.image),
+    );
+    let _ = instance.set_global_property(
+        "RealtimeState",
+        "frame-chart-has-data",
+        Value::Bool(rendered.has_data),
+    );
+}
+
+#[cfg(feature = "compiled-ui")]
+fn apply_compiled_frame_chart(ui: &AppWindow, rendered: RenderedFrameChart) {
+    let state = ui.global::<RealtimeState>();
+    state.set_frame_chart_image(rendered.image);
+    state.set_frame_chart_has_data(rendered.has_data);
+}
+
+fn set_frame_chart_samples(
+    frame_chart: &SharedRealtimeFrameChart,
+    samples: &[FrameSample],
+) -> RenderedFrameChart {
+    frame_chart
+        .lock()
+        .expect("realtime frame chart state")
+        .set_samples(samples)
+}
+
+fn resize_frame_chart(
+    frame_chart: &SharedRealtimeFrameChart,
+    width: i32,
+    height: i32,
+) -> Option<RenderedFrameChart> {
+    frame_chart
+        .lock()
+        .expect("realtime frame chart state")
+        .resize(width, height)
+}
+
+#[cfg(feature = "live-ui")]
 fn apply_live_realtime_view(
     instance: &slint_interpreter::ComponentInstance,
     view: &RealtimeViewState,
+    frame_chart: &SharedRealtimeFrameChart,
 ) {
     use slint::{ModelRc, SharedString, VecModel};
     use slint_interpreter::{Struct, Value};
@@ -4925,12 +5153,9 @@ fn apply_live_realtime_view(
                 .collect::<Vec<_>>(),
         ))),
     );
-    set(
+    apply_live_frame_chart(
         instance,
-        "frame-samples",
-        Value::Model(ModelRc::new(VecModel::from(live_realtime_frame_samples(
-            &view.frame_samples,
-        )))),
+        set_frame_chart_samples(frame_chart, &view.frame_samples),
     );
     set(
         instance,
@@ -4979,78 +5204,23 @@ fn live_realtime_points(points: &[RealtimeChartPoint]) -> Vec<slint_interpreter:
 }
 
 #[cfg(feature = "live-ui")]
-fn live_realtime_frame_samples(
-    samples: &[RealtimeFrameSampleView],
-) -> Vec<slint_interpreter::Value> {
-    use slint_interpreter::{Struct, Value};
-
-    samples
-        .iter()
-        .map(|sample| {
-            Value::Struct(Struct::from_iter([
-                ("frame".to_string(), Value::Number(sample.frame as f64)),
-                ("wall-us".to_string(), Value::Number(sample.wall_us as f64)),
-                (
-                    "prepare-us".to_string(),
-                    Value::Number(sample.prepare_us as f64),
-                ),
-                (
-                    "render-us".to_string(),
-                    Value::Number(sample.render_us as f64),
-                ),
-                (
-                    "custom-draw-us".to_string(),
-                    Value::Number(sample.custom_draw_us as f64),
-                ),
-                (
-                    "vsync-us".to_string(),
-                    Value::Number(sample.vsync_us as f64),
-                ),
-                (
-                    "present-us".to_string(),
-                    Value::Number(sample.present_us as f64),
-                ),
-                (
-                    "cpu-prepare-us".to_string(),
-                    Value::Number(sample.cpu_prepare_us as f64),
-                ),
-                (
-                    "cpu-render-us".to_string(),
-                    Value::Number(sample.cpu_render_us as f64),
-                ),
-                (
-                    "cpu-custom-draw-us".to_string(),
-                    Value::Number(sample.cpu_custom_draw_us as f64),
-                ),
-                (
-                    "cpu-vsync-us".to_string(),
-                    Value::Number(sample.cpu_vsync_us as f64),
-                ),
-                (
-                    "cpu-present-us".to_string(),
-                    Value::Number(sample.cpu_present_us as f64),
-                ),
-                (
-                    "process-cpu-us".to_string(),
-                    Value::Number(sample.process_cpu_us as f64),
-                ),
-                ("over-budget".to_string(), Value::Bool(sample.over_budget)),
-                ("idle".to_string(), Value::Bool(sample.idle)),
-            ]))
-        })
-        .collect()
-}
-
-#[cfg(feature = "live-ui")]
-fn apply_live_realtime_off(instance: &slint_interpreter::ComponentInstance) {
+fn apply_live_realtime_off(
+    instance: &slint_interpreter::ComponentInstance,
+    frame_chart: &SharedRealtimeFrameChart,
+) {
     apply_live_realtime_view(
         instance,
         &realtime_view_from_history(&RealtimeHistory::default(), false, ""),
+        frame_chart,
     );
 }
 
 #[cfg(feature = "compiled-ui")]
-fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
+fn apply_compiled_realtime_view(
+    ui: &AppWindow,
+    view: &RealtimeViewState,
+    frame_chart: &SharedRealtimeFrameChart,
+) {
     use slint::{ModelRc, SharedString, VecModel};
 
     let state = ui.global::<RealtimeState>();
@@ -5106,7 +5276,10 @@ fn apply_compiled_realtime_view(ui: &AppWindow, view: &RealtimeViewState) {
             })
             .collect::<Vec<_>>(),
     )));
-    state.set_frame_samples(compiled_realtime_frame_samples(&view.frame_samples));
+    apply_compiled_frame_chart(
+        ui,
+        set_frame_chart_samples(frame_chart, &view.frame_samples),
+    );
     state.set_health_tiles(ModelRc::new(VecModel::from(
         view.health_tiles
             .iter()
@@ -5136,40 +5309,11 @@ fn compiled_realtime_points(points: &[RealtimeChartPoint]) -> slint::ModelRc<Rea
 }
 
 #[cfg(feature = "compiled-ui")]
-fn compiled_realtime_frame_samples(
-    samples: &[RealtimeFrameSampleView],
-) -> slint::ModelRc<RealtimeFrameSample> {
-    use slint::{ModelRc, VecModel};
-
-    ModelRc::new(VecModel::from(
-        samples
-            .iter()
-            .map(|sample| RealtimeFrameSample {
-                frame: clamp_u64_i32(sample.frame),
-                wall_us: clamp_u64_i32(sample.wall_us),
-                prepare_us: clamp_u64_i32(sample.prepare_us),
-                render_us: clamp_u64_i32(sample.render_us),
-                custom_draw_us: clamp_u64_i32(sample.custom_draw_us),
-                vsync_us: clamp_u64_i32(sample.vsync_us),
-                present_us: clamp_u64_i32(sample.present_us),
-                cpu_prepare_us: clamp_u64_i32(sample.cpu_prepare_us),
-                cpu_render_us: clamp_u64_i32(sample.cpu_render_us),
-                cpu_custom_draw_us: clamp_u64_i32(sample.cpu_custom_draw_us),
-                cpu_vsync_us: clamp_u64_i32(sample.cpu_vsync_us),
-                cpu_present_us: clamp_u64_i32(sample.cpu_present_us),
-                process_cpu_us: clamp_u64_i32(sample.process_cpu_us),
-                over_budget: sample.over_budget,
-                idle: sample.idle,
-            })
-            .collect::<Vec<_>>(),
-    ))
-}
-
-#[cfg(feature = "compiled-ui")]
-fn apply_compiled_realtime_off(ui: &AppWindow) {
+fn apply_compiled_realtime_off(ui: &AppWindow, frame_chart: &SharedRealtimeFrameChart) {
     apply_compiled_realtime_view(
         ui,
         &realtime_view_from_history(&RealtimeHistory::default(), false, ""),
+        frame_chart,
     );
 }
 
@@ -6329,6 +6473,7 @@ fn spawn_live_realtime_stream(
     instance: slint::Weak<slint_interpreter::ComponentInstance>,
     stream_generation: SharedRealtimeStreamGeneration,
     stream_control: SharedRealtimeStreamControl,
+    frame_chart: SharedRealtimeFrameChart,
     host: String,
     generation: u64,
 ) {
@@ -6347,6 +6492,7 @@ fn spawn_live_realtime_stream(
                         apply_live_realtime_view(
                             &instance,
                             &realtime_view_from_history(&history, false, &err),
+                            &frame_chart,
                         );
                     }
                 });
@@ -6366,6 +6512,7 @@ fn spawn_live_realtime_stream(
                         apply_live_realtime_view(
                             &instance,
                             &realtime_view_from_history(&history, false, &err),
+                            &frame_chart,
                         );
                     }
                 });
@@ -6384,12 +6531,13 @@ fn spawn_live_realtime_stream(
                     let view = realtime_view_from_history(&history, true, "");
                     let event_generation = Arc::clone(&stream_generation);
                     let event_instance = instance.clone();
+                    let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
                         if event_generation.load(Ordering::SeqCst) != generation {
                             return;
                         }
                         if let Some(instance) = event_instance.upgrade() {
-                            apply_live_realtime_view(&instance, &view);
+                            apply_live_realtime_view(&instance, &view, &event_frame_chart);
                         }
                     });
                 }
@@ -6398,12 +6546,13 @@ fn spawn_live_realtime_stream(
                     let view = realtime_view_from_history(&history, false, &err);
                     let event_generation = Arc::clone(&stream_generation);
                     let event_instance = instance.clone();
+                    let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
                         if event_generation.load(Ordering::SeqCst) != generation {
                             return;
                         }
                         if let Some(instance) = event_instance.upgrade() {
-                            apply_live_realtime_view(&instance, &view);
+                            apply_live_realtime_view(&instance, &view, &event_frame_chart);
                         }
                     });
                     break;
@@ -6857,6 +7006,7 @@ fn spawn_compiled_realtime_stream(
     ui: slint::Weak<AppWindow>,
     stream_generation: SharedRealtimeStreamGeneration,
     stream_control: SharedRealtimeStreamControl,
+    frame_chart: SharedRealtimeFrameChart,
     host: String,
     generation: u64,
 ) {
@@ -6875,6 +7025,7 @@ fn spawn_compiled_realtime_stream(
                         apply_compiled_realtime_view(
                             &ui,
                             &realtime_view_from_history(&history, false, &err),
+                            &frame_chart,
                         );
                     }
                 });
@@ -6894,6 +7045,7 @@ fn spawn_compiled_realtime_stream(
                         apply_compiled_realtime_view(
                             &ui,
                             &realtime_view_from_history(&history, false, &err),
+                            &frame_chart,
                         );
                     }
                 });
@@ -6912,12 +7064,13 @@ fn spawn_compiled_realtime_stream(
                     let view = realtime_view_from_history(&history, true, "");
                     let event_generation = Arc::clone(&stream_generation);
                     let event_ui = ui.clone();
+                    let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
                         if event_generation.load(Ordering::SeqCst) != generation {
                             return;
                         }
                         if let Some(ui) = event_ui.upgrade() {
-                            apply_compiled_realtime_view(&ui, &view);
+                            apply_compiled_realtime_view(&ui, &view, &event_frame_chart);
                         }
                     });
                 }
@@ -6926,12 +7079,13 @@ fn spawn_compiled_realtime_stream(
                     let view = realtime_view_from_history(&history, false, &err);
                     let event_generation = Arc::clone(&stream_generation);
                     let event_ui = ui.clone();
+                    let event_frame_chart = Arc::clone(&frame_chart);
                     let _ = slint::invoke_from_event_loop(move || {
                         if event_generation.load(Ordering::SeqCst) != generation {
                             return;
                         }
                         if let Some(ui) = event_ui.upgrade() {
-                            apply_compiled_realtime_view(&ui, &view);
+                            apply_compiled_realtime_view(&ui, &view, &event_frame_chart);
                         }
                     });
                     break;
@@ -7546,6 +7700,33 @@ mod tests {
         .expect_err("bad chrome value should fail");
 
         assert!(error.to_string().contains("on or off"));
+    }
+
+    #[test]
+    fn realtime_frame_chart_fixture_cli_accepts_only_small_or_large() {
+        assert_eq!(
+            parse_realtime_frame_chart_fixture_args(&[
+                "--realtime-frame-chart-fixture".to_string(),
+                "small".to_string(),
+            ])
+            .expect("small fixture"),
+            Some(RealtimeFrameChartFixture::Small)
+        );
+        assert_eq!(
+            parse_realtime_frame_chart_fixture_args(&[
+                "--realtime-frame-chart-fixture".to_string(),
+                "large".to_string(),
+            ])
+            .expect("large fixture"),
+            Some(RealtimeFrameChartFixture::Large)
+        );
+        assert!(
+            parse_realtime_frame_chart_fixture_args(&[
+                "--realtime-frame-chart-fixture".to_string(),
+                "unknown".to_string(),
+            ])
+            .is_err()
+        );
     }
 
     #[cfg(feature = "compiled-ui")]

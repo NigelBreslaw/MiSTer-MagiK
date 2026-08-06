@@ -109,24 +109,6 @@ export struct RealtimeFramePhase {
     color-index: int,
 }
 
-export struct RealtimeFrameSample {
-    frame: int,
-    wall-us: int,
-    prepare-us: int,
-    render-us: int,
-    custom-draw-us: int,
-    vsync-us: int,
-    present-us: int,
-    cpu-prepare-us: int,
-    cpu-render-us: int,
-    cpu-custom-draw-us: int,
-    cpu-vsync-us: int,
-    cpu-present-us: int,
-    process-cpu-us: int,
-    over-budget: bool,
-    idle: bool,
-}
-
 export struct RealtimeHealthTile {
     title: string,
     value: string,
@@ -198,7 +180,8 @@ export global RealtimeState {
     in-out property <string> storage-write-path: "";
     in-out property <[RealtimePoint]> frame-history: [];
     in-out property <[RealtimeFramePhase]> frame-phases: [];
-    in-out property <[RealtimeFrameSample]> frame-samples: [];
+    in-out property <image> frame-chart-image;
+    in-out property <bool> frame-chart-has-data: false;
     in-out property <[RealtimeHealthTile]> health-tiles: [];
 }
 
@@ -305,6 +288,7 @@ export global Actions {
     callback select-page(string);
     callback debug-tab-changed(int);
     callback realtime-stream-changed(bool);
+    callback realtime-frame-chart-resized(int, int);
     callback capture-framebuffer();
     callback save-framebuffer-image();
     callback live-stream-changed(bool);
