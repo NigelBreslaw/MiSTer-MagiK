@@ -740,7 +740,32 @@ mod linux {
                 environment: read_environment(),
                 attempts: Vec::new(),
             };
-            diagnostics.attempts.push(minimal_cycle_attempt());
+            diagnostics.attempts.extend([
+                cycle_attribute_attempt("cycle-minimal", 0, 0),
+                cycle_attribute_attempt("cycle-disabled", 0, PERF_ATTR_DISABLED),
+                cycle_attribute_attempt("cycle-exclude-kernel", 0, PERF_ATTR_EXCLUDE_KERNEL),
+                cycle_attribute_attempt(
+                    "cycle-disabled-exclude-kernel",
+                    0,
+                    PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL,
+                ),
+                cycle_attribute_attempt("cycle-group-format", PERF_FORMAT_GROUP, 0),
+                cycle_attribute_attempt(
+                    "cycle-group-format-disabled",
+                    PERF_FORMAT_GROUP,
+                    PERF_ATTR_DISABLED,
+                ),
+                cycle_attribute_attempt(
+                    "cycle-group-format-disabled-exclude-kernel",
+                    PERF_FORMAT_GROUP,
+                    PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL,
+                ),
+                cycle_attribute_attempt(
+                    "cycle-group-format-all-exclusions",
+                    PERF_FORMAT_GROUP,
+                    PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HYPERVISOR,
+                ),
+            ]);
             let group = Self::open_matrix(Some(&mut diagnostics.attempts));
             (group, diagnostics)
         }
@@ -932,11 +957,13 @@ mod linux {
         }
     }
 
-    fn minimal_cycle_attempt() -> PmuOpenAttempt {
+    fn cycle_attribute_attempt(name: &str, read_format: u64, flags: u64) -> PmuOpenAttempt {
         let attributes = PerfEventAttr {
             event_type: PERF_TYPE_HARDWARE,
             size: std::mem::size_of::<PerfEventAttr>() as u32,
             config: HardwareEvent::Cycles.perf_config(),
+            read_format,
+            flags,
             ..PerfEventAttr::default()
         };
         let result = perf_event_open(
@@ -959,14 +986,18 @@ mod linux {
             }
         });
         PmuOpenAttempt {
-            name: "minimal-cycle".to_owned(),
-            read_format: None,
+            name: name.to_owned(),
+            read_format: if read_format == 0 {
+                None
+            } else {
+                Some(GroupReadFormat::OrderedValues)
+            },
             scope: CounterScope::CallingThreadAnyCpu,
             cpu: -1,
             perf_flags: PERF_FLAG_FD_CLOEXEC as u64,
-            disabled: false,
-            exclude_kernel: false,
-            exclude_hypervisor: false,
+            disabled: flags & PERF_ATTR_DISABLED != 0,
+            exclude_kernel: flags & PERF_ATTR_EXCLUDE_KERNEL != 0,
+            exclude_hypervisor: flags & PERF_ATTR_EXCLUDE_HYPERVISOR != 0,
             grouped: false,
             success: result.is_ok(),
             failure: result.err(),
