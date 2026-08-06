@@ -661,8 +661,6 @@ fn prepare_scene_evidence_output(
         "screenshot_pack": screenshot.map(|screenshot| json!({
             "path": screenshot.archive,
             "fingerprint": screenshot.fingerprint,
-            "sampling_profile": "sixteenth",
-            "phase_generation": "linear-lanczos3-neon-with-scalar-fallback",
         })),
         "fixture": fixture,
         "case": case,
