@@ -4358,6 +4358,23 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
         }))
     })();
 
+    if let Err(error) = &run_result {
+        let evidence = json!({
+            "schema": "mister-magik-modal-input-failure-v1",
+            "error": error.to_string(),
+            "status": remote_read(&session, SLINT_STATUS_REMOTE),
+            "main_status": remote_read(&session, MAIN_STATUS_REMOTE),
+            "events_tail": tail_remote(&session, "/tmp/mister-magik/events.jsonl", 160)
+                .map(|lines| lines.join("\n")),
+            "slint_log_tail": tail_remote(&session, "/tmp/mister-magik-slint.log", 160)
+                .map(|lines| lines.join("\n")),
+        });
+        fs::write(
+            output_dir.join("failure-evidence.json"),
+            format!("{}\n", serde_json::to_string_pretty(&evidence)?),
+        )?;
+    }
+
     let end_result = nonce
         .as_deref()
         .map(|nonce| launcher_automation::end(config, nonce).map(|_| ()))
