@@ -6,6 +6,7 @@ pub mod damage;
 #[cfg(feature = "ui")]
 pub mod downsample;
 pub mod format;
+pub mod full_frame_latch;
 #[cfg(feature = "framebuffer-lab")]
 pub mod hidden_latch;
 pub mod hidden_scanout;
