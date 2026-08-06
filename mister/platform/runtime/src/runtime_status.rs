@@ -859,6 +859,7 @@ fn write_launcher_status_json_tail(
         "preview_transition_progress",
         (status.preview_transition_progress * 1000.0).round() / 1000.0
     );
+    field!("screensaver_active_cards", status.screensaver_active_cards);
     field!("composition_state", status.composition_state);
     field!(
         "composition_recovery_count",
@@ -1131,6 +1132,7 @@ fn launcher_status_value(
         "preview_transition_progress",
         (status.preview_transition_progress * 1000.0).round() / 1000.0
     );
+    insert!("screensaver_active_cards", status.screensaver_active_cards);
     insert!("composition_state", status.composition_state);
     insert!(
         "composition_recovery_count",
@@ -2098,6 +2100,7 @@ mod tests {
         assert_eq!(value["preview_cache_state"], "exact");
         assert_eq!(value["preview_transition_effect"], "fade");
         assert_eq!(value["preview_transition_progress"], 0.5);
+        assert_eq!(value["screensaver_active_cards"], 73);
         assert_eq!(value["composition_state"], "mixed-arcade");
         assert_eq!(value["composition_recovery_count"], 0);
         assert_eq!(value["last_composition_invariant_kind"], "");
