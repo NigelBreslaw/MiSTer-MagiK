@@ -207,6 +207,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
     let scene = scene.to_owned();
     let fixture = fixture.map(str::to_owned);
     let case = case.map(str::to_owned);
+    let particle_preset = particle_preset.map(str::to_owned);
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = match thread::Builder::new()
         .name("framebuffer-scene-lab-device".into())
@@ -221,7 +222,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     screenshot,
                     case,
                     particle_count,
-                    particle_preset: particle_preset.map(str::to_owned),
+                    particle_preset,
                     seconds,
                     warmup_seconds,
                     profile,
