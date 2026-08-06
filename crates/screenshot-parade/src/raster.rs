@@ -500,6 +500,36 @@ fn lanczos_filters(source_len: usize, target_len: usize) -> Arc<[LanczosFilter]>
     filters
 }
 
+fn srgb_to_linear_table() -> &'static [u16; 256] {
+    static TABLE: OnceLock<[u16; 256]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        std::array::from_fn(|index| {
+            let encoded = index as f64 / 255.0;
+            let linear = if encoded <= 0.04045 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            };
+            (linear * 65535.0).round() as u16
+        })
+    })
+}
+
+fn linear_to_srgb_table() -> &'static [u8; 4097] {
+    static TABLE: OnceLock<[u8; 4097]> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        std::array::from_fn(|index| {
+            let linear = index as f64 / 4096.0;
+            let encoded = if linear <= 0.003_130_8 {
+                linear * 12.92
+            } else {
+                1.055 * linear.powf(1.0 / 2.4) - 0.055
+            };
+            (encoded * 255.0).round().clamp(0.0, 255.0) as u8
+        })
+    })
+}
+
 fn srgb8_to_linear16(value: u8) -> u16 {
     srgb_to_linear_table()[usize::from(value)]
 }
