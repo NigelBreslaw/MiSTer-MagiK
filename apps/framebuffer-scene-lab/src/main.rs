@@ -28,10 +28,11 @@ use mister_magik_particles::cabinet::{
     CabinetColorMode, CabinetCreativeMode, CabinetRenderOptions, Rgb565Pixel,
 };
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
-use mister_magik_screenshot_parade::STRICT_READY_CAPACITY;
 use mister_magik_screenshot_parade::{
-    LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, PreparationSlack,
-    ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats,
+    LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, STRICT_READY_CAPACITY,
+};
+use mister_magik_screenshot_parade::{
+    PreparationSlack, ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats,
 };
 use std::env;
 use std::fs::OpenOptions;
