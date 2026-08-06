@@ -1112,7 +1112,6 @@ impl LauncherWakeReasons {
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
     const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
-    const DIRECT_HIDDEN_EXIT_PENDING: Self = Self(1 << 25);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -1146,36 +1145,17 @@ impl LauncherRenderIntent {
     }
 }
 
-fn launcher_presentation_recovery_wake_reasons(
-    presenter_needs_frame: bool,
-    direct_hidden_exit_pending: bool,
-) -> LauncherWakeReasons {
+fn launcher_presentation_recovery_wake_reasons(presenter_needs_frame: bool) -> LauncherWakeReasons {
     let mut reasons = LauncherWakeReasons::default();
     reasons.insert_if(
         LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
         presenter_needs_frame,
     );
-    reasons.insert_if(
-        LauncherWakeReasons::DIRECT_HIDDEN_EXIT_PENDING,
-        direct_hidden_exit_pending,
-    );
     reasons
 }
 
-fn screensaver_pipeline_start_allowed(
-    screensaver_active: bool,
-    ram_pipeline_active: bool,
-    direct_pipeline_active: bool,
-    direct_hidden_exit_pending: bool,
-    retiring_direct_pipeline_count: usize,
-    activation_handoff_complete: bool,
-) -> bool {
-    screensaver_active
-        && !ram_pipeline_active
-        && !direct_pipeline_active
-        && !direct_hidden_exit_pending
-        && retiring_direct_pipeline_count == 0
-        && activation_handoff_complete
+fn screensaver_pipeline_start_allowed(screensaver_active: bool, ram_pipeline_active: bool) -> bool {
+    screensaver_active && !ram_pipeline_active
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2042,10 +2022,6 @@ pub(super) fn run_launcher_loop(
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
-    let mut screensaver_direct_pipeline: Option<ScreensaverDirectRenderAhead> = None;
-    let mut retiring_direct_pipelines: Vec<ScreensaverDirectRenderAhead> = Vec::new();
-    let mut direct_hidden_exit_pending = false;
-    let mut direct_hidden_grant_outstanding = false;
     let mut screensaver_loader: Option<LauncherScreensaverLoader> = None;
     let mut screensaver_launcher_frame: Option<Vec<Rgb565Pixel>> = None;
     let mut screensaver_frame_visible = false;
@@ -5267,10 +5243,7 @@ pub(super) fn run_launcher_loop(
             composition_decision.clear_direct_layers,
         );
         wake_reasons = wake_reasons
-            | launcher_presentation_recovery_wake_reasons(
-                launcher_presenter.needs_frame(),
-                direct_hidden_exit_pending,
-            );
+            | launcher_presentation_recovery_wake_reasons(launcher_presenter.needs_frame());
         let render_intent = LauncherRenderIntent {
             first_visible_copy_done: frame_accounting.first_visible_copy_done(),
             startup_input_enabled: startup_status.input_enabled,
@@ -5390,26 +5363,6 @@ pub(super) fn run_launcher_loop(
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
-        let mut returned_direct_buffers = Vec::new();
-        retiring_direct_pipelines.retain_mut(|pipeline| {
-            if !pipeline.poll_stopped() {
-                return true;
-            }
-            returned_direct_buffers.push(pipeline.take_returned_buffers());
-            false
-        });
-        for returned in returned_direct_buffers {
-            if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
-                launcher_presenter.fail_latch_completion(failure);
-            }
-        }
-        if direct_hidden_exit_pending && retiring_direct_pipelines.is_empty() {
-            launcher_presenter.invalidate_external_hidden_mode();
-            direct_hidden_exit_pending = false;
-            direct_hidden_grant_outstanding = false;
-            full_frame_present = true;
-            window.request_redraw();
-        }
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take() {
                 if !layer_target.swap_cached(&mut snapshot) {
@@ -5424,11 +5377,6 @@ pub(super) fn run_launcher_loop(
                 pipeline.cancel();
                 retiring_screensaver_pipelines.push(pipeline);
             }
-            if let Some(pipeline) = screensaver_direct_pipeline.take() {
-                pipeline.cancel();
-                retiring_direct_pipelines.push(pipeline);
-                direct_hidden_exit_pending = true;
-            }
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
             screensaver_archive_loading = false;
@@ -5436,14 +5384,7 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
             full_frame_present = true;
         }
-        if screensaver_pipeline_start_allowed(
-            screensaver.active,
-            screensaver_pipeline.is_some(),
-            screensaver_direct_pipeline.is_some(),
-            direct_hidden_exit_pending,
-            retiring_direct_pipelines.len(),
-            true,
-        ) {
+        if screensaver_pipeline_start_allowed(screensaver.active, screensaver_pipeline.is_some()) {
             if screensaver_loader.is_none() {
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
@@ -5476,19 +5417,11 @@ pub(super) fn run_launcher_loop(
         if let Some(pipeline) = screensaver_pipeline.as_ref() {
             pipeline.update_period_us(pacer.period_us());
         }
-        if let Some(pipeline) = screensaver_direct_pipeline.as_ref() {
-            pipeline.update_period_us(pacer.period_us());
-        }
         if !screensaver.active {
             screensaver_loader = None;
             if let Some(pipeline) = screensaver_pipeline.take() {
                 pipeline.cancel();
                 retiring_screensaver_pipelines.push(pipeline);
-            }
-            if let Some(pipeline) = screensaver_direct_pipeline.take() {
-                pipeline.cancel();
-                retiring_direct_pipelines.push(pipeline);
-                direct_hidden_exit_pending = true;
             }
             screensaver_launcher_frame = None;
             screensaver_frame_visible = false;
@@ -5564,80 +5497,7 @@ pub(super) fn run_launcher_loop(
             full_frame_present = true;
             window.request_redraw();
         }
-        if startup_intro.is_none() && screensaver.active && screensaver_direct_pipeline.is_some() {
-            let grant_result =
-                launcher_presenter.try_issue_hidden_slot_render_grant(f, display_session);
-            match grant_result {
-                Ok(Some(grant)) => {
-                    if !screensaver_direct_pipeline
-                        .as_ref()
-                        .is_some_and(|pipeline| pipeline.submit_grant(grant))
-                    {
-                        crate::ui_errln!("screensaver: direct hidden grant channel disconnected");
-                    } else {
-                        direct_hidden_grant_outstanding = true;
-                    }
-                }
-                Ok(None) => {}
-                Err(failure) => {
-                    launcher_presenter.fail_latch_completion(failure);
-                    screensaver.fail_current_activation(Instant::now());
-                    if let Some(pipeline) = screensaver_direct_pipeline.take() {
-                        pipeline.cancel();
-                        retiring_direct_pipelines.push(pipeline);
-                        direct_hidden_exit_pending = true;
-                    }
-                    screensaver_frame_visible = false;
-                }
-            }
-            let deadline = if direct_hidden_grant_outstanding {
-                frame_t0 + Duration::from_micros(pacer.period_us().saturating_sub(750).max(1))
-            } else {
-                Instant::now()
-            };
-            let direct_poll = screensaver_direct_pipeline
-                .as_ref()
-                .map(|pipeline| pipeline.try_next_until(deadline))
-                .unwrap_or(DirectRenderAheadPoll::Empty);
-            match direct_poll {
-                DirectRenderAheadPoll::Frame(frame) => {
-                    direct_hidden_grant_outstanding = false;
-                    completed_hidden_frame_for_present = Some(frame.completed);
-                    screensaver_frame_trace = frame.trace;
-                    screensaver_render_sequence = frame.sequence;
-                    screensaver_superseded_frames = frame.superseded_frames;
-                    screensaver_frame_trace.render_ahead_sequence = frame.sequence;
-                    screensaver_frame_trace.render_ahead_queue_depth = 0;
-                    screensaver_frame_trace.render_ahead_frame_age_us = frame
-                        .completed_at
-                        .elapsed()
-                        .as_micros()
-                        .try_into()
-                        .unwrap_or(u64::MAX);
-                    screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
-                    screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
-                    screensaver_active_cards = frame.active_cards;
-                    screensaver_archive_loading = frame.archive_loading;
-                    screensaver_has_rendered_card = frame.has_rendered_card;
-                    screensaver_frame_visible = true;
-                    accepted_screensaver_frame = true;
-                }
-                DirectRenderAheadPoll::Empty => {}
-                DirectRenderAheadPoll::Disconnected => {
-                    crate::ui_errln!(
-                        "screensaver: direct hidden pipeline disconnected; restoring launcher"
-                    );
-                    screensaver.fail_current_activation(Instant::now());
-                    if let Some(pipeline) = screensaver_direct_pipeline.take() {
-                        pipeline.cancel();
-                        retiring_direct_pipelines.push(pipeline);
-                        direct_hidden_exit_pending = true;
-                    }
-                    screensaver_frame_visible = false;
-                    window.request_redraw();
-                }
-            }
-        } else if startup_intro.is_none() && screensaver.active {
+        if startup_intro.is_none() && screensaver.active {
             let render_ahead_poll = screensaver_pipeline
                 .as_mut()
                 .map(ScreensaverRenderAhead::try_next)
@@ -5758,20 +5618,12 @@ pub(super) fn run_launcher_loop(
         screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
         screensaver_frame_trace.render_ahead_superseded_frames = screensaver_superseded_frames;
         screensaver_frame_trace.render_ahead_reused_frames = screensaver_reused_frames;
-        screensaver_frame_trace.render_ahead_cancelled = (screensaver_pipeline.is_none()
-            && !retiring_screensaver_pipelines.is_empty())
-            || (screensaver_direct_pipeline.is_none() && !retiring_direct_pipelines.is_empty());
+        screensaver_frame_trace.render_ahead_cancelled =
+            screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let mut slint_base_rendered = false;
         let mut slint_damage = DirtyRectList::new();
         let this_rect = if screensaver.active && screensaver_frame_visible {
-            if screensaver_direct_pipeline.is_some() {
-                Some(DirtyRect {
-                    x0: 0,
-                    y0: 0,
-                    x1: ui.render_w(),
-                    y1: ui.render_h(),
-                })
-            } else if accepted_screensaver_frame {
+            if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
                     Some(
                         layer_target.blend_screensaver_crossfade(
@@ -6155,9 +6007,7 @@ pub(super) fn run_launcher_loop(
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
             || navigation_transition_composition_active;
-        let direct_hidden_present_mode = startup_intro.is_some()
-            || screensaver_direct_pipeline.is_some()
-            || direct_hidden_exit_pending;
+        let direct_hidden_present_mode = startup_intro.is_some();
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -6192,27 +6042,6 @@ pub(super) fn run_launcher_loop(
             navigation_transition.note_frame_work_us(
                 frame_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
             );
-        }
-        if direct_hidden_present_mode
-            && !matches!(
-                presentation.main_present_backend,
-                LauncherPresentBackend::None | LauncherPresentBackend::FpgaVblankLatchHidden
-            )
-        {
-            screensaver.fail_current_activation(Instant::now());
-            if let Some(pipeline) = screensaver_direct_pipeline.take() {
-                pipeline.cancel();
-                retiring_direct_pipelines.push(pipeline);
-                direct_hidden_exit_pending = true;
-            }
-            screensaver_frame_visible = false;
-            window.request_redraw();
-        }
-        if screensaver.active
-            && screensaver_frame_visible
-            && let Some(pipeline) = screensaver_direct_pipeline.as_ref()
-        {
-            pipeline.note_presented_period();
         }
         if accepted_screensaver_frame
             && screensaver_pipeline.is_some()
@@ -6396,8 +6225,7 @@ pub(super) fn run_launcher_loop(
                 preview_cache_state: preview.trace_cache_state(),
                 preview_transition: preview_transition_trace,
                 composition_status: composition_status.clone(),
-                screensaver_active: screensaver.active
-                    && (screensaver_pipeline.is_some() || screensaver_direct_pipeline.is_some()),
+                screensaver_active: screensaver.active && screensaver_pipeline.is_some(),
                 screensaver_active_cards,
                 screensaver_archive_loading,
                 screensaver_frame_trace,
@@ -10356,7 +10184,6 @@ mod tests {
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
-            LauncherWakeReasons::DIRECT_HIDDEN_EXIT_PENDING,
         ] {
             assert!(
                 !LauncherRenderIntent {
@@ -10386,47 +10213,23 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn direct_hidden_exit_keeps_launcher_awake_until_restoration_can_run() {
+    pub(super) fn presenter_recovery_keeps_launcher_awake() {
         let sleeping_intent = |wake_reasons| LauncherRenderIntent {
             first_visible_copy_done: true,
             startup_input_enabled: true,
             wake_reasons,
         };
 
-        assert!(
-            sleeping_intent(launcher_presentation_recovery_wake_reasons(false, false)).can_sleep()
-        );
-        assert!(
-            !sleeping_intent(launcher_presentation_recovery_wake_reasons(false, true)).can_sleep()
-        );
-        assert!(
-            !sleeping_intent(launcher_presentation_recovery_wake_reasons(true, true)).can_sleep()
-        );
-        assert!(
-            sleeping_intent(launcher_presentation_recovery_wake_reasons(false, false)).can_sleep()
-        );
+        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
+        assert!(!sleeping_intent(launcher_presentation_recovery_wake_reasons(true)).can_sleep());
+        assert!(sleeping_intent(launcher_presentation_recovery_wake_reasons(false)).can_sleep());
     }
 
     #[test]
-    pub(super) fn direct_hidden_worker_retirement_blocks_screensaver_reentry() {
-        assert!(screensaver_pipeline_start_allowed(
-            true, false, false, false, 0, true
-        ));
-        assert!(!screensaver_pipeline_start_allowed(
-            true, false, false, true, 1, true
-        ));
-        assert!(!screensaver_pipeline_start_allowed(
-            true, false, false, false, 1, true
-        ));
-        assert!(!screensaver_pipeline_start_allowed(
-            true, false, true, false, 0, true
-        ));
-        assert!(!screensaver_pipeline_start_allowed(
-            false, false, false, false, 0, true
-        ));
-        assert!(!screensaver_pipeline_start_allowed(
-            true, false, false, false, 0, false
-        ));
+    pub(super) fn active_screensaver_starts_only_without_an_existing_pipeline() {
+        assert!(screensaver_pipeline_start_allowed(true, false));
+        assert!(!screensaver_pipeline_start_allowed(true, true));
+        assert!(!screensaver_pipeline_start_allowed(false, false));
     }
 
     #[test]
@@ -11068,14 +10871,7 @@ mod tests {
         assert!(saver.active);
         assert!(saver.preview_active);
         assert!(!saver.restore_full_frame);
-        assert!(screensaver_pipeline_start_allowed(
-            saver.active,
-            false,
-            false,
-            false,
-            0,
-            true,
-        ));
+        assert!(screensaver_pipeline_start_allowed(saver.active, false));
     }
 
     #[test]
