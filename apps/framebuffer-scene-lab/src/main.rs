@@ -781,10 +781,15 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
     let mut pixels = vec![Rgb565Pixel(0); geometry.len()];
     let started = Instant::now();
     let mut last_stats = None;
+    let mut reference_pixel_hash = None;
     for tick in 0..SCREENSHOT_PMU_FRAMES {
         last_stats = Some(renderer.render_at_presentation_tick(&mut pixels, tick)?);
+        if tick == 0 {
+            reference_pixel_hash = Some(frame_hash(&pixels));
+        }
     }
     let elapsed_us = started.elapsed().as_micros();
+    let final_pixel_hash = frame_hash(&pixels);
     let profile = mister_magik_screenshot_parade::take_render_pmu_profile();
     let stats = last_stats.ok_or("screenshot PMU workload rendered no frames")?;
     let phase_names = [
@@ -857,6 +862,7 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
             "width": SCREENSHOT_PMU_WIDTH,
             "height": SCREENSHOT_PMU_HEIGHT,
             "seed": SCREENSHOT_PMU_SEED,
+            "pixel_hash_tick": 0,
             "archive_path": archive_path,
         },
         "target": {
@@ -865,7 +871,11 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
             "event_sources": event_sources,
         },
         "elapsed_us": elapsed_us,
-        "pixel_hash": format!("{:016x}", frame_hash(&pixels)),
+        "pixel_hash": format!(
+            "{:016x}",
+            reference_pixel_hash.ok_or("screenshot PMU workload rendered no reference frame")?
+        ),
+        "final_pixel_hash": format!("{final_pixel_hash:016x}"),
         "result": {
             "active_cards": stats.active_cards,
             "cards_drawn": stats.cards_drawn,

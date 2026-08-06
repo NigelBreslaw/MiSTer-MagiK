@@ -121,7 +121,10 @@ the animation and remains independent of `--seconds`.
 
 The screenshot-only `--pmu` mode runs the fixed 960x600, 180-frame seeded
 workload synchronously in the disposable lab binary. It retains authoritative
-Cortex-A9 counters as `pmu.json` without replacing the installed launcher.
+Cortex-A9 counters as `pmu.json` without replacing the installed launcher. The
+pixel identity is the fixed tick-zero reference frame; the final workload-frame
+hash is retained separately because asynchronous successor preparation may
+change which later card is ready without changing the measured render contract.
 
 The timing fields are deliberately disjoint. `render` covers projection and
 rasterization, `transfer` covers only `prepare_cached`, `present` runs from the
