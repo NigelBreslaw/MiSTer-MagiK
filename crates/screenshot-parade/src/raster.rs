@@ -836,7 +836,8 @@ fn scale_lanczos3_linear_tinted(
 
 #[inline]
 fn preparation_checkpoint_row(slack: Option<&PreparationSlack>, row: usize) {
-    if row % 8 == 0
+    const ROWS_PER_CHECKPOINT: usize = 4;
+    if row % ROWS_PER_CHECKPOINT == 0
         && let Some(slack) = slack
     {
         slack.checkpoint();
@@ -1419,17 +1420,18 @@ fn prepare_linear_phase_neon_if_selected(
     }
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     {
-        for row_start in (0..request.height).step_by(8) {
+        const ROWS_PER_CHECKPOINT: usize = 4;
+        for row_start in (0..request.height).step_by(ROWS_PER_CHECKPOINT) {
             if let Some(slack) = preparation_slack {
                 slack.checkpoint();
             }
-            let rows = (request.height - row_start).min(8);
+            let rows = (request.height - row_start).min(ROWS_PER_CHECKPOINT);
             let source_start = row_start * request.source_width;
             let source_end = source_start + rows * request.source_width;
             let output_start = row_start * request.output_width;
             let output_end = output_start + rows * request.output_width;
             // SAFETY: MiSTer hardware is Cortex-A9 with NEON. Each slice is a
-            // complete, disjoint eight-row-or-smaller portion of the planes.
+            // complete, disjoint four-row-or-smaller portion of the planes.
             unsafe {
                 prepare_linear_phase_neon(
                     &request.source[source_start..source_end],
