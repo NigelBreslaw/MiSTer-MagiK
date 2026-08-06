@@ -1951,12 +1951,6 @@ fn run_window(
                 frame_evidence.push(evidence);
             }
             presentation_tick = presentation_tick.saturating_add(1);
-            if screenshot_pipeline.is_some() {
-                // The confirmed latch is the authoritative cadence clock. Keep
-                // the userspace wake target tied to it instead of accumulating
-                // nanosleep drift from the original process start.
-                next_frame = Instant::now();
-            }
             if let Some(bounded) = bounded
                 && measurement_started.is_none()
                 && screenshot_pipeline.as_ref().map_or_else(
