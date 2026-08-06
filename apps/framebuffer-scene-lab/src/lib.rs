@@ -379,6 +379,8 @@ pub struct FrameStats {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScreenshotFrameStats {
     pub preparation_pause_response_us: u64,
+    pub preparation_pause_waited: bool,
+    pub preparation_pause_timed_out: bool,
     pub card_adopt_us: u64,
     pub cards_adopted: usize,
     pub parade_advance_us: u64,
@@ -391,6 +393,7 @@ pub struct ScreenshotFrameStats {
     pub partial_edge_pixels: usize,
     pub exact_base_background_hits: usize,
     pub preparation_overlapped_render: bool,
+    pub preparation_decode_overlapped_render: bool,
     pub preparation_activity_transitions: u32,
     pub preparation_stage_start: u8,
     pub preparation_stage_end: u8,

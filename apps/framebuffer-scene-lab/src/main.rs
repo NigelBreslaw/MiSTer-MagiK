@@ -253,6 +253,18 @@ fn write_measurement_evidence(
                     .iter()
                     .map(|frame| frame.preparation_pause_response_us)
             ),
+            "preparation_pause_waits": screenshot_frames
+                .iter()
+                .filter(|frame| frame.preparation_pause_waited)
+                .count(),
+            "preparation_pause_timeouts": screenshot_frames
+                .iter()
+                .filter(|frame| frame.preparation_pause_timed_out)
+                .count(),
+            "preparation_decode_overlap_frames": screenshot_frames
+                .iter()
+                .filter(|frame| frame.preparation_decode_overlapped_render)
+                .count(),
             "preparation_activity_transitions": screenshot_frames
                 .iter()
                 .map(|frame| u64::from(frame.preparation_activity_transitions))
@@ -1042,6 +1054,8 @@ fn screenshot_frame_stats(
         intro_stages: None,
         screenshot: Some(mister_magik_framebuffer_scene_lab::ScreenshotFrameStats {
             preparation_pause_response_us: 0,
+            preparation_pause_waited: false,
+            preparation_pause_timed_out: false,
             card_adopt_us: stats.card_adopt_us.min(u128::from(u64::MAX)) as u64,
             cards_adopted: stats.cards_adopted,
             parade_advance_us: stats.parade_advance_us.min(u128::from(u64::MAX)) as u64,
@@ -1054,6 +1068,7 @@ fn screenshot_frame_stats(
             partial_edge_pixels: stats.partial_edge_pixels,
             exact_base_background_hits: stats.exact_base_background_hits,
             preparation_overlapped_render: stats.preparation_overlapped_render,
+            preparation_decode_overlapped_render: stats.preparation_decode_overlapped_render,
             preparation_activity_transitions: stats.preparation_activity_transitions,
             preparation_stage_start: stats.preparation_stage_start,
             preparation_stage_end: stats.preparation_stage_end,
@@ -1692,13 +1707,11 @@ fn run_screenshot_lab_render_worker(
             StrictFreeBufferPoll::Disconnected => break,
         };
         let elapsed = Duration::from_nanos((1_000_000_000 / FRAME_RATE).saturating_mul(tick));
+        let render_pause = preparation_slack.begin_render(Duration::from_millis(2));
+        let render_pause_receipt = render_pause.receipt();
         let render_started = std::time::Instant::now();
         let process_cpu_started = process_cpu_time();
         let thread_cpu_started = scene_lab_thread_cpu_us();
-        let preparation_pause_response_us = preparation_slack
-            .begin_render()
-            .as_micros()
-            .min(u128::from(u64::MAX)) as u64;
         let mut stats = match renderer.render_buffer(
             &mut pixels,
             (tick % 3) as u8,
@@ -1708,14 +1721,15 @@ fn run_screenshot_lab_render_worker(
         ) {
             Ok(stats) => stats,
             Err(error) => {
-                preparation_slack.finish_render();
                 eprintln!("screenshot scene-lab render worker failed: {error}");
                 break;
             }
         };
-        preparation_slack.finish_render();
+        drop(render_pause);
         if let Some(screenshot) = stats.screenshot.as_mut() {
-            screenshot.preparation_pause_response_us = preparation_pause_response_us;
+            screenshot.preparation_pause_response_us = render_pause_receipt.waited_us;
+            screenshot.preparation_pause_waited = render_pause_receipt.waited;
+            screenshot.preparation_pause_timed_out = render_pause_receipt.timed_out;
         }
         let render_wall_us = render_started.elapsed().as_micros() as u64;
         let render_cpu_us = scene_lab_elapsed_thread_cpu_us(thread_cpu_started);
@@ -2218,6 +2232,8 @@ fn run_window(
                     .as_ref()
                     .map_or(0, ScreenshotLabRenderAhead::sequence_failures),
                 preparation_pause_response_us: screenshot.preparation_pause_response_us,
+                preparation_pause_waited: screenshot.preparation_pause_waited,
+                preparation_pause_timed_out: screenshot.preparation_pause_timed_out,
                 card_adopt_us: screenshot.card_adopt_us,
                 cards_adopted: screenshot.cards_adopted,
                 parade_advance_us: screenshot.parade_advance_us,
@@ -2230,6 +2246,8 @@ fn run_window(
                 partial_edge_pixels: screenshot.partial_edge_pixels,
                 exact_base_background_hits: screenshot.exact_base_background_hits,
                 preparation_overlapped_render: screenshot.preparation_overlapped_render,
+                preparation_decode_overlapped_render: screenshot
+                    .preparation_decode_overlapped_render,
                 preparation_activity_transitions: screenshot.preparation_activity_transitions,
                 preparation_stage_start: screenshot.preparation_stage_start,
                 preparation_stage_end: screenshot.preparation_stage_end,

@@ -9,8 +9,69 @@ struct SlackState {
     live: bool,
     cancelled: bool,
     ready_depth: usize,
-    render_active: bool,
-    preparation_active: bool,
+    render_requested: bool,
+    raster_active: bool,
+    decode_active: bool,
+    raster_epoch: u64,
+    decode_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PreparationSlackSnapshot {
+    pub raster_active: bool,
+    pub decode_active: bool,
+    pub raster_epoch: u64,
+    pub decode_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RenderPauseReceipt {
+    pub waited_us: u64,
+    pub waited: bool,
+    pub timed_out: bool,
+}
+
+pub struct RenderPauseGuard<'a> {
+    slack: &'a PreparationSlack,
+    receipt: RenderPauseReceipt,
+}
+
+impl RenderPauseGuard<'_> {
+    #[must_use]
+    pub const fn receipt(&self) -> RenderPauseReceipt {
+        self.receipt
+    }
+}
+
+impl Drop for RenderPauseGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .slack
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        state.render_requested = false;
+        self.slack.changed.notify_all();
+    }
+}
+
+pub struct PreparationDecodeGuard<'a> {
+    slack: &'a PreparationSlack,
+}
+
+impl Drop for PreparationDecodeGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .slack
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if state.decode_active {
+            state.decode_active = false;
+            state.decode_epoch = state.decode_epoch.wrapping_add(1);
+        }
+        self.slack.changed.notify_all();
+    }
 }
 
 /// Cooperative gate that confines card preparation to proven render slack.
@@ -33,8 +94,11 @@ impl PreparationSlack {
                 live: false,
                 cancelled: false,
                 ready_depth: 0,
-                render_active: false,
-                preparation_active: false,
+                render_requested: false,
+                raster_active: false,
+                decode_active: false,
+                raster_epoch: 0,
+                decode_epoch: 0,
             }),
             changed: Condvar::new(),
         }
@@ -52,10 +116,20 @@ impl PreparationSlack {
         self.changed.notify_all();
     }
 
-    pub fn set_render_active(&self, render_active: bool) {
+    pub fn begin_decode(&self) -> PreparationDecodeGuard<'_> {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.render_active = render_active;
-        self.changed.notify_all();
+        while state.live && !state.cancelled && (state.ready_depth < 2 || state.render_requested) {
+            state = self
+                .changed
+                .wait_timeout(state, Duration::from_millis(1))
+                .unwrap_or_else(|error| error.into_inner())
+                .0;
+        }
+        if !state.cancelled {
+            state.decode_active = true;
+            state.decode_epoch = state.decode_epoch.wrapping_add(1);
+        }
+        PreparationDecodeGuard { slack: self }
     }
 
     /// Claims the render critical section and, once presentation is live,
@@ -63,45 +137,71 @@ impl PreparationSlack {
     ///
     /// The returned time is the cooperative pause response. Warmup deliberately
     /// permits overlap and therefore reports zero.
-    pub fn begin_render(&self) -> Duration {
+    pub fn begin_render(&self, maximum_wait: Duration) -> RenderPauseGuard<'_> {
         let started = Instant::now();
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.render_active = true;
+        state.render_requested = true;
         self.changed.notify_all();
         if !state.live {
-            return Duration::ZERO;
+            return RenderPauseGuard {
+                slack: self,
+                receipt: RenderPauseReceipt::default(),
+            };
         }
-        while !state.cancelled && state.preparation_active {
+        let waited = state.raster_active;
+        let mut timed_out = false;
+        while !state.cancelled && state.raster_active {
+            let elapsed = started.elapsed();
+            let Some(remaining) = maximum_wait.checked_sub(elapsed) else {
+                timed_out = true;
+                break;
+            };
             let waited = self
                 .changed
-                .wait_timeout(state, Duration::from_millis(1))
+                .wait_timeout(state, remaining)
                 .unwrap_or_else(|error| error.into_inner());
             state = waited.0;
+            if waited.1.timed_out() && state.raster_active {
+                timed_out = true;
+                break;
+            }
         }
-        started.elapsed()
-    }
-
-    pub fn finish_render(&self) {
-        self.set_render_active(false);
+        RenderPauseGuard {
+            slack: self,
+            receipt: RenderPauseReceipt {
+                waited_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                waited,
+                timed_out,
+            },
+        }
     }
 
     pub fn checkpoint(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.preparation_active = false;
+        if state.raster_active {
+            state.raster_active = false;
+            state.raster_epoch = state.raster_epoch.wrapping_add(1);
+        }
         self.changed.notify_all();
-        while state.live && !state.cancelled && (state.ready_depth < 2 || state.render_active) {
+        while state.live && !state.cancelled && (state.ready_depth < 2 || state.render_requested) {
             let waited = self
                 .changed
                 .wait_timeout(state, Duration::from_millis(1))
                 .unwrap_or_else(|error| error.into_inner());
             state = waited.0;
         }
-        state.preparation_active = !state.cancelled;
+        if !state.cancelled {
+            state.raster_active = true;
+            state.raster_epoch = state.raster_epoch.wrapping_add(1);
+        }
     }
 
     pub fn finish_preparation(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        state.preparation_active = false;
+        if state.raster_active {
+            state.raster_active = false;
+            state.raster_epoch = state.raster_epoch.wrapping_add(1);
+        }
         self.changed.notify_all();
     }
 
@@ -109,13 +209,26 @@ impl PreparationSlack {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .preparation_active
+            .raster_active
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> PreparationSlackSnapshot {
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        PreparationSlackSnapshot {
+            raster_active: state.raster_active,
+            decode_active: state.decode_active,
+            raster_epoch: state.raster_epoch,
+            decode_epoch: state.decode_epoch,
+        }
     }
 
     pub fn cancel(&self) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.cancelled = true;
-        state.preparation_active = false;
+        state.render_requested = false;
+        state.raster_active = false;
+        state.decode_active = false;
         self.changed.notify_all();
     }
 }
@@ -140,11 +253,11 @@ mod tests {
         });
         std::thread::sleep(Duration::from_millis(2));
         assert!(!passed.load(Ordering::Acquire));
-        slack.set_render_active(true);
+        let render = slack.begin_render(Duration::from_millis(10));
         slack.set_ready_depth(2);
         std::thread::sleep(Duration::from_millis(2));
         assert!(!passed.load(Ordering::Acquire));
-        slack.set_render_active(false);
+        drop(render);
         worker.join().unwrap();
         assert!(passed.load(Ordering::Acquire));
     }
@@ -160,9 +273,9 @@ mod tests {
         let render_slack = Arc::clone(&slack);
         let render_entered_worker = Arc::clone(&render_entered);
         let renderer = std::thread::spawn(move || {
-            render_slack.begin_render();
+            let render = render_slack.begin_render(Duration::from_millis(10));
             render_entered_worker.store(true, Ordering::Release);
-            render_slack.finish_render();
+            drop(render);
         });
         std::thread::sleep(Duration::from_millis(2));
         assert!(!render_entered.load(Ordering::Acquire));

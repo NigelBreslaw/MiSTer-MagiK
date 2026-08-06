@@ -345,12 +345,13 @@ impl PreparedScreenshotCard {
             }
             let mut styled =
                 scale_lanczos3_linear_tinted(source, width, height, tint, preparation_slack);
-            apply_depth_cues_linear(&mut styled, speed);
-            let coverage = prepare_rounded_coverage(width, height);
-            let corner_insets = coverage_corner_insets(&coverage, width, height);
+            apply_depth_cues_linear(&mut styled, speed, preparation_slack);
+            let coverage = prepare_rounded_coverage(width, height, preparation_slack);
+            let corner_insets = coverage_corner_insets(&coverage, width, height, preparation_slack);
             let phase_started = std::time::Instant::now();
-            let premultiplied = premultiply_linear_source(&styled, &coverage);
-            let source_opaque_spans = coverage_opaque_spans(&coverage, width, height);
+            let premultiplied = premultiply_linear_source(&styled, &coverage, preparation_slack);
+            let source_opaque_spans =
+                coverage_opaque_spans(&coverage, width, height, preparation_slack);
             let base = prepare_linear_phase(
                 &styled,
                 &coverage,
@@ -846,31 +847,42 @@ fn fixed_channel(value: i64) -> u16 {
     ((value + i64::from(LANCZOS_WEIGHT_ONE / 2)) >> 14).clamp(0, 65_535) as u16
 }
 
-fn apply_depth_cues_linear(image: &mut LinearImage, speed: usize) {
+fn apply_depth_cues_linear(
+    image: &mut LinearImage,
+    speed: usize,
+    preparation_slack: Option<&PreparationSlack>,
+) {
     let depth = speed
         .saturating_sub(PARADE_MIN_TILE_SPEED)
         .min(PARADE_SPEED_COUNT - 1);
     let atmosphere = [20_u64, 14, 8, 3, 0][depth];
     let desaturation = [25_u64, 16, 8, 3, 0][depth];
     let blue_haze = u64::from(srgb8_to_linear16(10));
-    for pixel in &mut image.pixels {
-        let mut r = u64::from(pixel.r);
-        let mut g = u64::from(pixel.g);
-        let mut b = u64::from(pixel.b);
-        let luminance = (77 * r + 150 * g + 29 * b + 128) >> 8;
-        r = (r * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        g = (g * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        b = (b * (100 - desaturation) + luminance * desaturation + 50) / 100;
-        r = (r * (100 - atmosphere) + 50) / 100;
-        g = (g * (100 - atmosphere) + 50) / 100;
-        b = (b * (100 - atmosphere) + blue_haze * atmosphere + 50) / 100;
-        pixel.r = r.min(65_535) as u16;
-        pixel.g = g.min(65_535) as u16;
-        pixel.b = b.min(65_535) as u16;
+    for y in 0..image.height {
+        preparation_checkpoint_row(preparation_slack, y);
+        for pixel in &mut image.pixels[y * image.stride..y * image.stride + image.width] {
+            let mut r = u64::from(pixel.r);
+            let mut g = u64::from(pixel.g);
+            let mut b = u64::from(pixel.b);
+            let luminance = (77 * r + 150 * g + 29 * b + 128) >> 8;
+            r = (r * (100 - desaturation) + luminance * desaturation + 50) / 100;
+            g = (g * (100 - desaturation) + luminance * desaturation + 50) / 100;
+            b = (b * (100 - desaturation) + luminance * desaturation + 50) / 100;
+            r = (r * (100 - atmosphere) + 50) / 100;
+            g = (g * (100 - atmosphere) + 50) / 100;
+            b = (b * (100 - atmosphere) + blue_haze * atmosphere + 50) / 100;
+            pixel.r = r.min(65_535) as u16;
+            pixel.g = g.min(65_535) as u16;
+            pixel.b = b.min(65_535) as u16;
+        }
     }
 }
 
-fn prepare_rounded_coverage(width: usize, height: usize) -> Vec<u8> {
+fn prepare_rounded_coverage(
+    width: usize,
+    height: usize,
+    preparation_slack: Option<&PreparationSlack>,
+) -> Vec<u8> {
     if width == 0 || height == 0 {
         return Vec::new();
     }
@@ -878,6 +890,7 @@ fn prepare_rounded_coverage(width: usize, height: usize) -> Vec<u8> {
     let radius_pixels = radius as usize;
     let mut coverage = vec![255_u8; width * height];
     for y in 0..height {
+        preparation_checkpoint_row(preparation_slack, y);
         let in_corner_y = y < radius_pixels || y >= height.saturating_sub(radius_pixels);
         if !in_corner_y {
             continue;
@@ -924,45 +937,64 @@ fn prepare_rounded_coverage(width: usize, height: usize) -> Vec<u8> {
     coverage
 }
 
-fn coverage_corner_insets(coverage: &[u8], width: usize, height: usize) -> Vec<u8> {
-    (0..height)
-        .map(|y| {
+fn coverage_corner_insets(
+    coverage: &[u8],
+    width: usize,
+    height: usize,
+    preparation_slack: Option<&PreparationSlack>,
+) -> Vec<u8> {
+    let mut insets = Vec::with_capacity(height);
+    for y in 0..height {
+        preparation_checkpoint_row(preparation_slack, y);
+        insets.push(
             coverage[y * width..(y + 1) * width]
                 .iter()
                 .position(|value| *value == 255)
                 .unwrap_or(width / 2)
-                .min(usize::from(u8::MAX)) as u8
-        })
-        .collect()
+                .min(usize::from(u8::MAX)) as u8,
+        );
+    }
+    insets
 }
 
-fn coverage_opaque_spans(values: &[u8], stride: usize, height: usize) -> Vec<OpaqueSpan> {
-    (0..height)
-        .map(|y| {
-            let row = &values[y * stride..(y + 1) * stride];
-            let start = row.iter().position(|value| *value == 255).unwrap_or(0);
-            let end = row
-                .iter()
-                .rposition(|value| *value == 255)
-                .map_or(start, |index| index + 1);
-            OpaqueSpan {
-                start: start.min(usize::from(u16::MAX)) as u16,
-                end: end.min(usize::from(u16::MAX)) as u16,
-            }
-        })
-        .collect()
+fn coverage_opaque_spans(
+    values: &[u8],
+    stride: usize,
+    height: usize,
+    preparation_slack: Option<&PreparationSlack>,
+) -> Vec<OpaqueSpan> {
+    let mut spans = Vec::with_capacity(height);
+    for y in 0..height {
+        preparation_checkpoint_row(preparation_slack, y);
+        let row = &values[y * stride..(y + 1) * stride];
+        let start = row.iter().position(|value| *value == 255).unwrap_or(0);
+        let end = row
+            .iter()
+            .rposition(|value| *value == 255)
+            .map_or(start, |index| index + 1);
+        spans.push(OpaqueSpan {
+            start: start.min(usize::from(u16::MAX)) as u16,
+            end: end.min(usize::from(u16::MAX)) as u16,
+        });
+    }
+    spans
 }
 
-fn coverage_plane(values: Vec<u8>, image: &ScreenshotImage) -> CoveragePlane {
+fn coverage_plane(
+    values: Vec<u8>,
+    image: &ScreenshotImage,
+    preparation_slack: Option<&PreparationSlack>,
+) -> CoveragePlane {
     let stride = image.stride;
     let height = image.height;
-    let opaque_spans = coverage_opaque_spans(&values, stride, height);
+    let opaque_spans = coverage_opaque_spans(&values, stride, height, preparation_slack);
     let mut rows = Vec::with_capacity(height);
     let mut partial_samples = Vec::with_capacity(height.saturating_mul(4));
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
     let base_background = color565(0, 0, 10);
     for (y, opaque) in opaque_spans.into_iter().enumerate() {
+        preparation_checkpoint_row(preparation_slack, y);
         let partial_start = partial_samples.len();
         for (x, alpha) in values[y * stride..(y + 1) * stride]
             .iter()
@@ -1014,12 +1046,18 @@ fn fractional_delay_weights(phase: usize) -> [i32; 6] {
     weights
 }
 
-fn premultiply_linear_source(image: &LinearImage, coverage: &[u8]) -> Vec<[u16; 4]> {
-    image
-        .pixels
-        .iter()
-        .zip(coverage)
-        .map(|(pixel, coverage)| {
+fn premultiply_linear_source(
+    image: &LinearImage,
+    coverage: &[u8],
+    preparation_slack: Option<&PreparationSlack>,
+) -> Vec<[u16; 4]> {
+    let mut premultiplied = Vec::with_capacity(image.width * image.height);
+    for y in 0..image.height {
+        preparation_checkpoint_row(preparation_slack, y);
+        for (pixel, coverage) in image.pixels[y * image.stride..y * image.stride + image.width]
+            .iter()
+            .zip(&coverage[y * image.width..(y + 1) * image.width])
+        {
             let alpha = u16::from(*coverage) * 257;
             let premultiply = |channel: u16| {
                 if alpha == 65_535 {
@@ -1028,14 +1066,15 @@ fn premultiply_linear_source(image: &LinearImage, coverage: &[u8]) -> Vec<[u16; 
                     ((u64::from(channel) * u64::from(alpha) + 32_767) / 65_535) as u16
                 }
             };
-            [
+            premultiplied.push([
                 premultiply(pixel.r),
                 premultiply(pixel.g),
                 premultiply(pixel.b),
                 alpha,
-            ]
-        })
-        .collect()
+            ]);
+        }
+    }
+    premultiplied
 }
 
 fn prepare_linear_phase(
@@ -1099,14 +1138,20 @@ fn prepare_linear_phase(
                 }
             }
         }
-        coverage =
-            shape_preserving_shifted_coverage(source_coverage, image.width, image.height, phase);
+        coverage = shape_preserving_shifted_coverage(
+            source_coverage,
+            image.width,
+            image.height,
+            phase,
+            preparation_slack,
+        );
         stabilize_phase_coverage(
             source_coverage,
             image.width,
             image.height,
             phase,
             &mut coverage,
+            preparation_slack,
         );
     }
     let image = ScreenshotImage {
@@ -1115,7 +1160,7 @@ fn prepare_linear_phase(
         height: image.height,
         stride: width,
     };
-    let coverage = coverage_plane(coverage, &image);
+    let coverage = coverage_plane(coverage, &image, preparation_slack);
     PreparedLinearPhase { image, coverage }
 }
 
@@ -1124,10 +1169,12 @@ fn shape_preserving_shifted_coverage(
     source_width: usize,
     height: usize,
     phase: usize,
+    preparation_slack: Option<&PreparationSlack>,
 ) -> Vec<u8> {
     let stride = source_width + 1;
     let mut shifted = vec![0_u8; stride * height];
     for y in 0..height {
+        preparation_checkpoint_row(preparation_slack, y);
         let source_row = &source[y * source_width..(y + 1) * source_width];
         let shifted_row = &mut shifted[y * stride..(y + 1) * stride];
         let mut remainder = 0_u32;
@@ -1149,14 +1196,22 @@ fn shape_preserving_shifted_coverage(
     shifted
 }
 
-fn coverage_mass_and_moment(values: &[u8], stride: usize) -> (u64, u64) {
-    values
-        .iter()
-        .enumerate()
-        .fold((0_u64, 0_u64), |(mass, moment), (index, coverage)| {
+fn coverage_mass_and_moment(
+    values: &[u8],
+    stride: usize,
+    preparation_slack: Option<&PreparationSlack>,
+) -> (u64, u64) {
+    let mut mass = 0_u64;
+    let mut moment = 0_u64;
+    for (y, row) in values.chunks_exact(stride).enumerate() {
+        preparation_checkpoint_row(preparation_slack, y);
+        for (x, coverage) in row.iter().enumerate() {
             let coverage = u64::from(*coverage);
-            (mass + coverage, moment + coverage * (index % stride) as u64)
-        })
+            mass += coverage;
+            moment += coverage * x as u64;
+        }
+    }
+    (mass, moment)
 }
 
 fn row_edge_candidates(row: &[u8], add: bool) -> Vec<usize> {
@@ -1193,11 +1248,13 @@ fn stabilize_phase_coverage(
     height: usize,
     phase: usize,
     shifted: &mut [u8],
+    preparation_slack: Option<&PreparationSlack>,
 ) {
     let stride = source_width + 1;
     debug_assert_eq!(source.len(), source_width * height);
     debug_assert_eq!(shifted.len(), stride * height);
-    let (target_mass, source_moment) = coverage_mass_and_moment(source, source_width);
+    let (target_mass, source_moment) =
+        coverage_mass_and_moment(source, source_width, preparation_slack);
     if target_mass == 0 {
         shifted.fill(0);
         return;
@@ -1207,9 +1264,12 @@ fn stabilize_phase_coverage(
         + (CRT_PHASE_COUNT / 2) as u128)
         / CRT_PHASE_COUNT as u128;
     let target_moment = u64::try_from(target_moment).unwrap_or(u64::MAX);
-    let (mut mass, mut moment) = coverage_mass_and_moment(shifted, stride);
+    let (mut mass, mut moment) = coverage_mass_and_moment(shifted, stride, preparation_slack);
 
     while mass != target_mass {
+        if let Some(slack) = preparation_slack {
+            slack.checkpoint();
+        }
         let add = mass < target_mass;
         let amount_needed = mass.abs_diff(target_mass);
         let moment_needed = if add {
@@ -1218,13 +1278,15 @@ fn stabilize_phase_coverage(
             i128::from(moment) - i128::from(target_moment)
         };
         let desired_x = (moment_needed / i128::from(amount_needed)).clamp(0, stride as i128 - 1);
-        let mut candidates = (0..height)
-            .flat_map(|y| {
+        let mut candidates = Vec::with_capacity(height.saturating_mul(4));
+        for y in 0..height {
+            preparation_checkpoint_row(preparation_slack, y);
+            candidates.extend(
                 row_edge_candidates(&shifted[y * stride..(y + 1) * stride], add)
                     .into_iter()
-                    .map(move |x| (y * stride + x, x))
-            })
-            .collect::<Vec<_>>();
+                    .map(|x| (y * stride + x, x)),
+            );
+        }
         candidates
             .sort_by_key(|(_, x)| (i128::try_from(*x).unwrap_or(i128::MAX) - desired_x).abs());
         let mut adjusted = false;
@@ -1248,9 +1310,13 @@ fn stabilize_phase_coverage(
     }
 
     while moment != target_moment {
+        if let Some(slack) = preparation_slack {
+            slack.checkpoint();
+        }
         let move_right = moment < target_moment;
         let mut adjusted = false;
         for y in 0..height {
+            preparation_checkpoint_row(preparation_slack, y);
             let row = &mut shifted[y * stride..(y + 1) * stride];
             let candidate = if move_right {
                 (0..stride - 1)
@@ -1279,7 +1345,7 @@ fn stabilize_phase_coverage(
         assert!(adjusted, "phase coverage moment cannot reach target");
     }
     debug_assert_eq!(
-        coverage_mass_and_moment(shifted, stride),
+        coverage_mass_and_moment(shifted, stride, preparation_slack),
         (target_mass, target_moment)
     );
 }
@@ -2319,7 +2385,7 @@ mod tests {
     fn rounded_corner_shortcut_is_exact() {
         for (width, height) in [(1, 1), (4, 3), (32, 24), (160, 120), (160, 160)] {
             assert_eq!(
-                prepare_rounded_coverage(width, height),
+                prepare_rounded_coverage(width, height, None),
                 rounded_coverage_reference(width, height),
                 "coverage differs at {width}x{height}"
             );

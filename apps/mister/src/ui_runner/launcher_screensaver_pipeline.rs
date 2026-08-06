@@ -540,11 +540,10 @@ fn run_render_ahead_worker(
         sequence = sequence.wrapping_add(1);
         motion_tick = motion_tick.saturating_add(1);
         elapsed_us = elapsed_us.saturating_add(period_us.load(Ordering::Relaxed).max(1));
+        let render_pause =
+            preparation_slack.map(|slack| slack.begin_render(Duration::from_millis(2)));
         let wall_started = Instant::now();
         let cpu_started = thread_cpu_us();
-        if let Some(slack) = preparation_slack {
-            slack.begin_render();
-        }
         let trace = renderer.render_at_presentation_tick(
             &mut pixels,
             width,
@@ -552,9 +551,7 @@ fn run_render_ahead_worker(
             motion_tick,
             Duration::from_micros(elapsed_us),
         );
-        if let Some(slack) = preparation_slack {
-            slack.finish_render();
-        }
+        drop(render_pause);
         let frame = RenderedScreensaverFrame {
             pixels,
             sequence,

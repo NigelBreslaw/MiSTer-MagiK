@@ -95,6 +95,7 @@ pub struct ScreenshotParadeStats {
     pub cards_drawn: usize,
     pub cards_culled: usize,
     pub preparation_overlapped_render: bool,
+    pub preparation_decode_overlapped_render: bool,
     pub preparation_activity_transitions: u32,
     pub preparation_stage_start: u8,
     pub preparation_stage_end: u8,
@@ -427,10 +428,10 @@ impl ScreenshotParade {
         let height = self.geometry.height();
         let preparation_epoch_start = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_start = self.preparation_stage.load(Ordering::Relaxed);
-        let preparation_active_start = self
+        let preparation_slack_start = self
             .preparation_slack
             .as_deref()
-            .is_some_and(PreparationSlack::preparation_active);
+            .map(PreparationSlack::snapshot);
 
         let background_start = Instant::now();
         render_background(pixels, width, height, motion_ticks_fp);
@@ -498,10 +499,20 @@ impl ScreenshotParade {
         }
         let preparation_epoch_end = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_end = self.preparation_stage.load(Ordering::Relaxed);
-        let preparation_active_end = self
+        let preparation_slack_end = self
             .preparation_slack
             .as_deref()
-            .is_some_and(PreparationSlack::preparation_active);
+            .map(PreparationSlack::snapshot);
+        let raster_overlap = preparation_slack_start
+            .zip(preparation_slack_end)
+            .is_some_and(|(start, end)| {
+                start.raster_active || end.raster_active || start.raster_epoch != end.raster_epoch
+            });
+        let decode_overlap = preparation_slack_start
+            .zip(preparation_slack_end)
+            .is_some_and(|(start, end)| {
+                start.decode_active || end.decode_active || start.decode_epoch != end.decode_epoch
+            });
         self.stats = ScreenshotParadeStats {
             card_adopt_us,
             cards_adopted,
@@ -516,12 +527,21 @@ impl ScreenshotParade {
             cards_drawn: self.visible_draw_order.len(),
             cards_culled,
             preparation_overlapped_render: if self.preparation_slack.is_some() {
-                preparation_active_start || preparation_active_end
+                raster_overlap
             } else {
                 preparation_epoch_start & 1 != 0 || preparation_epoch_end != preparation_epoch_start
             },
-            preparation_activity_transitions: preparation_epoch_end
-                .wrapping_sub(preparation_epoch_start),
+            preparation_decode_overlapped_render: decode_overlap,
+            preparation_activity_transitions: preparation_slack_start
+                .zip(preparation_slack_end)
+                .map_or_else(
+                    || preparation_epoch_end.wrapping_sub(preparation_epoch_start),
+                    |(start, end)| {
+                        end.raster_epoch
+                            .wrapping_sub(start.raster_epoch)
+                            .min(u64::from(u32::MAX)) as u32
+                    },
+                ),
             preparation_stage_start,
             preparation_stage_end,
             raster_held_cards,
@@ -1115,14 +1135,22 @@ fn run_scale_worker(
     preparation_slack: Option<Arc<PreparationSlack>>,
 ) {
     while let Ok(job) = jobs.recv() {
-        if let Some(slack) = preparation_slack.as_deref() {
-            slack.checkpoint();
-        }
         preparation_stage.store(1, Ordering::Relaxed);
         preparation_epoch.fetch_add(1, Ordering::Relaxed);
         let started = Instant::now();
-        let card = archive.load_pixels_at(job.image_index).map(|pixels| {
+        let pixels = if let Some(slack) = preparation_slack.as_deref() {
+            let decode = slack.begin_decode();
+            let pixels = archive.load_pixels_at(job.image_index);
+            drop(decode);
+            pixels
+        } else {
+            archive.load_pixels_at(job.image_index)
+        };
+        let card = pixels.map(|pixels| {
             preparation_stage.store(2, Ordering::Relaxed);
+            if let Some(slack) = preparation_slack.as_deref() {
+                slack.checkpoint();
+            }
             let source = ScreenshotImage::from_preview(pixels);
             let (raster, phase_us) = PreparedScreenshotCard::prepare_timed(
                 &source,
