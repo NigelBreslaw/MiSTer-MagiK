@@ -102,12 +102,21 @@ name = "mister-magik-framebuffer-scenes"
 version = "0.1.0"
 
 [[package]]
+name = "mister-magik-perf-events"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+]
+
+[[package]]
 name = "mister-magik-screenshot-parade"
 version = "0.1.0"
 dependencies = [
  "cc",
  "mister-magik-catalog",
  "mister-magik-framebuffer-scenes",
+ "mister-magik-perf-events",
 ]
 
 [[package]]

@@ -9,8 +9,11 @@
 //! represented as successful zero-valued samples.
 
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 const EVENT_SET: [HardwareEvent; 6] = [
     HardwareEvent::Cycles,
@@ -261,6 +264,184 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 pub struct SpanRecord {
     pub name: String,
     pub counters: CounterDelta,
+}
+
+const DEFAULT_SAMPLE_EVERY: u64 = 16;
+const DEFAULT_RECORD_LIMIT: usize = 4_096;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ThreadProfile {
+    pub schema: &'static str,
+    pub enabled: bool,
+    pub sample_every: u64,
+    pub attempted_spans: u64,
+    pub dropped_spans: u64,
+    pub records: Vec<SpanRecord>,
+    pub failure: Option<PmuFailure>,
+}
+
+struct ThreadCollector {
+    enabled: bool,
+    sample_every: u64,
+    record_limit: usize,
+    attempted_spans: u64,
+    dropped_spans: u64,
+    calls_by_name: BTreeMap<&'static str, u64>,
+    records: Vec<SpanRecord>,
+    failure: Option<PmuFailure>,
+    group: Option<CounterGroup>,
+}
+
+impl ThreadCollector {
+    fn from_env() -> Self {
+        let enabled = std::env::var_os("MISTER_PMU_PROFILE").is_some_and(|value| value == "1");
+        let sample_every = bounded_env_u64("MISTER_PMU_SAMPLE_EVERY", DEFAULT_SAMPLE_EVERY, 1, 10_000);
+        let record_limit = bounded_env_u64(
+            "MISTER_PMU_RECORD_LIMIT",
+            DEFAULT_RECORD_LIMIT as u64,
+            1,
+            65_536,
+        ) as usize;
+        Self::new(enabled, sample_every, record_limit)
+    }
+
+    fn new(enabled: bool, sample_every: u64, record_limit: usize) -> Self {
+        Self {
+            enabled,
+            sample_every,
+            record_limit,
+            attempted_spans: 0,
+            dropped_spans: 0,
+            calls_by_name: BTreeMap::new(),
+            records: Vec::new(),
+            failure: None,
+            group: None,
+        }
+    }
+
+    fn start(&mut self, name: &'static str) -> Option<CounterSnapshot> {
+        if !self.enabled || self.failure.is_some() {
+            return None;
+        }
+        self.attempted_spans = self.attempted_spans.saturating_add(1);
+        let calls = self.calls_by_name.entry(name).or_default();
+        *calls = calls.saturating_add(1);
+        if !(*calls - 1).is_multiple_of(self.sample_every) {
+            return None;
+        }
+        if self.group.is_none() {
+            match CounterGroup::open() {
+                Ok(group) => self.group = Some(group),
+                Err(failure) => {
+                    self.failure = Some(failure);
+                    return None;
+                }
+            }
+        }
+        match self.group.as_ref().expect("PMU group initialized").snapshot() {
+            Ok(snapshot) => Some(snapshot),
+            Err(failure) => {
+                self.failure = Some(failure);
+                self.group = None;
+                None
+            }
+        }
+    }
+
+    fn finish(&mut self, name: &'static str, started: CounterSnapshot) {
+        let Some(group) = self.group.as_ref() else {
+            return;
+        };
+        match group.snapshot() {
+            Ok(finished) if self.records.len() < self.record_limit => self.records.push(SpanRecord {
+                name: name.to_owned(),
+                counters: finished.delta_from(started),
+            }),
+            Ok(_) => self.dropped_spans = self.dropped_spans.saturating_add(1),
+            Err(failure) => {
+                self.failure = Some(failure);
+                self.group = None;
+            }
+        }
+    }
+
+    fn take(&mut self) -> ThreadProfile {
+        let profile = ThreadProfile {
+            schema: "mister-magik-pmu-thread-profile-v1",
+            enabled: self.enabled,
+            sample_every: self.sample_every,
+            attempted_spans: self.attempted_spans,
+            dropped_spans: self.dropped_spans,
+            records: std::mem::take(&mut self.records),
+            failure: self.failure.clone(),
+        };
+        self.attempted_spans = 0;
+        self.dropped_spans = 0;
+        self.calls_by_name.clear();
+        profile
+    }
+}
+
+fn bounded_env_u64(name: &str, default: u64, minimum: u64, maximum: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map_or(default, |value: u64| value.clamp(minimum, maximum))
+}
+
+thread_local! {
+    static THREAD_COLLECTOR: RefCell<ThreadCollector> = RefCell::new(ThreadCollector::from_env());
+}
+
+/// Starts a sampled span on the calling thread when `MISTER_PMU_PROFILE=1`.
+///
+/// Sampling is independent for each span name, preventing a fixed phase order
+/// from starving all but one phase. Dropping the guard records the end sample
+/// in thread-local memory; it never performs file I/O.
+#[must_use]
+pub fn sampled_span(name: &'static str) -> Option<SampledSpan> {
+    let started = THREAD_COLLECTOR.with(|collector| collector.borrow_mut().start(name))?;
+    Some(SampledSpan {
+        name,
+        started,
+        finished: false,
+        not_send: PhantomData,
+    })
+}
+
+/// Removes the accumulated records for the calling thread.
+#[must_use]
+pub fn take_thread_profile() -> ThreadProfile {
+    THREAD_COLLECTOR.with(|collector| collector.borrow_mut().take())
+}
+
+pub struct SampledSpan {
+    name: &'static str,
+    started: CounterSnapshot,
+    finished: bool,
+    not_send: PhantomData<Rc<()>>,
+}
+
+impl SampledSpan {
+    pub fn finish(mut self) {
+        self.finish_inner();
+    }
+
+    fn finish_inner(&mut self) {
+        if self.finished {
+            return;
+        }
+        THREAD_COLLECTOR.with(|collector| {
+            collector.borrow_mut().finish(self.name, self.started);
+        });
+        self.finished = true;
+    }
+}
+
+impl Drop for SampledSpan {
+    fn drop(&mut self) {
+        self.finish_inner();
+    }
 }
 
 pub struct NamedSpan<'a> {
@@ -686,5 +867,23 @@ mod tests {
         assert_eq!(metadata.len(), 6);
         assert_eq!(metadata[2].semantic, "Cortex-A9 L1 data-cache accesses");
         assert_eq!(metadata[3].semantic, "Cortex-A9 L1 data-cache refills");
+    }
+
+    #[test]
+    fn collector_samples_each_name_independently_and_drains_records() {
+        let mut collector = ThreadCollector::new(true, 2, 1);
+        collector.group = None;
+        assert_eq!(collector.sample_every, 2);
+        assert_eq!(collector.record_limit, 1);
+        let first = collector.calls_by_name.entry("first").or_default();
+        *first += 1;
+        let second = collector.calls_by_name.entry("second").or_default();
+        *second += 1;
+        assert_eq!(collector.calls_by_name["first"], 1);
+        assert_eq!(collector.calls_by_name["second"], 1);
+        let profile = collector.take();
+        assert!(profile.enabled);
+        assert_eq!(profile.schema, "mister-magik-pmu-thread-profile-v1");
+        assert!(collector.calls_by_name.is_empty());
     }
 }

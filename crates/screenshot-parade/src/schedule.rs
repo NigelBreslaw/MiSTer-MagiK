@@ -408,13 +408,19 @@ impl ScreenshotParade {
             .map(PreparationSlack::snapshot);
 
         let background_start = Instant::now();
+        let background_pmu = mister_magik_perf_events::sampled_span("screensaver.background");
         render_background(pixels, width, height, motion_ticks_fp);
+        drop(background_pmu);
         let background_us = background_start.elapsed().as_micros();
+        let advance_pmu = mister_magik_perf_events::sampled_span("screensaver.advance");
         let (card_adopt_us, cards_adopted, parade_advance_us) =
             self.advance(motion_ticks_fp, delta);
+        drop(advance_pmu);
         let draw_order_start = Instant::now();
+        let draw_order_pmu = mister_magik_perf_events::sampled_span("screensaver.draw-order");
         self.prepare_draw_order();
         let cards_culled = self.prepare_visible_draw_order();
+        drop(draw_order_pmu);
         let draw_order_us = draw_order_start.elapsed().as_micros();
 
         let mut raster_held_cards = 0;
@@ -434,6 +440,7 @@ impl ScreenshotParade {
             raster_moved_cards += usize::from(tile.raster_moved_this_frame);
         }
         let tile_blit_start = Instant::now();
+        let tile_blit_pmu = mister_magik_perf_events::sampled_span("screensaver.tile-blit");
         let mut coverage_composite_calls = 0;
         let mut partial_edge_pixels = 0;
         let mut exact_base_background_hits = 0;
@@ -463,6 +470,7 @@ impl ScreenshotParade {
                 tile.raster.blit(pixels, width, height, tile.x_fp, tile.y);
             }
         }
+        drop(tile_blit_pmu);
         let preparation_epoch_end = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_end = self.preparation_stage.load(Ordering::Relaxed);
         let preparation_slack_end = self

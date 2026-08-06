@@ -22,3 +22,9 @@ pub use schedule::{
     ScreenshotParade, ScreenshotParadeConfig, ScreenshotParadeStats, WorkerStartCallback,
 };
 pub use slack::{PreparationSlack, RenderPauseReceipt};
+
+/// Drains screenshot-render PMU records collected on the calling thread.
+#[must_use]
+pub fn take_render_pmu_profile() -> mister_magik_perf_events::ThreadProfile {
+    mister_magik_perf_events::take_thread_profile()
+}

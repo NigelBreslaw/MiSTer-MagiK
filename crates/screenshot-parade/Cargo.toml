@@ -18,6 +18,7 @@ all = "deny"
 [dependencies]
 mister-magik-catalog = { path = "../catalog", default-features = false, features = ["reader"] }
 mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
+mister-magik-perf-events = { path = "../perf-events" }
 
 [build-dependencies]
 cc = "1.3"
