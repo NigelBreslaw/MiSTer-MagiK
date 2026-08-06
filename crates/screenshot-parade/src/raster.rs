@@ -126,12 +126,6 @@ impl PreparedLinearPhase {
     }
 }
 
-#[derive(Clone, Copy)]
-struct LinearPhaseRef<'a> {
-    image: &'a ScreenshotImage,
-    coverage: &'a CoveragePlane,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct CoverageBlitStats {
     pub composite_calls: usize,
