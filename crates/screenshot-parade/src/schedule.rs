@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::raster::{PreparedScreenshotCard, depth_style};
+use crate::raster::{OpaqueRowCopyBackend, PreparedScreenshotCard, depth_style};
 use crate::slack::PreparationSlack;
 use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
@@ -214,11 +214,16 @@ pub struct ScreenshotParade {
     previous_motion_ticks_fp: u64,
     last_elapsed: Duration,
     stats: ScreenshotParadeStats,
+    row_copy_backend: OpaqueRowCopyBackend,
 }
 
 impl ScreenshotParade {
     pub fn preparation_slack(&self) -> Option<Arc<PreparationSlack>> {
         self.preparation_slack.clone()
+    }
+
+    pub fn set_row_copy_backend(&mut self, backend: OpaqueRowCopyBackend) {
+        self.row_copy_backend = backend;
     }
 
     pub fn new(
@@ -314,6 +319,7 @@ impl ScreenshotParade {
             previous_motion_ticks_fp: 0,
             last_elapsed: Duration::ZERO,
             stats: ScreenshotParadeStats::default(),
+            row_copy_backend: OpaqueRowCopyBackend::Libc,
         };
         shuffle(&mut parade.deck, &mut parade.rng);
         if offline_prepared {
@@ -468,13 +474,14 @@ impl ScreenshotParade {
         if coverage_probe_sampled {
             for &tile_index in &self.visible_draw_order {
                 let tile = &self.tiles[tile_index];
-                let blit_stats = tile.raster.blit_with_coverage_probe(
+                let blit_stats = tile.raster.blit_with_coverage_probe_and_row_copy(
                     pixels,
                     width,
                     height,
                     tile.x_fp,
                     tile.y,
                     base_background,
+                    self.row_copy_backend,
                 );
                 coverage_composite_calls += blit_stats.composite_calls;
                 partial_edge_pixels += blit_stats.partial_edge_pixels;
@@ -483,7 +490,14 @@ impl ScreenshotParade {
         } else {
             for &tile_index in &self.visible_draw_order {
                 let tile = &self.tiles[tile_index];
-                tile.raster.blit(pixels, width, height, tile.x_fp, tile.y);
+                tile.raster.blit_with_row_copy(
+                    pixels,
+                    width,
+                    height,
+                    tile.x_fp,
+                    tile.y,
+                    self.row_copy_backend,
+                );
             }
         }
         drop(tile_blit_pmu);

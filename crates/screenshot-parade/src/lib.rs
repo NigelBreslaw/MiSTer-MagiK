@@ -13,7 +13,9 @@ pub use live::{
     LiveScreenshotConfig, LiveScreenshotParade, LiveScreenshotPoll, ReadyScreenshotFrame,
     ScreenshotBuffer, ScreenshotFrameTelemetry, ScreenshotRenderTiming, ScreenshotSequenceFailure,
 };
-pub use raster::{PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage};
+pub use raster::{
+    OpaqueRowCopyBackend, PARADE_SUBPIXEL_ONE, PreparedScreenshotCard, ScreenshotImage,
+};
 pub use reservoir::{
     STRICT_READY_CAPACITY, STRICT_RENDER_BUFFER_COUNT, StrictFrameConsumer, StrictFramePoll,
     StrictFrameProducer, StrictFreeBufferPoll, StrictReadyFrame, strict_render_reservoir,

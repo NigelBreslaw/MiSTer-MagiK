@@ -53,6 +53,7 @@ pub(crate) struct SceneLabRequest<'a> {
     pub(crate) profile: bool,
     pub(crate) assess: bool,
     pub(crate) pmu: bool,
+    pub(crate) row_copy: Option<&'a str>,
     pub(crate) output_dir: Option<&'a Path>,
 }
 
@@ -71,6 +72,7 @@ struct RemoteLabRequest {
     profile: bool,
     assess: bool,
     pmu: bool,
+    row_copy: Option<String>,
     output_dir: Option<PathBuf>,
 }
 
@@ -107,6 +109,7 @@ pub(super) fn run(
             profile: false,
             assess: false,
             pmu: false,
+            row_copy: None,
             output_dir: None,
         },
     )
@@ -141,6 +144,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
         profile,
         assess,
         pmu,
+        row_copy,
         output_dir,
     } = request;
     let has_recipe = recipe.is_some();
@@ -190,6 +194,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
             profile,
             assess,
             pmu,
+            row_copy,
         ) {
             let cleanup = remove_volatile_directory(&session);
             return combine_results(Err(error), cleanup);
@@ -213,6 +218,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
     let fixture = fixture.map(str::to_owned);
     let case = case.map(str::to_owned);
     let particle_preset = particle_preset.map(str::to_owned);
+    let row_copy = row_copy.map(str::to_owned);
     let (finished_tx, finished_rx) = mpsc::sync_channel(1);
     let worker = match thread::Builder::new()
         .name("framebuffer-scene-lab-device".into())
@@ -233,6 +239,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
                     profile,
                     assess,
                     pmu,
+                    row_copy,
                     output_dir,
                 },
             )
@@ -563,6 +570,7 @@ fn run_remote_lab(
         profile,
         assess,
         pmu,
+        row_copy,
         output_dir,
     } = request;
     let session = connect_with(config, 10)?;
@@ -582,13 +590,19 @@ fn run_remote_lab(
             profile,
             assess,
             pmu,
+            row_copy.as_deref(),
         ),
     );
     let evidence_result = if pmu {
         let output_dir = output_dir
             .as_deref()
             .ok_or("PMU scene-lab output directory is missing")?;
-        retrieve_pmu_evidence(&session, output_dir, &scene)
+        retrieve_pmu_evidence(
+            &session,
+            output_dir,
+            &scene,
+            row_copy.as_deref().unwrap_or("libc"),
+        )
     } else if seconds.is_some() {
         let output_dir = output_dir
             .as_deref()
@@ -647,6 +661,7 @@ fn prepare_scene_evidence_output(
     profile: bool,
     assess: bool,
     pmu: bool,
+    row_copy: Option<&str>,
 ) -> Result<()> {
     fs::create_dir_all(output_dir)?;
     let receipt_path = PathBuf::from(format!("{}.build-receipt.tsv", binary.display()));
@@ -673,6 +688,7 @@ fn prepare_scene_evidence_output(
         "profile": profile,
         "assess": assess,
         "pmu": pmu,
+        "row_copy": row_copy,
         "seed": if pmu {
             Some(0x4d61_6769_4b50_4d55_u64)
         } else {
@@ -770,7 +786,12 @@ fn retrieve_scene_evidence(
     Ok(())
 }
 
-fn retrieve_pmu_evidence(session: &Session, output_dir: &Path, scene: &str) -> Result<()> {
+fn retrieve_pmu_evidence(
+    session: &Session,
+    output_dir: &Path,
+    scene: &str,
+    expected_row_copy: &str,
+) -> Result<()> {
     if scene != "screenshot-screensaver" {
         return Err("PMU scene-lab evidence is restricted to screenshot-screensaver".into());
     }
@@ -796,6 +817,10 @@ fn retrieve_pmu_evidence(session: &Session, output_dir: &Path, scene: &str) -> R
             .pointer("/configuration/seed")
             .and_then(Value::as_u64)
             != Some(0x4d61_6769_4b50_4d55)
+        || summary
+            .pointer("/configuration/row_copy")
+            .and_then(Value::as_str)
+            != Some(expected_row_copy)
         || summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
         || !summary
             .pointer("/profile/failure")
@@ -1702,6 +1727,7 @@ fn remote_run_lab_command(
     profile: bool,
     assess: bool,
     pmu: bool,
+    row_copy: Option<&str>,
 ) -> String {
     let suspend = acknowledged_main_command("mister_magik_suspend");
     let resume = acknowledged_main_command("mister_magik_resume");
@@ -1731,12 +1757,15 @@ fn remote_run_lab_command(
         )
     });
     let invocation = if pmu {
+        let row_copy =
+            row_copy.map_or_else(String::new, |backend| format!("--row-copy {}", sh(backend)));
         format!(
-            "rm -rf {evidence}; mkdir -p {evidence}; MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {environment} {binary} {scene_arguments} --pmu --evidence-dir {evidence}",
+            "rm -rf {evidence}; mkdir -p {evidence}; MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {environment} {binary} {scene_arguments} --pmu {row_copy} --evidence-dir {evidence}",
             evidence = sh(REMOTE_SCENE_EVIDENCE_DIR),
             environment = environment,
             binary = sh(REMOTE_BINARY),
             scene_arguments = scene_arguments,
+            row_copy = row_copy,
         )
     } else if assess {
         let cadence_dir = format!("{REMOTE_SCENE_EVIDENCE_DIR}/cadence");
@@ -1857,6 +1886,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains(REMOTE_DIR));
         assert!(run.contains("mister_magik_suspend"));
@@ -1885,6 +1915,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains("--particle-count 40000"));
         assert!(run.contains(&format!("--particle-preset {}", sh("visual"))));
@@ -1906,6 +1937,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains(&format!(
             "--scene {} --fixture {}",
@@ -1933,6 +1965,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains(&format!("--scene {}", sh("card-flip"))));
         assert!(!run.contains("--recipe"));
@@ -1962,6 +1995,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
         assert!(run.contains("--seed 4660"));
@@ -1992,11 +2026,12 @@ mod tests {
             false,
             false,
             true,
+            Some("neon"),
         );
         assert!(run.contains("MISTER_PMU_PROFILE=1"));
         assert!(run.contains("MISTER_PMU_SAMPLE_EVERY=1"));
         assert!(run.contains("MISTER_PMU_RECORD_LIMIT=4096"));
-        assert!(run.contains("--pmu --evidence-dir"));
+        assert!(run.contains("--pmu --row-copy neon --evidence-dir"));
         assert!(!run.contains("/media/fat/mister-magik-dev/mister-magik-fb"));
     }
 
@@ -2016,6 +2051,7 @@ mod tests {
             false,
             true,
             false,
+            None,
         );
         assert!(run.contains("--assessment-pass cadence"));
         assert!(run.contains("--assessment-pass profile"));
@@ -2040,6 +2076,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(navigation.contains("--seconds 5"));
         assert!(navigation.contains("--warmup-seconds 1"));
@@ -2064,6 +2101,7 @@ mod tests {
             false,
             true,
             false,
+            None,
         );
         assert_eq!(
             assessment
@@ -2254,6 +2292,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(run.contains("schema=1&output=crt-240p60"));
         assert!(run.contains("schema=1&mode=auto"));

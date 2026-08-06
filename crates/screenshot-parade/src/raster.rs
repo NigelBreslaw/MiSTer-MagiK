@@ -18,6 +18,54 @@ const LANCZOS_WEIGHT_ONE: i32 = 1 << 14;
 const COVERAGE_SAMPLES_PER_AXIS: usize = 8;
 const COVERAGE_SAMPLE_COUNT: usize = COVERAGE_SAMPLES_PER_AXIS * COVERAGE_SAMPLES_PER_AXIS;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OpaqueRowCopyBackend {
+    #[default]
+    Libc,
+    Neon,
+}
+
+type OpaqueRowCopy = fn(&mut [Rgb565Pixel], &[Rgb565Pixel]);
+
+impl OpaqueRowCopyBackend {
+    fn copy_function(self) -> OpaqueRowCopy {
+        match self {
+            Self::Libc => copy_opaque_row_libc,
+            Self::Neon => copy_opaque_row_neon,
+        }
+    }
+}
+
+fn copy_opaque_row_libc(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel]) {
+    destination.copy_from_slice(source);
+}
+
+#[cfg(all(target_arch = "arm", target_os = "linux"))]
+fn copy_opaque_row_neon(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel]) {
+    debug_assert_eq!(destination.len(), source.len());
+    unsafe extern "C" {
+        fn mister_magik_rgb565_copy_neon(
+            source: *const u16,
+            destination: *mut u16,
+            pixel_count: usize,
+        );
+    }
+    // SAFETY: the Rust slices are equal-length, valid, and non-overlapping
+    // because card phase storage and the framebuffer are independent owners.
+    unsafe {
+        mister_magik_rgb565_copy_neon(
+            source.as_ptr().cast(),
+            destination.as_mut_ptr().cast(),
+            source.len(),
+        );
+    }
+}
+
+#[cfg(not(all(target_arch = "arm", target_os = "linux")))]
+fn copy_opaque_row_neon(destination: &mut [Rgb565Pixel], source: &[Rgb565Pixel]) {
+    destination.copy_from_slice(source);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LinearPhaseKernel {
     #[cfg(test)]
@@ -302,6 +350,25 @@ impl PreparedScreenshotCard {
         x_fp: i64,
         y: isize,
     ) {
+        self.blit_with_row_copy(
+            dst,
+            screen_width,
+            screen_height,
+            x_fp,
+            y,
+            OpaqueRowCopyBackend::Libc,
+        );
+    }
+
+    pub(crate) fn blit_with_row_copy(
+        &self,
+        dst: &mut [Rgb565Pixel],
+        screen_width: usize,
+        screen_height: usize,
+        x_fp: i64,
+        y: isize,
+        row_copy: OpaqueRowCopyBackend,
+    ) {
         blit_sixteenth_phase(
             dst,
             screen_width,
@@ -311,6 +378,7 @@ impl PreparedScreenshotCard {
             &self.shifted_phases,
             x_fp,
             y,
+            row_copy,
         );
     }
 
@@ -364,6 +432,29 @@ impl PreparedScreenshotCard {
         y: isize,
         base_background: Rgb565Pixel,
     ) -> CoverageBlitStats {
+        self.blit_with_coverage_probe_and_row_copy(
+            dst,
+            screen_width,
+            screen_height,
+            x_fp,
+            y,
+            base_background,
+            OpaqueRowCopyBackend::Libc,
+        )
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn blit_with_coverage_probe_and_row_copy(
+        &self,
+        dst: &mut [Rgb565Pixel],
+        screen_width: usize,
+        screen_height: usize,
+        x_fp: i64,
+        y: isize,
+        base_background: Rgb565Pixel,
+        row_copy: OpaqueRowCopyBackend,
+    ) -> CoverageBlitStats {
         blit_sixteenth_phase_probed(
             dst,
             screen_width,
@@ -374,6 +465,7 @@ impl PreparedScreenshotCard {
             x_fp,
             y,
             base_background,
+            row_copy,
         )
     }
 }
@@ -1180,6 +1272,7 @@ fn blit_sixteenth_phase(
     shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
     x_fp: i64,
     y: isize,
+    row_copy: OpaqueRowCopyBackend,
 ) {
     let quantized = quantize_phase(x_fp);
     if quantized.phase == 0 {
@@ -1191,6 +1284,7 @@ fn blit_sixteenth_phase(
             base_coverage,
             quantized.x,
             y,
+            row_copy,
         );
         return;
     }
@@ -1206,6 +1300,7 @@ fn blit_sixteenth_phase(
         &shifted.coverage,
         quantized.x,
         y,
+        row_copy,
     );
 }
 
@@ -1222,6 +1317,7 @@ fn blit_sixteenth_phase_probed(
     x_fp: i64,
     y: isize,
     base_background: Rgb565Pixel,
+    row_copy: OpaqueRowCopyBackend,
 ) -> CoverageBlitStats {
     let quantized = quantize_phase(x_fp);
     if quantized.phase == 0 {
@@ -1234,6 +1330,7 @@ fn blit_sixteenth_phase_probed(
             quantized.x,
             y,
             base_background,
+            row_copy,
         );
     }
     let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
@@ -1249,6 +1346,7 @@ fn blit_sixteenth_phase_probed(
         quantized.x,
         y,
         base_background,
+        row_copy,
     )
 }
 
@@ -1261,7 +1359,9 @@ fn blit_coverage_phase(
     coverage: &CoveragePlane,
     x: isize,
     y: isize,
+    row_copy: OpaqueRowCopyBackend,
 ) {
+    let copy_opaque_row = row_copy.copy_function();
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
     let base_background = color565(0, 0, 10);
@@ -1304,8 +1404,10 @@ fn blit_coverage_phase(
         if opaque_end > opaque_start {
             let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
-            dst[target_start..target_start + copy_len]
-                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+            copy_opaque_row(
+                &mut dst[target_start..target_start + copy_len],
+                &image.pixels[source_row + opaque_start..source_row + opaque_end],
+            );
         }
     }
 }
@@ -1322,7 +1424,9 @@ fn blit_coverage_phase_probed(
     x: isize,
     y: isize,
     base_background: Rgb565Pixel,
+    row_copy: OpaqueRowCopyBackend,
 ) -> CoverageBlitStats {
+    let copy_opaque_row = row_copy.copy_function();
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
     let mut stats = CoverageBlitStats::default();
@@ -1368,8 +1472,10 @@ fn blit_coverage_phase_probed(
         if opaque_end > opaque_start {
             let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
-            dst[target_start..target_start + copy_len]
-                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+            copy_opaque_row(
+                &mut dst[target_start..target_start + copy_len],
+                &image.pixels[source_row + opaque_start..source_row + opaque_end],
+            );
         }
     }
     stats
@@ -1514,9 +1620,67 @@ mod tests {
                     coverage,
                     x,
                     y,
+                    OpaqueRowCopyBackend::Libc,
                 );
             }
             assert_eq!(actual, expected, "phase={phase}");
+        }
+    }
+
+    #[test]
+    fn row_copy_backends_match_scalar_reference_for_lengths_and_alignment() {
+        let source = (0..96)
+            .map(|value| Rgb565Pixel(value * 313))
+            .collect::<Vec<_>>();
+        for length in [0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 63] {
+            for (source_offset, destination_offset) in [(0, 0), (1, 0), (0, 1), (3, 5)] {
+                let source = &source[source_offset..source_offset + length];
+                let mut expected = vec![Rgb565Pixel(0x55aa); destination_offset + length + 3];
+                let mut actual = expected.clone();
+                copy_opaque_row_libc(
+                    &mut expected[destination_offset..destination_offset + length],
+                    source,
+                );
+                copy_opaque_row_neon(
+                    &mut actual[destination_offset..destination_offset + length],
+                    source,
+                );
+                assert_eq!(
+                    actual, expected,
+                    "length={length} source_offset={source_offset} destination_offset={destination_offset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn row_copy_backends_produce_identical_complete_frames() {
+        let source = test_image(32, 24);
+        let card = PreparedScreenshotCard::prepare(&source, 5, 180);
+        let screen_width = 160;
+        let screen_height = 120;
+        for phase in 0..CRT_PHASE_COUNT {
+            let x_fp = 19 * PARADE_SUBPIXEL_ONE + (phase * CRT_PHASE_STEP) as i64;
+            let background = vec![color565(7, 23, 41); screen_width * screen_height];
+            let mut libc = background.clone();
+            let mut neon = background;
+            card.blit_with_row_copy(
+                &mut libc,
+                screen_width,
+                screen_height,
+                x_fp,
+                -3,
+                OpaqueRowCopyBackend::Libc,
+            );
+            card.blit_with_row_copy(
+                &mut neon,
+                screen_width,
+                screen_height,
+                x_fp,
+                -3,
+                OpaqueRowCopyBackend::Neon,
+            );
+            assert_eq!(neon, libc, "phase={phase}");
         }
     }
 

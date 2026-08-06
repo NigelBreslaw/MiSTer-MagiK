@@ -428,6 +428,9 @@ pub fn execute_scene_device(
             "scene-lab --pmu requires screenshot-screensaver without timed/profile options".into(),
         );
     }
+    if args.row_copy.is_some() && !args.pmu {
+        return Err("scene-lab --row-copy requires screenshot-screensaver --pmu".into());
+    }
     let spec = if args.profile || args.assess {
         BuildSpec::framebuffer_scene_lab_analysis()
     } else {
