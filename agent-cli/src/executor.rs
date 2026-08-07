@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::evidence::{Evidence, now_ms};
-use crate::model::{Operation, Outcome, Plan, WorkflowPhase};
+use crate::model::{ActionKind, Operation, Outcome, Plan, WorkflowPhase};
 use crate::progress::{EventKind, Reporter};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -13,7 +13,21 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const VALIDATION_CACHE_SCHEMA: &str = "planner-schema-3";
+const VALIDATION_CACHE_SCHEMA: &str = "planner-schema-4";
+const FAST_CARGO_POLICY_SCHEMA: &str = "fast-assurance-v1";
+const FAST_CARGO_ENVIRONMENT: &[(&str, &str)] = &[
+    ("CARGO_INCREMENTAL", "1"),
+    ("CARGO_PROFILE_DEV_OPT_LEVEL", "0"),
+    ("CARGO_PROFILE_DEV_DEBUG", "0"),
+    ("CARGO_PROFILE_DEV_LTO", "false"),
+    ("CARGO_PROFILE_DEV_INCREMENTAL", "true"),
+    ("CARGO_PROFILE_DEV_CODEGEN_UNITS", "256"),
+    ("CARGO_PROFILE_TEST_OPT_LEVEL", "0"),
+    ("CARGO_PROFILE_TEST_DEBUG", "0"),
+    ("CARGO_PROFILE_TEST_LTO", "false"),
+    ("CARGO_PROFILE_TEST_INCREMENTAL", "true"),
+    ("CARGO_PROFILE_TEST_CODEGEN_UNITS", "256"),
+];
 const GIT_LOCAL_ENVIRONMENT: &[&str] = &[
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_COMMON_DIR",
@@ -376,6 +390,7 @@ fn operation_cache_key_with_schema(
         .collect::<Vec<_>>();
     let canonical = serde_json::to_vec(&(
         schema,
+        FAST_CARGO_POLICY_SCHEMA,
         &operation.id,
         &operation.program,
         &operation.args,
@@ -673,6 +688,7 @@ fn run_attempt(
         .args(args)
         .current_dir(repository)
         .env("MISTER_AGENT_PARENT_REQUEST_ID", request_id);
+    apply_operation_environment(&mut command, operation);
     scrub_git_local_environment(&mut command);
     if attempt == "network-fallback" {
         command.env("CARGO_NET_RETRY", "0");
@@ -703,6 +719,12 @@ fn run_attempt(
     let code = status.code().unwrap_or(1);
     evidence.finish_command(command_id, started, code)?;
     Ok(status)
+}
+
+fn apply_operation_environment(command: &mut Command, operation: &Operation) {
+    if matches!(operation.action, ActionKind::Cargo { .. }) {
+        command.envs(FAST_CARGO_ENVIRONMENT.iter().copied());
+    }
 }
 
 fn scrub_git_local_environment(command: &mut Command) {
@@ -973,6 +995,45 @@ mod tests {
             cargo_args(&args, false),
             ["test", "--locked", "--", "--nocapture"]
         );
+    }
+
+    #[test]
+    fn cargo_children_receive_the_exact_fast_assurance_profile() {
+        let mut command = Command::new("fixture");
+        for (name, _) in FAST_CARGO_ENVIRONMENT {
+            command.env(name, "external-slow-value");
+        }
+        let operation = test_operation(Path::new("cargo"));
+        apply_operation_environment(&mut command, &operation);
+        let environment = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                value.map(|value| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (name, expected) in FAST_CARGO_ENVIRONMENT {
+            assert_eq!(environment.get(*name).map(String::as_str), Some(*expected));
+        }
+        assert!(!environment.contains_key("CARGO_PROFILE_DEV_DEBUG_ASSERTIONS"));
+        assert!(!environment.contains_key("CARGO_PROFILE_DEV_OVERFLOW_CHECKS"));
+    }
+
+    #[test]
+    fn non_cargo_children_do_not_receive_assurance_profile_overrides() {
+        let mut command = Command::new("fixture");
+        let mut operation = test_operation(Path::new("fixture"));
+        operation.action = ActionKind::Script;
+        apply_operation_environment(&mut command, &operation);
+        let configured = command
+            .get_envs()
+            .filter_map(|(name, value)| value.map(|_| name))
+            .collect::<Vec<_>>();
+        assert!(configured.is_empty());
     }
 
     #[test]

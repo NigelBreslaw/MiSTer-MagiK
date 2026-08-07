@@ -1771,6 +1771,32 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_assurance_never_selects_an_optimized_cargo_profile() {
+        let paths = vec![
+            "agent-cli/src/lib.rs".into(),
+            "apps/mister/Cargo.toml".into(),
+            "apps/framebuffer-lab/src/lib.rs".into(),
+            "crates/catalog/src/lib.rs".into(),
+            "mister/tools/agent/src/main.rs".into(),
+        ];
+        let plan = affected_plan(
+            AssuranceRequest::PrePush {
+                remote: "origin".into(),
+            },
+            paths,
+        )
+        .unwrap();
+        for operation in plan
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation.action, ActionKind::Cargo { .. }))
+        {
+            assert!(!operation.args.iter().any(|arg| arg == "--release"));
+            assert!(!operation.args.iter().any(|arg| arg == "--profile"));
+        }
+    }
+
+    #[test]
     fn protocol_and_host_changes_refresh_the_runnable_agent_cli_binary() {
         for path in [
             "crates/agent-protocol/src/lib.rs",
