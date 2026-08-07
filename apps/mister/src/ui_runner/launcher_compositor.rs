@@ -331,6 +331,10 @@ impl<'a> LayerTarget<'a> {
         self.target.cached_frame_view()
     }
 
+    pub(super) fn restore_presentation_cached(&mut self, pixels: &[Rgb565Pixel]) -> bool {
+        restore_cached_565(self.target, pixels)
+    }
+
     pub(super) fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
         if self.layout.is_portrait() {
             None

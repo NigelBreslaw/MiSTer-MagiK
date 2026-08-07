@@ -2040,6 +2040,12 @@ fn apply_orientation_layout(
     window.request_redraw();
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OrientationTransitionIntent {
+    Confirm,
+    Rollback,
+}
+
 fn preview_archive_warm_skip_enabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
@@ -2185,6 +2191,9 @@ pub(super) fn run_launcher_loop(
     let mut orientation_confirm_deadline = None;
     let mut orientation_previous = None;
     let mut orientation_full_redraw_pending = layout.is_portrait();
+    let mut orientation_transition =
+        OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
+    let mut orientation_transition_intent = None;
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
@@ -2985,6 +2994,14 @@ pub(super) fn run_launcher_loop(
                 && nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation)
             {
                 if let Some(previous) = orientation_previous.take() {
+                    let from = nav.settings.screen_orientation;
+                    let animated = orientation_transition.start(
+                        from,
+                        previous,
+                        target.cached_565(),
+                        loop_start,
+                        nav.settings.reduce_motion,
+                    );
                     apply_orientation_layout(
                         &app,
                         window,
@@ -2995,6 +3012,11 @@ pub(super) fn run_launcher_loop(
                         &mut portrait_target,
                         &mut navigation_transition,
                     );
+                    if animated {
+                        orientation_transition_intent = Some(OrientationTransitionIntent::Rollback);
+                    } else {
+                        let _ = orientation_transition.take_completion();
+                    }
                 }
                 orientation_confirm_deadline = None;
                 nav.confirm_action = None;
@@ -4058,7 +4080,10 @@ pub(super) fn run_launcher_loop(
                             input_previous,
                         ))
                     .then(|| (nav.screen, nav.navigation_transition_state()));
-                    let event = if navigation_transition.is_active() {
+                    let event = if orientation_transition.is_active() {
+                        nav.absorb_input(&physical_nav_state);
+                        None
+                    } else if navigation_transition.is_active() {
                         None
                     } else if launch_failure_visible || recovery_dialog_visible {
                         if let Some(input) = route_lifecycle_dialog_input(
@@ -4539,7 +4564,15 @@ pub(super) fn run_launcher_loop(
                                     event.path.as_deref().and_then(ScreenOrientation::parse)
                                     && orientation != nav.settings.screen_orientation
                                 {
-                                    orientation_previous = Some(nav.settings.screen_orientation);
+                                    let previous = nav.settings.screen_orientation;
+                                    orientation_previous = Some(previous);
+                                    let animated = orientation_transition.start(
+                                        previous,
+                                        orientation,
+                                        target.cached_565(),
+                                        frame_now,
+                                        nav.settings.reduce_motion,
+                                    );
                                     apply_orientation_layout(
                                         &app,
                                         window,
@@ -4550,17 +4583,25 @@ pub(super) fn run_launcher_loop(
                                         &mut portrait_target,
                                         &mut navigation_transition,
                                     );
-                                    nav.confirm_action =
-                                        Some(launcher::ConfirmAction::ScreenOrientation);
-                                    nav.confirm_selected = 0;
-                                    nav.orientation_confirm_remaining =
-                                        launcher::DISPLAY_CONFIRM_SECONDS;
-                                    orientation_confirm_deadline = Some(
-                                        Instant::now()
-                                            + Duration::from_secs(u64::from(
-                                                launcher::DISPLAY_CONFIRM_SECONDS,
-                                            )),
-                                    );
+                                    if animated {
+                                        orientation_transition_intent =
+                                            Some(OrientationTransitionIntent::Confirm);
+                                        nav.confirm_action = None;
+                                        orientation_confirm_deadline = None;
+                                    } else {
+                                        let _ = orientation_transition.take_completion();
+                                        nav.confirm_action =
+                                            Some(launcher::ConfirmAction::ScreenOrientation);
+                                        nav.confirm_selected = 0;
+                                        nav.orientation_confirm_remaining =
+                                            launcher::DISPLAY_CONFIRM_SECONDS;
+                                        orientation_confirm_deadline = Some(
+                                            Instant::now()
+                                                + Duration::from_secs(u64::from(
+                                                    launcher::DISPLAY_CONFIRM_SECONDS,
+                                                )),
+                                        );
+                                    }
                                     orientation_full_redraw_pending = true;
                                     full_bridge_dirty = true;
                                 }
@@ -4577,6 +4618,14 @@ pub(super) fn run_launcher_loop(
                             }
                             LauncherAction::CancelScreenOrientation => {
                                 if let Some(previous) = orientation_previous.take() {
+                                    let from = nav.settings.screen_orientation;
+                                    let animated = orientation_transition.start(
+                                        from,
+                                        previous,
+                                        target.cached_565(),
+                                        frame_now,
+                                        nav.settings.reduce_motion,
+                                    );
                                     apply_orientation_layout(
                                         &app,
                                         window,
@@ -4587,6 +4636,12 @@ pub(super) fn run_launcher_loop(
                                         &mut portrait_target,
                                         &mut navigation_transition,
                                     );
+                                    if animated {
+                                        orientation_transition_intent =
+                                            Some(OrientationTransitionIntent::Rollback);
+                                    } else {
+                                        let _ = orientation_transition.take_completion();
+                                    }
                                 }
                                 orientation_confirm_deadline = None;
                                 nav.orientation_confirm_remaining = 0;
@@ -6145,7 +6200,42 @@ pub(super) fn run_launcher_loop(
         cached_damage.push_if_some(empty_base_cached_rect);
         cached_damage.push_if_some(raw_preview_cached_rect);
         cached_damage.push_if_some(cached_arcade_rect);
-        let cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
+        let mut cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
+        if orientation_transition.is_active() {
+            if !orientation_transition.destination_ready() {
+                let _ = orientation_transition
+                    .capture_destination(layer_target.presentation_frame_view().pixels());
+            }
+            if let Some((pixels, done)) = orientation_transition.render(Instant::now()) {
+                let _ = layer_target.restore_presentation_cached(pixels);
+                cached_damage = DirtyRectList::from_one(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: ui.render_w(),
+                    y1: ui.render_h(),
+                });
+                if done {
+                    let _ = orientation_transition.take_completion();
+                    match orientation_transition_intent.take() {
+                        Some(OrientationTransitionIntent::Confirm) => {
+                            nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
+                            nav.confirm_selected = 0;
+                            nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
+                            orientation_confirm_deadline = Some(
+                                Instant::now()
+                                    + Duration::from_secs(u64::from(
+                                        launcher::DISPLAY_CONFIRM_SECONDS,
+                                    )),
+                            );
+                            full_bridge_dirty = true;
+                        }
+                        Some(OrientationTransitionIntent::Rollback) | None => {}
+                    }
+                } else {
+                    window.request_redraw();
+                }
+            }
+        }
         let final_preview_target_presented = raw_preview.is_some()
             && preview.presentation_requires_present()
             && preview_transition_trace.progress >= 1.0;
