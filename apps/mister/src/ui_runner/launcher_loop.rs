@@ -519,6 +519,33 @@ fn sync_navigation_transition_active(
     }
 }
 
+fn begin_navigation_full_screen_transition(
+    chart: &mut FullScreenTransitionStateChart,
+    generation: &mut Option<FullScreenTransitionGeneration>,
+) -> bool {
+    match chart.begin(FullScreenTransitionOwner::Navigation) {
+        Ok(started) => {
+            *generation = Some(started);
+            true
+        }
+        Err(error) => {
+            crate::ui_errln!("navigation full-screen transition begin rejected: {error:?}");
+            false
+        }
+    }
+}
+
+fn release_navigation_full_screen_transition(
+    chart: &mut FullScreenTransitionStateChart,
+    generation: Option<FullScreenTransitionGeneration>,
+) {
+    if let Some(generation) = generation
+        && let Err(error) = chart.release(generation)
+    {
+        crate::ui_errln!("navigation full-screen transition release rejected: {error:?}");
+    }
+}
+
 fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) -> bool {
     catalog.system_game_count(collection_id) > 0
 }
@@ -2336,6 +2363,8 @@ pub(super) fn run_launcher_loop(
         layout.logical_h(),
         navigation_motion_enabled,
     );
+    let mut full_screen_transition = FullScreenTransitionStateChart::default();
+    let mut navigation_transition_generation = None;
     nav.screen = start_screen;
     if orientation_benchmark.enabled() {
         nav.settings_selected = 1;
@@ -3110,13 +3139,15 @@ pub(super) fn run_launcher_loop(
         }
         let loop_start = Instant::now();
         let slint_timer_dispatch_started = Instant::now();
-        let navigation_snapshot_locked_at_loop_start = navigation_transition.snapshot_locked();
+        let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
+        let navigation_snapshot_locked_at_loop_start =
+            full_screen_transition_policy_at_loop_start.snapshot_locked;
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
             startup_intro_launcher_frame_ready,
         ) == StartupIntroLauncherUiPlan::PrepareLiveFrame;
-        if !navigation_snapshot_locked_at_loop_start
+        if full_screen_transition_policy_at_loop_start.advance_slint_timers
             && (startup_intro.is_none() || startup_intro_needs_live_launcher)
         {
             slint::platform::update_timers_and_animations();
@@ -4352,7 +4383,13 @@ pub(super) fn run_launcher_loop(
                         } else {
                             navigation_transition.begin_settings_page(direction, source, now_us)
                         };
-                        if started.unwrap_or(false) {
+                        let started = started.unwrap_or(false);
+                        if started
+                            && begin_navigation_full_screen_transition(
+                                &mut full_screen_transition,
+                                &mut navigation_transition_generation,
+                            )
+                        {
                             pending_navigation_transition = Some(PendingNavigationTransition {
                                 event: launcher::LauncherEvent {
                                     action: LauncherAction::NavigateBack,
@@ -4366,6 +4403,9 @@ pub(super) fn run_launcher_loop(
                             });
                             full_bridge_dirty = true;
                             request_launcher_redraw!();
+                        } else if started {
+                            navigation_transition.settle_at_destination();
+                            let _ = navigation_transition.complete();
                         }
                     }
                     if let Some(event) = event {
@@ -4452,7 +4492,7 @@ pub(super) fn run_launcher_loop(
                                             .compose_direct_preview_rect(preview_screen_rect(ui));
                                     }
                                 }
-                                let transition_started =
+                                let navigation_runtime_started =
                                     transition_spec.is_some_and(|(edge, direction)| {
                                         let geometry = match direction {
                                             NavigationTransitionDirection::Forward => {
@@ -4546,6 +4586,11 @@ pub(super) fn run_launcher_loop(
                                                 .unwrap_or(false)
                                         })
                                     });
+                                let transition_started = navigation_runtime_started
+                                    && begin_navigation_full_screen_transition(
+                                        &mut full_screen_transition,
+                                        &mut navigation_transition_generation,
+                                    );
                                 if transition_started {
                                     let source_state = nav.navigation_transition_state();
                                     pending_navigation_transition =
@@ -4558,6 +4603,9 @@ pub(super) fn run_launcher_loop(
                                         });
                                     full_bridge_dirty = true;
                                     request_launcher_redraw!();
+                                } else if navigation_runtime_started {
+                                    navigation_transition.settle_at_destination();
+                                    let _ = navigation_transition.complete();
                                 } else if collection_id.is_none()
                                     || collection_id.as_deref().is_some_and(|collection_id| {
                                         collection_has_resident_rows(&catalog, collection_id)
@@ -5429,7 +5477,13 @@ pub(super) fn run_launcher_loop(
             } else {
                 navigation_transition.cancel_for_exclusive_view()
             };
-            let _ = navigation_transition.complete();
+            let completion = navigation_transition.complete();
+            if completion.is_some() {
+                release_navigation_full_screen_transition(
+                    &mut full_screen_transition,
+                    navigation_transition_generation,
+                );
+            }
             if endpoint == Some(NavigationTransitionEndpoint::Source)
                 && let Some(entry) = pending_collection_entry.take()
             {
@@ -5784,8 +5838,10 @@ pub(super) fn run_launcher_loop(
             .as_ref()
             .map(|(_, _, wait_us)| *wait_us)
             .unwrap_or(0);
-        let navigation_snapshot_locked_before_render = navigation_transition.snapshot_locked();
-        if !navigation_snapshot_locked_before_render {
+        let full_screen_transition_policy_before_render = full_screen_transition.policy();
+        let navigation_snapshot_locked_before_render =
+            full_screen_transition_policy_before_render.snapshot_locked;
+        if full_screen_transition_policy_before_render.advance_slint_timers {
             update_slint_animations(animation_clock);
         }
         let mut layer_target =
@@ -6052,6 +6108,8 @@ pub(super) fn run_launcher_loop(
             screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let mut slint_base_rendered = false;
         let mut slint_damage = DirtyRectList::new();
+        let mut full_screen_transition_release_raster_rendered = false;
+        let mut navigation_controlled_capture_rendered = false;
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -6078,7 +6136,39 @@ pub(super) fn run_launcher_loop(
             None
         } else if startup_intro_suppress_launcher_ui {
             None
-        } else if navigation_snapshot_locked_before_render {
+        } else if full_screen_transition_policy_before_render.snapshot_locked {
+            None
+        } else if full_screen_transition_policy_before_render.force_live_raster {
+            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+            slint_damage = damage;
+            slint_base_rendered = rendered;
+            full_screen_transition_release_raster_rendered = rendered;
+            dirty
+        } else if full_screen_transition_policy_before_render.controlled_capture
+            && composition_decision.force_full_slint_raster
+        {
+            let authorized = navigation_transition_generation.is_some_and(|generation| {
+                match full_screen_transition.take_controlled_capture(generation) {
+                    Ok(authorized) => authorized,
+                    Err(error) => {
+                        crate::ui_errln!("navigation controlled capture rejected: {error:?}");
+                        false
+                    }
+                }
+            });
+            if authorized {
+                let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+                slint_damage = damage;
+                slint_base_rendered = rendered;
+                navigation_controlled_capture_rendered = rendered;
+                dirty
+            } else {
+                None
+            }
+        } else if !full_screen_transition_policy_before_render.automatic_slint_raster {
+            if let Some(generation) = navigation_transition_generation {
+                let _ = full_screen_transition.retain_redraw(generation);
+            }
             None
         } else if composition_decision.force_full_slint_raster {
             let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
@@ -6204,8 +6294,9 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = true;
             if destination_committed && !navigation_transition.destination_ready() {
-                let destination_raster_ready =
-                    composition_decision.prepare_navigation_destination && slint_base_rendered;
+                let destination_raster_ready = composition_decision.prepare_navigation_destination
+                    && slint_base_rendered
+                    && navigation_controlled_capture_rendered;
                 let mut destination_layers_ready =
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
@@ -6280,6 +6371,13 @@ pub(super) fn run_launcher_loop(
                     {
                         navigation_transition.settle_at_destination();
                         render_transition_frame = false;
+                    } else if navigation_transition_generation.is_some_and(|generation| {
+                        full_screen_transition
+                            .capture_completed(generation)
+                            .is_err()
+                    }) {
+                        navigation_transition.settle_at_destination();
+                        render_transition_frame = false;
                     }
                     navigation_transition.tick(now_us);
                 }
@@ -6291,6 +6389,12 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 let completion = navigation_transition.complete();
+                if completion.is_some() {
+                    release_navigation_full_screen_transition(
+                        &mut full_screen_transition,
+                        navigation_transition_generation,
+                    );
+                }
                 let pending = pending_navigation_transition.take();
                 if completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Destination
@@ -6875,6 +6979,22 @@ pub(super) fn run_launcher_loop(
                 && launcher_presenter.latch_failure().is_none();
             if accepted_and_active_confirmed {
                 confirmed_present_sequence = presented_frame.main_present_sequence;
+            }
+            if accepted_and_active_confirmed
+                && full_screen_transition_release_raster_rendered
+                && let Some(generation) = navigation_transition_generation
+            {
+                match full_screen_transition.live_frame_presented(generation) {
+                    Ok(retained_redraw) => {
+                        navigation_transition_generation = None;
+                        if retained_redraw {
+                            request_launcher_redraw!();
+                        }
+                    }
+                    Err(error) => {
+                        crate::ui_errln!("navigation live-frame confirmation rejected: {error:?}")
+                    }
+                }
             }
             if accepted_and_active_confirmed {
                 launcher_automation.acknowledge_presented(

@@ -76,6 +76,7 @@ use mister_magik_fb::framebuffer::{
 use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
 use mister_magik_fb::launcher_runtime::catalog::*;
 use mister_magik_fb::launcher_runtime::composition::*;
+use mister_magik_fb::launcher_runtime::full_screen_transition::*;
 use mister_magik_fb::launcher_runtime::lifecycle::*;
 use mister_magik_fb::launcher_runtime::media::*;
 use mister_magik_fb::launcher_runtime::navigation_transition::*;

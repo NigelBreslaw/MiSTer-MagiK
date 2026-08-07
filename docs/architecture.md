@@ -383,6 +383,30 @@ complete new RGB565 base buffer, composes the Arcade list and preview when
 needed, and only then permits the transition destination snapshot. This keeps
 first entry behavior independent of Slint's reused-buffer dirty history.
 
+Full-screen transition render policy is centralized in
+`FullScreenTransitionStateChart`. Product runtimes continue to own navigation,
+geometry, reversal, input, startup, and screensaver behavior; the shared chart
+only controls Slint timer advancement, raster authorization, snapshot locking,
+release, and frame-driven scheduling. Navigation is the first consumer.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Live
+    Live --> CapturePending: Begin(owner, generation)
+    CapturePending --> SnapshotLocked: controlled capture completed
+    CapturePending --> Releasing: cancel or failure
+    SnapshotLocked --> Releasing: endpoint rendered or cancel
+    Releasing --> Live: forced live frame physically presented
+```
+
+Only one owner may be active. Every activation receives a generation token;
+stale events and nested ownership are rejected. `CapturePending` authorizes one
+controlled Slint raster, `SnapshotLocked` retains redraw requests without
+advancing or rasterizing Slint, and `Releasing` permits one forced live raster.
+Latch acceptance is not a release acknowledgement: the chart returns to
+`Live` only after the forced frame's sequence is confirmed active at a physical
+refresh.
+
 Screenshot presentation has a separate lifecycle. `Loading` retains the
 currently presented surface: an existing image stays visible, while a request
 started from empty stays black. A transition to `Empty` keeps the direct layer
