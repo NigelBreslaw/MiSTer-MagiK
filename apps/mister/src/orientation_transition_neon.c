@@ -9,31 +9,17 @@
 #define ORIENTATION_ROWS 9u
 #define ORIENTATION_LEVELS 32u
 #define ORIENTATION_SKIP 255u
-#define ORIENTATION_TRANSITION_COLOR 0x1082u
-#define ORIENTATION_TRANSITION_RED 2u
-#define ORIENTATION_TRANSITION_GREEN 4u
-#define ORIENTATION_TRANSITION_BLUE 2u
 
-static inline uint16x8_t fade_rgb565_to_transition_color(uint16x8_t packed, uint16_t opacity) {
+static inline uint16x8_t dim_rgb565(uint16x8_t packed, uint16_t opacity) {
     const uint16x8_t red_blue_mask = vdupq_n_u16(0x001f);
     const uint16x8_t green_mask = vdupq_n_u16(0x003f);
     const uint16x8_t opacity_vector = vdupq_n_u16(opacity);
-    const uint16x8_t inverse_opacity_vector = vdupq_n_u16(ORIENTATION_LEVELS - opacity);
     uint16x8_t red = vshrq_n_u16(packed, 11);
     uint16x8_t green = vandq_u16(vshrq_n_u16(packed, 5), green_mask);
     uint16x8_t blue = vandq_u16(packed, red_blue_mask);
-    red = vshrq_n_u16(vaddq_u16(
-        vmulq_u16(red, opacity_vector),
-        vmulq_u16(vdupq_n_u16(ORIENTATION_TRANSITION_RED), inverse_opacity_vector)
-    ), 5);
-    green = vshrq_n_u16(vaddq_u16(
-        vmulq_u16(green, opacity_vector),
-        vmulq_u16(vdupq_n_u16(ORIENTATION_TRANSITION_GREEN), inverse_opacity_vector)
-    ), 5);
-    blue = vshrq_n_u16(vaddq_u16(
-        vmulq_u16(blue, opacity_vector),
-        vmulq_u16(vdupq_n_u16(ORIENTATION_TRANSITION_BLUE), inverse_opacity_vector)
-    ), 5);
+    red = vshrq_n_u16(vmulq_u16(red, opacity_vector), 5);
+    green = vshrq_n_u16(vmulq_u16(green, opacity_vector), 5);
+    blue = vshrq_n_u16(vmulq_u16(blue, opacity_vector), 5);
     return vorrq_u16(
         vshlq_n_u16(red, 11),
         vorrq_u16(vshlq_n_u16(green, 5), blue)
@@ -65,24 +51,24 @@ static inline void copy_pixels(
     }
 }
 
-static inline void transition_color_pixels(uint16_t *output, size_t count) {
-    const uint16x8_t color = vdupq_n_u16(ORIENTATION_TRANSITION_COLOR);
+static inline void zero_pixels(uint16_t *output, size_t count) {
+    const uint16x8_t zero = vdupq_n_u16(0);
     size_t index = 0;
     for (; index + 32 <= count; index += 32) {
-        vst1q_u16(output + index, color);
-        vst1q_u16(output + index + 8, color);
-        vst1q_u16(output + index + 16, color);
-        vst1q_u16(output + index + 24, color);
+        vst1q_u16(output + index, zero);
+        vst1q_u16(output + index + 8, zero);
+        vst1q_u16(output + index + 16, zero);
+        vst1q_u16(output + index + 24, zero);
     }
     for (; index + 8 <= count; index += 8) {
-        vst1q_u16(output + index, color);
+        vst1q_u16(output + index, zero);
     }
     for (; index < count; index++) {
-        output[index] = ORIENTATION_TRANSITION_COLOR;
+        output[index] = 0;
     }
 }
 
-static inline void fade_pixels_to_transition_color(
+static inline void dim_pixels(
     const uint16_t *restrict source,
     uint16_t *restrict output,
     size_t count,
@@ -91,24 +77,19 @@ static inline void fade_pixels_to_transition_color(
     size_t index = 0;
     for (; index + 32 <= count; index += 32) {
         __builtin_prefetch(source + index + 64, 0, 1);
-        vst1q_u16(output + index, fade_rgb565_to_transition_color(vld1q_u16(source + index), opacity));
-        vst1q_u16(output + index + 8, fade_rgb565_to_transition_color(vld1q_u16(source + index + 8), opacity));
-        vst1q_u16(output + index + 16, fade_rgb565_to_transition_color(vld1q_u16(source + index + 16), opacity));
-        vst1q_u16(output + index + 24, fade_rgb565_to_transition_color(vld1q_u16(source + index + 24), opacity));
+        vst1q_u16(output + index, dim_rgb565(vld1q_u16(source + index), opacity));
+        vst1q_u16(output + index + 8, dim_rgb565(vld1q_u16(source + index + 8), opacity));
+        vst1q_u16(output + index + 16, dim_rgb565(vld1q_u16(source + index + 16), opacity));
+        vst1q_u16(output + index + 24, dim_rgb565(vld1q_u16(source + index + 24), opacity));
     }
     for (; index + 8 <= count; index += 8) {
-        vst1q_u16(output + index, fade_rgb565_to_transition_color(vld1q_u16(source + index), opacity));
+        vst1q_u16(output + index, dim_rgb565(vld1q_u16(source + index), opacity));
     }
     for (; index < count; index++) {
         const uint32_t pixel = source[index];
-        const uint32_t inverse_opacity = ORIENTATION_LEVELS - opacity;
-        const uint32_t red = ((pixel >> 11) * opacity
-            + ORIENTATION_TRANSITION_RED * inverse_opacity) >> 5;
-        const uint32_t green = (((pixel >> 5) & 63u) * opacity
-            + ORIENTATION_TRANSITION_GREEN * inverse_opacity) >> 5;
-        const uint32_t blue = ((pixel & 31u) * opacity
-            + ORIENTATION_TRANSITION_BLUE * inverse_opacity) >> 5;
-        output[index] = (uint16_t)((red << 11) | (green << 5) | blue);
+        const uint32_t red_blue = (((pixel & 0xf81fu) * opacity) >> 5) & 0xf81fu;
+        const uint32_t green = (((pixel & 0x07e0u) * opacity) >> 5) & 0x07e0u;
+        output[index] = (uint16_t)(red_blue | green);
     }
 }
 
@@ -135,16 +116,11 @@ void mister_magik_orientation_fade_neon(
                 const size_t count = x1 - x0;
                 const uint16_t opacity = levels[tile_row * ORIENTATION_COLUMNS + tile_column];
                 if (opacity == 0) {
-                    transition_color_pixels(output + row + x0, count);
+                    zero_pixels(output + row + x0, count);
                 } else if (opacity >= ORIENTATION_LEVELS) {
                     copy_pixels(source + row + x0, output + row + x0, count);
                 } else {
-                    fade_pixels_to_transition_color(
-                        source + row + x0,
-                        output + row + x0,
-                        count,
-                        opacity
-                    );
+                    dim_pixels(source + row + x0, output + row + x0, count, opacity);
                 }
             }
         }
@@ -205,7 +181,7 @@ void mister_magik_orientation_zoom_neon(
             centered_span(tile_x0, tile_x1, level, &x0, &x1);
             centered_span(tile_y0, tile_y1, level, &y0, &y1);
             for (size_t y = y0; y < y1; y++) {
-                transition_color_pixels(output + y * width + x0, x1 - x0);
+                zero_pixels(output + y * width + x0, x1 - x0);
             }
         }
     }
