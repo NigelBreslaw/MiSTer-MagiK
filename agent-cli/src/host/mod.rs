@@ -4497,6 +4497,7 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
     fs::create_dir_all(output_dir)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is missing before PMU profiling")?;
+    let installed_identity = pmu_installed_identity(&manifest)?;
     let capability = exec_checked_output(
         &session,
         "installed benchmark capability",
@@ -4542,6 +4543,7 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
             "status": "passed",
             "sample_every": 1,
             "record_limit": 4096,
+            "installed_identity": installed_identity,
             "workloads": summaries,
         }))
     })();
@@ -4562,6 +4564,14 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
         format!("{}\n", serde_json::to_string_pretty(&suite)?),
     )?;
     serde_json::to_string(&suite).map_err(Into::into)
+}
+
+fn pmu_installed_identity(manifest: &str) -> Result<Value> {
+    Ok(json!({
+        "manifest_sha256": encode_hex(&Sha256::digest(manifest.as_bytes())),
+        "magik_revision": exact_manifest_field(manifest, "magik_revision", 40)?,
+        "gui_sha256": exact_manifest_field(manifest, "gui_sha256", 64)?,
+    }))
 }
 
 fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()> {
@@ -13015,6 +13025,22 @@ mod tests {
             assert!(prepare.contains(arming_path));
             assert!(cleanup.contains(arming_path));
         }
+    }
+
+    #[test]
+    fn pmu_suite_identity_retains_revision_and_binary_digest() {
+        let manifest = format!(
+            "magik_revision={}\ngui_sha256={}\n",
+            "a".repeat(40),
+            "b".repeat(64)
+        );
+        let identity = pmu_installed_identity(&manifest).unwrap();
+        assert_eq!(identity["magik_revision"], "a".repeat(40));
+        assert_eq!(identity["gui_sha256"], "b".repeat(64));
+        assert_eq!(
+            identity["manifest_sha256"],
+            encode_hex(&Sha256::digest(manifest.as_bytes()))
+        );
     }
 
     #[test]
