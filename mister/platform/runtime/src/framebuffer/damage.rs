@@ -134,6 +134,15 @@ impl DirtyRectList {
         true
     }
 
+    fn remove(&mut self, index: usize) -> DirtyRect {
+        debug_assert!(index < self.len);
+        let removed = self.rects[index];
+        self.rects.copy_within(index + 1..self.len, index);
+        self.len -= 1;
+        self.rects[self.len] = EMPTY_DIRTY_RECT;
+        removed
+    }
+
     pub fn total_rgb565_bytes(&self) -> usize {
         self.iter()
             .map(|rect| rect.width() * rect.rows() as usize * size_of::<u16>())
@@ -141,9 +150,21 @@ impl DirtyRectList {
     }
 
     fn add_canonical(&mut self, rect: DirtyRect, full_rect: DirtyRect) {
-        let Some(rect) = rect.intersection(full_rect) else {
+        let Some(mut rect) = rect.intersection(full_rect) else {
             return;
         };
+        while let Some(index) = (0..self.len).find(|index| {
+            self.get(*index).is_some_and(|existing| {
+                existing.y0 == rect.y0
+                    && existing.y1 == rect.y1
+                    && existing.x0 <= rect.x1
+                    && rect.x0 <= existing.x1
+            })
+        }) {
+            let existing = self.remove(index);
+            rect.x0 = rect.x0.min(existing.x0);
+            rect.x1 = rect.x1.max(existing.x1);
+        }
         if self.iter().any(|existing| existing.contains(rect)) {
             return;
         }
@@ -385,5 +406,63 @@ mod tests {
             ledger.plan(1),
             DirtyRectList::from_one(rect(90, 70, 100, 80))
         );
+    }
+
+    #[test]
+    fn same_row_overlap_and_adjacency_merge_without_cross_row_boxes() {
+        let full = rect(0, 0, 100, 80);
+        let mut damage = DirtyRectList::new();
+        damage.add_canonical(rect(10, 20, 30, 30), full);
+        damage.add_canonical(rect(25, 20, 40, 30), full);
+        damage.add_canonical(rect(40, 20, 50, 30), full);
+        damage.add_canonical(rect(20, 30, 45, 40), full);
+        damage.add_canonical(rect(70, 20, 80, 30), full);
+
+        assert_eq!(
+            damage.to_vec(),
+            vec![
+                rect(10, 20, 50, 30),
+                rect(20, 30, 45, 40),
+                rect(70, 20, 80, 30),
+            ]
+        );
+        assert_eq!(
+            damage.total_rgb565_bytes(),
+            (40 * 10 + 25 * 10 + 10 * 10) * 2
+        );
+    }
+
+    #[test]
+    fn alternating_slot_debt_merges_consecutive_same_row_masks() {
+        let mut ledger = TwoSlotDamageLedger::new(160, 90);
+        ledger.mark_presented(1);
+        ledger.mark_presented(2);
+
+        let mut first = DirtyRectList::new();
+        first.push(rect(0, 0, 50, 10));
+        first.push(rect(80, 10, 100, 20));
+        ledger.record_damage(&first);
+        ledger.mark_presented(1);
+
+        let mut second = DirtyRectList::new();
+        second.push(rect(40, 0, 90, 10));
+        second.push(rect(100, 10, 120, 20));
+        ledger.record_damage(&second);
+
+        assert_eq!(
+            ledger.plan(2).to_vec(),
+            vec![rect(0, 0, 90, 10), rect(80, 10, 120, 20)]
+        );
+        assert_eq!(ledger.plan(1).to_vec(), second.to_vec());
+    }
+
+    #[test]
+    fn same_row_merging_prevents_capacity_fallback() {
+        let full = rect(0, 0, 128, 64);
+        let mut damage = DirtyRectList::new();
+        for x in 0..DIRTY_RECT_LIST_CAP {
+            damage.add_canonical(rect(x * 2, 10, x * 2 + 2, 20), full);
+        }
+        assert_eq!(damage, DirtyRectList::from_one(rect(0, 10, 64, 20)));
     }
 }
