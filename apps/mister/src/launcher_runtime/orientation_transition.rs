@@ -303,6 +303,10 @@ fn render_rotated_source(
         (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
     let source_cx = (width as f32 - 1.0) * 0.5;
     let source_cy = (height as f32 - 1.0) * 0.5;
+    let inverse_scale = scale.recip();
+    let source_x_step = cos * inverse_scale;
+    let source_y_step = -sin * inverse_scale;
+    let first_dx = -source_cx * inverse_scale;
     let fill_started = Instant::now();
     let fill_pmu = mister_magik_perf_events::sampled_span(fill_label);
     output.fill(Rgb565Pixel(0));
@@ -312,21 +316,23 @@ fn render_rotated_source(
     let map_pmu = mister_magik_perf_events::sampled_span(map_label);
     let mut mapped_pixels = 0u64;
     for y in 0..height {
-        let dy = (y as f32 - source_cy) / scale;
+        let dy = (y as f32 - source_cy) * inverse_scale;
+        let mut source_x = cos * first_dx + sin * dy + source_cx;
+        let mut source_y = -sin * first_dx + cos * dy + source_cy;
         let row = y * width;
         for x in 0..width {
-            let dx = (x as f32 - source_cx) / scale;
-            let source_x = cos * dx + sin * dy + source_cx;
-            let source_y = -sin * dx + cos * dy + source_cy;
             if source_x >= 0.0
                 && source_y >= 0.0
                 && source_x < width as f32
                 && source_y < height as f32
             {
-                output[row + x] = source[(source_y.round() as usize).min(height - 1) * width
-                    + (source_x.round() as usize).min(width - 1)];
+                let source_row = ((source_y + 0.5) as usize).min(height - 1) * width;
+                let source_column = ((source_x + 0.5) as usize).min(width - 1);
+                output[row + x] = source[source_row + source_column];
                 mapped_pixels = mapped_pixels.saturating_add(1);
             }
+            source_x += source_x_step;
+            source_y += source_y_step;
         }
     }
     drop(map_pmu);
@@ -357,6 +363,76 @@ fn blend_565(source: Rgb565Pixel, destination: Rgb565Pixel, alpha: u8) -> Rgb565
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render_rotated_source_reference(
+        source: &[Rgb565Pixel],
+        output: &mut [Rgb565Pixel],
+        width: usize,
+        height: usize,
+        quarter_turns: f32,
+    ) -> u64 {
+        let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
+        let (sin, cos) = angle.sin_cos();
+        let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
+        let rotated_height = sin.abs() * width as f32 + cos.abs() * height as f32;
+        let scale =
+            (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
+        let source_cx = (width as f32 - 1.0) * 0.5;
+        let source_cy = (height as f32 - 1.0) * 0.5;
+        output.fill(Rgb565Pixel(0));
+        let mut mapped_pixels = 0u64;
+        for y in 0..height {
+            let dy = (y as f32 - source_cy) / scale;
+            let row = y * width;
+            for x in 0..width {
+                let dx = (x as f32 - source_cx) / scale;
+                let source_x = cos * dx + sin * dy + source_cx;
+                let source_y = -sin * dx + cos * dy + source_cy;
+                if source_x >= 0.0
+                    && source_y >= 0.0
+                    && source_x < width as f32
+                    && source_y < height as f32
+                {
+                    output[row + x] = source[(source_y.round() as usize).min(height - 1) * width
+                        + (source_x.round() as usize).min(width - 1)];
+                    mapped_pixels = mapped_pixels.saturating_add(1);
+                }
+            }
+        }
+        mapped_pixels
+    }
+
+    #[test]
+    fn scanline_mapping_is_byte_equivalent_to_coordinate_reconstruction() {
+        for (width, height) in [(17, 11), (64, 37), (128, 72)] {
+            let source = (0..width * height)
+                .map(|index| Rgb565Pixel(index as u16))
+                .collect::<Vec<_>>();
+            for eighth_turns in -16..=16 {
+                let quarter_turns = eighth_turns as f32 / 8.0;
+                let mut expected = vec![Rgb565Pixel(0); source.len()];
+                let expected_mapped = render_rotated_source_reference(
+                    &source,
+                    &mut expected,
+                    width,
+                    height,
+                    quarter_turns,
+                );
+                let mut actual = vec![Rgb565Pixel(0); source.len()];
+                let (_, _, actual_mapped) = render_rotated_source(
+                    &source,
+                    &mut actual,
+                    width,
+                    height,
+                    quarter_turns,
+                    "orientation.invalid",
+                    "orientation.invalid",
+                );
+                assert_eq!(actual_mapped, expected_mapped, "turns={quarter_turns}");
+                assert_eq!(actual, expected, "turns={quarter_turns}");
+            }
+        }
+    }
 
     #[test]
     fn opposite_portrait_directions_use_the_longer_transition() {
