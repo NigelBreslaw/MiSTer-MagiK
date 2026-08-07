@@ -6711,8 +6711,7 @@ fn orientation_bracketed_presentation_window(
     let start = snapshots
         .iter()
         .copied()
-        .filter(|snapshot| snapshot.captured_monotonic_us <= first_completion_us)
-        .next_back()
+        .rfind(|snapshot| snapshot.captured_monotonic_us <= first_completion_us)
         .ok_or("orientation leg has no protocol-v5 start bracket")?;
     let end = snapshots
         .iter()
