@@ -14,6 +14,8 @@ const ORIENTATION_GRID_ROWS: usize = 9;
 const ORIENTATION_TILE_DELAY_US: u64 = 40_000;
 const ORIENTATION_TILE_FADE_US: u64 = 500_000;
 const RGB565_OPACITY_LEVELS: u8 = 32;
+const ORIENTATION_TILE_COUNT: usize = ORIENTATION_GRID_COLUMNS * ORIENTATION_GRID_ROWS;
+const ORIENTATION_TILE_SKIP: u8 = u8::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OrientationTransitionEffect {
@@ -394,23 +396,42 @@ fn render_brightness_wave(
             true,
         )
     };
+    let mut levels = [0_u8; ORIENTATION_TILE_COUNT];
+    for tile_row in 0..ORIENTATION_GRID_ROWS {
+        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
+            let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
+            levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column] = match (eased, revealing) {
+                (Some(level), true) => level,
+                (Some(level), false) => RGB565_OPACITY_LEVELS.saturating_sub(level),
+                (None, true) => 0,
+                (None, false) => RGB565_OPACITY_LEVELS,
+            };
+        }
+    }
+    if render_brightness_wave_neon(frame, output, width, height, &levels) {
+        return output.len().min(u64::MAX as usize) as u64;
+    }
+    render_brightness_wave_scalar(frame, output, width, height, &levels);
+    output.len().min(u64::MAX as usize) as u64
+}
+
+fn render_brightness_wave_scalar(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    levels: &[u8; ORIENTATION_TILE_COUNT],
+) {
     for tile_row in 0..ORIENTATION_GRID_ROWS {
         let y0 = tile_row * height / ORIENTATION_GRID_ROWS;
         let y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
         for tile_column in 0..ORIENTATION_GRID_COLUMNS {
             let x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
             let x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
-            let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
-            let level = match (eased, revealing) {
-                (Some(level), true) => level,
-                (Some(level), false) => RGB565_OPACITY_LEVELS.saturating_sub(level),
-                (None, true) => 0,
-                (None, false) => RGB565_OPACITY_LEVELS,
-            };
+            let level = levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
             render_dimmed_tile(frame, output, width, x0, x1, y0, y1, level);
         }
     }
-    output.len().min(u64::MAX as usize) as u64
 }
 
 fn render_center_pixel_zoom_wave(
@@ -434,13 +455,9 @@ fn render_center_pixel_zoom_wave(
             true,
         )
     };
-    output.copy_from_slice(frame);
+    let mut black_levels = [ORIENTATION_TILE_SKIP; ORIENTATION_TILE_COUNT];
     for tile_row in 0..ORIENTATION_GRID_ROWS {
-        let tile_y0 = tile_row * height / ORIENTATION_GRID_ROWS;
-        let tile_y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
         for tile_column in 0..ORIENTATION_GRID_COLUMNS {
-            let tile_x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
-            let tile_x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
             let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
             let black_level = match (eased, revealing) {
                 (Some(level), true) => RGB565_OPACITY_LEVELS.saturating_sub(level),
@@ -451,12 +468,148 @@ fn render_center_pixel_zoom_wave(
             if revealing && black_level == 0 {
                 continue;
             }
+            black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column] = black_level;
+        }
+    }
+    if render_center_pixel_zoom_wave_neon(frame, output, width, height, &black_levels) {
+        return output.len().min(u64::MAX as usize) as u64;
+    }
+    render_center_pixel_zoom_wave_scalar(frame, output, width, height, &black_levels);
+    output.len().min(u64::MAX as usize) as u64
+}
+
+fn render_center_pixel_zoom_wave_scalar(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    black_levels: &[u8; ORIENTATION_TILE_COUNT],
+) {
+    output.copy_from_slice(frame);
+    for tile_row in 0..ORIENTATION_GRID_ROWS {
+        let tile_y0 = tile_row * height / ORIENTATION_GRID_ROWS;
+        let tile_y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
+        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
+            let black_level = black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
+            if black_level == ORIENTATION_TILE_SKIP {
+                continue;
+            }
+            let tile_x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
+            let tile_x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
             let (x0, x1) = centered_span(tile_x0, tile_x1, black_level);
             let (y0, y1) = centered_span(tile_y0, tile_y1, black_level);
             fill_black_rect(output, width, x0, x1, y0, y1);
         }
     }
-    output.len().min(u64::MAX as usize) as u64
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn orientation_neon_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("MISTER_ORIENTATION_SIMD")
+            .ok()
+            .is_none_or(|value| !value.trim().eq_ignore_ascii_case("scalar"))
+    })
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+const fn orientation_neon_enabled() -> bool {
+    false
+}
+
+fn render_brightness_wave_neon(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    levels: &[u8; ORIENTATION_TILE_COUNT],
+) -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    if orientation_neon_enabled()
+        && frame.len() == output.len()
+        && frame.len() == width.saturating_mul(height)
+        && width >= ORIENTATION_GRID_COLUMNS
+        && height >= ORIENTATION_GRID_ROWS
+    {
+        unsafe extern "C" {
+            fn mister_magik_orientation_fade_neon(
+                source: *const u16,
+                output: *mut u16,
+                width: usize,
+                height: usize,
+                levels: *const u8,
+            );
+        }
+        // SAFETY: the slices are complete, distinct RGB565 planes with the
+        // supplied geometry; the fixed level array covers every grid tile.
+        unsafe {
+            mister_magik_orientation_fade_neon(
+                frame.as_ptr().cast(),
+                output.as_mut_ptr().cast(),
+                width,
+                height,
+                levels.as_ptr(),
+            );
+        }
+        return true;
+    }
+    let _ = (
+        frame,
+        output,
+        width,
+        height,
+        levels,
+        orientation_neon_enabled(),
+    );
+    false
+}
+
+fn render_center_pixel_zoom_wave_neon(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    black_levels: &[u8; ORIENTATION_TILE_COUNT],
+) -> bool {
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    if orientation_neon_enabled()
+        && frame.len() == output.len()
+        && frame.len() == width.saturating_mul(height)
+        && width >= ORIENTATION_GRID_COLUMNS
+        && height >= ORIENTATION_GRID_ROWS
+    {
+        unsafe extern "C" {
+            fn mister_magik_orientation_zoom_neon(
+                source: *const u16,
+                output: *mut u16,
+                width: usize,
+                height: usize,
+                black_levels: *const u8,
+            );
+        }
+        // SAFETY: the slices are complete, distinct RGB565 planes with the
+        // supplied geometry; the fixed level array covers every grid tile.
+        unsafe {
+            mister_magik_orientation_zoom_neon(
+                frame.as_ptr().cast(),
+                output.as_mut_ptr().cast(),
+                width,
+                height,
+                black_levels.as_ptr(),
+            );
+        }
+        return true;
+    }
+    let _ = (
+        frame,
+        output,
+        width,
+        height,
+        black_levels,
+        orientation_neon_enabled(),
+    );
+    false
 }
 
 fn orientation_tile_eased_level(phase_elapsed_us: u64, row: usize, column: usize) -> Option<u8> {
@@ -732,6 +885,43 @@ mod tests {
             OrientationTransitionEffect::BrightnessFade,
         );
         assert_eq!(fade.effect, OrientationTransitionEffect::BrightnessFade);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[test]
+    fn neon_kernels_are_pixel_identical_to_scalar_fallbacks() {
+        let width = 160;
+        let height = 90;
+        let source = (0..width * height)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(7919)))
+            .collect::<Vec<_>>();
+        let mut scalar = vec![Rgb565Pixel(0); source.len()];
+        let mut neon = scalar.clone();
+        let mut levels = [0_u8; ORIENTATION_TILE_COUNT];
+        for (index, level) in levels.iter_mut().enumerate() {
+            *level = (index % (usize::from(RGB565_OPACITY_LEVELS) + 1)) as u8;
+        }
+        render_brightness_wave_scalar(&source, &mut scalar, width, height, &levels);
+        assert!(render_brightness_wave_neon(
+            &source, &mut neon, width, height, &levels
+        ));
+        assert_eq!(neon, scalar);
+
+        let mut black_levels = [ORIENTATION_TILE_SKIP; ORIENTATION_TILE_COUNT];
+        for (index, level) in black_levels.iter_mut().enumerate() {
+            if index % 5 != 0 {
+                *level = (index % (usize::from(RGB565_OPACITY_LEVELS) + 1)) as u8;
+            }
+        }
+        render_center_pixel_zoom_wave_scalar(&source, &mut scalar, width, height, &black_levels);
+        assert!(render_center_pixel_zoom_wave_neon(
+            &source,
+            &mut neon,
+            width,
+            height,
+            &black_levels,
+        ));
+        assert_eq!(neon, scalar);
     }
 
     #[test]
