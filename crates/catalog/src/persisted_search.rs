@@ -329,6 +329,12 @@ pub(crate) fn populate(
 ) -> Result<usize, PersistedSearchError> {
     use std::collections::BTreeMap;
 
+    connection
+        .execute(
+            "INSERT INTO game_search_fts(game_search_fts,rank) VALUES ('automerge',0)",
+            [],
+        )
+        .map_err(|error| PersistedSearchError::with("suspend FTS automerge", error))?;
     let mut insert_search = connection
         .prepare(
             "INSERT INTO game_search_fts(
@@ -418,6 +424,12 @@ pub(crate) fn populate(
             [],
         )
         .map_err(|error| PersistedSearchError::with("optimize FTS index", error))?;
+    connection
+        .execute(
+            "INSERT INTO game_search_fts(game_search_fts,rank) VALUES ('automerge',4)",
+            [],
+        )
+        .map_err(|error| PersistedSearchError::with("restore FTS automerge", error))?;
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts) VALUES ('integrity-check')",
@@ -685,6 +697,21 @@ mod tests {
                 .autocomplete
                 .is_none()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bulk_population_restores_default_fts_automerge() {
+        let (root, sqlite) = fixture();
+        let connection = Connection::open(sqlite).unwrap();
+        let automerge: u32 = connection
+            .query_row(
+                "SELECT v FROM game_search_fts_config WHERE k='automerge'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(automerge, 4);
         fs::remove_dir_all(root).unwrap();
     }
 
