@@ -680,7 +680,10 @@ mod macos {
             bridge.set_licenses_selected(self.selection as i32);
             bridge.set_screensaver_settings_selected(self.selection as i32);
             bridge.set_confirm_selected(self.selection.min(1) as i32);
-            if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeSearch) {
+            if matches!(
+                self.scenario,
+                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade
+            ) {
                 let games = self
                     .catalog
                     .games
@@ -1253,7 +1256,10 @@ mod macos {
                     FramebufferTargetGeometry::new(self.frame_width, self.frame_height),
                 );
             });
-            if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeSearch) {
+            if matches!(
+                self.scenario,
+                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade
+            ) {
                 let games = self
                     .launcher_nav
                     .active_collection_id()
@@ -1269,7 +1275,9 @@ mod macos {
                     self.launcher_nav.arcade.visual_index,
                     true,
                 );
-                if self.scenario == Scenario::Arcade && !self.display_profile.is_crt() {
+                if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
+                    && !self.display_profile.is_crt()
+                {
                     let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
                     let current = self
                         .preview_current_index
@@ -2821,7 +2829,7 @@ mod macos {
         reset_transient_bridge(&bridge);
         bridge.set_screen_mode(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => 1,
-            Scenario::Arcade | Scenario::ArcadeSearch => 2,
+            Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => 2,
             Scenario::Settings | Scenario::OrientationChoice => 3,
             Scenario::About => 4,
             Scenario::Licenses => 5,
@@ -2831,7 +2839,7 @@ mod macos {
         });
         bridge.set_effective_view(
             match scenario {
-                Scenario::Arcade | Scenario::ArcadeSearch => "arcade",
+                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => "arcade",
                 Scenario::Settings | Scenario::OrientationChoice => "settings",
                 Scenario::Controller | Scenario::ControllerSetup => "controller",
                 Scenario::About => "about",
