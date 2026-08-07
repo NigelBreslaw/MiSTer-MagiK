@@ -9,7 +9,12 @@ use std::time::{Duration, Instant};
 
 pub const ORIENTATION_QUARTER_TURN_DURATION: Duration = Duration::from_millis(300);
 pub const ORIENTATION_OPPOSITE_TURN_DURATION: Duration = Duration::from_millis(450);
-const DESTINATION_CROSSFADE_START: f32 = 0.72;
+const ORIENTATION_DIALOG_SCALE: f32 = 0.40;
+const ORDERED_DITHER_8X8: [u8; 64] = [
+    0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4, 36, 14, 46, 6, 38, 60,
+    28, 52, 20, 62, 30, 54, 22, 3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15,
+    47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionCompletion {
@@ -219,38 +224,52 @@ impl OrientationTransitionRuntime {
         let progress = (now.saturating_duration_since(self.started_at).as_secs_f32()
             / self.duration.as_secs_f32())
         .clamp(0.0, 1.0);
-        let (fill_us, map_us, mapped_pixels) = render_rotated_source(
+        let fill_started = Instant::now();
+        let fill_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.from,
+            self.to,
+            OrientationPmuPhase::Fill,
+        ));
+        drop(fill_pmu);
+        let fill_us = elapsed_us(fill_started);
+        let crossfade_started = Instant::now();
+        let crossfade_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.from,
+            self.to,
+            OrientationPmuPhase::Crossfade,
+        ));
+        let blended_pixels = render_dithered_background(
             &self.source,
+            &self.destination,
             &mut self.output,
             self.width,
             self.height,
-            transition_quarter_turns(self.from, self.to) as f32 * progress,
-            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Fill),
+            progress,
+        );
+        drop(crossfade_pmu);
+        let crossfade_us = elapsed_us(crossfade_started);
+        let (dialog, dialog_turns) = if progress < 0.5 {
+            (
+                self.source.as_slice(),
+                transition_quarter_turns(self.from, self.to) as f32 * progress,
+            )
+        } else {
+            (
+                self.destination.as_slice(),
+                transition_quarter_turns(self.from, self.to) as f32 * (progress - 1.0),
+            )
+        };
+        let (map_us, mapped_pixels) = render_rotating_dialog(
+            dialog,
+            &mut self.output,
+            self.width,
+            self.height,
+            dialog_turns,
+            progress > 0.0 && progress < 1.0,
             orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Map),
         );
-        let mut crossfade_us = 0;
-        let mut blended_pixels = 0;
-        if progress >= DESTINATION_CROSSFADE_START {
-            let alpha = (((progress - DESTINATION_CROSSFADE_START)
-                / (1.0 - DESTINATION_CROSSFADE_START))
-                * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            let crossfade_started = Instant::now();
-            let _pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                self.from,
-                self.to,
-                OrientationPmuPhase::Crossfade,
-            ));
-            for (pixel, destination) in self.output.iter_mut().zip(&self.destination) {
-                *pixel = blend_565(*pixel, *destination, alpha);
-            }
-            crossfade_us = elapsed_us(crossfade_started);
-            blended_pixels = self.output.len().min(u64::MAX as usize) as u64;
-        }
         let done = progress >= 1.0;
         if done {
-            self.output.copy_from_slice(&self.destination);
             self.active = false;
             self.completion = Some(OrientationTransitionCompletion {
                 from: self.from,
@@ -286,41 +305,83 @@ fn transition_quarter_turns(from: ScreenOrientation, to: ScreenOrientation) -> i
     orientation_turns(to) - orientation_turns(from)
 }
 
-fn render_rotated_source(
+fn render_dithered_background(
+    source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    progress: f32,
+) -> u64 {
+    if progress <= 0.0 {
+        output.copy_from_slice(source);
+        return 0;
+    }
+    if progress >= 1.0 {
+        output.copy_from_slice(destination);
+        return output.len().min(u64::MAX as usize) as u64;
+    }
+    let (frame, visible) = if progress < 0.5 {
+        (source, 1.0 - progress * 2.0)
+    } else {
+        (destination, (progress - 0.5) * 2.0)
+    };
+    let visible_levels = (visible * 64.0).round().clamp(0.0, 64.0) as u8;
+    for y in 0..height {
+        let row = y * width;
+        let dither_row = (y & 7) * 8;
+        for x in 0..width {
+            output[row + x] = if ORDERED_DITHER_8X8[dither_row + (x & 7)] < visible_levels {
+                frame[row + x]
+            } else {
+                Rgb565Pixel(0)
+            };
+        }
+    }
+    output.len().min(u64::MAX as usize) as u64
+}
+
+fn render_rotating_dialog(
     source: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
     quarter_turns: f32,
-    fill_label: &'static str,
+    visible: bool,
     map_label: &'static str,
-) -> (u64, u64, u64) {
+) -> (u64, u64) {
+    let map_started = Instant::now();
+    let map_pmu = mister_magik_perf_events::sampled_span(map_label);
+    if !visible {
+        drop(map_pmu);
+        return (elapsed_us(map_started), 0);
+    }
     let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
     let (sin, cos) = angle.sin_cos();
     let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
     let rotated_height = sin.abs() * width as f32 + cos.abs() * height as f32;
-    let scale =
-        (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
+    let scale = (width as f32 / rotated_width.max(1.0))
+        .min(height as f32 / rotated_height.max(1.0))
+        * ORIENTATION_DIALOG_SCALE;
     let source_cx = (width as f32 - 1.0) * 0.5;
     let source_cy = (height as f32 - 1.0) * 0.5;
+    let dialog_width = rotated_width * scale;
+    let dialog_height = rotated_height * scale;
+    let x0 = (source_cx - dialog_width * 0.5).floor().max(0.0) as usize;
+    let y0 = (source_cy - dialog_height * 0.5).floor().max(0.0) as usize;
+    let x1 = (source_cx + dialog_width * 0.5).ceil().min(width as f32) as usize;
+    let y1 = (source_cy + dialog_height * 0.5).ceil().min(height as f32) as usize;
     let inverse_scale = scale.recip();
     let source_x_step = cos * inverse_scale;
     let source_y_step = -sin * inverse_scale;
-    let first_dx = -source_cx * inverse_scale;
-    let fill_started = Instant::now();
-    let fill_pmu = mister_magik_perf_events::sampled_span(fill_label);
-    output.fill(Rgb565Pixel(0));
-    drop(fill_pmu);
-    let fill_us = elapsed_us(fill_started);
-    let map_started = Instant::now();
-    let map_pmu = mister_magik_perf_events::sampled_span(map_label);
+    let first_dx = (x0 as f32 - source_cx) * inverse_scale;
     let mut mapped_pixels = 0u64;
-    for y in 0..height {
+    for y in y0..y1 {
         let dy = (y as f32 - source_cy) * inverse_scale;
         let mut source_x = cos * first_dx + sin * dy + source_cx;
         let mut source_y = -sin * first_dx + cos * dy + source_cy;
         let row = y * width;
-        for x in 0..width {
+        for x in x0..x1 {
             if source_x >= 0.0
                 && source_y >= 0.0
                 && source_x < width as f32
@@ -336,102 +397,59 @@ fn render_rotated_source(
         }
     }
     drop(map_pmu);
-    (fill_us, elapsed_us(map_started), mapped_pixels)
+    (elapsed_us(map_started), mapped_pixels)
 }
 
 fn elapsed_us(started: Instant) -> u64 {
     started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
-fn blend_565(source: Rgb565Pixel, destination: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
-    if alpha == 0 {
-        return source;
-    }
-    if alpha == u8::MAX {
-        return destination;
-    }
-    let alpha = u32::from(alpha);
-    let inverse = 255 - alpha;
-    let source = u32::from(source.0);
-    let destination = u32::from(destination.0);
-    let r = (((source >> 11) & 0x1f) * inverse + ((destination >> 11) & 0x1f) * alpha) / 255;
-    let g = (((source >> 5) & 0x3f) * inverse + ((destination >> 5) & 0x3f) * alpha) / 255;
-    let b = ((source & 0x1f) * inverse + (destination & 0x1f) * alpha) / 255;
-    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn render_rotated_source_reference(
-        source: &[Rgb565Pixel],
-        output: &mut [Rgb565Pixel],
-        width: usize,
-        height: usize,
-        quarter_turns: f32,
-    ) -> u64 {
-        let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
-        let (sin, cos) = angle.sin_cos();
-        let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
-        let rotated_height = sin.abs() * width as f32 + cos.abs() * height as f32;
-        let scale =
-            (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
-        let source_cx = (width as f32 - 1.0) * 0.5;
-        let source_cy = (height as f32 - 1.0) * 0.5;
-        output.fill(Rgb565Pixel(0));
-        let mut mapped_pixels = 0u64;
-        for y in 0..height {
-            let dy = (y as f32 - source_cy) / scale;
-            let row = y * width;
-            for x in 0..width {
-                let dx = (x as f32 - source_cx) / scale;
-                let source_x = cos * dx + sin * dy + source_cx;
-                let source_y = -sin * dx + cos * dy + source_cy;
-                if source_x >= 0.0
-                    && source_y >= 0.0
-                    && source_x < width as f32
-                    && source_y < height as f32
-                {
-                    output[row + x] = source[(source_y.round() as usize).min(height - 1) * width
-                        + (source_x.round() as usize).min(width - 1)];
-                    mapped_pixels = mapped_pixels.saturating_add(1);
-                }
-            }
+    #[test]
+    fn rotating_dialog_maps_less_than_one_quarter_of_the_frame() {
+        let width = 128;
+        let height = 72;
+        let source = vec![Rgb565Pixel(1); width * height];
+        for eighth_turns in -16..=16 {
+            let mut output = vec![Rgb565Pixel(0); source.len()];
+            let (_, mapped) = render_rotating_dialog(
+                &source,
+                &mut output,
+                width,
+                height,
+                eighth_turns as f32 / 8.0,
+                true,
+                "orientation.invalid",
+            );
+            assert!(mapped > 0);
+            assert!(mapped < (width * height / 4) as u64, "turn={eighth_turns}");
         }
-        mapped_pixels
     }
 
     #[test]
-    fn scanline_mapping_is_byte_equivalent_to_coordinate_reconstruction() {
-        for (width, height) in [(17, 11), (64, 37), (128, 72)] {
-            let source = (0..width * height)
-                .map(|index| Rgb565Pixel(index as u16))
-                .collect::<Vec<_>>();
-            for eighth_turns in -16..=16 {
-                let quarter_turns = eighth_turns as f32 / 8.0;
-                let mut expected = vec![Rgb565Pixel(0); source.len()];
-                let expected_mapped = render_rotated_source_reference(
-                    &source,
-                    &mut expected,
-                    width,
-                    height,
-                    quarter_turns,
-                );
-                let mut actual = vec![Rgb565Pixel(0); source.len()];
-                let (_, _, actual_mapped) = render_rotated_source(
-                    &source,
-                    &mut actual,
-                    width,
-                    height,
-                    quarter_turns,
-                    "orientation.invalid",
-                    "orientation.invalid",
-                );
-                assert_eq!(actual_mapped, expected_mapped, "turns={quarter_turns}");
-                assert_eq!(actual, expected, "turns={quarter_turns}");
-            }
-        }
+    fn dithered_background_is_exact_at_endpoints_and_black_at_midpoint() {
+        let source = [Rgb565Pixel(1); 64];
+        let destination = [Rgb565Pixel(2); 64];
+        let mut output = [Rgb565Pixel(3); 64];
+
+        assert_eq!(
+            render_dithered_background(&source, &destination, &mut output, 8, 8, 0.0),
+            0
+        );
+        assert_eq!(output, source);
+        assert_eq!(
+            render_dithered_background(&source, &destination, &mut output, 8, 8, 0.5),
+            64
+        );
+        assert_eq!(output, [Rgb565Pixel(0); 64]);
+        assert_eq!(
+            render_dithered_background(&source, &destination, &mut output, 8, 8, 1.0),
+            64
+        );
+        assert_eq!(output, destination);
     }
 
     #[test]
@@ -509,7 +527,7 @@ mod tests {
             .expect("halfway transition frame");
         assert!(!halfway_done);
         assert!(halfway.mapped_pixels > 0);
-        assert_eq!(halfway.blended_pixels, 0);
+        assert_eq!(halfway.blended_pixels, 12);
         assert_eq!(halfway.progress_ppm, 500_000);
 
         let (_, final_done, final_stats) = runtime
