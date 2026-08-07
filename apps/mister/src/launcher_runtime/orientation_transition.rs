@@ -267,4 +267,53 @@ mod tests {
         assert!(done);
         assert_eq!(frame, destination);
     }
+
+    #[test]
+    fn transition_reuses_preallocated_buffers() {
+        let start = Instant::now();
+        let source = [Rgb565Pixel(1); 12];
+        let destination = [Rgb565Pixel(2); 12];
+        let mut runtime = OrientationTransitionRuntime::new(4, 3);
+        let source_ptr = runtime.source.as_ptr();
+        let destination_ptr = runtime.destination.as_ptr();
+        let output_ptr = runtime.output.as_ptr();
+        let capacities = (
+            runtime.source.capacity(),
+            runtime.destination.capacity(),
+            runtime.output.capacity(),
+        );
+
+        assert!(runtime.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &source,
+            start,
+            false,
+        ));
+        assert!(runtime.capture_destination(&destination));
+        let _ = runtime.render(start + Duration::from_millis(150));
+        let _ = runtime.render(start + ORIENTATION_QUARTER_TURN_DURATION);
+        assert!(runtime.start(
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+            &destination,
+            start + ORIENTATION_QUARTER_TURN_DURATION,
+            false,
+        ));
+        assert!(runtime.capture_destination(&source));
+        let _ = runtime
+            .render(start + ORIENTATION_QUARTER_TURN_DURATION + ORIENTATION_OPPOSITE_TURN_DURATION);
+
+        assert_eq!(runtime.source.as_ptr(), source_ptr);
+        assert_eq!(runtime.destination.as_ptr(), destination_ptr);
+        assert_eq!(runtime.output.as_ptr(), output_ptr);
+        assert_eq!(
+            (
+                runtime.source.capacity(),
+                runtime.destination.capacity(),
+                runtime.output.capacity(),
+            ),
+            capacities
+        );
+    }
 }

@@ -480,4 +480,107 @@ mod tests {
                 .all(|pixel| *pixel == Rgb565Pixel(0))
         );
     }
+
+    #[test]
+    fn normal_damage_returns_without_transforming_the_cached_frame() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        let original = (0..12)
+            .map(|value| Rgb565Pixel(0x1000 + value))
+            .collect::<Vec<_>>();
+        target.cached_565_mut().copy_from_slice(&original);
+        let damage = DirtyRectList::from_one(DirtyRect {
+            x0: 1,
+            y0: 1,
+            x1: 3,
+            y1: 2,
+        });
+
+        let mapped = LayerTarget::new(&mut target, &ui).rotate_damage_to_composition(&damage);
+
+        assert_eq!(mapped, damage);
+        assert_eq!(target.cached_565(), original);
+    }
+
+    #[test]
+    fn portrait_idle_damage_performs_no_rotation_work() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
+        let mut composition = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        composition.cached_565_mut().fill(Rgb565Pixel(0x1234));
+        let mut logical = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+        logical.cached_565_mut().fill(Rgb565Pixel(0xabcd));
+
+        let mapped = LayerTarget::new_oriented(&mut composition, Some(&mut logical), &ui, layout)
+            .rotate_damage_to_composition(&DirtyRectList::new());
+
+        assert!(mapped.is_empty());
+        assert!(
+            composition
+                .cached_565()
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0x1234))
+        );
+    }
+
+    #[test]
+    fn portrait_rotation_updates_only_mapped_damage() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let mut composition = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+            let untouched = Rgb565Pixel(0x1234);
+            composition.cached_565_mut().fill(untouched);
+            let mut logical = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+            for (index, pixel) in logical.cached_565_mut().iter_mut().enumerate() {
+                *pixel = Rgb565Pixel(0x2000 + index as u16);
+            }
+            let logical_damage = DirtyRectList::from_one(DirtyRect {
+                x0: 1,
+                y0: 1,
+                x1: 3,
+                y1: 3,
+            });
+            let expected = match orientation {
+                ScreenOrientation::MonitorClockwise => DirtyRect {
+                    x0: 1,
+                    y0: 0,
+                    x1: 3,
+                    y1: 2,
+                },
+                ScreenOrientation::MonitorCounterclockwise => DirtyRect {
+                    x0: 1,
+                    y0: 1,
+                    x1: 3,
+                    y1: 3,
+                },
+                ScreenOrientation::Normal => unreachable!(),
+            };
+
+            let mapped =
+                LayerTarget::new_oriented(&mut composition, Some(&mut logical), &ui, layout)
+                    .rotate_damage_to_composition(&logical_damage);
+
+            assert_eq!(mapped, DirtyRectList::from_one(expected));
+            for composition_y in 0..3 {
+                for composition_x in 0..4 {
+                    let actual = composition.cached_565()[composition_y * 4 + composition_x];
+                    if composition_x >= expected.x0
+                        && composition_x < expected.x1
+                        && composition_y >= expected.y0
+                        && composition_y < expected.y1
+                    {
+                        let (logical_x, logical_y) =
+                            layout.composition_pixel_to_logical(composition_x, composition_y);
+                        assert_eq!(actual, logical.cached_565()[logical_y * 3 + logical_x]);
+                    } else {
+                        assert_eq!(actual, untouched);
+                    }
+                }
+            }
+        }
+    }
 }
