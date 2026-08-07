@@ -6416,16 +6416,6 @@ fn qualify_installed_orientation_transitions(
             Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
         )?;
         let session = connect_with(&config.connection, 10)?;
-        let completion_text = remote_read(
-            &session,
-            &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/completion.json"),
-        )
-        .ok_or("orientation benchmark completion metadata is missing")?;
-        let completion: Value = serde_json::from_str(completion_text.trim())?;
-        fs::write(
-            output_dir.join("completion.json"),
-            format!("{}\n", serde_json::to_string_pretty(&completion)?),
-        )?;
         let telemetry_text = telemetry
             .iter()
             .map(serde_json::to_string)
@@ -6438,6 +6428,27 @@ fn qualify_installed_orientation_transitions(
         if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
             fs::write(output_dir.join("launcher.log"), log)?;
         }
+        let completion_text = remote_read(
+            &session,
+            &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/completion.json"),
+        );
+        if completion_text.is_none() {
+            fs::write(
+                output_dir.join("failure.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "schema": "mister-magik-orientation-transition-failure-v1",
+                    "failure": "completion-metadata-missing",
+                    "launcher_status": read_launcher_status(&session).ok(),
+                }))?,
+            )?;
+        }
+        let completion_text =
+            completion_text.ok_or("orientation benchmark completion metadata is missing")?;
+        let completion: Value = serde_json::from_str(completion_text.trim())?;
+        fs::write(
+            output_dir.join("completion.json"),
+            format!("{}\n", serde_json::to_string_pretty(&completion)?),
+        )?;
         summarize_orientation_transition_qualification(&telemetry, completion)
     })();
 
