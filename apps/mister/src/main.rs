@@ -420,6 +420,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
         "orientation-transitions-v1": true,
+        "orientation-transitions-pprof-v1": cfg!(feature = "profile"),
         "pmu-probe-v1": true,
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,
