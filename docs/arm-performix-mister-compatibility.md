@@ -80,7 +80,6 @@ binary explicitly:
 
 ```text
 MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark streamline
-MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark orientation-transitions-streamline
 ```
 
 The typed workflow is Dev-only. It uploads to `/tmp`, captures the fixed

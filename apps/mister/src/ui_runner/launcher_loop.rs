@@ -78,17 +78,14 @@ fn write_orientation_transition_benchmark_completion(
         })
         .collect::<Vec<_>>();
     let document = serde_json::json!({
-        "schema": "mister-magik-orientation-transitions-v1",
+        "schema": "mister-magik-orientation-transition-v2",
         "state": if benchmark.complete() { "complete" } else { "failed" },
         "failure": benchmark.failure(),
+        "effect": benchmark.effect().id(),
         "frames": frames,
         "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
             .iter()
             .map(|orientation| orientation.id())
-            .collect::<Vec<_>>(),
-        "effects": ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
-            .iter()
-            .map(|effect| effect.id())
             .collect::<Vec<_>>(),
         "records": records,
     });
@@ -100,7 +97,9 @@ fn write_orientation_transition_benchmark_completion(
     std::fs::rename(temporary, directory.join("completion.json"))
 }
 
-fn write_orientation_transition_pmu_completion() -> std::io::Result<()> {
+fn write_orientation_transition_pmu_completion(
+    effect: OrientationTransitionEffect,
+) -> std::io::Result<()> {
     let Some(path) = std::env::var_os("MISTER_ORIENTATION_PMU_COMPLETE") else {
         return Ok(());
     };
@@ -110,7 +109,7 @@ fn write_orientation_transition_pmu_completion() -> std::io::Result<()> {
     }
     let profile = mister_magik_perf_events::take_thread_profile();
     let document = serde_json::json!({
-        "schema": "mister-magik-orientation-transitions-pmu-v1",
+        "schema": "mister-magik-orientation-transition-pmu-v2",
         "state": if profile.enabled && profile.failure.is_none() && !profile.records.is_empty() && profile.dropped_spans == 0 {
             "complete"
         } else {
@@ -120,10 +119,7 @@ fn write_orientation_transition_pmu_completion() -> std::io::Result<()> {
             .iter()
             .map(|orientation| orientation.id())
             .collect::<Vec<_>>(),
-        "effects": ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
-            .iter()
-            .map(|effect| effect.id())
-            .collect::<Vec<_>>(),
+        "effect": effect.id(),
         "profile": profile,
     });
     std::fs::write(
@@ -2232,9 +2228,19 @@ pub(super) fn run_launcher_loop(
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_env();
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
-    let mut orientation_benchmark = OrientationTransitionBenchmark::new(launcher_env_flag(
-        "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK",
-    ));
+    let orientation_benchmark_enabled =
+        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
+    let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
+        .ok()
+        .as_deref()
+        .and_then(OrientationTransitionEffect::from_id);
+    let mut orientation_benchmark = OrientationTransitionBenchmark::new(
+        orientation_benchmark_enabled,
+        orientation_benchmark_effect.unwrap_or(OrientationTransitionEffect::BrightnessFade),
+    );
+    if orientation_benchmark_enabled && orientation_benchmark_effect.is_none() {
+        orientation_benchmark.fail("benchmark-effect-is-missing-or-invalid");
+    }
     let mut orientation_benchmark_completed_at = None;
     let orientation_benchmark_requires_analytics =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
@@ -7082,7 +7088,9 @@ pub(super) fn run_launcher_loop(
                 );
                 orientation_benchmark_completed_at = Some(Instant::now());
                 screensaver_cpu_profile.complete_orientation_transitions(frames);
-                if let Err(error) = write_orientation_transition_pmu_completion() {
+                if let Err(error) =
+                    write_orientation_transition_pmu_completion(orientation_benchmark.effect())
+                {
                     crate::ui_errln!(
                         "orientation_transition_benchmark_pmu_write_failed error={error}"
                     );

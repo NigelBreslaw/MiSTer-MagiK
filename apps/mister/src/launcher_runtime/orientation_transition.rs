@@ -30,6 +30,14 @@ impl OrientationTransitionEffect {
             Self::CenterPixelZoom => "center-pixel-zoom",
         }
     }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        match value {
+            "brightness-fade" => Some(Self::BrightnessFade),
+            "center-pixel-zoom" => Some(Self::CenterPixelZoom),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

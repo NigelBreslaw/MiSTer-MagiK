@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Fixed production-view orientation-transition benchmark sequencing for both effects.
+//! Fixed production-view orientation-transition benchmark sequencing for one selected effect.
 
 use super::orientation_transition::OrientationTransitionEffect;
 use crate::settings::ScreenOrientation;
@@ -15,13 +15,8 @@ pub const ORIENTATION_TRANSITION_BENCHMARK_ROUTE: [ScreenOrientation; 7] = [
     ScreenOrientation::MonitorClockwise,
     ScreenOrientation::Normal,
 ];
-pub const ORIENTATION_TRANSITION_BENCHMARK_EFFECTS: [OrientationTransitionEffect; 2] = [
-    OrientationTransitionEffect::BrightnessFade,
-    OrientationTransitionEffect::CenterPixelZoom,
-];
 pub const ORIENTATION_TRANSITION_BENCHMARK_LEGS: usize =
-    (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1)
-        * ORIENTATION_TRANSITION_BENCHMARK_EFFECTS.len();
+    ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionBenchmarkLeg {
@@ -79,6 +74,7 @@ enum BenchmarkPhase {
 
 pub struct OrientationTransitionBenchmark {
     phase: BenchmarkPhase,
+    effect: OrientationTransitionEffect,
     next_leg: usize,
     start_frame: u64,
     rendered_endpoint_frame: u64,
@@ -87,13 +83,14 @@ pub struct OrientationTransitionBenchmark {
 }
 
 impl OrientationTransitionBenchmark {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(enabled: bool, effect: OrientationTransitionEffect) -> Self {
         Self {
             phase: if enabled {
                 BenchmarkPhase::WaitingForInitialPresentation
             } else {
                 BenchmarkPhase::Disabled
             },
+            effect,
             next_leg: 0,
             start_frame: 0,
             rendered_endpoint_frame: 0,
@@ -120,6 +117,10 @@ impl OrientationTransitionBenchmark {
 
     pub fn records(&self) -> &[OrientationTransitionBenchmarkRecord] {
         &self.records
+    }
+
+    pub const fn effect(&self) -> OrientationTransitionEffect {
+        self.effect
     }
 
     pub fn active_leg(&self) -> Option<OrientationTransitionBenchmarkLeg> {
@@ -217,14 +218,11 @@ impl OrientationTransitionBenchmark {
     }
 
     fn leg(&self, index: usize) -> Option<OrientationTransitionBenchmarkLeg> {
-        let route_legs = ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1;
-        let effect = *ORIENTATION_TRANSITION_BENCHMARK_EFFECTS.get(index / route_legs)?;
-        let route_index = index % route_legs;
-        let from = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(route_index)?;
-        let to = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(route_index + 1)?;
+        let from = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(index)?;
+        let to = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(index + 1)?;
         Some(OrientationTransitionBenchmarkLeg {
             index,
-            effect,
+            effect: self.effect,
             from,
             to,
         })
@@ -257,7 +255,8 @@ mod tests {
 
     #[test]
     fn every_leg_waits_for_a_confirmed_endpoint() {
-        let mut benchmark = OrientationTransitionBenchmark::new(true);
+        let effect = OrientationTransitionEffect::CenterPixelZoom;
+        let mut benchmark = OrientationTransitionBenchmark::new(true, effect);
         assert!(
             benchmark
                 .note_confirmed_presentation(ScreenOrientation::Normal, 10, 1)
@@ -265,17 +264,12 @@ mod tests {
         );
 
         for index in 0..ORIENTATION_TRANSITION_BENCHMARK_LEGS {
-            let route_index = index % (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1);
-            let pair = &ORIENTATION_TRANSITION_BENCHMARK_ROUTE[route_index..=route_index + 1];
+            let pair = &ORIENTATION_TRANSITION_BENCHMARK_ROUTE[index..=index + 1];
             let leg = benchmark
                 .take_next_leg(pair[0], 11 + index as u64 * 3)
                 .unwrap();
             assert_eq!(leg.index, index);
-            assert_eq!(
-                leg.effect,
-                ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
-                    [index / (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1)]
-            );
+            assert_eq!(leg.effect, effect);
             assert!(benchmark.take_next_leg(pair[0], 12).is_none());
             benchmark.note_rendered_endpoint(12 + index as u64 * 3);
             let record = benchmark
@@ -298,7 +292,8 @@ mod tests {
 
     #[test]
     fn mismatched_source_fails_without_starting_an_extra_leg() {
-        let mut benchmark = OrientationTransitionBenchmark::new(true);
+        let mut benchmark =
+            OrientationTransitionBenchmark::new(true, OrientationTransitionEffect::BrightnessFade);
         benchmark.note_confirmed_presentation(ScreenOrientation::Normal, 1, 1);
 
         assert!(
@@ -316,7 +311,8 @@ mod tests {
 
     #[test]
     fn disabled_benchmark_is_inert() {
-        let mut benchmark = OrientationTransitionBenchmark::new(false);
+        let mut benchmark =
+            OrientationTransitionBenchmark::new(false, OrientationTransitionEffect::BrightnessFade);
         benchmark.note_confirmed_presentation(ScreenOrientation::Normal, 1, 1);
         assert!(!benchmark.enabled());
         assert!(!benchmark.complete());

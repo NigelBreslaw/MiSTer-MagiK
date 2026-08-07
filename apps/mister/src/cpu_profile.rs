@@ -12,7 +12,8 @@ use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
 const NAVIGATION_TRANSITIONS_TRIGGER: &str = "navigation-transitions";
-const ORIENTATION_TRANSITIONS_TRIGGER: &str = "orientation-transitions";
+const ORIENTATION_TRANSITION_FADE_TRIGGER: &str = "orientation-transition-fade";
+const ORIENTATION_TRANSITION_ZOOM_TRIGGER: &str = "orientation-transition-zoom";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
@@ -20,7 +21,8 @@ const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 enum BoundedProfileTrigger {
     Screensaver,
     NavigationTransitions,
-    OrientationTransitions,
+    OrientationTransitionFade,
+    OrientationTransitionZoom,
     LaunchReturn,
 }
 
@@ -29,7 +31,8 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => SCREENSAVER_TRIGGER,
             Self::NavigationTransitions => NAVIGATION_TRANSITIONS_TRIGGER,
-            Self::OrientationTransitions => ORIENTATION_TRANSITIONS_TRIGGER,
+            Self::OrientationTransitionFade => ORIENTATION_TRANSITION_FADE_TRIGGER,
+            Self::OrientationTransitionZoom => ORIENTATION_TRANSITION_ZOOM_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
         }
     }
@@ -38,7 +41,8 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
-            Self::OrientationTransitions => "mister-magik-orientation-transitions-pprof-v1",
+            Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
+            Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
         }
     }
@@ -115,8 +119,11 @@ fn bounded_profile_trigger_from_values(
     match trigger {
         Some(SCREENSAVER_TRIGGER) => Some(BoundedProfileTrigger::Screensaver),
         Some(NAVIGATION_TRANSITIONS_TRIGGER) => Some(BoundedProfileTrigger::NavigationTransitions),
-        Some(ORIENTATION_TRANSITIONS_TRIGGER) => {
-            Some(BoundedProfileTrigger::OrientationTransitions)
+        Some(ORIENTATION_TRANSITION_FADE_TRIGGER) => {
+            Some(BoundedProfileTrigger::OrientationTransitionFade)
+        }
+        Some(ORIENTATION_TRANSITION_ZOOM_TRIGGER) => {
+            Some(BoundedProfileTrigger::OrientationTransitionZoom)
         }
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         _ => None,
@@ -408,7 +415,8 @@ mod imp {
                 Some(
                     BoundedProfileTrigger::Screensaver
                         | BoundedProfileTrigger::NavigationTransitions
-                        | BoundedProfileTrigger::OrientationTransitions
+                        | BoundedProfileTrigger::OrientationTransitionFade
+                        | BoundedProfileTrigger::OrientationTransitionZoom
                 )
             ) {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
@@ -435,11 +443,23 @@ mod imp {
         }
 
         pub fn begin_orientation_transitions(&mut self, first_frame: u64) {
-            self.begin(BoundedProfileTrigger::OrientationTransitions, first_frame);
+            if let Some(
+                trigger @ (BoundedProfileTrigger::OrientationTransitionFade
+                | BoundedProfileTrigger::OrientationTransitionZoom),
+            ) = self.trigger
+            {
+                self.begin(trigger, first_frame);
+            }
         }
 
         pub fn complete_orientation_transitions(&mut self, next_frame: u64) {
-            if self.trigger == Some(BoundedProfileTrigger::OrientationTransitions) {
+            if matches!(
+                self.trigger,
+                Some(
+                    BoundedProfileTrigger::OrientationTransitionFade
+                        | BoundedProfileTrigger::OrientationTransitionZoom
+                )
+            ) {
                 self.complete(next_frame, true);
             }
         }
@@ -481,7 +501,13 @@ mod imp {
             if warmed {
                 self.start(next_frame);
             }
-            if self.trigger == Some(BoundedProfileTrigger::OrientationTransitions) {
+            if matches!(
+                self.trigger,
+                Some(
+                    BoundedProfileTrigger::OrientationTransitionFade
+                        | BoundedProfileTrigger::OrientationTransitionZoom
+                )
+            ) {
                 return;
             }
             let elapsed = match &self.state {
@@ -708,8 +734,12 @@ mod tests {
             Some(BoundedProfileTrigger::LaunchReturn)
         );
         assert_eq!(
-            bounded_profile_trigger_from_values(Some("1"), Some("orientation-transitions")),
-            Some(BoundedProfileTrigger::OrientationTransitions)
+            bounded_profile_trigger_from_values(Some("1"), Some("orientation-transition-fade")),
+            Some(BoundedProfileTrigger::OrientationTransitionFade)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("orientation-transition-zoom")),
+            Some(BoundedProfileTrigger::OrientationTransitionZoom)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),
