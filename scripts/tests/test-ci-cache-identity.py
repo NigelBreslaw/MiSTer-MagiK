@@ -67,6 +67,7 @@ def main() -> int:
         assert changed_lock["cargo_host"] != changed_cross["cargo_host"]
         assert changed_lock["host_target"] != changed_cross["host_target"]
         assert changed_lock["agent_cli"] != changed_cross["agent_cli"]
+        assert changed_lock["agent_cli_deps"] != changed_cross["agent_cli_deps"]
 
         toolchain = fixture / "apps/mister/rust-toolchain.toml"
         toolchain.write_text(
@@ -76,6 +77,7 @@ def main() -> int:
         changed_toolchain = MODULE.identities(fixture)
         assert changed_toolchain["rust_abi"] != changed_lock["rust_abi"]
         assert changed_toolchain["agent_cli"] != changed_lock["agent_cli"]
+        assert changed_toolchain["agent_cli_deps"] != changed_lock["agent_cli_deps"]
         assert changed_toolchain["host_target"] != changed_lock["host_target"]
         assert changed_toolchain["arm_target"] != changed_lock["arm_target"]
         assert changed_toolchain["agent_target"] != changed_lock["agent_target"]
@@ -85,6 +87,7 @@ def main() -> int:
         changed_manifest = MODULE.identities(fixture)
         assert changed_manifest["host_target"] != changed_toolchain["host_target"]
         assert changed_manifest["arm_target"] != changed_toolchain["arm_target"]
+        assert changed_manifest["agent_cli_deps"] == changed_toolchain["agent_cli_deps"]
 
         desktop_lock = fixture / "apps/desktop/Cargo.lock"
         desktop_lock.write_text(
@@ -140,6 +143,7 @@ def main() -> int:
         )
         previous = changed_stream_source
         for pattern, changed_groups in source_expectations:
+            previous_agent_cli_deps = previous["agent_cli_deps"]
             source = next(iter(MODULE.files_for(fixture, (pattern,))))
             source.write_text(
                 source.read_text(encoding="utf-8") + "\n// cache identity test\n",
@@ -148,6 +152,7 @@ def main() -> int:
             current = MODULE.identities(fixture)
             for group in changed_groups:
                 assert current[group] != previous[group], (pattern, group)
+            assert current["agent_cli_deps"] == previous_agent_cli_deps, pattern
             previous = current
 
         compiled_input_expectations = (

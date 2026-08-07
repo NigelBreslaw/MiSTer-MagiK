@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 name: Set up agent CLI
-description: Restore or build the exact debug agent-cli used by CI workflows
+description: Restore or build the exact fast-development agent-cli used by CI workflows
 
 inputs:
   cache-scope:
@@ -18,6 +18,7 @@ runs:
       shell: bash
       run: |
         echo "value=$(python3 scripts/checks/ci-cache-identity.py --value agent_cli)" >> "$GITHUB_OUTPUT"
+        echo "deps=$(python3 scripts/checks/ci-cache-identity.py --value agent_cli_deps)" >> "$GITHUB_OUTPUT"
         toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
         test -n "$toolchain"
         echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
@@ -26,15 +27,17 @@ runs:
       id: cache
       uses: actions/cache@v6
       with:
-        path: agent-cli/target/debug/agent-cli
-        key: agent-cli-debug-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.value }}
+        path: agent-cli/target/debug
+        key: agent-cli-fast-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-${{ steps.identity.outputs.value }}
+        restore-keys: |
+          agent-cli-fast-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-
 
     - name: Certify restored agent CLI
       if: steps.cache.outputs.cache-hit == 'true'
       shell: bash
       run: touch agent-cli/target/debug/agent-cli
 
-    - name: Select debug agent CLI
+    - name: Select fast-development agent CLI
       shell: bash
       run: echo "MISTER_AGENT_CLI_PROFILE=debug" >> "$GITHUB_ENV"
 

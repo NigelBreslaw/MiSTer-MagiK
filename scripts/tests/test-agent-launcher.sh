@@ -15,6 +15,7 @@ mkdir -p \
   "$FIXTURE/crates/media-contract/src" \
   "$FIXTURE/crates/agent-protocol/src" \
   "$FIXTURE/bin" \
+  "$FIXTURE/target/debug" \
   "$FIXTURE/target/release"
 touch \
   "$FIXTURE/agent-cli/Cargo.toml" \
@@ -55,30 +56,34 @@ export FIXTURE_BUILD_COUNT="$FIXTURE/build-count"
 export FIXTURE_CARGO_ARGS="$FIXTURE/cargo-args"
 export FIXTURE_RUSTC_CALLS="$FIXTURE/rustc-calls"
 export MISTER_AGENT_CLI_MANIFEST="$FIXTURE/agent-cli/Cargo.toml"
-export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
+export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/debug/agent-cli"
 export CARGO_TARGET_DIR="$FIXTURE/target"
 
 output="$($ROOT/scripts/agent plan)"
 [[ "$output" == "agent:plan" ]]
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
-[[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --release --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
+[[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
 [[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
 "$ROOT/scripts/agent" check >/dev/null
 [[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
 [[ ! -e "$FIXTURE_RUSTC_CALLS" ]]
 
-rm -f "$MISTER_AGENT_CLI_BINARY"
 export MISTER_AGENT_CLI_PROFILE=debug
 unset MISTER_AGENT_CLI_BINARY
 output="$($ROOT/scripts/agent plan)"
 [[ "$output" == "agent:plan" ]]
 [[ -x "$FIXTURE/target/debug/agent-cli" ]]
-[[ "$(<"$FIXTURE_BUILD_COUNT")" == 2 ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 1 ]]
 [[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
 
 export MISTER_AGENT_CLI_PROFILE=release
 export MISTER_AGENT_CLI_BINARY="$FIXTURE/target/release/agent-cli"
+
+output="$($ROOT/scripts/agent plan)"
+[[ "$output" == "agent:plan" ]]
+[[ "$(<"$FIXTURE_BUILD_COUNT")" == 2 ]]
+[[ "$(<"$FIXTURE_CARGO_ARGS")" == "build --release --locked --quiet --manifest-path $MISTER_AGENT_CLI_MANIFEST" ]]
 
 sleep 1
 touch "$FIXTURE/agent-cli/src/main.rs"
@@ -122,6 +127,8 @@ fi
 
 CI_ACTION="$ROOT/.github/actions/setup-agent-cli/action.yml"
 grep -q 'MISTER_AGENT_CLI_PROFILE=debug.*GITHUB_ENV' "$CI_ACTION"
+grep -q 'path: agent-cli/target/debug$' "$CI_ACTION"
+grep -q 'agent-cli-fast-v2-' "$CI_ACTION"
 if grep -q 'RUSTUP_TOOLCHAIN=.*GITHUB_ENV' "$CI_ACTION"; then
   echo "CI agent setup leaked its bootstrap toolchain into host validation" >&2
   exit 1

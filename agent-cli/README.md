@@ -48,7 +48,11 @@ to match the clean local commit wherever runtime or platform files changed.
 Host-only benchmark changes may reconcile as a no-op without replacing the
 installed runtime.
 
-The launcher builds and runs `agent-cli` with Cargo's release profile. Explicit
+The launcher builds and runs `agent-cli` with a compile-first development
+profile: no optimization or debug information, incremental compilation, and
+wide codegen parallelism. Set `MISTER_AGENT_CLI_PROFILE=release` only when an
+optimized workflow-engine binary is itself required. Cargo profile environment
+overrides remain available when full host debug symbols are explicitly needed;
 manifest, target-directory, and binary overrides remain available for tests and
 specialized host environments.
 

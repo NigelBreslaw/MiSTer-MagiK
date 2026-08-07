@@ -38,8 +38,14 @@ thiserror = "2"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.40", default-features = false, features = ["backup", "bundled", "modern_sqlite"] }
 
-[profile.dev.package.lz4_flex]
-opt-level = 3
+[profile.dev]
+# Workflow tooling favors compile latency. Production/device artifacts use
+# their owning release profiles instead of inheriting this host-only policy.
+opt-level = 0
+debug = 0
+incremental = true
+codegen-units = 256
+lto = false
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"

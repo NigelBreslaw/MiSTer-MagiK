@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
 TARGET_ROOT="${CARGO_TARGET_DIR:-$SOURCE_ROOT/target}"
-PROFILE="${MISTER_AGENT_CLI_PROFILE:-release}"
+PROFILE="${MISTER_AGENT_CLI_PROFILE:-debug}"
 case "$PROFILE" in
   debug)
     PROFILE_DIR=debug

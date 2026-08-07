@@ -61,6 +61,14 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "crates/agent-protocol/Cargo.toml",
         "crates/agent-protocol/src/**/*.rs",
     ),
+    "agent_cli_deps": (
+        "apps/mister/rust-toolchain.toml",
+        "agent-cli/Cargo.lock",
+        "agent-cli/Cargo.toml",
+        "crates/catalog/Cargo.toml",
+        "crates/media-contract/Cargo.toml",
+        "crates/agent-protocol/Cargo.toml",
+    ),
     "host_target": (
         "apps/mister/rust-toolchain.toml",
         "apps/mister/Cargo.lock",
