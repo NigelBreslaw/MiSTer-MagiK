@@ -1,0 +1,67 @@
+{
+  "schema": "mister-magik-compile-revision-comparison-v1",
+  "baseline_repository": "/private/tmp/mister-magik-compile-baseline.qH1tNW",
+  "candidate_repository": "/Users/nigelb/slint/mister-slint",
+  "work_root": "/private/tmp/mister-magik-prepush-compare-20260807-escalated",
+  "machine_arch": "arm64",
+  "macos_version": "26.5.2",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
+  "scenarios": [
+    {
+      "scenario": "pre-push-catalog",
+      "variants": [
+        {
+          "label": "baseline",
+          "repository": "/private/tmp/mister-magik-compile-baseline.qH1tNW",
+          "source_revision": "7fac463ff3dfae69c124543f161b4cef8c0e24f7",
+          "source_path": "crates/catalog/src/lib.rs",
+          "source_sha256_before": "dba9f4b554461b8545d456cba55e988647cc57130f0d7f6375fbe2d17d30bc61",
+          "source_sha256_after": "dba9f4b554461b8545d456cba55e988647cc57130f0d7f6375fbe2d17d30bc61",
+          "effective_profile": "legacy revision defaults",
+          "command": "scripts/agent ci host-assurance --paths crates/catalog/src/lib.rs",
+          "target_dir": "/private/tmp/mister-magik-prepush-compare-20260807-escalated/pre-push-catalog/baseline/target",
+          "cold_ms": 71836,
+          "edit_warmup_ms": 38901,
+          "edit_rebuild_ms": [
+            40049,
+            43588,
+            46978,
+            44956,
+            43725
+          ],
+          "edit_median_ms": 43725
+        },
+        {
+          "label": "candidate",
+          "repository": "/Users/nigelb/slint/mister-slint",
+          "source_revision": "b678bf0ed3bfda461d6aacee9379f66e0745520d",
+          "source_path": "crates/catalog/src/lib.rs",
+          "source_sha256_before": "dba9f4b554461b8545d456cba55e988647cc57130f0d7f6375fbe2d17d30bc61",
+          "source_sha256_after": "dba9f4b554461b8545d456cba55e988647cc57130f0d7f6375fbe2d17d30bc61",
+          "effective_profile": "fast agent + fast assurance",
+          "command": "scripts/agent ci host-assurance --paths crates/catalog/src/lib.rs",
+          "target_dir": "/private/tmp/mister-magik-prepush-compare-20260807-escalated/pre-push-catalog/candidate/target",
+          "cold_ms": 63594,
+          "edit_warmup_ms": 21582,
+          "edit_rebuild_ms": [
+            20956,
+            20958,
+            21231,
+            21749,
+            20771
+          ],
+          "edit_median_ms": 20958
+        }
+      ],
+      "comparisons": [
+        {
+          "baseline": "baseline",
+          "candidate": "candidate",
+          "cold_ratio": 1.1296034217064503,
+          "edit_median_ratio": 2.0863154881190953
+        }
+      ]
+    }
+  ]
+}
