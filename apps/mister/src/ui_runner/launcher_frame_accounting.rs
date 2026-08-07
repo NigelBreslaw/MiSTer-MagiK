@@ -1259,6 +1259,10 @@ impl LauncherFrameAccounting {
                 && cpu_profile::screensaver_profile_state() == "complete")
     }
 
+    pub(super) fn request_status_write(&mut self) {
+        self.last_status_write = Instant::now() - Duration::from_secs(2);
+    }
+
     pub(super) fn runtime_status_worker_active(&self) -> bool {
         self.runtime_status_publisher.metrics().worker_active
     }

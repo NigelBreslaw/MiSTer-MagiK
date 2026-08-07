@@ -2198,6 +2198,7 @@ pub(super) fn run_launcher_loop(
     let mut orientation_benchmark = OrientationTransitionBenchmark::new(launcher_env_flag(
         "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK",
     ));
+    let mut orientation_benchmark_completed_at = None;
     let orientation_benchmark_requires_analytics =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
     let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
@@ -7002,7 +7003,7 @@ pub(super) fn run_launcher_loop(
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
         frames += 1;
-        if orientation_benchmark.complete() {
+        if orientation_benchmark.complete() && orientation_benchmark_completed_at.is_none() {
             if let Some(directory) = orientation_transition_benchmark_evidence_dir()
                 && let Err(error) = write_orientation_transition_benchmark_completion(
                     &directory,
@@ -7015,16 +7016,23 @@ pub(super) fn run_launcher_loop(
                 );
                 orientation_benchmark.fail("completion-write-failed");
             }
+            if orientation_benchmark.complete() {
+                print_startup_event(
+                    start,
+                    "orientation_transition_benchmark_complete",
+                    format!(
+                        "legs={} frames={frames}",
+                        orientation_benchmark.records().len()
+                    ),
+                );
+                orientation_benchmark_completed_at = Some(Instant::now());
+                frame_accounting.request_status_write();
+                request_launcher_redraw!();
+            }
         }
-        if orientation_benchmark.complete() {
-            print_startup_event(
-                start,
-                "orientation_transition_benchmark_complete",
-                format!(
-                    "legs={} frames={frames}",
-                    orientation_benchmark.records().len()
-                ),
-            );
+        if orientation_benchmark_completed_at
+            .is_some_and(|completed| completed.elapsed() >= Duration::from_millis(500))
+        {
             break;
         }
         if orientation_benchmark.failed() {
