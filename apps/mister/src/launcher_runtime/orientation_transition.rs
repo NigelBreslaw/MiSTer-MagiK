@@ -7,9 +7,13 @@ use crate::settings::ScreenOrientation;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
-pub const ORIENTATION_QUARTER_TURN_DURATION: Duration = Duration::from_millis(300);
-pub const ORIENTATION_OPPOSITE_TURN_DURATION: Duration = Duration::from_millis(450);
-const DESTINATION_CROSSFADE_START: f32 = 0.72;
+pub const ORIENTATION_WAVE_PHASE_DURATION: Duration = Duration::from_millis(1_500);
+pub const ORIENTATION_WAVE_TOTAL_DURATION: Duration = Duration::from_millis(3_000);
+const ORIENTATION_GRID_COLUMNS: usize = 16;
+const ORIENTATION_GRID_ROWS: usize = 9;
+const ORIENTATION_TILE_DELAY_US: u64 = 40_000;
+const ORIENTATION_TILE_FADE_US: u64 = 500_000;
+const RGB565_OPACITY_LEVELS: u8 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionCompletion {
@@ -130,7 +134,7 @@ impl OrientationTransitionRuntime {
             from: ScreenOrientation::Normal,
             to: ScreenOrientation::Normal,
             started_at: Instant::now(),
-            duration: ORIENTATION_QUARTER_TURN_DURATION,
+            duration: ORIENTATION_WAVE_TOTAL_DURATION,
             source: vec![Rgb565Pixel(0); len],
             destination: vec![Rgb565Pixel(0); len],
             output: vec![Rgb565Pixel(0); len],
@@ -157,11 +161,7 @@ impl OrientationTransitionRuntime {
         self.from = from;
         self.to = to;
         self.started_at = now;
-        self.duration = if from.is_portrait() && to.is_portrait() {
-            ORIENTATION_OPPOSITE_TURN_DURATION
-        } else {
-            ORIENTATION_QUARTER_TURN_DURATION
-        };
+        self.duration = ORIENTATION_WAVE_TOTAL_DURATION;
         self.source.copy_from_slice(source);
         self.destination.fill(Rgb565Pixel(0));
         self.output.copy_from_slice(source);
@@ -216,41 +216,43 @@ impl OrientationTransitionRuntime {
             return Some((&self.source, false, self.last_render_stats));
         }
         let render_started = Instant::now();
-        let progress = (now.saturating_duration_since(self.started_at).as_secs_f32()
-            / self.duration.as_secs_f32())
-        .clamp(0.0, 1.0);
-        let (fill_us, map_us, mapped_pixels) = render_rotated_source(
+        let elapsed = now
+            .saturating_duration_since(self.started_at)
+            .min(self.duration);
+        let fill_started = Instant::now();
+        let fill_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.from,
+            self.to,
+            OrientationPmuPhase::Fill,
+        ));
+        drop(fill_pmu);
+        let fill_us = elapsed_us(fill_started);
+        let map_started = Instant::now();
+        let map_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.from,
+            self.to,
+            OrientationPmuPhase::Map,
+        ));
+        drop(map_pmu);
+        let map_us = elapsed_us(map_started);
+        let crossfade_started = Instant::now();
+        let crossfade_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.from,
+            self.to,
+            OrientationPmuPhase::Crossfade,
+        ));
+        let blended_pixels = render_orientation_wave(
             &self.source,
+            &self.destination,
             &mut self.output,
             self.width,
             self.height,
-            transition_quarter_turns(self.from, self.to) as f32 * progress,
-            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Fill),
-            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Map),
+            elapsed,
         );
-        let mut crossfade_us = 0;
-        let mut blended_pixels = 0;
-        if progress >= DESTINATION_CROSSFADE_START {
-            let alpha = (((progress - DESTINATION_CROSSFADE_START)
-                / (1.0 - DESTINATION_CROSSFADE_START))
-                * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            let crossfade_started = Instant::now();
-            let _pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                self.from,
-                self.to,
-                OrientationPmuPhase::Crossfade,
-            ));
-            for (pixel, destination) in self.output.iter_mut().zip(&self.destination) {
-                *pixel = blend_565(*pixel, *destination, alpha);
-            }
-            crossfade_us = elapsed_us(crossfade_started);
-            blended_pixels = self.output.len().min(u64::MAX as usize) as u64;
-        }
-        let done = progress >= 1.0;
+        drop(crossfade_pmu);
+        let crossfade_us = elapsed_us(crossfade_started);
+        let done = elapsed >= self.duration;
         if done {
-            self.output.copy_from_slice(&self.destination);
             self.active = false;
             self.completion = Some(OrientationTransitionCompletion {
                 from: self.from,
@@ -262,9 +264,9 @@ impl OrientationTransitionRuntime {
             map_us,
             crossfade_us,
             total_us: elapsed_us(render_started),
-            mapped_pixels,
+            mapped_pixels: 0,
             blended_pixels,
-            progress_ppm: (progress * 1_000_000.0).round().clamp(0.0, 1_000_000.0) as u32,
+            progress_ppm: duration_progress_ppm(elapsed, self.duration),
         };
         Some((&self.output, done, self.last_render_stats))
     }
@@ -274,168 +276,206 @@ impl OrientationTransitionRuntime {
     }
 }
 
-fn orientation_turns(orientation: ScreenOrientation) -> i8 {
-    match orientation {
-        ScreenOrientation::Normal => 0,
-        ScreenOrientation::MonitorClockwise => -1,
-        ScreenOrientation::MonitorCounterclockwise => 1,
-    }
-}
-
-fn transition_quarter_turns(from: ScreenOrientation, to: ScreenOrientation) -> i8 {
-    orientation_turns(to) - orientation_turns(from)
-}
-
-fn render_rotated_source(
+fn render_orientation_wave(
     source: &[Rgb565Pixel],
+    destination: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
-    quarter_turns: f32,
-    fill_label: &'static str,
-    map_label: &'static str,
-) -> (u64, u64, u64) {
-    let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
-    let (sin, cos) = angle.sin_cos();
-    let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
-    let rotated_height = sin.abs() * width as f32 + cos.abs() * height as f32;
-    let scale =
-        (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
-    let source_cx = (width as f32 - 1.0) * 0.5;
-    let source_cy = (height as f32 - 1.0) * 0.5;
-    let inverse_scale = scale.recip();
-    let source_x_step = cos * inverse_scale;
-    let source_y_step = -sin * inverse_scale;
-    let first_dx = -source_cx * inverse_scale;
-    let fill_started = Instant::now();
-    let fill_pmu = mister_magik_perf_events::sampled_span(fill_label);
-    output.fill(Rgb565Pixel(0));
-    drop(fill_pmu);
-    let fill_us = elapsed_us(fill_started);
-    let map_started = Instant::now();
-    let map_pmu = mister_magik_perf_events::sampled_span(map_label);
-    let mut mapped_pixels = 0u64;
-    for y in 0..height {
-        let dy = (y as f32 - source_cy) * inverse_scale;
-        let mut source_x = cos * first_dx + sin * dy + source_cx;
-        let mut source_y = -sin * first_dx + cos * dy + source_cy;
-        let row = y * width;
-        for x in 0..width {
-            if source_x >= 0.0
-                && source_y >= 0.0
-                && source_x < width as f32
-                && source_y < height as f32
-            {
-                let source_row = ((source_y + 0.5) as usize).min(height - 1) * width;
-                let source_column = ((source_x + 0.5) as usize).min(width - 1);
-                output[row + x] = source[source_row + source_column];
-                mapped_pixels = mapped_pixels.saturating_add(1);
-            }
-            source_x += source_x_step;
-            source_y += source_y_step;
+    elapsed: Duration,
+) -> u64 {
+    if elapsed >= ORIENTATION_WAVE_TOTAL_DURATION {
+        output.copy_from_slice(destination);
+        return output.len().min(u64::MAX as usize) as u64;
+    }
+    let (frame, phase_elapsed_us, revealing) = if elapsed < ORIENTATION_WAVE_PHASE_DURATION {
+        (source, duration_us(elapsed), false)
+    } else {
+        (
+            destination,
+            duration_us(elapsed - ORIENTATION_WAVE_PHASE_DURATION),
+            true,
+        )
+    };
+    for tile_row in 0..ORIENTATION_GRID_ROWS {
+        let y0 = tile_row * height / ORIENTATION_GRID_ROWS;
+        let y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
+        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
+            let x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
+            let x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
+            let level =
+                orientation_tile_opacity_level(phase_elapsed_us, tile_row, tile_column, revealing);
+            render_dimmed_tile(frame, output, width, x0, x1, y0, y1, level);
         }
     }
-    drop(map_pmu);
-    (fill_us, elapsed_us(map_started), mapped_pixels)
+    output.len().min(u64::MAX as usize) as u64
+}
+
+fn orientation_tile_opacity_level(
+    phase_elapsed_us: u64,
+    row: usize,
+    column: usize,
+    revealing: bool,
+) -> u8 {
+    let delay_us = u64::try_from(row.saturating_add(column))
+        .unwrap_or(u64::MAX)
+        .saturating_mul(ORIENTATION_TILE_DELAY_US);
+    let local_us = phase_elapsed_us
+        .saturating_sub(delay_us)
+        .min(ORIENTATION_TILE_FADE_US);
+    let fade_squared = ORIENTATION_TILE_FADE_US.saturating_mul(ORIENTATION_TILE_FADE_US);
+    let eased = local_us
+        .saturating_mul(local_us)
+        .saturating_mul(u64::from(RGB565_OPACITY_LEVELS))
+        .saturating_add(fade_squared / 2)
+        / fade_squared;
+    let eased = u8::try_from(eased).unwrap_or(RGB565_OPACITY_LEVELS);
+    if revealing {
+        eased
+    } else {
+        RGB565_OPACITY_LEVELS.saturating_sub(eased)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_dimmed_tile(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    stride: usize,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+    opacity_level: u8,
+) {
+    for y in y0..y1 {
+        let start = y * stride + x0;
+        let end = y * stride + x1;
+        if opacity_level == 0 {
+            output[start..end].fill(Rgb565Pixel(0));
+        } else if opacity_level >= RGB565_OPACITY_LEVELS {
+            output[start..end].copy_from_slice(&frame[start..end]);
+        } else {
+            for (pixel, source) in output[start..end].iter_mut().zip(&frame[start..end]) {
+                *pixel = dim_565(*source, opacity_level);
+            }
+        }
+    }
+}
+
+fn dim_565(pixel: Rgb565Pixel, opacity_level: u8) -> Rgb565Pixel {
+    let pixel = u32::from(pixel.0);
+    let opacity = u32::from(opacity_level);
+    let red_blue = (((pixel & 0xf81f) * opacity) >> 5) & 0xf81f;
+    let green = (((pixel & 0x07e0) * opacity) >> 5) & 0x07e0;
+    Rgb565Pixel((red_blue | green) as u16)
+}
+
+fn duration_progress_ppm(elapsed: Duration, duration: Duration) -> u32 {
+    let duration_us = duration.as_micros().max(1);
+    let progress = elapsed
+        .as_micros()
+        .saturating_mul(1_000_000)
+        .saturating_add(duration_us / 2)
+        / duration_us;
+    u32::try_from(progress.min(1_000_000)).unwrap_or(1_000_000)
+}
+
+fn duration_us(duration: Duration) -> u64 {
+    duration.as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn elapsed_us(started: Instant) -> u64 {
-    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
-}
-
-fn blend_565(source: Rgb565Pixel, destination: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
-    if alpha == 0 {
-        return source;
-    }
-    if alpha == u8::MAX {
-        return destination;
-    }
-    let alpha = u32::from(alpha);
-    let inverse = 255 - alpha;
-    let source = u32::from(source.0);
-    let destination = u32::from(destination.0);
-    let r = (((source >> 11) & 0x1f) * inverse + ((destination >> 11) & 0x1f) * alpha) / 255;
-    let g = (((source >> 5) & 0x3f) * inverse + ((destination >> 5) & 0x3f) * alpha) / 255;
-    let b = ((source & 0x1f) * inverse + (destination & 0x1f) * alpha) / 255;
-    Rgb565Pixel(((r << 11) | (g << 5) | b) as u16)
+    duration_us(started.elapsed())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn render_rotated_source_reference(
-        source: &[Rgb565Pixel],
-        output: &mut [Rgb565Pixel],
-        width: usize,
-        height: usize,
-        quarter_turns: f32,
-    ) -> u64 {
-        let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
-        let (sin, cos) = angle.sin_cos();
-        let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
-        let rotated_height = sin.abs() * width as f32 + cos.abs() * height as f32;
-        let scale =
-            (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
-        let source_cx = (width as f32 - 1.0) * 0.5;
-        let source_cy = (height as f32 - 1.0) * 0.5;
-        output.fill(Rgb565Pixel(0));
-        let mut mapped_pixels = 0u64;
-        for y in 0..height {
-            let dy = (y as f32 - source_cy) / scale;
-            let row = y * width;
-            for x in 0..width {
-                let dx = (x as f32 - source_cx) / scale;
-                let source_x = cos * dx + sin * dy + source_cx;
-                let source_y = -sin * dx + cos * dy + source_cy;
-                if source_x >= 0.0
-                    && source_y >= 0.0
-                    && source_x < width as f32
-                    && source_y < height as f32
-                {
-                    output[row + x] = source[(source_y.round() as usize).min(height - 1) * width
-                        + (source_x.round() as usize).min(width - 1)];
-                    mapped_pixels = mapped_pixels.saturating_add(1);
-                }
-            }
-        }
-        mapped_pixels
+    #[test]
+    fn wave_uses_the_supplied_delay_duration_and_quadratic_easing() {
+        assert_eq!(
+            orientation_tile_opacity_level(0, 0, 0, false),
+            RGB565_OPACITY_LEVELS
+        );
+        assert_eq!(orientation_tile_opacity_level(125_000, 0, 0, true), 2);
+        assert_eq!(orientation_tile_opacity_level(250_000, 0, 0, true), 8);
+        assert_eq!(orientation_tile_opacity_level(375_000, 0, 0, true), 18);
+        assert_eq!(
+            orientation_tile_opacity_level(500_000, 0, 0, true),
+            RGB565_OPACITY_LEVELS
+        );
+        assert_eq!(
+            orientation_tile_opacity_level(920_000, 8, 15, false),
+            RGB565_OPACITY_LEVELS
+        );
+        assert_eq!(orientation_tile_opacity_level(1_420_000, 8, 15, false), 0);
     }
 
     #[test]
-    fn scanline_mapping_is_byte_equivalent_to_coordinate_reconstruction() {
-        for (width, height) in [(17, 11), (64, 37), (128, 72)] {
-            let source = (0..width * height)
-                .map(|index| Rgb565Pixel(index as u16))
-                .collect::<Vec<_>>();
-            for eighth_turns in -16..=16 {
-                let quarter_turns = eighth_turns as f32 / 8.0;
-                let mut expected = vec![Rgb565Pixel(0); source.len()];
-                let expected_mapped = render_rotated_source_reference(
-                    &source,
-                    &mut expected,
-                    width,
-                    height,
-                    quarter_turns,
-                );
-                let mut actual = vec![Rgb565Pixel(0); source.len()];
-                let (_, _, actual_mapped) = render_rotated_source(
-                    &source,
-                    &mut actual,
-                    width,
-                    height,
-                    quarter_turns,
-                    "orientation.invalid",
-                    "orientation.invalid",
-                );
-                assert_eq!(actual_mapped, expected_mapped, "turns={quarter_turns}");
-                assert_eq!(actual, expected, "turns={quarter_turns}");
-            }
-        }
+    fn wave_fades_old_frame_to_black_then_reveals_new_frame() {
+        let width = 16;
+        let height = 9;
+        let source = vec![Rgb565Pixel(u16::MAX); width * height];
+        let destination = vec![Rgb565Pixel(0x07e0); width * height];
+        let mut output = vec![Rgb565Pixel(0); width * height];
+
+        render_orientation_wave(
+            &source,
+            &destination,
+            &mut output,
+            width,
+            height,
+            Duration::ZERO,
+        );
+        assert_eq!(output, source);
+
+        render_orientation_wave(
+            &source,
+            &destination,
+            &mut output,
+            width,
+            height,
+            Duration::from_millis(500),
+        );
+        assert_eq!(output[0], Rgb565Pixel(0));
+        assert_eq!(output[width * height - 1], source[width * height - 1]);
+
+        render_orientation_wave(
+            &source,
+            &destination,
+            &mut output,
+            width,
+            height,
+            Duration::from_millis(1_420),
+        );
+        assert_eq!(output, vec![Rgb565Pixel(0); width * height]);
+
+        render_orientation_wave(
+            &source,
+            &destination,
+            &mut output,
+            width,
+            height,
+            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(500),
+        );
+        assert_eq!(output[0], destination[0]);
+        assert_eq!(output[width * height - 1], Rgb565Pixel(0));
+
+        render_orientation_wave(
+            &source,
+            &destination,
+            &mut output,
+            width,
+            height,
+            ORIENTATION_WAVE_TOTAL_DURATION,
+        );
+        assert_eq!(output, destination);
     }
 
     #[test]
-    fn opposite_portrait_directions_use_the_longer_transition() {
+    fn every_orientation_pair_uses_the_two_phase_wave_duration() {
         let start = Instant::now();
         let mut runtime = OrientationTransitionRuntime::new(4, 3);
         assert!(runtime.start(
@@ -445,7 +485,7 @@ mod tests {
             start,
             false,
         ));
-        assert_eq!(runtime.duration, ORIENTATION_OPPOSITE_TURN_DURATION);
+        assert_eq!(runtime.duration, ORIENTATION_WAVE_TOTAL_DURATION);
     }
 
     #[test]
@@ -483,7 +523,7 @@ mod tests {
         );
         assert!(runtime.capture_destination(&destination));
         let (frame, done, _) = runtime
-            .render(start + ORIENTATION_QUARTER_TURN_DURATION)
+            .render(start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("transition frame");
         assert!(done);
         assert_eq!(frame, destination);
@@ -504,16 +544,17 @@ mod tests {
         ));
         assert!(runtime.capture_destination(&destination));
 
-        let (_, halfway_done, halfway) = runtime
-            .render(start + ORIENTATION_QUARTER_TURN_DURATION / 2)
+        let (halfway_frame, halfway_done, halfway) = runtime
+            .render(start + ORIENTATION_WAVE_PHASE_DURATION)
             .expect("halfway transition frame");
         assert!(!halfway_done);
-        assert!(halfway.mapped_pixels > 0);
-        assert_eq!(halfway.blended_pixels, 0);
+        assert_eq!(halfway_frame, [Rgb565Pixel(0); 12]);
+        assert_eq!(halfway.mapped_pixels, 0);
+        assert_eq!(halfway.blended_pixels, 12);
         assert_eq!(halfway.progress_ppm, 500_000);
 
         let (_, final_done, final_stats) = runtime
-            .render(start + ORIENTATION_QUARTER_TURN_DURATION)
+            .render(start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("final transition frame");
         assert!(final_done);
         assert_eq!(final_stats.blended_pixels, 12);
@@ -546,18 +587,17 @@ mod tests {
             false,
         ));
         assert!(runtime.capture_destination(&destination));
-        let _ = runtime.render(start + Duration::from_millis(150));
-        let _ = runtime.render(start + ORIENTATION_QUARTER_TURN_DURATION);
+        let _ = runtime.render(start + Duration::from_millis(750));
+        let _ = runtime.render(start + ORIENTATION_WAVE_TOTAL_DURATION);
         assert!(runtime.start(
             ScreenOrientation::MonitorClockwise,
             ScreenOrientation::MonitorCounterclockwise,
             &destination,
-            start + ORIENTATION_QUARTER_TURN_DURATION,
+            start + ORIENTATION_WAVE_TOTAL_DURATION,
             false,
         ));
         assert!(runtime.capture_destination(&source));
-        let _ = runtime
-            .render(start + ORIENTATION_QUARTER_TURN_DURATION + ORIENTATION_OPPOSITE_TURN_DURATION);
+        let _ = runtime.render(start + ORIENTATION_WAVE_TOTAL_DURATION * 2);
 
         assert_eq!(runtime.source.as_ptr(), source_ptr);
         assert_eq!(runtime.destination.as_ptr(), destination_ptr);
