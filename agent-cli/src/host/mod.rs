@@ -6323,7 +6323,7 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
 const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
-const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 6;
+const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 8;
 
 fn qualify_installed_orientation_transitions(
     config: &NativeDeviceConfig,
@@ -6386,6 +6386,23 @@ fn qualify_installed_orientation_transitions(
                 sh(ORIENTATION_TRANSITION_REMOTE_DIR)
             ),
         )?;
+        let telemetry_endpoint = config.agent()?.clone();
+        let telemetry_thread = thread::spawn(move || {
+            agent_telemetry_for_duration(
+                &telemetry_endpoint,
+                Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
+            )
+            .map_err(|error| error.to_string())
+        });
+        let analytics_started = Instant::now();
+        while remote_read(&session, "/tmp/mister-magik/realtime-frame-analytics").as_deref()
+            != Some("process\n")
+        {
+            if analytics_started.elapsed() >= Duration::from_secs(3) {
+                return Err("orientation benchmark analytics lease did not become ready".into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
@@ -6411,10 +6428,10 @@ fn qualify_installed_orientation_transitions(
         )?;
         drop(session);
 
-        let telemetry = agent_telemetry_for_duration(
-            config.agent()?,
-            Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
-        )?;
+        let telemetry = telemetry_thread
+            .join()
+            .map_err(|_| "orientation benchmark telemetry collector panicked")?
+            .map_err(|error| format!("orientation benchmark telemetry failed: {error}"))?;
         let session = connect_with(&config.connection, 10)?;
         let telemetry_text = telemetry
             .iter()
