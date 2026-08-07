@@ -28,6 +28,83 @@ pub struct OrientationTransitionRenderStats {
     pub progress_ppm: u32,
 }
 
+#[derive(Clone, Copy)]
+pub enum OrientationPmuPhase {
+    Destination,
+    Fill,
+    Map,
+    Crossfade,
+    CacheRestore,
+}
+
+pub const fn orientation_pmu_label(
+    from: ScreenOrientation,
+    to: ScreenOrientation,
+    phase: OrientationPmuPhase,
+) -> &'static str {
+    const LABELS: [[&str; 5]; 6] = [
+        [
+            "orientation.normal-clockwise.destination",
+            "orientation.normal-clockwise.fill",
+            "orientation.normal-clockwise.map",
+            "orientation.normal-clockwise.crossfade",
+            "orientation.normal-clockwise.cache-restore",
+        ],
+        [
+            "orientation.clockwise-counterclockwise.destination",
+            "orientation.clockwise-counterclockwise.fill",
+            "orientation.clockwise-counterclockwise.map",
+            "orientation.clockwise-counterclockwise.crossfade",
+            "orientation.clockwise-counterclockwise.cache-restore",
+        ],
+        [
+            "orientation.counterclockwise-normal.destination",
+            "orientation.counterclockwise-normal.fill",
+            "orientation.counterclockwise-normal.map",
+            "orientation.counterclockwise-normal.crossfade",
+            "orientation.counterclockwise-normal.cache-restore",
+        ],
+        [
+            "orientation.normal-counterclockwise.destination",
+            "orientation.normal-counterclockwise.fill",
+            "orientation.normal-counterclockwise.map",
+            "orientation.normal-counterclockwise.crossfade",
+            "orientation.normal-counterclockwise.cache-restore",
+        ],
+        [
+            "orientation.counterclockwise-clockwise.destination",
+            "orientation.counterclockwise-clockwise.fill",
+            "orientation.counterclockwise-clockwise.map",
+            "orientation.counterclockwise-clockwise.crossfade",
+            "orientation.counterclockwise-clockwise.cache-restore",
+        ],
+        [
+            "orientation.clockwise-normal.destination",
+            "orientation.clockwise-normal.fill",
+            "orientation.clockwise-normal.map",
+            "orientation.clockwise-normal.crossfade",
+            "orientation.clockwise-normal.cache-restore",
+        ],
+    ];
+    let leg = match (from, to) {
+        (ScreenOrientation::Normal, ScreenOrientation::MonitorClockwise) => 0,
+        (ScreenOrientation::MonitorClockwise, ScreenOrientation::MonitorCounterclockwise) => 1,
+        (ScreenOrientation::MonitorCounterclockwise, ScreenOrientation::Normal) => 2,
+        (ScreenOrientation::Normal, ScreenOrientation::MonitorCounterclockwise) => 3,
+        (ScreenOrientation::MonitorCounterclockwise, ScreenOrientation::MonitorClockwise) => 4,
+        (ScreenOrientation::MonitorClockwise, ScreenOrientation::Normal) => 5,
+        _ => return "orientation.invalid",
+    };
+    let phase = match phase {
+        OrientationPmuPhase::Destination => 0,
+        OrientationPmuPhase::Fill => 1,
+        OrientationPmuPhase::Map => 2,
+        OrientationPmuPhase::Crossfade => 3,
+        OrientationPmuPhase::CacheRestore => 4,
+    };
+    LABELS[leg][phase]
+}
+
 pub struct OrientationTransitionRuntime {
     width: usize,
     height: usize,
@@ -148,6 +225,8 @@ impl OrientationTransitionRuntime {
             self.width,
             self.height,
             transition_quarter_turns(self.from, self.to) as f32 * progress,
+            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Fill),
+            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Map),
         );
         let mut crossfade_us = 0;
         let mut blended_pixels = 0;
@@ -158,6 +237,11 @@ impl OrientationTransitionRuntime {
                 .round()
                 .clamp(0.0, 255.0) as u8;
             let crossfade_started = Instant::now();
+            let _pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+                self.from,
+                self.to,
+                OrientationPmuPhase::Crossfade,
+            ));
             for (pixel, destination) in self.output.iter_mut().zip(&self.destination) {
                 *pixel = blend_565(*pixel, *destination, alpha);
             }
@@ -208,6 +292,8 @@ fn render_rotated_source(
     width: usize,
     height: usize,
     quarter_turns: f32,
+    fill_label: &'static str,
+    map_label: &'static str,
 ) -> (u64, u64, u64) {
     let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
     let (sin, cos) = angle.sin_cos();
@@ -218,9 +304,12 @@ fn render_rotated_source(
     let source_cx = (width as f32 - 1.0) * 0.5;
     let source_cy = (height as f32 - 1.0) * 0.5;
     let fill_started = Instant::now();
+    let fill_pmu = mister_magik_perf_events::sampled_span(fill_label);
     output.fill(Rgb565Pixel(0));
+    drop(fill_pmu);
     let fill_us = elapsed_us(fill_started);
     let map_started = Instant::now();
+    let map_pmu = mister_magik_perf_events::sampled_span(map_label);
     let mut mapped_pixels = 0u64;
     for y in 0..height {
         let dy = (y as f32 - source_cy) / scale;
@@ -240,6 +329,7 @@ fn render_rotated_source(
             }
         }
     }
+    drop(map_pmu);
     (fill_us, elapsed_us(map_started), mapped_pixels)
 }
 
@@ -404,5 +494,30 @@ mod tests {
             ),
             capacities
         );
+    }
+
+    #[test]
+    fn pmu_labels_cover_every_directed_leg_and_phase() {
+        let phases = [
+            OrientationPmuPhase::Destination,
+            OrientationPmuPhase::Fill,
+            OrientationPmuPhase::Map,
+            OrientationPmuPhase::Crossfade,
+            OrientationPmuPhase::CacheRestore,
+        ];
+        let mut labels = std::collections::BTreeSet::new();
+        for from in ScreenOrientation::ALL {
+            for to in ScreenOrientation::ALL {
+                if from == to {
+                    continue;
+                }
+                for phase in phases {
+                    let label = orientation_pmu_label(from, to, phase);
+                    assert_ne!(label, "orientation.invalid");
+                    assert!(labels.insert(label));
+                }
+            }
+        }
+        assert_eq!(labels.len(), 30);
     }
 }

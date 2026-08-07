@@ -95,6 +95,34 @@ fn write_orientation_transition_benchmark_completion(
     std::fs::rename(temporary, directory.join("completion.json"))
 }
 
+fn write_orientation_transition_pmu_completion() -> std::io::Result<()> {
+    let Some(path) = std::env::var_os("MISTER_ORIENTATION_PMU_COMPLETE") else {
+        return Ok(());
+    };
+    let path = std::path::PathBuf::from(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let profile = mister_magik_perf_events::take_thread_profile();
+    let document = serde_json::json!({
+        "schema": "mister-magik-orientation-transitions-pmu-v1",
+        "state": if profile.enabled && profile.failure.is_none() && !profile.records.is_empty() && profile.dropped_spans == 0 {
+            "complete"
+        } else {
+            "failed"
+        },
+        "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
+            .iter()
+            .map(|orientation| orientation.id())
+            .collect::<Vec<_>>(),
+        "profile": profile,
+    });
+    std::fs::write(
+        path,
+        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
+    )
+}
+
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>) -> Self {
         match backend {
@@ -6378,8 +6406,15 @@ pub(super) fn run_launcher_loop(
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
             if !orientation_transition.destination_ready() {
                 let capture_started = Instant::now();
+                let destination_pmu =
+                    mister_magik_perf_events::sampled_span(orientation_pmu_label(
+                        orientation_transition.from(),
+                        orientation_transition.to(),
+                        OrientationPmuPhase::Destination,
+                    ));
                 let _ = orientation_transition
                     .capture_destination(layer_target.presentation_frame_view().pixels());
+                drop(destination_pmu);
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
             }
@@ -6388,7 +6423,13 @@ pub(super) fn run_launcher_loop(
             {
                 custom_draw_trace.orientation_transition_stats = render_stats;
                 let restore_started = Instant::now();
+                let restore_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+                    orientation_transition.from(),
+                    orientation_transition.to(),
+                    OrientationPmuPhase::CacheRestore,
+                ));
                 let _ = layer_target.restore_presentation_cached(pixels);
+                drop(restore_pmu);
                 custom_draw_trace.orientation_transition_cache_restore_us =
                     restore_started.elapsed().as_micros();
                 cached_damage = DirtyRectList::from_one(DirtyRect {
@@ -7030,6 +7071,11 @@ pub(super) fn run_launcher_loop(
                 );
                 orientation_benchmark_completed_at = Some(Instant::now());
                 screensaver_cpu_profile.complete_orientation_transitions(frames);
+                if let Err(error) = write_orientation_transition_pmu_completion() {
+                    crate::ui_errln!(
+                        "orientation_transition_benchmark_pmu_write_failed error={error}"
+                    );
+                }
                 frame_accounting.request_status_write();
                 request_launcher_redraw!();
             }
