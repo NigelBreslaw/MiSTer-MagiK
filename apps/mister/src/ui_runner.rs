@@ -86,6 +86,24 @@ use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 
+fn launcher_env_flag(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
+fn launcher_startup_orientation(
+    persisted: ScreenOrientation,
+    orientation_benchmark: bool,
+) -> ScreenOrientation {
+    if orientation_benchmark {
+        ScreenOrientation::Normal
+    } else {
+        persisted
+    }
+}
+
 mod arcade_drawer;
 mod catalog_worker;
 mod controller_loop;
@@ -438,8 +456,11 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
         }
         "launcher" => {
             let launcher_settings = crate::settings::MagikSettings::load();
-            let launcher_layout =
-                UiLayoutGeometry::for_display(&ui, launcher_settings.screen_orientation);
+            let launcher_orientation = launcher_startup_orientation(
+                launcher_settings.screen_orientation,
+                launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"),
+            );
+            let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);
             with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {
                 boot_analytics::event("app_show_attempt", "scene=launcher");
                 app.show().expect("show");

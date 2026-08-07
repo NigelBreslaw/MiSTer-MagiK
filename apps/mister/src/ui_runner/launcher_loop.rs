@@ -1854,13 +1854,6 @@ fn screensaver_start_mode(
     }
 }
 
-fn launcher_env_flag(name: &str) -> bool {
-    matches!(
-        std::env::var(name).ok().as_deref(),
-        Some("1" | "on" | "true" | "yes")
-    )
-}
-
 fn screensaver_preview_start_ready(
     content_ready: bool,
     wait_for_analytics: bool,
@@ -10150,6 +10143,20 @@ mod tests {
         assert!(return_to_launcher_env_is_set(Some("1")));
         assert!(return_to_launcher_env_is_set(Some("true")));
         assert!(return_to_launcher_env_is_set(Some("yes")));
+    }
+
+    #[test]
+    pub(super) fn orientation_benchmark_selects_landscape_layout_before_window_creation() {
+        for persisted in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            assert_eq!(
+                launcher_startup_orientation(persisted, true),
+                ScreenOrientation::Normal
+            );
+            assert_eq!(launcher_startup_orientation(persisted, false), persisted);
+        }
     }
 
     #[test]
