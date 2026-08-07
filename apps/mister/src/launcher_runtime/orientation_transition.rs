@@ -220,10 +220,10 @@ impl OrientationTransitionRuntime {
             / self.duration.as_secs_f32())
         .clamp(0.0, 1.0);
         let destination_alpha = (progress >= DESTINATION_CROSSFADE_START).then(|| {
-            ((((progress - DESTINATION_CROSSFADE_START) / (1.0 - DESTINATION_CROSSFADE_START))
+            (((progress - DESTINATION_CROSSFADE_START) / (1.0 - DESTINATION_CROSSFADE_START))
                 * 255.0)
                 .round()
-                .clamp(0.0, 255.0) as u8)
+                .clamp(0.0, 255.0) as u8
         });
         let (fill_us, map_us, crossfade_us, mapped_pixels, blended_pixels) = render_rotated_source(
             &self.source,
