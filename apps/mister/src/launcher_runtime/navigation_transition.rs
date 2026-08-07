@@ -499,7 +499,32 @@ impl NavigationTransitionRuntime {
         source: &[Rgb565Pixel],
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
-        let mut request = NavigationTransitionRequest::settings_page(direction);
+        self.begin_settings_page_request(
+            NavigationTransitionRequest::settings_page(direction),
+            source,
+            now_us,
+        )
+    }
+
+    pub fn begin_settings_page_portrait(
+        &mut self,
+        direction: NavigationTransitionDirection,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        self.begin_settings_page_request(
+            NavigationTransitionRequest::settings_page_portrait(direction),
+            source,
+            now_us,
+        )
+    }
+
+    fn begin_settings_page_request(
+        &mut self,
+        mut request: NavigationTransitionRequest,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
@@ -1598,6 +1623,23 @@ mod tests {
         assert_eq!(runtime.take_queued_input(), Some(back));
         assert_eq!(runtime.take_queued_input(), Some(home));
         assert_eq!(runtime.take_queued_input(), None);
+    }
+
+    #[test]
+    fn portrait_settings_page_adapter_selects_vertical_request() {
+        let mut runtime = NavigationTransitionRuntime::new(3, 16, true);
+        let source = vec![Rgb565Pixel(0x1111); 3 * 16];
+
+        runtime
+            .begin_settings_page_portrait(NavigationTransitionDirection::Forward, &source, 0)
+            .unwrap();
+
+        assert_eq!(
+            runtime.request(),
+            Some(NavigationTransitionRequest::settings_page_portrait(
+                NavigationTransitionDirection::Forward
+            ))
+        );
     }
 
     #[test]

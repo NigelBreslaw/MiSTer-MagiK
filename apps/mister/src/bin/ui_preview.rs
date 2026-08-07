@@ -128,12 +128,17 @@ mod macos {
             options.display_profile,
             options.orientation,
             options.navigation_transition_demo.is_some()
+                || options.settings_page_transition_demo
                 || options.navigation_transition_duration_ms.is_some(),
         )?;
         application
             .navigation_transition
             .configure_preview(options.navigation_transition_duration_ms);
-        application.select_scenario(options.scenario);
+        application.select_scenario(if options.settings_page_transition_demo {
+            Scenario::Home
+        } else {
+            options.scenario
+        });
         if let Some(edge) = options.navigation_transition_demo {
             application.configure_navigation_transition_demo(edge)?;
         }
@@ -143,7 +148,9 @@ mod macos {
         if let Some(output) = options.output {
             let mut demo_origin_selected_id = None;
             let mut demo_origin_frame = None;
-            if options.navigation_transition_demo.is_some() {
+            let navigation_demo = options.navigation_transition_demo.is_some()
+                || options.settings_page_transition_demo;
+            if navigation_demo {
                 for _ in 0..36 {
                     application.compose_frame();
                 }
@@ -153,7 +160,11 @@ mod macos {
                     .get(application.launcher_nav.selected)
                     .map(|item| item.id.clone());
                 demo_origin_frame = Some(application.frame_target.cached_565().to_vec());
-                application.launcher_pad.btn_a = true;
+                if options.settings_page_transition_demo {
+                    application.launcher_pad.btn_home = true;
+                } else {
+                    application.launcher_pad.btn_a = true;
+                }
                 application.launcher_pad.rebuild_pressed_now();
                 if options.navigation_transition_demo_reverse {
                     let settle_frames = options
@@ -166,6 +177,7 @@ mod macos {
                         application.compose_frame();
                         if step == 0 {
                             application.launcher_pad.btn_a = false;
+                            application.launcher_pad.btn_home = false;
                             application.launcher_pad.rebuild_pressed_now();
                         }
                     }
@@ -196,6 +208,7 @@ mod macos {
             for _ in 0..capture_advance_count {
                 application.compose_frame();
                 application.launcher_pad.btn_a = false;
+                application.launcher_pad.btn_home = false;
                 application.launcher_pad.rebuild_pressed_now();
             }
             if options.navigation_transition_demo_reverse
@@ -933,10 +946,20 @@ mod macos {
             if let Some((source_screen, source_state)) = settings_transition_source
                 && let Some(direction) =
                     settings_page_transition_direction(source_screen, self.launcher_nav.screen)
-                && self
-                    .navigation_transition
-                    .begin_settings_page(direction, self.frame_target.cached_565(), now_us)
-                    .unwrap_or(false)
+                && (if self.orientation.is_portrait() {
+                    self.navigation_transition.begin_settings_page_portrait(
+                        direction,
+                        self.frame_target.cached_565(),
+                        now_us,
+                    )
+                } else {
+                    self.navigation_transition.begin_settings_page(
+                        direction,
+                        self.frame_target.cached_565(),
+                        now_us,
+                    )
+                })
+                .unwrap_or(false)
             {
                 self.pending_navigation_event = Some(LauncherEvent {
                     action: LauncherAction::NavigateBack,
@@ -2305,6 +2328,7 @@ mod macos {
         display_profile: DisplayProfile,
         orientation: ScreenOrientation,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
+        settings_page_transition_demo: bool,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
     }
@@ -2323,6 +2347,7 @@ mod macos {
             let mut display_profile = DisplayProfile::Hdmi;
             let mut orientation = ScreenOrientation::Normal;
             let mut navigation_transition_demo = None;
+            let mut settings_page_transition_demo = false;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
             let mut arguments = arguments.into_iter();
@@ -2394,6 +2419,9 @@ mod macos {
                                 )
                             })?);
                     }
+                    "--settings-page-transition-demo" => {
+                        settings_page_transition_demo = true;
+                    }
                     "--navigation-transition-demo-reverse" => {
                         navigation_transition_demo_reverse = true;
                     }
@@ -2417,7 +2445,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2427,9 +2455,12 @@ mod macos {
             if frame > 0 && output.is_none() {
                 return Err("--frame requires --output".into());
             }
-            if navigation_transition_demo_reverse && navigation_transition_demo.is_none() {
+            if navigation_transition_demo_reverse
+                && navigation_transition_demo.is_none()
+                && !settings_page_transition_demo
+            {
                 return Err(
-                    "--navigation-transition-demo-reverse requires --navigation-transition-demo"
+                    "--navigation-transition-demo-reverse requires a navigation transition demo"
                         .into(),
                 );
             }
@@ -2446,6 +2477,7 @@ mod macos {
                 display_profile,
                 orientation,
                 navigation_transition_demo,
+                settings_page_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
             })
@@ -3288,6 +3320,21 @@ mod macos {
                 Some(NavigationTransitionEdge::HomeToArcade)
             );
             assert_eq!(options.navigation_transition_duration_ms, Some(4_000));
+            assert!(options.navigation_transition_demo_reverse);
+        }
+
+        #[test]
+        fn preview_options_parse_portrait_settings_transition_demo() {
+            let options = PreviewOptions::parse(
+                [
+                    "--settings-page-transition-demo",
+                    "--navigation-transition-demo-reverse",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+
+            assert!(options.settings_page_transition_demo);
             assert!(options.navigation_transition_demo_reverse);
         }
 

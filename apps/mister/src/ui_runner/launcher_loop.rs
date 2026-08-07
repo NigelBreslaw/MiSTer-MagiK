@@ -4162,16 +4162,16 @@ pub(super) fn run_launcher_loop(
                             .saturating_duration_since(start)
                             .as_micros()
                             .min(u64::MAX as u128) as u64;
-                        if navigation_transition
-                            .begin_settings_page(
-                                direction,
-                                portrait_target
-                                    .as_ref()
-                                    .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565),
-                                now_us,
-                            )
-                            .unwrap_or(false)
-                        {
+                        let source = portrait_target
+                            .as_ref()
+                            .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565);
+                        let started = if portrait_target.is_some() {
+                            navigation_transition
+                                .begin_settings_page_portrait(direction, source, now_us)
+                        } else {
+                            navigation_transition.begin_settings_page(direction, source, now_us)
+                        };
+                        if started.unwrap_or(false) {
                             pending_navigation_transition = Some(PendingNavigationTransition {
                                 event: launcher::LauncherEvent {
                                     action: LauncherAction::NavigateBack,

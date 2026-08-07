@@ -138,6 +138,108 @@ fn settings_page_push_settles_to_exact_snapshots_in_both_directions() {
 }
 
 #[test]
+fn portrait_settings_page_push_settles_to_exact_snapshots_in_both_directions() {
+    let width = 3;
+    let height = 16;
+    let source = vec![Rgb565Pixel(0xf800); width * height];
+    let destination = vec![Rgb565Pixel(0x07e0); width * height];
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.begin_capture();
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+
+    for direction in [
+        NavigationTransitionDirection::Forward,
+        NavigationTransitionDirection::Reverse,
+    ] {
+        let request = NavigationTransitionRequest::settings_page_portrait(direction);
+        render_settings_page_vertical_push(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                progress_q16: 0,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(buffers.working(), source);
+
+        render_settings_page_vertical_push(
+            &mut buffers,
+            request,
+            NavigationTransitionFrame {
+                progress_q16: PROGRESS_MAX,
+                ..NavigationTransitionFrame::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(buffers.working(), destination);
+    }
+}
+
+#[test]
+fn portrait_settings_page_push_moves_up_when_entering_and_down_when_backing() {
+    let width = 2;
+    let height = 16;
+    let source = (0..height)
+        .flat_map(|row| [Rgb565Pixel(0x1000 + row as u16); 2])
+        .collect::<Vec<_>>();
+    let destination = (0..height)
+        .flat_map(|row| [Rgb565Pixel(0x2000 + row as u16); 2])
+        .collect::<Vec<_>>();
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.begin_capture();
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+    let progress_q16 = PROGRESS_MAX / 2;
+    let travel_q16 = spring_ease_q16(progress_q16) as usize;
+    let source_travel = height / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR as usize;
+
+    render_settings_page_vertical_push(
+        &mut buffers,
+        NavigationTransitionRequest::settings_page_portrait(
+            NavigationTransitionDirection::Forward,
+        ),
+        NavigationTransitionFrame {
+            progress_q16,
+            ..NavigationTransitionFrame::default()
+        },
+    )
+    .unwrap();
+    let forward_source_rows = source_travel * travel_q16 / PROGRESS_MAX as usize;
+    let forward_destination_y = height - height * travel_q16 / PROGRESS_MAX as usize;
+    assert!(forward_source_rows > 0);
+    assert!(forward_destination_y < height);
+    assert_eq!(buffers.working()[0], source[forward_source_rows * width]);
+    assert_eq!(
+        buffers.working()[forward_destination_y * width],
+        destination[0]
+    );
+
+    render_settings_page_vertical_push(
+        &mut buffers,
+        NavigationTransitionRequest::settings_page_portrait(
+            NavigationTransitionDirection::Reverse,
+        ),
+        NavigationTransitionFrame {
+            progress_q16,
+            ..NavigationTransitionFrame::default()
+        },
+    )
+    .unwrap();
+    let reverse_destination_rows = source_travel - source_travel * travel_q16
+        / PROGRESS_MAX as usize;
+    let reverse_source_y = height * travel_q16 / PROGRESS_MAX as usize;
+    assert!(reverse_destination_rows > 0);
+    assert!(reverse_source_y > 0);
+    assert_eq!(
+        buffers.working()[0],
+        destination[reverse_destination_rows * width]
+    );
+    assert_eq!(buffers.working()[reverse_source_y * width], source[0]);
+}
+
+#[test]
 fn failed_recap_does_not_expose_stale_snapshot() {
     let mut buffers = NavigationTransitionBuffers::new(4, 3);
     let pixels = vec![Rgb565Pixel(0x1234); 12];
@@ -221,6 +323,29 @@ fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
     );
     assert_eq!(&output[3..width], &source[..width - 3]);
     assert_eq!(&output[width + 3..width * 2], &source[width..width * 2 - 3]);
+}
+
+#[test]
+fn portrait_settings_page_push_uses_clipped_contiguous_row_copies() {
+    let width = 3;
+    let height = 4;
+    let source = (0..width * height)
+        .map(|index| Rgb565Pixel(index as u16))
+        .collect::<Vec<_>>();
+    let mut output = vec![Rgb565Pixel(0xffff); width * height];
+
+    assert_eq!(
+        blit_snapshot_y(&mut output, &source, width, height, -1),
+        ((height - 1) * width) as u64
+    );
+    assert_eq!(&output[..(height - 1) * width], &source[width..]);
+
+    output.fill(Rgb565Pixel(0xffff));
+    assert_eq!(
+        blit_snapshot_y(&mut output, &source, width, height, 1),
+        ((height - 1) * width) as u64
+    );
+    assert_eq!(&output[width..], &source[..(height - 1) * width]);
 }
 
 #[test]

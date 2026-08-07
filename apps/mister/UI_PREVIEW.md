@@ -171,6 +171,10 @@ data. Headless `auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100
 ms. Repeating a scenario, frame, and refresh rate produces the same RGB565
 output.
 
+Use `--settings-page-transition-demo` to capture the Settings page-depth
+transition. Add `--navigation-transition-demo-reverse` to capture the backing
+motion instead.
+
 An explicit card-mode `screenshot-screensaver` capture opens the production
 archive with a fixed smoke-test seed, advances the same renderer with the fixed
 capture clock, and waits for a bounded number of production scaler results
