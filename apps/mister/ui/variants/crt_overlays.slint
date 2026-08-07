@@ -222,7 +222,9 @@ component CompactDialogButton inherits Rectangle {
             font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-        size: MisterUi.crt-body-font;
+        size: MisterUi.portrait-layout && MisterUi.window-width < 400
+            ? PixelTextSize.px8
+            : MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
@@ -230,6 +232,7 @@ component CompactDialogButton inherits Rectangle {
 }
 
 export component ConfirmDialog inherits Rectangle {
+    property <bool> narrow-portrait: MisterUi.portrait-layout && MisterUi.window-width < 400;
     background: #000000b0;
 
     Rectangle {
@@ -252,7 +255,7 @@ export component ConfirmDialog inherits Rectangle {
             font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
-                size: MisterUi.crt-heading-font;
+                size: root.narrow-portrait ? PixelTextSize.px8 : MisterUi.crt-heading-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -261,7 +264,7 @@ export component ConfirmDialog inherits Rectangle {
             font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
-                size: MisterUi.crt-body-font;
+                size: root.narrow-portrait ? PixelTextSize.px8 : MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
