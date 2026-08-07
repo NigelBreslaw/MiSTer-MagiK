@@ -3104,6 +3104,9 @@ pub(super) fn run_launcher_loop(
                 OrientationTransitionIntent::Benchmark,
             );
             if animated {
+                if leg.index == 0 {
+                    screensaver_cpu_profile.begin_orientation_transitions(frames);
+                }
                 print_startup_event(
                     start,
                     "orientation_transition_benchmark_leg_started",
@@ -7026,6 +7029,7 @@ pub(super) fn run_launcher_loop(
                     ),
                 );
                 orientation_benchmark_completed_at = Some(Instant::now());
+                screensaver_cpu_profile.complete_orientation_transitions(frames);
                 frame_accounting.request_status_write();
                 request_launcher_redraw!();
             }

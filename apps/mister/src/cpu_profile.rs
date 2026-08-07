@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
 const NAVIGATION_TRANSITIONS_TRIGGER: &str = "navigation-transitions";
+const ORIENTATION_TRANSITIONS_TRIGGER: &str = "orientation-transitions";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
@@ -19,6 +20,7 @@ const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 enum BoundedProfileTrigger {
     Screensaver,
     NavigationTransitions,
+    OrientationTransitions,
     LaunchReturn,
 }
 
@@ -27,6 +29,7 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => SCREENSAVER_TRIGGER,
             Self::NavigationTransitions => NAVIGATION_TRANSITIONS_TRIGGER,
+            Self::OrientationTransitions => ORIENTATION_TRANSITIONS_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
         }
     }
@@ -35,6 +38,7 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
+            Self::OrientationTransitions => "mister-magik-orientation-transitions-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
         }
     }
@@ -111,6 +115,9 @@ fn bounded_profile_trigger_from_values(
     match trigger {
         Some(SCREENSAVER_TRIGGER) => Some(BoundedProfileTrigger::Screensaver),
         Some(NAVIGATION_TRANSITIONS_TRIGGER) => Some(BoundedProfileTrigger::NavigationTransitions),
+        Some(ORIENTATION_TRANSITIONS_TRIGGER) => {
+            Some(BoundedProfileTrigger::OrientationTransitions)
+        }
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         _ => None,
     }
@@ -401,6 +408,7 @@ mod imp {
                 Some(
                     BoundedProfileTrigger::Screensaver
                         | BoundedProfileTrigger::NavigationTransitions
+                        | BoundedProfileTrigger::OrientationTransitions
                 )
             ) {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
@@ -424,6 +432,16 @@ mod imp {
 
         pub fn begin_navigation_transition(&mut self, first_frame: u64) {
             self.begin(BoundedProfileTrigger::NavigationTransitions, first_frame);
+        }
+
+        pub fn begin_orientation_transitions(&mut self, first_frame: u64) {
+            self.begin(BoundedProfileTrigger::OrientationTransitions, first_frame);
+        }
+
+        pub fn complete_orientation_transitions(&mut self, next_frame: u64) {
+            if self.trigger == Some(BoundedProfileTrigger::OrientationTransitions) {
+                self.complete(next_frame, true);
+            }
         }
 
         fn begin(&mut self, trigger: BoundedProfileTrigger, first_frame: u64) {
@@ -470,6 +488,10 @@ mod imp {
             if elapsed < self.duration {
                 return;
             }
+            self.complete(next_frame, false);
+        }
+
+        fn complete(&mut self, next_frame: u64, include_orientation_route: bool) {
             let state = std::mem::replace(&mut self.state, State::Failed);
             let State::Active {
                 profiler,
@@ -498,6 +520,15 @@ mod imp {
                         "bytes": summary.bytes,
                         "first_frame": first_frame,
                         "last_frame": last_frame,
+                        "route": include_orientation_route.then_some([
+                            "normal",
+                            "monitor-clockwise",
+                            "monitor-counterclockwise",
+                            "normal",
+                            "monitor-counterclockwise",
+                            "monitor-clockwise",
+                            "normal",
+                        ]),
                     });
                     if let Err(error) = self.write_completion(&metadata.to_string()) {
                         self.fail(&format!("completion-write-failed:{error}"));
@@ -602,6 +633,10 @@ mod stub {
 
         pub fn begin_navigation_transition(&mut self, _first_frame: u64) {}
 
+        pub fn begin_orientation_transitions(&mut self, _first_frame: u64) {}
+
+        pub fn complete_orientation_transitions(&mut self, _next_frame: u64) {}
+
         pub fn poll(&mut self, _next_frame: u64) {}
     }
 }
@@ -664,6 +699,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("launch-return")),
             Some(BoundedProfileTrigger::LaunchReturn)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("orientation-transitions")),
+            Some(BoundedProfileTrigger::OrientationTransitions)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),
