@@ -17,6 +17,17 @@ pub struct OrientationTransitionCompletion {
     pub to: ScreenOrientation,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OrientationTransitionRenderStats {
+    pub fill_us: u64,
+    pub map_us: u64,
+    pub crossfade_us: u64,
+    pub total_us: u64,
+    pub mapped_pixels: u64,
+    pub blended_pixels: u64,
+    pub progress_ppm: u32,
+}
+
 pub struct OrientationTransitionRuntime {
     width: usize,
     height: usize,
@@ -30,6 +41,7 @@ pub struct OrientationTransitionRuntime {
     destination_ready: bool,
     active: bool,
     completion: Option<OrientationTransitionCompletion>,
+    last_render_stats: OrientationTransitionRenderStats,
 }
 
 impl OrientationTransitionRuntime {
@@ -48,6 +60,7 @@ impl OrientationTransitionRuntime {
             destination_ready: false,
             active: false,
             completion: None,
+            last_render_stats: OrientationTransitionRenderStats::default(),
         }
     }
 
@@ -78,6 +91,7 @@ impl OrientationTransitionRuntime {
         self.destination_ready = false;
         self.active = true;
         self.completion = None;
+        self.last_render_stats = OrientationTransitionRenderStats::default();
         true
     }
 
@@ -101,32 +115,54 @@ impl OrientationTransitionRuntime {
         self.destination_ready
     }
 
-    pub fn render(&mut self, now: Instant) -> Option<(&[Rgb565Pixel], bool)> {
+    pub const fn from(&self) -> ScreenOrientation {
+        self.from
+    }
+
+    pub const fn to(&self) -> ScreenOrientation {
+        self.to
+    }
+
+    pub const fn last_render_stats(&self) -> OrientationTransitionRenderStats {
+        self.last_render_stats
+    }
+
+    pub fn render(
+        &mut self,
+        now: Instant,
+    ) -> Option<(&[Rgb565Pixel], bool, OrientationTransitionRenderStats)> {
         if !self.active {
             return None;
         }
         if !self.destination_ready {
-            return Some((&self.source, false));
+            self.last_render_stats = OrientationTransitionRenderStats::default();
+            return Some((&self.source, false, self.last_render_stats));
         }
+        let render_started = Instant::now();
         let progress = (now.saturating_duration_since(self.started_at).as_secs_f32()
             / self.duration.as_secs_f32())
         .clamp(0.0, 1.0);
-        render_rotated_source(
+        let (fill_us, map_us, mapped_pixels) = render_rotated_source(
             &self.source,
             &mut self.output,
             self.width,
             self.height,
             transition_quarter_turns(self.from, self.to) as f32 * progress,
         );
+        let mut crossfade_us = 0;
+        let mut blended_pixels = 0;
         if progress >= DESTINATION_CROSSFADE_START {
             let alpha = (((progress - DESTINATION_CROSSFADE_START)
                 / (1.0 - DESTINATION_CROSSFADE_START))
                 * 255.0)
                 .round()
                 .clamp(0.0, 255.0) as u8;
+            let crossfade_started = Instant::now();
             for (pixel, destination) in self.output.iter_mut().zip(&self.destination) {
                 *pixel = blend_565(*pixel, *destination, alpha);
             }
+            crossfade_us = elapsed_us(crossfade_started);
+            blended_pixels = self.output.len().min(u64::MAX as usize) as u64;
         }
         let done = progress >= 1.0;
         if done {
@@ -137,7 +173,16 @@ impl OrientationTransitionRuntime {
                 to: self.to,
             });
         }
-        Some((&self.output, done))
+        self.last_render_stats = OrientationTransitionRenderStats {
+            fill_us,
+            map_us,
+            crossfade_us,
+            total_us: elapsed_us(render_started),
+            mapped_pixels,
+            blended_pixels,
+            progress_ppm: (progress * 1_000_000.0).round().clamp(0.0, 1_000_000.0) as u32,
+        };
+        Some((&self.output, done, self.last_render_stats))
     }
 
     pub fn take_completion(&mut self) -> Option<OrientationTransitionCompletion> {
@@ -163,7 +208,7 @@ fn render_rotated_source(
     width: usize,
     height: usize,
     quarter_turns: f32,
-) {
+) -> (u64, u64, u64) {
     let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
     let (sin, cos) = angle.sin_cos();
     let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
@@ -172,7 +217,11 @@ fn render_rotated_source(
         (width as f32 / rotated_width.max(1.0)).min(height as f32 / rotated_height.max(1.0));
     let source_cx = (width as f32 - 1.0) * 0.5;
     let source_cy = (height as f32 - 1.0) * 0.5;
+    let fill_started = Instant::now();
     output.fill(Rgb565Pixel(0));
+    let fill_us = elapsed_us(fill_started);
+    let map_started = Instant::now();
+    let mut mapped_pixels = 0u64;
     for y in 0..height {
         let dy = (y as f32 - source_cy) / scale;
         let row = y * width;
@@ -187,9 +236,15 @@ fn render_rotated_source(
             {
                 output[row + x] = source[(source_y.round() as usize).min(height - 1) * width
                     + (source_x.round() as usize).min(width - 1)];
+                mapped_pixels = mapped_pixels.saturating_add(1);
             }
         }
     }
+    (fill_us, elapsed_us(map_started), mapped_pixels)
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn blend_565(source: Rgb565Pixel, destination: Rgb565Pixel, alpha: u8) -> Rgb565Pixel {
@@ -261,11 +316,45 @@ mod tests {
             false,
         );
         assert!(runtime.capture_destination(&destination));
-        let (frame, done) = runtime
+        let (frame, done, _) = runtime
             .render(start + ORIENTATION_QUARTER_TURN_DURATION)
             .expect("transition frame");
         assert!(done);
         assert_eq!(frame, destination);
+    }
+
+    #[test]
+    fn render_stats_separate_mapping_and_crossfade_work() {
+        let start = Instant::now();
+        let source = [Rgb565Pixel(1); 12];
+        let destination = [Rgb565Pixel(2); 12];
+        let mut runtime = OrientationTransitionRuntime::new(4, 3);
+        assert!(runtime.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &source,
+            start,
+            false,
+        ));
+        assert!(runtime.capture_destination(&destination));
+
+        let (_, halfway_done, halfway) = runtime
+            .render(start + ORIENTATION_QUARTER_TURN_DURATION / 2)
+            .expect("halfway transition frame");
+        assert!(!halfway_done);
+        assert!(halfway.mapped_pixels > 0);
+        assert_eq!(halfway.blended_pixels, 0);
+        assert_eq!(halfway.progress_ppm, 500_000);
+
+        let (_, final_done, final_stats) = runtime
+            .render(start + ORIENTATION_QUARTER_TURN_DURATION)
+            .expect("final transition frame");
+        assert!(final_done);
+        assert_eq!(final_stats.blended_pixels, 12);
+        assert_eq!(final_stats.progress_ppm, 1_000_000);
+        assert!(final_stats.total_us >= final_stats.fill_us);
+        assert!(final_stats.total_us >= final_stats.map_us);
+        assert!(final_stats.total_us >= final_stats.crossfade_us);
     }
 
     #[test]

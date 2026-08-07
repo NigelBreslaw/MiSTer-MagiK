@@ -6230,7 +6230,7 @@ pub(super) fn run_launcher_loop(
         }
         let effect_label_us = navigation_transition_render_us;
         let navigation_telemetry = navigation_transition.telemetry();
-        let custom_draw_trace = LauncherCustomDrawTrace {
+        let mut custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
             preview_blit_us,
             effect_label_us,
@@ -6243,6 +6243,7 @@ pub(super) fn run_launcher_loop(
                 && !navigation_snapshot_locked_before_render,
             navigation_status_quiesce_wait_us: navigation_telemetry.status_quiesce_wait_us,
             navigation_status_quiesce_timeout: navigation_telemetry.status_quiesce_timeout,
+            ..LauncherCustomDrawTrace::default()
         };
         let cpu_custom_draw_done = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_done = Instant::now();
@@ -6318,12 +6319,28 @@ pub(super) fn run_launcher_loop(
         cached_damage.push_if_some(cached_arcade_rect);
         let mut cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
         if orientation_transition.is_active() {
+            let orientation_started = Instant::now();
+            custom_draw_trace.orientation_transition_active = true;
+            custom_draw_trace.orientation_transition_from = orientation_transition.from().id();
+            custom_draw_trace.orientation_transition_to = orientation_transition.to().id();
+            custom_draw_trace.orientation_transition_leg = orientation_benchmark
+                .active_leg()
+                .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
             if !orientation_transition.destination_ready() {
+                let capture_started = Instant::now();
                 let _ = orientation_transition
                     .capture_destination(layer_target.presentation_frame_view().pixels());
+                custom_draw_trace.orientation_transition_destination_capture_us =
+                    capture_started.elapsed().as_micros();
             }
-            if let Some((pixels, done)) = orientation_transition.render(Instant::now()) {
+            if let Some((pixels, done, render_stats)) =
+                orientation_transition.render(Instant::now())
+            {
+                custom_draw_trace.orientation_transition_stats = render_stats;
+                let restore_started = Instant::now();
                 let _ = layer_target.restore_presentation_cached(pixels);
+                custom_draw_trace.orientation_transition_cache_restore_us =
+                    restore_started.elapsed().as_micros();
                 cached_damage = DirtyRectList::from_one(DirtyRect {
                     x0: 0,
                     y0: 0,
@@ -6354,6 +6371,8 @@ pub(super) fn run_launcher_loop(
                     window.request_redraw();
                 }
             }
+            custom_draw_trace.orientation_transition_total_us =
+                orientation_started.elapsed().as_micros();
         }
         let final_preview_target_presented = raw_preview.is_some()
             && preview.presentation_requires_present()
