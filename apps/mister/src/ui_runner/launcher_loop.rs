@@ -535,7 +535,7 @@ fn begin_navigation_full_screen_transition(
     }
 }
 
-fn release_navigation_full_screen_transition(
+fn release_full_screen_transition(
     chart: &mut FullScreenTransitionStateChart,
     generation: Option<FullScreenTransitionGeneration>,
 ) {
@@ -2156,10 +2156,20 @@ fn begin_orientation_transition(
     layout: &mut UiLayoutGeometry,
     portrait_target: &mut Option<UiFrameTarget>,
     navigation_transition: &mut NavigationTransitionRuntime,
+    full_screen_transition: &mut FullScreenTransitionStateChart,
+    orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
     orientation_transition: &mut OrientationTransitionRuntime,
     orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
     intent: OrientationTransitionIntent,
 ) -> bool {
+    let generation = match full_screen_transition.begin(FullScreenTransitionOwner::Orientation) {
+        Ok(generation) => generation,
+        Err(error) => {
+            crate::ui_errln!("orientation full-screen transition begin rejected: {error:?}");
+            return false;
+        }
+    };
+    *orientation_transition_generation = Some(generation);
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
     apply_orientation_layout(
         app,
@@ -2176,6 +2186,7 @@ fn begin_orientation_transition(
     } else {
         let _ = orientation_transition.take_completion();
         *orientation_transition_intent = None;
+        release_full_screen_transition(full_screen_transition, Some(generation));
     }
     animated
 }
@@ -2376,6 +2387,7 @@ pub(super) fn run_launcher_loop(
     let mut orientation_transition =
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
+    let mut orientation_transition_generation = None;
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
@@ -3177,6 +3189,8 @@ pub(super) fn run_launcher_loop(
                 &mut layout,
                 &mut portrait_target,
                 &mut navigation_transition,
+                &mut full_screen_transition,
+                &mut orientation_transition_generation,
                 &mut orientation_transition,
                 &mut orientation_transition_intent,
                 OrientationTransitionIntent::Benchmark,
@@ -3240,6 +3254,8 @@ pub(super) fn run_launcher_loop(
                         &mut layout,
                         &mut portrait_target,
                         &mut navigation_transition,
+                        &mut full_screen_transition,
+                        &mut orientation_transition_generation,
                         &mut orientation_transition,
                         &mut orientation_transition_intent,
                         OrientationTransitionIntent::Rollback,
@@ -4310,7 +4326,10 @@ pub(super) fn run_launcher_loop(
                             input_previous,
                         ))
                     .then(|| (nav.screen, nav.navigation_transition_state()));
-                    let event = if orientation_transition.is_active() {
+                    let event = if orientation_transition.is_active()
+                        || full_screen_transition.owner()
+                            == Some(FullScreenTransitionOwner::Orientation)
+                    {
                         nav.absorb_input(&physical_nav_state);
                         None
                     } else if navigation_transition.is_active() {
@@ -4846,6 +4865,8 @@ pub(super) fn run_launcher_loop(
                                         &mut layout,
                                         &mut portrait_target,
                                         &mut navigation_transition,
+                                        &mut full_screen_transition,
+                                        &mut orientation_transition_generation,
                                         &mut orientation_transition,
                                         &mut orientation_transition_intent,
                                         OrientationTransitionIntent::Confirm,
@@ -4897,6 +4918,8 @@ pub(super) fn run_launcher_loop(
                                         &mut layout,
                                         &mut portrait_target,
                                         &mut navigation_transition,
+                                        &mut full_screen_transition,
+                                        &mut orientation_transition_generation,
                                         &mut orientation_transition,
                                         &mut orientation_transition_intent,
                                         OrientationTransitionIntent::Rollback,
@@ -5479,7 +5502,7 @@ pub(super) fn run_launcher_loop(
             };
             let completion = navigation_transition.complete();
             if completion.is_some() {
-                release_navigation_full_screen_transition(
+                release_full_screen_transition(
                     &mut full_screen_transition,
                     navigation_transition_generation,
                 );
@@ -6109,7 +6132,7 @@ pub(super) fn run_launcher_loop(
         let mut slint_base_rendered = false;
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
-        let mut navigation_controlled_capture_rendered = false;
+        let mut full_screen_controlled_capture_rendered = false;
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -6137,6 +6160,9 @@ pub(super) fn run_launcher_loop(
         } else if startup_intro_suppress_launcher_ui {
             None
         } else if full_screen_transition_policy_before_render.snapshot_locked {
+            if let Some(generation) = full_screen_transition.generation() {
+                let _ = full_screen_transition.retain_redraw(generation);
+            }
             None
         } else if full_screen_transition_policy_before_render.force_live_raster {
             let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
@@ -6145,28 +6171,31 @@ pub(super) fn run_launcher_loop(
             full_screen_transition_release_raster_rendered = rendered;
             dirty
         } else if full_screen_transition_policy_before_render.controlled_capture
-            && composition_decision.force_full_slint_raster
+            && (composition_decision.force_full_slint_raster
+                || full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation))
         {
-            let authorized = navigation_transition_generation.is_some_and(|generation| {
-                match full_screen_transition.take_controlled_capture(generation) {
-                    Ok(authorized) => authorized,
-                    Err(error) => {
-                        crate::ui_errln!("navigation controlled capture rejected: {error:?}");
-                        false
+            let authorized = full_screen_transition
+                .generation()
+                .is_some_and(|generation| {
+                    match full_screen_transition.take_controlled_capture(generation) {
+                        Ok(authorized) => authorized,
+                        Err(error) => {
+                            crate::ui_errln!("navigation controlled capture rejected: {error:?}");
+                            false
+                        }
                     }
-                }
-            });
+                });
             if authorized {
                 let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
                 slint_damage = damage;
                 slint_base_rendered = rendered;
-                navigation_controlled_capture_rendered = rendered;
+                full_screen_controlled_capture_rendered = rendered;
                 dirty
             } else {
                 None
             }
         } else if !full_screen_transition_policy_before_render.automatic_slint_raster {
-            if let Some(generation) = navigation_transition_generation {
+            if let Some(generation) = full_screen_transition.generation() {
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
@@ -6193,6 +6222,17 @@ pub(super) fn run_launcher_loop(
             };
             expanded
         };
+        if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation)
+            && full_screen_transition.state() == FullScreenTransitionState::CapturePending
+            && !full_screen_transition.policy().controlled_capture
+            && !full_screen_controlled_capture_rendered
+        {
+            orientation_transition.cancel();
+            release_full_screen_transition(
+                &mut full_screen_transition,
+                orientation_transition_generation,
+            );
+        }
         if startup_intro_prepare_live_launcher {
             startup_intro_launcher_frame_ready = true;
             print_startup_event(
@@ -6296,7 +6336,7 @@ pub(super) fn run_launcher_loop(
             if destination_committed && !navigation_transition.destination_ready() {
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && slint_base_rendered
-                    && navigation_controlled_capture_rendered;
+                    && full_screen_controlled_capture_rendered;
                 let mut destination_layers_ready =
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
@@ -6390,7 +6430,7 @@ pub(super) fn run_launcher_loop(
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
                 let completion = navigation_transition.complete();
                 if completion.is_some() {
-                    release_navigation_full_screen_transition(
+                    release_full_screen_transition(
                         &mut full_screen_transition,
                         navigation_transition_generation,
                     );
@@ -6531,7 +6571,9 @@ pub(super) fn run_launcher_loop(
                 .active_leg()
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
             custom_draw_trace.orientation_transition_effect = orientation_transition.effect().id();
-            if !orientation_transition.destination_ready() {
+            if !orientation_transition.destination_ready()
+                && full_screen_controlled_capture_rendered
+            {
                 let capture_started = Instant::now();
                 let destination_pmu =
                     mister_magik_perf_events::sampled_span(orientation_pmu_label(
@@ -6540,11 +6582,29 @@ pub(super) fn run_launcher_loop(
                         transition_to,
                         OrientationPmuPhase::Destination,
                     ));
-                let _ = orientation_transition
+                let captured = orientation_transition
                     .capture_destination(layer_target.presentation_frame_view().pixels());
                 drop(destination_pmu);
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
+                if captured {
+                    if let Some(generation) = orientation_transition_generation
+                        && let Err(error) = full_screen_transition.capture_completed(generation)
+                    {
+                        crate::ui_errln!("orientation snapshot lock rejected: {error:?}");
+                        orientation_transition.cancel();
+                        release_full_screen_transition(
+                            &mut full_screen_transition,
+                            orientation_transition_generation,
+                        );
+                    }
+                } else {
+                    orientation_transition.cancel();
+                    release_full_screen_transition(
+                        &mut full_screen_transition,
+                        orientation_transition_generation,
+                    );
+                }
             }
             if let Some((done, render_stats, transition_damage)) = orientation_transition
                 .render_into(layer_target.presentation_pixels_mut(), Instant::now())
@@ -6560,6 +6620,10 @@ pub(super) fn run_launcher_loop(
                 }
                 if done {
                     let _ = orientation_transition.take_completion();
+                    release_full_screen_transition(
+                        &mut full_screen_transition,
+                        orientation_transition_generation,
+                    );
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
                             nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
@@ -6982,17 +7046,26 @@ pub(super) fn run_launcher_loop(
             }
             if accepted_and_active_confirmed
                 && full_screen_transition_release_raster_rendered
-                && let Some(generation) = navigation_transition_generation
+                && let Some(generation) = full_screen_transition.generation()
             {
+                let owner = full_screen_transition.owner();
                 match full_screen_transition.live_frame_presented(generation) {
                     Ok(retained_redraw) => {
-                        navigation_transition_generation = None;
+                        match owner {
+                            Some(FullScreenTransitionOwner::Navigation) => {
+                                navigation_transition_generation = None;
+                            }
+                            Some(FullScreenTransitionOwner::Orientation) => {
+                                orientation_transition_generation = None;
+                            }
+                            _ => {}
+                        }
                         if retained_redraw {
                             request_launcher_redraw!();
                         }
                     }
                     Err(error) => {
-                        crate::ui_errln!("navigation live-frame confirmation rejected: {error:?}")
+                        crate::ui_errln!("full-screen live-frame confirmation rejected: {error:?}")
                     }
                 }
             }
@@ -7145,6 +7218,7 @@ pub(super) fn run_launcher_loop(
             scheduler.catalog_worker_running(),
         );
         if accepted_and_active_confirmed
+            && full_screen_transition.state() == FullScreenTransitionState::Live
             && let Some(record) = orientation_benchmark.note_confirmed_presentation(
                 nav.settings.screen_orientation,
                 frames,

@@ -350,6 +350,15 @@ impl OrientationTransitionRuntime {
         self.destination_ready
     }
 
+    pub fn cancel(&mut self) -> bool {
+        let was_active = self.active;
+        self.active = false;
+        self.destination_ready = false;
+        self.completion = None;
+        self.previous_levels_valid = false;
+        was_active
+    }
+
     pub const fn from(&self) -> ScreenOrientation {
         self.from
     }
@@ -1291,6 +1300,34 @@ mod tests {
             (runtime.source.capacity(), runtime.destination.capacity()),
             capacities
         );
+    }
+
+    #[test]
+    fn cancellation_clears_snapshot_playback_state() {
+        let start = Instant::now();
+        let source = [Rgb565Pixel(1); 12];
+        let destination = [Rgb565Pixel(2); 12];
+        let mut output = [Rgb565Pixel(0); 12];
+        let mut runtime = OrientationTransitionRuntime::new(4, 3);
+
+        assert!(runtime.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &source,
+            start,
+            false,
+        ));
+        assert!(runtime.capture_destination(&destination));
+        assert!(runtime.cancel());
+        assert!(!runtime.is_active());
+        assert!(!runtime.destination_ready());
+        assert!(
+            runtime
+                .render_into(&mut output, start + Duration::from_millis(750))
+                .is_none()
+        );
+        assert!(runtime.take_completion().is_none());
+        assert!(!runtime.cancel());
     }
 
     #[test]
