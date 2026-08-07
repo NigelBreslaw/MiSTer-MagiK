@@ -6440,7 +6440,7 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
 const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
-const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 8;
+const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 24;
 
 fn qualify_installed_orientation_transitions(
     config: &NativeDeviceConfig,
