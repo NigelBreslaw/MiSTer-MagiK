@@ -590,7 +590,22 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_streamline(config, output_dir))
+        self.benchmark_profile(|config| {
+            profile_installed_streamline(config, output_dir, StreamlineWorkload::Screensaver)
+        })
+    }
+
+    pub(crate) fn profile_orientation_transition_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_streamline(
+                config,
+                output_dir,
+                StreamlineWorkload::OrientationTransitions,
+            )
+        })
     }
 
     pub(crate) fn verify_search_ui(
@@ -4718,7 +4733,26 @@ const STREAMLINE_REMOTE_APC: &str = "/tmp/mister-magik/streamline-capture/mister
 const STREAMLINE_REMOTE_ARCHIVE: &str =
     "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
 
-fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamlineWorkload {
+    Screensaver,
+    OrientationTransitions,
+}
+
+impl StreamlineWorkload {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Screensaver => "pmu-profile screensaver",
+            Self::OrientationTransitions => "orientation-transitions",
+        }
+    }
+}
+
+fn profile_installed_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    workload: StreamlineWorkload,
+) -> Result<String> {
     let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
     let gatord_metadata = fs::metadata(&gatord)?;
     if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
@@ -4741,6 +4775,7 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "prepare Streamline capture",
         &streamline_prepare_command(),
     )?;
+    let mut launcher_suspended = false;
     let run_result = (|| -> Result<(String, String)> {
         put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
         let version = exec(
@@ -4752,12 +4787,41 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
             true,
         )?;
         let gatord_version = parse_gatord_version(&version)?;
-        let output = exec(&session, &streamline_capture_command(), true)?;
+        if workload == StreamlineWorkload::OrientationTransitions {
+            exec_checked(
+                &session,
+                "suspend ordinary launcher for orientation Streamline capture",
+                &acknowledged_main_command("mister_magik_suspend"),
+            )?;
+            launcher_suspended = true;
+        }
+        let output = exec(&session, &streamline_capture_command(workload), true)?;
         let mut capture_log = output.stdout.clone();
         capture_log.push_str(&output.stderr);
         fs::write(output_dir.join("gatord.log"), &capture_log)?;
         if let Some(message) = exec_failure_message("bounded Streamline capture", &output) {
             return Err(message.into());
+        }
+        if workload == StreamlineWorkload::OrientationTransitions {
+            let completion = remote_read(
+                &session,
+                &format!("{STREAMLINE_REMOTE_ROOT}/orientation/completion.json"),
+            )
+            .ok_or("orientation Streamline route completion is missing")?;
+            let completion_value: Value = serde_json::from_str(completion.trim())?;
+            if completion_value.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-orientation-transitions-v1")
+                || completion_value.get("state").and_then(Value::as_str) != Some("complete")
+                || completion_value
+                    .get("records")
+                    .and_then(Value::as_array)
+                    .is_none_or(|records| records.len() != 6)
+            {
+                return Err(
+                    "orientation Streamline workload did not complete the fixed route".into(),
+                );
+            }
+            fs::write(output_dir.join("completion.json"), completion)?;
         }
         exec_checked(
             &session,
@@ -4789,8 +4853,33 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "clean Streamline capture",
         &streamline_cleanup_command(),
     );
-    cleanup_result?;
-    let (gatord_version, archive_sha256) = run_result?;
+    let restore_result = if launcher_suspended {
+        exec_checked(
+            &session,
+            "restore ordinary launcher after orientation Streamline capture",
+            &acknowledged_main_command("mister_magik_resume"),
+        )
+        .and_then(|()| {
+            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45)).map(|_| ())
+        })
+    } else {
+        Ok(())
+    };
+    let (gatord_version, archive_sha256) = match (run_result, cleanup_result, restore_result) {
+        (Ok(result), Ok(()), Ok(())) => result,
+        (Err(run), Ok(()), Ok(())) => return Err(run),
+        (Ok(_), Err(cleanup), Ok(())) => return Err(cleanup),
+        (Ok(_), Ok(()), Err(restore)) => return Err(restore),
+        (run, cleanup, restore) => {
+            return Err(format!(
+                "Streamline capture failed: run={:?}; cleanup={:?}; restore={:?}",
+                run.err().map(|error| error.to_string()),
+                cleanup.err().map(|error| error.to_string()),
+                restore.err().map(|error| error.to_string()),
+            )
+            .into());
+        }
+    };
 
     let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable after Streamline capture")?;
@@ -4810,7 +4899,7 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "archive_sha256": archive_sha256,
         "capture": "mister-magik.apc",
         "archive": "mister-magik.apc.tar.gz",
-        "workload": "pmu-profile screensaver",
+        "workload": workload.label(),
         "max_duration_seconds": 10,
         "sample_rate": "low",
         "exclude_kernel": false,
@@ -4854,11 +4943,30 @@ fn streamline_prepare_command() -> String {
     )
 }
 
-fn streamline_capture_command() -> String {
+fn streamline_capture_command(workload: StreamlineWorkload) -> String {
+    let app = match workload {
+        StreamlineWorkload::Screensaver => {
+            "/media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver".to_string()
+        }
+        StreamlineWorkload::OrientationTransitions => format!(
+            "MISTER_CATALOG_REFRESH=off MISTER_ORIENTATION_TRANSITIONS_BENCHMARK=1 MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR={evidence} {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app /media/fat/mister-magik-dev/mister-magik-fb ui launcher 0",
+            evidence = sh(&format!("{STREAMLINE_REMOTE_ROOT}/orientation")),
+            gatord = sh(STREAMLINE_REMOTE_GATORD),
+            apc = sh(STREAMLINE_REMOTE_APC),
+        ),
+    };
+    let invocation = if workload == StreamlineWorkload::Screensaver {
+        format!(
+            "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app {app}",
+            gatord = sh(STREAMLINE_REMOTE_GATORD),
+            apc = sh(STREAMLINE_REMOTE_APC),
+        )
+    } else {
+        app
+    };
     format!(
-        "set +e; {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app /media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
-        gatord = sh(STREAMLINE_REMOTE_GATORD),
-        apc = sh(STREAMLINE_REMOTE_APC),
+        "set +e; {invocation} & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
+        invocation = invocation,
         pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
     )
 }
@@ -13916,7 +14024,7 @@ mod tests {
 
     #[test]
     fn streamline_capture_is_fixed_bounded_and_pmuv1_compatible() {
-        let command = streamline_capture_command();
+        let command = streamline_capture_command(StreamlineWorkload::Screensaver);
         assert!(command.contains("--max-duration 10"));
         assert!(command.contains("--sample-rate low"));
         assert!(command.contains("--system-wide no"));
@@ -13925,6 +14033,18 @@ mod tests {
         assert!(command.contains("--stop-on-exit yes"));
         assert!(command.ends_with("exit \"$rc\""));
         assert!(command.contains("pmu-profile screensaver"));
+    }
+
+    #[test]
+    fn orientation_streamline_runs_the_exact_installed_launcher_route() {
+        let command = streamline_capture_command(StreamlineWorkload::OrientationTransitions);
+        assert!(command.contains("--max-duration 10"));
+        assert!(command.contains("--stop-on-exit yes"));
+        assert!(command.contains("--exclude-kernel no"));
+        assert!(command.contains("MISTER_CATALOG_REFRESH=off"));
+        assert!(command.contains("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK=1"));
+        assert!(command.contains("/media/fat/mister-magik-dev/mister-magik-fb ui launcher 0"));
+        assert!(!command.contains("pmu-profile screensaver"));
     }
 
     #[test]

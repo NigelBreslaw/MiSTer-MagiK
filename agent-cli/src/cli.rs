@@ -697,6 +697,7 @@ mod tests {
             "navigation-transitions",
             "orientation-transitions",
             "orientation-transitions-profile",
+            "orientation-transitions-streamline",
             "pmu-profile",
             "launch-return",
             "launch-return-fallback",

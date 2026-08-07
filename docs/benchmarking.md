@@ -25,6 +25,8 @@ Supported scenarios:
 - `modal-input`
 - `navigation-transitions`
 - `orientation-transitions`
+- `orientation-transitions-profile`
+- `orientation-transitions-streamline`
 - `pmu-profile`
 - `search`
 
@@ -61,6 +63,15 @@ and its exact `MiSTer.ini`, and restores the ordinary launcher while verifying
 the settings hash, boot identity, and installed manifest.
 Evidence is written below
 `build/agent-benchmarks/orientation-transitions/<timestamp>/`.
+
+`orientation-transitions-profile` runs isolated bounded pprof and PMU passes
+over that same route. `orientation-transitions-streamline` runs the exact
+installed Dev launcher and fixed route under the existing ten-second gator
+capture contract. These instrumented scenarios provide attribution only and do
+not qualify cadence. The Streamline scenario requires a user-supplied audited
+ARMv7 hard-float daemon through `MISTER_GATORD_PATH`; it never downloads or
+redistributes one. Both scenarios retain the confirmed 1280×720/60 Hz mode and
+restore the ordinary launcher.
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
