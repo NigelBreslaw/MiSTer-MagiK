@@ -32,7 +32,7 @@ component SearchKeyboardRow inherits Rectangle {
     height: 42px;
     background: transparent;
 
-    if !MisterUi.portrait-layout : HorizontalLayout {
+    HorizontalLayout {
         spacing: 6px;
 
         for key-offset in root.key-count: SearchKey {
@@ -43,35 +43,6 @@ component SearchKeyboardRow inherits Rectangle {
         }
     }
 
-    if MisterUi.portrait-layout : Rectangle {
-        if !MisterBridge.arcade-search-active : Rectangle {
-            x: MisterBridge.arcade-preview-box-x * 1px;
-            y: MisterBridge.arcade-preview-box-y * 1px;
-            width: MisterBridge.arcade-preview-box-width * 1px;
-            height: MisterBridge.arcade-preview-box-height * 1px;
-            background: black;
-            border-width: 1px;
-            border-color: #352848;
-        }
-
-        Rectangle {
-            x: MisterBridge.arcade-list-x * 1px;
-            y: MisterBridge.arcade-list-y * 1px;
-            width: MisterBridge.arcade-list-width * 1px;
-            height: MisterBridge.arcade-list-height * 1px;
-            background: #120d1a;
-            border-width: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? 2px : 1px;
-            border-color: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
-            clip: true;
-        }
-
-        if MisterBridge.arcade-search-active : SearchKeyboard {
-            x: 0px;
-            y: MisterBridge.arcade-list-y * 1px + MisterBridge.arcade-list-height * 1px + 8px;
-            width: parent.width;
-            height: parent.height - self.y;
-        }
-    }
 }
 
 component SearchKeyboard inherits Rectangle {
@@ -163,7 +134,7 @@ export component ArcadeListScreen inherits Rectangle {
     property <bool> games-loading: MisterBridge.arcade-games-loading;
     background: #1a1424;
 
-    HorizontalLayout {
+    if !MisterUi.portrait-layout : HorizontalLayout {
 
         // Left half - scrollable game list or search keyboard
         Rectangle {
@@ -261,6 +232,44 @@ export component ArcadeListScreen inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    if MisterUi.portrait-layout : Rectangle {
+        if MisterBridge.arcade-search-active : Rectangle {
+            x: 0px;
+            y: 0px;
+            width: parent.width;
+            height: parent.height;
+            background: #1a1424;
+        }
+
+        if !MisterBridge.arcade-search-active : Rectangle {
+            x: MisterBridge.arcade-preview-box-x * 1px;
+            y: MisterBridge.arcade-preview-box-y * 1px;
+            width: MisterBridge.arcade-preview-box-width * 1px;
+            height: MisterBridge.arcade-preview-box-height * 1px;
+            background: black;
+            border-width: 1px;
+            border-color: #352848;
+        }
+
+        Rectangle {
+            x: MisterBridge.arcade-list-x * 1px;
+            y: MisterBridge.arcade-list-y * 1px;
+            width: MisterBridge.arcade-list-width * 1px;
+            height: MisterBridge.arcade-list-height * 1px;
+            background: #120d1a;
+            border-width: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? 2px : 1px;
+            border-color: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
+            clip: true;
+        }
+
+        if MisterBridge.arcade-search-active : SearchKeyboard {
+            x: 0px;
+            y: MisterBridge.arcade-list-y * 1px + MisterBridge.arcade-list-height * 1px + 8px;
+            width: parent.width;
+            height: parent.height - self.y;
         }
     }
 

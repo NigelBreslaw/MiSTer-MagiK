@@ -159,7 +159,7 @@ impl MagikScene {
         config: ParticleConfig,
         options: MagikSceneOptions,
     ) -> Result<Self, String> {
-        let mask = magik_target_mask()?;
+        let mask = magik_target_mask()?.fit_within(config.width, config.height)?;
         Self::new(config, mask, options)
     }
 
@@ -202,7 +202,7 @@ impl MagikScene {
         recipe: MagikRecipe,
         options: MagikSceneOptions,
     ) -> Result<Self, String> {
-        let mask = magik_target_mask()?;
+        let mask = magik_target_mask()?.fit_within(width, height)?;
         Self::from_engine(
             ParticleEngine::from_recipe(width, height, preset, recipe, mask)?,
             options,
@@ -218,7 +218,7 @@ impl MagikScene {
         preset: ParticlePreset,
         recipe: MagikRecipe,
     ) -> Result<Self, String> {
-        let mask = magik_target_mask()?;
+        let mask = magik_target_mask()?.fit_within(width, height)?;
         Self::from_engine(
             ParticleEngine::from_recipe(width, height, preset, recipe, mask)?,
             MagikSceneOptions::default(),

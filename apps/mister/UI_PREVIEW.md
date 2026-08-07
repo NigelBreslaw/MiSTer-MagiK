@@ -150,10 +150,17 @@ The capture path must not already exist:
 ```bash
 apps/mister/scripts/dev-ui-mac.sh \
   --scenario arcade \
+  --orientation monitor-clockwise \
   --refresh-rate 120 \
   --frame 12 \
   --output /tmp/mister-magik-arcade.ppm
 ```
+
+Use `--orientation normal`, `--orientation monitor-clockwise`, or
+`--orientation monitor-counterclockwise` to exercise the launcher geometry for
+the corresponding physical monitor mounting. Portrait captures retain the
+landscape composition dimensions sent to the display; rotate the captured image
+in the mounting direction when reviewing it on an unrotated monitor.
 
 Useful capture scenarios include `home`, `arcade`, `settings`,
 `arcade-crossfade`, `controller-setup`, `catalog-scan`, `particle`, and

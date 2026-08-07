@@ -5233,6 +5233,7 @@ pub(super) fn run_launcher_loop(
         let preview_presentation_state = preview.presentation_state();
         let wants_preview = preview_route.allows_preview_work()
             && !screensaver.active
+            && !nav.arcade_search.is_active(&nav.arcade_filter.active)
             && direct_preview_requested(
                 nav.screen,
                 memory_guard.active(),
@@ -5988,20 +5989,18 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let (raw_preview, preview_transition_trace) = if preview_route.allows_preview_work()
-            && composition_decision.allow_preview_blit
-            && !memory_guard.active()
-        {
-            layer_target.blit_raw_preview_if_needed(
-                &mut preview,
-                &mut preview_transition,
-                loop_start.duration_since(run_start),
-                this_rect,
-                full_frame_present,
-            )
-        } else {
-            (None, PreviewTransitionTrace::default())
-        };
+        let (raw_preview, preview_transition_trace) =
+            if wants_preview && composition_decision.allow_preview_blit && !memory_guard.active() {
+                layer_target.blit_raw_preview_if_needed(
+                    &mut preview,
+                    &mut preview_transition,
+                    loop_start.duration_since(run_start),
+                    this_rect,
+                    full_frame_present,
+                )
+            } else {
+                (None, PreviewTransitionTrace::default())
+            };
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             request_launcher_redraw!();

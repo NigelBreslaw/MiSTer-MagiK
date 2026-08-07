@@ -12,7 +12,7 @@ export component HomeGrid inherits Rectangle {
     property <length> narrow-tile-width: 191px;
     property <length> tile-gap: 16px;
     property <length> tile-width: root-menu
-        ? (system-viewport.width - 3 * tile-gap) / 4
+        ? (root.width - 36px - 3 * tile-gap) / 4
         : narrow-tile-width;
     property <length> tile-pitch: tile-width + tile-gap;
     property <int> layout-item-count: root-menu ? Math.max(4, MisterBridge.menu-items.length)
@@ -183,7 +183,7 @@ export component HomeGrid inherits Rectangle {
             clip: true;
             background: transparent;
             property <length> gap: 12px;
-            property <length> card-height: (height - gap * 3.5) / 4.5;
+            property <length> card-height: (self.height - gap * 3.5) / 4.5;
             property <length> pitch: card-height + gap;
             property <int> first-row: (MisterBridge.selected-index - 2).clamp(
                 0, (MisterBridge.menu-items.length - 5).max(0));

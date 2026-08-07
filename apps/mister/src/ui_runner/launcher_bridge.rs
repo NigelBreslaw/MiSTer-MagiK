@@ -343,6 +343,8 @@ pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeLi
         crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation)
             .content_rect()
             .bottom()
+    } else if nav.uses_portrait_layout() && search {
+        geometry.y + ui.render_w() * 34 / 100 + 16
     } else if nav.uses_portrait_layout() {
         ui.render_w()
     } else {

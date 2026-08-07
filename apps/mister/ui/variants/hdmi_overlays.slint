@@ -195,16 +195,20 @@ component CompactDialogButton inherits Rectangle {
 
 export component ConfirmDialog inherits Rectangle {
     property <bool> compact: MisterUi.window-height <= 288;
+    property <bool> portrait: MisterUi.portrait-layout;
+    property <bool> condensed: compact || portrait;
     background: #000000b0;
 
     Rectangle {
-        width: root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
-        height: root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
+        width: root.portrait ? (MisterUi.window-width - 24) * 1px
+            : root.compact ? (MisterUi.window-width - 16) * 1px : 680px;
+        height: root.portrait ? 250px
+            : root.compact ? (MisterUi.window-height - 12) * 1px : 260px;
         background: #0e0c14;
-        border-width: root.compact ? 2px : 4px;
+        border-width: root.condensed ? 2px : 4px;
         border-color: #06d6a0;
 
-        if !root.compact : VerticalLayout {
+        if !root.condensed : VerticalLayout {
             padding: 24px;
             spacing: 18px;
 
@@ -242,7 +246,7 @@ export component ConfirmDialog inherits Rectangle {
             }
         }
 
-        if root.compact : VerticalLayout {
+        if root.condensed : VerticalLayout {
             padding: 10px;
             spacing: 8px;
 

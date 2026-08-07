@@ -16,8 +16,8 @@ mod macos {
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
-        ArcadeSearchPane, ArcadeSearchStatus, LauncherAction, LauncherEvent, LauncherNav,
-        NavigationTransitionState, Screen,
+        ArcadeSearchPane, LauncherAction, LauncherEvent, LauncherNav, NavigationTransitionState,
+        Screen,
     };
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::launcher_runtime::catalog::{
@@ -600,6 +600,12 @@ mod macos {
             } else {
                 self.update_selection();
             }
+            self.sync_orientation_geometry();
+            self.arcade_layer.configure_for_display(
+                &self.display_profile.display(),
+                self.orientation,
+                matches!(scenario, Scenario::ArcadeSearch),
+            );
             if let Some(window) = self.native_window.as_ref() {
                 window.set_title(&self.window_title());
                 window.request_redraw();
@@ -657,7 +663,7 @@ mod macos {
             bridge.set_licenses_selected(self.selection as i32);
             bridge.set_screensaver_settings_selected(self.selection as i32);
             bridge.set_confirm_selected(self.selection.min(1) as i32);
-            if self.scenario == Scenario::Arcade {
+            if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeSearch) {
                 let games = self
                     .catalog
                     .games
@@ -764,8 +770,13 @@ mod macos {
                         Scenario::ArcadeSearch => {
                             self.launcher_nav.arcade_filter.active = ArcadeFilter::Search;
                             self.launcher_nav.arcade_search.query = "PAC".into();
-                            self.launcher_nav.arcade_search.suggestion = "PAC-MAN".into();
-                            self.launcher_nav.arcade_search.status = ArcadeSearchStatus::Ready;
+                            let collection_id = self
+                                .launcher_nav
+                                .active_collection_id()
+                                .unwrap_or(MENU_ARCADE_SYSTEM_ID)
+                                .to_owned();
+                            self.launcher_nav
+                                .refresh_arcade_search_if_active(&self.catalog, &collection_id);
                             self.launcher_nav.arcade_search.selected_key = 15;
                             self.launcher_nav.arcade_search.pane = ArcadeSearchPane::Keyboard;
                         }
@@ -1040,7 +1051,19 @@ mod macos {
 
         fn finish_navigation_tick(&mut self) {
             let previous = self.scenario;
-            self.scenario = Scenario::from_screen(self.launcher_nav.screen);
+            self.scenario = match (previous, self.launcher_nav.screen) {
+                (Scenario::ArcadeSearch, Screen::Arcade)
+                    if self
+                        .launcher_nav
+                        .arcade_search
+                        .is_active(&self.launcher_nav.arcade_filter.active) =>
+                {
+                    Scenario::ArcadeSearch
+                }
+                (Scenario::ArcadeCrossfade, Screen::Arcade) => Scenario::ArcadeCrossfade,
+                (Scenario::ControllerSetup, Screen::Controller) => Scenario::ControllerSetup,
+                _ => Scenario::from_screen(self.launcher_nav.screen),
+            };
             self.sync_launcher_navigation();
             self.sync_navigation_transition_active();
             if self.scenario != previous
@@ -1174,6 +1197,7 @@ mod macos {
                 &fixture_games,
                 self.launcher_nav.arcade.selected,
             );
+            self.sync_orientation_geometry();
             self.request_selected_preview();
             self.slint_window.request_redraw();
         }
@@ -1194,7 +1218,7 @@ mod macos {
                     FramebufferTargetGeometry::new(self.frame_width, self.frame_height),
                 );
             });
-            if self.scenario == Scenario::Arcade {
+            if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeSearch) {
                 let games = self
                     .launcher_nav
                     .active_collection_id()
@@ -1210,53 +1234,55 @@ mod macos {
                     self.launcher_nav.arcade.visual_index,
                     true,
                 );
-                let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
-                let current = self
-                    .preview_current_index
-                    .or(Some(self.launcher_nav.arcade.selected))
-                    .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
-                    .and_then(|game| {
-                        preview_screenshot(
-                            game,
-                            &self.loaded_screenshots,
-                            &self.fixture_screenshots,
-                            use_fixtures,
-                        )
-                    })
-                    .or_else(|| {
-                        use_fixtures
-                            .then(|| self.fixture_screenshots.first())
-                            .flatten()
-                    });
-                let previous = self
-                    .preview_previous_index
-                    .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
-                    .and_then(|game| {
-                        preview_screenshot(
-                            game,
-                            &self.loaded_screenshots,
-                            &self.fixture_screenshots,
-                            use_fixtures,
-                        )
-                    });
-                if let Some(current) = current {
-                    let transition = self.preview_transition.update(
-                        Some(self.preview_transition_id),
-                        previous.is_some(),
-                        (),
-                        self.preview_transition_duration,
-                        self.fixed_time.get(),
-                    );
-                    self.preview_compositor.compose(
-                        self.frame_target.cached_565_mut(),
-                        self.frame_width,
-                        self.frame_height,
-                        hdmi_preview_rect(self.frame_width, self.frame_height),
-                        previous.map(fixture_preview_frame),
-                        fixture_preview_frame(current),
-                        transition.progress,
-                        PreviewSurface::full(self.frame_width),
-                    );
+                if self.scenario == Scenario::Arcade && !self.display_profile.is_crt() {
+                    let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
+                    let current = self
+                        .preview_current_index
+                        .or(Some(self.launcher_nav.arcade.selected))
+                        .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
+                        .and_then(|game| {
+                            preview_screenshot(
+                                game,
+                                &self.loaded_screenshots,
+                                &self.fixture_screenshots,
+                                use_fixtures,
+                            )
+                        })
+                        .or_else(|| {
+                            use_fixtures
+                                .then(|| self.fixture_screenshots.first())
+                                .flatten()
+                        });
+                    let previous = self
+                        .preview_previous_index
+                        .and_then(|index| preview_game(&self.launcher_nav, &self.catalog, index))
+                        .and_then(|game| {
+                            preview_screenshot(
+                                game,
+                                &self.loaded_screenshots,
+                                &self.fixture_screenshots,
+                                use_fixtures,
+                            )
+                        });
+                    if let Some(current) = current {
+                        let transition = self.preview_transition.update(
+                            Some(self.preview_transition_id),
+                            previous.is_some(),
+                            (),
+                            self.preview_transition_duration,
+                            self.fixed_time.get(),
+                        );
+                        self.preview_compositor.compose(
+                            self.frame_target.cached_565_mut(),
+                            self.frame_width,
+                            self.frame_height,
+                            hdmi_preview_rect(self.frame_width, self.frame_height),
+                            previous.map(fixture_preview_frame),
+                            fixture_preview_frame(current),
+                            transition.progress,
+                            PreviewSurface::full(self.frame_width),
+                        );
+                    }
                 }
             } else if self.scenario == Scenario::ParticleScreensaver {
                 if self.particle_renderer.is_none() {

@@ -6,6 +6,7 @@
 use crate::arcade_catalog::ArcadeGameView;
 use crate::arcade_list_renderer::{ArcadeListGeometry, ArcadeListRenderer, ArcadeListUpdate};
 use crate::framebuffer::target::{DirtyRect, UiFrameTarget, blend_565};
+use crate::ui_display::{CrtUiMetrics, ScreenOrientation, UiDisplay, UiLayoutGeometry};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
 
@@ -16,14 +17,52 @@ pub struct ArcadeVisualLayer {
 impl ArcadeVisualLayer {
     pub fn new(frame_width: usize, frame_height: usize) -> Self {
         let mut renderer = ArcadeListRenderer::new();
-        let mut geometry = if frame_height > frame_width {
-            ArcadeListGeometry::portrait(frame_width, frame_height, false)
-        } else {
-            ArcadeListGeometry::NORMAL
-        };
+        let mut geometry = Self::geometry(frame_width, frame_height, false);
         geometry.width = geometry.width.min(frame_width.saturating_sub(geometry.x));
         renderer.set_geometry_for_render_h(geometry, frame_height);
         Self { renderer }
+    }
+
+    pub fn configure(&mut self, frame_width: usize, frame_height: usize, search: bool) {
+        let mut geometry = Self::geometry(frame_width, frame_height, search);
+        geometry.width = geometry.width.min(frame_width.saturating_sub(geometry.x));
+        let render_height = if frame_height > frame_width && search {
+            geometry.y + frame_height * 34 / 100 + 16
+        } else {
+            frame_height
+        };
+        self.renderer
+            .set_geometry_for_render_h(geometry, render_height);
+    }
+
+    pub fn configure_for_display(
+        &mut self,
+        display: &UiDisplay,
+        orientation: ScreenOrientation,
+        search: bool,
+    ) {
+        if !display.direct_video() {
+            let layout = UiLayoutGeometry::for_display(display, orientation);
+            self.configure(layout.logical_w(), layout.logical_h(), search);
+            return;
+        }
+
+        let layout = UiLayoutGeometry::for_display(display, orientation);
+        let metrics = CrtUiMetrics::for_display(display);
+        self.renderer = ArcadeListRenderer::new_for_crt_display(metrics, display);
+        let geometry = ArcadeListGeometry::crt_for_content(layout.content_rect(), metrics, search);
+        self.renderer
+            .set_geometry_for_render_h(geometry, layout.content_rect().bottom());
+    }
+
+    fn geometry(frame_width: usize, frame_height: usize, search: bool) -> ArcadeListGeometry {
+        if frame_height > frame_width {
+            ArcadeListGeometry::portrait(frame_width, frame_height, search)
+        } else if search {
+            ArcadeListGeometry::search_for_render_w(frame_width)
+        } else {
+            ArcadeListGeometry::NORMAL
+        }
     }
 
     pub fn compose(

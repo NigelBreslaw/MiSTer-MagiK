@@ -43,7 +43,9 @@ export component CrtHeader inherits Rectangle {
                 text: root.title;
                 font-family: MisterUi.crt-font-family;
                 color: CrtTheme.text;
-                size: MisterUi.crt-heading-font;
+                size: MisterUi.portrait-layout && MisterUi.window-width < 400
+                    ? PixelTextSize.px8
+                    : MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-heading-font;
                 overflow: elide;
             }
 
@@ -60,7 +62,7 @@ export component CrtHeader inherits Rectangle {
             text: root.status;
             font-family: MisterUi.crt-font-family;
             color: CrtTheme.text;
-            size: MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -85,7 +87,7 @@ export component CrtFooter inherits Rectangle {
             text: root.left-hint;
             font-family: MisterUi.crt-font-family;
             color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
             horizontal-stretch: 1;
         }
 
@@ -93,7 +95,7 @@ export component CrtFooter inherits Rectangle {
             text: root.right-hint;
             font-family: MisterUi.crt-font-family;
             color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -164,11 +166,11 @@ export component CrtCard inherits Rectangle {
         cross-axis-alignment: center;
 
         PixelText8 {
-            width: MisterUi.card-title-font;
+            width: MisterUi.portrait-layout ? MisterUi.body-font : MisterUi.card-title-font;
             text: root.focused && root.show-marker ? ">" : "";
             font-family: MisterUi.crt-font-family;
             color: CrtTheme.accent-text;
-            size: MisterUi.crt-card-title-font;
+            size: MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-card-title-font;
             vertical-alignment: center;
         }
 
@@ -185,7 +187,7 @@ export component CrtCard inherits Rectangle {
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.text;
-                size: MisterUi.crt-card-title-font;
+                size: MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-card-title-font;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -198,7 +200,7 @@ export component CrtCard inherits Rectangle {
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.muted;
-                size: MisterUi.crt-card-detail-font;
+                size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-card-detail-font;
                 overflow: elide;
                 vertical-alignment: center;
             }

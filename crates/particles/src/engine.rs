@@ -158,6 +158,24 @@ impl TargetMask {
     pub fn points(&self) -> &[ParticleTarget] {
         &self.points
     }
+
+    pub fn fit_within(mut self, max_width: usize, max_height: usize) -> Result<Self, String> {
+        if max_width == 0 || max_height == 0 {
+            return Err("particle target viewport dimensions must be nonzero".into());
+        }
+        if self.width <= max_width && self.height <= max_height {
+            return Ok(self);
+        }
+        let scale = (max_width as f32 / self.width as f32)
+            .min(max_height as f32 / self.height as f32);
+        self.width = ((self.width as f32 * scale).floor() as usize).max(1);
+        self.height = ((self.height as f32 * scale).floor() as usize).max(1);
+        for point in &mut self.points {
+            point.x *= scale;
+            point.y *= scale;
+        }
+        Ok(self)
+    }
 }
 
 pub fn magik_target_mask() -> Result<TargetMask, String> {
@@ -1380,6 +1398,22 @@ mod tests {
                 ParticleTarget { x: 0.0, y: 2.0 },
                 ParticleTarget { x: 2.0, y: 2.0 },
             ]
+        );
+    }
+
+    #[test]
+    fn target_mask_scales_down_to_fit_portrait_viewports() {
+        let fitted = TargetMask::from_alpha(8, 4, 8, &[255; 32], 128, 2)
+            .unwrap()
+            .fit_within(4, 8)
+            .unwrap();
+
+        assert_eq!((fitted.width(), fitted.height()), (4, 2));
+        assert!(
+            fitted
+                .points()
+                .iter()
+                .all(|point| point.x < 4.0 && point.y < 2.0)
         );
     }
 

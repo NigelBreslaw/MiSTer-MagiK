@@ -50,8 +50,10 @@ export component SetupOverlay inherits Rectangle {
         PixelText8 {
             text: title;
             color: #e8e0f0;
-            size: PixelTextSize.px24;
+            size: MisterUi.portrait-layout ? PixelTextSize.px16 : PixelTextSize.px24;
             horizontal-alignment: center;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
         }
 
         if phase != 4 && phase != 5 : PixelText8 {
