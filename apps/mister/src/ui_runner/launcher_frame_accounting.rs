@@ -947,6 +947,7 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) navigation_status_quiesce_timeout: bool,
     pub(super) orientation_transition_active: bool,
     pub(super) orientation_transition_leg: u8,
+    pub(super) orientation_transition_effect: &'static str,
     pub(super) orientation_transition_from: &'static str,
     pub(super) orientation_transition_to: &'static str,
     pub(super) orientation_transition_destination_capture_us: u128,
@@ -1891,6 +1892,9 @@ impl LauncherFrameAccounting {
                     .custom_draw_trace
                     .orientation_transition_active,
                 orientation_transition_leg: frame.custom_draw_trace.orientation_transition_leg,
+                orientation_transition_effect: frame
+                    .custom_draw_trace
+                    .orientation_transition_effect,
                 orientation_transition_from: frame.custom_draw_trace.orientation_transition_from,
                 orientation_transition_to: frame.custom_draw_trace.orientation_transition_to,
                 orientation_transition_destination_capture_us: u128_to_u64_saturating(

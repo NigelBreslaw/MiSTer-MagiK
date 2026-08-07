@@ -66,6 +66,7 @@ fn write_orientation_transition_benchmark_completion(
         .map(|record| {
             serde_json::json!({
                 "leg": record.leg.index + 1,
+                "effect": record.leg.effect.id(),
                 "label": record.leg.label(),
                 "from": record.leg.from.id(),
                 "to": record.leg.to.id(),
@@ -84,6 +85,10 @@ fn write_orientation_transition_benchmark_completion(
         "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
             .iter()
             .map(|orientation| orientation.id())
+            .collect::<Vec<_>>(),
+        "effects": ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
+            .iter()
+            .map(|effect| effect.id())
             .collect::<Vec<_>>(),
         "records": records,
     });
@@ -114,6 +119,10 @@ fn write_orientation_transition_pmu_completion() -> std::io::Result<()> {
         "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
             .iter()
             .map(|orientation| orientation.id())
+            .collect::<Vec<_>>(),
+        "effects": ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
+            .iter()
+            .map(|effect| effect.id())
             .collect::<Vec<_>>(),
         "profile": profile,
     });
@@ -3114,6 +3123,10 @@ pub(super) fn run_launcher_loop(
             && let Some(leg) =
                 orientation_benchmark.take_next_leg(nav.settings.screen_orientation, frames)
         {
+            if !orientation_transition.set_effect(leg.effect) {
+                orientation_benchmark.fail("benchmark-effect-changed-during-transition");
+                continue;
+            }
             let animated = begin_orientation_transition(
                 &app,
                 window,
@@ -3139,8 +3152,9 @@ pub(super) fn run_launcher_loop(
                     start,
                     "orientation_transition_benchmark_leg_started",
                     format!(
-                        "leg={} label={} from={} to={} frame={frames}",
+                        "leg={} effect={} label={} from={} to={} frame={frames}",
                         leg.index + 1,
+                        leg.effect.id(),
                         leg.label(),
                         leg.from.id(),
                         leg.to.id(),
@@ -6406,10 +6420,12 @@ pub(super) fn run_launcher_loop(
             custom_draw_trace.orientation_transition_leg = orientation_benchmark
                 .active_leg()
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
+            custom_draw_trace.orientation_transition_effect = orientation_transition.effect().id();
             if !orientation_transition.destination_ready() {
                 let capture_started = Instant::now();
                 let destination_pmu =
                     mister_magik_perf_events::sampled_span(orientation_pmu_label(
+                        orientation_transition.effect(),
                         transition_from,
                         transition_to,
                         OrientationPmuPhase::Destination,
@@ -6420,20 +6436,10 @@ pub(super) fn run_launcher_loop(
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
             }
-            if let Some((pixels, done, render_stats)) =
-                orientation_transition.render(Instant::now())
+            if let Some((done, render_stats)) = orientation_transition
+                .render_into(layer_target.presentation_pixels_mut(), Instant::now())
             {
                 custom_draw_trace.orientation_transition_stats = render_stats;
-                let restore_started = Instant::now();
-                let restore_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                    transition_from,
-                    transition_to,
-                    OrientationPmuPhase::CacheRestore,
-                ));
-                let _ = layer_target.restore_presentation_cached(pixels);
-                drop(restore_pmu);
-                custom_draw_trace.orientation_transition_cache_restore_us =
-                    restore_started.elapsed().as_micros();
                 cached_damage = DirtyRectList::from_one(DirtyRect {
                     x0: 0,
                     y0: 0,
@@ -7022,10 +7028,11 @@ pub(super) fn run_launcher_loop(
                 "orientation_transition_benchmark_leg_completed",
                 format!(
                     concat!(
-                        "leg={} label={} from={} to={} start_frame={} ",
+                        "leg={} effect={} label={} from={} to={} start_frame={} ",
                         "rendered_endpoint_frame={} presented_endpoint_frame={} sequence={}"
                     ),
                     record.leg.index + 1,
+                    record.leg.effect.id(),
                     record.leg.label(),
                     record.leg.from.id(),
                     record.leg.to.id(),

@@ -52,7 +52,8 @@ ordinary launcher. Evidence is written below
 
 `orientation-transitions` runs the real Settings view at 1280×720/60 Hz through
 Normal → Clockwise → Counterclockwise → Normal → Counterclockwise → Clockwise
-→ Normal. Each endpoint must complete a physical hidden-slot presentation
+→ Normal once with the brightness-fade wave and once with the center-pixel zoom
+wave. Each endpoint must complete a physical hidden-slot presentation
 before the next leg starts. Every leg independently requires zero protocol-v5
 repeated-vblank drops, zero latch drops and sequence gaps, continuous accepted
 hidden-slot presentation, at least 59.9 physical FPS, whole-frame work P99 below
@@ -65,7 +66,7 @@ Evidence is written below
 `build/agent-benchmarks/orientation-transitions/<timestamp>/`.
 
 `orientation-transitions-profile` runs isolated bounded pprof and PMU passes
-over that same route. `orientation-transitions-streamline` runs the exact
+over both effects in one launcher workload per profiler. `orientation-transitions-streamline` runs the exact
 installed Dev launcher and fixed route under the existing ten-second gator
 capture contract. These instrumented scenarios provide attribution only and do
 not qualify cadence. The Streamline scenario requires a user-supplied audited

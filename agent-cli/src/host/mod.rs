@@ -4815,7 +4815,7 @@ fn profile_installed_streamline(
                 || completion_value
                     .get("records")
                     .and_then(Value::as_array)
-                    .is_none_or(|records| records.len() != 6)
+                    .is_none_or(|records| records.len() != ORIENTATION_TRANSITION_TOTAL_LEGS)
             {
                 return Err(
                     "orientation Streamline workload did not complete the fixed route".into(),
@@ -6440,7 +6440,11 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
 const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
-const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 24;
+const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 48;
+const ORIENTATION_TRANSITION_EFFECT_COUNT: usize = 2;
+const ORIENTATION_TRANSITION_LEGS_PER_EFFECT: usize = 6;
+const ORIENTATION_TRANSITION_TOTAL_LEGS: usize =
+    ORIENTATION_TRANSITION_EFFECT_COUNT * ORIENTATION_TRANSITION_LEGS_PER_EFFECT;
 
 fn qualify_installed_orientation_transitions(
     config: &NativeDeviceConfig,
@@ -6755,8 +6759,8 @@ fn summarize_orientation_transition_qualification(
     let records = completion
         .get("records")
         .and_then(Value::as_array)
-        .filter(|records| records.len() == 6)
-        .ok_or("orientation benchmark did not complete exactly six legs")?;
+        .filter(|records| records.len() == ORIENTATION_TRANSITION_TOTAL_LEGS)
+        .ok_or("orientation benchmark did not complete both six-leg effects")?;
     let mut frames = BTreeMap::<(u8, u64), Value>::new();
     for sample in telemetry {
         for frame in sample
@@ -6777,7 +6781,7 @@ fn summarize_orientation_transition_qualification(
             }
         }
     }
-    let mut legs = Vec::with_capacity(6);
+    let mut legs = Vec::with_capacity(ORIENTATION_TRANSITION_TOTAL_LEGS);
     let mut all_pass = true;
     for (index, record) in records.iter().enumerate() {
         let leg_number = u8::try_from(index + 1)?;
@@ -6829,6 +6833,7 @@ fn summarize_orientation_transition_qualification(
         all_pass &= passed;
         legs.push(json!({
             "leg": leg_number,
+            "effect": record.get("effect"),
             "label": record.get("label"),
             "from": record.get("from"),
             "to": record.get("to"),
@@ -6872,13 +6877,14 @@ fn persist_orientation_transition_qualification(
     )?;
     writeln!(
         report,
-        "| Leg | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Result |"
+        "| Effect | Leg | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Result |"
     )?;
-    writeln!(report, "|---|---:|---:|---:|---:|---:|---:|---|")?;
+    writeln!(report, "|---|---|---:|---:|---:|---:|---:|---:|---|")?;
     for leg in summary["legs"].as_array().into_iter().flatten() {
         writeln!(
             report,
-            "| {} | {:.3} | {} us | {} us | {} | {} | {} | {} |",
+            "| {} | {} | {:.3} | {} us | {} us | {} | {} | {} | {} |",
+            leg["effect"].as_str().unwrap_or("unknown"),
             leg["label"].as_str().unwrap_or("unknown"),
             leg["protocol_v5"]["physical_fps"].as_f64().unwrap_or(0.0),
             leg["whole_frame_work_p99_us"].as_u64().unwrap_or(0),
@@ -7079,7 +7085,7 @@ fn run_orientation_profile_pass(
         OrientationProfilePass::Pmu => env_vars.extend([
             ("MISTER_PMU_PROFILE".into(), "1".into()),
             ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
-            ("MISTER_PMU_RECORD_LIMIT".into(), "4096".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "8192".into()),
             (
                 "MISTER_ORIENTATION_PMU_COMPLETE".into(),
                 format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/pmu.json"),
@@ -7270,10 +7276,11 @@ fn aggregate_orientation_pmu(document: &Value) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
-    if phases.len() < 30 {
+    let expected_phases = ORIENTATION_TRANSITION_TOTAL_LEGS * 4;
+    if phases.len() < expected_phases {
         return Err(format!(
-            "orientation PMU label coverage is incomplete: {} of 30",
-            phases.len()
+            "orientation PMU label coverage is incomplete: {} of {expected_phases}",
+            phases.len(),
         )
         .into());
     }
@@ -17322,7 +17329,11 @@ H: Handlers=event3 js0"#
         ];
         let mut telemetry = Vec::new();
         let mut records = Vec::new();
-        for (index, (label, from, to)) in labels.into_iter().enumerate() {
+        for (index, (effect, (label, from, to))) in ["brightness-fade", "center-pixel-zoom"]
+            .into_iter()
+            .flat_map(|effect| labels.into_iter().map(move |leg| (effect, leg)))
+            .enumerate()
+        {
             let base_us = index as u64 * 500_000 + 1_000_000;
             let presented = index as u64 * 30;
             telemetry.push(json!({
@@ -17346,6 +17357,7 @@ H: Handlers=event3 js0"#
                     "frame": id,
                     "orientation_transition_active": true,
                     "orientation_transition_leg": index + 1,
+                    "orientation_transition_effect": effect,
                     "completion_monotonic_us": completion_us,
                     "main_present_status": "ok",
                     "main_present_copy_path": "identity-full",
@@ -17376,6 +17388,7 @@ H: Handlers=event3 js0"#
             }));
             records.push(json!({
                 "leg": index + 1,
+                "effect": effect,
                 "label": label,
                 "from": from,
                 "to": to,
@@ -17403,7 +17416,10 @@ H: Handlers=event3 js0"#
             .expect("fixture should qualify");
 
         assert_eq!(summary["status"], "passed");
-        assert_eq!(summary["legs"].as_array().unwrap().len(), 6);
+        assert_eq!(
+            summary["legs"].as_array().unwrap().len(),
+            ORIENTATION_TRANSITION_TOTAL_LEGS
+        );
         assert!(
             summary["legs"]
                 .as_array()

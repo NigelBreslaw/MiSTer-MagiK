@@ -481,6 +481,9 @@ mod imp {
             if warmed {
                 self.start(next_frame);
             }
+            if self.trigger == Some(BoundedProfileTrigger::OrientationTransitions) {
+                return;
+            }
             let elapsed = match &self.state {
                 State::Active { started, .. } => started.elapsed(),
                 _ => return,
@@ -528,6 +531,10 @@ mod imp {
                             "monitor-counterclockwise",
                             "monitor-clockwise",
                             "normal",
+                        ]),
+                        "effects": include_orientation_route.then_some([
+                            "brightness-fade",
+                            "center-pixel-zoom",
                         ]),
                     });
                     if let Err(error) = self.write_completion(&metadata.to_string()) {

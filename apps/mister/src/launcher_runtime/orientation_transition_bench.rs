@@ -1,8 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Fixed six-leg production-view orientation-transition benchmark sequencing.
+//! Fixed production-view orientation-transition benchmark sequencing for both effects.
 
+use super::orientation_transition::OrientationTransitionEffect;
 use crate::settings::ScreenOrientation;
 
 pub const ORIENTATION_TRANSITION_BENCHMARK_ROUTE: [ScreenOrientation; 7] = [
@@ -14,10 +15,18 @@ pub const ORIENTATION_TRANSITION_BENCHMARK_ROUTE: [ScreenOrientation; 7] = [
     ScreenOrientation::MonitorClockwise,
     ScreenOrientation::Normal,
 ];
+pub const ORIENTATION_TRANSITION_BENCHMARK_EFFECTS: [OrientationTransitionEffect; 2] = [
+    OrientationTransitionEffect::BrightnessFade,
+    OrientationTransitionEffect::CenterPixelZoom,
+];
+pub const ORIENTATION_TRANSITION_BENCHMARK_LEGS: usize =
+    (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1)
+        * ORIENTATION_TRANSITION_BENCHMARK_EFFECTS.len();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionBenchmarkLeg {
     pub index: usize,
+    pub effect: OrientationTransitionEffect,
     pub from: ScreenOrientation,
     pub to: ScreenOrientation,
 }
@@ -88,7 +97,7 @@ impl OrientationTransitionBenchmark {
             next_leg: 0,
             start_frame: 0,
             rendered_endpoint_frame: 0,
-            records: Vec::with_capacity(ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1),
+            records: Vec::with_capacity(ORIENTATION_TRANSITION_BENCHMARK_LEGS),
             failure: None,
         }
     }
@@ -155,7 +164,7 @@ impl OrientationTransitionBenchmark {
                 };
                 self.records.push(record);
                 self.next_leg += 1;
-                self.phase = if self.next_leg + 1 == ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() {
+                self.phase = if self.next_leg == ORIENTATION_TRANSITION_BENCHMARK_LEGS {
                     BenchmarkPhase::Complete
                 } else {
                     BenchmarkPhase::Ready
@@ -208,9 +217,17 @@ impl OrientationTransitionBenchmark {
     }
 
     fn leg(&self, index: usize) -> Option<OrientationTransitionBenchmarkLeg> {
-        let from = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(index)?;
-        let to = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(index + 1)?;
-        Some(OrientationTransitionBenchmarkLeg { index, from, to })
+        let route_legs = ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1;
+        let effect = *ORIENTATION_TRANSITION_BENCHMARK_EFFECTS.get(index / route_legs)?;
+        let route_index = index % route_legs;
+        let from = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(route_index)?;
+        let to = *ORIENTATION_TRANSITION_BENCHMARK_ROUTE.get(route_index + 1)?;
+        Some(OrientationTransitionBenchmarkLeg {
+            index,
+            effect,
+            from,
+            to,
+        })
     }
 }
 
@@ -247,14 +264,18 @@ mod tests {
                 .is_none()
         );
 
-        for (index, pair) in ORIENTATION_TRANSITION_BENCHMARK_ROUTE
-            .windows(2)
-            .enumerate()
-        {
+        for index in 0..ORIENTATION_TRANSITION_BENCHMARK_LEGS {
+            let route_index = index % (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1);
+            let pair = &ORIENTATION_TRANSITION_BENCHMARK_ROUTE[route_index..=route_index + 1];
             let leg = benchmark
                 .take_next_leg(pair[0], 11 + index as u64 * 3)
                 .unwrap();
             assert_eq!(leg.index, index);
+            assert_eq!(
+                leg.effect,
+                ORIENTATION_TRANSITION_BENCHMARK_EFFECTS
+                    [index / (ORIENTATION_TRANSITION_BENCHMARK_ROUTE.len() - 1)]
+            );
             assert!(benchmark.take_next_leg(pair[0], 12).is_none());
             benchmark.note_rendered_endpoint(12 + index as u64 * 3);
             let record = benchmark
@@ -264,7 +285,10 @@ mod tests {
         }
 
         assert!(benchmark.complete());
-        assert_eq!(benchmark.records().len(), 6);
+        assert_eq!(
+            benchmark.records().len(),
+            ORIENTATION_TRANSITION_BENCHMARK_LEGS
+        );
         assert!(
             benchmark
                 .take_next_leg(ScreenOrientation::Normal, 99)

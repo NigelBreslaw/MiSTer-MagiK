@@ -21,6 +21,15 @@ pub enum OrientationTransitionEffect {
     CenterPixelZoom,
 }
 
+impl OrientationTransitionEffect {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::BrightnessFade => "brightness-fade",
+            Self::CenterPixelZoom => "center-pixel-zoom",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionCompletion {
     pub from: ScreenOrientation,
@@ -48,52 +57,97 @@ pub enum OrientationPmuPhase {
 }
 
 pub const fn orientation_pmu_label(
+    effect: OrientationTransitionEffect,
     from: ScreenOrientation,
     to: ScreenOrientation,
     phase: OrientationPmuPhase,
 ) -> &'static str {
-    const LABELS: [[&str; 5]; 6] = [
+    const FADE_LABELS: [[&str; 5]; 6] = [
         [
-            "orientation.normal-clockwise.destination",
-            "orientation.normal-clockwise.fill",
-            "orientation.normal-clockwise.map",
-            "orientation.normal-clockwise.crossfade",
-            "orientation.normal-clockwise.cache-restore",
+            "orientation.fade.normal-clockwise.destination",
+            "orientation.fade.normal-clockwise.fill",
+            "orientation.fade.normal-clockwise.map",
+            "orientation.fade.normal-clockwise.crossfade",
+            "orientation.fade.normal-clockwise.cache-restore",
         ],
         [
-            "orientation.clockwise-counterclockwise.destination",
-            "orientation.clockwise-counterclockwise.fill",
-            "orientation.clockwise-counterclockwise.map",
-            "orientation.clockwise-counterclockwise.crossfade",
-            "orientation.clockwise-counterclockwise.cache-restore",
+            "orientation.fade.clockwise-counterclockwise.destination",
+            "orientation.fade.clockwise-counterclockwise.fill",
+            "orientation.fade.clockwise-counterclockwise.map",
+            "orientation.fade.clockwise-counterclockwise.crossfade",
+            "orientation.fade.clockwise-counterclockwise.cache-restore",
         ],
         [
-            "orientation.counterclockwise-normal.destination",
-            "orientation.counterclockwise-normal.fill",
-            "orientation.counterclockwise-normal.map",
-            "orientation.counterclockwise-normal.crossfade",
-            "orientation.counterclockwise-normal.cache-restore",
+            "orientation.fade.counterclockwise-normal.destination",
+            "orientation.fade.counterclockwise-normal.fill",
+            "orientation.fade.counterclockwise-normal.map",
+            "orientation.fade.counterclockwise-normal.crossfade",
+            "orientation.fade.counterclockwise-normal.cache-restore",
         ],
         [
-            "orientation.normal-counterclockwise.destination",
-            "orientation.normal-counterclockwise.fill",
-            "orientation.normal-counterclockwise.map",
-            "orientation.normal-counterclockwise.crossfade",
-            "orientation.normal-counterclockwise.cache-restore",
+            "orientation.fade.normal-counterclockwise.destination",
+            "orientation.fade.normal-counterclockwise.fill",
+            "orientation.fade.normal-counterclockwise.map",
+            "orientation.fade.normal-counterclockwise.crossfade",
+            "orientation.fade.normal-counterclockwise.cache-restore",
         ],
         [
-            "orientation.counterclockwise-clockwise.destination",
-            "orientation.counterclockwise-clockwise.fill",
-            "orientation.counterclockwise-clockwise.map",
-            "orientation.counterclockwise-clockwise.crossfade",
-            "orientation.counterclockwise-clockwise.cache-restore",
+            "orientation.fade.counterclockwise-clockwise.destination",
+            "orientation.fade.counterclockwise-clockwise.fill",
+            "orientation.fade.counterclockwise-clockwise.map",
+            "orientation.fade.counterclockwise-clockwise.crossfade",
+            "orientation.fade.counterclockwise-clockwise.cache-restore",
         ],
         [
-            "orientation.clockwise-normal.destination",
-            "orientation.clockwise-normal.fill",
-            "orientation.clockwise-normal.map",
-            "orientation.clockwise-normal.crossfade",
-            "orientation.clockwise-normal.cache-restore",
+            "orientation.fade.clockwise-normal.destination",
+            "orientation.fade.clockwise-normal.fill",
+            "orientation.fade.clockwise-normal.map",
+            "orientation.fade.clockwise-normal.crossfade",
+            "orientation.fade.clockwise-normal.cache-restore",
+        ],
+    ];
+    const ZOOM_LABELS: [[&str; 5]; 6] = [
+        [
+            "orientation.zoom.normal-clockwise.destination",
+            "orientation.zoom.normal-clockwise.fill",
+            "orientation.zoom.normal-clockwise.map",
+            "orientation.zoom.normal-clockwise.crossfade",
+            "orientation.zoom.normal-clockwise.cache-restore",
+        ],
+        [
+            "orientation.zoom.clockwise-counterclockwise.destination",
+            "orientation.zoom.clockwise-counterclockwise.fill",
+            "orientation.zoom.clockwise-counterclockwise.map",
+            "orientation.zoom.clockwise-counterclockwise.crossfade",
+            "orientation.zoom.clockwise-counterclockwise.cache-restore",
+        ],
+        [
+            "orientation.zoom.counterclockwise-normal.destination",
+            "orientation.zoom.counterclockwise-normal.fill",
+            "orientation.zoom.counterclockwise-normal.map",
+            "orientation.zoom.counterclockwise-normal.crossfade",
+            "orientation.zoom.counterclockwise-normal.cache-restore",
+        ],
+        [
+            "orientation.zoom.normal-counterclockwise.destination",
+            "orientation.zoom.normal-counterclockwise.fill",
+            "orientation.zoom.normal-counterclockwise.map",
+            "orientation.zoom.normal-counterclockwise.crossfade",
+            "orientation.zoom.normal-counterclockwise.cache-restore",
+        ],
+        [
+            "orientation.zoom.counterclockwise-clockwise.destination",
+            "orientation.zoom.counterclockwise-clockwise.fill",
+            "orientation.zoom.counterclockwise-clockwise.map",
+            "orientation.zoom.counterclockwise-clockwise.crossfade",
+            "orientation.zoom.counterclockwise-clockwise.cache-restore",
+        ],
+        [
+            "orientation.zoom.clockwise-normal.destination",
+            "orientation.zoom.clockwise-normal.fill",
+            "orientation.zoom.clockwise-normal.map",
+            "orientation.zoom.clockwise-normal.crossfade",
+            "orientation.zoom.clockwise-normal.cache-restore",
         ],
     ];
     let leg = match (from, to) {
@@ -112,7 +166,10 @@ pub const fn orientation_pmu_label(
         OrientationPmuPhase::Crossfade => 3,
         OrientationPmuPhase::CacheRestore => 4,
     };
-    LABELS[leg][phase]
+    match effect {
+        OrientationTransitionEffect::BrightnessFade => FADE_LABELS[leg][phase],
+        OrientationTransitionEffect::CenterPixelZoom => ZOOM_LABELS[leg][phase],
+    }
 }
 
 pub struct OrientationTransitionRuntime {
@@ -125,7 +182,6 @@ pub struct OrientationTransitionRuntime {
     effect: OrientationTransitionEffect,
     source: Vec<Rgb565Pixel>,
     destination: Vec<Rgb565Pixel>,
-    output: Vec<Rgb565Pixel>,
     destination_ready: bool,
     active: bool,
     completion: Option<OrientationTransitionCompletion>,
@@ -153,7 +209,6 @@ impl OrientationTransitionRuntime {
             effect,
             source: vec![Rgb565Pixel(0); len],
             destination: vec![Rgb565Pixel(0); len],
-            output: vec![Rgb565Pixel(0); len],
             destination_ready: false,
             active: false,
             completion: None,
@@ -180,7 +235,6 @@ impl OrientationTransitionRuntime {
         self.duration = ORIENTATION_WAVE_TOTAL_DURATION;
         self.source.copy_from_slice(source);
         self.destination.fill(Rgb565Pixel(0));
-        self.output.copy_from_slice(source);
         self.destination_ready = false;
         self.active = true;
         self.completion = None;
@@ -212,6 +266,18 @@ impl OrientationTransitionRuntime {
         self.from
     }
 
+    pub const fn effect(&self) -> OrientationTransitionEffect {
+        self.effect
+    }
+
+    pub fn set_effect(&mut self, effect: OrientationTransitionEffect) -> bool {
+        if self.active {
+            return false;
+        }
+        self.effect = effect;
+        true
+    }
+
     pub const fn to(&self) -> ScreenOrientation {
         self.to
     }
@@ -220,16 +286,18 @@ impl OrientationTransitionRuntime {
         self.last_render_stats
     }
 
-    pub fn render(
+    pub fn render_into(
         &mut self,
+        output: &mut [Rgb565Pixel],
         now: Instant,
-    ) -> Option<(&[Rgb565Pixel], bool, OrientationTransitionRenderStats)> {
-        if !self.active {
+    ) -> Option<(bool, OrientationTransitionRenderStats)> {
+        if !self.active || output.len() != self.source.len() {
             return None;
         }
         if !self.destination_ready {
+            output.copy_from_slice(&self.source);
             self.last_render_stats = OrientationTransitionRenderStats::default();
-            return Some((&self.source, false, self.last_render_stats));
+            return Some((false, self.last_render_stats));
         }
         let render_started = Instant::now();
         let elapsed = now
@@ -237,6 +305,7 @@ impl OrientationTransitionRuntime {
             .min(self.duration);
         let fill_started = Instant::now();
         let fill_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.effect,
             self.from,
             self.to,
             OrientationPmuPhase::Fill,
@@ -245,6 +314,7 @@ impl OrientationTransitionRuntime {
         let fill_us = elapsed_us(fill_started);
         let map_started = Instant::now();
         let map_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.effect,
             self.from,
             self.to,
             OrientationPmuPhase::Map,
@@ -253,6 +323,7 @@ impl OrientationTransitionRuntime {
         let map_us = elapsed_us(map_started);
         let crossfade_started = Instant::now();
         let crossfade_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+            self.effect,
             self.from,
             self.to,
             OrientationPmuPhase::Crossfade,
@@ -261,7 +332,7 @@ impl OrientationTransitionRuntime {
             OrientationTransitionEffect::BrightnessFade => render_brightness_wave(
                 &self.source,
                 &self.destination,
-                &mut self.output,
+                output,
                 self.width,
                 self.height,
                 elapsed,
@@ -269,7 +340,7 @@ impl OrientationTransitionRuntime {
             OrientationTransitionEffect::CenterPixelZoom => render_center_pixel_zoom_wave(
                 &self.source,
                 &self.destination,
-                &mut self.output,
+                output,
                 self.width,
                 self.height,
                 elapsed,
@@ -294,7 +365,7 @@ impl OrientationTransitionRuntime {
             blended_pixels,
             progress_ppm: duration_progress_ppm(elapsed, self.duration),
         };
-        Some((&self.output, done, self.last_render_stats))
+        Some((done, self.last_render_stats))
     }
 
     pub fn take_completion(&mut self) -> Option<OrientationTransitionCompletion> {
@@ -702,6 +773,7 @@ mod tests {
         let start = Instant::now();
         let source = [Rgb565Pixel(1); 12];
         let destination = [Rgb565Pixel(2); 12];
+        let mut output = [Rgb565Pixel(0); 12];
         let mut runtime = OrientationTransitionRuntime::new(4, 3);
         runtime.start(
             ScreenOrientation::Normal,
@@ -711,11 +783,11 @@ mod tests {
             false,
         );
         assert!(runtime.capture_destination(&destination));
-        let (frame, done, _) = runtime
-            .render(start + ORIENTATION_WAVE_TOTAL_DURATION)
+        let (done, _) = runtime
+            .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("transition frame");
         assert!(done);
-        assert_eq!(frame, destination);
+        assert_eq!(output, destination);
     }
 
     #[test]
@@ -723,6 +795,7 @@ mod tests {
         let start = Instant::now();
         let source = [Rgb565Pixel(1); 12];
         let destination = [Rgb565Pixel(2); 12];
+        let mut output = [Rgb565Pixel(0); 12];
         let mut runtime = OrientationTransitionRuntime::new(4, 3);
         assert!(runtime.start(
             ScreenOrientation::Normal,
@@ -733,17 +806,17 @@ mod tests {
         ));
         assert!(runtime.capture_destination(&destination));
 
-        let (halfway_frame, halfway_done, halfway) = runtime
-            .render(start + ORIENTATION_WAVE_PHASE_DURATION)
+        let (halfway_done, halfway) = runtime
+            .render_into(&mut output, start + ORIENTATION_WAVE_PHASE_DURATION)
             .expect("halfway transition frame");
         assert!(!halfway_done);
-        assert_eq!(halfway_frame, [Rgb565Pixel(0); 12]);
+        assert_eq!(output, [Rgb565Pixel(0); 12]);
         assert_eq!(halfway.mapped_pixels, 0);
         assert_eq!(halfway.blended_pixels, 12);
         assert_eq!(halfway.progress_ppm, 500_000);
 
-        let (_, final_done, final_stats) = runtime
-            .render(start + ORIENTATION_WAVE_TOTAL_DURATION)
+        let (final_done, final_stats) = runtime
+            .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("final transition frame");
         assert!(final_done);
         assert_eq!(final_stats.blended_pixels, 12);
@@ -758,15 +831,11 @@ mod tests {
         let start = Instant::now();
         let source = [Rgb565Pixel(1); 12];
         let destination = [Rgb565Pixel(2); 12];
+        let mut output = [Rgb565Pixel(0); 12];
         let mut runtime = OrientationTransitionRuntime::new(4, 3);
         let source_ptr = runtime.source.as_ptr();
         let destination_ptr = runtime.destination.as_ptr();
-        let output_ptr = runtime.output.as_ptr();
-        let capacities = (
-            runtime.source.capacity(),
-            runtime.destination.capacity(),
-            runtime.output.capacity(),
-        );
+        let capacities = (runtime.source.capacity(), runtime.destination.capacity());
 
         assert!(runtime.start(
             ScreenOrientation::Normal,
@@ -776,8 +845,8 @@ mod tests {
             false,
         ));
         assert!(runtime.capture_destination(&destination));
-        let _ = runtime.render(start + Duration::from_millis(750));
-        let _ = runtime.render(start + ORIENTATION_WAVE_TOTAL_DURATION);
+        let _ = runtime.render_into(&mut output, start + Duration::from_millis(750));
+        let _ = runtime.render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION);
         assert!(runtime.start(
             ScreenOrientation::MonitorClockwise,
             ScreenOrientation::MonitorCounterclockwise,
@@ -786,17 +855,12 @@ mod tests {
             false,
         ));
         assert!(runtime.capture_destination(&source));
-        let _ = runtime.render(start + ORIENTATION_WAVE_TOTAL_DURATION * 2);
+        let _ = runtime.render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION * 2);
 
         assert_eq!(runtime.source.as_ptr(), source_ptr);
         assert_eq!(runtime.destination.as_ptr(), destination_ptr);
-        assert_eq!(runtime.output.as_ptr(), output_ptr);
         assert_eq!(
-            (
-                runtime.source.capacity(),
-                runtime.destination.capacity(),
-                runtime.output.capacity(),
-            ),
+            (runtime.source.capacity(), runtime.destination.capacity()),
             capacities
         );
     }
@@ -817,12 +881,17 @@ mod tests {
                     continue;
                 }
                 for phase in phases {
-                    let label = orientation_pmu_label(from, to, phase);
-                    assert_ne!(label, "orientation.invalid");
-                    assert!(labels.insert(label));
+                    for effect in [
+                        OrientationTransitionEffect::BrightnessFade,
+                        OrientationTransitionEffect::CenterPixelZoom,
+                    ] {
+                        let label = orientation_pmu_label(effect, from, to, phase);
+                        assert_ne!(label, "orientation.invalid");
+                        assert!(labels.insert(label));
+                    }
                 }
             }
         }
-        assert_eq!(labels.len(), 30);
+        assert_eq!(labels.len(), 60);
     }
 }

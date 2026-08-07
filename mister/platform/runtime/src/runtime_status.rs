@@ -254,6 +254,7 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_status_quiesce_timeout: bool,
     pub orientation_transition_active: bool,
     pub orientation_transition_leg: u8,
+    pub orientation_transition_effect: &'static str,
     pub orientation_transition_from: &'static str,
     pub orientation_transition_to: &'static str,
     pub orientation_transition_destination_capture_us: u64,
@@ -1241,6 +1242,10 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!(
         "orientation_transition_leg",
         frame.orientation_transition_leg
+    );
+    field!(
+        "orientation_transition_effect",
+        frame.orientation_transition_effect
     );
     field!(
         "orientation_transition_from",
