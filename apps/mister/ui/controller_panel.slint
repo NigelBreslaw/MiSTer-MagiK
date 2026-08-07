@@ -4,6 +4,7 @@
 import { PixelText8, PixelTextSize } from "components/pixel_text_8.slint";
 
 import { MisterBridge } from "api.slint";
+import { MisterUi } from "mister_window.slint";
 import "fonts/PressStart2P-Regular.ttf";
 export { MisterBridge }
 
@@ -430,7 +431,7 @@ component ControllerBody inherits Rectangle {
 }
 
 export component ControllerPanel inherits Rectangle {
-    VerticalLayout {
+    if !MisterUi.portrait-layout : VerticalLayout {
         width: 100%;
         height: 100%;
         padding: 32px;
@@ -546,6 +547,104 @@ export component ControllerPanel inherits Rectangle {
                 text: MisterBridge.last-raw-event;
                 color: #605068;
                 size: PixelTextSize.px16;
+            }
+        }
+    }
+
+    if MisterUi.portrait-layout : VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 4px;
+            PixelText8 {
+                text: MisterBridge.device-name;
+                color: #e8e0f0;
+                size: PixelTextSize.px24;
+                overflow: elide;
+            }
+            PixelText8 {
+                text: "INPUT TEST  ·  USB " + MisterBridge.usb-port;
+                color: #06d6a0;
+                size: PixelTextSize.px8;
+                overflow: elide;
+            }
+        }
+
+        Rectangle {
+            height: 98px;
+            background: #211a2b;
+            border-width: 1px;
+            border-color: #5c4a72;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "L"; pressed: MisterBridge.btn-l; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "R"; pressed: MisterBridge.btn-r; }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZL"; pressed: MisterBridge.btn-zl; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZR"; pressed: MisterBridge.btn-zr; }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            height: 220px;
+            spacing: 28px;
+            alignment: center;
+            Dpad {
+                up: MisterBridge.dpad-up;
+                down: MisterBridge.dpad-down;
+                left: MisterBridge.dpad-left;
+                right: MisterBridge.dpad-right;
+            }
+            FaceCluster {
+                btn-x: MisterBridge.btn-x;
+                btn-y: MisterBridge.btn-y;
+                btn-a: MisterBridge.btn-a;
+                btn-b: MisterBridge.btn-b;
+            }
+        }
+
+        Rectangle {
+            height: 190px;
+            background: #211a2b;
+            border-width: 1px;
+            border-color: #5c4a72;
+            HorizontalLayout {
+                padding: 18px;
+                spacing: 36px;
+                alignment: center;
+                StickWell { stick-x: MisterBridge.left-x; stick-y: MisterBridge.left-y; }
+                StickWell { stick-x: MisterBridge.right-x; stick-y: MisterBridge.right-y; }
+            }
+        }
+
+        HorizontalLayout {
+            height: 74px;
+            spacing: 18px;
+            alignment: center;
+            PillBtn { caption: "SELECT"; pressed: MisterBridge.btn-select; }
+            SysBtn { caption: "Home"; pressed: MisterBridge.btn-home; }
+            SysBtn { caption: "Capture"; pressed: MisterBridge.btn-capture; available: MisterBridge.capture-available; }
+            PillBtn { caption: "START"; pressed: MisterBridge.btn-start; }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: #15101d;
+            border-width: 1px;
+            border-color: #352848;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 8px;
+                PixelText8 { text: "Pressed  " + MisterBridge.pressed-now; color: #06d6a0; size: PixelTextSize.px8; overflow: elide; }
+                PixelText8 { text: "Last  " + MisterBridge.last-event-label; color: #c8b8d8; size: PixelTextSize.px8; overflow: elide; }
+                PixelText8 { text: MisterBridge.last-raw-event; color: #706080; size: PixelTextSize.px8; overflow: elide; }
             }
         }
     }

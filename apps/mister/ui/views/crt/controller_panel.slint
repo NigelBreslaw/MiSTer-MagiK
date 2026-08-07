@@ -16,10 +16,26 @@ export component CrtControllerPanel inherits Rectangle {
         spacing: MisterUi.grid-y;
 
         CrtHeader { title: "Controller"; subtitle: "Input test"; status: ""; }
-        CrtMenuRow { vertical-stretch: 1; label: "Device"; detail: MisterBridge.device-name; focused: false; }
-        CrtMenuRow { vertical-stretch: 1; label: "USB"; detail: MisterBridge.usb-port; focused: false; }
-        CrtMenuRow { vertical-stretch: 1; label: "Pressed"; detail: MisterBridge.pressed-now; focused: MisterBridge.pressed-now != ""; }
-        CrtMenuRow { vertical-stretch: 1; label: "Last event"; detail: MisterBridge.last-event-label; focused: false; }
+        if !MisterUi.portrait-layout : VerticalLayout {
+            spacing: MisterUi.grid-y;
+            vertical-stretch: 1;
+            CrtMenuRow { vertical-stretch: 1; label: "Device"; detail: MisterBridge.device-name; focused: false; }
+            CrtMenuRow { vertical-stretch: 1; label: "USB"; detail: MisterBridge.usb-port; focused: false; }
+            CrtMenuRow { vertical-stretch: 1; label: "Pressed"; detail: MisterBridge.pressed-now; focused: MisterBridge.pressed-now != ""; }
+            CrtMenuRow { vertical-stretch: 1; label: "Last event"; detail: MisterBridge.last-event-label; focused: false; }
+        }
+        if MisterUi.portrait-layout : VerticalLayout {
+            spacing: MisterUi.grid-y;
+            vertical-stretch: 1;
+            CrtMenuRow { vertical-stretch: 1; label: "Device"; detail: MisterBridge.device-name; focused: false; }
+            CrtMenuRow { vertical-stretch: 1; label: "D-pad"; detail: (MisterBridge.dpad-up ? "U " : "") + (MisterBridge.dpad-down ? "D " : "") + (MisterBridge.dpad-left ? "L " : "") + (MisterBridge.dpad-right ? "R" : ""); focused: MisterBridge.dpad-up || MisterBridge.dpad-down || MisterBridge.dpad-left || MisterBridge.dpad-right; }
+            CrtMenuRow { vertical-stretch: 1; label: "Face"; detail: (MisterBridge.btn-a ? "A " : "") + (MisterBridge.btn-b ? "B " : "") + (MisterBridge.btn-x ? "X " : "") + (MisterBridge.btn-y ? "Y" : ""); focused: MisterBridge.btn-a || MisterBridge.btn-b || MisterBridge.btn-x || MisterBridge.btn-y; }
+            CrtMenuRow { vertical-stretch: 1; label: "Shoulders"; detail: (MisterBridge.btn-l ? "L " : "") + (MisterBridge.btn-r ? "R " : "") + (MisterBridge.btn-zl ? "ZL " : "") + (MisterBridge.btn-zr ? "ZR" : ""); focused: MisterBridge.btn-l || MisterBridge.btn-r || MisterBridge.btn-zl || MisterBridge.btn-zr; }
+            CrtMenuRow { vertical-stretch: 1; label: "Left stick"; detail: round(MisterBridge.left-x * 100) + "," + round(MisterBridge.left-y * 100); focused: false; }
+            CrtMenuRow { vertical-stretch: 1; label: "Right stick"; detail: round(MisterBridge.right-x * 100) + "," + round(MisterBridge.right-y * 100); focused: false; }
+            CrtMenuRow { vertical-stretch: 1; label: "Pressed"; detail: MisterBridge.pressed-now; focused: MisterBridge.pressed-now != ""; }
+            CrtMenuRow { vertical-stretch: 1; label: "Last event"; detail: MisterBridge.last-event-label; focused: false; }
+        }
         CrtFooter { left-hint: "Test controls"; right-hint: "B Back   HOME Launcher"; }
     }
 }

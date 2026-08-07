@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import { MisterUi } from "../mister_window.slint";
 
 // Controller setup overlay — new pad detection and USB port change rebinding.
 component ConfigRow inherits HorizontalLayout {
@@ -135,7 +136,7 @@ export component SetupOverlay inherits Rectangle {
             }
 
             Rectangle {
-                width: 700px;
+                width: MisterUi.portrait-layout ? MisterUi.window-width * 1px - 48px : 700px;
                 vertical-stretch: 1;
                 border-radius: 6px;
                 border-width: 1px;

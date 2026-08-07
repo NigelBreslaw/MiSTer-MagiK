@@ -46,8 +46,8 @@ mod macos {
     };
     use mister_magik_fb::production_launcher_screensaver::LauncherScreensaver;
     use mister_magik_fb::ui_display::{
-        CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiDisplayPlan, UiFramebufferSizePolicy,
-        UiPixelSize,
+        CrtUiMetrics, ResolvedOutputRoute, ScreenOrientation, UiDisplay, UiDisplayPlan,
+        UiFramebufferSizePolicy, UiLayoutGeometry, UiPixelSize,
     };
     use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
     use mister_magik_fb::visual_composition::{
@@ -90,7 +90,9 @@ mod macos {
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
         let headless = options.output.is_some();
-        let (frame_width, frame_height) = options.display_profile.render_size();
+        let display = options.display_profile.display();
+        let layout = UiLayoutGeometry::for_display(&display, options.orientation);
+        let (frame_width, frame_height) = (layout.logical_w(), layout.logical_h());
         let content = resolve_preview_content(
             options.content_mode,
             options.sd_root.as_deref(),
@@ -107,7 +109,7 @@ mod macos {
 
         let launcher = Launcher::new()?;
         let ui = launcher.global::<MisterUi>();
-        configure_display_profile(&ui, options.display_profile);
+        configure_display_profile(&ui, options.display_profile, options.orientation);
         let bridge = launcher.global::<MisterBridge>();
         initialize_bridge(&bridge);
         launcher.show()?;
@@ -124,6 +126,7 @@ mod macos {
             !options.no_scan,
             !options.no_download,
             options.display_profile,
+            options.orientation,
             options.navigation_transition_demo.is_some()
                 || options.navigation_transition_duration_ms.is_some(),
         )?;
@@ -228,11 +231,12 @@ mod macos {
             if options.scenario == Scenario::ScreenshotTiles {
                 application.settle_headless_production_screensaver()?;
             }
+            let capture = oriented_capture(application.frame_target.cached_565(), layout);
             write_ppm(
                 &output,
-                application.frame_target.cached_565(),
-                frame_width,
-                frame_height,
+                &capture,
+                layout.composition_w(),
+                layout.composition_h(),
             )?;
             println!(
                 "capture={} scenario={} frame={} refresh_hz={} transition_phase={:?} transition_progress_q16={} hash={:016x}",
@@ -242,7 +246,7 @@ mod macos {
                 application.refresh_hz,
                 application.navigation_transition.frame().phase,
                 application.navigation_transition.frame().progress_q16,
-                frame_hash(application.frame_target.cached_565())
+                frame_hash(&capture)
             );
             return Ok(());
         }
@@ -373,6 +377,7 @@ mod macos {
         next_frame_deadline: Instant,
         focused: bool,
         display_profile: DisplayProfile,
+        orientation: ScreenOrientation,
         card_connected: bool,
         next_card_check_at: Instant,
         navigation_transition: NavigationTransitionRuntime,
@@ -394,20 +399,29 @@ mod macos {
             scan_card: bool,
             download_media: bool,
             display_profile: DisplayProfile,
+            orientation: ScreenOrientation,
             force_navigation_motion: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
             let (catalog, catalog_generation, catalog_source) =
                 preview_catalog(&content, fixtures.catalog)?;
             let display = display_profile.display();
-            let frame_width = display.render_w();
-            let frame_height = display.render_h();
+            let layout = UiLayoutGeometry::for_display(&display, orientation);
+            let frame_width = layout.logical_w();
+            let frame_height = layout.logical_h();
             let mut launcher_nav = LauncherNav::for_crt_layout_with_row_height(
                 display_profile.is_crt(),
                 CrtUiMetrics::for_display(&display).game_row_height,
             );
             let settings_store = FileSettingsStore::new(default_settings_path());
             launcher_nav.settings = settings_store.load();
+            launcher_nav.settings.screen_orientation = orientation;
+            launcher_nav.set_portrait_layout(layout.is_portrait());
+            launcher_nav.sync_orientation_selection();
+            let bridge = launcher.global::<MisterBridge>();
+            bridge.set_orientation_active_label(orientation.label().into());
+            bridge.set_orientation_selected(launcher_nav.orientation_selected as i32);
+            bridge.set_orientation_highlighted(launcher_nav.orientation_highlighted as i32);
             launcher_nav.catalog_build_started();
             for system in &catalog.systems {
                 launcher_nav.catalog_system_discovered(&system.id);
@@ -493,6 +507,7 @@ mod macos {
                 next_frame_deadline,
                 focused: true,
                 display_profile,
+                orientation,
                 card_connected,
                 next_card_check_at: now + Duration::from_secs(1),
                 navigation_transition: NavigationTransitionRuntime::new(
@@ -568,6 +583,7 @@ mod macos {
                 self.configure_launcher_screen(scenario);
             }
             apply_scenario(&self.launcher, scenario);
+            self.sync_orientation_geometry();
             if matches!(scenario, Scenario::Arcade | Scenario::ArcadeCrossfade) {
                 self.arcade_layer.invalidate();
             }
@@ -588,6 +604,31 @@ mod macos {
                 window.set_title(&self.window_title());
                 window.request_redraw();
             }
+        }
+
+        fn sync_orientation_geometry(&self) {
+            let bridge = self.launcher.global::<MisterBridge>();
+            bridge.set_orientation_active_label(self.orientation.label().into());
+            if !self.orientation.is_portrait() {
+                return;
+            }
+            let preview = hdmi_preview_rect(self.frame_width, self.frame_height);
+            bridge.set_arcade_preview_box_x(preview.x0 as i32);
+            bridge.set_arcade_preview_box_y(preview.y0 as i32);
+            bridge.set_arcade_preview_box_width(preview.width() as i32);
+            bridge.set_arcade_preview_box_height(preview.rows() as i32);
+            let margin = 16usize;
+            let search = matches!(self.scenario, Scenario::ArcadeSearch);
+            let list_y = if search { 56 } else { preview.y1 + 12 };
+            let list_height = if search {
+                self.frame_height * 34 / 100
+            } else {
+                self.frame_height.saturating_sub(list_y + margin)
+            };
+            bridge.set_arcade_list_x(margin as i32);
+            bridge.set_arcade_list_y(list_y as i32);
+            bridge.set_arcade_list_width(self.frame_width.saturating_sub(margin * 2) as i32);
+            bridge.set_arcade_list_height(list_height as i32);
         }
 
         fn move_selection(&mut self, delta: isize) {
@@ -2219,6 +2260,7 @@ mod macos {
         no_scan: bool,
         no_download: bool,
         display_profile: DisplayProfile,
+        orientation: ScreenOrientation,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
@@ -2236,6 +2278,7 @@ mod macos {
             let mut no_scan = false;
             let mut no_download = false;
             let mut display_profile = DisplayProfile::Hdmi;
+            let mut orientation = ScreenOrientation::Normal;
             let mut navigation_transition_demo = None;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
@@ -2319,9 +2362,19 @@ mod macos {
                             )?;
                         display_profile = DisplayProfile::parse(&value)?;
                     }
+                    "--orientation" => {
+                        let value = arguments.next().ok_or(
+                            "--orientation requires normal, monitor-clockwise, or monitor-counterclockwise",
+                        )?;
+                        orientation = ScreenOrientation::parse(&value).ok_or_else(|| {
+                            format!(
+                                "invalid orientation {value:?}; expected normal, monitor-clockwise, or monitor-counterclockwise"
+                            )
+                        })?;
+                    }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
                                 .into(),
                         );
                     }
@@ -2348,6 +2401,7 @@ mod macos {
                 no_scan,
                 no_download,
                 display_profile,
+                orientation,
                 navigation_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
@@ -2441,16 +2495,26 @@ mod macos {
         }
     }
 
-    fn configure_display_profile(ui: &MisterUi, profile: DisplayProfile) {
+    fn configure_display_profile(
+        ui: &MisterUi,
+        profile: DisplayProfile,
+        orientation: ScreenOrientation,
+    ) {
         let display = profile.display();
-        ui.set_window_width(display.render_w() as i32);
-        ui.set_window_height(display.render_h() as i32);
+        let layout = UiLayoutGeometry::for_display(&display, orientation);
+        ui.set_window_width(layout.logical_w() as i32);
+        ui.set_window_height(layout.logical_h() as i32);
         ui.set_crt_layout(profile.is_crt());
+        ui.set_screen_orientation(match orientation {
+            ScreenOrientation::Normal => 0,
+            ScreenOrientation::MonitorClockwise => 1,
+            ScreenOrientation::MonitorCounterclockwise => 2,
+        });
         if !profile.is_crt() {
             return;
         }
         let metrics = CrtUiMetrics::for_display(&display);
-        let content = display.content_rect();
+        let content = layout.content_rect();
         ui.set_crt_grid_x(metrics.grid_x);
         ui.set_crt_grid_y(metrics.grid_y);
         ui.set_crt_border_x(metrics.border_x);
@@ -2619,6 +2683,22 @@ mod macos {
         hash
     }
 
+    fn oriented_capture(logical: &[Rgb565Pixel], layout: UiLayoutGeometry) -> Vec<Rgb565Pixel> {
+        if !layout.is_portrait() {
+            return logical.to_vec();
+        }
+        let mut composition = vec![Rgb565Pixel(0); layout.composition_w() * layout.composition_h()];
+        for logical_y in 0..layout.logical_h() {
+            for logical_x in 0..layout.logical_w() {
+                let (composition_x, composition_y) =
+                    layout.logical_pixel_to_composition(logical_x, logical_y);
+                composition[composition_y * layout.composition_w() + composition_x] =
+                    logical[logical_y * layout.logical_w() + logical_x];
+            }
+        }
+        composition
+    }
+
     fn initialize_bridge(bridge: &MisterBridge) {
         bridge.set_clock_text("12:34".into());
         bridge.set_build_label("Mac visual preview".into());
@@ -2640,6 +2720,12 @@ mod macos {
             "CRT 240p 60 Hz",
         ]));
         bridge.set_display_active_label("1920×1080 60 Hz".into());
+        bridge.set_orientation_options(ModelRc::new(VecModel::from(
+            ScreenOrientation::ALL
+                .iter()
+                .map(|orientation| SharedString::from(orientation.label()))
+                .collect::<Vec<_>>(),
+        )));
         bridge.set_arcade_search_keys(strings(&[
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q",
             "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
@@ -3098,6 +3184,24 @@ mod macos {
             assert_eq!(options.refresh_rate, RefreshRate::Auto);
             assert_eq!(options.content_mode, ContentMode::Auto);
             assert_eq!(options.display_profile, DisplayProfile::Hdmi);
+            assert_eq!(options.orientation, ScreenOrientation::Normal);
+        }
+
+        #[test]
+        fn preview_options_parse_both_monitor_orientations() {
+            let clockwise =
+                PreviewOptions::parse(["--orientation", "monitor-clockwise"].map(String::from))
+                    .unwrap();
+            let counterclockwise = PreviewOptions::parse(
+                ["--orientation", "monitor-counterclockwise"].map(String::from),
+            )
+            .unwrap();
+
+            assert_eq!(clockwise.orientation, ScreenOrientation::MonitorClockwise);
+            assert_eq!(
+                counterclockwise.orientation,
+                ScreenOrientation::MonitorCounterclockwise
+            );
         }
 
         #[test]

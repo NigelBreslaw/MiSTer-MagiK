@@ -2046,6 +2046,22 @@ enum OrientationTransitionIntent {
     Rollback,
 }
 
+fn render_immediate_launcher_frame(
+    window: &MisterSoftwareWindow,
+    target: &mut UiFrameTarget,
+    portrait_target: &mut Option<UiFrameTarget>,
+    ui: &UiDisplay,
+    layout: UiLayoutGeometry,
+) -> Option<DirtyRect> {
+    let mut layer_target = LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
+    let (dirty, mut damage) = layer_target.render_slint_base(window);
+    if damage.is_empty() {
+        damage.push_if_some(dirty);
+    }
+    let mapped = layer_target.rotate_damage_to_composition(&damage);
+    mapped.iter().reduce(DirtyRect::union)
+}
+
 fn preview_archive_warm_skip_enabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
@@ -3542,11 +3558,13 @@ pub(super) fn run_launcher_loop(
                         ui,
                     );
                     update_slint_animations(animation_clock);
-                    let mut recovery_rect = None;
-                    window.draw_if_needed(|renderer| {
-                        let region = target.render(renderer, frame_target_geometry(ui));
-                        recovery_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
-                    });
+                    let recovery_rect = render_immediate_launcher_frame(
+                        window,
+                        target,
+                        &mut portrait_target,
+                        ui,
+                        layout,
+                    );
                     if let Some(rect) = recovery_rect {
                         let _ = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     } else {
@@ -4145,7 +4163,13 @@ pub(super) fn run_launcher_loop(
                             .as_micros()
                             .min(u64::MAX as u128) as u64;
                         if navigation_transition
-                            .begin_settings_page(direction, target.cached_565(), now_us)
+                            .begin_settings_page(
+                                direction,
+                                portrait_target
+                                    .as_ref()
+                                    .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565),
+                                now_us,
+                            )
                             .unwrap_or(false)
                         {
                             pending_navigation_transition = Some(PendingNavigationTransition {
@@ -4238,9 +4262,14 @@ pub(super) fn run_launcher_loop(
                                     && nav.screen == Screen::Arcade
                                     && !crt_layout
                                 {
-                                    arcade_list_renderer.compose_layer_to_cached(target, true);
-                                    let _ =
-                                        target.compose_direct_preview_rect(preview_screen_rect(ui));
+                                    if let Some(logical_target) = portrait_target.as_mut() {
+                                        arcade_list_renderer
+                                            .compose_layer_to_cached(logical_target, true);
+                                    } else {
+                                        arcade_list_renderer.compose_layer_to_cached(target, true);
+                                        let _ = target
+                                            .compose_direct_preview_rect(preview_screen_rect(ui));
+                                    }
                                 }
                                 let transition_started =
                                     transition_spec.is_some_and(|(edge, direction)| {
@@ -4254,10 +4283,10 @@ pub(super) fn run_launcher_loop(
                                                     .map(|item| item.title.as_str())
                                                     .unwrap_or("");
                                                 Some(if crt_layout {
-                                                    let content = ui.content_rect();
+                                                    let content = layout.content_rect();
                                                     crt_navigation_geometry(
-                                                        ui.render_w(),
-                                                        ui.render_h(),
+                                                        layout.logical_w(),
+                                                        layout.logical_h(),
                                                         CrtNavigationLayout {
                                                             content_x: content.x,
                                                             content_y: content.y,
@@ -4303,8 +4332,8 @@ pub(super) fn run_launcher_loop(
                                                     )
                                                 } else {
                                                     hdmi_navigation_geometry(
-                                                        ui.render_w(),
-                                                        ui.render_h(),
+                                                        layout.logical_w(),
+                                                        layout.logical_h(),
                                                         nav.selected,
                                                         nav.scroll_x,
                                                         root_menu,
@@ -4323,7 +4352,10 @@ pub(super) fn run_launcher_loop(
                                                     edge,
                                                     direction,
                                                     geometry,
-                                                    target.cached_565(),
+                                                    portrait_target.as_ref().map_or_else(
+                                                        || target.cached_565(),
+                                                        UiFrameTarget::cached_565,
+                                                    ),
                                                     frame_now
                                                         .saturating_duration_since(start)
                                                         .as_micros()
@@ -4385,10 +4417,13 @@ pub(super) fn run_launcher_loop(
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
-                                window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, frame_target_geometry(ui));
-                                    let _ = region;
-                                });
+                                let _ = render_immediate_launcher_frame(
+                                    window,
+                                    target,
+                                    &mut portrait_target,
+                                    ui,
+                                    layout,
+                                );
                                 let _pace = pacer.wait();
                                 copy_cached_rows_565(
                                     disp,
@@ -4448,10 +4483,13 @@ pub(super) fn run_launcher_loop(
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
-                                window.draw_if_needed(|renderer| {
-                                    let region = target.render(renderer, frame_target_geometry(ui));
-                                    let _ = region;
-                                });
+                                let _ = render_immediate_launcher_frame(
+                                    window,
+                                    target,
+                                    &mut portrait_target,
+                                    ui,
+                                    layout,
+                                );
                                 let _pace = pacer.wait();
                                 copy_cached_rows_565(
                                     disp,
@@ -4741,10 +4779,13 @@ pub(super) fn run_launcher_loop(
                             );
                             window.request_redraw();
                             update_slint_animations(animation_clock);
-                            window.draw_if_needed(|renderer| {
-                                let region = target.render(renderer, frame_target_geometry(ui));
-                                let _ = region;
-                            });
+                            let _ = render_immediate_launcher_frame(
+                                window,
+                                target,
+                                &mut portrait_target,
+                                ui,
+                                layout,
+                            );
                             let _pace = pacer.wait();
                             copy_cached_rows_565(
                                 disp,

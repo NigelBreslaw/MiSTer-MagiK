@@ -2117,7 +2117,7 @@ impl LauncherNav {
         emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
         if rising(now.btn_home, self.prev.btn_home) {
-            if self.crt_layout && self.current_menu_id() == ROOT_MENU_ID {
+            if (self.crt_layout || self.portrait_layout) && self.current_menu_id() == ROOT_MENU_ID {
                 self.remember_current_menu_view();
                 self.settings_selected = 0;
                 self.settings_focused = false;
@@ -2461,7 +2461,14 @@ impl LauncherNav {
                     }
                 }
                 if self.repeat.tick_up(now.dpad_up, frame_now) {
-                    self.move_arcade_search_key(0, -1);
+                    if self.portrait_layout
+                        && self.arcade_search.selected_key < ARCADE_SEARCH_KEY_COLUMNS
+                        && count > 0
+                    {
+                        self.arcade_search.pane = ArcadeSearchPane::Results;
+                    } else {
+                        self.move_arcade_search_key(0, -1);
+                    }
                 }
                 if self.repeat.tick_down(now.dpad_down, frame_now) {
                     self.move_arcade_search_key(0, 1);
@@ -2484,6 +2491,13 @@ impl LauncherNav {
                 if self.arcade.selected >= count {
                     self.arcade.selected = count - 1;
                     self.arcade.snap_to_selected();
+                }
+                if self.portrait_layout
+                    && self.arcade.selected + 1 >= count
+                    && rising(now.dpad_down, self.prev.dpad_down)
+                {
+                    self.arcade_search.pane = ArcadeSearchPane::Keyboard;
+                    return None;
                 }
                 let dir = arcade_dpad_dir(now);
                 let previous_dir = arcade_dpad_dir(&self.prev);
@@ -7775,6 +7789,47 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
             .expect("cancel display");
         assert_eq!(event.action, LauncherAction::CancelDisplayResolution);
+    }
+
+    #[test]
+    fn orientation_combo_applies_and_confirmation_can_confirm_or_cancel() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        let t0 = Instant::now();
+        nav.screen = Screen::Settings;
+        nav.settings_selected = SETTINGS_ORIENTATION_SELECTED;
+        let press_a = pad_with(|pad| pad.btn_a = true);
+        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        assert!(nav.orientation_combo_open);
+        release(&mut nav, &catalog, t0, 16);
+
+        let down = pad_with(|pad| pad.dpad_down = true);
+        assert!(
+            nav.handle_input(&down, t0 + Duration::from_millis(32), &catalog)
+                .is_none()
+        );
+        release(&mut nav, &catalog, t0, 48);
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
+            .expect("new orientation");
+        assert_eq!(event.action, LauncherAction::ApplyScreenOrientation);
+        assert_eq!(event.path.as_deref(), Some("monitor-clockwise"));
+
+        nav.confirm_action = Some(ConfirmAction::ScreenOrientation);
+        nav.confirm_selected = 1;
+        release(&mut nav, &catalog, t0, 80);
+        let event = nav
+            .handle_input(&press_a, t0 + Duration::from_millis(96), &catalog)
+            .expect("confirm orientation");
+        assert_eq!(event.action, LauncherAction::ConfirmScreenOrientation);
+
+        nav.confirm_action = Some(ConfirmAction::ScreenOrientation);
+        release(&mut nav, &catalog, t0, 112);
+        let press_b = pad_with(|pad| pad.btn_b = true);
+        let event = nav
+            .handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
+            .expect("cancel orientation");
+        assert_eq!(event.action, LauncherAction::CancelScreenOrientation);
     }
 
     #[test]

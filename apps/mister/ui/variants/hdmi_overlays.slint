@@ -95,7 +95,7 @@ export component CatalogScanPopup inherits Rectangle {
 
 export component MediaProgressPopup inherits Rectangle {
 
-    width: 560px;
+    width: MisterUi.portrait-layout ? MisterUi.window-width * 1px - 32px : 560px;
     height: 100px;
     x: MisterUi.window-width * 1px / 2 - self.width / 2;
     y: MisterUi.window-height * 1px - self.height - 24px;

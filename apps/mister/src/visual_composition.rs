@@ -16,7 +16,11 @@ pub struct ArcadeVisualLayer {
 impl ArcadeVisualLayer {
     pub fn new(frame_width: usize, frame_height: usize) -> Self {
         let mut renderer = ArcadeListRenderer::new();
-        let mut geometry = ArcadeListGeometry::NORMAL;
+        let mut geometry = if frame_height > frame_width {
+            ArcadeListGeometry::portrait(frame_width, frame_height, false)
+        } else {
+            ArcadeListGeometry::NORMAL
+        };
         geometry.width = geometry.width.min(frame_width.saturating_sub(geometry.x));
         renderer.set_geometry_for_render_h(geometry, frame_height);
         Self { renderer }
