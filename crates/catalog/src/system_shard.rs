@@ -209,10 +209,14 @@ pub(crate) fn write_system_shard_with_durability(
         .execute_batch(durability_pragmas)
         .map_err(|error| SystemShardError::with("configure shard durability", error))?;
     connection
+        .execute_batch("PRAGMA page_size=4096;")
+        .map_err(|error| SystemShardError::with("configure shard page size", error))?;
+    connection
+        .pragma_update(None, "cache_size", shard_cache_size_kib(durability))
+        .map_err(|error| SystemShardError::with("configure shard page cache", error))?;
+    connection
         .execute_batch(
-            "PRAGMA page_size=4096;
-             PRAGMA cache_size=-2048;
-             PRAGMA temp_store=FILE;
+            "PRAGMA temp_store=FILE;
              PRAGMA locking_mode=EXCLUSIVE;
              CREATE TABLE shard_meta (
                  key TEXT PRIMARY KEY,
@@ -384,6 +388,14 @@ pub(crate) fn write_system_shard_with_durability(
     let loaded = open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits);
     drop(validate_pmu);
     loaded
+}
+
+#[cfg(feature = "builder")]
+const fn shard_cache_size_kib(durability: ShardDurability) -> i32 {
+    match durability {
+        ShardDurability::Immediate => -2048,
+        ShardDurability::Deferred => -8192,
+    }
 }
 
 pub fn open_system_shard(
@@ -946,6 +958,13 @@ mod tests {
     use super::*;
     #[cfg(feature = "builder")]
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn deferred_shards_use_the_larger_page_cache() {
+        assert_eq!(shard_cache_size_kib(ShardDurability::Immediate), -2048);
+        assert_eq!(shard_cache_size_kib(ShardDurability::Deferred), -8192);
+    }
 
     #[test]
     #[cfg(feature = "builder")]
