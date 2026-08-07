@@ -7065,6 +7065,15 @@ fn run_orientation_profile_pass(
             json!({"metadata": profile, "aggregate": aggregate})
         }
     };
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
     Ok(result)
 }
 
