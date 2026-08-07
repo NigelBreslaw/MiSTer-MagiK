@@ -950,7 +950,19 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) orientation_transition_effect: &'static str,
     pub(super) orientation_transition_from: &'static str,
     pub(super) orientation_transition_to: &'static str,
+    pub(super) orientation_begin_us: u128,
+    pub(super) orientation_source_snapshot_us: u128,
+    pub(super) orientation_layout_us: u128,
+    pub(super) orientation_source_snapshot_bytes: u64,
+    pub(super) orientation_controlled_slint_raster_us: u128,
     pub(super) orientation_transition_destination_capture_us: u128,
+    pub(super) orientation_destination_snapshot_bytes: u64,
+    pub(super) orientation_damage_rotation_us: u128,
+    pub(super) orientation_damage_build_us: u128,
+    pub(super) orientation_damage_rects_before: u32,
+    pub(super) orientation_damage_rects_after: u32,
+    pub(super) orientation_effect_read_bytes: u64,
+    pub(super) orientation_effect_write_bytes: u64,
     pub(super) orientation_transition_cache_restore_us: u128,
     pub(super) orientation_transition_total_us: u128,
     pub(super) orientation_transition_stats: OrientationTransitionRenderStats,
@@ -1897,11 +1909,49 @@ impl LauncherFrameAccounting {
                     .orientation_transition_effect,
                 orientation_transition_from: frame.custom_draw_trace.orientation_transition_from,
                 orientation_transition_to: frame.custom_draw_trace.orientation_transition_to,
+                orientation_begin_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_begin_us,
+                ),
+                orientation_source_snapshot_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_source_snapshot_us,
+                ),
+                orientation_layout_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_layout_us,
+                ),
+                orientation_controlled_slint_raster_us: u128_to_u64_saturating(
+                    frame
+                        .custom_draw_trace
+                        .orientation_controlled_slint_raster_us,
+                ),
                 orientation_transition_destination_capture_us: u128_to_u64_saturating(
                     frame
                         .custom_draw_trace
                         .orientation_transition_destination_capture_us,
                 ),
+                orientation_damage_rotation_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_damage_rotation_us,
+                ),
+                orientation_damage_build_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_damage_build_us,
+                ),
+                orientation_source_snapshot_bytes: frame
+                    .custom_draw_trace
+                    .orientation_source_snapshot_bytes,
+                orientation_destination_snapshot_bytes: frame
+                    .custom_draw_trace
+                    .orientation_destination_snapshot_bytes,
+                orientation_effect_read_bytes: frame
+                    .custom_draw_trace
+                    .orientation_effect_read_bytes,
+                orientation_effect_write_bytes: frame
+                    .custom_draw_trace
+                    .orientation_effect_write_bytes,
+                orientation_damage_rects_before: frame
+                    .custom_draw_trace
+                    .orientation_damage_rects_before,
+                orientation_damage_rects_after: frame
+                    .custom_draw_trace
+                    .orientation_damage_rects_after,
                 orientation_transition_fill_us: frame
                     .custom_draw_trace
                     .orientation_transition_stats

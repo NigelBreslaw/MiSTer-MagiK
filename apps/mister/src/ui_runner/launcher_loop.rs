@@ -2160,8 +2160,10 @@ fn begin_orientation_transition(
     orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
     orientation_transition: &mut OrientationTransitionRuntime,
     orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
+    orientation_preparation_trace: &mut OrientationPreparationTrace,
     intent: OrientationTransitionIntent,
 ) -> bool {
+    let begin_started = Instant::now();
     let generation = match full_screen_transition.begin(FullScreenTransitionOwner::Orientation) {
         Ok(generation) => generation,
         Err(error) => {
@@ -2170,7 +2172,10 @@ fn begin_orientation_transition(
         }
     };
     *orientation_transition_generation = Some(generation);
+    let source_snapshot_started = Instant::now();
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
+    let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
+    let layout_started = Instant::now();
     apply_orientation_layout(
         app,
         window,
@@ -2181,6 +2186,12 @@ fn begin_orientation_transition(
         portrait_target,
         navigation_transition,
     );
+    *orientation_preparation_trace = OrientationPreparationTrace {
+        begin_us: begin_started.elapsed().as_micros(),
+        source_snapshot_us,
+        layout_us: layout_started.elapsed().as_micros(),
+        source_snapshot_bytes: target.cached_565().len().saturating_mul(2) as u64,
+    };
     if animated {
         *orientation_transition_intent = Some(intent);
     } else {
@@ -2196,6 +2207,14 @@ enum OrientationTransitionIntent {
     Confirm,
     Rollback,
     Benchmark,
+}
+
+#[derive(Clone, Copy, Default)]
+struct OrientationPreparationTrace {
+    begin_us: u128,
+    source_snapshot_us: u128,
+    layout_us: u128,
+    source_snapshot_bytes: u64,
 }
 
 fn render_immediate_launcher_frame(
@@ -2388,6 +2407,7 @@ pub(super) fn run_launcher_loop(
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
     let mut orientation_transition_generation = None;
+    let mut orientation_preparation_trace = OrientationPreparationTrace::default();
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
@@ -3193,6 +3213,7 @@ pub(super) fn run_launcher_loop(
                 &mut orientation_transition_generation,
                 &mut orientation_transition,
                 &mut orientation_transition_intent,
+                &mut orientation_preparation_trace,
                 OrientationTransitionIntent::Benchmark,
             );
             if animated {
@@ -3258,6 +3279,7 @@ pub(super) fn run_launcher_loop(
                         &mut orientation_transition_generation,
                         &mut orientation_transition,
                         &mut orientation_transition_intent,
+                        &mut orientation_preparation_trace,
                         OrientationTransitionIntent::Rollback,
                     );
                     let _ = animated;
@@ -4869,6 +4891,7 @@ pub(super) fn run_launcher_loop(
                                         &mut orientation_transition_generation,
                                         &mut orientation_transition,
                                         &mut orientation_transition_intent,
+                                        &mut orientation_preparation_trace,
                                         OrientationTransitionIntent::Confirm,
                                     );
                                     if animated {
@@ -4922,6 +4945,7 @@ pub(super) fn run_launcher_loop(
                                         &mut orientation_transition_generation,
                                         &mut orientation_transition,
                                         &mut orientation_transition_intent,
+                                        &mut orientation_preparation_trace,
                                         OrientationTransitionIntent::Rollback,
                                     );
                                     let _ = animated;
@@ -6133,6 +6157,7 @@ pub(super) fn run_launcher_loop(
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
+        let mut orientation_controlled_slint_raster_us = 0;
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -6186,7 +6211,12 @@ pub(super) fn run_launcher_loop(
                     }
                 });
             if authorized {
+                let controlled_raster_started = Instant::now();
                 let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+                if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation) {
+                    orientation_controlled_slint_raster_us =
+                        controlled_raster_started.elapsed().as_micros();
+                }
                 slint_damage = damage;
                 slint_base_rendered = rendered;
                 full_screen_controlled_capture_rendered = rendered;
@@ -6559,7 +6589,11 @@ pub(super) fn run_launcher_loop(
         cached_damage.push_if_some(empty_base_cached_rect);
         cached_damage.push_if_some(raw_preview_cached_rect);
         cached_damage.push_if_some(cached_arcade_rect);
+        let orientation_damage_rects_before = cached_damage.len() as u32;
+        let damage_rotation_started = Instant::now();
         let mut cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
+        let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();
+        let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
         if orientation_transition.is_active() {
             let orientation_started = Instant::now();
             let transition_from = orientation_transition.from();
@@ -6571,6 +6605,18 @@ pub(super) fn run_launcher_loop(
                 .active_leg()
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
             custom_draw_trace.orientation_transition_effect = orientation_transition.effect().id();
+            let preparation_trace = std::mem::take(&mut orientation_preparation_trace);
+            custom_draw_trace.orientation_begin_us = preparation_trace.begin_us;
+            custom_draw_trace.orientation_source_snapshot_us = preparation_trace.source_snapshot_us;
+            custom_draw_trace.orientation_layout_us = preparation_trace.layout_us;
+            custom_draw_trace.orientation_source_snapshot_bytes =
+                preparation_trace.source_snapshot_bytes;
+            custom_draw_trace.orientation_controlled_slint_raster_us =
+                orientation_controlled_slint_raster_us;
+            custom_draw_trace.orientation_damage_rotation_us = orientation_damage_rotation_us;
+            custom_draw_trace.orientation_damage_rects_before = orientation_damage_rects_before;
+            custom_draw_trace.orientation_damage_rects_after =
+                orientation_damage_rects_after_rotation;
             if !orientation_transition.destination_ready()
                 && full_screen_controlled_capture_rendered
             {
@@ -6587,6 +6633,12 @@ pub(super) fn run_launcher_loop(
                 drop(destination_pmu);
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
+                custom_draw_trace.orientation_destination_snapshot_bytes = layer_target
+                    .presentation_frame_view()
+                    .pixels()
+                    .len()
+                    .saturating_mul(2)
+                    as u64;
                 if captured {
                     if let Some(generation) = orientation_transition_generation
                         && let Err(error) = full_screen_transition.capture_completed(generation)
@@ -6610,6 +6662,11 @@ pub(super) fn run_launcher_loop(
                 .render_into(layer_target.presentation_pixels_mut(), Instant::now())
             {
                 custom_draw_trace.orientation_transition_stats = render_stats;
+                custom_draw_trace.orientation_effect_read_bytes =
+                    render_stats.blended_pixels.saturating_mul(2);
+                custom_draw_trace.orientation_effect_write_bytes =
+                    render_stats.blended_pixels.saturating_mul(2);
+                let damage_build_started = Instant::now();
                 cached_damage.clear();
                 for row in 0..9 {
                     if let Some((x0, y0, x1, y1)) =
@@ -6618,6 +6675,9 @@ pub(super) fn run_launcher_loop(
                         cached_damage.push(DirtyRect { x0, y0, x1, y1 });
                     }
                 }
+                custom_draw_trace.orientation_damage_build_us =
+                    damage_build_started.elapsed().as_micros();
+                custom_draw_trace.orientation_damage_rects_after = cached_damage.len() as u32;
                 if done {
                     let _ = orientation_transition.take_completion();
                     release_full_screen_transition(

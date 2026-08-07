@@ -257,7 +257,19 @@ pub struct FrameBudgetRecentFrame {
     pub orientation_transition_effect: &'static str,
     pub orientation_transition_from: &'static str,
     pub orientation_transition_to: &'static str,
+    pub orientation_begin_us: u64,
+    pub orientation_source_snapshot_us: u64,
+    pub orientation_layout_us: u64,
+    pub orientation_controlled_slint_raster_us: u64,
     pub orientation_transition_destination_capture_us: u64,
+    pub orientation_damage_rotation_us: u64,
+    pub orientation_damage_build_us: u64,
+    pub orientation_source_snapshot_bytes: u64,
+    pub orientation_destination_snapshot_bytes: u64,
+    pub orientation_effect_read_bytes: u64,
+    pub orientation_effect_write_bytes: u64,
+    pub orientation_damage_rects_before: u32,
+    pub orientation_damage_rects_after: u32,
     pub orientation_transition_fill_us: u64,
     pub orientation_transition_map_us: u64,
     pub orientation_transition_crossfade_us: u64,
@@ -1252,9 +1264,51 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         frame.orientation_transition_from
     );
     field!("orientation_transition_to", frame.orientation_transition_to);
+    field!("orientation_begin_us", frame.orientation_begin_us);
+    field!(
+        "orientation_source_snapshot_us",
+        frame.orientation_source_snapshot_us
+    );
+    field!("orientation_layout_us", frame.orientation_layout_us);
+    field!(
+        "orientation_controlled_slint_raster_us",
+        frame.orientation_controlled_slint_raster_us
+    );
     field!(
         "orientation_transition_destination_capture_us",
         frame.orientation_transition_destination_capture_us
+    );
+    field!(
+        "orientation_damage_rotation_us",
+        frame.orientation_damage_rotation_us
+    );
+    field!(
+        "orientation_damage_build_us",
+        frame.orientation_damage_build_us
+    );
+    field!(
+        "orientation_source_snapshot_bytes",
+        frame.orientation_source_snapshot_bytes
+    );
+    field!(
+        "orientation_destination_snapshot_bytes",
+        frame.orientation_destination_snapshot_bytes
+    );
+    field!(
+        "orientation_effect_read_bytes",
+        frame.orientation_effect_read_bytes
+    );
+    field!(
+        "orientation_effect_write_bytes",
+        frame.orientation_effect_write_bytes
+    );
+    field!(
+        "orientation_damage_rects_before",
+        frame.orientation_damage_rects_before
+    );
+    field!(
+        "orientation_damage_rects_after",
+        frame.orientation_damage_rects_after
     );
     field!(
         "orientation_transition_fill_us",
@@ -1755,7 +1809,19 @@ mod tests {
                         orientation_transition_leg: 2,
                         orientation_transition_from: "monitor-clockwise",
                         orientation_transition_to: "monitor-counterclockwise",
+                        orientation_begin_us: 101,
+                        orientation_source_snapshot_us: 102,
+                        orientation_layout_us: 103,
+                        orientation_controlled_slint_raster_us: 104,
                         orientation_transition_destination_capture_us: 111,
+                        orientation_damage_rotation_us: 105,
+                        orientation_damage_build_us: 106,
+                        orientation_source_snapshot_bytes: 1_843_200,
+                        orientation_destination_snapshot_bytes: 1_843_200,
+                        orientation_effect_read_bytes: 640,
+                        orientation_effect_write_bytes: 640,
+                        orientation_damage_rects_before: 9,
+                        orientation_damage_rects_after: 7,
                         orientation_transition_fill_us: 222,
                         orientation_transition_map_us: 3_333,
                         orientation_transition_crossfade_us: 444,
@@ -1893,6 +1959,18 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["orientation_transition_total_us"],
             4_665
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["orientation_controlled_slint_raster_us"],
+            104
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["orientation_damage_rotation_us"],
+            105
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["orientation_source_snapshot_bytes"],
+            1_843_200
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(
