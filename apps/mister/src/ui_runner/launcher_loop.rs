@@ -2142,6 +2142,12 @@ fn apply_orientation_layout(
     window.request_redraw();
 }
 
+fn arm_orientation_confirmation(nav: &mut LauncherNav) {
+    nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
+    nav.confirm_selected = 0;
+    nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
+}
+
 #[allow(clippy::too_many_arguments)]
 fn begin_orientation_transition(
     app: &slint_ui::launcher::Launcher,
@@ -4874,6 +4880,8 @@ pub(super) fn run_launcher_loop(
                                 {
                                     let previous = nav.settings.screen_orientation;
                                     orientation_previous = Some(previous);
+                                    arm_orientation_confirmation(&mut nav);
+                                    orientation_confirm_deadline = None;
                                     let animated = begin_orientation_transition(
                                         &app,
                                         window,
@@ -4894,16 +4902,8 @@ pub(super) fn run_launcher_loop(
                                         &mut orientation_preparation_trace,
                                         OrientationTransitionIntent::Confirm,
                                     );
-                                    if animated {
-                                        nav.confirm_action = None;
-                                        orientation_confirm_deadline = None;
-                                    } else {
+                                    if !animated {
                                         let _ = orientation_transition.take_completion();
-                                        nav.confirm_action =
-                                            Some(launcher::ConfirmAction::ScreenOrientation);
-                                        nav.confirm_selected = 0;
-                                        nav.orientation_confirm_remaining =
-                                            launcher::DISPLAY_CONFIRM_SECONDS;
                                         orientation_confirm_deadline = Some(
                                             Instant::now()
                                                 + Duration::from_secs(u64::from(
@@ -6686,16 +6686,12 @@ pub(super) fn run_launcher_loop(
                     );
                     match orientation_transition_intent.take() {
                         Some(OrientationTransitionIntent::Confirm) => {
-                            nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
-                            nav.confirm_selected = 0;
-                            nav.orientation_confirm_remaining = launcher::DISPLAY_CONFIRM_SECONDS;
                             orientation_confirm_deadline = Some(
                                 Instant::now()
                                     + Duration::from_secs(u64::from(
                                         launcher::DISPLAY_CONFIRM_SECONDS,
                                     )),
                             );
-                            full_bridge_dirty = true;
                         }
                         Some(OrientationTransitionIntent::Benchmark) => {
                             orientation_benchmark.note_rendered_endpoint(frames);
@@ -8911,6 +8907,23 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arming_orientation_confirmation_sets_destination_dialog_state() {
+        let mut nav = LauncherNav::new();
+
+        arm_orientation_confirmation(&mut nav);
+
+        assert_eq!(
+            nav.confirm_action,
+            Some(launcher::ConfirmAction::ScreenOrientation)
+        );
+        assert_eq!(nav.confirm_selected, 0);
+        assert_eq!(
+            nav.orientation_confirm_remaining,
+            launcher::DISPLAY_CONFIRM_SECONDS
+        );
+    }
 
     #[test]
     fn modal_input_test_requires_every_path_below_fixed_tmp_root() {

@@ -8,12 +8,12 @@ use crate::spring_animation::smooth_spring_q16;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
-pub const ORIENTATION_WAVE_PHASE_DURATION: Duration = Duration::from_millis(1_170);
-pub const ORIENTATION_WAVE_TOTAL_DURATION: Duration = Duration::from_millis(2_340);
+pub const ORIENTATION_WAVE_PHASE_DURATION: Duration = Duration::from_millis(775);
+pub const ORIENTATION_WAVE_TOTAL_DURATION: Duration = Duration::from_millis(1_550);
 const ORIENTATION_GRID_COLUMNS: usize = 16;
 const ORIENTATION_GRID_ROWS: usize = 9;
-const ORIENTATION_TILE_DELAY_US: u64 = 40_000;
-const ORIENTATION_TILE_FADE_US: u64 = 250_000;
+const ORIENTATION_TILE_DELAY_US: u64 = 25_000;
+const ORIENTATION_TILE_FADE_US: u64 = 200_000;
 const RGB565_OPACITY_LEVELS: u8 = 32;
 const ORIENTATION_TILE_COUNT: usize = ORIENTATION_GRID_COLUMNS * ORIENTATION_GRID_ROWS;
 const ORIENTATION_TILE_SKIP: u8 = u8::MAX;
@@ -924,19 +924,19 @@ mod tests {
     #[test]
     fn wave_uses_the_supplied_delay_duration_and_smooth_spring_easing() {
         assert_eq!(orientation_tile_eased_level(0, 0, 0), Some(0));
-        let quarter = orientation_tile_eased_level(62_500, 0, 0).unwrap();
-        let halfway = orientation_tile_eased_level(125_000, 0, 0).unwrap();
-        let three_quarters = orientation_tile_eased_level(187_500, 0, 0).unwrap();
+        let quarter = orientation_tile_eased_level(50_000, 0, 0).unwrap();
+        let halfway = orientation_tile_eased_level(100_000, 0, 0).unwrap();
+        let three_quarters = orientation_tile_eased_level(150_000, 0, 0).unwrap();
         assert!(0 < quarter && quarter < halfway);
         assert!(halfway < three_quarters && three_quarters < RGB565_OPACITY_LEVELS);
         assert_eq!(
-            orientation_tile_eased_level(250_000, 0, 0),
+            orientation_tile_eased_level(200_000, 0, 0),
             Some(RGB565_OPACITY_LEVELS)
         );
-        assert_eq!(orientation_tile_eased_level(919_999, 8, 15), None);
-        assert_eq!(orientation_tile_eased_level(920_000, 8, 15), Some(0));
+        assert_eq!(orientation_tile_eased_level(574_999, 8, 15), None);
+        assert_eq!(orientation_tile_eased_level(575_000, 8, 15), Some(0));
         assert_eq!(
-            orientation_tile_eased_level(1_170_000, 8, 15),
+            orientation_tile_eased_level(775_000, 8, 15),
             Some(RGB565_OPACITY_LEVELS)
         );
     }
@@ -1007,7 +1007,7 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(250),
+            Duration::from_millis(200),
         );
         assert_eq!(output[0], Rgb565Pixel(0));
         assert_eq!(output[width * height - 1], source[width * height - 1]);
@@ -1018,7 +1018,7 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(1_170),
+            Duration::from_millis(775),
         );
         assert_eq!(output, vec![Rgb565Pixel(0); width * height]);
 
@@ -1028,7 +1028,7 @@ mod tests {
             &mut output,
             width,
             height,
-            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(250),
+            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(200),
         );
         assert_eq!(output[0], destination[0]);
         assert_eq!(output[width * height - 1], Rgb565Pixel(0));
@@ -1074,7 +1074,7 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(250),
+            Duration::from_millis(200),
         );
         assert!((0..10).all(|y| {
             output[y * width..y * width + 10]
@@ -1089,7 +1089,7 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(1_170),
+            Duration::from_millis(775),
         );
         assert!(output.iter().all(|pixel| pixel.0 == 0));
 
@@ -1099,7 +1099,7 @@ mod tests {
             &mut output,
             width,
             height,
-            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(250),
+            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(200),
         );
         assert!((0..10).all(|y| {
             output[y * width..y * width + 10]
