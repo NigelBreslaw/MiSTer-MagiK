@@ -50,11 +50,8 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
         return Err("particle lab preview is available only on macOS".into());
     }
     let lab = repository.join(LAB_DIR);
-    let mut build = Command::new("cargo");
-    build
-        .current_dir(&lab)
-        .args(["build", "--locked"])
-        .stdin(Stdio::null());
+    let mut build = crate::lab_build::command(&lab, None);
+    build.stdin(Stdio::null());
     let mut child = build
         .spawn()
         .map_err(|error| format!("cannot start particle lab preview build: {error}"))?;
@@ -68,7 +65,7 @@ fn preview(repository: &Path, args: &PreviewArgs) -> AgentResult<()> {
     if !status.success() {
         return Err(format!("particle lab preview build exited with {status}").into());
     }
-    let binary = lab.join("target/debug").join(LAB_BINARY);
+    let binary = crate::lab_build::artifact(&lab, LAB_BINARY);
     let status = Command::new(&binary)
         .args(["--demo", &args.demo, "--family"])
         .arg(&args.family)

@@ -27,6 +27,7 @@ pub mod game_databases;
 pub mod git;
 pub mod hooks;
 mod host;
+pub mod lab_build;
 pub mod live_particles;
 pub mod local_main_delivery;
 pub mod model;

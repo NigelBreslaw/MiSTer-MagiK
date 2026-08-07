@@ -217,11 +217,8 @@ fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> 
         return Err("--archive and --seed are valid only for screenshot-screensaver".into());
     }
     let lab = repository.join(LAB_DIR);
-    let mut build = Command::new("cargo");
-    build
-        .current_dir(&lab)
-        .args(["build", "--locked", "--bin", LAB_BINARY])
-        .stdin(Stdio::null());
+    let mut build = crate::lab_build::command(&lab, Some(LAB_BINARY));
+    build.stdin(Stdio::null());
     let mut child = build
         .spawn()
         .map_err(|error| format!("cannot start scene capture build: {error}"))?;
@@ -235,7 +232,7 @@ fn scene_capture(repository: &Path, args: &SceneCaptureArgs) -> AgentResult<()> 
     if !status.success() {
         return Err(format!("scene capture build exited with {status}").into());
     }
-    let binary = lab.join("target/debug").join(LAB_BINARY);
+    let binary = crate::lab_build::artifact(&lab, LAB_BINARY);
     let output = if args.output.is_absolute() {
         args.output.clone()
     } else {
@@ -282,6 +279,8 @@ fn generate_intro_assets(repository: &Path, args: &GenerateIntroAssetsArgs) -> A
         .args([
             "run",
             "--locked",
+            "--profile",
+            crate::lab_build::RUNNABLE_LAB_PROFILE,
             "--features",
             "asset-tools",
             "--bin",
@@ -571,11 +570,8 @@ fn run_preview(
         return Err("framebuffer scene preview is available only on macOS".into());
     }
     let lab = repository.join(LAB_DIR);
-    let mut build = Command::new("cargo");
-    build
-        .current_dir(&lab)
-        .args(["build", "--locked"])
-        .stdin(Stdio::null());
+    let mut build = crate::lab_build::command(&lab, None);
+    build.stdin(Stdio::null());
     let mut child = build
         .spawn()
         .map_err(|error| format!("cannot start startup particle preview build: {error}"))?;
@@ -589,7 +585,7 @@ fn run_preview(
     if !status.success() {
         return Err(format!("startup particle preview build exited with {status}").into());
     }
-    let binary = lab.join("target/debug").join(LAB_BINARY);
+    let binary = crate::lab_build::artifact(&lab, LAB_BINARY);
     let mut preview = Command::new(&binary);
     preview.args(["--scene", scene]);
     if let Some(recipe) = recipe {
