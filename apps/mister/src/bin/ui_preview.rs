@@ -574,6 +574,9 @@ mod macos {
             self.scenario = scenario;
             self.selection = 0;
             self.settings_focused = false;
+            if scenario != Scenario::OrientationChoice {
+                self.launcher_nav.orientation_combo_open = false;
+            }
             if scenario == Scenario::ArcadeCrossfade {
                 self.preview_previous_index = None;
                 self.preview_current_index = Some(0);
@@ -615,6 +618,7 @@ mod macos {
         fn sync_orientation_geometry(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
             bridge.set_orientation_active_label(self.orientation.label().into());
+            bridge.set_orientation_combo_open(self.launcher_nav.orientation_combo_open);
             if !self.orientation.is_portrait() {
                 return;
             }
@@ -788,6 +792,13 @@ mod macos {
                     }
                 }
                 Scenario::Settings => self.launcher_nav.screen = Screen::Settings,
+                Scenario::OrientationChoice => {
+                    self.launcher_nav.screen = Screen::Settings;
+                    self.launcher_nav.settings_selected = 1;
+                    self.launcher_nav.orientation_combo_open = true;
+                    self.launcher_nav.orientation_highlighted =
+                        self.launcher_nav.orientation_selected;
+                }
                 Scenario::Controller => self.launcher_nav.screen = Screen::Controller,
                 Scenario::About => self.launcher_nav.screen = Screen::About,
                 Scenario::Licenses => self.launcher_nav.screen = Screen::Licenses,
@@ -1061,6 +1072,7 @@ mod macos {
                     Scenario::ArcadeSearch
                 }
                 (Scenario::ArcadeCrossfade, Screen::Arcade) => Scenario::ArcadeCrossfade,
+                (Scenario::OrientationChoice, Screen::Settings) => Scenario::OrientationChoice,
                 (Scenario::ControllerSetup, Screen::Controller) => Scenario::ControllerSetup,
                 _ => Scenario::from_screen(self.launcher_nav.screen),
             };
@@ -2000,6 +2012,7 @@ mod macos {
         ArcadeSearch,
         ArcadeCrossfade,
         Settings,
+        OrientationChoice,
         Controller,
         ControllerSetup,
         About,
@@ -2025,6 +2038,7 @@ mod macos {
                     | Self::ArcadeSearch
                     | Self::ArcadeCrossfade
                     | Self::Settings
+                    | Self::OrientationChoice
                     | Self::Controller
                     | Self::About
                     | Self::Licenses
@@ -2053,6 +2067,7 @@ mod macos {
                 "arcade-search" | "search" => Some(Self::ArcadeSearch),
                 "arcade-crossfade" | "crossfade" => Some(Self::ArcadeCrossfade),
                 "settings" => Some(Self::Settings),
+                "orientation-choice" | "orientation-chooser" => Some(Self::OrientationChoice),
                 "controller" => Some(Self::Controller),
                 "controller-setup" | "setup" => Some(Self::ControllerSetup),
                 "about" => Some(Self::About),
@@ -2080,6 +2095,7 @@ mod macos {
                 Self::ArcadeSearch => "Arcade Search",
                 Self::ArcadeCrossfade => "Arcade Crossfade",
                 Self::Settings => "Settings",
+                Self::OrientationChoice => "Orientation Choice",
                 Self::Controller => "Controller",
                 Self::ControllerSetup => "Controller Setup",
                 Self::About => "About",
@@ -2101,6 +2117,7 @@ mod macos {
             match self {
                 Self::Home => "1",
                 Self::Settings => "2",
+                Self::OrientationChoice => "headless",
                 Self::Controller => "3",
                 Self::About => "4",
                 Self::Licenses => "5",
@@ -2773,7 +2790,7 @@ mod macos {
         bridge.set_screen_mode(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => 1,
             Scenario::Arcade | Scenario::ArcadeSearch => 2,
-            Scenario::Settings => 3,
+            Scenario::Settings | Scenario::OrientationChoice => 3,
             Scenario::About => 4,
             Scenario::Licenses => 5,
             Scenario::Info => 6,
@@ -2783,7 +2800,7 @@ mod macos {
         bridge.set_effective_view(
             match scenario {
                 Scenario::Arcade | Scenario::ArcadeSearch => "arcade",
-                Scenario::Settings => "settings",
+                Scenario::Settings | Scenario::OrientationChoice => "settings",
                 Scenario::Controller | Scenario::ControllerSetup => "controller",
                 Scenario::About => "about",
                 Scenario::Licenses => "licenses",
@@ -3228,6 +3245,16 @@ mod macos {
                 counterclockwise.orientation,
                 ScreenOrientation::MonitorCounterclockwise
             );
+        }
+
+        #[test]
+        fn preview_options_parse_orientation_choice_aliases() {
+            for scenario in ["orientation-choice", "orientation-chooser"] {
+                let options =
+                    PreviewOptions::parse(["--scenario", scenario].map(String::from)).unwrap();
+
+                assert_eq!(options.scenario, Scenario::OrientationChoice);
+            }
         }
 
         #[test]

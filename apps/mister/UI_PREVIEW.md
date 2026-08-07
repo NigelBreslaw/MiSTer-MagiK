@@ -163,12 +163,13 @@ landscape composition dimensions sent to the display; rotate the captured image
 in the mounting direction when reviewing it on an unrotated monitor.
 
 Useful capture scenarios include `home`, `arcade`, `settings`,
-`arcade-crossfade`, `controller-setup`, `catalog-scan`, `particle`, and
-`screenshot-screensaver`. Captures use a fixed animation clock and deterministic
-in-memory catalog/media fixtures by default. Pass `--content card --sd-root
-PATH --no-scan --no-download` for a bounded capture of real card data. Headless
-`auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100 ms. Repeating
-a scenario, frame, and refresh rate produces the same RGB565 output.
+`orientation-choice`, `arcade-crossfade`, `controller-setup`, `catalog-scan`,
+`particle`, and `screenshot-screensaver`. Captures use a fixed animation clock
+and deterministic in-memory catalog/media fixtures by default. Pass `--content
+card --sd-root PATH --no-scan --no-download` for a bounded capture of real card
+data. Headless `auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100
+ms. Repeating a scenario, frame, and refresh rate produces the same RGB565
+output.
 
 An explicit card-mode `screenshot-screensaver` capture opens the production
 archive with a fixed smoke-test seed, advances the same renderer with the fixed

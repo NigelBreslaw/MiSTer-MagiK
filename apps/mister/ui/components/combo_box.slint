@@ -4,13 +4,18 @@
 import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
 
 import { MisterBridge } from "../api.slint";
+import { MisterUi } from "../mister_window.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
     property <bool> orientation: MisterBridge.orientation-combo-open;
+    property <int> option-count: orientation
+        ? MisterBridge.orientation-options.length : MisterBridge.display-options.length;
     background: #000000c8;
     Rectangle {
         width: 94%;
-        height: 90%;
+        height: MisterUi.portrait-layout
+            ? Math.min((MisterUi.window-height - 32) * 1px, 68px + root.option-count * 38px)
+            : parent.height * 90 / 100;
         background: #0e0c14;
         border-width: 4px;
         border-color: #06d6a0;

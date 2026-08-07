@@ -16,7 +16,7 @@ component CrtResolutionRow inherits Rectangle {
     border-width: MisterUi.border;
     border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
 
-    HorizontalLayout {
+    if !MisterUi.portrait-layout : HorizontalLayout {
         padding-left: MisterUi.grid-x * 2;
         padding-right: MisterUi.grid-x * 2;
         spacing: MisterUi.grid-x;
@@ -43,6 +43,31 @@ component CrtResolutionRow inherits Rectangle {
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             size: MisterUi.crt-body-font;
             horizontal-alignment: right;
+        }
+    }
+
+    if MisterUi.portrait-layout : VerticalLayout {
+        padding-left: MisterUi.grid-x;
+        padding-right: MisterUi.grid-x;
+        padding-top: MisterUi.grid-y;
+        padding-bottom: MisterUi.grid-y;
+        spacing: MisterUi.grid-y;
+        alignment: center;
+
+        PixelText8 {
+            text: root.label;
+            font-family: MisterUi.crt-font-family;
+            color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
+            size: PixelTextSize.px8;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+        if root.detail != "" : PixelText8 {
+            text: root.detail;
+            font-family: MisterUi.crt-font-family;
+            color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
+            size: PixelTextSize.px8;
+            horizontal-alignment: center;
         }
     }
 }
@@ -75,6 +100,9 @@ export component CrtComboBoxOverlay inherits Rectangle {
             }
         }
 
-        CrtFooter { left-hint: "UP/DOWN Choose   A Apply"; right-hint: "B Cancel"; }
+        CrtFooter {
+            left-hint: MisterUi.portrait-layout ? "UP/DN Choose A Apply" : "UP/DOWN Choose   A Apply";
+            right-hint: "B Cancel";
+        }
     }
 }
