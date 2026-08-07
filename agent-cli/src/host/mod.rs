@@ -6906,6 +6906,7 @@ fn run_orientation_profile_pass(
     let local_dir = output_dir.join(name);
     fs::create_dir_all(&local_dir)?;
     let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
     exec_checked(
         &session,
         "reset orientation profile pass artifacts",
