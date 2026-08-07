@@ -6373,11 +6373,16 @@ fn qualify_installed_orientation_transitions(
     drop(session);
     fs::create_dir_all(output_dir)?;
     let _signal_guard = AttendedOperationSignalGuard::install();
+    let mut benchmark_ini = None;
 
     let run_result = (|| -> Result<Value> {
         apply_confirmed_display_mode(config, benchmark_mode, "orientation benchmark")?;
         let session = connect_with(&config.connection, 10)?;
         validate_live_display_mode(&session, benchmark_mode)?;
+        benchmark_ini = Some(
+            remote_read(&session, "/media/fat/MiSTer.ini")
+                .ok_or("MiSTer.ini is unavailable in orientation benchmark mode")?,
+        );
         exec_checked(
             &session,
             "reset orientation benchmark performance artifacts",
@@ -6471,10 +6476,10 @@ fn qualify_installed_orientation_transitions(
 
     let cleanup_result = restore_installed_orientation_transition_benchmark(
         config,
-        original_mode,
+        benchmark_mode,
         &boot_id,
         &manifest,
-        &original_ini,
+        benchmark_ini.as_deref(),
         original_settings.as_deref(),
     );
     let mut summary = match (run_result, cleanup_result) {
@@ -6492,7 +6497,11 @@ fn qualify_installed_orientation_transitions(
         "manifest": parse_manifest_evidence(&manifest),
         "original_mode": original_mode.id,
         "benchmark_mode": benchmark_mode.id,
+        "final_mode": benchmark_mode.id,
         "original_ini_sha256": encode_hex(&Sha256::digest(original_ini.as_bytes())),
+        "benchmark_ini_sha256": benchmark_ini
+            .as_ref()
+            .map(|ini| encode_hex(&Sha256::digest(ini.as_bytes()))),
         "settings_sha256": original_settings
             .as_ref()
             .map(|settings| encode_hex(&Sha256::digest(settings.as_bytes()))),
@@ -6502,10 +6511,10 @@ fn qualify_installed_orientation_transitions(
 
 fn restore_installed_orientation_transition_benchmark(
     config: &NativeDeviceConfig,
-    original_mode: DisplayMatrixMode,
+    benchmark_mode: DisplayMatrixMode,
     expected_boot_id: &str,
     expected_manifest: &str,
-    expected_ini: &str,
+    expected_ini: Option<&str>,
     expected_settings: Option<&str>,
 ) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
@@ -6529,7 +6538,6 @@ fn restore_installed_orientation_transition_benchmark(
     )?;
     drop(session);
     cancel_pending_benchmark_display_mode(config)?;
-    apply_confirmed_display_mode(config, original_mode, "orientation benchmark restore")?;
     let session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
     let display = exec_checked_output(
@@ -6538,10 +6546,11 @@ fn restore_installed_orientation_transition_benchmark(
         &acknowledged_main_command("mister_magik_display_get_v1"),
     )?;
     if parse_display_reply_pending(display.stdout.trim())?.is_some()
-        || parse_display_reply_active(display.stdout.trim())? != original_mode.id
+        || parse_display_reply_active(display.stdout.trim())? != benchmark_mode.id
     {
-        return Err("orientation benchmark did not restore the original display mode".into());
+        return Err("orientation benchmark did not retain the 1280x720p60 display mode".into());
     }
+    validate_live_display_mode(&session, benchmark_mode)?;
     if remote_read(&session, "/proc/sys/kernel/random/boot_id").as_deref() != Some(expected_boot_id)
     {
         return Err("device rebooted during orientation benchmark".into());
@@ -6551,8 +6560,10 @@ fn restore_installed_orientation_transition_benchmark(
     {
         return Err("installed platform manifest changed during orientation benchmark".into());
     }
-    if remote_read(&session, "/media/fat/MiSTer.ini").as_deref() != Some(expected_ini) {
-        return Err("orientation benchmark did not restore exact MiSTer.ini contents".into());
+    if expected_ini.is_none()
+        || remote_read(&session, "/media/fat/MiSTer.ini").as_deref() != expected_ini
+    {
+        return Err("orientation benchmark changed the retained 1280x720p60 MiSTer.ini".into());
     }
     if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE).as_deref() != expected_settings
     {

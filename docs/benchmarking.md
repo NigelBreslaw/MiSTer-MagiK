@@ -56,8 +56,9 @@ repeated-vblank drops, zero latch drops and sequence gaps, continuous accepted
 hidden-slot presentation, at least 59.9 physical FPS, whole-frame work P99 below
 15,917 µs, and maximum whole-frame work below 16,667 µs. The scenario changes
 orientation and motion state only in memory, disables catalog refresh, retains
-only performance evidence, and restores the original display mode, exact
-`MiSTer.ini`, settings hash, launcher, boot identity, and installed manifest.
+only performance evidence, retains the confirmed 1280×720/60 Hz display mode
+and its exact `MiSTer.ini`, and restores the ordinary launcher while verifying
+the settings hash, boot identity, and installed manifest.
 Evidence is written below
 `build/agent-benchmarks/orientation-transitions/<timestamp>/`.
 
