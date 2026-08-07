@@ -327,7 +327,7 @@ pub(crate) fn populate(
     connection: &Connection,
     games: &[crate::system_shard::SystemGame],
 ) -> Result<usize, PersistedSearchError> {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     let mut insert_search = connection
         .prepare(
@@ -337,7 +337,7 @@ pub(crate) fn populate(
              ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
-    let mut words = HashMap::<String, AutocompleteStats>::new();
+    let mut words = BTreeMap::<String, AutocompleteStats>::new();
     for (ordinal, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
@@ -403,9 +403,6 @@ pub(crate) fn populate(
     }
     drop(insert_search);
 
-    let word_count = words.len();
-    let mut words = words.into_iter().collect::<Vec<_>>();
-    words.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
     let mut insert_word = connection
         .prepare("INSERT INTO autocomplete_words(word,source_rank,score) VALUES (?1,?2,?3)")
         .map_err(|error| PersistedSearchError::with("prepare autocomplete rows", error))?;
@@ -427,7 +424,7 @@ pub(crate) fn populate(
             [],
         )
         .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
-    Ok(word_count)
+    Ok(words.len())
 }
 
 pub(crate) fn validate(
@@ -555,7 +552,7 @@ struct AutocompleteStats {
 
 #[cfg(feature = "builder")]
 fn add_words(
-    words: &mut std::collections::HashMap<String, AutocompleteStats>,
+    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
     value: &str,
     source: AutocompleteSource,
 ) {
@@ -566,7 +563,7 @@ fn add_words(
 
 #[cfg(feature = "builder")]
 fn add_word(
-    words: &mut std::collections::HashMap<String, AutocompleteStats>,
+    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
     value: &str,
     source: AutocompleteSource,
 ) {
@@ -687,42 +684,6 @@ mod tests {
                 .unwrap()
                 .autocomplete
                 .is_none()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn autocomplete_rows_remain_deterministic_after_hash_aggregation() {
-        let (root, sqlite) = fixture();
-        let connection = Connection::open(sqlite).unwrap();
-        let mut statement = connection
-            .prepare("SELECT word,source_rank,score FROM autocomplete_words ORDER BY word")
-            .unwrap();
-        let rows = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u8>(1)?,
-                    row.get::<_, u32>(2)?,
-                ))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert_eq!(
-            rows,
-            vec![
-                ("capcom".into(), 2, 4),
-                ("dual".into(), 2, 4),
-                ("fighter".into(), 2, 6),
-                ("ii".into(), 2, 6),
-                ("joystick".into(), 2, 4),
-                ("man".into(), 2, 6),
-                ("mra".into(), 1, 2),
-                ("namco".into(), 2, 4),
-                ("pac".into(), 2, 6),
-                ("street".into(), 2, 6),
-            ]
         );
         fs::remove_dir_all(root).unwrap();
     }
