@@ -300,7 +300,9 @@ export component LoadingOverlay inherits Rectangle {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
-            size: MisterUi.crt-heading-font;
+            size: MisterUi.portrait-layout && MisterUi.window-width < 400
+                ? PixelTextSize.px8
+                : MisterUi.portrait-layout ? PixelTextSize.px16 : MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
 
@@ -308,7 +310,7 @@ export component LoadingOverlay inherits Rectangle {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
-            size: MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
     }
