@@ -640,6 +640,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_orientation_transitions(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            qualify_installed_orientation_transitions(config, output_dir)
+        })
+    }
+
     pub(crate) fn verify_development_health(&mut self) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::SSH_READ)?;
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
@@ -6310,6 +6319,435 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
             format!("{root}/diagnostics"),
         ),
     ]
+}
+
+const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
+const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
+const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 6;
+
+fn qualify_installed_orientation_transitions(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("orientation benchmark display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed orientation benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("orientation-transitions-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support orientation-transitions-v1".into());
+    }
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_display = exec_checked_output(
+        &session,
+        "query original orientation benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err("orientation benchmark cannot start during a display transaction".into());
+    }
+    let original_mode_id = parse_display_reply_active(original_display.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode_id)
+        .copied()
+        .ok_or_else(|| format!("original display mode {original_mode_id} is unsupported"))?;
+    drop(session);
+    fs::create_dir_all(output_dir)?;
+    let _signal_guard = AttendedOperationSignalGuard::install();
+
+    let run_result = (|| -> Result<Value> {
+        apply_confirmed_display_mode(config, benchmark_mode, "orientation benchmark")?;
+        let session = connect_with(&config.connection, 10)?;
+        validate_live_display_mode(&session, benchmark_mode)?;
+        exec_checked(
+            &session,
+            "reset orientation benchmark performance artifacts",
+            &format!(
+                "set -eu; rm -rf {0}; mkdir -p {0}",
+                sh(ORIENTATION_TRANSITION_REMOTE_DIR)
+            ),
+        )?;
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK".into(),
+                        "1".into(),
+                    ),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS".into(),
+                        "1".into(),
+                    ),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR".into(),
+                        ORIENTATION_TRANSITION_REMOTE_DIR.into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        drop(session);
+
+        let telemetry = agent_telemetry_for_duration(
+            config.agent()?,
+            Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
+        )?;
+        let session = connect_with(&config.connection, 10)?;
+        let completion_text = remote_read(
+            &session,
+            &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/completion.json"),
+        )
+        .ok_or("orientation benchmark completion metadata is missing")?;
+        let completion: Value = serde_json::from_str(completion_text.trim())?;
+        fs::write(
+            output_dir.join("completion.json"),
+            format!("{}\n", serde_json::to_string_pretty(&completion)?),
+        )?;
+        let telemetry_text = telemetry
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join("\n");
+        fs::write(
+            output_dir.join("telemetry.jsonl"),
+            format!("{telemetry_text}\n"),
+        )?;
+        if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+            fs::write(output_dir.join("launcher.log"), log)?;
+        }
+        summarize_orientation_transition_qualification(&telemetry, completion)
+    })();
+
+    let cleanup_result = restore_installed_orientation_transition_benchmark(
+        config,
+        original_mode,
+        &boot_id,
+        &manifest,
+        &original_ini,
+        original_settings.as_deref(),
+    );
+    let mut summary = match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("orientation benchmark cleanup failed: {error}").into());
+        }
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; orientation benchmark cleanup failed: {cleanup}").into());
+        }
+    };
+    summary["identity"] = json!({
+        "boot_id": boot_id.trim(),
+        "manifest": parse_manifest_evidence(&manifest),
+        "original_mode": original_mode.id,
+        "benchmark_mode": benchmark_mode.id,
+        "original_ini_sha256": encode_hex(&Sha256::digest(original_ini.as_bytes())),
+        "settings_sha256": original_settings
+            .as_ref()
+            .map(|settings| encode_hex(&Sha256::digest(settings.as_bytes()))),
+    });
+    persist_orientation_transition_qualification(output_dir, &summary)
+}
+
+fn restore_installed_orientation_transition_benchmark(
+    config: &NativeDeviceConfig,
+    original_mode: DisplayMatrixMode,
+    expected_boot_id: &str,
+    expected_manifest: &str,
+    expected_ini: &str,
+    expected_settings: Option<&str>,
+) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "clear orientation benchmark one-shot state",
+        &format!(
+            "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {artifacts}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            artifacts = sh(ORIENTATION_TRANSITION_REMOTE_DIR),
+        ),
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    cancel_pending_benchmark_display_mode(config)?;
+    apply_confirmed_display_mode(config, original_mode, "orientation benchmark restore")?;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    let display = exec_checked_output(
+        &session,
+        "verify restored orientation benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(display.stdout.trim())?.is_some()
+        || parse_display_reply_active(display.stdout.trim())? != original_mode.id
+    {
+        return Err("orientation benchmark did not restore the original display mode".into());
+    }
+    if remote_read(&session, "/proc/sys/kernel/random/boot_id").as_deref() != Some(expected_boot_id)
+    {
+        return Err("device rebooted during orientation benchmark".into());
+    }
+    if remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest").as_deref()
+        != Some(expected_manifest)
+    {
+        return Err("installed platform manifest changed during orientation benchmark".into());
+    }
+    if remote_read(&session, "/media/fat/MiSTer.ini").as_deref() != Some(expected_ini) {
+        return Err("orientation benchmark did not restore exact MiSTer.ini contents".into());
+    }
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE).as_deref() != expected_settings
+    {
+        return Err("orientation benchmark changed settings.json".into());
+    }
+    exec_checked(
+        &session,
+        "orientation benchmark restored health",
+        &delivery_health_command("dev")?,
+    )?;
+    Ok(())
+}
+
+fn orientation_bracketed_presentation_window(
+    samples: &[Value],
+    first_completion_us: u64,
+    last_completion_us: u64,
+) -> Result<Value> {
+    let snapshots = samples
+        .iter()
+        .filter_map(parse_host_presentation_snapshot)
+        .filter(|snapshot| snapshot.magik_ownership)
+        .collect::<Vec<_>>();
+    let start = snapshots
+        .iter()
+        .copied()
+        .filter(|snapshot| snapshot.captured_monotonic_us <= first_completion_us)
+        .next_back()
+        .ok_or("orientation leg has no protocol-v5 start bracket")?;
+    let end = snapshots
+        .iter()
+        .copied()
+        .find(|snapshot| snapshot.captured_monotonic_us >= last_completion_us)
+        .ok_or("orientation leg has no protocol-v5 end bracket")?;
+    let elapsed_us = end
+        .captured_monotonic_us
+        .saturating_sub(start.captured_monotonic_us);
+    if elapsed_us == 0 {
+        return Err("orientation leg protocol-v5 brackets have no elapsed time".into());
+    }
+    let presented = end
+        .presented_vblank_count
+        .wrapping_sub(start.presented_vblank_count);
+    let repeated = end
+        .repeated_vblank_count
+        .wrapping_sub(start.repeated_vblank_count);
+    let ownership_losses = end
+        .ownership_loss_count
+        .wrapping_sub(start.ownership_loss_count);
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v5",
+        "start_captured_monotonic_us": start.captured_monotonic_us,
+        "end_captured_monotonic_us": end.captured_monotonic_us,
+        "elapsed_us": elapsed_us,
+        "presented_vblank_delta": presented,
+        "repeated_vblank_delta": repeated,
+        "ownership_loss_delta": ownership_losses,
+        "physical_fps": presented as f64 * 1_000_000.0 / elapsed_us as f64,
+    }))
+}
+
+fn summarize_orientation_transition_qualification(
+    telemetry: &[Value],
+    completion: Value,
+) -> Result<Value> {
+    if completion.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-orientation-transitions-v1")
+        || completion.get("state").and_then(Value::as_str) != Some("complete")
+    {
+        return Err("orientation benchmark route did not complete".into());
+    }
+    let records = completion
+        .get("records")
+        .and_then(Value::as_array)
+        .filter(|records| records.len() == 6)
+        .ok_or("orientation benchmark did not complete exactly six legs")?;
+    let mut frames = BTreeMap::<(u8, u64), Value>::new();
+    for sample in telemetry {
+        for frame in sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let leg = frame_u64(frame, "orientation_transition_leg") as u8;
+            let id = frame_u64(frame, "frame");
+            if leg > 0
+                && frame
+                    .get("orientation_transition_active")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                frames.insert((leg, id), frame.clone());
+            }
+        }
+    }
+    let mut legs = Vec::with_capacity(6);
+    let mut all_pass = true;
+    for (index, record) in records.iter().enumerate() {
+        let leg_number = u8::try_from(index + 1)?;
+        let selected = frames
+            .iter()
+            .filter(|((leg, _), _)| *leg == leg_number)
+            .map(|(_, frame)| frame)
+            .collect::<Vec<_>>();
+        if selected.len() < 2 {
+            return Err(
+                format!("orientation leg {leg_number} has insufficient frame telemetry").into(),
+            );
+        }
+        let first_us = frame_u64(selected[0], "completion_monotonic_us");
+        let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
+        let protocol = orientation_bracketed_presentation_window(telemetry, first_us, last_us)?;
+        let sequence_gaps = selected
+            .windows(2)
+            .filter(|pair| {
+                (frame_u64(pair[0], "main_present_sequence") as u16).wrapping_add(1)
+                    != frame_u64(pair[1], "main_present_sequence") as u16
+            })
+            .count();
+        let latch_drop_delta = (frame_u64(selected[selected.len() - 1], "main_present_drop_count")
+            as u16)
+            .wrapping_sub(frame_u64(selected[0], "main_present_drop_count") as u16);
+        let continuous_hidden = selected.iter().all(|frame| {
+            frame.get("main_present_status").and_then(Value::as_str) == Some("ok")
+                && frame.get("main_present_copy_path").and_then(Value::as_str) != Some("none")
+                && frame_u64(frame, "main_present_sequence")
+                    == frame_u64(frame, "main_present_active_sequence")
+        });
+        let mut whole_frame_work = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "wall_us").saturating_sub(frame_u64(frame, "vsync_us")))
+            .collect::<Vec<_>>();
+        whole_frame_work.sort_unstable();
+        let p99_us = percentile_99(&whole_frame_work);
+        let max_us = whole_frame_work.last().copied().unwrap_or(0);
+        let physical_fps = protocol["physical_fps"].as_f64().unwrap_or(0.0);
+        let passed = protocol["repeated_vblank_delta"].as_u64() == Some(0)
+            && protocol["ownership_loss_delta"].as_u64() == Some(0)
+            && latch_drop_delta == 0
+            && sequence_gaps == 0
+            && continuous_hidden
+            && physical_fps >= 59.9
+            && p99_us < 15_917
+            && max_us < 16_667;
+        all_pass &= passed;
+        legs.push(json!({
+            "leg": leg_number,
+            "label": record.get("label"),
+            "from": record.get("from"),
+            "to": record.get("to"),
+            "frames": selected.len(),
+            "passed": passed,
+            "protocol_v5": protocol,
+            "latch_drop_delta": latch_drop_delta,
+            "sequence_gaps": sequence_gaps,
+            "continuous_hidden_slot_presentation": continuous_hidden,
+            "whole_frame_work_p99_us": p99_us,
+            "whole_frame_work_max_us": max_us,
+        }));
+    }
+    Ok(json!({
+        "schema": "mister-magik-orientation-transition-qualification-v1",
+        "scenario": "orientation-transitions",
+        "status": if all_pass { "passed" } else { "failed" },
+        "cadence_authoritative": true,
+        "profiler_enabled": false,
+        "route": completion.get("route"),
+        "completion": completion,
+        "legs": legs,
+        "telemetry_file": "telemetry.jsonl",
+    }))
+}
+
+fn persist_orientation_transition_qualification(
+    output_dir: &Path,
+    summary: &Value,
+) -> Result<String> {
+    use std::fmt::Write as _;
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(summary)?),
+    )?;
+    let mut report = String::from("# Orientation transition qualification\n\n");
+    writeln!(
+        report,
+        "Result: **{}**\n",
+        summary["status"].as_str().unwrap_or("failed")
+    )?;
+    writeln!(
+        report,
+        "| Leg | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Result |"
+    )?;
+    writeln!(report, "|---|---:|---:|---:|---:|---:|---:|---|")?;
+    for leg in summary["legs"].as_array().into_iter().flatten() {
+        writeln!(
+            report,
+            "| {} | {:.3} | {} us | {} us | {} | {} | {} | {} |",
+            leg["label"].as_str().unwrap_or("unknown"),
+            leg["protocol_v5"]["physical_fps"].as_f64().unwrap_or(0.0),
+            leg["whole_frame_work_p99_us"].as_u64().unwrap_or(0),
+            leg["whole_frame_work_max_us"].as_u64().unwrap_or(0),
+            leg["protocol_v5"]["repeated_vblank_delta"]
+                .as_u64()
+                .unwrap_or(u64::MAX),
+            leg["latch_drop_delta"].as_u64().unwrap_or(u64::MAX),
+            leg["sequence_gaps"].as_u64().unwrap_or(u64::MAX),
+            if leg["passed"].as_bool() == Some(true) {
+                "PASS"
+            } else {
+                "FAIL"
+            },
+        )?;
+    }
+    fs::write(output_dir.join("report.md"), report)?;
+    if summary.get("status").and_then(Value::as_str) != Some("passed") {
+        return Err(format!(
+            "orientation transition qualification failed; performance evidence retained at {}",
+            output_dir.display()
+        )
+        .into());
+    }
+    serde_json::to_string(summary).map_err(Into::into)
 }
 
 const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 22;
@@ -16310,6 +16748,124 @@ H: Handlers=event3 js0"#
             "/media/fat/mister-magik-dev/catalog-v3/../agent.token"
         ));
         assert!(!is_catalog_database_path("/media/fat/MiSTer.ini"));
+    }
+
+    fn orientation_qualification_fixture() -> (Vec<Value>, Value) {
+        let labels = [
+            ("normal-to-clockwise", "normal", "clockwise"),
+            (
+                "clockwise-to-counterclockwise",
+                "clockwise",
+                "counterclockwise",
+            ),
+            ("counterclockwise-to-normal", "counterclockwise", "normal"),
+            ("normal-to-counterclockwise", "normal", "counterclockwise"),
+            (
+                "counterclockwise-to-clockwise",
+                "counterclockwise",
+                "clockwise",
+            ),
+            ("clockwise-to-normal", "clockwise", "normal"),
+        ];
+        let mut telemetry = Vec::new();
+        let mut records = Vec::new();
+        for (index, (label, from, to)) in labels.into_iter().enumerate() {
+            let base_us = index as u64 * 500_000 + 1_000_000;
+            let presented = index as u64 * 30;
+            telemetry.push(json!({
+                "presentation": {
+                    "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "available": true,
+                    "captured_monotonic_us": base_us,
+                    "owned_vblank_count": presented,
+                    "presented_vblank_count": presented,
+                    "repeated_vblank_count": 0,
+                    "ownership_loss_count": 0,
+                    "magik_ownership": true,
+                    "pending": false,
+                },
+                "launcher": {"frame_budget": {"recent_frames": []}},
+            }));
+            let sequence = index as u64 * 20 + 1;
+            let frame = |id: u64, completion_us: u64, sequence: u64| {
+                json!({
+                    "frame": id,
+                    "orientation_transition_active": true,
+                    "orientation_transition_leg": index + 1,
+                    "completion_monotonic_us": completion_us,
+                    "main_present_status": "ok",
+                    "main_present_copy_path": "identity-full",
+                    "main_present_sequence": sequence,
+                    "main_present_active_sequence": sequence,
+                    "main_present_drop_count": 0,
+                    "wall_us": 15_000,
+                    "vsync_us": 5_000,
+                })
+            };
+            telemetry.push(json!({
+                "presentation": {
+                    "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "available": true,
+                    "captured_monotonic_us": base_us + 250_000,
+                    "owned_vblank_count": presented + 15,
+                    "presented_vblank_count": presented + 15,
+                    "repeated_vblank_count": 0,
+                    "ownership_loss_count": 0,
+                    "magik_ownership": true,
+                    "pending": false,
+                },
+                "launcher": {"frame_budget": {"recent_frames": [
+                    frame(index as u64 * 10 + 1, base_us + 100_000, sequence),
+                    frame(index as u64 * 10 + 2, base_us + 116_667, sequence + 1),
+                ]}},
+            }));
+            records.push(json!({
+                "leg": index + 1,
+                "label": label,
+                "from": from,
+                "to": to,
+                "start_frame": index * 10 + 1,
+                "rendered_endpoint_frame": index * 10 + 2,
+                "presented_endpoint_frame": index * 10 + 2,
+                "presented_sequence": sequence + 1,
+            }));
+        }
+        (
+            telemetry,
+            json!({
+                "schema": "mister-magik-orientation-transitions-v1",
+                "state": "complete",
+                "route": ["normal", "clockwise", "counterclockwise", "normal", "counterclockwise", "clockwise", "normal"],
+                "records": records,
+            }),
+        )
+    }
+
+    #[test]
+    fn orientation_qualification_applies_every_leg_gate() {
+        let (telemetry, completion) = orientation_qualification_fixture();
+        let summary = summarize_orientation_transition_qualification(&telemetry, completion)
+            .expect("fixture should qualify");
+
+        assert_eq!(summary["status"], "passed");
+        assert_eq!(summary["legs"].as_array().unwrap().len(), 6);
+        assert!(
+            summary["legs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|leg| leg["passed"] == true)
+        );
+    }
+
+    #[test]
+    fn orientation_qualification_rejects_incomplete_routes() {
+        let (telemetry, mut completion) = orientation_qualification_fixture();
+        completion["records"].as_array_mut().unwrap().pop();
+
+        assert!(summarize_orientation_transition_qualification(&telemetry, completion).is_err());
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

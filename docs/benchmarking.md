@@ -24,6 +24,7 @@ Supported scenarios:
 - `launch-return-fallback`
 - `modal-input`
 - `navigation-transitions`
+- `orientation-transitions`
 - `pmu-profile`
 - `search`
 
@@ -46,6 +47,19 @@ Slint calls, status-writer overlap, preparation attribution, latch sequence
 continuity, physical FPS, and drop counters for all six legs, then restores the
 ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
+
+`orientation-transitions` runs the real Settings view at 1280×720/60 Hz through
+Normal → Clockwise → Counterclockwise → Normal → Counterclockwise → Clockwise
+→ Normal. Each endpoint must complete a physical hidden-slot presentation
+before the next leg starts. Every leg independently requires zero protocol-v5
+repeated-vblank drops, zero latch drops and sequence gaps, continuous accepted
+hidden-slot presentation, at least 59.9 physical FPS, whole-frame work P99 below
+15,917 µs, and maximum whole-frame work below 16,667 µs. The scenario changes
+orientation and motion state only in memory, disables catalog refresh, retains
+only performance evidence, and restores the original display mode, exact
+`MiSTer.ini`, settings hash, launcher, boot identity, and installed manifest.
+Evidence is written below
+`build/agent-benchmarks/orientation-transitions/<timestamp>/`.
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,

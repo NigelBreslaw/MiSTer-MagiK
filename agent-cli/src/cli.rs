@@ -695,6 +695,7 @@ mod tests {
             "particle-demo-40k",
             "particle-step",
             "navigation-transitions",
+            "orientation-transitions",
             "pmu-profile",
             "launch-return",
             "launch-return-fallback",

@@ -419,6 +419,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "schema": "mister-magik-benchmark-capabilities-v1",
         "screensaver-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
+        "orientation-transitions-v1": true,
         "pmu-probe-v1": true,
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,

@@ -45,6 +45,55 @@ const MODAL_INPUT_TEST_PATH_ENVS: &[&str] = &[
     "MISTER_CATALOG_READY_SNAPSHOT",
     "MISTER_CATALOG_DIAGNOSTICS_DIR",
 ];
+const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
+    "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR";
+
+fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+fn write_orientation_transition_benchmark_completion(
+    directory: &Path,
+    benchmark: &OrientationTransitionBenchmark,
+    frames: u64,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    let records = benchmark
+        .records()
+        .iter()
+        .map(|record| {
+            serde_json::json!({
+                "leg": record.leg.index + 1,
+                "label": record.leg.label(),
+                "from": record.leg.from.id(),
+                "to": record.leg.to.id(),
+                "start_frame": record.start_frame,
+                "rendered_endpoint_frame": record.rendered_endpoint_frame,
+                "presented_endpoint_frame": record.presented_endpoint_frame,
+                "presented_sequence": record.presented_sequence,
+            })
+        })
+        .collect::<Vec<_>>();
+    let document = serde_json::json!({
+        "schema": "mister-magik-orientation-transitions-v1",
+        "state": if benchmark.complete() { "complete" } else { "failed" },
+        "failure": benchmark.failure(),
+        "frames": frames,
+        "route": ORIENTATION_TRANSITION_BENCHMARK_ROUTE
+            .iter()
+            .map(|orientation| orientation.id())
+            .collect::<Vec<_>>(),
+        "records": records,
+    });
+    let temporary = directory.join("completion.json.tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
+    )?;
+    std::fs::rename(temporary, directory.join("completion.json"))
+}
 
 impl LauncherPresentBackend {
     fn from_env_values(backend: Option<&str>) -> Self {
@@ -2156,6 +2205,8 @@ pub(super) fn run_launcher_loop(
     let mut orientation_benchmark = OrientationTransitionBenchmark::new(launcher_env_flag(
         "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK",
     ));
+    let orientation_benchmark_requires_analytics =
+        launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
     let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
     let mut latch_v5_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
@@ -3036,8 +3087,10 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
-        if let Some(leg) =
-            orientation_benchmark.take_next_leg(nav.settings.screen_orientation, frames)
+        if (!orientation_benchmark_requires_analytics
+            || frame_accounting.frame_analytics_mode() != FrameAnalyticsMode::Off)
+            && let Some(leg) =
+                orientation_benchmark.take_next_leg(nav.settings.screen_orientation, frames)
         {
             let animated = begin_orientation_transition(
                 &app,
@@ -6957,6 +7010,20 @@ pub(super) fn run_launcher_loop(
         latch_v5_qualification.write_state_if_due(Instant::now());
         frames += 1;
         if orientation_benchmark.complete() {
+            if let Some(directory) = orientation_transition_benchmark_evidence_dir()
+                && let Err(error) = write_orientation_transition_benchmark_completion(
+                    &directory,
+                    &orientation_benchmark,
+                    frames,
+                )
+            {
+                crate::ui_errln!(
+                    "orientation_transition_benchmark_completion_write_failed error={error}"
+                );
+                orientation_benchmark.fail("completion-write-failed");
+            }
+        }
+        if orientation_benchmark.complete() {
             print_startup_event(
                 start,
                 "orientation_transition_benchmark_complete",
@@ -6968,6 +7035,17 @@ pub(super) fn run_launcher_loop(
             break;
         }
         if orientation_benchmark.failed() {
+            if let Some(directory) = orientation_transition_benchmark_evidence_dir()
+                && let Err(error) = write_orientation_transition_benchmark_completion(
+                    &directory,
+                    &orientation_benchmark,
+                    frames,
+                )
+            {
+                crate::ui_errln!(
+                    "orientation_transition_benchmark_failure_write_failed error={error}"
+                );
+            }
             print_startup_event(
                 start,
                 "orientation_transition_benchmark_failed",
