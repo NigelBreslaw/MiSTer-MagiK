@@ -2083,7 +2083,6 @@ pub(super) fn run_launcher_loop(
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
     launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
-    mut layout: UiLayoutGeometry,
 ) {
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
@@ -2186,7 +2185,7 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
-    layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
+    let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
     let mut portrait_target = layout.is_portrait().then(|| {

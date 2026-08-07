@@ -148,17 +148,15 @@ impl<'a> LayerTarget<'a> {
         &mut self,
         saver: &mut LauncherScreensaver,
     ) -> (DirtyRect, ScreensaverFrameTrace) {
-        let trace = saver.render(
-            self.drawing_target_mut().cached_565_mut(),
-            self.layout.logical_w(),
-            self.layout.logical_h(),
-        );
+        let width = self.layout.logical_w();
+        let height = self.layout.logical_h();
+        let trace = saver.render(self.drawing_target_mut().cached_565_mut(), width, height);
         (
             DirtyRect {
                 x0: 0,
                 y0: 0,
-                x1: self.layout.logical_w(),
-                y1: self.layout.logical_h(),
+                x1: width,
+                y1: height,
             },
             trace,
         )
@@ -192,11 +190,9 @@ impl<'a> LayerTarget<'a> {
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> (DirtyRect, ScreensaverFrameTrace) {
-        let trace = saver.render(
-            self.drawing_target_mut().cached_565_mut(),
-            self.layout.logical_w(),
-            self.layout.logical_h(),
-        );
+        let width = self.layout.logical_w();
+        let height = self.layout.logical_h();
+        let trace = saver.render(self.drawing_target_mut().cached_565_mut(), width, height);
         let cached = self.drawing_target_mut().cached_565_mut();
         if cached.len() == launcher_frame.len() {
             for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
@@ -207,8 +203,8 @@ impl<'a> LayerTarget<'a> {
             DirtyRect {
                 x0: 0,
                 y0: 0,
-                x1: self.layout.logical_w(),
-                y1: self.layout.logical_h(),
+                x1: width,
+                y1: height,
             },
             trace,
         )

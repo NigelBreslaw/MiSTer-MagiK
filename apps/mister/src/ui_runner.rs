@@ -459,7 +459,6 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
                     app,
                     &animation_clock,
                     launch_return_cpu_profile,
-                    launcher_layout,
                 );
             });
         }
