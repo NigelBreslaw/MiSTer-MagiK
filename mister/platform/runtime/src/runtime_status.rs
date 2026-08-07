@@ -278,9 +278,6 @@ pub struct FrameBudgetRecentFrame {
     pub orientation_transition_mapped_pixels: u64,
     pub orientation_transition_blended_pixels: u64,
     pub orientation_transition_progress_ppm: u32,
-    pub late_start_wait_eligible: bool,
-    pub late_start_wait_selected: bool,
-    pub late_start_wait_bypassed: bool,
     pub wall_us: u64,
     pub prepare_us: u64,
     pub slint_timer_dispatch_us: u64,
@@ -1345,9 +1342,6 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "orientation_transition_progress_ppm",
         frame.orientation_transition_progress_ppm
     );
-    field!("late_start_wait_eligible", frame.late_start_wait_eligible);
-    field!("late_start_wait_selected", frame.late_start_wait_selected);
-    field!("late_start_wait_bypassed", frame.late_start_wait_bypassed);
     field!("wall_us", frame.wall_us);
     field!("prepare_us", frame.prepare_us);
     field!("slint_timer_dispatch_us", frame.slint_timer_dispatch_us);

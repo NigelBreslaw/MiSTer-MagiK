@@ -1414,11 +1414,8 @@ fn home_frame_driven_redraw_active(
     screen == Screen::Home && (home_pan_present_active || home_horizontal_input_held)
 }
 
-fn latch_late_start_wait_enabled(
-    latch_backend_active: bool,
-    frame_driven_motion_active: bool,
-) -> bool {
-    !(latch_backend_active && frame_driven_motion_active)
+fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active: bool) -> bool {
+    !(latch_backend_active && home_motion_active)
 }
 
 fn retain_or_defer_screensaver_buffer(
@@ -5694,7 +5691,6 @@ pub(super) fn run_launcher_loop(
             != arcade_visual_index_at_loop_start
             || nav.arcade_filter.visual_index != arcade_filter_visual_index_at_loop_start;
         let stream_motion_before_render = navigation_transition.is_active()
-            || full_screen_transition.policy().frame_driven_motion
             || slint_animation_active
             || home_pan_present_active
             || home_horizontal_input_held
@@ -5857,24 +5853,21 @@ pub(super) fn run_launcher_loop(
             home_pan_present_active,
             home_horizontal_input_held,
         );
-        let frame_driven_motion_active =
-            home_motion_active || full_screen_transition.policy().frame_driven_motion;
         let late_frame_start_headroom_us = if latch_backend_active {
             phase_alignment.required_headroom_us()
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
         };
-        let late_start_wait_eligible = pacing_policy
-            .decide(LauncherFramePacingInput {
-                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-                frame_start_phase_us,
-                period_us: pacer.period_us(),
-                late_frame_start_headroom_us,
-            })
-            .wait_before_render;
-        let late_start_wait_bypassed = late_start_wait_eligible
-            && !latch_late_start_wait_enabled(latch_backend_active, frame_driven_motion_active);
-        let wait_before_render = late_start_wait_eligible && !late_start_wait_bypassed;
+        let wait_before_render =
+            latch_late_start_wait_enabled(latch_backend_active, home_motion_active)
+                && pacing_policy
+                    .decide(LauncherFramePacingInput {
+                        first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+                        frame_start_phase_us,
+                        period_us: pacer.period_us(),
+                        late_frame_start_headroom_us,
+                    })
+                    .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -6950,9 +6943,6 @@ pub(super) fn run_launcher_loop(
                 frame_t3,
                 frame_t4,
                 pre_render_wait_us,
-                late_start_wait_eligible,
-                late_start_wait_selected: wait_before_render,
-                late_start_wait_bypassed,
                 post_present_wait_us,
                 custom_draw_start,
                 custom_draw_done,
@@ -11165,7 +11155,7 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn latch_late_start_wait_is_disabled_for_any_frame_driven_motion() {
+    pub(super) fn latch_late_start_wait_is_disabled_only_for_active_home_motion() {
         assert!(latch_late_start_wait_enabled(false, false));
         assert!(latch_late_start_wait_enabled(false, true));
         assert!(latch_late_start_wait_enabled(true, false));
