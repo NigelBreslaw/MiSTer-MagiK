@@ -6398,9 +6398,11 @@ pub(super) fn run_launcher_loop(
         let mut cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
         if orientation_transition.is_active() {
             let orientation_started = Instant::now();
+            let transition_from = orientation_transition.from();
+            let transition_to = orientation_transition.to();
             custom_draw_trace.orientation_transition_active = true;
-            custom_draw_trace.orientation_transition_from = orientation_transition.from().id();
-            custom_draw_trace.orientation_transition_to = orientation_transition.to().id();
+            custom_draw_trace.orientation_transition_from = transition_from.id();
+            custom_draw_trace.orientation_transition_to = transition_to.id();
             custom_draw_trace.orientation_transition_leg = orientation_benchmark
                 .active_leg()
                 .map_or(0, |leg| (leg.index + 1).min(u8::MAX as usize) as u8);
@@ -6408,8 +6410,8 @@ pub(super) fn run_launcher_loop(
                 let capture_started = Instant::now();
                 let destination_pmu =
                     mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                        orientation_transition.from(),
-                        orientation_transition.to(),
+                        transition_from,
+                        transition_to,
                         OrientationPmuPhase::Destination,
                     ));
                 let _ = orientation_transition
@@ -6424,8 +6426,8 @@ pub(super) fn run_launcher_loop(
                 custom_draw_trace.orientation_transition_stats = render_stats;
                 let restore_started = Instant::now();
                 let restore_pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
-                    orientation_transition.from(),
-                    orientation_transition.to(),
+                    transition_from,
+                    transition_to,
                     OrientationPmuPhase::CacheRestore,
                 ));
                 let _ = layer_target.restore_presentation_cached(pixels);
