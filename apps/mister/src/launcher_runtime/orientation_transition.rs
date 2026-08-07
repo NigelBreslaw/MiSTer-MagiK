@@ -12,8 +12,9 @@ pub const ORIENTATION_WAVE_TOTAL_DURATION: Duration = Duration::from_millis(3_00
 const ORIENTATION_GRID_COLUMNS: usize = 16;
 const ORIENTATION_GRID_ROWS: usize = 9;
 const ORIENTATION_TILE_DELAY_US: u64 = 40_000;
-const ORIENTATION_TILE_FADE_US: u64 = 500_000;
+const ORIENTATION_TILE_FADE_US: u64 = 300_000;
 const RGB565_OPACITY_LEVELS: u8 = 32;
+const ORIENTATION_TRANSITION_COLOR: Rgb565Pixel = Rgb565Pixel(0x1082);
 const ORIENTATION_TILE_COUNT: usize = ORIENTATION_GRID_COLUMNS * ORIENTATION_GRID_ROWS;
 const ORIENTATION_TILE_SKIP: u8 = u8::MAX;
 
@@ -548,7 +549,7 @@ fn render_brightness_wave_scalar(
             let x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
             let x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
             let level = levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
-            render_white_faded_tile(frame, output, width, x0, x1, y0, y1, level);
+            render_color_faded_tile(frame, output, width, x0, x1, y0, y1, level);
         }
     }
 }
@@ -617,7 +618,7 @@ fn render_center_pixel_zoom_wave_scalar(
             }
             let (x0, x1) = centered_span(tile_x0, tile_x1, black_level);
             let (y0, y1) = centered_span(tile_y0, tile_y1, black_level);
-            fill_white_rect(output, width, x0, x1, y0, y1);
+            fill_transition_color_rect(output, width, x0, x1, y0, y1);
         }
     }
 }
@@ -828,7 +829,7 @@ fn centered_span(start: usize, end: usize, level: u8) -> (usize, usize) {
     )
 }
 
-fn fill_white_rect(
+fn fill_transition_color_rect(
     output: &mut [Rgb565Pixel],
     stride: usize,
     x0: usize,
@@ -839,7 +840,7 @@ fn fill_white_rect(
     for y in y0..y1 {
         let start = y * stride + x0;
         let end = y * stride + x1;
-        output[start..end].fill(Rgb565Pixel(u16::MAX));
+        output[start..end].fill(ORIENTATION_TRANSITION_COLOR);
     }
 }
 
@@ -860,7 +861,7 @@ fn copy_rect(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_white_faded_tile(
+fn render_color_faded_tile(
     frame: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
     stride: usize,
@@ -874,23 +875,25 @@ fn render_white_faded_tile(
         let start = y * stride + x0;
         let end = y * stride + x1;
         if opacity_level == 0 {
-            output[start..end].fill(Rgb565Pixel(u16::MAX));
+            output[start..end].fill(ORIENTATION_TRANSITION_COLOR);
         } else if opacity_level >= RGB565_OPACITY_LEVELS {
             output[start..end].copy_from_slice(&frame[start..end]);
         } else {
             for (pixel, source) in output[start..end].iter_mut().zip(&frame[start..end]) {
-                *pixel = fade_565_to_white(*source, opacity_level);
+                *pixel = fade_565_to_transition_color(*source, opacity_level);
             }
         }
     }
 }
 
-fn fade_565_to_white(pixel: Rgb565Pixel, opacity_level: u8) -> Rgb565Pixel {
+fn fade_565_to_transition_color(pixel: Rgb565Pixel, opacity_level: u8) -> Rgb565Pixel {
     let pixel = u32::from(pixel.0);
     let opacity = u32::from(opacity_level);
-    let red = 31 - (((31 - (pixel >> 11)) * opacity) >> 5);
-    let green = 63 - (((63 - ((pixel >> 5) & 63)) * opacity) >> 5);
-    let blue = 31 - (((31 - (pixel & 31)) * opacity) >> 5);
+    let inverse_opacity = u32::from(RGB565_OPACITY_LEVELS) - opacity;
+    let target = u32::from(ORIENTATION_TRANSITION_COLOR.0);
+    let red = ((pixel >> 11) * opacity + (target >> 11) * inverse_opacity) >> 5;
+    let green = (((pixel >> 5) & 63) * opacity + ((target >> 5) & 63) * inverse_opacity) >> 5;
+    let blue = ((pixel & 31) * opacity + (target & 31) * inverse_opacity) >> 5;
     Rgb565Pixel(((red << 11) | (green << 5) | blue) as u16)
 }
 
@@ -919,17 +922,17 @@ mod tests {
     #[test]
     fn wave_uses_the_supplied_delay_duration_and_quadratic_easing() {
         assert_eq!(orientation_tile_eased_level(0, 0, 0), Some(0));
-        assert_eq!(orientation_tile_eased_level(125_000, 0, 0), Some(2));
-        assert_eq!(orientation_tile_eased_level(250_000, 0, 0), Some(8));
-        assert_eq!(orientation_tile_eased_level(375_000, 0, 0), Some(18));
+        assert_eq!(orientation_tile_eased_level(75_000, 0, 0), Some(2));
+        assert_eq!(orientation_tile_eased_level(150_000, 0, 0), Some(8));
+        assert_eq!(orientation_tile_eased_level(225_000, 0, 0), Some(18));
         assert_eq!(
-            orientation_tile_eased_level(500_000, 0, 0),
+            orientation_tile_eased_level(300_000, 0, 0),
             Some(RGB565_OPACITY_LEVELS)
         );
         assert_eq!(orientation_tile_eased_level(919_999, 8, 15), None);
         assert_eq!(orientation_tile_eased_level(920_000, 8, 15), Some(0));
         assert_eq!(
-            orientation_tile_eased_level(1_420_000, 8, 15),
+            orientation_tile_eased_level(1_220_000, 8, 15),
             Some(RGB565_OPACITY_LEVELS)
         );
     }
@@ -970,14 +973,14 @@ mod tests {
 
         render_center_pixel_zoom_wave_scalar(&source, &mut output, width, height, &levels, damage);
 
-        assert_eq!(output[0], Rgb565Pixel(u16::MAX));
-        assert_eq!(output[9], Rgb565Pixel(u16::MAX));
+        assert_eq!(output[0], ORIENTATION_TRANSITION_COLOR);
+        assert_eq!(output[9], ORIENTATION_TRANSITION_COLOR);
         assert_eq!(output[10], sentinel);
         assert_eq!(output[10 * width], sentinel);
     }
 
     #[test]
-    fn wave_fades_old_frame_to_white_then_reveals_new_frame() {
+    fn wave_fades_old_frame_to_transition_color_then_reveals_new_frame() {
         let width = 16;
         let height = 9;
         let source = vec![Rgb565Pixel(0xf800); width * height];
@@ -1000,9 +1003,9 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(500),
+            Duration::from_millis(300),
         );
-        assert_eq!(output[0], Rgb565Pixel(u16::MAX));
+        assert_eq!(output[0], ORIENTATION_TRANSITION_COLOR);
         assert_eq!(output[width * height - 1], source[width * height - 1]);
 
         render_brightness_wave(
@@ -1011,9 +1014,9 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(1_420),
+            Duration::from_millis(1_220),
         );
-        assert_eq!(output, vec![Rgb565Pixel(u16::MAX); width * height]);
+        assert_eq!(output, vec![ORIENTATION_TRANSITION_COLOR; width * height]);
 
         render_brightness_wave(
             &source,
@@ -1021,10 +1024,10 @@ mod tests {
             &mut output,
             width,
             height,
-            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(500),
+            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(300),
         );
         assert_eq!(output[0], destination[0]);
-        assert_eq!(output[width * height - 1], Rgb565Pixel(u16::MAX));
+        assert_eq!(output[width * height - 1], ORIENTATION_TRANSITION_COLOR);
 
         render_brightness_wave(
             &source,
@@ -1038,7 +1041,7 @@ mod tests {
     }
 
     #[test]
-    fn center_pixel_zoom_expands_white_then_shrinks_over_destination() {
+    fn center_pixel_zoom_expands_transition_color_then_shrinks_over_destination() {
         let width = 160;
         let height = 90;
         let source = vec![Rgb565Pixel(0xf800); width * height];
@@ -1054,11 +1057,14 @@ mod tests {
             height,
             Duration::ZERO,
         );
-        assert_eq!(output[first_tile_center], Rgb565Pixel(u16::MAX));
+        assert_eq!(output[first_tile_center], ORIENTATION_TRANSITION_COLOR);
         assert_eq!(
-            output.iter().filter(|pixel| pixel.0 == u16::MAX).count(),
+            output
+                .iter()
+                .filter(|pixel| **pixel == ORIENTATION_TRANSITION_COLOR)
+                .count(),
             1,
-            "only the first tile's center pixel starts white"
+            "only the first tile's center pixel starts in the transition color"
         );
 
         render_center_pixel_zoom_wave(
@@ -1067,12 +1073,12 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(500),
+            Duration::from_millis(300),
         );
         assert!((0..10).all(|y| {
             output[y * width..y * width + 10]
                 .iter()
-                .all(|pixel| pixel.0 == u16::MAX)
+                .all(|pixel| *pixel == ORIENTATION_TRANSITION_COLOR)
         }));
         assert_eq!(output[width * height - 1], source[width * height - 1]);
 
@@ -1082,9 +1088,13 @@ mod tests {
             &mut output,
             width,
             height,
-            Duration::from_millis(1_420),
+            Duration::from_millis(1_220),
         );
-        assert!(output.iter().all(|pixel| pixel.0 == u16::MAX));
+        assert!(
+            output
+                .iter()
+                .all(|pixel| *pixel == ORIENTATION_TRANSITION_COLOR)
+        );
 
         render_center_pixel_zoom_wave(
             &source,
@@ -1092,14 +1102,14 @@ mod tests {
             &mut output,
             width,
             height,
-            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(500),
+            ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(300),
         );
         assert!((0..10).all(|y| {
             output[y * width..y * width + 10]
                 .iter()
                 .all(|pixel| *pixel == destination[0])
         }));
-        assert_eq!(output[width * height - 1], Rgb565Pixel(u16::MAX));
+        assert_eq!(output[width * height - 1], ORIENTATION_TRANSITION_COLOR);
 
         render_center_pixel_zoom_wave(
             &source,
