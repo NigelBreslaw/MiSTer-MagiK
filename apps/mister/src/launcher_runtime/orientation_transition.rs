@@ -473,6 +473,7 @@ impl OrientationTransitionRuntime {
     }
 }
 
+#[cfg(test)]
 fn render_brightness_wave(
     source: &[Rgb565Pixel],
     destination: &[Rgb565Pixel],
@@ -535,6 +536,7 @@ fn render_brightness_wave_scalar(
     }
 }
 
+#[cfg(test)]
 fn render_center_pixel_zoom_wave(
     source: &[Rgb565Pixel],
     destination: &[Rgb565Pixel],
