@@ -252,6 +252,20 @@ pub struct FrameBudgetRecentFrame {
     pub navigation_slint_render_called: bool,
     pub navigation_status_quiesce_wait_us: u64,
     pub navigation_status_quiesce_timeout: bool,
+    pub orientation_transition_active: bool,
+    pub orientation_transition_leg: u8,
+    pub orientation_transition_effect: &'static str,
+    pub orientation_transition_from: &'static str,
+    pub orientation_transition_to: &'static str,
+    pub orientation_transition_destination_capture_us: u64,
+    pub orientation_transition_fill_us: u64,
+    pub orientation_transition_map_us: u64,
+    pub orientation_transition_crossfade_us: u64,
+    pub orientation_transition_cache_restore_us: u64,
+    pub orientation_transition_total_us: u64,
+    pub orientation_transition_mapped_pixels: u64,
+    pub orientation_transition_blended_pixels: u64,
+    pub orientation_transition_progress_ppm: u32,
     pub wall_us: u64,
     pub prepare_us: u64,
     pub slint_timer_dispatch_us: u64,
@@ -1221,6 +1235,59 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "navigation_status_quiesce_timeout",
         frame.navigation_status_quiesce_timeout
     );
+    field!(
+        "orientation_transition_active",
+        frame.orientation_transition_active
+    );
+    field!(
+        "orientation_transition_leg",
+        frame.orientation_transition_leg
+    );
+    field!(
+        "orientation_transition_effect",
+        frame.orientation_transition_effect
+    );
+    field!(
+        "orientation_transition_from",
+        frame.orientation_transition_from
+    );
+    field!("orientation_transition_to", frame.orientation_transition_to);
+    field!(
+        "orientation_transition_destination_capture_us",
+        frame.orientation_transition_destination_capture_us
+    );
+    field!(
+        "orientation_transition_fill_us",
+        frame.orientation_transition_fill_us
+    );
+    field!(
+        "orientation_transition_map_us",
+        frame.orientation_transition_map_us
+    );
+    field!(
+        "orientation_transition_crossfade_us",
+        frame.orientation_transition_crossfade_us
+    );
+    field!(
+        "orientation_transition_cache_restore_us",
+        frame.orientation_transition_cache_restore_us
+    );
+    field!(
+        "orientation_transition_total_us",
+        frame.orientation_transition_total_us
+    );
+    field!(
+        "orientation_transition_mapped_pixels",
+        frame.orientation_transition_mapped_pixels
+    );
+    field!(
+        "orientation_transition_blended_pixels",
+        frame.orientation_transition_blended_pixels
+    );
+    field!(
+        "orientation_transition_progress_ppm",
+        frame.orientation_transition_progress_ppm
+    );
     field!("wall_us", frame.wall_us);
     field!("prepare_us", frame.prepare_us);
     field!("slint_timer_dispatch_us", frame.slint_timer_dispatch_us);
@@ -1684,6 +1751,19 @@ mod tests {
                         frame: 42,
                         screensaver_active: true,
                         screensaver_renderer: "parade",
+                        orientation_transition_active: true,
+                        orientation_transition_leg: 2,
+                        orientation_transition_from: "monitor-clockwise",
+                        orientation_transition_to: "monitor-counterclockwise",
+                        orientation_transition_destination_capture_us: 111,
+                        orientation_transition_fill_us: 222,
+                        orientation_transition_map_us: 3_333,
+                        orientation_transition_crossfade_us: 444,
+                        orientation_transition_cache_restore_us: 555,
+                        orientation_transition_total_us: 4_665,
+                        orientation_transition_mapped_pixels: 700_000,
+                        orientation_transition_blended_pixels: 921_600,
+                        orientation_transition_progress_ppm: 800_000,
                         wall_us: 18_000,
                         prepare_us: 100,
                         render_us: 2_000,
@@ -1805,6 +1885,14 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["screensaver_renderer"],
             "parade"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["orientation_transition_leg"],
+            2
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["orientation_transition_total_us"],
+            4_665
         );
         assert_eq!(value["frame_budget"]["slow_frames"][0]["frame"], 41);
         assert_eq!(

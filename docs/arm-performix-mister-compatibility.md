@@ -80,6 +80,7 @@ binary explicitly:
 
 ```text
 MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark streamline
+MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark orientation-transitions-streamline
 ```
 
 The typed workflow is Dev-only. It uploads to `/tmp`, captures the fixed
@@ -89,6 +90,9 @@ and disables call-stack unwinding. It retrieves both an extracted
 `mister-magik.apc` directory and its SHA-256-verified archive, then removes the
 remote daemon and capture. Cleanup may terminate only the PID recorded by this
 capture and only while `/proc/PID/exe` still resolves to the uploaded daemon.
+The orientation variant temporarily suspends the ordinary launcher, captures
+the exact installed Dev launcher running the fixed six-leg Settings route, and
+then restores the ordinary launcher while preserving the current display mode.
 
 The audited source contract is Arm gator commit
 `f0774012f36dbdb543e082d3e14ca9db20d0432d` (gator 9.7.2). Its maintained

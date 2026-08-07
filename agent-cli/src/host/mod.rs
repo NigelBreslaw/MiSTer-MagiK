@@ -590,7 +590,22 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_streamline(config, output_dir))
+        self.benchmark_profile(|config| {
+            profile_installed_streamline(config, output_dir, StreamlineWorkload::Screensaver)
+        })
+    }
+
+    pub(crate) fn profile_orientation_transition_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_streamline(
+                config,
+                output_dir,
+                StreamlineWorkload::OrientationTransitions,
+            )
+        })
     }
 
     pub(crate) fn verify_search_ui(
@@ -637,6 +652,24 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
             profile_installed_navigation_transitions(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_orientation_transitions(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            qualify_installed_orientation_transitions(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_orientation_transition_suite(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_orientation_transition_suite(config, output_dir)
         })
     }
 
@@ -4700,7 +4733,26 @@ const STREAMLINE_REMOTE_APC: &str = "/tmp/mister-magik/streamline-capture/mister
 const STREAMLINE_REMOTE_ARCHIVE: &str =
     "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
 
-fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamlineWorkload {
+    Screensaver,
+    OrientationTransitions,
+}
+
+impl StreamlineWorkload {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Screensaver => "pmu-profile screensaver",
+            Self::OrientationTransitions => "orientation-transitions",
+        }
+    }
+}
+
+fn profile_installed_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    workload: StreamlineWorkload,
+) -> Result<String> {
     let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
     let gatord_metadata = fs::metadata(&gatord)?;
     if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
@@ -4723,6 +4775,7 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "prepare Streamline capture",
         &streamline_prepare_command(),
     )?;
+    let mut launcher_suspended = false;
     let run_result = (|| -> Result<(String, String)> {
         put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
         let version = exec(
@@ -4734,12 +4787,41 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
             true,
         )?;
         let gatord_version = parse_gatord_version(&version)?;
-        let output = exec(&session, &streamline_capture_command(), true)?;
+        if workload == StreamlineWorkload::OrientationTransitions {
+            exec_checked(
+                &session,
+                "suspend ordinary launcher for orientation Streamline capture",
+                &acknowledged_main_command("mister_magik_suspend"),
+            )?;
+            launcher_suspended = true;
+        }
+        let output = exec(&session, &streamline_capture_command(workload), true)?;
         let mut capture_log = output.stdout.clone();
         capture_log.push_str(&output.stderr);
         fs::write(output_dir.join("gatord.log"), &capture_log)?;
         if let Some(message) = exec_failure_message("bounded Streamline capture", &output) {
             return Err(message.into());
+        }
+        if workload == StreamlineWorkload::OrientationTransitions {
+            let completion = remote_read(
+                &session,
+                &format!("{STREAMLINE_REMOTE_ROOT}/orientation/completion.json"),
+            )
+            .ok_or("orientation Streamline route completion is missing")?;
+            let completion_value: Value = serde_json::from_str(completion.trim())?;
+            if completion_value.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-orientation-transitions-v1")
+                || completion_value.get("state").and_then(Value::as_str) != Some("complete")
+                || completion_value
+                    .get("records")
+                    .and_then(Value::as_array)
+                    .is_none_or(|records| records.len() != ORIENTATION_TRANSITION_TOTAL_LEGS)
+            {
+                return Err(
+                    "orientation Streamline workload did not complete the fixed route".into(),
+                );
+            }
+            fs::write(output_dir.join("completion.json"), completion)?;
         }
         exec_checked(
             &session,
@@ -4771,8 +4853,33 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "clean Streamline capture",
         &streamline_cleanup_command(),
     );
-    cleanup_result?;
-    let (gatord_version, archive_sha256) = run_result?;
+    let restore_result = if launcher_suspended {
+        exec_checked(
+            &session,
+            "restore ordinary launcher after orientation Streamline capture",
+            &acknowledged_main_command("mister_magik_resume"),
+        )
+        .and_then(|()| {
+            wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45)).map(|_| ())
+        })
+    } else {
+        Ok(())
+    };
+    let (gatord_version, archive_sha256) = match (run_result, cleanup_result, restore_result) {
+        (Ok(result), Ok(()), Ok(())) => result,
+        (Err(run), Ok(()), Ok(())) => return Err(run),
+        (Ok(_), Err(cleanup), Ok(())) => return Err(cleanup),
+        (Ok(_), Ok(()), Err(restore)) => return Err(restore),
+        (run, cleanup, restore) => {
+            return Err(format!(
+                "Streamline capture failed: run={:?}; cleanup={:?}; restore={:?}",
+                run.err().map(|error| error.to_string()),
+                cleanup.err().map(|error| error.to_string()),
+                restore.err().map(|error| error.to_string()),
+            )
+            .into());
+        }
+    };
 
     let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable after Streamline capture")?;
@@ -4792,7 +4899,7 @@ fn profile_installed_streamline(config: &NativeDeviceConfig, output_dir: &Path) 
         "archive_sha256": archive_sha256,
         "capture": "mister-magik.apc",
         "archive": "mister-magik.apc.tar.gz",
-        "workload": "pmu-profile screensaver",
+        "workload": workload.label(),
         "max_duration_seconds": 10,
         "sample_rate": "low",
         "exclude_kernel": false,
@@ -4836,11 +4943,30 @@ fn streamline_prepare_command() -> String {
     )
 }
 
-fn streamline_capture_command() -> String {
+fn streamline_capture_command(workload: StreamlineWorkload) -> String {
+    let app = match workload {
+        StreamlineWorkload::Screensaver => {
+            "/media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver".to_string()
+        }
+        StreamlineWorkload::OrientationTransitions => format!(
+            "MISTER_CATALOG_REFRESH=off MISTER_ORIENTATION_TRANSITIONS_BENCHMARK=1 MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR={evidence} {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app /media/fat/mister-magik-dev/mister-magik-fb ui launcher 0",
+            evidence = sh(&format!("{STREAMLINE_REMOTE_ROOT}/orientation")),
+            gatord = sh(STREAMLINE_REMOTE_GATORD),
+            apc = sh(STREAMLINE_REMOTE_APC),
+        ),
+    };
+    let invocation = if workload == StreamlineWorkload::Screensaver {
+        format!(
+            "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app {app}",
+            gatord = sh(STREAMLINE_REMOTE_GATORD),
+            apc = sh(STREAMLINE_REMOTE_APC),
+        )
+    } else {
+        app
+    };
     format!(
-        "set +e; {gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app /media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
-        gatord = sh(STREAMLINE_REMOTE_GATORD),
-        apc = sh(STREAMLINE_REMOTE_APC),
+        "set +e; {invocation} & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
+        invocation = invocation,
         pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
     )
 }
@@ -6310,6 +6436,866 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
             format!("{root}/diagnostics"),
         ),
     ]
+}
+
+const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
+const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
+const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 48;
+const ORIENTATION_TRANSITION_EFFECT_COUNT: usize = 2;
+const ORIENTATION_TRANSITION_LEGS_PER_EFFECT: usize = 6;
+const ORIENTATION_TRANSITION_TOTAL_LEGS: usize =
+    ORIENTATION_TRANSITION_EFFECT_COUNT * ORIENTATION_TRANSITION_LEGS_PER_EFFECT;
+
+fn qualify_installed_orientation_transitions(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("orientation benchmark display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed orientation benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("orientation-transitions-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support orientation-transitions-v1".into());
+    }
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let original_ini =
+        remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_display = exec_checked_output(
+        &session,
+        "query original orientation benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err("orientation benchmark cannot start during a display transaction".into());
+    }
+    let original_mode_id = parse_display_reply_active(original_display.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_mode_id)
+        .copied()
+        .ok_or_else(|| format!("original display mode {original_mode_id} is unsupported"))?;
+    drop(session);
+    fs::create_dir_all(output_dir)?;
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let mut benchmark_ini = None;
+
+    let run_result = (|| -> Result<Value> {
+        apply_confirmed_display_mode(config, benchmark_mode, "orientation benchmark")?;
+        let session = connect_with(&config.connection, 10)?;
+        validate_live_display_mode(&session, benchmark_mode)?;
+        benchmark_ini = Some(
+            remote_read(&session, "/media/fat/MiSTer.ini")
+                .ok_or("MiSTer.ini is unavailable in orientation benchmark mode")?,
+        );
+        exec_checked(
+            &session,
+            "reset orientation benchmark performance artifacts",
+            &format!(
+                "set -eu; rm -rf {0}; mkdir -p {0}",
+                sh(ORIENTATION_TRANSITION_REMOTE_DIR)
+            ),
+        )?;
+        let telemetry_endpoint = config.agent()?.clone();
+        let telemetry_thread = thread::spawn(move || {
+            agent_telemetry_for_duration(
+                &telemetry_endpoint,
+                Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
+            )
+            .map_err(|error| error.to_string())
+        });
+        let analytics_started = Instant::now();
+        while remote_read(&session, "/tmp/mister-magik/realtime-frame-analytics").as_deref()
+            != Some("process\n")
+        {
+            if analytics_started.elapsed() >= Duration::from_secs(3) {
+                return Err("orientation benchmark analytics lease did not become ready".into());
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        restart_launcher_with_one_shot_env(
+            &session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK".into(),
+                        "1".into(),
+                    ),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS".into(),
+                        "1".into(),
+                    ),
+                    (
+                        "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR".into(),
+                        ORIENTATION_TRANSITION_REMOTE_DIR.into(),
+                    ),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        drop(session);
+
+        let telemetry = telemetry_thread
+            .join()
+            .map_err(|_| "orientation benchmark telemetry collector panicked")?
+            .map_err(|error| format!("orientation benchmark telemetry failed: {error}"))?;
+        let session = connect_with(&config.connection, 10)?;
+        let telemetry_text = telemetry
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .join("\n");
+        fs::write(
+            output_dir.join("telemetry.jsonl"),
+            format!("{telemetry_text}\n"),
+        )?;
+        if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+            fs::write(output_dir.join("launcher.log"), log)?;
+        }
+        let completion_text = remote_read(
+            &session,
+            &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/completion.json"),
+        );
+        if completion_text.is_none() {
+            fs::write(
+                output_dir.join("failure.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "schema": "mister-magik-orientation-transition-failure-v1",
+                    "failure": "completion-metadata-missing",
+                    "launcher_status": read_launcher_status(&session).ok(),
+                }))?,
+            )?;
+        }
+        let completion_text =
+            completion_text.ok_or("orientation benchmark completion metadata is missing")?;
+        let completion: Value = serde_json::from_str(completion_text.trim())?;
+        fs::write(
+            output_dir.join("completion.json"),
+            format!("{}\n", serde_json::to_string_pretty(&completion)?),
+        )?;
+        summarize_orientation_transition_qualification(&telemetry, completion)
+    })();
+
+    let cleanup_result = restore_installed_orientation_transition_benchmark(
+        config,
+        benchmark_mode,
+        &boot_id,
+        &manifest,
+        benchmark_ini.as_deref(),
+        original_settings.as_deref(),
+    );
+    let mut summary = match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => summary,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("orientation benchmark cleanup failed: {error}").into());
+        }
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; orientation benchmark cleanup failed: {cleanup}").into());
+        }
+    };
+    summary["identity"] = json!({
+        "boot_id": boot_id.trim(),
+        "manifest": parse_manifest_evidence(&manifest),
+        "original_mode": original_mode.id,
+        "benchmark_mode": benchmark_mode.id,
+        "final_mode": benchmark_mode.id,
+        "original_ini_sha256": encode_hex(&Sha256::digest(original_ini.as_bytes())),
+        "benchmark_ini_sha256": benchmark_ini
+            .as_ref()
+            .map(|ini| encode_hex(&Sha256::digest(ini.as_bytes()))),
+        "settings_sha256": original_settings
+            .as_ref()
+            .map(|settings| encode_hex(&Sha256::digest(settings.as_bytes()))),
+    });
+    persist_orientation_transition_qualification(output_dir, &summary)
+}
+
+fn restore_installed_orientation_transition_benchmark(
+    config: &NativeDeviceConfig,
+    benchmark_mode: DisplayMatrixMode,
+    expected_boot_id: &str,
+    expected_manifest: &str,
+    expected_ini: Option<&str>,
+    expected_settings: Option<&str>,
+) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "clear orientation benchmark one-shot state",
+        &format!(
+            "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {artifacts}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            artifacts = sh(ORIENTATION_TRANSITION_REMOTE_DIR),
+        ),
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    cancel_pending_benchmark_display_mode(config)?;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    let display = exec_checked_output(
+        &session,
+        "verify restored orientation benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(display.stdout.trim())?.is_some()
+        || parse_display_reply_active(display.stdout.trim())? != benchmark_mode.id
+    {
+        return Err("orientation benchmark did not retain the 1280x720p60 display mode".into());
+    }
+    validate_live_display_mode(&session, benchmark_mode)?;
+    if remote_read(&session, "/proc/sys/kernel/random/boot_id").as_deref() != Some(expected_boot_id)
+    {
+        return Err("device rebooted during orientation benchmark".into());
+    }
+    if remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest").as_deref()
+        != Some(expected_manifest)
+    {
+        return Err("installed platform manifest changed during orientation benchmark".into());
+    }
+    if expected_ini.is_none()
+        || remote_read(&session, "/media/fat/MiSTer.ini").as_deref() != expected_ini
+    {
+        return Err("orientation benchmark changed the retained 1280x720p60 MiSTer.ini".into());
+    }
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE).as_deref() != expected_settings
+    {
+        return Err("orientation benchmark changed settings.json".into());
+    }
+    exec_checked(
+        &session,
+        "orientation benchmark restored health",
+        &delivery_health_command("dev")?,
+    )?;
+    Ok(())
+}
+
+fn orientation_bracketed_presentation_window(
+    samples: &[Value],
+    first_completion_us: u64,
+    last_completion_us: u64,
+) -> Result<Value> {
+    let snapshots = samples
+        .iter()
+        .filter_map(parse_host_presentation_snapshot)
+        .filter(|snapshot| snapshot.magik_ownership)
+        .collect::<Vec<_>>();
+    let start = snapshots
+        .iter()
+        .copied()
+        .filter(|snapshot| snapshot.captured_monotonic_us <= first_completion_us)
+        .next_back()
+        .ok_or("orientation leg has no protocol-v5 start bracket")?;
+    let end = snapshots
+        .iter()
+        .copied()
+        .find(|snapshot| snapshot.captured_monotonic_us >= last_completion_us)
+        .ok_or("orientation leg has no protocol-v5 end bracket")?;
+    let elapsed_us = end
+        .captured_monotonic_us
+        .saturating_sub(start.captured_monotonic_us);
+    if elapsed_us == 0 {
+        return Err("orientation leg protocol-v5 brackets have no elapsed time".into());
+    }
+    let presented = end
+        .presented_vblank_count
+        .wrapping_sub(start.presented_vblank_count);
+    let repeated = end
+        .repeated_vblank_count
+        .wrapping_sub(start.repeated_vblank_count);
+    let ownership_losses = end
+        .ownership_loss_count
+        .wrapping_sub(start.ownership_loss_count);
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v5",
+        "start_captured_monotonic_us": start.captured_monotonic_us,
+        "end_captured_monotonic_us": end.captured_monotonic_us,
+        "elapsed_us": elapsed_us,
+        "presented_vblank_delta": presented,
+        "repeated_vblank_delta": repeated,
+        "ownership_loss_delta": ownership_losses,
+        "physical_fps": presented as f64 * 1_000_000.0 / elapsed_us as f64,
+    }))
+}
+
+fn summarize_orientation_transition_qualification(
+    telemetry: &[Value],
+    completion: Value,
+) -> Result<Value> {
+    if completion.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-orientation-transitions-v1")
+        || completion.get("state").and_then(Value::as_str) != Some("complete")
+    {
+        return Err("orientation benchmark route did not complete".into());
+    }
+    let records = completion
+        .get("records")
+        .and_then(Value::as_array)
+        .filter(|records| records.len() == ORIENTATION_TRANSITION_TOTAL_LEGS)
+        .ok_or("orientation benchmark did not complete both six-leg effects")?;
+    let mut frames = BTreeMap::<(u8, u64), Value>::new();
+    for sample in telemetry {
+        for frame in sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let leg = frame_u64(frame, "orientation_transition_leg") as u8;
+            let id = frame_u64(frame, "frame");
+            if leg > 0
+                && frame
+                    .get("orientation_transition_active")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            {
+                frames.insert((leg, id), frame.clone());
+            }
+        }
+    }
+    let mut legs = Vec::with_capacity(ORIENTATION_TRANSITION_TOTAL_LEGS);
+    let mut all_pass = true;
+    for (index, record) in records.iter().enumerate() {
+        let leg_number = u8::try_from(index + 1)?;
+        let selected = frames
+            .iter()
+            .filter(|((leg, _), _)| *leg == leg_number)
+            .map(|(_, frame)| frame)
+            .collect::<Vec<_>>();
+        if selected.len() < 2 {
+            return Err(
+                format!("orientation leg {leg_number} has insufficient frame telemetry").into(),
+            );
+        }
+        let first_us = frame_u64(selected[0], "completion_monotonic_us");
+        let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
+        let protocol = orientation_bracketed_presentation_window(telemetry, first_us, last_us)?;
+        let sequence_gaps = selected
+            .windows(2)
+            .filter(|pair| {
+                (frame_u64(pair[0], "main_present_sequence") as u16).wrapping_add(1)
+                    != frame_u64(pair[1], "main_present_sequence") as u16
+            })
+            .count();
+        let latch_drop_delta = (frame_u64(selected[selected.len() - 1], "main_present_drop_count")
+            as u16)
+            .wrapping_sub(frame_u64(selected[0], "main_present_drop_count") as u16);
+        let continuous_hidden = selected.iter().all(|frame| {
+            frame.get("main_present_status").and_then(Value::as_str) == Some("ok")
+                && frame.get("main_present_copy_path").and_then(Value::as_str) != Some("none")
+                && frame_u64(frame, "main_present_sequence")
+                    == frame_u64(frame, "main_present_active_sequence")
+        });
+        let mut whole_frame_work = selected
+            .iter()
+            .map(|frame| frame_u64(frame, "wall_us").saturating_sub(frame_u64(frame, "vsync_us")))
+            .collect::<Vec<_>>();
+        whole_frame_work.sort_unstable();
+        let p99_us = percentile_99(&whole_frame_work);
+        let max_us = whole_frame_work.last().copied().unwrap_or(0);
+        let physical_fps = protocol["physical_fps"].as_f64().unwrap_or(0.0);
+        let passed = protocol["repeated_vblank_delta"].as_u64() == Some(0)
+            && protocol["ownership_loss_delta"].as_u64() == Some(0)
+            && latch_drop_delta == 0
+            && sequence_gaps == 0
+            && continuous_hidden
+            && physical_fps >= 59.9
+            && p99_us < 15_917
+            && max_us < 16_667;
+        all_pass &= passed;
+        legs.push(json!({
+            "leg": leg_number,
+            "effect": record.get("effect"),
+            "label": record.get("label"),
+            "from": record.get("from"),
+            "to": record.get("to"),
+            "frames": selected.len(),
+            "passed": passed,
+            "protocol_v5": protocol,
+            "latch_drop_delta": latch_drop_delta,
+            "sequence_gaps": sequence_gaps,
+            "continuous_hidden_slot_presentation": continuous_hidden,
+            "whole_frame_work_p99_us": p99_us,
+            "whole_frame_work_max_us": max_us,
+        }));
+    }
+    Ok(json!({
+        "schema": "mister-magik-orientation-transition-qualification-v1",
+        "scenario": "orientation-transitions",
+        "status": if all_pass { "passed" } else { "failed" },
+        "cadence_authoritative": true,
+        "profiler_enabled": false,
+        "route": completion.get("route"),
+        "completion": completion,
+        "legs": legs,
+        "telemetry_file": "telemetry.jsonl",
+    }))
+}
+
+fn persist_orientation_transition_qualification(
+    output_dir: &Path,
+    summary: &Value,
+) -> Result<String> {
+    use std::fmt::Write as _;
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(summary)?),
+    )?;
+    let mut report = String::from("# Orientation transition qualification\n\n");
+    writeln!(
+        report,
+        "Result: **{}**\n",
+        summary["status"].as_str().unwrap_or("failed")
+    )?;
+    writeln!(
+        report,
+        "| Effect | Leg | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Result |"
+    )?;
+    writeln!(report, "|---|---|---:|---:|---:|---:|---:|---:|---|")?;
+    for leg in summary["legs"].as_array().into_iter().flatten() {
+        writeln!(
+            report,
+            "| {} | {} | {:.3} | {} us | {} us | {} | {} | {} | {} |",
+            leg["effect"].as_str().unwrap_or("unknown"),
+            leg["label"].as_str().unwrap_or("unknown"),
+            leg["protocol_v5"]["physical_fps"].as_f64().unwrap_or(0.0),
+            leg["whole_frame_work_p99_us"].as_u64().unwrap_or(0),
+            leg["whole_frame_work_max_us"].as_u64().unwrap_or(0),
+            leg["protocol_v5"]["repeated_vblank_delta"]
+                .as_u64()
+                .unwrap_or(u64::MAX),
+            leg["latch_drop_delta"].as_u64().unwrap_or(u64::MAX),
+            leg["sequence_gaps"].as_u64().unwrap_or(u64::MAX),
+            if leg["passed"].as_bool() == Some(true) {
+                "PASS"
+            } else {
+                "FAIL"
+            },
+        )?;
+    }
+    fs::write(output_dir.join("report.md"), report)?;
+    if summary.get("status").and_then(Value::as_str) != Some("passed") {
+        return Err(format!(
+            "orientation transition qualification failed; performance evidence retained at {}",
+            output_dir.display()
+        )
+        .into());
+    }
+    serde_json::to_string(summary).map_err(Into::into)
+}
+
+#[derive(Clone, Copy)]
+enum OrientationProfilePass {
+    Pprof,
+    Pmu,
+}
+
+fn profile_installed_orientation_transition_suite(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let benchmark_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("orientation profile display mode is unavailable")?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed orientation profile capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("orientation-transitions-pprof-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support orientation-transitions-pprof-v1".into());
+    }
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    drop(session);
+    fs::create_dir_all(output_dir)?;
+    apply_confirmed_display_mode(config, benchmark_mode, "orientation profile")?;
+    let session = connect_with(&config.connection, 10)?;
+    validate_live_display_mode(&session, benchmark_mode)?;
+    let benchmark_ini = remote_read(&session, "/media/fat/MiSTer.ini")
+        .ok_or("MiSTer.ini is unavailable in orientation profile mode")?;
+    drop(session);
+    let _signal_guard = AttendedOperationSignalGuard::install();
+
+    let run_result = (|| -> Result<(Value, Value)> {
+        let pprof =
+            run_orientation_profile_pass(config, output_dir, OrientationProfilePass::Pprof)?;
+        let pmu = run_orientation_profile_pass(config, output_dir, OrientationProfilePass::Pmu)?;
+        Ok((pprof, pmu))
+    })();
+    let cleanup = restore_installed_orientation_transition_benchmark(
+        config,
+        benchmark_mode,
+        &boot_id,
+        &manifest,
+        Some(&benchmark_ini),
+        settings.as_deref(),
+    );
+    let (pprof, pmu) = match (run_result, cleanup) {
+        (Ok(result), Ok(())) => result,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("orientation profile cleanup failed: {error}").into());
+        }
+        (Err(run), Err(cleanup)) => {
+            return Err(format!("{run}; orientation profile cleanup failed: {cleanup}").into());
+        }
+    };
+    let summary = json!({
+        "schema": "mister-magik-orientation-transition-profile-suite-v1",
+        "status": "passed",
+        "cadence_authoritative": false,
+        "instrumented_attribution_only": true,
+        "passes": {"pprof": pprof, "pmu": pmu},
+        "identity": {
+            "boot_id": boot_id.trim(),
+            "manifest": parse_manifest_evidence(&manifest),
+            "display_mode": benchmark_mode.id,
+            "ini_sha256": encode_hex(&Sha256::digest(benchmark_ini.as_bytes())),
+            "settings_sha256": settings
+                .as_ref()
+                .map(|value| encode_hex(&Sha256::digest(value.as_bytes()))),
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        "# Orientation transition profile suite\n\nBoth pprof and PMU passes completed. These instrumented runs provide attribution only and do not qualify cadence.\n",
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn run_orientation_profile_pass(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    pass: OrientationProfilePass,
+) -> Result<Value> {
+    let name = match pass {
+        OrientationProfilePass::Pprof => "pprof",
+        OrientationProfilePass::Pmu => "pmu",
+    };
+    let local_dir = output_dir.join(name);
+    fs::create_dir_all(&local_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+    exec_checked(
+        &session,
+        "reset orientation profile pass artifacts",
+        &format!(
+            "set -eu; rm -rf {0}; mkdir -p {0}",
+            sh(ORIENTATION_TRANSITION_REMOTE_DIR)
+        ),
+    )?;
+    let telemetry_endpoint = config.agent()?.clone();
+    let telemetry_thread = thread::spawn(move || {
+        agent_telemetry_for_duration(
+            &telemetry_endpoint,
+            Duration::from_secs(ORIENTATION_TRANSITION_TELEMETRY_SECS),
+        )
+        .map_err(|error| error.to_string())
+    });
+    let analytics_started = Instant::now();
+    while remote_read(&session, "/tmp/mister-magik/realtime-frame-analytics").as_deref()
+        != Some("process\n")
+    {
+        if analytics_started.elapsed() >= Duration::from_secs(3) {
+            return Err("orientation profile analytics lease did not become ready".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        (
+            "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK".into(),
+            "1".into(),
+        ),
+        (
+            "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS".into(),
+            "1".into(),
+        ),
+        (
+            "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR".into(),
+            ORIENTATION_TRANSITION_REMOTE_DIR.into(),
+        ),
+    ];
+    match pass {
+        OrientationProfilePass::Pprof => env_vars.extend([
+            ("MISTER_PPROF".into(), "1".into()),
+            (
+                "MISTER_PPROF_TRIGGER".into(),
+                "orientation-transitions".into(),
+            ),
+            ("MISTER_PPROF_HZ".into(), "999".into()),
+            (
+                "MISTER_PPROF_OUT".into(),
+                format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/flamegraph.svg"),
+            ),
+            (
+                "MISTER_PPROF_FOLDED_OUT".into(),
+                format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/stacks.folded"),
+            ),
+            (
+                "MISTER_PPROF_COMPLETE".into(),
+                format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/profile.json"),
+            ),
+        ]),
+        OrientationProfilePass::Pmu => env_vars.extend([
+            ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "8192".into()),
+            (
+                "MISTER_ORIENTATION_PMU_COMPLETE".into(),
+                format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/pmu.json"),
+            ),
+        ]),
+    }
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars,
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    drop(session);
+    let telemetry = telemetry_thread
+        .join()
+        .map_err(|_| "orientation profile telemetry collector panicked")?
+        .map_err(|error| format!("orientation profile telemetry failed: {error}"))?;
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        local_dir.join("telemetry.jsonl"),
+        format!("{telemetry_text}\n"),
+    )?;
+    let session = connect_with(&config.connection, 10)?;
+    if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+        fs::write(local_dir.join("launcher.log"), log)?;
+    }
+    let completion = remote_read(
+        &session,
+        &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/completion.json"),
+    )
+    .ok_or("orientation profile route completion is missing")?;
+    fs::write(local_dir.join("completion.json"), &completion)?;
+    let profile_path = match pass {
+        OrientationProfilePass::Pprof => "profile.json",
+        OrientationProfilePass::Pmu => "pmu.json",
+    };
+    let profile_text = remote_read(
+        &session,
+        &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/{profile_path}"),
+    )
+    .ok_or_else(|| format!("orientation {name} completion is missing"))?;
+    let profile: Value = serde_json::from_str(profile_text.trim())?;
+    if profile.get("state").and_then(Value::as_str) != Some("complete") {
+        return Err(format!("orientation {name} pass failed: {profile}").into());
+    }
+    fs::write(
+        local_dir.join(profile_path),
+        format!("{}\n", serde_json::to_string_pretty(&profile)?),
+    )?;
+    let result = match pass {
+        OrientationProfilePass::Pprof => {
+            if profile.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-orientation-transitions-pprof-v1")
+                || profile
+                    .get("sample_hits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    <= 0
+            {
+                return Err("orientation pprof pass produced no samples".into());
+            }
+            let svg = remote_read(
+                &session,
+                &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/flamegraph.svg"),
+            )
+            .filter(|value| !value.is_empty())
+            .ok_or("orientation pprof flamegraph is missing")?;
+            let folded = remote_read(
+                &session,
+                &format!("{ORIENTATION_TRANSITION_REMOTE_DIR}/stacks.folded"),
+            )
+            .filter(|value| !value.is_empty())
+            .ok_or("orientation pprof folded stacks are missing")?;
+            fs::write(local_dir.join("flamegraph.svg"), svg)?;
+            fs::write(local_dir.join("stacks.folded"), folded)?;
+            json!({"metadata": profile})
+        }
+        OrientationProfilePass::Pmu => {
+            let aggregate = aggregate_orientation_pmu(&profile)?;
+            fs::write(
+                local_dir.join("aggregate.json"),
+                format!("{}\n", serde_json::to_string_pretty(&aggregate)?),
+            )?;
+            json!({"metadata": profile, "aggregate": aggregate})
+        }
+    };
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    Ok(result)
+}
+
+fn aggregate_orientation_pmu(document: &Value) -> Result<Value> {
+    let profile = document
+        .get("profile")
+        .ok_or("orientation PMU document has no profile")?;
+    if profile.get("enabled").and_then(Value::as_bool) != Some(true)
+        || profile
+            .get("failure")
+            .is_some_and(|failure| !failure.is_null())
+        || profile.get("dropped_spans").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("orientation PMU profile is incomplete or multiplexed".into());
+    }
+    let records = profile
+        .get("records")
+        .and_then(Value::as_array)
+        .filter(|records| !records.is_empty())
+        .ok_or("orientation PMU profile has no records")?;
+    let read_format = profile
+        .get("read_format")
+        .and_then(Value::as_str)
+        .ok_or("orientation PMU profile has no read format")?;
+    let mut totals = BTreeMap::<String, [u64; 7]>::new();
+    for record in records {
+        let name = record
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| name.starts_with("orientation."))
+            .ok_or("orientation PMU record has an invalid label")?;
+        let counters = record
+            .pointer("/counters/counters")
+            .ok_or("orientation PMU record has no counters")?;
+        let enabled = frame_u64(
+            record.get("counters").unwrap_or(&Value::Null),
+            "time_enabled_ns",
+        );
+        let running = frame_u64(
+            record.get("counters").unwrap_or(&Value::Null),
+            "time_running_ns",
+        );
+        if !orientation_pmu_timing_valid(read_format, enabled, running) {
+            return Err("orientation PMU counters were multiplexed or unavailable".into());
+        }
+        let entry = totals.entry(name.to_owned()).or_default();
+        entry[0] = entry[0].saturating_add(1);
+        for (index, field) in [
+            "cycles",
+            "instructions",
+            "l1d_accesses",
+            "l1d_refills",
+            "branches",
+            "branch_mispredicts",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            entry[index + 1] = entry[index + 1]
+                .saturating_add(counters.get(field).and_then(Value::as_u64).unwrap_or(0));
+        }
+    }
+    let phases = totals
+        .into_iter()
+        .map(|(name, values)| {
+            let ratio = |numerator: u64, denominator: u64| {
+                if denominator == 0 {
+                    0.0
+                } else {
+                    numerator as f64 / denominator as f64
+                }
+            };
+            json!({
+                "label": name,
+                "records": values[0],
+                "cycles": values[1],
+                "instructions": values[2],
+                "ipc": ratio(values[2], values[1]),
+                "l1d_accesses": values[3],
+                "l1d_refills": values[4],
+                "l1d_refill_ratio": ratio(values[4], values[3]),
+                "branches": values[5],
+                "branch_mispredicts": values[6],
+                "branch_mispredict_ratio": ratio(values[6], values[5]),
+                "cycles_per_record": ratio(values[1], values[0]),
+            })
+        })
+        .collect::<Vec<_>>();
+    let expected_phases = ORIENTATION_TRANSITION_TOTAL_LEGS * 4;
+    if phases.len() < expected_phases {
+        return Err(format!(
+            "orientation PMU label coverage is incomplete: {} of {expected_phases}",
+            phases.len(),
+        )
+        .into());
+    }
+    Ok(json!({
+        "schema": "mister-magik-orientation-transitions-pmu-aggregate-v1",
+        "phases": phases,
+    }))
+}
+
+fn orientation_pmu_timing_valid(read_format: &str, enabled: u64, running: u64) -> bool {
+    match read_format {
+        "ids-and-times" => enabled > 0 && running > 0 && enabled == running,
+        "ordered-values" => enabled == 0 && running == 0,
+        _ => false,
+    }
 }
 
 const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 22;
@@ -13045,7 +14031,7 @@ mod tests {
 
     #[test]
     fn streamline_capture_is_fixed_bounded_and_pmuv1_compatible() {
-        let command = streamline_capture_command();
+        let command = streamline_capture_command(StreamlineWorkload::Screensaver);
         assert!(command.contains("--max-duration 10"));
         assert!(command.contains("--sample-rate low"));
         assert!(command.contains("--system-wide no"));
@@ -13054,6 +14040,18 @@ mod tests {
         assert!(command.contains("--stop-on-exit yes"));
         assert!(command.ends_with("exit \"$rc\""));
         assert!(command.contains("pmu-profile screensaver"));
+    }
+
+    #[test]
+    fn orientation_streamline_runs_the_exact_installed_launcher_route() {
+        let command = streamline_capture_command(StreamlineWorkload::OrientationTransitions);
+        assert!(command.contains("--max-duration 10"));
+        assert!(command.contains("--stop-on-exit yes"));
+        assert!(command.contains("--exclude-kernel no"));
+        assert!(command.contains("MISTER_CATALOG_REFRESH=off"));
+        assert!(command.contains("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK=1"));
+        assert!(command.contains("/media/fat/mister-magik-dev/mister-magik-fb ui launcher 0"));
+        assert!(!command.contains("pmu-profile screensaver"));
     }
 
     #[test]
@@ -16310,6 +17308,141 @@ H: Handlers=event3 js0"#
             "/media/fat/mister-magik-dev/catalog-v3/../agent.token"
         ));
         assert!(!is_catalog_database_path("/media/fat/MiSTer.ini"));
+    }
+
+    fn orientation_qualification_fixture() -> (Vec<Value>, Value) {
+        let labels = [
+            ("normal-to-clockwise", "normal", "clockwise"),
+            (
+                "clockwise-to-counterclockwise",
+                "clockwise",
+                "counterclockwise",
+            ),
+            ("counterclockwise-to-normal", "counterclockwise", "normal"),
+            ("normal-to-counterclockwise", "normal", "counterclockwise"),
+            (
+                "counterclockwise-to-clockwise",
+                "counterclockwise",
+                "clockwise",
+            ),
+            ("clockwise-to-normal", "clockwise", "normal"),
+        ];
+        let mut telemetry = Vec::new();
+        let mut records = Vec::new();
+        for (index, (effect, (label, from, to))) in ["brightness-fade", "center-pixel-zoom"]
+            .into_iter()
+            .flat_map(|effect| labels.into_iter().map(move |leg| (effect, leg)))
+            .enumerate()
+        {
+            let base_us = index as u64 * 500_000 + 1_000_000;
+            let presented = index as u64 * 30;
+            telemetry.push(json!({
+                "presentation": {
+                    "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "available": true,
+                    "captured_monotonic_us": base_us,
+                    "owned_vblank_count": presented,
+                    "presented_vblank_count": presented,
+                    "repeated_vblank_count": 0,
+                    "ownership_loss_count": 0,
+                    "magik_ownership": true,
+                    "pending": false,
+                },
+                "launcher": {"frame_budget": {"recent_frames": []}},
+            }));
+            let sequence = index as u64 * 20 + 1;
+            let frame = |id: u64, completion_us: u64, sequence: u64| {
+                json!({
+                    "frame": id,
+                    "orientation_transition_active": true,
+                    "orientation_transition_leg": index + 1,
+                    "orientation_transition_effect": effect,
+                    "completion_monotonic_us": completion_us,
+                    "main_present_status": "ok",
+                    "main_present_copy_path": "identity-full",
+                    "main_present_sequence": sequence,
+                    "main_present_active_sequence": sequence,
+                    "main_present_drop_count": 0,
+                    "wall_us": 15_000,
+                    "vsync_us": 5_000,
+                })
+            };
+            telemetry.push(json!({
+                "presentation": {
+                    "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "available": true,
+                    "captured_monotonic_us": base_us + 250_000,
+                    "owned_vblank_count": presented + 15,
+                    "presented_vblank_count": presented + 15,
+                    "repeated_vblank_count": 0,
+                    "ownership_loss_count": 0,
+                    "magik_ownership": true,
+                    "pending": false,
+                },
+                "launcher": {"frame_budget": {"recent_frames": [
+                    frame(index as u64 * 10 + 1, base_us + 100_000, sequence),
+                    frame(index as u64 * 10 + 2, base_us + 116_667, sequence + 1),
+                ]}},
+            }));
+            records.push(json!({
+                "leg": index + 1,
+                "effect": effect,
+                "label": label,
+                "from": from,
+                "to": to,
+                "start_frame": index * 10 + 1,
+                "rendered_endpoint_frame": index * 10 + 2,
+                "presented_endpoint_frame": index * 10 + 2,
+                "presented_sequence": sequence + 1,
+            }));
+        }
+        (
+            telemetry,
+            json!({
+                "schema": "mister-magik-orientation-transitions-v1",
+                "state": "complete",
+                "route": ["normal", "clockwise", "counterclockwise", "normal", "counterclockwise", "clockwise", "normal"],
+                "records": records,
+            }),
+        )
+    }
+
+    #[test]
+    fn orientation_qualification_applies_every_leg_gate() {
+        let (telemetry, completion) = orientation_qualification_fixture();
+        let summary = summarize_orientation_transition_qualification(&telemetry, completion)
+            .expect("fixture should qualify");
+
+        assert_eq!(summary["status"], "passed");
+        assert_eq!(
+            summary["legs"].as_array().unwrap().len(),
+            ORIENTATION_TRANSITION_TOTAL_LEGS
+        );
+        assert!(
+            summary["legs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|leg| leg["passed"] == true)
+        );
+    }
+
+    #[test]
+    fn orientation_qualification_rejects_incomplete_routes() {
+        let (telemetry, mut completion) = orientation_qualification_fixture();
+        completion["records"].as_array_mut().unwrap().pop();
+
+        assert!(summarize_orientation_transition_qualification(&telemetry, completion).is_err());
+    }
+
+    #[test]
+    fn orientation_pmu_timing_accepts_each_non_multiplexed_read_format() {
+        assert!(orientation_pmu_timing_valid("ids-and-times", 100, 100));
+        assert!(orientation_pmu_timing_valid("ordered-values", 0, 0));
+        assert!(!orientation_pmu_timing_valid("ids-and-times", 100, 90));
+        assert!(!orientation_pmu_timing_valid("ordered-values", 1, 0));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

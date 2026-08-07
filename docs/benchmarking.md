@@ -24,6 +24,9 @@ Supported scenarios:
 - `launch-return-fallback`
 - `modal-input`
 - `navigation-transitions`
+- `orientation-transitions`
+- `orientation-transitions-profile`
+- `orientation-transitions-streamline`
 - `pmu-profile`
 - `search`
 
@@ -46,6 +49,30 @@ Slint calls, status-writer overlap, preparation attribution, latch sequence
 continuity, physical FPS, and drop counters for all six legs, then restores the
 ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
+
+`orientation-transitions` runs the real Settings view at 1280×720/60 Hz through
+Normal → Clockwise → Counterclockwise → Normal → Counterclockwise → Clockwise
+→ Normal once with the brightness-fade wave and once with the center-pixel zoom
+wave. Each endpoint must complete a physical hidden-slot presentation
+before the next leg starts. Every leg independently requires zero protocol-v5
+repeated-vblank drops, zero latch drops and sequence gaps, continuous accepted
+hidden-slot presentation, at least 59.9 physical FPS, whole-frame work P99 below
+15,917 µs, and maximum whole-frame work below 16,667 µs. The scenario changes
+orientation and motion state only in memory, disables catalog refresh, retains
+only performance evidence, retains the confirmed 1280×720/60 Hz display mode
+and its exact `MiSTer.ini`, and restores the ordinary launcher while verifying
+the settings hash, boot identity, and installed manifest.
+Evidence is written below
+`build/agent-benchmarks/orientation-transitions/<timestamp>/`.
+
+`orientation-transitions-profile` runs isolated bounded pprof and PMU passes
+over both effects in one launcher workload per profiler. `orientation-transitions-streamline` runs the exact
+installed Dev launcher and fixed route under the existing ten-second gator
+capture contract. These instrumented scenarios provide attribution only and do
+not qualify cadence. The Streamline scenario requires a user-supplied audited
+ARMv7 hard-float daemon through `MISTER_GATORD_PATH`; it never downloads or
+redistributes one. Both scenarios retain the confirmed 1280×720/60 Hz mode and
+restore the ordinary launcher.
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,

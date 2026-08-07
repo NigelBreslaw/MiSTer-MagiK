@@ -945,6 +945,15 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) navigation_slint_render_called: bool,
     pub(super) navigation_status_quiesce_wait_us: u64,
     pub(super) navigation_status_quiesce_timeout: bool,
+    pub(super) orientation_transition_active: bool,
+    pub(super) orientation_transition_leg: u8,
+    pub(super) orientation_transition_effect: &'static str,
+    pub(super) orientation_transition_from: &'static str,
+    pub(super) orientation_transition_to: &'static str,
+    pub(super) orientation_transition_destination_capture_us: u128,
+    pub(super) orientation_transition_cache_restore_us: u128,
+    pub(super) orientation_transition_total_us: u128,
+    pub(super) orientation_transition_stats: OrientationTransitionRenderStats,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1249,6 +1258,10 @@ impl LauncherFrameAccounting {
         self.last_status_write.elapsed() >= Duration::from_secs(1)
             || (!self.profile_completion_submitted
                 && cpu_profile::screensaver_profile_state() == "complete")
+    }
+
+    pub(super) fn request_status_write(&mut self) {
+        self.last_status_write = Instant::now() - Duration::from_secs(2);
     }
 
     pub(super) fn runtime_status_worker_active(&self) -> bool {
@@ -1875,6 +1888,52 @@ impl LauncherFrameAccounting {
                 navigation_status_quiesce_timeout: frame
                     .custom_draw_trace
                     .navigation_status_quiesce_timeout,
+                orientation_transition_active: frame
+                    .custom_draw_trace
+                    .orientation_transition_active,
+                orientation_transition_leg: frame.custom_draw_trace.orientation_transition_leg,
+                orientation_transition_effect: frame
+                    .custom_draw_trace
+                    .orientation_transition_effect,
+                orientation_transition_from: frame.custom_draw_trace.orientation_transition_from,
+                orientation_transition_to: frame.custom_draw_trace.orientation_transition_to,
+                orientation_transition_destination_capture_us: u128_to_u64_saturating(
+                    frame
+                        .custom_draw_trace
+                        .orientation_transition_destination_capture_us,
+                ),
+                orientation_transition_fill_us: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .fill_us,
+                orientation_transition_map_us: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .map_us,
+                orientation_transition_crossfade_us: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .crossfade_us,
+                orientation_transition_cache_restore_us: u128_to_u64_saturating(
+                    frame
+                        .custom_draw_trace
+                        .orientation_transition_cache_restore_us,
+                ),
+                orientation_transition_total_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.orientation_transition_total_us,
+                ),
+                orientation_transition_mapped_pixels: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .mapped_pixels,
+                orientation_transition_blended_pixels: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .blended_pixels,
+                orientation_transition_progress_ppm: frame
+                    .custom_draw_trace
+                    .orientation_transition_stats
+                    .progress_ppm,
                 wall_us,
                 prepare_us,
                 slint_timer_dispatch_us: u128_to_u64_saturating(

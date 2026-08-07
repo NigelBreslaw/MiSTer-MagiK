@@ -11,6 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=src/particle_neon.c");
+    println!("cargo:rerun-if-changed=src/orientation_transition_neon.c");
     println!("cargo:rerun-if-changed=../../.git/HEAD");
     println!("cargo:rustc-check-cfg=cfg(mister_ui_scope_launcher)");
     println!("cargo:rustc-check-cfg=cfg(mister_bench_scenes)");
@@ -49,6 +50,7 @@ fn main() {
         let mut particle_neon = cc::Build::new();
         particle_neon
             .file("src/particle_neon.c")
+            .file("src/orientation_transition_neon.c")
             .flag("-std=c11")
             .flag("-O3")
             .flag("-mtune=cortex-a9")

@@ -37,6 +37,9 @@ enum BenchmarkProfile {
     ModalInput,
     ColdBoot,
     NavigationTransitions,
+    OrientationTransitions,
+    OrientationTransitionsProfile,
+    OrientationTransitionsStreamline,
     Pmu,
     Streamline,
 }
@@ -76,6 +79,15 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
+            }
+            BenchmarkProfile::OrientationTransitions => {
+                device.profile_orientation_transitions(&output_dir)
+            }
+            BenchmarkProfile::OrientationTransitionsProfile => {
+                device.profile_orientation_transition_suite(&output_dir)
+            }
+            BenchmarkProfile::OrientationTransitionsStreamline => {
+                device.profile_orientation_transition_streamline(&output_dir)
             }
             BenchmarkProfile::Pmu => device.profile_pmu(&output_dir),
             BenchmarkProfile::Streamline => device.profile_streamline(&output_dir),
@@ -156,12 +168,59 @@ fn require_clean_installed_commit(
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::OrientationTransitions => {
+            execute_orientation_transitions(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::OrientationTransitionsProfile => {
+            execute_orientation_transition_profile(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::OrientationTransitionsStreamline => {
+            execute_orientation_transition_streamline(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::PmuProfile => execute_pmu(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Streamline => {
             execute_streamline(&mut device, manifest, output_dir, reporter)
         }
     }
+}
+
+fn execute_orientation_transition_streamline(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "capturing the fixed orientation route with Arm Streamline",
+        Some(30),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::OrientationTransitionsStreamline,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-streamline-capture-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("workload").and_then(Value::as_str) != Some("orientation-transitions")
+    {
+        return Err("orientation Streamline capture is not a passing fixed-workload report".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
 }
 
 fn execute_streamline(
@@ -271,6 +330,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
             "particle CPU profiling moved to the dedicated lab; run the required count with scripts/agent device scene-lab --scene magik --recipe crates/particles/assets/recipes/magik-v1.json --particle-preset PRESET --particle-count COUNT --seconds 90 --assess --attended",
         ),
         BenchmarkScenario::Streamline
+        | BenchmarkScenario::OrientationTransitionsStreamline
         | BenchmarkScenario::Screensaver
         | BenchmarkScenario::ColdBoot
         | BenchmarkScenario::CatalogLifecycle
@@ -278,9 +338,84 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LaunchReturnFallback
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::NavigationTransitions
+        | BenchmarkScenario::OrientationTransitions
+        | BenchmarkScenario::OrientationTransitionsProfile
         | BenchmarkScenario::PmuProfile
         | BenchmarkScenario::Search => None,
     }
+}
+
+fn execute_orientation_transition_profile(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "capturing isolated orientation pprof and PMU passes",
+        Some(20),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::OrientationTransitionsProfile,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-orientation-transition-profile-suite-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("orientation transition profiling suite did not complete both passes".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_orientation_transitions(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "qualification",
+        "qualifying six real Settings orientation transitions",
+        Some(20),
+    )?;
+    let detail = device.profile(BenchmarkProfile::OrientationTransitions, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-orientation-transition-qualification-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("orientation transition qualification did not pass every leg".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
 }
 
 fn execute_modal_input(
