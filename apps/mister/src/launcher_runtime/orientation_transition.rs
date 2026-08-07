@@ -436,15 +436,7 @@ impl OrientationTransitionRuntime {
         let (frame, levels, revealing) =
             orientation_wave_state(self.effect, &self.source, &self.destination, elapsed);
         let done = elapsed >= self.duration;
-        let phase_changed = self.previous_revealing != revealing;
-        let black_boundary_unchanged = phase_changed
-            && levels_are_fully_black(self.effect, &self.previous_levels)
-            && levels_are_fully_black(self.effect, &levels);
-        let destination_already_exact = self.previous_revealing
-            && levels_are_exact_destination(self.effect, &self.previous_levels);
-        let damage = if !self.previous_levels_valid
-            || (phase_changed && !black_boundary_unchanged)
-            || (done && !destination_already_exact)
+        let damage = if !self.previous_levels_valid || self.previous_revealing != revealing || done
         {
             OrientationTransitionDamage::full()
         } else {
@@ -679,28 +671,6 @@ fn orientation_wave_state<'a>(
         }
     }
     (frame, levels, revealing)
-}
-
-fn levels_are_fully_black(
-    effect: OrientationTransitionEffect,
-    levels: &[u8; ORIENTATION_TILE_COUNT],
-) -> bool {
-    let black = match effect {
-        OrientationTransitionEffect::BrightnessFade => 0,
-        OrientationTransitionEffect::CenterPixelZoom => RGB565_OPACITY_LEVELS,
-    };
-    levels.iter().all(|level| *level == black)
-}
-
-fn levels_are_exact_destination(
-    effect: OrientationTransitionEffect,
-    levels: &[u8; ORIENTATION_TILE_COUNT],
-) -> bool {
-    let exact = match effect {
-        OrientationTransitionEffect::BrightnessFade => RGB565_OPACITY_LEVELS,
-        OrientationTransitionEffect::CenterPixelZoom => ORIENTATION_TILE_SKIP,
-    };
-    levels.iter().all(|level| *level == exact)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -1253,95 +1223,6 @@ mod tests {
             .expect("transition frame");
         assert!(done);
         assert_eq!(output, destination);
-    }
-
-    #[test]
-    fn identical_midpoint_and_endpoint_frames_have_no_damage() {
-        for effect in [
-            OrientationTransitionEffect::BrightnessFade,
-            OrientationTransitionEffect::CenterPixelZoom,
-        ] {
-            let start = Instant::now();
-            let source = [Rgb565Pixel(1); 12];
-            let destination = [Rgb565Pixel(2); 12];
-            let mut output = [Rgb565Pixel(0); 12];
-            let mut runtime = OrientationTransitionRuntime::new_with_effect(4, 3, effect);
-            assert!(runtime.start(
-                ScreenOrientation::Normal,
-                ScreenOrientation::MonitorClockwise,
-                &source,
-                start,
-                false,
-            ));
-            assert!(runtime.capture_destination(&destination));
-
-            let (_, _, before_black) = runtime
-                .render_into(&mut output, start + Duration::from_millis(1_419))
-                .expect("pre-black frame");
-            let (_, _, fully_black) = runtime
-                .render_into(&mut output, start + Duration::from_millis(1_420))
-                .expect("black frame");
-            let (_, _, held_black) = runtime
-                .render_into(&mut output, start + Duration::from_millis(1_499))
-                .expect("held black frame");
-            let (_, _, reveal_boundary) = runtime
-                .render_into(&mut output, start + Duration::from_millis(1_500))
-                .expect("reveal boundary");
-            assert_ne!(before_black, OrientationTransitionDamage::default());
-            let _ = fully_black;
-            assert_eq!(held_black, OrientationTransitionDamage::default());
-            assert_eq!(reveal_boundary, OrientationTransitionDamage::default());
-            assert!(output.iter().all(|pixel| pixel.0 == 0));
-
-            let (_, _, settled) = runtime
-                .render_into(&mut output, start + Duration::from_millis(2_920))
-                .expect("settled destination");
-            let (_, _, held_destination) = runtime
-                .render_into(&mut output, start + Duration::from_millis(2_999))
-                .expect("held destination");
-            let (done, _, endpoint) = runtime
-                .render_into(&mut output, start + Duration::from_millis(3_000))
-                .expect("endpoint");
-            assert_ne!(settled, OrientationTransitionDamage::default());
-            assert_eq!(held_destination, OrientationTransitionDamage::default());
-            assert_eq!(endpoint, OrientationTransitionDamage::default());
-            assert!(done);
-            assert_eq!(output, destination);
-        }
-    }
-
-    #[test]
-    fn skipped_phase_or_endpoint_progress_forces_required_damage() {
-        for effect in [
-            OrientationTransitionEffect::BrightnessFade,
-            OrientationTransitionEffect::CenterPixelZoom,
-        ] {
-            let start = Instant::now();
-            let source = [Rgb565Pixel(1); 12];
-            let destination = [Rgb565Pixel(2); 12];
-            let mut output = [Rgb565Pixel(0); 12];
-            let mut runtime = OrientationTransitionRuntime::new_with_effect(4, 3, effect);
-            assert!(runtime.start(
-                ScreenOrientation::Normal,
-                ScreenOrientation::MonitorClockwise,
-                &source,
-                start,
-                false,
-            ));
-            assert!(runtime.capture_destination(&destination));
-            let _ = runtime.render_into(&mut output, start + Duration::from_millis(500));
-            let (_, _, crossed_midpoint) = runtime
-                .render_into(&mut output, start + Duration::from_millis(1_600))
-                .expect("crossed midpoint");
-            assert_eq!(crossed_midpoint, OrientationTransitionDamage::full());
-
-            let (done, _, skipped_endpoint) = runtime
-                .render_into(&mut output, start + Duration::from_millis(3_000))
-                .expect("skipped endpoint");
-            assert!(done);
-            assert_eq!(skipped_endpoint, OrientationTransitionDamage::full());
-            assert_eq!(output, destination);
-        }
     }
 
     #[test]
