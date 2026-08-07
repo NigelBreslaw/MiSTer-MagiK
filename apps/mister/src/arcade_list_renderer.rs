@@ -2012,7 +2012,10 @@ mod tests {
                 width: 624,
             }
         );
-        assert_eq!(geometry.visible_height(480), 384);
+        assert_eq!(
+            geometry.visible_height_with_metrics(480, Some(metrics)),
+            384
+        );
 
         let search = ArcadeListGeometry::crt_for_content(content, metrics, true);
         assert_eq!(
@@ -2023,7 +2026,7 @@ mod tests {
                 width: 360,
             }
         );
-        assert_eq!(search.visible_height(480), 384);
+        assert_eq!(search.visible_height_with_metrics(480, Some(metrics)), 384);
     }
 
     #[test]
