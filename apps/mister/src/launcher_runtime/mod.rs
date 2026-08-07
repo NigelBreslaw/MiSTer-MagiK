@@ -9,4 +9,5 @@ pub mod lifecycle;
 pub mod media;
 pub mod navigation_transition;
 pub mod orientation_transition;
+pub mod orientation_transition_bench;
 pub mod settings;

@@ -2040,10 +2040,49 @@ fn apply_orientation_layout(
     window.request_redraw();
 }
 
+#[allow(clippy::too_many_arguments)]
+fn begin_orientation_transition(
+    app: &slint_ui::launcher::Launcher,
+    window: &Rc<MisterSoftwareWindow>,
+    ui: &UiDisplay,
+    target: &UiFrameTarget,
+    from: ScreenOrientation,
+    to: ScreenOrientation,
+    now: Instant,
+    reduce_motion: bool,
+    nav: &mut LauncherNav,
+    layout: &mut UiLayoutGeometry,
+    portrait_target: &mut Option<UiFrameTarget>,
+    navigation_transition: &mut NavigationTransitionRuntime,
+    orientation_transition: &mut OrientationTransitionRuntime,
+    orientation_transition_intent: &mut Option<OrientationTransitionIntent>,
+    intent: OrientationTransitionIntent,
+) -> bool {
+    let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
+    apply_orientation_layout(
+        app,
+        window,
+        ui,
+        to,
+        nav,
+        layout,
+        portrait_target,
+        navigation_transition,
+    );
+    if animated {
+        *orientation_transition_intent = Some(intent);
+    } else {
+        let _ = orientation_transition.take_completion();
+        *orientation_transition_intent = None;
+    }
+    animated
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OrientationTransitionIntent {
     Confirm,
     Rollback,
+    Benchmark,
 }
 
 fn render_immediate_launcher_frame(
@@ -2114,6 +2153,9 @@ pub(super) fn run_launcher_loop(
     let mut launcher_presenter = LauncherPresenter::new(ui);
     let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_env();
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let mut orientation_benchmark = OrientationTransitionBenchmark::new(launcher_env_flag(
+        "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK",
+    ));
     let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
     let mut latch_v5_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
@@ -2137,7 +2179,7 @@ pub(super) fn run_launcher_loop(
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
     let media_benchmark_contention = media_benchmark_contention_enabled();
     let benchmark_media_interaction_active = benchmark_media_interaction_gate_active(
-        launcher_bench_scenario.is_some(),
+        launcher_bench_scenario.is_some() || orientation_benchmark.enabled(),
         media_benchmark_contention,
     );
     let env_start_screen = launcher_start_screen_from_env();
@@ -2146,9 +2188,10 @@ pub(super) fn run_launcher_loop(
         .is_some()
         .then(launcher_start_menu_from_env)
         .flatten();
-    let start_screen = latch_v5_qualification
+    let start_screen = orientation_benchmark
         .enabled()
-        .then_some(Screen::Arcade)
+        .then_some(Screen::Settings)
+        .or_else(|| latch_v5_qualification.enabled().then_some(Screen::Arcade))
         .or(env_start_screen)
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
@@ -2185,6 +2228,10 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
+    if orientation_benchmark.enabled() {
+        nav.settings.screen_orientation = ScreenOrientation::Normal;
+        nav.settings.reduce_motion = false;
+    }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
@@ -2202,6 +2249,9 @@ pub(super) fn run_launcher_loop(
         navigation_motion_enabled,
     );
     nav.screen = start_screen;
+    if orientation_benchmark.enabled() {
+        nav.settings_selected = 1;
+    }
     let mut display_confirm_deadline = None;
     let mut orientation_confirm_deadline = None;
     let mut orientation_previous = None;
@@ -2986,6 +3036,44 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
+        if let Some(leg) =
+            orientation_benchmark.take_next_leg(nav.settings.screen_orientation, frames)
+        {
+            let animated = begin_orientation_transition(
+                &app,
+                window,
+                ui,
+                target,
+                leg.from,
+                leg.to,
+                loop_start,
+                false,
+                &mut nav,
+                &mut layout,
+                &mut portrait_target,
+                &mut navigation_transition,
+                &mut orientation_transition,
+                &mut orientation_transition_intent,
+                OrientationTransitionIntent::Benchmark,
+            );
+            if animated {
+                print_startup_event(
+                    start,
+                    "orientation_transition_benchmark_leg_started",
+                    format!(
+                        "leg={} label={} from={} to={} frame={frames}",
+                        leg.index + 1,
+                        leg.label(),
+                        leg.from.id(),
+                        leg.to.id(),
+                    ),
+                );
+            } else {
+                orientation_benchmark.fail("benchmark-transition-did-not-animate");
+            }
+            orientation_full_redraw_pending = true;
+            full_bridge_dirty = true;
+        }
         if let Some(collection_id) = deferred_navigation_hydration_finish.take() {
             nav.catalog_system_hydration_finished(&collection_id);
             full_bridge_dirty = true;
@@ -3010,28 +3098,24 @@ pub(super) fn run_launcher_loop(
             {
                 if let Some(previous) = orientation_previous.take() {
                     let from = nav.settings.screen_orientation;
-                    let animated = orientation_transition.start(
-                        from,
-                        previous,
-                        target.cached_565(),
-                        loop_start,
-                        nav.settings.reduce_motion,
-                    );
-                    apply_orientation_layout(
+                    let animated = begin_orientation_transition(
                         &app,
                         window,
                         ui,
+                        target,
+                        from,
                         previous,
+                        loop_start,
+                        nav.settings.reduce_motion,
                         &mut nav,
                         &mut layout,
                         &mut portrait_target,
                         &mut navigation_transition,
+                        &mut orientation_transition,
+                        &mut orientation_transition_intent,
+                        OrientationTransitionIntent::Rollback,
                     );
-                    if animated {
-                        orientation_transition_intent = Some(OrientationTransitionIntent::Rollback);
-                    } else {
-                        let _ = orientation_transition.take_completion();
-                    }
+                    let _ = animated;
                 }
                 orientation_confirm_deadline = None;
                 nav.confirm_action = None;
@@ -4603,26 +4687,24 @@ pub(super) fn run_launcher_loop(
                                 {
                                     let previous = nav.settings.screen_orientation;
                                     orientation_previous = Some(previous);
-                                    let animated = orientation_transition.start(
-                                        previous,
-                                        orientation,
-                                        target.cached_565(),
-                                        frame_now,
-                                        nav.settings.reduce_motion,
-                                    );
-                                    apply_orientation_layout(
+                                    let animated = begin_orientation_transition(
                                         &app,
                                         window,
                                         ui,
+                                        target,
+                                        previous,
                                         orientation,
+                                        frame_now,
+                                        nav.settings.reduce_motion,
                                         &mut nav,
                                         &mut layout,
                                         &mut portrait_target,
                                         &mut navigation_transition,
+                                        &mut orientation_transition,
+                                        &mut orientation_transition_intent,
+                                        OrientationTransitionIntent::Confirm,
                                     );
                                     if animated {
-                                        orientation_transition_intent =
-                                            Some(OrientationTransitionIntent::Confirm);
                                         nav.confirm_action = None;
                                         orientation_confirm_deadline = None;
                                     } else {
@@ -4656,29 +4738,24 @@ pub(super) fn run_launcher_loop(
                             LauncherAction::CancelScreenOrientation => {
                                 if let Some(previous) = orientation_previous.take() {
                                     let from = nav.settings.screen_orientation;
-                                    let animated = orientation_transition.start(
-                                        from,
-                                        previous,
-                                        target.cached_565(),
-                                        frame_now,
-                                        nav.settings.reduce_motion,
-                                    );
-                                    apply_orientation_layout(
+                                    let animated = begin_orientation_transition(
                                         &app,
                                         window,
                                         ui,
+                                        target,
+                                        from,
                                         previous,
+                                        frame_now,
+                                        nav.settings.reduce_motion,
                                         &mut nav,
                                         &mut layout,
                                         &mut portrait_target,
                                         &mut navigation_transition,
+                                        &mut orientation_transition,
+                                        &mut orientation_transition_intent,
+                                        OrientationTransitionIntent::Rollback,
                                     );
-                                    if animated {
-                                        orientation_transition_intent =
-                                            Some(OrientationTransitionIntent::Rollback);
-                                    } else {
-                                        let _ = orientation_transition.take_completion();
-                                    }
+                                    let _ = animated;
                                 }
                                 orientation_confirm_deadline = None;
                                 nav.orientation_confirm_remaining = 0;
@@ -6268,6 +6345,9 @@ pub(super) fn run_launcher_loop(
                             );
                             full_bridge_dirty = true;
                         }
+                        Some(OrientationTransitionIntent::Benchmark) => {
+                            orientation_benchmark.note_rendered_endpoint(frames);
+                        }
                         Some(OrientationTransitionIntent::Rollback) | None => {}
                     }
                 } else {
@@ -6552,6 +6632,7 @@ pub(super) fn run_launcher_loop(
         }
         .build();
         let mut accepted_and_active_confirmed = false;
+        let mut confirmed_present_sequence = 0u16;
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -6666,6 +6747,9 @@ pub(super) fn run_launcher_loop(
                     == presented_frame.main_present_sequence
                 && !presented_frame.main_present_pending
                 && launcher_presenter.latch_failure().is_none();
+            if accepted_and_active_confirmed {
+                confirmed_present_sequence = presented_frame.main_present_sequence;
+            }
             if accepted_and_active_confirmed {
                 launcher_automation.acknowledge_presented(
                     presented_frame.automation,
@@ -6814,6 +6898,32 @@ pub(super) fn run_launcher_loop(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
         );
+        if accepted_and_active_confirmed
+            && let Some(record) = orientation_benchmark.note_confirmed_presentation(
+                nav.settings.screen_orientation,
+                frames,
+                confirmed_present_sequence,
+            )
+        {
+            print_startup_event(
+                start,
+                "orientation_transition_benchmark_leg_completed",
+                format!(
+                    concat!(
+                        "leg={} label={} from={} to={} start_frame={} ",
+                        "rendered_endpoint_frame={} presented_endpoint_frame={} sequence={}"
+                    ),
+                    record.leg.index + 1,
+                    record.leg.label(),
+                    record.leg.from.id(),
+                    record.leg.to.id(),
+                    record.start_frame,
+                    record.rendered_endpoint_frame,
+                    record.presented_endpoint_frame,
+                    record.presented_sequence,
+                ),
+            );
+        }
         let preview_present_confirmed = if latch_trace_flush_deferred {
             accepted_and_active_confirmed
         } else {
@@ -6827,6 +6937,29 @@ pub(super) fn run_launcher_loop(
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
         frames += 1;
+        if orientation_benchmark.complete() {
+            print_startup_event(
+                start,
+                "orientation_transition_benchmark_complete",
+                format!(
+                    "legs={} frames={frames}",
+                    orientation_benchmark.records().len()
+                ),
+            );
+            break;
+        }
+        if orientation_benchmark.failed() {
+            print_startup_event(
+                start,
+                "orientation_transition_benchmark_failed",
+                format!(
+                    "failure={} legs={} frames={frames}",
+                    orientation_benchmark.failure().unwrap_or("unknown"),
+                    orientation_benchmark.records().len(),
+                ),
+            );
+            break;
+        }
     }
     if let Some(mut intro) = startup_intro.take() {
         let returned = intro.take_buffers();
