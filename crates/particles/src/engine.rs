@@ -166,8 +166,8 @@ impl TargetMask {
         if self.width <= max_width && self.height <= max_height {
             return Ok(self);
         }
-        let scale = (max_width as f32 / self.width as f32)
-            .min(max_height as f32 / self.height as f32);
+        let scale =
+            (max_width as f32 / self.width as f32).min(max_height as f32 / self.height as f32);
         self.width = ((self.width as f32 * scale).floor() as usize).max(1);
         self.height = ((self.height as f32 * scale).floor() as usize).max(1);
         for point in &mut self.points {
