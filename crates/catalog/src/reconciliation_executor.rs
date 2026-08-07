@@ -30,19 +30,6 @@ thread_local! {
     static FAIL_MANIFEST_PUBLICATION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-#[cfg(target_os = "linux")]
-struct AllocatorTrimOnDrop;
-
-#[cfg(target_os = "linux")]
-impl Drop for AllocatorTrimOnDrop {
-    fn drop(&mut self) {
-        // SAFETY: malloc_trim has no pointer or lifetime preconditions.
-        unsafe {
-            libc::malloc_trim(0);
-        }
-    }
-}
-
 fn run_artifact_barrier(storage_root: &Path) -> Result<(), ReconciliationError> {
     #[cfg(test)]
     if FAIL_ARTIFACT_BARRIER.with(|fail| fail.replace(false)) {
@@ -187,8 +174,6 @@ pub fn execute_reconciliation_with_events(
             generation: actual_generation,
         });
     }
-    #[cfg(target_os = "linux")]
-    let _allocator_trim = AllocatorTrimOnDrop;
     let expected_generation = actual_generation
         .unwrap_or(0)
         .checked_add(1)
