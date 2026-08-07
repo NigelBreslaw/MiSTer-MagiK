@@ -187,7 +187,10 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "ci-cache-identity.py",
             "rustup default \"$toolchain\"",
             "scripts/agent ci host-assurance --paths ${{ matrix.paths }}",
-            "name: cargo-timings-release",
+            "scripts/agent build runtime-ci",
+            "scripts/agent build device-agent-ci",
+            "name: cargo-timings-ci-fast",
+            "armv7-unknown-linux-gnueabihf/ci-fast",
             "if-no-files-found: error",
         ],
         &[
@@ -195,6 +198,10 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "Cache host build outputs",
             "scripts/agent verify --paths desktop",
             "scripts/agent check",
+            "runtime-fast",
+            "release-device",
+            "mister-magik-fb-release",
+            "binary-size-release",
         ],
     )?;
     let distribution = read(repository, ".github/workflows/distribution.yml")?;
@@ -229,6 +236,8 @@ fn check_distribution_workflow(repository: &Path) -> Result<(), String> {
     for required in [
         "release_channel:",
         "scripts/agent build runtime-device",
+        "scripts/agent build manager-device",
+        "armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb",
         "scripts/agent ci require-alpha-promotion",
         "scripts/agent ci platform-manifest generate",
         "scripts/agent ci game-databases verify",

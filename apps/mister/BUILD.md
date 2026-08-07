@@ -38,6 +38,21 @@ platform assurance.
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `scripts/agent device scene`; it is separate from building and deployment.
 
+Compilation intent is explicit:
+
+| Intent | Cargo policy | Artifact use |
+| --- | --- | --- |
+| Unit tests, Clippy, checks, pre-push, host CI | Dev/test, optimization 0, no debug info or LTO, incremental, 256 codegen units | Correctness only |
+| Ordinary PR and main ARM CI | `ci-fast`, with the same compile-first settings | Linked non-production diagnostics |
+| Runnable labs and captures | `release-live` or the owning device/profile release profile | Performance-sensitive iteration and evidence |
+| Delivery | `release-device` runtime plus optimized manager | Installed development runtime |
+| Alpha, beta, and release publication | `release-device` runtime plus optimized manager | Published production artifact |
+
+`ci-fast` must never feed delivery, packaging, binary-size evidence, or a
+release channel. Conversely, ordinary CI must not pay for release optimization;
+its linked artifacts exist to prove the complete ARM application and agent
+still link and satisfy their shared-library contracts.
+
 The canonical `release-device` runtime includes dormant on-device profiling
 support and retains function symbols. Benchmarks activate that support only on
 the already-installed runtime. `scripts/agent build runtime-analysis` produces

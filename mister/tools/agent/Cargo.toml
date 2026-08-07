@@ -36,3 +36,12 @@ opt-level = 3
 lto = "thin"
 strip = true
 panic = "abort"
+
+[profile.ci-fast]
+# Ordinary CI proves the ARM agent links without paying release optimization.
+inherits = "dev"
+opt-level = 0
+debug = 0
+incremental = true
+codegen-units = 256
+lto = false

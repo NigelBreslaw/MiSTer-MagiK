@@ -18,7 +18,6 @@ env:
   CROSS_VERSION: 0.2.5
   DOCKER_DEFAULT_PLATFORM: linux/amd64
   MISTER_CARGO_TIMINGS: "0"
-  MISTER_CI_ARM_PROFILE: ${{ github.event_name == 'pull_request' && 'release' || 'release-device' }}
 
 jobs:
   host-dev-group:
@@ -85,7 +84,7 @@ jobs:
         run: test "$GROUP_RESULT" = success
 
   arm-build:
-    name: release
+    name: arm-ci-fast
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -146,52 +145,38 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            apps/mister/target/${{ env.MISTER_CI_ARM_PROFILE }}
-            !apps/mister/target/${{ env.MISTER_CI_ARM_PROFILE }}/incremental
-            apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}
-            !apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}/incremental
-          key: target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-${{ env.MISTER_CI_ARM_PROFILE }}-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
+            apps/mister/target/ci-fast
+            !apps/mister/target/ci-fast/incremental
+            apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast
+            !apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/incremental
+          key: target-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
           restore-keys: |
-            target-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-${{ env.MISTER_CI_ARM_PROFILE }}-${{ steps.cache-id.outputs.cross_abi }}-
+            target-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-
 
       - name: Build ARM binary
         env:
           MISTER_CARGO_TIMINGS: "1"
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
-          if [[ "$MISTER_CI_ARM_PROFILE" == release ]]; then
-            MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-fast
-          else
-            MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-device
-          fi
+          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-ci
 
       - name: Upload Cargo timings
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: cargo-timings-release
+          name: cargo-timings-ci-fast
           path: apps/mister/target/cargo-timings/*.html
           if-no-files-found: error
           retention-days: 14
 
       - name: Check ARM shared libraries
-        run: apps/mister/scripts/check-arm-shared-libs.sh "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
-
-      - name: Record binary size
-        run: apps/mister/scripts/record-binary-size.sh "$MISTER_CI_ARM_PROFILE" ui "apps/mister/target/armv7-unknown-linux-gnueabihf/$MISTER_CI_ARM_PROFILE/mister-magik-fb"
+        run: apps/mister/scripts/check-arm-shared-libs.sh apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
 
       - name: Upload ARM binary
         uses: actions/upload-artifact@v7
         with:
-          name: mister-magik-fb-release
-          path: apps/mister/target/armv7-unknown-linux-gnueabihf/${{ env.MISTER_CI_ARM_PROFILE }}/mister-magik-fb
-          if-no-files-found: error
-
-      - name: Upload size history
-        uses: actions/upload-artifact@v7
-        with:
-          name: binary-size-release
-          path: build/binary-size.tsv
+          name: mister-magik-fb-ci-fast
+          path: apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-fb
           if-no-files-found: error
 
   agent-arm-build:
@@ -249,20 +234,20 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release
-            !mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/incremental
-          key: target-agent-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.agent_target }}
+            mister/tools/agent/target/armv7-unknown-linux-gnueabihf/ci-fast
+            !mister/tools/agent/target/armv7-unknown-linux-gnueabihf/ci-fast/incremental
+          key: target-agent-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.agent_target }}
           restore-keys: |
-            target-agent-arm-v2-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-release-${{ steps.cache-id.outputs.cross_abi }}-
+            target-agent-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-
 
       - name: Build ARM agent
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
-          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build device-agent
+          MISTER_ARM_BUILD_BACKEND=cross scripts/agent build device-agent-ci
 
       - name: Upload ARM agent
         uses: actions/upload-artifact@v7
         with:
-          name: mister-magik-agent
-          path: mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent
+          name: mister-magik-agent-ci-fast
+          path: mister/tools/agent/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-agent
           if-no-files-found: error

@@ -94,6 +94,16 @@ lto = "thin"
 strip = true
 panic = "abort"
 
+[profile.ci-fast]
+# Linked non-production ARM validation: preserve correctness checks while
+# minimizing LLVM/codegen and link work in pull requests and main CI.
+inherits = "dev"
+opt-level = 0
+debug = 0
+incremental = true
+codegen-units = 256
+lto = false
+
 [profile.release-device]
 # Full MiSTer release: fat LTO + two CGUs, preserving global optimization while
 # allowing enough parallel codegen to shorten the final release-build tail.

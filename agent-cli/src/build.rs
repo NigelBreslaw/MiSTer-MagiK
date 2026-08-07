@@ -42,12 +42,13 @@ const FFMPEG_APPLE_CONTAINER_ENV: [(&str, &str); 5] = [
 #[serde(rename_all = "kebab-case")]
 pub enum BuildCommand {
     RuntimeDevice,
-    RuntimeFast,
+    RuntimeCi,
     RuntimeAnalysis,
     ValidateLauncher,
     ValidateLibrary,
     ValidateRuntime,
     DeviceAgent,
+    DeviceAgentCi,
     ManagerDevice,
     FramebufferLabDevice,
     FramebufferSceneLabDevice,
@@ -104,13 +105,13 @@ impl BuildSpec {
                 UiScope::All,
                 runtime_artifact("release-device"),
             ),
-            BuildCommand::RuntimeFast => (
+            BuildCommand::RuntimeCi => (
                 BuildTarget::Runtime,
                 BuildMode::Build,
-                "release",
+                "ci-fast",
                 vec!["ui"],
                 UiScope::All,
-                runtime_artifact("release"),
+                runtime_artifact("ci-fast"),
             ),
             BuildCommand::RuntimeAnalysis => (
                 BuildTarget::Runtime,
@@ -144,6 +145,16 @@ impl BuildSpec {
                 UiScope::All,
                 PathBuf::from(
                     "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/release/mister-magik-agent",
+                ),
+            ),
+            BuildCommand::DeviceAgentCi => (
+                BuildTarget::DeviceAgent,
+                BuildMode::Build,
+                "ci-fast",
+                Vec::new(),
+                UiScope::All,
+                PathBuf::from(
+                    "mister/tools/agent/target/armv7-unknown-linux-gnueabihf/ci-fast/mister-magik-agent",
                 ),
             ),
             BuildCommand::ManagerDevice => (
@@ -1692,9 +1703,11 @@ mod tests {
     #[test]
     fn cache_identity_changes_with_profile_scope_and_target() {
         let device = BuildSpec::canonical(UiScope::All);
-        let fast = BuildSpec::for_command(BuildCommand::RuntimeFast).unwrap();
-        let agent = BuildSpec::for_command(BuildCommand::DeviceAgent).unwrap();
-        assert_ne!(device.cache_identity, fast.cache_identity);
+        let ci = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();
+        let agent = BuildSpec::for_command(BuildCommand::DeviceAgentCi).unwrap();
+        assert_eq!(ci.profile, "ci-fast");
+        assert_eq!(agent.profile, "ci-fast");
+        assert_ne!(device.cache_identity, ci.cache_identity);
         assert_ne!(device.cache_identity, agent.cache_identity);
         assert_ne!(
             device.cache_identity,
@@ -1729,7 +1742,7 @@ mod tests {
         assert!(!cargo_timings_enabled(Some("0")).unwrap());
         assert!(cargo_timings_enabled(Some("true")).is_err());
 
-        let spec = BuildSpec::for_command(BuildCommand::RuntimeFast).unwrap();
+        let spec = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();
         assert!(
             cargo_args(&spec, true)
                 .iter()

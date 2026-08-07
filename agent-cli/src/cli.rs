@@ -762,12 +762,13 @@ mod tests {
     fn build_accepts_only_owned_intents() {
         for intent in [
             "runtime-device",
-            "runtime-fast",
+            "runtime-ci",
             "runtime-analysis",
             "validate-launcher",
             "validate-library",
             "validate-runtime",
             "device-agent",
+            "device-agent-ci",
             "manager-device",
             "framebuffer-scene-lab-device",
             "framebuffer-scene-lab-analysis",
