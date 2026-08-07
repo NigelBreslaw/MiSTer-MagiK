@@ -2003,6 +2003,7 @@ mod tests {
             height: 480,
         };
         let metrics = CrtUiMetrics::for_framebuffer(640, 480);
+        let expected_visible_height = 384;
         let geometry = ArcadeListGeometry::crt_for_content(content, metrics, false);
         assert_eq!(
             geometry,
@@ -2014,7 +2015,7 @@ mod tests {
         );
         assert_eq!(
             geometry.visible_height_with_metrics(480, Some(metrics)),
-            384
+            expected_visible_height
         );
 
         let search = ArcadeListGeometry::crt_for_content(content, metrics, true);
@@ -2026,7 +2027,10 @@ mod tests {
                 width: 360,
             }
         );
-        assert_eq!(search.visible_height_with_metrics(480, Some(metrics)), 384);
+        assert_eq!(
+            search.visible_height_with_metrics(480, Some(metrics)),
+            expected_visible_height
+        );
     }
 
     #[test]
