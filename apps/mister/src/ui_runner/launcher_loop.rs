@@ -10289,7 +10289,8 @@ mod tests {
         let start = Instant::now();
         let catalog = empty_arcade_catalog("/tmp");
         let mut nav = LauncherNav::new();
-        let mut driver = LauncherInputScriptDriver::from_script("up,a,down,a,down,down,a", start);
+        let mut driver =
+            LauncherInputScriptDriver::from_script("up,a,down,down,a,down,down,a", start);
         driver.wait_frames = 0;
         let mut action = None;
         let mut frame = 0;
