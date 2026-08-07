@@ -219,24 +219,35 @@ impl OrientationTransitionRuntime {
         let progress = (now.saturating_duration_since(self.started_at).as_secs_f32()
             / self.duration.as_secs_f32())
         .clamp(0.0, 1.0);
-        let destination_alpha = (progress >= DESTINATION_CROSSFADE_START).then(|| {
-            (((progress - DESTINATION_CROSSFADE_START) / (1.0 - DESTINATION_CROSSFADE_START))
-                * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8
-        });
-        let (fill_us, map_us, crossfade_us, mapped_pixels, blended_pixels) = render_rotated_source(
+        let (fill_us, map_us, mapped_pixels) = render_rotated_source(
             &self.source,
-            &self.destination,
             &mut self.output,
             self.width,
             self.height,
             transition_quarter_turns(self.from, self.to) as f32 * progress,
-            destination_alpha,
             orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Fill),
             orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Map),
-            orientation_pmu_label(self.from, self.to, OrientationPmuPhase::Crossfade),
         );
+        let mut crossfade_us = 0;
+        let mut blended_pixels = 0;
+        if progress >= DESTINATION_CROSSFADE_START {
+            let alpha = (((progress - DESTINATION_CROSSFADE_START)
+                / (1.0 - DESTINATION_CROSSFADE_START))
+                * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            let crossfade_started = Instant::now();
+            let _pmu = mister_magik_perf_events::sampled_span(orientation_pmu_label(
+                self.from,
+                self.to,
+                OrientationPmuPhase::Crossfade,
+            ));
+            for (pixel, destination) in self.output.iter_mut().zip(&self.destination) {
+                *pixel = blend_565(*pixel, *destination, alpha);
+            }
+            crossfade_us = elapsed_us(crossfade_started);
+            blended_pixels = self.output.len().min(u64::MAX as usize) as u64;
+        }
         let done = progress >= 1.0;
         if done {
             self.output.copy_from_slice(&self.destination);
@@ -277,16 +288,13 @@ fn transition_quarter_turns(from: ScreenOrientation, to: ScreenOrientation) -> i
 
 fn render_rotated_source(
     source: &[Rgb565Pixel],
-    destination: &[Rgb565Pixel],
     output: &mut [Rgb565Pixel],
     width: usize,
     height: usize,
     quarter_turns: f32,
-    destination_alpha: Option<u8>,
     fill_label: &'static str,
     map_label: &'static str,
-    crossfade_label: &'static str,
-) -> (u64, u64, u64, u64, u64) {
+) -> (u64, u64, u64) {
     let angle = quarter_turns * std::f32::consts::FRAC_PI_2;
     let (sin, cos) = angle.sin_cos();
     let rotated_width = cos.abs() * width as f32 + sin.abs() * height as f32;
@@ -301,14 +309,11 @@ fn render_rotated_source(
     let first_dx = -source_cx * inverse_scale;
     let fill_started = Instant::now();
     let fill_pmu = mister_magik_perf_events::sampled_span(fill_label);
+    output.fill(Rgb565Pixel(0));
     drop(fill_pmu);
     let fill_us = elapsed_us(fill_started);
-    let compose_started = Instant::now();
-    let compose_pmu = mister_magik_perf_events::sampled_span(if destination_alpha.is_some() {
-        crossfade_label
-    } else {
-        map_label
-    });
+    let map_started = Instant::now();
+    let map_pmu = mister_magik_perf_events::sampled_span(map_label);
     let mut mapped_pixels = 0u64;
     for y in 0..height {
         let dy = (y as f32 - source_cy) * inverse_scale;
@@ -316,8 +321,6 @@ fn render_rotated_source(
         let mut source_y = -sin * first_dx + cos * dy + source_cy;
         let row = y * width;
         for x in 0..width {
-            let output_index = row + x;
-            let mut pixel = Rgb565Pixel(0);
             if source_x >= 0.0
                 && source_y >= 0.0
                 && source_x < width as f32
@@ -325,26 +328,15 @@ fn render_rotated_source(
             {
                 let source_row = ((source_y + 0.5) as usize).min(height - 1) * width;
                 let source_column = ((source_x + 0.5) as usize).min(width - 1);
-                pixel = source[source_row + source_column];
+                output[row + x] = source[source_row + source_column];
                 mapped_pixels = mapped_pixels.saturating_add(1);
             }
-            output[output_index] = destination_alpha.map_or(pixel, |alpha| {
-                blend_565(pixel, destination[output_index], alpha)
-            });
             source_x += source_x_step;
             source_y += source_y_step;
         }
     }
-    drop(compose_pmu);
-    let compose_us = elapsed_us(compose_started);
-    let blended_pixels = destination_alpha
-        .map(|_| output.len().min(u64::MAX as usize) as u64)
-        .unwrap_or(0);
-    if destination_alpha.is_some() {
-        (fill_us, 0, compose_us, mapped_pixels, blended_pixels)
-    } else {
-        (fill_us, compose_us, 0, mapped_pixels, blended_pixels)
-    }
+    drop(map_pmu);
+    (fill_us, elapsed_us(map_started), mapped_pixels)
 }
 
 fn elapsed_us(started: Instant) -> u64 {
@@ -427,62 +419,17 @@ mod tests {
                     quarter_turns,
                 );
                 let mut actual = vec![Rgb565Pixel(0); source.len()];
-                let (_, _, _, actual_mapped, _) = render_rotated_source(
+                let (_, _, actual_mapped) = render_rotated_source(
                     &source,
-                    &expected,
                     &mut actual,
                     width,
                     height,
                     quarter_turns,
-                    None,
-                    "orientation.invalid",
                     "orientation.invalid",
                     "orientation.invalid",
                 );
                 assert_eq!(actual_mapped, expected_mapped, "turns={quarter_turns}");
                 assert_eq!(actual, expected, "turns={quarter_turns}");
-            }
-        }
-    }
-
-    #[test]
-    fn fused_map_and_crossfade_is_byte_equivalent_to_two_pass_composition() {
-        let (width, height) = (64, 37);
-        let source = (0..width * height)
-            .map(|index| Rgb565Pixel(index as u16))
-            .collect::<Vec<_>>();
-        let destination = (0..width * height)
-            .map(|index| Rgb565Pixel((index as u16).rotate_left(5)))
-            .collect::<Vec<_>>();
-        for quarter_turns in [-2.0, -1.375, -0.5, 0.5, 1.375, 2.0] {
-            for alpha in [0, 1, 127, 254, 255] {
-                let mut expected = vec![Rgb565Pixel(0); source.len()];
-                render_rotated_source_reference(
-                    &source,
-                    &mut expected,
-                    width,
-                    height,
-                    quarter_turns,
-                );
-                for (pixel, destination) in expected.iter_mut().zip(&destination) {
-                    *pixel = blend_565(*pixel, *destination, alpha);
-                }
-                let mut actual = vec![Rgb565Pixel(0); source.len()];
-                let (_, map_us, _, _, blended_pixels) = render_rotated_source(
-                    &source,
-                    &destination,
-                    &mut actual,
-                    width,
-                    height,
-                    quarter_turns,
-                    Some(alpha),
-                    "orientation.invalid",
-                    "orientation.invalid",
-                    "orientation.invalid",
-                );
-                assert_eq!(map_us, 0);
-                assert_eq!(blended_pixels, source.len() as u64);
-                assert_eq!(actual, expected, "turns={quarter_turns} alpha={alpha}");
             }
         }
     }
