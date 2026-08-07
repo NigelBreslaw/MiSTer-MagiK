@@ -273,6 +273,30 @@ impl BuildSpec {
         ))
     }
 
+    /// Reproduces the former pull-request ARM build for revision comparisons.
+    #[must_use]
+    pub fn runtime_release_baseline() -> Self {
+        Self::from_configuration((
+            BuildTarget::Runtime,
+            BuildMode::Build,
+            "release",
+            vec!["ui"],
+            UiScope::All,
+            runtime_artifact("release"),
+        ))
+    }
+
+    #[must_use]
+    pub fn runtime_ci() -> Self {
+        Self::for_command(BuildCommand::RuntimeCi)
+            .expect("ordinary ARM CI builds have a specification")
+    }
+
+    #[must_use]
+    pub const fn profile(&self) -> &'static str {
+        self.profile
+    }
+
     #[must_use]
     pub fn artifact(&self) -> &Path {
         &self.artifact

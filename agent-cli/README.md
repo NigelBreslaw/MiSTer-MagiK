@@ -56,6 +56,12 @@ overrides remain available when full host debug symbols are explicitly needed;
 manifest, target-directory, and binary overrides remain available for tests and
 specialized host environments.
 
+Compile-policy changes are measured with the hidden, build-only
+`scripts/agent compile-time compare-revisions` interface. It requires separate
+clean baseline and candidate worktrees, an external new work root, an explicit
+scenario, and a new JSON output path. The comparison never installs, deploys,
+or runs an ARM artifact.
+
 Device operations use `DeviceClient` and closed `DeviceRequest` variants.
 The separate Rust `mister` binary remains available to humans for fixed operator
 operations, but `agent-cli` never invokes it as a subprocess. Explicitly

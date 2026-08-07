@@ -601,6 +601,42 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "compare-revisions",
+                "--baseline-repository",
+                "/tmp/baseline",
+                "--candidate-repository",
+                "/tmp/candidate",
+                "--work-root",
+                "/tmp/compile-comparison",
+                "--output",
+                "/tmp/compile-comparison.json",
+                "--scenario",
+                "pre-push-catalog",
+                "--scenario",
+                "arm-runtime-ci",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "compare-revisions",
+                "--baseline-repository",
+                "/tmp/baseline",
+                "--candidate-repository",
+                "/tmp/candidate",
+                "--work-root",
+                "/tmp/compile-comparison",
+                "--output",
+                "/tmp/compile-comparison.json",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

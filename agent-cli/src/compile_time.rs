@@ -22,6 +22,13 @@ const EDIT_REBUILD_SAMPLES: usize = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
+pub enum RevisionComparisonScenario {
+    PrePushCatalog,
+    ArmRuntimeCi,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "kebab-case")]
 pub enum CompileTimeTarget {
     FramebufferLabArm,
     FramebufferLabMacos,
@@ -85,6 +92,19 @@ pub enum CompileTimeCommand {
         #[arg(long, value_enum, default_value = "shared-magik")]
         edit: CompileTimeEdit,
     },
+    /// Compare compile latency between two clean repository revisions.
+    CompareRevisions {
+        #[arg(long, value_name = "ABSOLUTE_PATH")]
+        baseline_repository: PathBuf,
+        #[arg(long, value_name = "ABSOLUTE_PATH")]
+        candidate_repository: PathBuf,
+        #[arg(long, value_name = "NEW_ABSOLUTE_PATH")]
+        work_root: PathBuf,
+        #[arg(long, value_name = "NEW_JSON_PATH")]
+        output: PathBuf,
+        #[arg(long, value_enum, required = true)]
+        scenario: Vec<RevisionComparisonScenario>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +125,51 @@ struct CompileTimeReport {
     no_op_ms: Vec<u128>,
     edit_warmup_ms: u128,
     edit_rebuild_ms: Vec<u128>,
+}
+
+#[derive(Debug, Serialize)]
+struct RevisionComparisonReport {
+    schema: &'static str,
+    baseline_repository: String,
+    candidate_repository: String,
+    work_root: String,
+    machine_arch: String,
+    macos_version: String,
+    rustc: String,
+    cargo: String,
+    scenarios: Vec<ScenarioComparisonReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct ScenarioComparisonReport {
+    scenario: RevisionComparisonScenario,
+    variants: Vec<RevisionVariantReport>,
+    comparisons: Vec<SpeedupReport>,
+}
+
+#[derive(Debug, Serialize)]
+struct RevisionVariantReport {
+    label: String,
+    repository: String,
+    source_revision: String,
+    source_path: String,
+    source_sha256_before: String,
+    source_sha256_after: String,
+    effective_profile: String,
+    command: String,
+    target_dir: String,
+    cold_ms: u128,
+    edit_warmup_ms: u128,
+    edit_rebuild_ms: Vec<u128>,
+    edit_median_ms: u128,
+}
+
+#[derive(Debug, Serialize)]
+struct SpeedupReport {
+    baseline: String,
+    candidate: String,
+    cold_ratio: f64,
+    edit_median_ratio: f64,
 }
 
 pub fn execute(
@@ -139,6 +204,20 @@ pub fn execute(
             output,
             edit,
         } => measure(repository, *target, *edit, target_dir, output, reporter),
+        CompileTimeCommand::CompareRevisions {
+            baseline_repository,
+            candidate_repository,
+            work_root,
+            output,
+            scenario,
+        } => compare_revisions(
+            baseline_repository,
+            candidate_repository,
+            work_root,
+            output,
+            scenario,
+            reporter,
+        ),
     }
 }
 
@@ -379,6 +458,327 @@ fn build_macos_framebuffer_scene_lab(repository: &Path, target_dir: &Path) -> Ag
     Ok(())
 }
 
+fn compare_revisions(
+    baseline_repository: &Path,
+    candidate_repository: &Path,
+    work_root: &Path,
+    output: &Path,
+    scenarios: &[RevisionComparisonScenario],
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    validate_comparison_inputs(baseline_repository, candidate_repository, work_root, output)?;
+    std::fs::create_dir_all(work_root)
+        .map_err(|error| format!("cannot create {}: {error}", work_root.display()))?;
+    let mut reports = Vec::with_capacity(scenarios.len());
+    for (index, scenario) in scenarios.iter().copied().enumerate() {
+        reporter.emit(
+            EventKind::Progress,
+            "compile-time-compare",
+            &format!("measuring revision scenario {scenario:?}"),
+            Some(u8::try_from(5 + index * 80 / scenarios.len().max(1)).unwrap_or(90)),
+        )?;
+        reports.push(match scenario {
+            RevisionComparisonScenario::PrePushCatalog => compare_pre_push_catalog(
+                baseline_repository,
+                candidate_repository,
+                &work_root.join("pre-push-catalog"),
+            )?,
+            RevisionComparisonScenario::ArmRuntimeCi => compare_arm_runtime_ci(
+                baseline_repository,
+                candidate_repository,
+                &work_root.join("arm-runtime-ci"),
+            )?,
+        });
+    }
+    let report = RevisionComparisonReport {
+        schema: "mister-magik-compile-revision-comparison-v1",
+        baseline_repository: baseline_repository.display().to_string(),
+        candidate_repository: candidate_repository.display().to_string(),
+        work_root: work_root.display().to_string(),
+        machine_arch: command_output(candidate_repository, "uname", &["-m"])?,
+        macos_version: command_output(candidate_repository, "sw_vers", &["-productVersion"])
+            .unwrap_or_else(|_| "not-macos".into()),
+        rustc: command_output(candidate_repository, "rustc", &["--version"])?,
+        cargo: command_output(candidate_repository, "cargo", &["--version"])?,
+        scenarios: reports,
+    };
+    write_json_report(output, &report)?;
+    reporter.emit(
+        EventKind::Completed,
+        "compile-time-compare",
+        &format!("wrote {}", output.display()),
+        Some(100),
+    )?;
+    Ok(())
+}
+
+fn validate_comparison_inputs(
+    baseline_repository: &Path,
+    candidate_repository: &Path,
+    work_root: &Path,
+    output: &Path,
+) -> AgentResult<()> {
+    for (label, repository) in [
+        ("baseline", baseline_repository),
+        ("candidate", candidate_repository),
+    ] {
+        if !repository.is_absolute() || !repository.is_dir() {
+            return Err(format!("{label} repository must be an absolute directory").into());
+        }
+        require_clean_repository(repository)?;
+    }
+    if baseline_repository == candidate_repository {
+        return Err("baseline and candidate repositories must differ".into());
+    }
+    if !work_root.is_absolute()
+        || work_root == Path::new("/")
+        || work_root.starts_with(baseline_repository)
+        || work_root.starts_with(candidate_repository)
+    {
+        return Err("comparison work root must be an absolute external path".into());
+    }
+    if work_root.exists() {
+        return Err(format!(
+            "comparison work root already exists: {}",
+            work_root.display()
+        )
+        .into());
+    }
+    if output.exists() {
+        return Err(format!("compile-time output already exists: {}", output.display()).into());
+    }
+    Ok(())
+}
+
+fn require_clean_repository(repository: &Path) -> AgentResult<()> {
+    let status = command_output(
+        repository,
+        "git",
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?;
+    if !status.is_empty() {
+        return Err(format!(
+            "comparison repository is not clean: {}",
+            repository.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn compare_pre_push_catalog(
+    baseline_repository: &Path,
+    candidate_repository: &Path,
+    work_root: &Path,
+) -> AgentResult<ScenarioComparisonReport> {
+    let baseline = measure_assurance_revision(
+        "baseline",
+        baseline_repository,
+        &work_root.join("baseline"),
+        "legacy revision defaults",
+    )?;
+    let candidate = measure_assurance_revision(
+        "candidate",
+        candidate_repository,
+        &work_root.join("candidate"),
+        "fast agent + fast assurance",
+    )?;
+    let comparisons = vec![speedup(&baseline, &candidate)];
+    Ok(ScenarioComparisonReport {
+        scenario: RevisionComparisonScenario::PrePushCatalog,
+        variants: vec![baseline, candidate],
+        comparisons,
+    })
+}
+
+fn measure_assurance_revision(
+    label: &str,
+    repository: &Path,
+    work_root: &Path,
+    effective_profile: &str,
+) -> AgentResult<RevisionVariantReport> {
+    let target_dir = work_root.join("target");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("cannot create {}: {error}", target_dir.display()))?;
+    let relative_source = Path::new("crates/catalog/src/lib.rs");
+    let source = repository.join(relative_source);
+    require_clean_source(repository, &source)?;
+    let mut source_guard = SourceStampGuard::new(&source)?;
+    let cold_ms = timed_assurance(repository, &target_dir, &work_root.join("state-cold"))?;
+    source_guard.force_rebuild()?;
+    let edit_warmup_ms = timed_assurance(repository, &target_dir, &work_root.join("state-warmup"))?;
+    let mut edit_rebuild_ms = Vec::with_capacity(EDIT_REBUILD_SAMPLES);
+    for sample in 0..EDIT_REBUILD_SAMPLES {
+        source_guard.force_rebuild()?;
+        edit_rebuild_ms.push(timed_assurance(
+            repository,
+            &target_dir,
+            &work_root.join(format!("state-edit-{sample}")),
+        )?);
+    }
+    let source_sha256_before = source_guard.original_sha256.clone();
+    let source_sha256_after = source_guard.finish()?;
+    require_clean_repository(repository)?;
+    let edit_median_ms = median(&edit_rebuild_ms)?;
+    Ok(RevisionVariantReport {
+        label: label.into(),
+        repository: repository.display().to_string(),
+        source_revision: command_output(repository, "git", &["rev-parse", "HEAD"])?,
+        source_path: relative_source.display().to_string(),
+        source_sha256_before,
+        source_sha256_after,
+        effective_profile: effective_profile.into(),
+        command: "scripts/agent ci host-assurance --paths crates/catalog/src/lib.rs".into(),
+        target_dir: target_dir.display().to_string(),
+        cold_ms,
+        edit_warmup_ms,
+        edit_rebuild_ms,
+        edit_median_ms,
+    })
+}
+
+fn timed_assurance(repository: &Path, target_dir: &Path, state_dir: &Path) -> AgentResult<u128> {
+    if state_dir.exists() {
+        return Err(format!(
+            "comparison state path already exists: {}",
+            state_dir.display()
+        )
+        .into());
+    }
+    let started = Instant::now();
+    let mut child = Command::new(repository.join("scripts/agent"))
+        .current_dir(repository)
+        .env("CARGO_TARGET_DIR", target_dir)
+        .env("MISTER_AGENT_CLI_STATE_DIR", state_dir)
+        .env("RUSTC_WRAPPER", "")
+        .args([
+            "ci",
+            "host-assurance",
+            "--paths",
+            "crates/catalog/src/lib.rs",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("cannot start comparison assurance: {error}"))?;
+    let status = process::wait(
+        &mut child,
+        Some(BUILD_DEADLINE),
+        "comparison host assurance",
+        None,
+        || Ok(()),
+    )?;
+    if !status.success() {
+        return Err(format!("comparison host assurance exited with {status}").into());
+    }
+    Ok(started.elapsed().as_millis())
+}
+
+fn compare_arm_runtime_ci(
+    baseline_repository: &Path,
+    candidate_repository: &Path,
+    work_root: &Path,
+) -> AgentResult<ScenarioComparisonReport> {
+    let baseline_pr = measure_arm_revision(
+        "baseline-pr-release",
+        baseline_repository,
+        &work_root.join("baseline-pr-release"),
+        &BuildSpec::runtime_release_baseline(),
+    )?;
+    let baseline_main = measure_arm_revision(
+        "baseline-main-release-device",
+        baseline_repository,
+        &work_root.join("baseline-main-release-device"),
+        &BuildSpec::canonical(crate::deploy::UiScope::All),
+    )?;
+    let candidate = measure_arm_revision(
+        "candidate-ci-fast",
+        candidate_repository,
+        &work_root.join("candidate-ci-fast"),
+        &BuildSpec::runtime_ci(),
+    )?;
+    let comparisons = vec![
+        speedup(&baseline_pr, &candidate),
+        speedup(&baseline_main, &candidate),
+    ];
+    Ok(ScenarioComparisonReport {
+        scenario: RevisionComparisonScenario::ArmRuntimeCi,
+        variants: vec![baseline_pr, baseline_main, candidate],
+        comparisons,
+    })
+}
+
+fn measure_arm_revision(
+    label: &str,
+    repository: &Path,
+    target_dir: &Path,
+    spec: &BuildSpec,
+) -> AgentResult<RevisionVariantReport> {
+    validate_target_dir(repository, target_dir, true)?;
+    std::fs::create_dir_all(target_dir)
+        .map_err(|error| format!("cannot create {}: {error}", target_dir.display()))?;
+    let relative_source = Path::new("crates/particles/src/magik.rs");
+    let source = repository.join(relative_source);
+    require_clean_source(repository, &source)?;
+    let mut source_guard = SourceStampGuard::new(&source)?;
+    let cold_ms = timed_build_spec(repository, spec, target_dir)?;
+    source_guard.force_rebuild()?;
+    let edit_warmup_ms = timed_build_spec(repository, spec, target_dir)?;
+    let mut edit_rebuild_ms = Vec::with_capacity(EDIT_REBUILD_SAMPLES);
+    for _ in 0..EDIT_REBUILD_SAMPLES {
+        source_guard.force_rebuild()?;
+        edit_rebuild_ms.push(timed_build_spec(repository, spec, target_dir)?);
+    }
+    let source_sha256_before = source_guard.original_sha256.clone();
+    let source_sha256_after = source_guard.finish()?;
+    require_clean_repository(repository)?;
+    let edit_median_ms = median(&edit_rebuild_ms)?;
+    Ok(RevisionVariantReport {
+        label: label.into(),
+        repository: repository.display().to_string(),
+        source_revision: command_output(repository, "git", &["rev-parse", "HEAD"])?,
+        source_path: relative_source.display().to_string(),
+        source_sha256_before,
+        source_sha256_after,
+        effective_profile: spec.profile().into(),
+        command: format!("typed ARM runtime build --profile {}", spec.profile()),
+        target_dir: target_dir.display().to_string(),
+        cold_ms,
+        edit_warmup_ms,
+        edit_rebuild_ms,
+        edit_median_ms,
+    })
+}
+
+fn timed_build_spec(repository: &Path, spec: &BuildSpec, target_dir: &Path) -> AgentResult<u128> {
+    let started = Instant::now();
+    execute_quiet_at_target_dir(repository, spec, target_dir)?;
+    Ok(started.elapsed().as_millis())
+}
+
+fn median(samples: &[u128]) -> AgentResult<u128> {
+    if samples.is_empty() {
+        return Err("cannot compute a median without samples".into());
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    Ok(sorted[sorted.len() / 2])
+}
+
+fn speedup(baseline: &RevisionVariantReport, candidate: &RevisionVariantReport) -> SpeedupReport {
+    SpeedupReport {
+        baseline: baseline.label.clone(),
+        candidate: candidate.label.clone(),
+        cold_ratio: ratio(baseline.cold_ms, candidate.cold_ms),
+        edit_median_ratio: ratio(baseline.edit_median_ms, candidate.edit_median_ms),
+    }
+}
+
+fn ratio(baseline: u128, candidate: u128) -> f64 {
+    baseline as f64 / candidate.max(1) as f64
+}
+
 fn validate_target_dir(repository: &Path, target_dir: &Path, require_new: bool) -> AgentResult<()> {
     if !target_dir.is_absolute() {
         return Err("compile-time target directory must be absolute".into());
@@ -531,6 +931,10 @@ fn command_output(repository: &Path, program: &str, arguments: &[&str]) -> Agent
 }
 
 fn write_report(path: &Path, report: &CompileTimeReport) -> AgentResult<()> {
+    write_json_report(path, report)
+}
+
+fn write_json_report(path: &Path, report: &impl Serialize) -> AgentResult<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -634,5 +1038,12 @@ mod tests {
         assert_eq!(guard.finish().unwrap(), sha256_bytes(original));
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn comparison_statistics_use_the_middle_sample_and_baseline_ratio() {
+        assert_eq!(median(&[900, 100, 500, 300, 700]).unwrap(), 500);
+        assert!(median(&[]).is_err());
+        assert_eq!(ratio(2_000, 500), 4.0);
     }
 }
