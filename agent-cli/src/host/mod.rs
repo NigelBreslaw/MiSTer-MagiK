@@ -7094,6 +7094,10 @@ fn aggregate_orientation_pmu(document: &Value) -> Result<Value> {
         .and_then(Value::as_array)
         .filter(|records| !records.is_empty())
         .ok_or("orientation PMU profile has no records")?;
+    let read_format = profile
+        .get("read_format")
+        .and_then(Value::as_str)
+        .ok_or("orientation PMU profile has no read format")?;
     let mut totals = BTreeMap::<String, [u64; 7]>::new();
     for record in records {
         let name = record
@@ -7112,7 +7116,7 @@ fn aggregate_orientation_pmu(document: &Value) -> Result<Value> {
             record.get("counters").unwrap_or(&Value::Null),
             "time_running_ns",
         );
-        if enabled == 0 || running == 0 || enabled != running {
+        if !orientation_pmu_timing_valid(read_format, enabled, running) {
             return Err("orientation PMU counters were multiplexed or unavailable".into());
         }
         let entry = totals.entry(name.to_owned()).or_default();
@@ -7169,6 +7173,14 @@ fn aggregate_orientation_pmu(document: &Value) -> Result<Value> {
         "schema": "mister-magik-orientation-transitions-pmu-aggregate-v1",
         "phases": phases,
     }))
+}
+
+fn orientation_pmu_timing_valid(read_format: &str, enabled: u64, running: u64) -> bool {
+    match read_format {
+        "ids-and-times" => enabled > 0 && running > 0 && enabled == running,
+        "ordered-values" => enabled == 0 && running == 0,
+        _ => false,
+    }
 }
 
 const NAVIGATION_TRANSITION_PROFILE_SECS: u64 = 22;
@@ -17287,6 +17299,14 @@ H: Handlers=event3 js0"#
         completion["records"].as_array_mut().unwrap().pop();
 
         assert!(summarize_orientation_transition_qualification(&telemetry, completion).is_err());
+    }
+
+    #[test]
+    fn orientation_pmu_timing_accepts_each_non_multiplexed_read_format() {
+        assert!(orientation_pmu_timing_valid("ids-and-times", 100, 100));
+        assert!(orientation_pmu_timing_valid("ordered-values", 0, 0));
+        assert!(!orientation_pmu_timing_valid("ids-and-times", 100, 90));
+        assert!(!orientation_pmu_timing_valid("ordered-values", 1, 0));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
