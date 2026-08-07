@@ -99,7 +99,8 @@ void mister_magik_orientation_fade_neon(
     uint16_t *restrict output,
     size_t width,
     size_t height,
-    const uint8_t *restrict levels
+    const uint8_t *restrict levels,
+    const uint16_t *restrict dirty_rows
 ) {
     for (size_t tile_row = 0; tile_row < ORIENTATION_ROWS; tile_row++) {
         const size_t y0 = tile_row * height / ORIENTATION_ROWS;
@@ -107,6 +108,9 @@ void mister_magik_orientation_fade_neon(
         for (size_t y = y0; y < y1; y++) {
             const size_t row = y * width;
             for (size_t tile_column = 0; tile_column < ORIENTATION_COLUMNS; tile_column++) {
+                if ((dirty_rows[tile_row] & (1u << tile_column)) == 0) {
+                    continue;
+                }
                 const size_t x0 = tile_column * width / ORIENTATION_COLUMNS;
                 const size_t x1 = (tile_column + 1) * width / ORIENTATION_COLUMNS;
                 const size_t count = x1 - x0;
@@ -147,19 +151,29 @@ void mister_magik_orientation_zoom_neon(
     uint16_t *restrict output,
     size_t width,
     size_t height,
-    const uint8_t *restrict black_levels
+    const uint8_t *restrict black_levels,
+    const uint16_t *restrict dirty_rows
 ) {
-    copy_pixels(source, output, width * height);
     for (size_t tile_row = 0; tile_row < ORIENTATION_ROWS; tile_row++) {
         const size_t tile_y0 = tile_row * height / ORIENTATION_ROWS;
         const size_t tile_y1 = (tile_row + 1) * height / ORIENTATION_ROWS;
         for (size_t tile_column = 0; tile_column < ORIENTATION_COLUMNS; tile_column++) {
-            const uint8_t level = black_levels[tile_row * ORIENTATION_COLUMNS + tile_column];
-            if (level == ORIENTATION_SKIP) {
+            if ((dirty_rows[tile_row] & (1u << tile_column)) == 0) {
                 continue;
             }
             const size_t tile_x0 = tile_column * width / ORIENTATION_COLUMNS;
             const size_t tile_x1 = (tile_column + 1) * width / ORIENTATION_COLUMNS;
+            for (size_t y = tile_y0; y < tile_y1; y++) {
+                copy_pixels(
+                    source + y * width + tile_x0,
+                    output + y * width + tile_x0,
+                    tile_x1 - tile_x0
+                );
+            }
+            const uint8_t level = black_levels[tile_row * ORIENTATION_COLUMNS + tile_column];
+            if (level == ORIENTATION_SKIP) {
+                continue;
+            }
             size_t x0;
             size_t x1;
             size_t y0;

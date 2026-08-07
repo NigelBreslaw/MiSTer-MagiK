@@ -6436,16 +6436,18 @@ pub(super) fn run_launcher_loop(
                 custom_draw_trace.orientation_transition_destination_capture_us =
                     capture_started.elapsed().as_micros();
             }
-            if let Some((done, render_stats)) = orientation_transition
+            if let Some((done, render_stats, transition_damage)) = orientation_transition
                 .render_into(layer_target.presentation_pixels_mut(), Instant::now())
             {
                 custom_draw_trace.orientation_transition_stats = render_stats;
-                cached_damage = DirtyRectList::from_one(DirtyRect {
-                    x0: 0,
-                    y0: 0,
-                    x1: ui.render_w(),
-                    y1: ui.render_h(),
-                });
+                cached_damage.clear();
+                for row in 0..9 {
+                    if let Some((x0, y0, x1, y1)) =
+                        transition_damage.rect_for_row(row, ui.render_w(), ui.render_h())
+                    {
+                        cached_damage.push(DirtyRect { x0, y0, x1, y1 });
+                    }
+                }
                 if done {
                     let _ = orientation_transition.take_completion();
                     match orientation_transition_intent.take() {

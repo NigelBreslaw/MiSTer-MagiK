@@ -188,6 +188,79 @@ pub struct OrientationTransitionRuntime {
     active: bool,
     completion: Option<OrientationTransitionCompletion>,
     last_render_stats: OrientationTransitionRenderStats,
+    previous_levels: [u8; ORIENTATION_TILE_COUNT],
+    previous_levels_valid: bool,
+    previous_revealing: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OrientationTransitionDamage {
+    rows: [u16; ORIENTATION_GRID_ROWS],
+}
+
+impl OrientationTransitionDamage {
+    const fn full() -> Self {
+        Self {
+            rows: [u16::MAX; ORIENTATION_GRID_ROWS],
+        }
+    }
+
+    fn changed(
+        previous: &[u8; ORIENTATION_TILE_COUNT],
+        current: &[u8; ORIENTATION_TILE_COUNT],
+    ) -> Self {
+        let mut damage = Self::default();
+        for row in 0..ORIENTATION_GRID_ROWS {
+            let mut mask = 0_u16;
+            for column in 0..ORIENTATION_GRID_COLUMNS {
+                let index = row * ORIENTATION_GRID_COLUMNS + column;
+                if previous[index] != current[index] {
+                    mask |= 1_u16 << column;
+                }
+            }
+            damage.rows[row] = mask;
+        }
+        damage
+    }
+
+    pub fn rect_for_row(
+        self,
+        row: usize,
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
+        let mask = *self.rows.get(row)?;
+        if mask == 0 {
+            return None;
+        }
+        let first_column = mask.trailing_zeros() as usize;
+        let last_column = ORIENTATION_GRID_COLUMNS - mask.leading_zeros() as usize;
+        Some((
+            first_column * width / ORIENTATION_GRID_COLUMNS,
+            row * height / ORIENTATION_GRID_ROWS,
+            last_column * width / ORIENTATION_GRID_COLUMNS,
+            (row + 1) * height / ORIENTATION_GRID_ROWS,
+        ))
+    }
+
+    fn dirty_pixels(self, width: usize, height: usize) -> u64 {
+        let mut pixels = 0_u64;
+        for row in 0..ORIENTATION_GRID_ROWS {
+            let tile_height =
+                (row + 1) * height / ORIENTATION_GRID_ROWS - row * height / ORIENTATION_GRID_ROWS;
+            for column in 0..ORIENTATION_GRID_COLUMNS {
+                if self.rows[row] & (1_u16 << column) == 0 {
+                    continue;
+                }
+                let tile_width = (column + 1) * width / ORIENTATION_GRID_COLUMNS
+                    - column * width / ORIENTATION_GRID_COLUMNS;
+                pixels = pixels.saturating_add(
+                    u64::try_from(tile_width.saturating_mul(tile_height)).unwrap_or(u64::MAX),
+                );
+            }
+        }
+        pixels
+    }
 }
 
 impl OrientationTransitionRuntime {
@@ -215,6 +288,9 @@ impl OrientationTransitionRuntime {
             active: false,
             completion: None,
             last_render_stats: OrientationTransitionRenderStats::default(),
+            previous_levels: [0; ORIENTATION_TILE_COUNT],
+            previous_levels_valid: false,
+            previous_revealing: false,
         }
     }
 
@@ -241,6 +317,8 @@ impl OrientationTransitionRuntime {
         self.active = true;
         self.completion = None;
         self.last_render_stats = OrientationTransitionRenderStats::default();
+        self.previous_levels_valid = false;
+        self.previous_revealing = false;
         true
     }
 
@@ -292,14 +370,22 @@ impl OrientationTransitionRuntime {
         &mut self,
         output: &mut [Rgb565Pixel],
         now: Instant,
-    ) -> Option<(bool, OrientationTransitionRenderStats)> {
+    ) -> Option<(
+        bool,
+        OrientationTransitionRenderStats,
+        OrientationTransitionDamage,
+    )> {
         if !self.active || output.len() != self.source.len() {
             return None;
         }
         if !self.destination_ready {
             output.copy_from_slice(&self.source);
             self.last_render_stats = OrientationTransitionRenderStats::default();
-            return Some((false, self.last_render_stats));
+            return Some((
+                false,
+                self.last_render_stats,
+                OrientationTransitionDamage::full(),
+            ));
         }
         let render_started = Instant::now();
         let elapsed = now
@@ -330,27 +416,39 @@ impl OrientationTransitionRuntime {
             self.to,
             OrientationPmuPhase::Crossfade,
         ));
-        let blended_pixels = match self.effect {
-            OrientationTransitionEffect::BrightnessFade => render_brightness_wave(
-                &self.source,
-                &self.destination,
+        let (frame, levels, revealing) =
+            orientation_wave_state(self.effect, &self.source, &self.destination, elapsed);
+        let done = elapsed >= self.duration;
+        let damage = if !self.previous_levels_valid || self.previous_revealing != revealing || done
+        {
+            OrientationTransitionDamage::full()
+        } else {
+            OrientationTransitionDamage::changed(&self.previous_levels, &levels)
+        };
+        match self.effect {
+            OrientationTransitionEffect::BrightnessFade => render_brightness_wave_dirty(
+                frame,
                 output,
                 self.width,
                 self.height,
-                elapsed,
+                &levels,
+                damage,
             ),
-            OrientationTransitionEffect::CenterPixelZoom => render_center_pixel_zoom_wave(
-                &self.source,
-                &self.destination,
+            OrientationTransitionEffect::CenterPixelZoom => render_center_pixel_zoom_wave_dirty(
+                frame,
                 output,
                 self.width,
                 self.height,
-                elapsed,
+                &levels,
+                damage,
             ),
         };
+        self.previous_levels = levels;
+        self.previous_levels_valid = true;
+        self.previous_revealing = revealing;
+        let blended_pixels = damage.dirty_pixels(self.width, self.height);
         drop(crossfade_pmu);
         let crossfade_us = elapsed_us(crossfade_started);
-        let done = elapsed >= self.duration;
         if done {
             self.active = false;
             self.completion = Some(OrientationTransitionCompletion {
@@ -367,7 +465,7 @@ impl OrientationTransitionRuntime {
             blended_pixels,
             progress_ppm: duration_progress_ppm(elapsed, self.duration),
         };
-        Some((done, self.last_render_stats))
+        Some((done, self.last_render_stats, damage))
     }
 
     pub fn take_completion(&mut self) -> Option<OrientationTransitionCompletion> {
@@ -383,36 +481,35 @@ fn render_brightness_wave(
     height: usize,
     elapsed: Duration,
 ) -> u64 {
-    if elapsed >= ORIENTATION_WAVE_TOTAL_DURATION {
-        output.copy_from_slice(destination);
-        return output.len().min(u64::MAX as usize) as u64;
-    }
-    let (frame, phase_elapsed_us, revealing) = if elapsed < ORIENTATION_WAVE_PHASE_DURATION {
-        (source, duration_us(elapsed), false)
-    } else {
-        (
-            destination,
-            duration_us(elapsed - ORIENTATION_WAVE_PHASE_DURATION),
-            true,
-        )
-    };
-    let mut levels = [0_u8; ORIENTATION_TILE_COUNT];
-    for tile_row in 0..ORIENTATION_GRID_ROWS {
-        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
-            let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
-            levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column] = match (eased, revealing) {
-                (Some(level), true) => level,
-                (Some(level), false) => RGB565_OPACITY_LEVELS.saturating_sub(level),
-                (None, true) => 0,
-                (None, false) => RGB565_OPACITY_LEVELS,
-            };
-        }
-    }
-    if render_brightness_wave_neon(frame, output, width, height, &levels) {
-        return output.len().min(u64::MAX as usize) as u64;
-    }
-    render_brightness_wave_scalar(frame, output, width, height, &levels);
+    let (frame, levels, _) = orientation_wave_state(
+        OrientationTransitionEffect::BrightnessFade,
+        source,
+        destination,
+        elapsed,
+    );
+    render_brightness_wave_dirty(
+        frame,
+        output,
+        width,
+        height,
+        &levels,
+        OrientationTransitionDamage::full(),
+    );
     output.len().min(u64::MAX as usize) as u64
+}
+
+fn render_brightness_wave_dirty(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
+) {
+    if render_brightness_wave_neon(frame, output, width, height, levels, damage) {
+        return;
+    }
+    render_brightness_wave_scalar(frame, output, width, height, levels, damage);
 }
 
 fn render_brightness_wave_scalar(
@@ -421,11 +518,15 @@ fn render_brightness_wave_scalar(
     width: usize,
     height: usize,
     levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
 ) {
     for tile_row in 0..ORIENTATION_GRID_ROWS {
         let y0 = tile_row * height / ORIENTATION_GRID_ROWS;
         let y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
         for tile_column in 0..ORIENTATION_GRID_COLUMNS {
+            if damage.rows[tile_row] & (1_u16 << tile_column) == 0 {
+                continue;
+            }
             let x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
             let x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
             let level = levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
@@ -442,40 +543,35 @@ fn render_center_pixel_zoom_wave(
     height: usize,
     elapsed: Duration,
 ) -> u64 {
-    if elapsed >= ORIENTATION_WAVE_TOTAL_DURATION {
-        output.copy_from_slice(destination);
-        return output.len().min(u64::MAX as usize) as u64;
-    }
-    let (frame, phase_elapsed_us, revealing) = if elapsed < ORIENTATION_WAVE_PHASE_DURATION {
-        (source, duration_us(elapsed), false)
-    } else {
-        (
-            destination,
-            duration_us(elapsed - ORIENTATION_WAVE_PHASE_DURATION),
-            true,
-        )
-    };
-    let mut black_levels = [ORIENTATION_TILE_SKIP; ORIENTATION_TILE_COUNT];
-    for tile_row in 0..ORIENTATION_GRID_ROWS {
-        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
-            let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
-            let black_level = match (eased, revealing) {
-                (Some(level), true) => RGB565_OPACITY_LEVELS.saturating_sub(level),
-                (Some(level), false) => level,
-                (None, true) => RGB565_OPACITY_LEVELS,
-                (None, false) => continue,
-            };
-            if revealing && black_level == 0 {
-                continue;
-            }
-            black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column] = black_level;
-        }
-    }
-    if render_center_pixel_zoom_wave_neon(frame, output, width, height, &black_levels) {
-        return output.len().min(u64::MAX as usize) as u64;
-    }
-    render_center_pixel_zoom_wave_scalar(frame, output, width, height, &black_levels);
+    let (frame, black_levels, _) = orientation_wave_state(
+        OrientationTransitionEffect::CenterPixelZoom,
+        source,
+        destination,
+        elapsed,
+    );
+    render_center_pixel_zoom_wave_dirty(
+        frame,
+        output,
+        width,
+        height,
+        &black_levels,
+        OrientationTransitionDamage::full(),
+    );
     output.len().min(u64::MAX as usize) as u64
+}
+
+fn render_center_pixel_zoom_wave_dirty(
+    frame: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+    black_levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
+) {
+    if render_center_pixel_zoom_wave_neon(frame, output, width, height, black_levels, damage) {
+        return;
+    }
+    render_center_pixel_zoom_wave_scalar(frame, output, width, height, black_levels, damage);
 }
 
 fn render_center_pixel_zoom_wave_scalar(
@@ -484,23 +580,78 @@ fn render_center_pixel_zoom_wave_scalar(
     width: usize,
     height: usize,
     black_levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
 ) {
-    output.copy_from_slice(frame);
     for tile_row in 0..ORIENTATION_GRID_ROWS {
         let tile_y0 = tile_row * height / ORIENTATION_GRID_ROWS;
         let tile_y1 = (tile_row + 1) * height / ORIENTATION_GRID_ROWS;
         for tile_column in 0..ORIENTATION_GRID_COLUMNS {
-            let black_level = black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
-            if black_level == ORIENTATION_TILE_SKIP {
+            if damage.rows[tile_row] & (1_u16 << tile_column) == 0 {
                 continue;
             }
             let tile_x0 = tile_column * width / ORIENTATION_GRID_COLUMNS;
             let tile_x1 = (tile_column + 1) * width / ORIENTATION_GRID_COLUMNS;
+            copy_rect(frame, output, width, tile_x0, tile_x1, tile_y0, tile_y1);
+            let black_level = black_levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column];
+            if black_level == ORIENTATION_TILE_SKIP {
+                continue;
+            }
             let (x0, x1) = centered_span(tile_x0, tile_x1, black_level);
             let (y0, y1) = centered_span(tile_y0, tile_y1, black_level);
             fill_black_rect(output, width, x0, x1, y0, y1);
         }
     }
+}
+
+fn orientation_wave_state<'a>(
+    effect: OrientationTransitionEffect,
+    source: &'a [Rgb565Pixel],
+    destination: &'a [Rgb565Pixel],
+    elapsed: Duration,
+) -> (&'a [Rgb565Pixel], [u8; ORIENTATION_TILE_COUNT], bool) {
+    let revealing = elapsed >= ORIENTATION_WAVE_PHASE_DURATION;
+    let (frame, phase_elapsed_us) = if revealing {
+        (
+            destination,
+            duration_us(elapsed.saturating_sub(ORIENTATION_WAVE_PHASE_DURATION)),
+        )
+    } else {
+        (source, duration_us(elapsed))
+    };
+    let initial = if effect == OrientationTransitionEffect::CenterPixelZoom {
+        ORIENTATION_TILE_SKIP
+    } else {
+        0
+    };
+    let mut levels = [initial; ORIENTATION_TILE_COUNT];
+    for tile_row in 0..ORIENTATION_GRID_ROWS {
+        for tile_column in 0..ORIENTATION_GRID_COLUMNS {
+            let eased = orientation_tile_eased_level(phase_elapsed_us, tile_row, tile_column);
+            let level = match (effect, eased, revealing) {
+                (OrientationTransitionEffect::BrightnessFade, Some(level), true) => level,
+                (OrientationTransitionEffect::BrightnessFade, Some(level), false) => {
+                    RGB565_OPACITY_LEVELS.saturating_sub(level)
+                }
+                (OrientationTransitionEffect::BrightnessFade, None, true) => 0,
+                (OrientationTransitionEffect::BrightnessFade, None, false) => RGB565_OPACITY_LEVELS,
+                (OrientationTransitionEffect::CenterPixelZoom, Some(level), false) => level,
+                (OrientationTransitionEffect::CenterPixelZoom, Some(level), true) => {
+                    let level = RGB565_OPACITY_LEVELS.saturating_sub(level);
+                    if level == 0 {
+                        ORIENTATION_TILE_SKIP
+                    } else {
+                        level
+                    }
+                }
+                (OrientationTransitionEffect::CenterPixelZoom, None, true) => RGB565_OPACITY_LEVELS,
+                (OrientationTransitionEffect::CenterPixelZoom, None, false) => {
+                    ORIENTATION_TILE_SKIP
+                }
+            };
+            levels[tile_row * ORIENTATION_GRID_COLUMNS + tile_column] = level;
+        }
+    }
+    (frame, levels, revealing)
 }
 
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
@@ -524,6 +675,7 @@ fn render_brightness_wave_neon(
     width: usize,
     height: usize,
     levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
 ) -> bool {
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     if orientation_neon_enabled()
@@ -539,6 +691,7 @@ fn render_brightness_wave_neon(
                 width: usize,
                 height: usize,
                 levels: *const u8,
+                dirty_rows: *const u16,
             );
         }
         // SAFETY: the slices are complete, distinct RGB565 planes with the
@@ -550,6 +703,7 @@ fn render_brightness_wave_neon(
                 width,
                 height,
                 levels.as_ptr(),
+                damage.rows.as_ptr(),
             );
         }
         return true;
@@ -560,6 +714,7 @@ fn render_brightness_wave_neon(
         width,
         height,
         levels,
+        damage,
         orientation_neon_enabled(),
     );
     false
@@ -571,6 +726,7 @@ fn render_center_pixel_zoom_wave_neon(
     width: usize,
     height: usize,
     black_levels: &[u8; ORIENTATION_TILE_COUNT],
+    damage: OrientationTransitionDamage,
 ) -> bool {
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     if orientation_neon_enabled()
@@ -586,6 +742,7 @@ fn render_center_pixel_zoom_wave_neon(
                 width: usize,
                 height: usize,
                 black_levels: *const u8,
+                dirty_rows: *const u16,
             );
         }
         // SAFETY: the slices are complete, distinct RGB565 planes with the
@@ -597,6 +754,7 @@ fn render_center_pixel_zoom_wave_neon(
                 width,
                 height,
                 black_levels.as_ptr(),
+                damage.rows.as_ptr(),
             );
         }
         return true;
@@ -607,6 +765,7 @@ fn render_center_pixel_zoom_wave_neon(
         width,
         height,
         black_levels,
+        damage,
         orientation_neon_enabled(),
     );
     false
@@ -662,6 +821,22 @@ fn fill_black_rect(
         let start = y * stride + x0;
         let end = y * stride + x1;
         output[start..end].fill(Rgb565Pixel(0));
+    }
+}
+
+fn copy_rect(
+    source: &[Rgb565Pixel],
+    output: &mut [Rgb565Pixel],
+    stride: usize,
+    x0: usize,
+    x1: usize,
+    y0: usize,
+    y1: usize,
+) {
+    for y in y0..y1 {
+        let start = y * stride + x0;
+        let end = y * stride + x1;
+        output[start..end].copy_from_slice(&source[start..end]);
     }
 }
 
@@ -737,6 +912,48 @@ mod tests {
             orientation_tile_eased_level(1_420_000, 8, 15),
             Some(RGB565_OPACITY_LEVELS)
         );
+    }
+
+    #[test]
+    fn dirty_tiles_collapse_to_one_bounding_rectangle_per_row() {
+        let previous = [0_u8; ORIENTATION_TILE_COUNT];
+        let mut current = previous;
+        current[2 * ORIENTATION_GRID_COLUMNS + 1] = 1;
+        current[2 * ORIENTATION_GRID_COLUMNS + 7] = 1;
+        current[2 * ORIENTATION_GRID_COLUMNS + 15] = 1;
+        current[8 * ORIENTATION_GRID_COLUMNS + 4] = 1;
+
+        let damage = OrientationTransitionDamage::changed(&previous, &current);
+        assert_eq!(damage.rect_for_row(0, 1280, 720), None);
+        assert_eq!(
+            damage.rect_for_row(2, 1280, 720),
+            Some((80, 160, 1280, 240))
+        );
+        assert_eq!(
+            damage.rect_for_row(8, 1280, 720),
+            Some((320, 640, 400, 720))
+        );
+        assert_eq!(damage.dirty_pixels(1280, 720), 4 * 80 * 80);
+    }
+
+    #[test]
+    fn dirty_zoom_redraw_leaves_unchanged_tiles_alone() {
+        let width = 160;
+        let height = 90;
+        let source = vec![Rgb565Pixel(0x07e0); width * height];
+        let sentinel = Rgb565Pixel(0xf800);
+        let mut output = vec![sentinel; width * height];
+        let mut levels = [ORIENTATION_TILE_SKIP; ORIENTATION_TILE_COUNT];
+        levels[0] = RGB565_OPACITY_LEVELS;
+        let mut damage = OrientationTransitionDamage::default();
+        damage.rows[0] = 1;
+
+        render_center_pixel_zoom_wave_scalar(&source, &mut output, width, height, &levels, damage);
+
+        assert_eq!(output[0], Rgb565Pixel(0));
+        assert_eq!(output[9], Rgb565Pixel(0));
+        assert_eq!(output[10], sentinel);
+        assert_eq!(output[10 * width], sentinel);
     }
 
     #[test]
@@ -901,9 +1118,10 @@ mod tests {
         for (index, level) in levels.iter_mut().enumerate() {
             *level = (index % (usize::from(RGB565_OPACITY_LEVELS) + 1)) as u8;
         }
-        render_brightness_wave_scalar(&source, &mut scalar, width, height, &levels);
+        let damage = OrientationTransitionDamage::full();
+        render_brightness_wave_scalar(&source, &mut scalar, width, height, &levels, damage);
         assert!(render_brightness_wave_neon(
-            &source, &mut neon, width, height, &levels
+            &source, &mut neon, width, height, &levels, damage
         ));
         assert_eq!(neon, scalar);
 
@@ -913,13 +1131,21 @@ mod tests {
                 *level = (index % (usize::from(RGB565_OPACITY_LEVELS) + 1)) as u8;
             }
         }
-        render_center_pixel_zoom_wave_scalar(&source, &mut scalar, width, height, &black_levels);
+        render_center_pixel_zoom_wave_scalar(
+            &source,
+            &mut scalar,
+            width,
+            height,
+            &black_levels,
+            damage,
+        );
         assert!(render_center_pixel_zoom_wave_neon(
             &source,
             &mut neon,
             width,
             height,
             &black_levels,
+            damage,
         ));
         assert_eq!(neon, scalar);
     }
@@ -973,7 +1199,7 @@ mod tests {
             false,
         );
         assert!(runtime.capture_destination(&destination));
-        let (done, _) = runtime
+        let (done, _, _) = runtime
             .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("transition frame");
         assert!(done);
@@ -996,20 +1222,22 @@ mod tests {
         ));
         assert!(runtime.capture_destination(&destination));
 
-        let (halfway_done, halfway) = runtime
+        let (halfway_done, halfway, halfway_damage) = runtime
             .render_into(&mut output, start + ORIENTATION_WAVE_PHASE_DURATION)
             .expect("halfway transition frame");
         assert!(!halfway_done);
         assert_eq!(output, [Rgb565Pixel(0); 12]);
         assert_eq!(halfway.mapped_pixels, 0);
         assert_eq!(halfway.blended_pixels, 12);
+        assert_eq!(halfway_damage, OrientationTransitionDamage::full());
         assert_eq!(halfway.progress_ppm, 500_000);
 
-        let (final_done, final_stats) = runtime
+        let (final_done, final_stats, final_damage) = runtime
             .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
             .expect("final transition frame");
         assert!(final_done);
         assert_eq!(final_stats.blended_pixels, 12);
+        assert_eq!(final_damage, OrientationTransitionDamage::full());
         assert_eq!(final_stats.progress_ppm, 1_000_000);
         assert!(final_stats.total_us >= final_stats.fill_us);
         assert!(final_stats.total_us >= final_stats.map_us);
