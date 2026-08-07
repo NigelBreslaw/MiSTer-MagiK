@@ -211,6 +211,20 @@ impl ArcadeListGeometry {
         }
     }
 
+    pub(crate) fn portrait(render_w: usize, render_h: usize, search: bool) -> Self {
+        let margin = ARCADE_LIST_X * 2;
+        let y = if search {
+            56
+        } else {
+            64 + render_h * 38 / 100 + 12
+        };
+        Self {
+            x: margin,
+            y: y.min(render_h.saturating_sub(1)),
+            width: render_w.saturating_sub(margin * 2).max(1),
+        }
+    }
+
     pub(crate) fn crt_for_content(
         content: CrtContentRect,
         metrics: CrtUiMetrics,
@@ -250,12 +264,12 @@ impl ArcadeListGeometry {
         render_h: usize,
         metrics: Option<CrtUiMetrics>,
     ) -> usize {
-        let bottom_inset = if self.y == ARCADE_LIST_Y {
+        let bottom_inset = if let Some(metrics) = metrics {
+            metrics.footer_height.max(1) as usize + metrics.grid_y.max(1) as usize * 3
+        } else if self.y == ARCADE_LIST_Y {
             32
         } else {
-            let metrics =
-                metrics.unwrap_or_else(|| CrtUiMetrics::for_framebuffer(self.width, render_h));
-            metrics.footer_height.max(1) as usize + metrics.grid_y.max(1) as usize * 3
+            16
         };
         render_h
             .saturating_sub(self.y + bottom_inset)

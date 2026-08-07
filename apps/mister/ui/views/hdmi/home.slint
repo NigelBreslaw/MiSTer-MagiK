@@ -4,6 +4,7 @@
 import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
 
 import { MisterBridge } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
 export component HomeGrid inherits Rectangle {
@@ -23,7 +24,7 @@ export component HomeGrid inherits Rectangle {
 
     background: transparent;
 
-    HorizontalLayout {
+    if !MisterUi.portrait-layout : HorizontalLayout {
         VerticalLayout {
             padding: 18px;
             spacing: 14px;
@@ -129,6 +130,91 @@ export component HomeGrid inherits Rectangle {
                         flat-focus-style: true;
                     }
                 }
+            }
+        }
+    }
+
+    if MisterUi.portrait-layout : VerticalLayout {
+        padding: 14px;
+        spacing: 12px;
+
+        Rectangle {
+            height: 52px;
+            background: #172131;
+            border-width: 1px;
+            border-color: #52647d;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 10px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 3px;
+                    PixelText8 {
+                        text: MisterBridge.menu-title;
+                        color: #d7eef8;
+                        size: PixelTextSize.px16;
+                        overflow: elide;
+                    }
+                    PixelText8 {
+                        text: MisterBridge.menu-breadcrumb != "" ? MisterBridge.menu-breadcrumb
+                            : MisterBridge.dev-mode ? "DEV MODE"
+                            : MisterBridge.update-available ? "Update Available" : "";
+                        color: MisterBridge.dev-mode ? #ffb347 : #8ca4b5;
+                        size: PixelTextSize.px8;
+                        overflow: elide;
+                    }
+                }
+                PixelText8 {
+                    text: MisterBridge.clock-text;
+                    color: #d7eef8;
+                    size: PixelTextSize.px8;
+                    horizontal-alignment: right;
+                }
+                SettingsButton { width: 36px; height: 36px; focused: false; }
+            }
+        }
+
+        portrait-viewport := Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+            background: transparent;
+            property <length> gap: 12px;
+            property <length> card-height: (height - gap * 3.5) / 4.5;
+            property <length> pitch: card-height + gap;
+            property <int> first-row: (MisterBridge.selected-index - 2).clamp(
+                0, (MisterBridge.menu-items.length - 5).max(0));
+
+            for item[index] in MisterBridge.menu-items : LauncherTile {
+                x: 0px;
+                y: (index - portrait-viewport.first-row) * portrait-viewport.pitch;
+                width: parent.width;
+                height: portrait-viewport.card-height;
+                label: item.label;
+                subtitle: item.subtitle;
+                status: item.status;
+                focused: item.focused;
+                focus-transition-enabled: item.focus-transition-enabled;
+                flat-focus-style: true;
+            }
+        }
+
+        Rectangle {
+            height: 30px;
+            background: #172131;
+            border-width: 1px;
+            border-color: #52647d;
+            PixelText8 {
+                text: root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
+                    : "UP/DOWN Move    A Open    B Back    HOME Launcher";
+                color: #8ca4b5;
+                size: PixelTextSize.px8;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
             }
         }
     }

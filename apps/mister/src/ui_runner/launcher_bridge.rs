@@ -47,6 +47,12 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
             .map(|mode| SharedString::from(mode.label))
             .collect::<Vec<_>>(),
     )));
+    bridge.set_orientation_options(ModelRc::new(VecModel::from(
+        crate::settings::ScreenOrientation::ALL
+            .iter()
+            .map(|orientation| SharedString::from(orientation.label()))
+            .collect::<Vec<_>>(),
+    )));
     bridge.set_simple_joystick_handling(false);
     bridge.set_reduce_motion(false);
     bridge.set_licenses_selected(0);
@@ -164,6 +170,36 @@ pub(super) fn sync_settings_bridge(
         set_display_confirm_remaining,
         nav.display_confirm_remaining as i32
     );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_orientation_active_label,
+        set_orientation_active_label,
+        nav.settings.screen_orientation.label()
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_orientation_combo_open,
+        set_orientation_combo_open,
+        nav.orientation_combo_open
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_orientation_selected,
+        set_orientation_selected,
+        nav.orientation_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_orientation_highlighted,
+        set_orientation_highlighted,
+        nav.orientation_highlighted as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_orientation_confirm_remaining,
+        set_orientation_confirm_remaining,
+        nav.orientation_confirm_remaining as i32
+    );
     set_bridge_if_changed!(
         bridge,
         get_simple_joystick_handling,
@@ -200,6 +236,7 @@ pub(super) fn sync_settings_bridge(
             Some(
                 launcher::ConfirmAction::DisplayResolution
                     | launcher::ConfirmAction::DisplayResolutionError
+                    | launcher::ConfirmAction::ScreenOrientation
             )
         )
     {
@@ -265,23 +302,49 @@ fn sync_arcade_list_geometry_bridge(
         render_h,
         nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
     ) as i32);
+    sync_arcade_preview_geometry_bridge(bridge, nav, ui);
+}
+
+fn sync_arcade_preview_geometry_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+    ui: &UiDisplay,
+) {
+    let (width, height) = if nav.uses_portrait_layout() {
+        (ui.render_h(), ui.render_w())
+    } else {
+        (ui.render_w(), ui.render_h())
+    };
+    let rect = mister_magik_fb::visual_composition::hdmi_preview_rect(width, height);
+    bridge.set_arcade_preview_box_x(rect.x0 as i32);
+    bridge.set_arcade_preview_box_y(rect.y0 as i32);
+    bridge.set_arcade_preview_box_width(rect.width() as i32);
+    bridge.set_arcade_preview_box_height(rect.rows() as i32);
 }
 
 pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeListGeometry, usize) {
     let search = nav.arcade_search.is_active(&nav.arcade_filter.active);
     let geometry = if nav.uses_crt_layout() {
+        let layout =
+            crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
         ArcadeListGeometry::crt_for_content(
-            ui.content_rect(),
+            layout.content_rect(),
             CrtUiMetrics::for_display(ui),
             search,
         )
+    } else if nav.uses_portrait_layout() {
+        ArcadeListGeometry::portrait(ui.render_h(), ui.render_w(), search)
     } else if search {
         ArcadeListGeometry::search_for_render_w(ui.render_w())
     } else {
         ArcadeListGeometry::NORMAL
     };
     let render_h = if nav.uses_crt_layout() {
-        ui.content_rect().bottom()
+        crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation)
+            .content_rect()
+            .bottom()
+    } else if nav.uses_portrait_layout() {
+        ui.render_w()
     } else {
         ui.render_h()
     };
@@ -564,6 +627,14 @@ fn sync_launcher_confirm_bridge(
                 "Retry"
             );
         }
+    } else if nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation) {
+        let label = format!("Cancel ({})", nav.orientation_confirm_remaining);
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirm_left_label,
+            set_confirm_left_label,
+            &label
+        );
     } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError) {
         if let Some(error) = nav.display_error.as_deref() {
             set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, error);
@@ -622,6 +693,12 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             message: "The display resolution could not be changed.",
             left_label: "OK",
             right_label: "",
+        },
+        Some(launcher::ConfirmAction::ScreenOrientation) => ConfirmBridgeText {
+            title: "Confirm screen orientation",
+            message: "Is the launcher upright on the rotated monitor?",
+            left_label: "Cancel (20)",
+            right_label: "Confirm",
         },
         None => ConfirmBridgeText {
             title: "",
@@ -1065,6 +1142,36 @@ fn sync_arcade_list_geometry_bridge_if_changed(
             render_h,
             nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
         ) as i32
+    );
+    let (width, height) = if nav.uses_portrait_layout() {
+        (ui.render_h(), ui.render_w())
+    } else {
+        (ui.render_w(), ui.render_h())
+    };
+    let preview = mister_magik_fb::visual_composition::hdmi_preview_rect(width, height);
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_preview_box_x,
+        set_arcade_preview_box_x,
+        preview.x0 as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_preview_box_y,
+        set_arcade_preview_box_y,
+        preview.y0 as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_preview_box_width,
+        set_arcade_preview_box_width,
+        preview.width() as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_arcade_preview_box_height,
+        set_arcade_preview_box_height,
+        preview.rows() as i32
     );
 }
 

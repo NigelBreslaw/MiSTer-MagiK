@@ -58,7 +58,7 @@ export component CrtLauncherUi inherits Rectangle {
         }
         if MisterBridge.catalog-scan-visible : CatalogScanPopup { }
         if MisterBridge.confirm-visible : ConfirmDialog { }
-        if MisterBridge.display-combo-open : CrtComboBoxOverlay { }
+        if MisterBridge.display-combo-open || MisterBridge.orientation-combo-open : CrtComboBoxOverlay { }
         if MisterBridge.loading-message != "" : LoadingOverlay { }
         if MisterBridge.startup-visible : StartupSplash { }
     }

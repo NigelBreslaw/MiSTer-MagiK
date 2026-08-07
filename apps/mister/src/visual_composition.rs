@@ -87,6 +87,18 @@ pub fn hdmi_preview_rect(frame_width: usize, frame_height: usize) -> DirtyRect {
     const PREVIEW_WIDTH: usize = 320;
     const PREVIEW_HEIGHT: usize = 320;
 
+    if frame_height > frame_width {
+        let margin = 16.min(frame_width / 4);
+        let y0 = 64.min(frame_height);
+        let height = (frame_height * 38 / 100).min(frame_height.saturating_sub(y0));
+        return DirtyRect {
+            x0: margin,
+            y0,
+            x1: frame_width.saturating_sub(margin),
+            y1: y0 + height,
+        };
+    }
+
     let list = ArcadeListGeometry::NORMAL;
     // The list may extend into the nominal right pane. Center in the black
     // pixels that remain visible between the list, header, and footer.

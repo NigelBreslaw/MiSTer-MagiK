@@ -21,11 +21,12 @@ export component SettingsScreen inherits Rectangle {
             vertical-stretch: 1;
             spacing: 0px;
             CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; }
-            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 1; }
-            CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: MisterBridge.reduce-motion ? "On" : "Off"; focused: MisterBridge.settings-selected == 2; }
-            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 3; }
-            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: MisterBridge.settings-selected == 4; }
-            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 5; }
+            CrtMenuRow { vertical-stretch: 1; label: "Orientation"; detail: MisterBridge.orientation-active-label; focused: MisterBridge.settings-selected == 1; }
+            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 2; }
+            CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: MisterBridge.reduce-motion ? "On" : "Off"; focused: MisterBridge.settings-selected == 3; }
+            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 4; }
+            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: MisterBridge.settings-selected == 5; }
+            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 6; }
         }
 
         CrtFooter { left-hint: "A Change"; right-hint: "B Back"; }

@@ -67,7 +67,7 @@ export global MisterBridge {
     // Home focus: selected row in the responsive launcher list; Settings is Home-only.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
-    // Settings focus: 0=display, 1=screensaver, 2=reduce motion, 3=exit, 4=rebuild, 5=about.
+    // Settings focus: 0=display, 1=orientation, 2=screensaver, 3=reduce motion, 4=exit, 5=rebuild, 6=about.
     in-out property <int> settings-selected;
     // About focus: 0=info, 1=licenses.
     in-out property <int> about-selected;
@@ -77,6 +77,12 @@ export global MisterBridge {
     in-out property <int> display-selected;
     in-out property <int> display-highlighted;
     in-out property <int> display-confirm-remaining;
+    in-out property <[string]> orientation-options;
+    in-out property <string> orientation-active-label: "Normal";
+    in-out property <bool> orientation-combo-open;
+    in-out property <int> orientation-selected;
+    in-out property <int> orientation-highlighted;
+    in-out property <int> orientation-confirm-remaining;
     in-out property <bool> simple-joystick-handling;
     in-out property <bool> reduce-motion;
     in-out property <int> screensaver-settings-selected;

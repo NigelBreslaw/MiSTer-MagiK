@@ -10,9 +10,63 @@ use std::path::{Path, PathBuf};
 
 const SETTINGS_VERSION: u32 = 1;
 
+/// Physical orientation of the monitor used for the launcher.
+///
+/// Portrait variants describe how the monitor is mounted. The compositor
+/// applies the inverse pixel rotation so launcher content remains upright.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScreenOrientation {
+    #[default]
+    Normal,
+    MonitorClockwise,
+    MonitorCounterclockwise,
+}
+
+impl ScreenOrientation {
+    pub const ALL: [Self; 3] = [
+        Self::Normal,
+        Self::MonitorClockwise,
+        Self::MonitorCounterclockwise,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::MonitorClockwise => "Monitor right (clockwise)",
+            Self::MonitorCounterclockwise => "Monitor left (counterclockwise)",
+        }
+    }
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::MonitorClockwise => "monitor-clockwise",
+            Self::MonitorCounterclockwise => "monitor-counterclockwise",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "monitor-clockwise" | "clockwise" | "right" => Some(Self::MonitorClockwise),
+            "monitor-counterclockwise" | "counterclockwise" | "left" => {
+                Some(Self::MonitorCounterclockwise)
+            }
+            _ => None,
+        }
+    }
+
+    pub const fn is_portrait(self) -> bool {
+        !matches!(self, Self::Normal)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MagikSettings {
     pub version: u32,
+    #[serde(default)]
+    pub screen_orientation: ScreenOrientation,
     #[serde(default)]
     pub simple_joystick_handling: bool,
     #[serde(default)]
@@ -35,6 +89,7 @@ impl Default for MagikSettings {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
+            screen_orientation: ScreenOrientation::Normal,
             simple_joystick_handling: false,
             reduce_motion: false,
             screensaver_enabled: default_screensaver_enabled(),
@@ -67,13 +122,39 @@ impl MagikSettings {
                     );
                     Self::default()
                 }
-                Err(e) => {
-                    crate::ui_errln!(
-                        "settings: parse error in {}: {e}, using defaults",
-                        path.display()
-                    );
-                    Self::default()
-                }
+                Err(e) => match serde_json::from_str::<serde_json::Value>(&text) {
+                    Ok(mut value) if value.get("version").and_then(|v| v.as_u64()) == Some(1) => {
+                        if let Some(object) = value.as_object_mut() {
+                            object.remove("screen_orientation");
+                        }
+                        match serde_json::from_value::<Self>(value) {
+                            Ok(mut settings) => {
+                                crate::ui_errln!(
+                                    "settings: invalid screen orientation in {}, using normal",
+                                    path.display()
+                                );
+                                settings.screen_orientation = ScreenOrientation::Normal;
+                                settings.screensaver_delay_minutes =
+                                    settings.screensaver_delay_minutes.clamp(1, 10);
+                                settings
+                            }
+                            Err(_) => {
+                                crate::ui_errln!(
+                                    "settings: parse error in {}: {e}, using defaults",
+                                    path.display()
+                                );
+                                Self::default()
+                            }
+                        }
+                    }
+                    _ => {
+                        crate::ui_errln!(
+                            "settings: parse error in {}: {e}, using defaults",
+                            path.display()
+                        );
+                        Self::default()
+                    }
+                },
             },
             Err(e) if e.kind() == io::ErrorKind::NotFound => Self::default(),
             Err(e) => {
@@ -150,6 +231,7 @@ mod tests {
         let settings = MagikSettings::load_from(path);
 
         assert!(settings.simple_joystick_handling);
+        assert_eq!(settings.screen_orientation, ScreenOrientation::Normal);
         assert!(!settings.reduce_motion);
         assert!(settings.screensaver_enabled);
         assert_eq!(settings.screensaver_delay_minutes, 5);
@@ -203,5 +285,52 @@ mod tests {
 
         assert!(!settings.screensaver_enabled);
         assert_eq!(settings.screensaver_delay_minutes, 10);
+    }
+
+    #[test]
+    fn orientation_round_trips_with_stable_names() {
+        for orientation in ScreenOrientation::ALL {
+            let settings = MagikSettings {
+                screen_orientation: orientation,
+                ..MagikSettings::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let decoded: MagikSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded.screen_orientation, orientation);
+        }
+        assert_eq!(
+            serde_json::to_string(&ScreenOrientation::MonitorClockwise).unwrap(),
+            r#""monitor-clockwise""#
+        );
+    }
+
+    #[test]
+    fn legacy_version_one_settings_preserve_other_values() {
+        let settings: MagikSettings = serde_json::from_str(
+            r#"{"version":1,"simple_joystick_handling":true,"reduce_motion":true,"screensaver_enabled":false,"screensaver_delay_minutes":7}"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.screen_orientation, ScreenOrientation::Normal);
+        assert!(settings.simple_joystick_handling);
+        assert!(settings.reduce_motion);
+        assert!(!settings.screensaver_enabled);
+        assert_eq!(settings.screensaver_delay_minutes, 7);
+    }
+
+    #[test]
+    fn invalid_orientation_falls_back_without_discarding_settings() {
+        let path = temp_settings_path("invalid-orientation");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"version":1,"screen_orientation":"sideways","reduce_motion":true}"#,
+        )
+        .unwrap();
+
+        let settings = MagikSettings::load_from(path);
+
+        assert_eq!(settings.screen_orientation, ScreenOrientation::Normal);
+        assert!(settings.reduce_motion);
     }
 }

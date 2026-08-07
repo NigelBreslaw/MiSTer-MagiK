@@ -48,6 +48,7 @@ component CrtResolutionRow inherits Rectangle {
 }
 
 export component CrtComboBoxOverlay inherits Rectangle {
+    property <bool> orientation: MisterBridge.orientation-combo-open;
     background: CrtTheme.background;
 
     VerticalLayout {
@@ -57,7 +58,7 @@ export component CrtComboBoxOverlay inherits Rectangle {
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
 
-        CrtHeader { title: "Resolution"; subtitle: ""; status: ""; }
+        CrtHeader { title: root.orientation ? "Orientation" : "Resolution"; subtitle: ""; status: ""; }
 
         Rectangle {
             vertical-stretch: 1;
@@ -65,11 +66,11 @@ export component CrtComboBoxOverlay inherits Rectangle {
             clip: true;
             VerticalLayout {
                 spacing: 0px;
-                for option[index] in MisterBridge.display-options : CrtResolutionRow {
+                for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : CrtResolutionRow {
                     vertical-stretch: 1;
                     label: option;
-                    detail: index == MisterBridge.display-selected ? "Selected" : "";
-                    focused: index == MisterBridge.display-highlighted;
+                    detail: index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "Selected" : "";
+                    focused: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted);
                 }
             }
         }

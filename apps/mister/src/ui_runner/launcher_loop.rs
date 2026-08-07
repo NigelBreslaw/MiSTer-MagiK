@@ -1987,6 +1987,59 @@ const fn screensaver_catalog_busy(worker_running: bool, refresh_done: bool) -> b
     worker_running || !refresh_done
 }
 
+fn apply_orientation_layout(
+    app: &slint_ui::launcher::Launcher,
+    window: &Rc<MisterSoftwareWindow>,
+    ui: &UiDisplay,
+    orientation: ScreenOrientation,
+    nav: &mut LauncherNav,
+    layout: &mut UiLayoutGeometry,
+    portrait_target: &mut Option<UiFrameTarget>,
+    navigation_transition: &mut NavigationTransitionRuntime,
+) {
+    nav.settings.screen_orientation = orientation;
+    nav.sync_orientation_selection();
+    *layout = UiLayoutGeometry::for_display(ui, orientation);
+    nav.set_portrait_layout(layout.is_portrait());
+    if layout.is_portrait() {
+        let expected_len = layout.logical_w().saturating_mul(layout.logical_h());
+        if portrait_target
+            .as_ref()
+            .is_none_or(|target| target.cached_565().len() != expected_len)
+        {
+            *portrait_target = Some(UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                layout.logical_w(),
+                layout.logical_h(),
+            )));
+        }
+    } else {
+        *portrait_target = None;
+    }
+
+    let mister_ui = app.global::<slint_ui::launcher::MisterUi>();
+    mister_ui.set_window_width(layout.logical_w() as i32);
+    mister_ui.set_window_height(layout.logical_h() as i32);
+    mister_ui.set_screen_orientation(match orientation {
+        ScreenOrientation::Normal => 0,
+        ScreenOrientation::MonitorClockwise => 1,
+        ScreenOrientation::MonitorCounterclockwise => 2,
+    });
+    if ui.output_route().is_crt() {
+        let content = layout.content_rect();
+        mister_ui.set_crt_content_x(content.x as i32);
+        mister_ui.set_crt_content_y(content.y as i32);
+        mister_ui.set_crt_content_width(content.width as i32);
+        mister_ui.set_crt_content_height(content.height as i32);
+    }
+    configure_window_layout(layout, window);
+    navigation_transition.set_enabled(
+        layout.logical_w(),
+        layout.logical_h(),
+        !nav.settings.reduce_motion,
+    );
+    window.request_redraw();
+}
+
 fn preview_archive_warm_skip_enabled() -> bool {
     matches!(
         std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
@@ -2008,6 +2061,7 @@ pub(super) fn run_launcher_loop(
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
     launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    mut layout: UiLayoutGeometry,
 ) {
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
@@ -2110,12 +2164,27 @@ pub(super) fn run_launcher_loop(
         mister_magik_catalog::device_layout::current_app_path("settings.json"),
     );
     nav.settings = settings_store.load();
+    layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
+    nav.set_portrait_layout(layout.is_portrait());
+    nav.sync_orientation_selection();
+    let mut portrait_target = layout.is_portrait().then(|| {
+        UiFrameTarget::cached(FramebufferTargetGeometry::new(
+            layout.logical_w(),
+            layout.logical_h(),
+        ))
+    });
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
-    let mut navigation_transition =
-        NavigationTransitionRuntime::new(ui.render_w(), ui.render_h(), navigation_motion_enabled);
+    let mut navigation_transition = NavigationTransitionRuntime::new(
+        layout.logical_w(),
+        layout.logical_h(),
+        navigation_motion_enabled,
+    );
     nav.screen = start_screen;
     let mut display_confirm_deadline = None;
+    let mut orientation_confirm_deadline = None;
+    let mut orientation_previous = None;
+    let mut orientation_full_redraw_pending = layout.is_portrait();
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
@@ -2904,6 +2973,36 @@ pub(super) fn run_launcher_loop(
                 ((deadline - loop_start).as_millis().div_ceil(1000) as u8)
                     .min(launcher::DISPLAY_CONFIRM_SECONDS)
             };
+        }
+        if let Some(deadline) = orientation_confirm_deadline {
+            nav.orientation_confirm_remaining = if loop_start >= deadline {
+                0
+            } else {
+                ((deadline - loop_start).as_millis().div_ceil(1000) as u8)
+                    .min(launcher::DISPLAY_CONFIRM_SECONDS)
+            };
+            if loop_start >= deadline
+                && nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation)
+            {
+                if let Some(previous) = orientation_previous.take() {
+                    apply_orientation_layout(
+                        &app,
+                        window,
+                        ui,
+                        previous,
+                        &mut nav,
+                        &mut layout,
+                        &mut portrait_target,
+                        &mut navigation_transition,
+                    );
+                }
+                orientation_confirm_deadline = None;
+                nav.confirm_action = None;
+                nav.confirm_selected = 0;
+                nav.orientation_confirm_remaining = 0;
+                orientation_full_redraw_pending = true;
+                full_bridge_dirty = true;
+            }
         }
         while let Ok(result) = display_confirm_rx.try_recv() {
             pacer.rearm_after_display_mode_change();
@@ -4435,6 +4534,65 @@ pub(super) fn run_launcher_loop(
                                     nav.confirm_selected = 0;
                                 }
                             }
+                            LauncherAction::ApplyScreenOrientation => {
+                                if let Some(orientation) =
+                                    event.path.as_deref().and_then(ScreenOrientation::parse)
+                                    && orientation != nav.settings.screen_orientation
+                                {
+                                    orientation_previous = Some(nav.settings.screen_orientation);
+                                    apply_orientation_layout(
+                                        &app,
+                                        window,
+                                        ui,
+                                        orientation,
+                                        &mut nav,
+                                        &mut layout,
+                                        &mut portrait_target,
+                                        &mut navigation_transition,
+                                    );
+                                    nav.confirm_action =
+                                        Some(launcher::ConfirmAction::ScreenOrientation);
+                                    nav.confirm_selected = 0;
+                                    nav.orientation_confirm_remaining =
+                                        launcher::DISPLAY_CONFIRM_SECONDS;
+                                    orientation_confirm_deadline = Some(
+                                        Instant::now()
+                                            + Duration::from_secs(u64::from(
+                                                launcher::DISPLAY_CONFIRM_SECONDS,
+                                            )),
+                                    );
+                                    orientation_full_redraw_pending = true;
+                                    full_bridge_dirty = true;
+                                }
+                            }
+                            LauncherAction::ConfirmScreenOrientation => {
+                                orientation_confirm_deadline = None;
+                                orientation_previous = None;
+                                nav.orientation_confirm_remaining = 0;
+                                if let Err(error) = settings_store.save(&nav.settings) {
+                                    crate::ui_errln!(
+                                        "settings: failed to save screen orientation: {error}"
+                                    );
+                                }
+                            }
+                            LauncherAction::CancelScreenOrientation => {
+                                if let Some(previous) = orientation_previous.take() {
+                                    apply_orientation_layout(
+                                        &app,
+                                        window,
+                                        ui,
+                                        previous,
+                                        &mut nav,
+                                        &mut layout,
+                                        &mut portrait_target,
+                                        &mut navigation_transition,
+                                    );
+                                }
+                                orientation_confirm_deadline = None;
+                                nav.orientation_confirm_remaining = 0;
+                                orientation_full_redraw_pending = true;
+                                full_bridge_dirty = true;
+                            }
                             LauncherAction::PreviewScreensaver => {
                                 if !screensaver.preview_active {
                                     screensaver.preview(frame_now);
@@ -4971,8 +5129,8 @@ pub(super) fn run_launcher_loop(
         {
             bridge.set_effective_view(effective_view.label().into());
         }
-        let mut full_frame_present = display_session
-            .should_present_full_frame(launching, route_action)
+        let mut full_frame_present = std::mem::take(&mut orientation_full_redraw_pending)
+            || display_session.should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
@@ -5359,7 +5517,8 @@ pub(super) fn run_launcher_loop(
         if !navigation_snapshot_locked_before_render {
             update_slint_animations(animation_clock);
         }
-        let mut layer_target = LayerTarget::new(target, ui);
+        let mut layer_target =
+            LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
@@ -5393,8 +5552,8 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 screensaver_loader = Some(LauncherScreensaverLoader::start(
-                    ui.render_w(),
-                    ui.render_h(),
+                    layout.logical_w(),
+                    layout.logical_h(),
                     screensaver_show_started,
                 ));
             }
@@ -5637,8 +5796,8 @@ pub(super) fn run_launcher_loop(
                     Some(DirtyRect {
                         x0: 0,
                         y0: 0,
-                        x1: ui.render_w(),
-                        y1: ui.render_h(),
+                        x1: layout.logical_w(),
+                        y1: layout.logical_h(),
                     })
                 }
             } else {
@@ -5661,7 +5820,11 @@ pub(super) fn run_launcher_loop(
             dirty
         } else {
             let (dirty, damage) = layer_target.render_slint_base(&window);
-            let expanded = expand_home_pan_dirty_rect(dirty, ui, home_pan_present_active);
+            let expanded = if layout.is_portrait() {
+                dirty
+            } else {
+                expand_home_pan_dirty_rect(dirty, ui, home_pan_present_active)
+            };
             slint_damage = if expanded == dirty {
                 damage
             } else {
@@ -5719,7 +5882,7 @@ pub(super) fn run_launcher_loop(
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
-        let empty_base_cached_rect = if preview_direct_present_enabled()
+        let empty_base_cached_rect = if (layout.is_portrait() || preview_direct_present_enabled())
             && preview_route.allows_preview_work()
             && composition_decision.allow_preview_blit
             && !memory_guard.active()
@@ -5922,8 +6085,8 @@ pub(super) fn run_launcher_loop(
         let full_rect = DirtyRect {
             x0: 0,
             y0: 0,
-            x1: ui.render_w(),
-            y1: ui.render_h(),
+            x1: layout.logical_w(),
+            y1: layout.logical_h(),
         };
         let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
@@ -5937,7 +6100,7 @@ pub(super) fn run_launcher_loop(
             launcher_arcade_scroll_offset =
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
-        let crt_arcade_cached_rect = if crt_layout {
+        let cached_arcade_rect = if crt_layout || layout.is_portrait() {
             arcade_list_rect.map(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
@@ -5948,15 +6111,17 @@ pub(super) fn run_launcher_loop(
         };
         let preview_layer_desired =
             should_desire_direct_layer(wants_preview, composition_decision.allow_preview_blit);
-        let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
-            Some(DirectLayerState::new(
-                preview_screen_rect(ui),
-                launcher_preview_version,
-            ))
-        } else {
-            None
-        };
-        let arcade_desired = if !crt_layout
+        let preview_desired =
+            if !layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
+                Some(DirectLayerState::new(
+                    preview_screen_rect(ui),
+                    launcher_preview_version,
+                ))
+            } else {
+                None
+            };
+        let arcade_desired = if !layout.is_portrait()
+            && !crt_layout
             && should_desire_direct_layer(
                 wants_arcade_list,
                 composition_decision.allow_arcade_list_blit,
@@ -5979,11 +6144,13 @@ pub(super) fn run_launcher_loop(
         };
         cached_damage.push_if_some(empty_base_cached_rect);
         cached_damage.push_if_some(raw_preview_cached_rect);
-        cached_damage.push_if_some(crt_arcade_cached_rect);
+        cached_damage.push_if_some(cached_arcade_rect);
+        let cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
         let final_preview_target_presented = raw_preview.is_some()
             && preview.presentation_requires_present()
             && preview_transition_trace.progress >= 1.0;
-        let cached_empty_target_presented = !preview_direct_present_enabled()
+        let cached_empty_target_presented = (layout.is_portrait()
+            || !preview_direct_present_enabled())
             && final_preview_target_presented
             && raw_preview_cached_rect.is_some()
             && matches!(
@@ -6001,7 +6168,11 @@ pub(super) fn run_launcher_loop(
             preview_desired,
             raw_preview_direct_rect,
             arcade_desired,
-            if crt_layout { None } else { arcade_list_rect },
+            if crt_layout || layout.is_portrait() {
+                None
+            } else {
+                arcade_list_rect
+            },
         );
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render

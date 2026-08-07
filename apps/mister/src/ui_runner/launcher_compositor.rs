@@ -46,12 +46,49 @@ impl LauncherPresentStatus {
 
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
+    logical_target: Option<&'a mut UiFrameTarget>,
     ui: &'a UiDisplay,
+    layout: UiLayoutGeometry,
+    drawing_ui: UiDisplay,
 }
 
 impl<'a> LayerTarget<'a> {
     pub(super) fn new(target: &'a mut UiFrameTarget, ui: &'a UiDisplay) -> Self {
-        Self { target, ui }
+        Self {
+            target,
+            logical_target: None,
+            ui,
+            layout: UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
+            drawing_ui: UiDisplay::for_framebuffer(ui.render_w(), ui.render_h()),
+        }
+    }
+
+    pub(super) fn new_oriented(
+        target: &'a mut UiFrameTarget,
+        logical_target: Option<&'a mut UiFrameTarget>,
+        ui: &'a UiDisplay,
+        layout: UiLayoutGeometry,
+    ) -> Self {
+        debug_assert_eq!(layout.is_portrait(), logical_target.is_some());
+        Self {
+            target,
+            logical_target,
+            ui,
+            layout,
+            drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
+        }
+    }
+
+    fn drawing_target(&self) -> &UiFrameTarget {
+        self.logical_target.as_deref().unwrap_or(self.target)
+    }
+
+    fn drawing_target_mut(&mut self) -> &mut UiFrameTarget {
+        self.logical_target.as_deref_mut().unwrap_or(self.target)
+    }
+
+    fn drawing_geometry(&self) -> FramebufferTargetGeometry {
+        FramebufferTargetGeometry::new(self.layout.logical_w(), self.layout.logical_h())
     }
 
     pub(super) fn render_slint_base(
@@ -61,9 +98,10 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         window.draw_if_needed(|renderer| {
-            let region = self.target.render(renderer, frame_target_geometry(self.ui));
-            slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
-            slint_damage = dirty_rects(&region, self.ui.render_w(), self.ui.render_h());
+            let geometry = self.drawing_geometry();
+            let region = self.drawing_target_mut().render(renderer, geometry);
+            slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
+            slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
         });
         (slint_dirty, slint_damage)
     }
@@ -75,27 +113,30 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         let rendered = window.draw_full_frame_if_needed(|renderer| {
-            let region = self.target.render(renderer, frame_target_geometry(self.ui));
-            slint_dirty = dirty_rect(&region, self.ui.render_w(), self.ui.render_h());
-            slint_damage = dirty_rects(&region, self.ui.render_w(), self.ui.render_h());
+            let geometry = self.drawing_geometry();
+            let region = self.drawing_target_mut().render(renderer, geometry);
+            slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
+            slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
         });
         (slint_dirty, slint_damage, rendered)
     }
 
     pub(super) fn render_black(&mut self) -> DirtyRect {
-        self.target.cached_565_mut().fill(Rgb565Pixel(0));
+        self.drawing_target_mut()
+            .cached_565_mut()
+            .fill(Rgb565Pixel(0));
         DirtyRect {
             x0: 0,
             y0: 0,
-            x1: self.ui.render_w(),
-            y1: self.ui.render_h(),
+            x1: self.layout.logical_w(),
+            y1: self.layout.logical_h(),
         }
     }
 
     pub(super) fn clear_cached_preview(&mut self) -> DirtyRect {
-        let rect = preview_screen_rect(self.ui);
-        let stride = self.ui.render_w();
-        let cached = self.target.cached_565_mut();
+        let rect = preview_screen_rect(&self.drawing_ui);
+        let stride = self.layout.logical_w();
+        let cached = self.drawing_target_mut().cached_565_mut();
         for y in rect.y0..rect.y1 {
             let row = y * stride;
             cached[row + rect.x0..row + rect.x1].fill(Rgb565Pixel(0));
@@ -108,16 +149,16 @@ impl<'a> LayerTarget<'a> {
         saver: &mut LauncherScreensaver,
     ) -> (DirtyRect, ScreensaverFrameTrace) {
         let trace = saver.render(
-            self.target.cached_565_mut(),
-            self.ui.render_w(),
-            self.ui.render_h(),
+            self.drawing_target_mut().cached_565_mut(),
+            self.layout.logical_w(),
+            self.layout.logical_h(),
         );
         (
             DirtyRect {
                 x0: 0,
                 y0: 0,
-                x1: self.ui.render_w(),
-                y1: self.ui.render_h(),
+                x1: self.layout.logical_w(),
+                y1: self.layout.logical_h(),
             },
             trace,
         )
@@ -128,7 +169,7 @@ impl<'a> LayerTarget<'a> {
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> DirtyRect {
-        let cached = self.target.cached_565_mut();
+        let cached = self.drawing_target_mut().cached_565_mut();
         if cached.len() == launcher_frame.len() {
             let black = Rgb565Pixel(0);
             for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
@@ -140,8 +181,8 @@ impl<'a> LayerTarget<'a> {
         DirtyRect {
             x0: 0,
             y0: 0,
-            x1: self.ui.render_w(),
-            y1: self.ui.render_h(),
+            x1: self.layout.logical_w(),
+            y1: self.layout.logical_h(),
         }
     }
 
@@ -152,11 +193,11 @@ impl<'a> LayerTarget<'a> {
         alpha: u8,
     ) -> (DirtyRect, ScreensaverFrameTrace) {
         let trace = saver.render(
-            self.target.cached_565_mut(),
-            self.ui.render_w(),
-            self.ui.render_h(),
+            self.drawing_target_mut().cached_565_mut(),
+            self.layout.logical_w(),
+            self.layout.logical_h(),
         );
-        let cached = self.target.cached_565_mut();
+        let cached = self.drawing_target_mut().cached_565_mut();
         if cached.len() == launcher_frame.len() {
             for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
                 *pixel = blend_565(*source, *pixel, alpha);
@@ -166,23 +207,25 @@ impl<'a> LayerTarget<'a> {
             DirtyRect {
                 x0: 0,
                 y0: 0,
-                x1: self.ui.render_w(),
-                y1: self.ui.render_h(),
+                x1: self.layout.logical_w(),
+                y1: self.layout.logical_h(),
             },
             trace,
         )
     }
 
     pub(super) fn snapshot_cached(&self) -> Vec<Rgb565Pixel> {
-        snapshot_cached_565(self.target)
+        snapshot_cached_565(self.drawing_target())
     }
 
     pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
-        restore_cached_565(self.target, snapshot)
+        restore_cached_565(self.drawing_target_mut(), snapshot)
     }
 
     pub(super) fn swap_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {
-        self.target.swap_cached_565(replacement, self.ui.render_w())
+        let width = self.layout.logical_w();
+        self.drawing_target_mut()
+            .swap_cached_565(replacement, width)
     }
 
     pub(super) fn blend_screensaver_crossfade(
@@ -190,7 +233,7 @@ impl<'a> LayerTarget<'a> {
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> DirtyRect {
-        let cached = self.target.cached_565_mut();
+        let cached = self.drawing_target_mut().cached_565_mut();
         if cached.len() == launcher_frame.len() {
             for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
                 *pixel = blend_565(*source, *pixel, alpha);
@@ -199,8 +242,8 @@ impl<'a> LayerTarget<'a> {
         DirtyRect {
             x0: 0,
             y0: 0,
-            x1: self.ui.render_w(),
-            y1: self.ui.render_h(),
+            x1: self.layout.logical_w(),
+            y1: self.layout.logical_h(),
         }
     }
 
@@ -212,14 +255,18 @@ impl<'a> LayerTarget<'a> {
         slint_dirty: Option<DirtyRect>,
         full_frame_present: bool,
     ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
+        let drawing_ui = &self.drawing_ui;
+        let allow_direct = !self.layout.is_portrait();
+        let target = self.logical_target.as_deref_mut().unwrap_or(self.target);
         blit_raw_preview_if_needed(
-            self.target,
-            self.ui,
+            target,
+            drawing_ui,
             preview,
             transition,
             elapsed,
             slint_dirty,
             full_frame_present,
+            allow_direct,
         )
     }
 
@@ -231,13 +278,15 @@ impl<'a> LayerTarget<'a> {
         if frame.status() != PreviewRawFrameStatus::Ready {
             return None;
         }
-        if preview_direct_present_enabled() {
+        if preview_direct_present_enabled() && !self.layout.is_portrait() {
             self.target
                 .blit_raw_preview_direct(self.ui, &frame, true)
                 .map(RawPreviewPresent::Direct)
         } else {
-            self.target
-                .blit_raw_preview(self.ui, &frame, true)
+            self.logical_target
+                .as_deref_mut()
+                .unwrap_or(self.target)
+                .blit_raw_preview(&self.drawing_ui, &frame, true)
                 .map(RawPreviewPresent::Cached)
         }
     }
@@ -262,7 +311,7 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
-        compose_arcade_list_update(self.target, renderer, update)
+        compose_arcade_list_update(self.drawing_target_mut(), renderer, update)
     }
 
     pub(super) fn copy_arcade_list_update_to_hidden(
@@ -275,11 +324,50 @@ impl<'a> LayerTarget<'a> {
     }
 
     pub(super) fn cached_frame_view(&self) -> CachedFrameView<'_> {
+        self.drawing_target().cached_frame_view()
+    }
+
+    pub(super) fn presentation_frame_view(&self) -> CachedFrameView<'_> {
         self.target.cached_frame_view()
     }
 
     pub(super) fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
-        self.target.direct_preview_view()
+        if self.layout.is_portrait() {
+            None
+        } else {
+            self.target.direct_preview_view()
+        }
+    }
+
+    pub(super) fn rotate_damage_to_composition(
+        &mut self,
+        logical_damage: &DirtyRectList,
+    ) -> DirtyRectList {
+        if !self.layout.is_portrait() {
+            return *logical_damage;
+        }
+        let logical = self
+            .logical_target
+            .as_deref()
+            .expect("portrait logical target")
+            .cached_565();
+        let composition = self.target.cached_565_mut();
+        let mut mapped = DirtyRectList::new();
+        for rect in logical_damage.iter() {
+            let rect = self.layout.logical_rect_to_composition(rect);
+            mapped.push(rect);
+            for composition_y in rect.y0..rect.y1 {
+                let row = composition_y * self.layout.composition_w();
+                for composition_x in rect.x0..rect.x1 {
+                    let (logical_x, logical_y) = self
+                        .layout
+                        .composition_pixel_to_logical(composition_x, composition_y);
+                    composition[row + composition_x] =
+                        logical[logical_y * self.layout.logical_w() + logical_x];
+                }
+            }
+        }
+        mapped
     }
 }
 

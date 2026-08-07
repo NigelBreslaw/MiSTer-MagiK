@@ -16,7 +16,7 @@ use crate::launcher_taxonomy::{
 };
 #[cfg(test)]
 use crate::library_db;
-use crate::settings::MagikSettings;
+use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use serde::{Deserialize, Serialize};
@@ -67,11 +67,12 @@ pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
 const SETTINGS_DISPLAY_SELECTED: usize = 0;
-const SETTINGS_SCREENSAVER_SELECTED: usize = 1;
-const SETTINGS_REDUCE_MOTION_SELECTED: usize = 2;
-const SETTINGS_EXIT_SELECTED: usize = 3;
-const SETTINGS_REBUILD_SELECTED: usize = 4;
-const SETTINGS_ABOUT_SELECTED: usize = 5;
+const SETTINGS_ORIENTATION_SELECTED: usize = 1;
+const SETTINGS_SCREENSAVER_SELECTED: usize = 2;
+const SETTINGS_REDUCE_MOTION_SELECTED: usize = 3;
+const SETTINGS_EXIT_SELECTED: usize = 4;
+const SETTINGS_REBUILD_SELECTED: usize = 5;
+const SETTINGS_ABOUT_SELECTED: usize = 6;
 const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
@@ -271,6 +272,7 @@ pub enum ConfirmAction {
     LibraryUpdateFailed,
     DisplayResolution,
     DisplayResolutionError,
+    ScreenOrientation,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -289,6 +291,9 @@ pub enum LauncherAction {
     ApplyDisplayResolution,
     ConfirmDisplayResolution,
     CancelDisplayResolution,
+    ApplyScreenOrientation,
+    ConfirmScreenOrientation,
+    CancelScreenOrientation,
     PersistSettings,
 }
 
@@ -781,6 +786,7 @@ fn directional_row_spring_target(
 
 pub struct LauncherNav {
     crt_layout: bool,
+    portrait_layout: bool,
     pub screen: Screen,
     pub selected: usize,
     pub scroll_x: i32,
@@ -793,6 +799,10 @@ pub struct LauncherNav {
     pub display_confirm_remaining: u8,
     pub display_confirm_busy: bool,
     pub display_error: Option<String>,
+    pub orientation_combo_open: bool,
+    pub orientation_selected: usize,
+    pub orientation_highlighted: usize,
+    pub orientation_confirm_remaining: u8,
     pub screensaver_selected: usize,
     pub settings: MagikSettings,
     pub licenses_selected: usize,
@@ -867,6 +877,10 @@ pub struct NavigationTransitionState {
     display_confirm_remaining: u8,
     display_confirm_busy: bool,
     display_error: Option<String>,
+    orientation_combo_open: bool,
+    orientation_selected: usize,
+    orientation_highlighted: usize,
+    orientation_confirm_remaining: u8,
     screensaver_selected: usize,
     licenses_selected: usize,
     licenses_expanded: bool,
@@ -1119,17 +1133,43 @@ impl LauncherNav {
         self.crt_layout
     }
 
+    pub fn set_portrait_layout(&mut self, portrait_layout: bool) {
+        self.portrait_layout = portrait_layout;
+        self.settings_focused = false;
+        self.home_scroll = HomeScrollState::default();
+        self.home_scroll_animation.snap_to(self.scroll_x as f64);
+    }
+
+    pub fn uses_portrait_layout(&self) -> bool {
+        self.portrait_layout
+    }
+
+    pub fn sync_orientation_selection(&mut self) {
+        self.orientation_selected = ScreenOrientation::ALL
+            .iter()
+            .position(|orientation| *orientation == self.settings.screen_orientation)
+            .unwrap_or(0);
+        self.orientation_highlighted = self.orientation_selected;
+    }
+
     pub fn home_horizontal_held(&self) -> bool {
-        self.screen == Screen::Home && !self.settings_focused && self.home_scroll.held_dir != 0
+        self.screen == Screen::Home
+            && !self.portrait_layout
+            && !self.settings_focused
+            && self.home_scroll.held_dir != 0
     }
 
     pub fn home_horizontal_repeat_active(&self) -> bool {
-        self.screen == Screen::Home && !self.settings_focused && self.home_scroll.active
+        self.screen == Screen::Home
+            && !self.portrait_layout
+            && !self.settings_focused
+            && self.home_scroll.active
     }
 
     pub fn new() -> Self {
         Self {
             crt_layout: false,
+            portrait_layout: false,
             screen: Screen::Home,
             selected: 0,
             scroll_x: 0,
@@ -1142,6 +1182,10 @@ impl LauncherNav {
             display_confirm_remaining: 0,
             display_confirm_busy: false,
             display_error: None,
+            orientation_combo_open: false,
+            orientation_selected: 0,
+            orientation_highlighted: 0,
+            orientation_confirm_remaining: 0,
             screensaver_selected: 0,
             settings: MagikSettings::default(),
             licenses_selected: 0,
@@ -1795,6 +1839,10 @@ impl LauncherNav {
             display_confirm_remaining: self.display_confirm_remaining,
             display_confirm_busy: self.display_confirm_busy,
             display_error: self.display_error.clone(),
+            orientation_combo_open: self.orientation_combo_open,
+            orientation_selected: self.orientation_selected,
+            orientation_highlighted: self.orientation_highlighted,
+            orientation_confirm_remaining: self.orientation_confirm_remaining,
             screensaver_selected: self.screensaver_selected,
             licenses_selected: self.licenses_selected,
             licenses_expanded: self.licenses_expanded,
@@ -1832,6 +1880,10 @@ impl LauncherNav {
         self.display_confirm_remaining = state.display_confirm_remaining;
         self.display_confirm_busy = state.display_confirm_busy;
         self.display_error = state.display_error;
+        self.orientation_combo_open = state.orientation_combo_open;
+        self.orientation_selected = state.orientation_selected;
+        self.orientation_highlighted = state.orientation_highlighted;
+        self.orientation_confirm_remaining = state.orientation_confirm_remaining;
         self.screensaver_selected = state.screensaver_selected;
         self.licenses_selected = state.licenses_selected;
         self.licenses_expanded = state.licenses_expanded;
@@ -2094,7 +2146,7 @@ impl LauncherNav {
         }
 
         let item_count = self.current_menu_count();
-        if !self.crt_layout {
+        if !self.crt_layout && !self.portrait_layout {
             if self.repeat.tick_up(now.dpad_up, frame_now) {
                 self.settings_focused = true;
             }
@@ -2172,7 +2224,7 @@ impl LauncherNav {
             });
         self.home_scroll.last_frame_at = Some(frame_now);
 
-        let (dir, previous_dir) = if self.crt_layout {
+        let (dir, previous_dir) = if self.crt_layout || self.portrait_layout {
             (
                 i32::from(now.dpad_down || now.dpad_right)
                     - i32::from(now.dpad_up || now.dpad_left),
@@ -2536,6 +2588,38 @@ impl LauncherNav {
             }
             return None;
         }
+        if self.orientation_combo_open {
+            let count = ScreenOrientation::ALL.len();
+            if rising(now.btn_b, self.prev.btn_b) {
+                self.orientation_combo_open = false;
+                self.orientation_highlighted = self.orientation_selected.min(count - 1);
+                return None;
+            }
+            if self.repeat.tick_down(now.dpad_down, frame_now)
+                && self.orientation_highlighted + 1 < count
+            {
+                self.orientation_highlighted += 1;
+            }
+            if self.repeat.tick_up(now.dpad_up, frame_now) && self.orientation_highlighted > 0 {
+                self.orientation_highlighted -= 1;
+            }
+            if rising(now.btn_a, self.prev.btn_a) {
+                self.orientation_combo_open = false;
+                if self.orientation_highlighted == self.orientation_selected {
+                    return None;
+                }
+                return Some(LauncherEvent {
+                    action: LauncherAction::ApplyScreenOrientation,
+                    path: Some(
+                        ScreenOrientation::ALL[self.orientation_highlighted]
+                            .id()
+                            .into(),
+                    ),
+                    settings: None,
+                });
+            }
+            return None;
+        }
         if rising(now.btn_home, self.prev.btn_home) {
             self.go_root();
             return None;
@@ -2563,6 +2647,11 @@ impl LauncherNav {
                 } else {
                     0
                 };
+                return None;
+            }
+            if self.settings_selected == SETTINGS_ORIENTATION_SELECTED {
+                self.orientation_combo_open = true;
+                self.orientation_highlighted = self.orientation_selected;
                 return None;
             }
             if self.settings_selected == SETTINGS_SCREENSAVER_SELECTED {
@@ -2761,6 +2850,15 @@ impl LauncherNav {
                     settings: None,
                 });
             }
+            if self.confirm_action == Some(ConfirmAction::ScreenOrientation) {
+                self.confirm_action = None;
+                self.confirm_selected = 0;
+                return Some(LauncherEvent {
+                    action: LauncherAction::CancelScreenOrientation,
+                    path: None,
+                    settings: None,
+                });
+            }
             if self.confirm_action == Some(ConfirmAction::LibraryChanged) {
                 self.confirm_action = None;
                 self.confirm_selected = 0;
@@ -2841,12 +2939,24 @@ impl LauncherNav {
                         settings: None,
                     }),
                     Some(ConfirmAction::DisplayResolutionError) => None,
+                    Some(ConfirmAction::ScreenOrientation) => Some(LauncherEvent {
+                        action: LauncherAction::ConfirmScreenOrientation,
+                        path: None,
+                        settings: None,
+                    }),
                     None => None,
                 };
             }
             if action == Some(ConfirmAction::DisplayResolution) {
                 return Some(LauncherEvent {
                     action: LauncherAction::CancelDisplayResolution,
+                    path: None,
+                    settings: None,
+                });
+            }
+            if action == Some(ConfirmAction::ScreenOrientation) {
+                return Some(LauncherEvent {
+                    action: LauncherAction::CancelScreenOrientation,
                     path: None,
                     settings: None,
                 });

@@ -17,6 +17,8 @@ use mister_magik_core::display::{
     DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
     runtime_display_geometry_v1, video_mode_geometry,
 };
+use mister_magik_mister_runtime::framebuffer::damage::DirtyRect;
+pub use mister_magik_mister_runtime::settings::ScreenOrientation;
 
 const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
@@ -159,6 +161,183 @@ pub struct CrtContentRect {
     pub y: usize,
     pub width: usize,
     pub height: usize,
+}
+
+/// Launcher layout geometry above the fixed display/composition geometry.
+///
+/// Portrait layouts swap the composition axes. They are rotated into the
+/// landscape composition buffer before the existing output transform runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UiLayoutGeometry {
+    orientation: ScreenOrientation,
+    logical_w: usize,
+    logical_h: usize,
+    composition_w: usize,
+    composition_h: usize,
+    content_rect: CrtContentRect,
+}
+
+impl UiLayoutGeometry {
+    pub fn for_display(display: &UiDisplay, orientation: ScreenOrientation) -> Self {
+        let composition_w = display.render_w();
+        let composition_h = display.render_h();
+        let (logical_w, logical_h) = if orientation.is_portrait() {
+            (composition_h, composition_w)
+        } else {
+            (composition_w, composition_h)
+        };
+        let content_rect = Self::composition_rect_to_logical(
+            orientation,
+            logical_w,
+            logical_h,
+            display.content_rect(),
+        );
+        Self {
+            orientation,
+            logical_w,
+            logical_h,
+            composition_w,
+            composition_h,
+            content_rect,
+        }
+    }
+
+    pub const fn orientation(self) -> ScreenOrientation {
+        self.orientation
+    }
+
+    pub const fn is_portrait(self) -> bool {
+        self.orientation.is_portrait()
+    }
+
+    pub const fn logical_w(self) -> usize {
+        self.logical_w
+    }
+
+    pub const fn logical_h(self) -> usize {
+        self.logical_h
+    }
+
+    pub const fn composition_w(self) -> usize {
+        self.composition_w
+    }
+
+    pub const fn composition_h(self) -> usize {
+        self.composition_h
+    }
+
+    pub const fn content_rect(self) -> CrtContentRect {
+        self.content_rect
+    }
+
+    /// Maps a logical pixel coordinate into the persistent composition cache.
+    pub fn logical_pixel_to_composition(self, x: usize, y: usize) -> (usize, usize) {
+        debug_assert!(x < self.logical_w && y < self.logical_h);
+        match self.orientation {
+            ScreenOrientation::Normal => (x, y),
+            // Monitor mounted clockwise: counterclockwise buffer rotation.
+            ScreenOrientation::MonitorClockwise => (y, self.logical_w - 1 - x),
+            // Monitor mounted counterclockwise: clockwise buffer rotation.
+            ScreenOrientation::MonitorCounterclockwise => (self.logical_h - 1 - y, x),
+        }
+    }
+
+    pub fn composition_pixel_to_logical(self, x: usize, y: usize) -> (usize, usize) {
+        debug_assert!(x < self.composition_w && y < self.composition_h);
+        match self.orientation {
+            ScreenOrientation::Normal => (x, y),
+            ScreenOrientation::MonitorClockwise => (self.logical_w - 1 - y, x),
+            ScreenOrientation::MonitorCounterclockwise => (y, self.logical_h - 1 - x),
+        }
+    }
+
+    pub fn logical_rect_to_composition(self, rect: DirtyRect) -> DirtyRect {
+        let rect = self.clamp_logical_rect(rect);
+        match self.orientation {
+            ScreenOrientation::Normal => rect,
+            ScreenOrientation::MonitorClockwise => DirtyRect {
+                x0: rect.y0,
+                y0: self.logical_w - rect.x1,
+                x1: rect.y1,
+                y1: self.logical_w - rect.x0,
+            },
+            ScreenOrientation::MonitorCounterclockwise => DirtyRect {
+                x0: self.logical_h - rect.y1,
+                y0: rect.x0,
+                x1: self.logical_h - rect.y0,
+                y1: rect.x1,
+            },
+        }
+    }
+
+    pub fn composition_rect_to_logical_rect(self, rect: DirtyRect) -> DirtyRect {
+        let rect = DirtyRect {
+            x0: rect.x0.min(self.composition_w),
+            y0: rect.y0.min(self.composition_h),
+            x1: rect.x1.min(self.composition_w),
+            y1: rect.y1.min(self.composition_h),
+        };
+        match self.orientation {
+            ScreenOrientation::Normal => rect,
+            ScreenOrientation::MonitorClockwise => DirtyRect {
+                x0: self.logical_w - rect.y1,
+                y0: rect.x0,
+                x1: self.logical_w - rect.y0,
+                y1: rect.x1,
+            },
+            ScreenOrientation::MonitorCounterclockwise => DirtyRect {
+                x0: rect.y0,
+                y0: self.logical_h - rect.x1,
+                x1: rect.y1,
+                y1: self.logical_h - rect.x0,
+            },
+        }
+    }
+
+    fn clamp_logical_rect(self, rect: DirtyRect) -> DirtyRect {
+        DirtyRect {
+            x0: rect.x0.min(self.logical_w),
+            y0: rect.y0.min(self.logical_h),
+            x1: rect.x1.min(self.logical_w),
+            y1: rect.y1.min(self.logical_h),
+        }
+    }
+
+    fn composition_rect_to_logical(
+        orientation: ScreenOrientation,
+        logical_w: usize,
+        logical_h: usize,
+        rect: CrtContentRect,
+    ) -> CrtContentRect {
+        let mapped = Self {
+            orientation,
+            logical_w,
+            logical_h,
+            composition_w: if orientation.is_portrait() {
+                logical_h
+            } else {
+                logical_w
+            },
+            composition_h: if orientation.is_portrait() {
+                logical_w
+            } else {
+                logical_h
+            },
+            content_rect: rect,
+        }
+        .composition_rect_to_logical_rect(DirtyRect {
+            x0: rect.x,
+            y0: rect.y,
+            x1: rect.right(),
+            y1: rect.bottom(),
+        });
+        CrtContentRect {
+            x: mapped.x0,
+            y: mapped.y0,
+            width: mapped.width(),
+            height: mapped.rows() as usize,
+        }
+    }
 }
 
 impl CrtContentRect {
@@ -991,6 +1170,96 @@ mod tests {
         let ui = UiDisplay::for_plan(plan);
         assert_eq!(ui.render_w(), 960);
         assert_eq!(ui.render_h(), 540);
+    }
+
+    #[test]
+    fn portrait_layout_swaps_only_logical_dimensions() {
+        let ui = UiDisplay::for_plan(UiDisplayPlan::from_output(1920, 1080, false, "test"));
+        let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
+
+        assert_eq!((layout.logical_w(), layout.logical_h()), (540, 960));
+        assert_eq!((layout.composition_w(), layout.composition_h()), (960, 540));
+        assert_eq!((ui.fb_w(), ui.fb_h()), (960, 540));
+        assert_eq!((ui.output_w(), ui.output_h()), (1920, 1080));
+        assert_eq!((ui.scan_w(), ui.scan_h()), (1920, 1080));
+    }
+
+    #[test]
+    fn portrait_pixel_transforms_are_inverse_for_asymmetric_corners() {
+        let ui = UiDisplay::for_framebuffer(7, 5);
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let logical_corners = [
+                (0, 0),
+                (layout.logical_w() - 1, 0),
+                (0, layout.logical_h() - 1),
+                (layout.logical_w() - 1, layout.logical_h() - 1),
+                (1, 3),
+            ];
+            for (x, y) in logical_corners {
+                let composition = layout.logical_pixel_to_composition(x, y);
+                assert_eq!(
+                    layout.composition_pixel_to_logical(composition.0, composition.1),
+                    (x, y)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn portrait_dirty_rect_mapping_round_trips() {
+        let ui = UiDisplay::for_framebuffer(11, 7);
+        let logical = DirtyRect {
+            x0: 1,
+            y0: 2,
+            x1: 5,
+            y1: 9,
+        };
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let composition = layout.logical_rect_to_composition(logical);
+            assert_eq!(
+                layout.composition_rect_to_logical_rect(composition),
+                logical
+            );
+            assert_eq!(composition.width(), logical.rows() as usize);
+            assert_eq!(composition.rows() as usize, logical.width());
+        }
+    }
+
+    #[test]
+    fn portrait_rotates_asymmetric_crt_content_insets() {
+        let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
+            None,
+            "[MiSTer]\ndirect_video=1\nmenu_pal=1\nforced_scandoubler=1\n",
+            Some("schema=1&output=crt-576p50"),
+            None,
+        )
+        .expect("CRT 576p route");
+        let ui = UiDisplay::for_plan(plan);
+        let normal = ui.content_rect();
+        let clockwise =
+            UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise).content_rect();
+        let counterclockwise =
+            UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorCounterclockwise)
+                .content_rect();
+
+        assert_eq!(
+            (clockwise.width, clockwise.height),
+            (normal.height, normal.width)
+        );
+        assert_eq!(
+            (counterclockwise.width, counterclockwise.height),
+            (normal.height, normal.width)
+        );
+        assert_eq!(clockwise.y, normal.x);
+        assert_eq!(counterclockwise.x, normal.y);
     }
 
     #[test]

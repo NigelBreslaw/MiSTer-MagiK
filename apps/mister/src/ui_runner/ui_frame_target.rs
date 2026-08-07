@@ -250,6 +250,7 @@ pub(super) fn blit_raw_preview_if_needed(
     elapsed: Duration,
     slint_dirty: Option<DirtyRect>,
     full_frame_present: bool,
+    allow_direct: bool,
 ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
     let raw_dirty = preview.take_raw_dirty();
     // Full-frame Slint presents overwrite direct preview pixels, so they count
@@ -270,7 +271,7 @@ pub(super) fn blit_raw_preview_if_needed(
     let Some(transition_frame) = transition_frame else {
         return (None, trace);
     };
-    let direct_present = preview_direct_present_enabled();
+    let direct_present = allow_direct && preview_direct_present_enabled();
     let raw_rect = if trace.active {
         let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
@@ -426,9 +427,19 @@ pub(super) fn frame_rect(rect: DirtyRect) -> FrameRect {
 }
 
 pub(super) fn configure_window(ui: &UiDisplay, window: &Rc<MisterSoftwareWindow>) {
+    configure_window_layout(
+        &UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
+        window,
+    );
+}
+
+pub(super) fn configure_window_layout(
+    layout: &UiLayoutGeometry,
+    window: &Rc<MisterSoftwareWindow>,
+) {
     window.set_size(PhysicalSize::new(
-        ui.render_w() as u32,
-        ui.render_h() as u32,
+        layout.logical_w() as u32,
+        layout.logical_h() as u32,
     ));
 }
 

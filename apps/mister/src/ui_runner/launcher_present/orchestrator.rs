@@ -612,7 +612,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             });
         }
         let stats = latch.present_cached_full_frame(
-            layer_target.cached_frame_view(),
+            layer_target.presentation_frame_view(),
             frame,
             hardware,
             self.display,
@@ -677,7 +677,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
 
     fn present_fb0(&mut self, frame: LauncherFramePlan) -> Self::Output {
         let (_, frame_t3, cpu_t3, pacing_trace) = self.pace_before_fb0();
-        let cached_frame = self.targets.layer_target.cached_frame_view();
+        let cached_frame = self.targets.layer_target.presentation_frame_view();
         let direct_preview = self.targets.layer_target.direct_preview_view();
         let fb0 = &mut *self.targets.fb0;
         let arcade_list_renderer = &mut *self.targets.arcade_list_renderer;

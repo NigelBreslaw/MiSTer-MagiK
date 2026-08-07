@@ -49,7 +49,8 @@ use crate::screenshot_transitions::{
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{
-    CrtUiMetrics, RuntimeDisplayGeometry, UiDisplay, UiDisplayPlan, UiPixelSize,
+    CrtUiMetrics, RuntimeDisplayGeometry, ScreenOrientation, UiDisplay, UiDisplayPlan,
+    UiLayoutGeometry, UiPixelSize,
 };
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
@@ -267,8 +268,8 @@ pub fn print_transition_effects() {
     experiments::effects::print_transition_effects();
 }
 
-macro_rules! with_scene_app {
-    ($module:ident::$ty:ident, $ui:expr, $window:expr, $app:ident, $body:block) => {{
+macro_rules! with_scene_app_layout {
+    ($module:ident::$ty:ident, $ui:expr, $layout:expr, $window:expr, $app:ident, $body:block) => {{
         boot_analytics::event(
             "app_construct_attempt",
             format!("scene_type={}", stringify!($module::$ty)),
@@ -279,13 +280,18 @@ macro_rules! with_scene_app {
             format!("scene_type={} ok=1", stringify!($module::$ty)),
         );
         let mister_ui = $app.global::<slint_ui::$module::MisterUi>();
-        mister_ui.set_window_width($ui.render_w() as i32);
-        mister_ui.set_window_height($ui.render_h() as i32);
+        mister_ui.set_window_width($layout.logical_w() as i32);
+        mister_ui.set_window_height($layout.logical_h() as i32);
         mister_ui.set_crt_layout($ui.output_route().is_crt());
+        mister_ui.set_screen_orientation(match $layout.orientation() {
+            ScreenOrientation::Normal => 0,
+            ScreenOrientation::MonitorClockwise => 1,
+            ScreenOrientation::MonitorCounterclockwise => 2,
+        });
         // HDMI keeps the legacy shared metrics; CRT profiles are route-owned.
         if $ui.output_route().is_crt() {
             let crt_metrics = CrtUiMetrics::for_display($ui);
-            let content = $ui.content_rect();
+            let content = $layout.content_rect();
             mister_ui.set_crt_grid_x(crt_metrics.grid_x);
             mister_ui.set_crt_grid_y(crt_metrics.grid_y);
             mister_ui.set_crt_border_x(crt_metrics.border_x);
@@ -309,8 +315,15 @@ macro_rules! with_scene_app {
             mister_ui.set_crt_content_width(content.width as i32);
             mister_ui.set_crt_content_height(content.height as i32);
         }
-        configure_window($ui, $window);
+        configure_window_layout($layout, $window);
         $body
+    }};
+}
+
+macro_rules! with_scene_app {
+    ($module:ident::$ty:ident, $ui:expr, $window:expr, $app:ident, $body:block) => {{
+        let layout = UiLayoutGeometry::for_display($ui, ScreenOrientation::Normal);
+        with_scene_app_layout!($module::$ty, $ui, &layout, $window, $app, $body)
     }};
 }
 
@@ -422,7 +435,10 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
             });
         }
         "launcher" => {
-            with_scene_app!(launcher::Launcher, &ui, &window, app, {
+            let launcher_settings = crate::settings::MagikSettings::load();
+            let launcher_layout =
+                UiLayoutGeometry::for_display(&ui, launcher_settings.screen_orientation);
+            with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {
                 boot_analytics::event("app_show_attempt", "scene=launcher");
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=launcher ok=1");
@@ -442,6 +458,7 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
                     app,
                     &animation_clock,
                     launch_return_cpu_profile,
+                    launcher_layout,
                 );
             });
         }

@@ -6,6 +6,7 @@ import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
 import { MisterBridge } from "../api.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
+    property <bool> orientation: MisterBridge.orientation-combo-open;
     background: #000000c8;
     Rectangle {
         width: 94%;
@@ -16,15 +17,15 @@ export component ComboBoxOverlay inherits Rectangle {
         VerticalLayout {
             padding: 16px;
             spacing: 4px;
-            PixelText8 { text: "Display resolution"; color: #06d6a0; size: PixelTextSize.px16; horizontal-alignment: center; }
-            for option[index] in MisterBridge.display-options : Rectangle {
+            PixelText8 { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: PixelTextSize.px16; horizontal-alignment: center; }
+            for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : Rectangle {
                 height: 34px;
-                background: index == MisterBridge.display-highlighted ? #2a2236 : transparent;
-                border-width: index == MisterBridge.display-highlighted ? 2px : 0px;
+                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : transparent;
+                border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : 0px;
                 border-color: #06d6a0;
                 PixelText8 {
-                    text: (index == MisterBridge.display-selected ? "✓ " : "  ") + option;
-                    color: index == MisterBridge.display-highlighted ? #06d6a0 : #e8e0f0;
+                    text: (index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "✓ " : "  ") + option;
+                    color: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #06d6a0 : #e8e0f0;
                     size: PixelTextSize.px8;
                     vertical-alignment: center;
                 }
