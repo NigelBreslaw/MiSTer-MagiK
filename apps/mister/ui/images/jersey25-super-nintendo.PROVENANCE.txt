@@ -1,0 +1,30 @@
+MiSTer MagiK — Super Nintendo title mask
+
+Authoritative font:
+  apps/mister/ui/fonts/Jersey25-Regular.ttf
+  SHA-256 4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370
+
+The Jersey 25 face has a 750-unit capital height in a 1230-unit em. A 41px
+em therefore produces exactly 25px-high capitals and maps the face's 30-unit
+pixel grid to whole framebuffer pixels. Live TrueType rendering is not used
+for this static heading because Slint's Swash outline rasterizer emits
+grayscale alpha coverage even at that exact size.
+
+Regeneration command, run from the repository root with ImageMagick 7:
+
+  magick -background none -fill white \
+    -font apps/mister/ui/fonts/Jersey25-Regular.ttf \
+    -pointsize 41 -density 72 +antialias \
+    label:'SUPER NINTENDO' -trim +repage -strip \
+    -define png:exclude-chunks=date,time \
+    apps/mister/ui/images/jersey25-super-nintendo.png
+
+Generated contract:
+  dimensions 266x25
+  colours 2 (fully transparent or fully opaque white)
+  channel depth 1-bit grayscale + 1-bit alpha
+  SHA-256 76b897ee06f8e78abf109be535b3eb05f842cde3087a1b3c08e42406737df0a9
+
+The Slint Image is positioned at integer coordinates, rendered at 266x25,
+and uses image-rendering: pixelated. No resampling or alpha blending occurs
+inside the title mask.

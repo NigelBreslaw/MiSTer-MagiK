@@ -194,6 +194,7 @@ required = {
     "mister-magik/mister_magik_scanout_slots.ko",
     "mister-magik/fpga/menu-magik-vblank-latch.rbf",
     "mister-magik/THIRD-PARTY-NOTICES.txt",
+    "mister-magik/licenses/JERSEY-10-OFL-1.1.txt",
     "mister-magik/SOURCE-OFFER.txt",
 }
 with zipfile.ZipFile(os.environ["ZIP"]) as archive:

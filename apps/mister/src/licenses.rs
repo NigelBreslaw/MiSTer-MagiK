@@ -4,10 +4,12 @@
 use std::sync::OnceLock;
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 5] = [
+pub const LICENSE_TITLES: [&str; 7] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Press Start 2P",
+    "Jersey 10",
+    "Jersey 25",
     "Arcade Cabinet",
     "Slint",
 ];
@@ -15,6 +17,8 @@ pub const LICENSE_TITLES: [&str; 5] = [
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
+const JERSEY_10: &str = include_str!("../licenses/JERSEY-10.txt");
+const JERSEY_25: &str = include_str!("../licenses/JERSEY-25.txt");
 const ARCADE_CABINET: &str =
     include_str!("../../../crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt");
 const LICENSE_LINE_COLUMNS: usize = 105;
@@ -22,15 +26,17 @@ const LICENSE_VISIBLE_ROWS: usize = 40;
 
 pub fn text(index: usize) -> &'static str {
     match index {
-        0 | 4 => GPL3,
+        0 | 6 => GPL3,
         1 => FFMPEG,
         2 => PRESS_START_2P,
+        3 => JERSEY_10,
+        4 => JERSEY_25,
         _ => ARCADE_CABINET,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 5] = [const { OnceLock::new() }; 5];
+    static LINES: [OnceLock<Vec<String>>; 7] = [const { OnceLock::new() }; 7];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -82,7 +88,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 4] {
+        for index in [0, 1, 2, 3, 4, 6] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -105,13 +111,17 @@ mod tests {
                 "MiSTer MagiK",
                 "FFmpeg",
                 "Press Start 2P",
+                "Jersey 10",
+                "Jersey 25",
                 "Arcade Cabinet",
                 "Slint"
             ]
         );
-        assert_eq!(text(4), GPL3);
+        assert_eq!(text(6), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
+        assert!(JERSEY_10.contains("SIL OPEN FONT LICENSE"));
+        assert!(JERSEY_25.contains("SIL OPEN FONT LICENSE"));
         assert!(ARCADE_CABINET.contains("Lluc Guardiolaa"));
         assert!(ARCADE_CABINET.contains("CC-BY-NC-4.0"));
     }

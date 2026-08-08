@@ -21,7 +21,10 @@ export component LicensesScreen inherits Rectangle {
         CrtMenuRow { label: "MiSTer MagiK"; detail: ">"; focused: MisterBridge.licenses-selected == 0; }
         CrtMenuRow { label: "FFmpeg"; detail: ">"; focused: MisterBridge.licenses-selected == 1; }
         CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; }
-        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        CrtMenuRow { label: "Jersey 10"; detail: ">"; focused: MisterBridge.licenses-selected == 3; }
+        CrtMenuRow { label: "Jersey 25"; detail: ">"; focused: MisterBridge.licenses-selected == 4; }
+        CrtMenuRow { label: "Arcade Cabinet"; detail: ">"; focused: MisterBridge.licenses-selected == 5; }
+        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 6; }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
 
@@ -35,7 +38,10 @@ export component LicensesScreen inherits Rectangle {
             font-family: MisterUi.crt-font-family;
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
-                  MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" : "Slint  v";
+                  MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
+                  MisterBridge.licenses-selected == 3 ? "Jersey 10  v" :
+                  MisterBridge.licenses-selected == 4 ? "Jersey 25  v" :
+                  MisterBridge.licenses-selected == 5 ? "Arcade Cabinet  v" : "Slint  v";
             color: CrtTheme.accent;
             size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
