@@ -218,6 +218,23 @@ impl<'a> LayerTarget<'a> {
         restore_cached_565(self.drawing_target_mut(), snapshot)
     }
 
+    pub(super) fn restore_presentation_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
+        restore_cached_565(self.target, snapshot)
+    }
+
+    pub(super) fn sync_full_portrait_composition(&mut self) {
+        if !self.layout.is_portrait() {
+            return;
+        }
+        let full = DirtyRectList::from_one(DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: self.layout.logical_w(),
+            y1: self.layout.logical_h(),
+        });
+        let _ = self.rotate_damage_to_composition(&full);
+    }
+
     pub(super) fn swap_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {
         let width = self.layout.logical_w();
         self.drawing_target_mut()

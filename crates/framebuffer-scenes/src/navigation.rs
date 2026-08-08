@@ -85,6 +85,14 @@ enum NavigationTransitionRenderer {
     SettingsPage,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SettingsPageTransitionAxis {
+    #[default]
+    Horizontal,
+    Vertical,
+    VerticalReversed,
+}
+
 impl NavigationTransitionDirection {
     pub const fn label(self) -> &'static str {
         match self {
@@ -535,6 +543,7 @@ pub struct NavigationTransitionRequest {
     pub duration_us: u64,
     pub preparation_timeout_us: u64,
     renderer: NavigationTransitionRenderer,
+    settings_axis: SettingsPageTransitionAxis,
 }
 
 impl NavigationTransitionRequest {
@@ -550,6 +559,7 @@ impl NavigationTransitionRequest {
             duration_us: edge.duration_us(),
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SuperScaler,
+            settings_axis: SettingsPageTransitionAxis::Horizontal,
         }
     }
 
@@ -561,6 +571,17 @@ impl NavigationTransitionRequest {
             duration_us: SETTINGS_PAGE_DURATION_US,
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SettingsPage,
+            settings_axis: SettingsPageTransitionAxis::Horizontal,
+        }
+    }
+
+    pub fn settings_page_on_axis(
+        direction: NavigationTransitionDirection,
+        axis: SettingsPageTransitionAxis,
+    ) -> Self {
+        Self {
+            settings_axis: axis,
+            ..Self::settings_page(direction)
         }
     }
 
@@ -1211,52 +1232,70 @@ fn render_settings_page_push(
     }
 
     let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
-    let width = buffers.width as isize;
-    let source_travel = width / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
+    let extent = match request.settings_axis {
+        SettingsPageTransitionAxis::Horizontal => buffers.width,
+        SettingsPageTransitionAxis::Vertical | SettingsPageTransitionAxis::VerticalReversed => {
+            buffers.height
+        }
+    } as isize;
+    let source_travel = extent / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
     working.fill(Rgb565Pixel(0));
+    let blit = |output: &mut [Rgb565Pixel], snapshot: &[Rgb565Pixel], offset: isize| match request
+        .settings_axis
+    {
+        SettingsPageTransitionAxis::Horizontal => {
+            blit_snapshot_x(output, snapshot, buffers.width, buffers.height, offset)
+        }
+        SettingsPageTransitionAxis::Vertical => {
+            blit_snapshot_y(output, snapshot, buffers.width, buffers.height, offset)
+        }
+        SettingsPageTransitionAxis::VerticalReversed => {
+            blit_snapshot_y(output, snapshot, buffers.width, buffers.height, -offset)
+        }
+    };
     match request.direction {
         NavigationTransitionDirection::Forward => {
             let source_x = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
-            let destination_x = width - width * travel_q16 / PROGRESS_MAX as isize;
+            let destination_x = extent - extent * travel_q16 / PROGRESS_MAX as isize;
             stats.copied_pixels = stats
                 .copied_pixels
-                .saturating_add(blit_snapshot_x(
-                    working,
-                    source,
-                    buffers.width,
-                    buffers.height,
-                    source_x,
-                ))
-                .saturating_add(blit_snapshot_x(
-                    working,
-                    destination,
-                    buffers.width,
-                    buffers.height,
-                    destination_x,
-                ));
+                .saturating_add(blit(working, source, source_x))
+                .saturating_add(blit(working, destination, destination_x));
         }
         NavigationTransitionDirection::Reverse => {
             let destination_x = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
-            let source_x = width * travel_q16 / PROGRESS_MAX as isize;
+            let source_x = extent * travel_q16 / PROGRESS_MAX as isize;
             stats.copied_pixels = stats
                 .copied_pixels
-                .saturating_add(blit_snapshot_x(
-                    working,
-                    destination,
-                    buffers.width,
-                    buffers.height,
-                    destination_x,
-                ))
-                .saturating_add(blit_snapshot_x(
-                    working,
-                    source,
-                    buffers.width,
-                    buffers.height,
-                    source_x,
-                ));
+                .saturating_add(blit(working, destination, destination_x))
+                .saturating_add(blit(working, source, source_x));
         }
     }
     Ok(stats)
+}
+
+fn blit_snapshot_y(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    offset_y: isize,
+) -> u64 {
+    if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
+        return 0;
+    }
+    let destination_y = offset_y.max(0) as usize;
+    let source_y = offset_y.saturating_neg().max(0) as usize;
+    if destination_y >= height || source_y >= height {
+        return 0;
+    }
+    let copy_height = (height - destination_y).min(height - source_y);
+    let destination_start = destination_y * width;
+    let source_start = source_y * width;
+    let copy_len = copy_height * width;
+    output[destination_start..destination_start + copy_len]
+        .copy_from_slice(&snapshot[source_start..source_start + copy_len]);
+    copy_len as u64
 }
 
 fn blit_snapshot_x(

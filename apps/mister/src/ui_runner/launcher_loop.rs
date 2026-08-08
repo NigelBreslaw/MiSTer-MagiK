@@ -4532,11 +4532,25 @@ pub(super) fn run_launcher_loop(
                             .saturating_duration_since(start)
                             .as_micros()
                             .min(u64::MAX as u128) as u64;
-                        let source = portrait_target
-                            .as_ref()
-                            .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565);
-                        let started = navigation_transition
-                            .begin_settings_page(route, direction, source, now_us);
+                        let source = target.cached_565();
+                        let axis = match nav.settings.screen_orientation {
+                            ScreenOrientation::Normal => SettingsPageTransitionAxis::Horizontal,
+                            ScreenOrientation::MonitorCounterclockwise => {
+                                SettingsPageTransitionAxis::Vertical
+                            }
+                            ScreenOrientation::MonitorClockwise => {
+                                SettingsPageTransitionAxis::VerticalReversed
+                            }
+                        };
+                        let started = navigation_transition.begin_settings_page_physical(
+                            route,
+                            direction,
+                            axis,
+                            ui.render_w(),
+                            ui.render_h(),
+                            source,
+                            now_us,
+                        );
                         let started = started.unwrap_or(false);
                         if started
                             && begin_navigation_full_screen_transition(
@@ -6537,6 +6551,9 @@ pub(super) fn run_launcher_loop(
                     }
                 }
                 if destination_layers_ready {
+                    if navigation_transition.settings_physical_space() {
+                        layer_target.sync_full_portrait_composition();
+                    }
                     if let Some((waited, timed_out)) = status_quiesce {
                         navigation_transition.note_pending_status_quiesce(
                             waited.as_micros().min(u64::MAX as u128) as u64,
@@ -6544,7 +6561,14 @@ pub(super) fn run_launcher_loop(
                         );
                     }
                     if navigation_transition
-                        .capture_destination(layer_target.cached_frame_view().pixels(), now_us)
+                        .capture_destination(
+                            if navigation_transition.settings_physical_space() {
+                                layer_target.presentation_frame_view().pixels()
+                            } else {
+                                layer_target.cached_frame_view().pixels()
+                            },
+                            now_us,
+                        )
                         .is_err()
                     {
                         navigation_transition.settle_at_destination();
@@ -6561,7 +6585,11 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if render_transition_frame && let Ok(frame) = navigation_transition.render() {
-                let _ = layer_target.restore_cached(frame);
+                if navigation_transition.settings_physical_space() {
+                    let _ = layer_target.restore_presentation_cached(frame);
+                } else {
+                    let _ = layer_target.restore_cached(frame);
+                }
             }
             full_frame_present = true;
             request_launcher_redraw!();
@@ -6706,7 +6734,16 @@ pub(super) fn run_launcher_loop(
         cached_damage.push_if_some(cached_arcade_rect);
         let orientation_damage_rects_before = cached_damage.len() as u32;
         let damage_rotation_started = Instant::now();
-        let mut cached_damage = layer_target.rotate_damage_to_composition(&cached_damage);
+        let mut cached_damage = if navigation_transition.settings_physical_space() {
+            DirtyRectList::from_one(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: ui.render_w(),
+                y1: ui.render_h(),
+            })
+        } else {
+            layer_target.rotate_damage_to_composition(&cached_damage)
+        };
         let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();
         let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
         if orientation_transition.is_active() {

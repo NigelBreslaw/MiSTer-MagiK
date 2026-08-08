@@ -10,7 +10,8 @@ pub use mister_magik_framebuffer_scenes::navigation::{
     NavigationTransitionDirection, NavigationTransitionEdge, NavigationTransitionEndpoint,
     NavigationTransitionFailure, NavigationTransitionFrame, NavigationTransitionGeometry,
     NavigationTransitionPhase, NavigationTransitionRect, NavigationTransitionRenderStats,
-    NavigationTransitionRequest, crt_navigation_geometry, hdmi_navigation_geometry,
+    NavigationTransitionRequest, SettingsPageTransitionAxis, crt_navigation_geometry,
+    hdmi_navigation_geometry,
 };
 use mister_magik_framebuffer_scenes::navigation::{
     PROGRESS_MAX, SUPER_SCALER_COVER_PROGRESS, forward_progress_q16_at_elapsed,
@@ -480,6 +481,9 @@ pub struct NavigationTransitionRuntime {
     pending_status_quiesce_timeout: bool,
     queued_inputs: VecDeque<NavigationTransitionInput>,
     buffers: NavigationTransitionBuffers,
+    logical_width: usize,
+    logical_height: usize,
+    settings_physical_space: bool,
     geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
@@ -504,6 +508,9 @@ impl NavigationTransitionRuntime {
             pending_status_quiesce_timeout: false,
             queued_inputs: VecDeque::new(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
+            logical_width: buffer_width,
+            logical_height: buffer_height,
+            settings_physical_space: false,
             geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
@@ -521,7 +528,11 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn set_enabled(&mut self, width: usize, height: usize, enabled: bool) {
-        if self.enabled == enabled {
+        self.logical_width = width;
+        self.logical_height = height;
+        if self.enabled == enabled
+            && (!enabled || (self.buffers.width() == width && self.buffers.height() == height))
+        {
             return;
         }
         self.enabled = enabled;
@@ -530,6 +541,7 @@ impl NavigationTransitionRuntime {
         self.queued_inputs.clear();
         self.geometry_history.clear();
         self.route = None;
+        self.settings_physical_space = false;
         if enabled {
             warm_navigation_transition_rasterizer();
             self.buffers.resize(width, height);
@@ -577,6 +589,42 @@ impl NavigationTransitionRuntime {
         )?;
         if started {
             self.route = Some(route);
+        }
+        Ok(started)
+    }
+
+    pub fn begin_settings_page_physical(
+        &mut self,
+        route: NavigationTransitionRoute,
+        direction: NavigationTransitionDirection,
+        axis: SettingsPageTransitionAxis,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        if !route.is_settings_page() {
+            return Ok(false);
+        }
+        if self.enabled && !self.is_active() {
+            self.buffers.resize(width, height);
+        }
+        let started = match self.begin_settings_page_request(
+            NavigationTransitionRequest::settings_page_on_axis(direction, axis),
+            source,
+            now_us,
+        ) {
+            Ok(started) => started,
+            Err(failure) => {
+                self.buffers.resize(self.logical_width, self.logical_height);
+                return Err(failure);
+            }
+        };
+        if started {
+            self.route = Some(route);
+            self.settings_physical_space = true;
+        } else if self.enabled && !self.is_active() {
+            self.buffers.resize(self.logical_width, self.logical_height);
         }
         Ok(started)
     }
@@ -810,6 +858,10 @@ impl NavigationTransitionRuntime {
         }) {
             self.geometry_history.pop();
         }
+        if self.settings_physical_space {
+            self.settings_physical_space = false;
+            self.buffers.resize(self.logical_width, self.logical_height);
+        }
         Some(completion)
     }
 
@@ -849,6 +901,10 @@ impl NavigationTransitionRuntime {
     /// this playback settles.
     pub const fn snapshot_locked(&self) -> bool {
         self.is_active() && self.pending_request.is_none() && self.buffers.destination_ready()
+    }
+
+    pub const fn settings_physical_space(&self) -> bool {
+        self.settings_physical_space
     }
 
     pub const fn last_render_stats(&self) -> NavigationTransitionRenderStats {
@@ -1700,6 +1756,41 @@ mod tests {
         assert_eq!(runtime.take_queued_input(), Some(back));
         assert_eq!(runtime.take_queued_input(), Some(home));
         assert_eq!(runtime.take_queued_input(), None);
+    }
+
+    #[test]
+    fn physical_settings_transition_restores_logical_buffer_geometry() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
+        runtime
+            .begin_settings_page_physical(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward,
+                SettingsPageTransitionAxis::Vertical,
+                12,
+                16,
+                &source,
+                0,
+            )
+            .unwrap();
+        assert!(runtime.settings_physical_space());
+        assert_eq!(
+            (runtime.buffers.width(), runtime.buffers.height()),
+            (12, 16)
+        );
+        runtime.capture_destination(&destination, 1).unwrap();
+        runtime.tick(
+            NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward)
+                .duration_us
+                + 1,
+        );
+        assert!(runtime.complete().is_some());
+        assert!(!runtime.settings_physical_space());
+        assert_eq!(
+            (runtime.buffers.width(), runtime.buffers.height()),
+            (16, 12)
+        );
     }
 
     #[test]

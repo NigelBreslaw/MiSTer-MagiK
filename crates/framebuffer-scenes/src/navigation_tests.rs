@@ -187,8 +187,8 @@ fn portrait_settings_page_push_stays_horizontal_in_both_directions() {
         },
     )
     .unwrap();
-    let reverse_destination_columns = source_travel - source_travel * travel_q16
-        / PROGRESS_MAX as usize;
+    let reverse_destination_columns =
+        source_travel - source_travel * travel_q16 / PROGRESS_MAX as usize;
     let reverse_source_x = width * travel_q16 / PROGRESS_MAX as usize;
     assert!(reverse_destination_columns > 0);
     assert!(reverse_source_x > 0);
@@ -286,6 +286,48 @@ fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
     );
     assert_eq!(&output[3..width], &source[..width - 3]);
     assert_eq!(&output[width + 3..width * 2], &source[width..width * 2 - 3]);
+}
+
+#[test]
+fn settings_page_push_moves_contiguous_rows_in_physical_portrait_space() {
+    let width = 4;
+    let height = 8;
+    let source = (0..width * height)
+        .map(|index| Rgb565Pixel(0x1000 + index as u16))
+        .collect::<Vec<_>>();
+    let destination = (0..width * height)
+        .map(|index| Rgb565Pixel(0x2000 + index as u16))
+        .collect::<Vec<_>>();
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+    let progress_q16 = PROGRESS_MAX / 2;
+    let travel_q16 = spring_ease_q16(progress_q16) as usize;
+
+    render_settings_page_push(
+        &mut buffers,
+        NavigationTransitionRequest::settings_page_on_axis(
+            NavigationTransitionDirection::Forward,
+            SettingsPageTransitionAxis::Vertical,
+        ),
+        NavigationTransitionFrame {
+            progress_q16,
+            ..NavigationTransitionFrame::default()
+        },
+    )
+    .unwrap();
+
+    let source_rows = (height / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR as usize) * travel_q16
+        / PROGRESS_MAX as usize;
+    let destination_y = height - height * travel_q16 / PROGRESS_MAX as usize;
+    assert_eq!(
+        &buffers.working()[..width],
+        &source[source_rows * width..(source_rows + 1) * width]
+    );
+    assert_eq!(
+        &buffers.working()[destination_y * width..(destination_y + 1) * width],
+        &destination[..width]
+    );
 }
 
 #[test]
