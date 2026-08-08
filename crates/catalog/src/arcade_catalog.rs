@@ -45,6 +45,13 @@ pub struct ArcadeGameEntry {
 }
 
 impl ArcadeGameEntry {
+    pub fn stable_key(&self) -> String {
+        format!(
+            "{}\u{1f}{}\u{1f}{}",
+            self.system_id, self.title, self.mra_path
+        )
+    }
+
     pub fn metadata_key(&self) -> ArcadeGameMetadataKey {
         ArcadeGameMetadataKey {
             year: self.year,
@@ -490,6 +497,30 @@ impl ArcadeCatalog {
             .find(|g| g.mra_path.as_ref() == mra_path)
             .map(|g| g.title.as_ref())
             .unwrap_or("Game")
+    }
+
+    pub fn game_for_launch_ref(&self, launch_ref: &str) -> Option<&ArcadeGameEntry> {
+        self.games
+            .iter()
+            .find(|game| game.mra_path.as_ref() == launch_ref)
+    }
+
+    pub fn user_game_identity_for_ref(
+        &self,
+        launch_ref: &str,
+    ) -> Option<crate::user_state::UserGameIdentity> {
+        let game = self.game_for_launch_ref(launch_ref)?;
+        let payload_path = self
+            .structured_launch_plan_for_ref(launch_ref)
+            .map(|plan| plan.payload_path.to_string())
+            .unwrap_or_else(|| launch_ref.to_string());
+        Some(crate::user_state::UserGameIdentity {
+            system_id: game.system_id.to_string(),
+            stable_key: game.stable_key(),
+            title: game.title.to_string(),
+            launch_ref: launch_ref.to_string(),
+            payload_path,
+        })
     }
 
     pub fn launch_target_for_ref(&self, launch_ref: &str) -> LaunchTarget {

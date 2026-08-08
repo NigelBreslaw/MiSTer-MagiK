@@ -3,8 +3,10 @@
 
 use super::*;
 use std::io::Write;
+use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
 
@@ -51,6 +53,7 @@ struct StagedLaunch {
     return_state: Option<launcher::LaunchReturnState>,
     return_catalog: Option<return_catalog_capsule::PreparedReturnCatalogCapsule>,
     bench_iteration: Option<usize>,
+    user_game: Option<mister_magik_catalog::user_state::UserGameIdentity>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,6 +185,7 @@ struct LaunchWorkerRequest {
     bench_iteration: Option<usize>,
     bench_delay: Duration,
     bench_mode: launcher::LaunchHandoffBenchMode,
+    user_game: Option<mister_magik_catalog::user_state::UserGameIdentity>,
 }
 
 type LaunchWorkerSpawner = fn(LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult>;
@@ -289,6 +293,10 @@ impl LaunchHandoffSession {
         let title = launcher::game_title(catalog, launch_ref);
         self.loading_title = format!("Loading {title}…");
         let bench_iteration = self.bench.begin_launch();
+        let user_game = bench_iteration
+            .is_none()
+            .then(|| catalog.user_game_identity_for_ref(launch_ref))
+            .flatten();
         let return_state = if bench_iteration.is_some() {
             None
         } else {
@@ -318,6 +326,7 @@ impl LaunchHandoffSession {
             return_state,
             return_catalog,
             bench_iteration,
+            user_game,
         });
         true
     }
@@ -351,6 +360,7 @@ impl LaunchHandoffSession {
             bench_iteration: staged.bench_iteration,
             bench_delay: self.bench.delay,
             bench_mode: self.bench.mode,
+            user_game: staged.user_game,
         });
         self.pending = Some(PendingLaunch {
             title: staged.title,
@@ -509,10 +519,19 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
                         bench: Some(bench),
                     }
                 }
-                Ok(launch_target) => LaunchWorkerResult {
-                    result: launcher::execute_game_launch(&launch_target),
-                    bench: None,
-                },
+                Ok(launch_target) => {
+                    let result = launcher::execute_game_launch(&launch_target);
+                    if result.is_ok()
+                        && let Some(game) = request.user_game.as_ref()
+                        && let Err(error) = record_successful_launch(game)
+                    {
+                        crate::ui_errln!("user-state: failed to record successful launch: {error}");
+                    }
+                    LaunchWorkerResult {
+                        result,
+                        bench: None,
+                    }
+                }
                 Err(error) => {
                     let result = Err(launcher::LaunchError::preparation(error));
                     let bench =
@@ -535,12 +554,35 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
     rx
 }
 
+fn record_successful_launch(
+    game: &mister_magik_catalog::user_state::UserGameIdentity,
+) -> Result<(), String> {
+    let played_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock before Unix epoch: {error}"))?
+        .as_secs();
+    record_successful_launch_at(
+        game,
+        &mister_magik_catalog::catalog_config::default_user_state_path(),
+        i64::try_from(played_at).unwrap_or(i64::MAX),
+    )
+}
+
+fn record_successful_launch_at(
+    game: &mister_magik_catalog::user_state::UserGameIdentity,
+    path: &Path,
+    played_at: i64,
+) -> Result<(), String> {
+    mister_magik_catalog::user_state::UserStateStore::open(path)?.record_play(game, played_at)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{arcade_catalog, arcade_game, arcade_system};
     use std::path::Path;
     use std::sync::{Mutex, MutexGuard, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn launch_handoff_test_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -551,6 +593,32 @@ mod tests {
         launch_handoff_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn successful_launch_history_is_durable_and_unique_mru() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-launch-history-{}-{nonce}.sqlite3",
+            std::process::id()
+        ));
+        let game = mister_magik_catalog::user_state::UserGameIdentity {
+            system_id: "snes".to_string(),
+            stable_key: "snes-game".to_string(),
+            title: "SNES Game".to_string(),
+            launch_ref: "/games/SNES/game.sfc".to_string(),
+            payload_path: "/games/SNES/game.sfc".to_string(),
+        };
+        record_successful_launch_at(&game, &path, 10).unwrap();
+        record_successful_launch_at(&game, &path, 20).unwrap();
+        let store = mister_magik_catalog::user_state::UserStateStore::open(&path).unwrap();
+        let recent = store.recent_unique("snes", 16).unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].play_count, 2);
+        assert_eq!(recent[0].last_played_at, 20);
     }
 
     fn one_game_catalog() -> ArcadeCatalog {
