@@ -44,6 +44,7 @@ mod game_discovery;
 pub mod incremental_inputs;
 pub mod launch_profiles;
 pub mod lazy_sharded_reader;
+pub mod legacy_user_state_import;
 pub mod library_bench;
 mod library_cli;
 pub mod library_db;
