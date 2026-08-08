@@ -293,6 +293,33 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
         })
     }
 
+    pub(in crate::ui_runner) fn try_render_direct_hidden_frame<H, R>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+        render: R,
+    ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
+    where
+        H: LatchHardware,
+        R: FnOnce(&mut [Rgb565Pixel]) -> bool,
+    {
+        let Some(grant) = self.try_issue_hidden_slot_render_grant(hardware, display_session)?
+        else {
+            return Ok(None);
+        };
+        let buffer = self
+            .buffers
+            .as_mut()
+            .expect("hidden mappings available for direct transition rendering")
+            .buffer_mut(grant.slot_index);
+        if !render(buffer.pixels_mut()) {
+            self.outstanding_direct_grant = None;
+            return Ok(None);
+        }
+        buffer.publish_writes();
+        Ok(Some(CompletedHiddenFrame { grant }))
+    }
+
     pub(in crate::ui_runner) fn restore_direct_frame_buffers(
         &mut self,
         returned: Option<PluginLatchFrameBuffers>,

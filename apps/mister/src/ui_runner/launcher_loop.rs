@@ -6584,10 +6584,26 @@ pub(super) fn run_launcher_loop(
                     navigation_transition.tick(now_us);
                 }
             }
-            if render_transition_frame && let Ok(frame) = navigation_transition.render() {
+            if render_transition_frame {
+                let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
-                    let _ = layer_target.restore_presentation_cached(frame);
-                } else {
+                    match launcher_presenter.try_render_direct_hidden_frame(
+                        f,
+                        display_session,
+                        |pixels| navigation_transition.render_into(pixels).is_ok(),
+                    ) {
+                        Ok(Some(completed)) => {
+                            completed_hidden_frame_for_present = Some(completed);
+                            rendered_direct = true;
+                        }
+                        Ok(None) => {}
+                        Err(failure) => launcher_presenter.fail_latch_completion(failure),
+                    }
+                    if !rendered_direct {
+                        let _ = navigation_transition
+                            .render_into(layer_target.presentation_pixels_mut());
+                    }
+                } else if let Ok(frame) = navigation_transition.render() {
                     let _ = layer_target.restore_cached(frame);
                 }
             }
@@ -6889,7 +6905,8 @@ pub(super) fn run_launcher_loop(
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
             || navigation_transition_composition_active;
-        let direct_hidden_present_mode = startup_intro.is_some();
+        let direct_hidden_present_mode =
+            startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,

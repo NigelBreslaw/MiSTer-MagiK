@@ -15,8 +15,8 @@ pub use mister_magik_framebuffer_scenes::navigation::{
 };
 use mister_magik_framebuffer_scenes::navigation::{
     PROGRESS_MAX, SUPER_SCALER_COVER_PROGRESS, forward_progress_q16_at_elapsed,
-    render_navigation_transition, request_cover_progress_q16, scale_progress,
-    warm_navigation_transition_rasterizer,
+    render_navigation_transition, render_settings_page_transition_into, request_cover_progress_q16,
+    scale_progress, warm_navigation_transition_rasterizer,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::VecDeque;
@@ -747,6 +747,39 @@ impl NavigationTransitionRuntime {
         Ok(shared_rgb565_as_slint(self.buffers.working()))
     }
 
+    pub fn render_into(
+        &mut self,
+        output: &mut [Rgb565Pixel],
+    ) -> Result<(), NavigationTransitionFailure> {
+        let output = slint_rgb565_as_shared_mut(output);
+        let started = Instant::now();
+        let Some(request) = self.request() else {
+            return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
+        };
+        let frame = self.frame();
+        let pending = self.pending_request.is_some();
+        let mut stats = if pending {
+            let source = self
+                .buffers
+                .source()
+                .filter(|source| source.len() == output.len())
+                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+            output.copy_from_slice(source);
+            NavigationTransitionRenderStats {
+                copied_pixels: source.len() as u64,
+                ..NavigationTransitionRenderStats::default()
+            }
+        } else {
+            render_settings_page_transition_into(&self.buffers, request, frame, output)?
+        };
+        stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        self.controller
+            .telemetry_mut()
+            .note_render(stats.render_us, false);
+        self.last_render_stats = stats;
+        Ok(())
+    }
+
     pub fn request_reverse(&mut self, now_us: u64) -> bool {
         if self.pending_request.is_some() {
             self.activate_pending(now_us);
@@ -958,6 +991,25 @@ fn slint_rgb565_as_shared(pixels: &[Rgb565Pixel]) -> &[SharedRgb565Pixel] {
     // SAFETY: both RGB565 pixel types are transparent `u16` wrappers with equal
     // size/alignment, and the returned slice retains the input lifetime.
     unsafe { std::slice::from_raw_parts(pixels.as_ptr().cast::<SharedRgb565Pixel>(), pixels.len()) }
+}
+
+fn slint_rgb565_as_shared_mut(pixels: &mut [Rgb565Pixel]) -> &mut [SharedRgb565Pixel] {
+    assert_eq!(
+        std::mem::size_of::<Rgb565Pixel>(),
+        std::mem::size_of::<SharedRgb565Pixel>()
+    );
+    assert_eq!(
+        std::mem::align_of::<Rgb565Pixel>(),
+        std::mem::align_of::<SharedRgb565Pixel>()
+    );
+    // SAFETY: both RGB565 pixel types are transparent `u16` wrappers with equal
+    // size/alignment, and the returned slice retains the exclusive input borrow.
+    unsafe {
+        std::slice::from_raw_parts_mut(
+            pixels.as_mut_ptr().cast::<SharedRgb565Pixel>(),
+            pixels.len(),
+        )
+    }
 }
 
 fn shared_rgb565_as_slint(pixels: &[SharedRgb565Pixel]) -> &[Rgb565Pixel] {
@@ -1790,6 +1842,37 @@ mod tests {
         assert_eq!(
             (runtime.buffers.width(), runtime.buffers.height()),
             (16, 12)
+        );
+    }
+
+    #[test]
+    fn physical_settings_transition_renders_into_external_target() {
+        let mut runtime = NavigationTransitionRuntime::new(8, 6, true);
+        let source = vec![Rgb565Pixel(0x1111); 8 * 6];
+        let destination = vec![Rgb565Pixel(0x2222); 8 * 6];
+        runtime
+            .begin_settings_page_physical(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward,
+                SettingsPageTransitionAxis::Vertical,
+                8,
+                6,
+                &source,
+                0,
+            )
+            .unwrap();
+        runtime.capture_destination(&destination, 1).unwrap();
+        runtime.tick(160_001);
+        let mut output = vec![Rgb565Pixel(0xffff); 8 * 6];
+        runtime.render_into(&mut output).unwrap();
+
+        assert!(output.iter().all(|pixel| *pixel != Rgb565Pixel(0xffff)));
+        assert!(
+            runtime
+                .buffers
+                .working()
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0))
         );
     }
 

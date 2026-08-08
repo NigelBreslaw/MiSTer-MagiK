@@ -249,6 +249,23 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
+    pub(in crate::ui_runner) fn try_render_direct_hidden_frame<R>(
+        &mut self,
+        hardware: &mut Fpga,
+        display: &mut LauncherDisplaySession,
+        render: R,
+    ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
+    where
+        R: FnOnce(&mut [Rgb565Pixel]) -> bool,
+    {
+        match &mut self.state {
+            LauncherPresenterState::Latch(latch) => {
+                latch.try_render_direct_hidden_frame(hardware, display, render)
+            }
+            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
+        }
+    }
+
     pub(in crate::ui_runner) fn try_issue_startup_intro_hidden_slot_render_grant(
         &mut self,
         hardware: &mut Fpga,

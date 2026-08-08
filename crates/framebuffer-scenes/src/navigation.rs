@@ -1206,9 +1206,22 @@ fn render_settings_page_push(
     request: NavigationTransitionRequest,
     frame: NavigationTransitionFrame,
 ) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
+    let mut working = std::mem::take(&mut buffers.working);
+    let result = render_settings_page_transition_into(buffers, request, frame, &mut working);
+    buffers.working = working;
+    result
+}
+
+pub fn render_settings_page_transition_into(
+    buffers: &NavigationTransitionBuffers,
+    request: NavigationTransitionRequest,
+    frame: NavigationTransitionFrame,
+    output: &mut [Rgb565Pixel],
+) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
     if !buffers.source_ready
         || buffers.source.len() != buffers.width.saturating_mul(buffers.height)
-        || buffers.working.len() != buffers.source.len()
+        || output.len() != buffers.source.len()
+        || request.is_super_scaler()
     {
         return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
     }
@@ -1216,17 +1229,16 @@ fn render_settings_page_push(
     let destination = buffers
         .destination_ready
         .then_some(buffers.destination.as_slice());
-    let working = buffers.working.as_mut_slice();
     let mut stats = NavigationTransitionRenderStats::default();
 
     if frame.progress_q16 == 0 || destination.is_none() {
-        working.copy_from_slice(source);
+        output.copy_from_slice(source);
         stats.copied_pixels = source.len() as u64;
         return Ok(stats);
     }
     let destination = destination.expect("checked destination snapshot");
     if frame.progress_q16 == PROGRESS_MAX {
-        working.copy_from_slice(destination);
+        output.copy_from_slice(destination);
         stats.copied_pixels = destination.len() as u64;
         return Ok(stats);
     }
@@ -1239,7 +1251,6 @@ fn render_settings_page_push(
         }
     } as isize;
     let source_travel = extent / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
-    working.fill(Rgb565Pixel(0));
     let blit = |output: &mut [Rgb565Pixel], snapshot: &[Rgb565Pixel], offset: isize| match request
         .settings_axis
     {
@@ -1259,16 +1270,16 @@ fn render_settings_page_push(
             let destination_x = extent - extent * travel_q16 / PROGRESS_MAX as isize;
             stats.copied_pixels = stats
                 .copied_pixels
-                .saturating_add(blit(working, source, source_x))
-                .saturating_add(blit(working, destination, destination_x));
+                .saturating_add(blit(output, source, source_x))
+                .saturating_add(blit(output, destination, destination_x));
         }
         NavigationTransitionDirection::Reverse => {
             let destination_x = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
             let source_x = extent * travel_q16 / PROGRESS_MAX as isize;
             stats.copied_pixels = stats
                 .copied_pixels
-                .saturating_add(blit(working, destination, destination_x))
-                .saturating_add(blit(working, source, source_x));
+                .saturating_add(blit(output, destination, destination_x))
+                .saturating_add(blit(output, source, source_x));
         }
     }
     Ok(stats)

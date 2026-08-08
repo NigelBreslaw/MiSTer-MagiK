@@ -218,10 +218,6 @@ impl<'a> LayerTarget<'a> {
         restore_cached_565(self.drawing_target_mut(), snapshot)
     }
 
-    pub(super) fn restore_presentation_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
-        restore_cached_565(self.target, snapshot)
-    }
-
     pub(super) fn sync_full_portrait_composition(&mut self) {
         if !self.layout.is_portrait() {
             return;

@@ -331,6 +331,44 @@ fn settings_page_push_moves_contiguous_rows_in_physical_portrait_space() {
 }
 
 #[test]
+fn settings_page_push_covers_every_pixel_without_a_clear_pass() {
+    let width = 8;
+    let height = 6;
+    let source = vec![Rgb565Pixel(0x1111); width * height];
+    let destination = vec![Rgb565Pixel(0x2222); width * height];
+    let sentinel = Rgb565Pixel(0xffff);
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+
+    for axis in [
+        SettingsPageTransitionAxis::Horizontal,
+        SettingsPageTransitionAxis::Vertical,
+        SettingsPageTransitionAxis::VerticalReversed,
+    ] {
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            for progress_q16 in [1, 8_000, 16_000, 32_000, 48_000, 64_000] {
+                let mut output = vec![sentinel; width * height];
+                render_settings_page_transition_into(
+                    &buffers,
+                    NavigationTransitionRequest::settings_page_on_axis(direction, axis),
+                    NavigationTransitionFrame {
+                        progress_q16,
+                        ..NavigationTransitionFrame::default()
+                    },
+                    &mut output,
+                )
+                .unwrap();
+                assert!(output.iter().all(|pixel| *pixel != sentinel));
+            }
+        }
+    }
+}
+
+#[test]
 fn super_scaler_visual_windows_use_only_the_smooth_spring() {
     let source = include_str!("navigation.rs");
     let production = source
