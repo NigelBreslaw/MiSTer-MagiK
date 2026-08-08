@@ -11,6 +11,7 @@ import { ScreensaverSettingsScreen } from "../views/hdmi/screensaver_settings.sl
 import { LicensesScreen } from "../views/hdmi/licenses.slint";
 import { AboutScreen } from "../views/hdmi/about.slint";
 import { InfoScreen } from "../views/hdmi/info.slint";
+import { SystemHubScreen } from "../views/hdmi/system_hub.slint";
 import { ComboBoxOverlay } from "../components/combo_box.slint";
 import {
     BackgroundScanBadge,
@@ -31,6 +32,7 @@ export component HdmiLauncherUi inherits Rectangle {
     if MisterBridge.screen-mode == 5 : LicensesScreen { }
     if MisterBridge.screen-mode == 6 : InfoScreen { }
     if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
+    if MisterBridge.screen-mode == 8 : SystemHubScreen { }
 
     if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
     if MisterBridge.setup-visible : SetupOverlay {

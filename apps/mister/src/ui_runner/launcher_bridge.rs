@@ -21,6 +21,35 @@ macro_rules! set_bridge_string_if_changed {
     }};
 }
 
+fn load_snes_artwork_image() -> Option<slint::Image> {
+    let active = mister_magik_fb::snes_artwork::active_asset_path();
+    let artwork = mister_magik_fb::snes_artwork::SnesArtwork::load(&active).or_else(|active_error| {
+        #[cfg(feature = "ui-preview")]
+        {
+            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets/snes/snes-small-v1.rgb565a");
+            return mister_magik_fb::snes_artwork::SnesArtwork::load(&repository).map_err(|repository_error| {
+                crate::ui_errln!(
+                    "SNES artwork unavailable: active={active_error}; repository={repository_error}"
+                );
+                repository_error
+            });
+        }
+        #[cfg(not(feature = "ui-preview"))]
+        {
+            crate::ui_errln!("SNES artwork unavailable: {active_error}");
+            Err(active_error)
+        }
+    }).ok()?;
+    let pixels = artwork.rgba8_bytes();
+    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &pixels,
+        artwork.width as u32,
+        artwork.height as u32,
+    );
+    Some(slint::Image::from_rgba8(buffer))
+}
+
 pub(super) fn open_pads() -> PadPool {
     PadPool::open_all().unwrap_or_else(|e| {
         crate::ui_errln!("failed to initialize gamepad input: {e}");
@@ -32,6 +61,16 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
+    bridge.set_system_hub_selected(0);
+    bridge.set_system_hub_games_count(0);
+    bridge.set_system_hub_recent_count(0);
+    bridge.set_system_hub_favourites_count(0);
+    if let Some(image) = load_snes_artwork_image() {
+        bridge.set_snes_artwork(image);
+        bridge.set_snes_artwork_visible(true);
+    } else {
+        bridge.set_snes_artwork_visible(false);
+    }
     bridge.set_effective_view("home".into());
     bridge.set_build_label(build_label().into());
     bridge.set_present_mode_label("Mode=/dev/fb0".into());
@@ -116,6 +155,7 @@ pub(super) fn sync_settings_bridge(
         set_screen_mode,
         match nav.screen {
             Screen::Home => 0,
+            Screen::SystemHub => 8,
             Screen::Controller => 1,
             Screen::Arcade => 2,
             Screen::Settings => 3,
@@ -752,6 +792,7 @@ pub(super) fn sync_bridge_launcher(
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_screen_mode(match nav.screen {
         Screen::Home => 0,
+        Screen::SystemHub => 8,
         Screen::Controller => 1,
         Screen::Arcade => 2,
         Screen::Settings => 3,
@@ -762,6 +803,7 @@ pub(super) fn sync_bridge_launcher(
     });
     bridge.set_clock_text(launcher_clock_text().into());
     bridge.set_selected_index(nav.selected as i32);
+    bridge.set_system_hub_selected(nav.system_hub_selected as i32);
     bridge.set_home_scroll_held(nav.home_horizontal_held());
     bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active());
     bridge.set_home_scroll_x(nav.scroll_x);
@@ -801,6 +843,9 @@ pub(super) fn sync_bridge_launcher(
         bridge.set_menu_items(models.menu_items(nav, catalog_version));
         bridge.set_active_system_title(header.title.into());
         bridge.set_active_system_count(header.count as i32);
+        bridge.set_system_hub_games_count(catalog.system_game_count("snes") as i32);
+        bridge.set_system_hub_recent_count(nav.recent_count() as i32);
+        bridge.set_system_hub_favourites_count(nav.favourite_count() as i32);
         active_games_for_preview = Some(games);
     }
     bridge.set_arcade_games_loading(active_games_loading);
@@ -870,6 +915,7 @@ pub(super) fn sync_bridge_launcher_light(
         set_screen_mode,
         match nav.screen {
             Screen::Home => 0,
+            Screen::SystemHub => 8,
             Screen::Controller => 1,
             Screen::Arcade => 2,
             Screen::Settings => 3,
@@ -884,6 +930,30 @@ pub(super) fn sync_bridge_launcher_light(
         get_selected_index,
         set_selected_index,
         nav.selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_system_hub_selected,
+        set_system_hub_selected,
+        nav.system_hub_selected as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_system_hub_games_count,
+        set_system_hub_games_count,
+        catalog.system_game_count("snes") as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_system_hub_recent_count,
+        set_system_hub_recent_count,
+        nav.recent_count() as i32
+    );
+    set_bridge_if_changed!(
+        bridge,
+        get_system_hub_favourites_count,
+        set_system_hub_favourites_count,
+        nav.favourite_count() as i32
     );
     set_bridge_if_changed!(
         bridge,
@@ -1075,7 +1145,13 @@ fn active_system_header(
             count: fallback_count,
         };
     };
-    let base_title = system.title.clone();
+    let base_title = match nav.arcade_user_list_mode() {
+        crate::launcher::ArcadeUserListMode::Games => system.title.clone(),
+        crate::launcher::ArcadeUserListMode::Recent => format!("{} - Recent", system.title),
+        crate::launcher::ArcadeUserListMode::Favourites => {
+            format!("{} - Favorites", system.title)
+        }
+    };
     let filter_label = nav.arcade_filter.active_label();
     let title = if filter_label == "Games A-Z" {
         base_title
@@ -1267,6 +1343,8 @@ pub(super) struct LauncherBridgeKey {
     pub(super) menu_id: String,
     active_collection_id: Option<String>,
     selected: usize,
+    system_hub_selected: usize,
+    arcade_user_list_mode: crate::launcher::ArcadeUserListMode,
     scroll_x: i32,
     home_scroll_repeat_active: bool,
     home_scroll_held: bool,
@@ -1295,6 +1373,8 @@ impl LauncherBridgeKey {
             menu_id: nav.current_menu_id().to_string(),
             active_collection_id: nav.active_collection_id().map(str::to_string),
             selected: nav.selected,
+            system_hub_selected: nav.system_hub_selected,
+            arcade_user_list_mode: nav.arcade_user_list_mode(),
             scroll_x: nav.scroll_x,
             home_scroll_repeat_active: nav.home_horizontal_repeat_active(),
             home_scroll_held: nav.home_horizontal_held(),

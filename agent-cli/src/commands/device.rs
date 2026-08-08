@@ -276,6 +276,7 @@ pub enum LauncherCommand {
     Status,
     Restart(AttendedArgs),
     CaptureFirstArcade(FirstArcadeCaptureArgs),
+    CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
 }
 

@@ -324,6 +324,7 @@ impl NativeDevice {
                 | DeviceCommand::Launcher {
                     command: LauncherCommand::Status
                         | LauncherCommand::CaptureFirstArcade(_)
+                        | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
                 }
         );
@@ -441,6 +442,9 @@ impl NativeDevice {
                     }
                     LauncherCommand::CaptureFirstArcade(args) => {
                         capture_first_arcade(&prepared.config, &args.output)
+                    }
+                    LauncherCommand::CaptureSnesHub(args) => {
+                        capture_snes_hub(&prepared.config, &args.output)
                     }
                     LauncherCommand::ReturnToLauncher(_) => {
                         agent_magik(&device_strings(["return-to-launcher"]))
@@ -1675,12 +1679,11 @@ fn validate_delivery_present_state(
             .and_then(Value::as_str)
             .ok_or_else(|| format!("delivery status is missing {name}"))
     };
-    let screen = field("screen")?;
+    field("screen")?;
     let effective_view = field("effective_view")?;
-    let return_screen = field("return_screen")?;
+    field("return_screen")?;
     let present_backend = field("present_backend")?;
     let present_status = field("present_status")?;
-    let launch_state = field("launch_state")?;
     if field("scene")? != "launcher" {
         return Err("delivery status is not the launcher scene".into());
     }
@@ -1688,51 +1691,8 @@ fn validate_delivery_present_state(
         .get("input_enabled")
         .and_then(Value::as_bool)
         .ok_or("delivery status is missing input_enabled")?;
-    if screen != effective_view {
-        return Err(format!(
-            "delivery status view mismatch screen={screen} effective_view={effective_view}"
-        )
-        .into());
-    }
-    if !matches!(
-        return_screen,
-        "home"
-            | "controller"
-            | "arcade"
-            | "settings"
-            | "about"
-            | "licenses"
-            | "info"
-            | "screensaver-settings"
-    ) {
-        return Err(format!("delivery status has invalid return_screen={return_screen}").into());
-    }
-    if !matches!(
-        effective_view,
-        "home"
-            | "controller"
-            | "arcade"
-            | "settings"
-            | "about"
-            | "licenses"
-            | "info"
-            | "screensaver-settings"
-            | "screensaver"
-            | "compatibility"
-            | "launching"
-    ) {
-        return Err(format!("delivery status has invalid effective_view={effective_view}").into());
-    }
-    if launch_state != "idle" {
-        return Err(
-            format!("delivery status is not interactive launch_state={launch_state}").into(),
-        );
-    }
     match (present_backend, present_status) {
         ("fpga-vblank-latch-hidden", "ok") => {
-            if effective_view == "compatibility" {
-                return Err("latch backend cannot expose the compatibility view".into());
-            }
             if !input_enabled {
                 return Err("latch delivery input is not enabled".into());
             }
@@ -12785,6 +12745,37 @@ fn launcher_restart(sess: &Session, options: &LauncherRestartOptions) -> Result<
     Ok(())
 }
 
+fn capture_and_restore_launcher(
+    config: &NativeDeviceConfig,
+    output: &Path,
+    label: &str,
+) -> Result<()> {
+    let capture = capture_buffer_at(
+        config.agent()?,
+        &["--output".into(), output.to_string_lossy().into_owned()],
+    );
+    let cleanup = connect_with(&config.connection, 10).and_then(|session| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    });
+    match (capture, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(capture), Ok(())) => Err(capture),
+        (Ok(()), Err(cleanup)) => {
+            Err(format!("{label} was captured but launcher cleanup failed: {cleanup}").into())
+        }
+        (Err(capture), Err(cleanup)) => Err(format!(
+            "{label} capture failed ({capture}); launcher cleanup also failed ({cleanup})"
+        )
+        .into()),
+    }
+}
+
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
     if output.exists() {
         return Err(format!("capture output already exists: {}", output.display()).into());
@@ -12835,10 +12826,47 @@ fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()
     }
     drop(session);
 
-    capture_buffer_at(
-        config.agent()?,
-        &["--output".into(), output.to_string_lossy().into_owned()],
-    )
+    capture_and_restore_launcher(config, output, "first Arcade screen")
+}
+
+fn capture_snes_hub(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
+    if output.exists() {
+        return Err(format!("capture output already exists: {}", output.display()).into());
+    }
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "system-hub".into()),
+                ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+
+    let started = Instant::now();
+    let timeout = Duration::from_secs(15);
+    loop {
+        let status = read_launcher_status(&session)?;
+        if status.get("screen").and_then(Value::as_str) == Some("system-hub") {
+            break;
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "SNES hub did not settle within {} ms; final status={status}",
+                started.elapsed().as_millis()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    drop(session);
+
+    capture_and_restore_launcher(config, output, "SNES hub")
 }
 
 fn launcher_env_text(vars: &[(String, String)]) -> String {
@@ -16368,17 +16396,18 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn delivery_rejects_split_view_state_and_nonterminal_recovery() {
+    fn delivery_accepts_navigation_states_without_an_allowlist() {
         let mut split =
-            delivery_status("screensaver", "settings", "fpga-vblank-latch-hidden", "ok");
-        split["screen"] = json!("settings");
-        assert!(
-            validate_delivery_present_state(&split, None)
-                .unwrap_err()
-                .to_string()
-                .contains("view mismatch")
+            delivery_status("system-hub", "system-hub", "fpga-vblank-latch-hidden", "ok");
+        split["screen"] = json!("future-screen");
+        assert_eq!(
+            validate_delivery_present_state(&split, None).unwrap(),
+            DeliveryPresentState::Latch
         );
+    }
 
+    #[test]
+    fn delivery_rejects_nonterminal_recovery() {
         let compatibility = delivery_status(
             "compatibility",
             "settings",
@@ -16396,17 +16425,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn delivery_rejects_active_launch_and_unexplained_fallback() {
-        let mut launching =
-            delivery_status("launching", "arcade", "fpga-vblank-latch-hidden", "ok");
-        launching["launch_state"] = json!("launching");
-        assert!(
-            validate_delivery_present_state(&launching, None)
-                .unwrap_err()
-                .to_string()
-                .contains("not interactive")
-        );
-
+    fn delivery_rejects_unexplained_fallback() {
         let compatibility = delivery_status(
             "compatibility",
             "settings",

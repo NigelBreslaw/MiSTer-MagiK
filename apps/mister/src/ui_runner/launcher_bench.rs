@@ -147,6 +147,7 @@ pub(super) fn launcher_bench_after_input_script_enabled() -> bool {
 fn launcher_screen_from_env(name: &str) -> Option<Screen> {
     match std::env::var(name).ok()?.to_ascii_lowercase().as_str() {
         "home" => Some(Screen::Home),
+        "system-hub" | "snes-hub" => Some(Screen::SystemHub),
         "arcade" => Some(Screen::Arcade),
         "controller" | "controller-test" | "controller_test" => Some(Screen::Controller),
         "settings" => Some(Screen::Settings),

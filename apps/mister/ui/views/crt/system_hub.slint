@@ -1,0 +1,36 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { MisterBridge } from "../../api.slint";
+import { MisterUi } from "../../mister_window.slint";
+import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { CrtTheme, CrtFooter } from "../../components/crt_ui.slint";
+
+component HubCard inherits Rectangle {
+    in property <string> glyph;
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> focused;
+    in property <bool> enabled: true;
+    background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
+    border-width: focused ? MisterUi.border * 2 : MisterUi.border;
+    border-color: focused ? CrtTheme.accent : CrtTheme.border;
+    PixelText8 { x: MisterUi.grid-x; y: MisterUi.grid-y; width: 32px; text: root.glyph; font-family: MisterUi.crt-font-family; color: root.focused ? CrtTheme.accent : CrtTheme.muted; size: MisterUi.crt-heading-font; horizontal-alignment: center; }
+    PixelText8 { x: 48px; y: MisterUi.grid-y; width: parent.width - 56px; text: root.label; font-family: MisterUi.crt-font-family; color: root.enabled ? (root.focused ? CrtTheme.accent : CrtTheme.text) : CrtTheme.muted; size: MisterUi.crt-heading-font; }
+    Rectangle { x: MisterUi.grid-x; y: parent.height / 2 + 4px; width: parent.width - MisterUi.grid-x * 2; height: MisterUi.border; background: root.focused ? CrtTheme.accent : CrtTheme.border; }
+    PixelText8 { x: MisterUi.grid-x; y: parent.height - 24px; width: parent.width - MisterUi.grid-x * 2; text: root.detail; font-family: MisterUi.crt-font-family; color: CrtTheme.muted; size: MisterUi.crt-body-font; horizontal-alignment: center; }
+}
+
+export component SystemHubScreen inherits Rectangle {
+    background: CrtTheme.background;
+    property <length> card-width: (root.width - MisterUi.grid-x * 5) / 2;
+    property <length> card-height: (root.height - 150px - MisterUi.footer-height - MisterUi.grid-y * 3) / 2;
+    Image { x: MisterUi.grid-x * 2; y: MisterUi.grid-y; width: 266px; height: 25px; source: @image-url("../../images/jersey25-super-nintendo.png"); image-fit: fill; image-rendering: pixelated; }
+    PixelText8 { x: MisterUi.grid-x * 2; y: 50px; text: "1990 / 16-BIT CONSOLE"; font-family: MisterUi.crt-font-family; size: MisterUi.crt-body-font; color: CrtTheme.warning; }
+    Image { x: parent.width - 185px - MisterUi.grid-x * 2; y: MisterUi.grid-y; visible: MisterBridge.snes-artwork-visible; source: MisterBridge.snes-artwork; width: 185px; height: 82px; }
+    HubCard { x: MisterUi.grid-x * 2; y: 104px; width: card-width; height: card-height; glyph: "+"; label: "GAMES"; detail: MisterBridge.system-hub-games-count + " TITLES"; focused: MisterBridge.system-hub-selected == 0; }
+    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px; width: card-width; height: card-height; glyph: "@"; label: "RECENT"; detail: MisterBridge.system-hub-recent-count + " PLAYED"; focused: MisterBridge.system-hub-selected == 1; }
+    HubCard { x: MisterUi.grid-x * 2; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "*"; label: "FAVORITES"; detail: MisterBridge.system-hub-favourites-count + " SAVED"; focused: MisterBridge.system-hub-selected == 2; }
+    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "i"; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: MisterBridge.system-hub-selected == 3; }
+    CrtFooter { x: MisterUi.grid-x * 2; y: parent.height - MisterUi.footer-height - MisterUi.grid-y; width: parent.width - MisterUi.grid-x * 4; left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
+}

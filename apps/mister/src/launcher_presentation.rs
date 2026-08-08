@@ -311,6 +311,7 @@ impl LauncherBridgePresenter {
 pub fn screen_mode(screen: Screen) -> i32 {
     match screen {
         Screen::Home => 0,
+        Screen::SystemHub => 8,
         Screen::Controller => 1,
         Screen::Arcade => 2,
         Screen::Settings => 3,

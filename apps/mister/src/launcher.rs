@@ -254,6 +254,7 @@ impl std::error::Error for LaunchError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
     Home,
+    SystemHub,
     Controller,
     Arcade,
     Settings,
@@ -801,6 +802,7 @@ pub struct LauncherNav {
     portrait_layout: bool,
     pub screen: Screen,
     pub selected: usize,
+    pub system_hub_selected: usize,
     pub scroll_x: i32,
     pub settings_focused: bool,
     pub settings_selected: usize,
@@ -884,6 +886,7 @@ pub struct HomeViewState {
 pub struct NavigationTransitionState {
     screen: Screen,
     selected: usize,
+    system_hub_selected: usize,
     scroll_x: i32,
     settings_focused: bool,
     settings_selected: usize,
@@ -1194,6 +1197,7 @@ impl LauncherNav {
             portrait_layout: false,
             screen: Screen::Home,
             selected: 0,
+            system_hub_selected: 0,
             scroll_x: 0,
             settings_focused: false,
             settings_selected: 0,
@@ -1802,6 +1806,15 @@ impl LauncherNav {
         let count = self.active_arcade_game_count(catalog, &collection.id);
         self.restore_game_list_state(&collection.id, count);
         self.screen = Screen::Arcade;
+        if collection
+            .system_id
+            .as_deref()
+            .unwrap_or(&collection.legacy_system_id)
+            .eq_ignore_ascii_case("snes")
+        {
+            self.screen = Screen::SystemHub;
+            self.system_hub_selected = 0;
+        }
         if let Some(system_index) = catalog.systems.iter().position(|system| {
             collection
                 .system_id
@@ -1858,6 +1871,7 @@ impl LauncherNav {
         NavigationTransitionState {
             screen: self.screen,
             selected: self.selected,
+            system_hub_selected: self.system_hub_selected,
             scroll_x: self.scroll_x,
             settings_focused: self.settings_focused,
             settings_selected: self.settings_selected,
@@ -1904,6 +1918,7 @@ impl LauncherNav {
     pub fn restore_navigation_transition_state(&mut self, state: NavigationTransitionState) {
         self.screen = state.screen;
         self.selected = state.selected;
+        self.system_hub_selected = state.system_hub_selected;
         self.scroll_x = state.scroll_x;
         self.settings_focused = state.settings_focused;
         self.settings_selected = state.settings_selected;
@@ -2081,6 +2096,9 @@ impl LauncherNav {
                 .is_some_and(|collection_id| self.activate_collection(catalog, collection_id)),
             LauncherAction::NavigateBack if self.screen == Screen::Home => self.pop_menu(),
             LauncherAction::NavigateBack if self.screen == Screen::Arcade => {
+                if self.return_arcade_to_system_hub() {
+                    return true;
+                }
                 let collection_id = self.active_collection_scope_id(catalog).to_string();
                 let before = self.screen;
                 self.leave_arcade(false, &collection_id);
@@ -2121,6 +2139,7 @@ impl LauncherNav {
                     emit_collection_intents,
                     emit_navigation_intents,
                 ),
+                Screen::SystemHub => self.handle_system_hub(now, catalog),
                 Screen::Controller => {
                     if rising(now.btn_home, self.prev.btn_home) {
                         self.go_root();
@@ -2145,6 +2164,52 @@ impl LauncherNav {
         };
         self.prev = now.clone();
         result
+    }
+
+    fn handle_system_hub(
+        &mut self,
+        now: &PadState,
+        catalog: &ArcadeCatalog,
+    ) -> Option<LauncherEvent> {
+        if rising(now.btn_home, self.prev.btn_home) {
+            self.go_root();
+            return None;
+        }
+        if rising(now.btn_b, self.prev.btn_b) {
+            self.active_collection_id = None;
+            self.screen = Screen::Home;
+            self.settings_focused = false;
+            if let Some(source) = self.active_collection_source.take() {
+                self.restore_home_view_state(source);
+            } else {
+                self.restore_current_menu_view();
+            }
+            return None;
+        }
+        if rising(now.dpad_right, self.prev.dpad_right) && matches!(self.system_hub_selected, 0 | 2)
+        {
+            self.system_hub_selected += 1;
+        }
+        if rising(now.dpad_left, self.prev.dpad_left) && matches!(self.system_hub_selected, 1 | 3) {
+            self.system_hub_selected -= 1;
+        }
+        if rising(now.dpad_down, self.prev.dpad_down) && self.system_hub_selected < 2 {
+            self.system_hub_selected += 2;
+        }
+        if rising(now.dpad_up, self.prev.dpad_up) && self.system_hub_selected >= 2 {
+            self.system_hub_selected -= 2;
+        }
+        if rising(now.btn_a, self.prev.btn_a) && self.system_hub_selected < 3 {
+            let mode = match self.system_hub_selected {
+                0 => ArcadeUserListMode::Games,
+                1 => ArcadeUserListMode::Recent,
+                2 => ArcadeUserListMode::Favourites,
+                _ => unreachable!(),
+            };
+            self.set_arcade_user_list_mode(catalog, mode);
+            self.screen = Screen::Arcade;
+        }
+        None
     }
 
     fn handle_home(
@@ -2420,6 +2485,9 @@ impl LauncherNav {
                     path: None,
                     settings: None,
                 });
+            }
+            if self.return_arcade_to_system_hub() {
+                return None;
             }
             self.leave_arcade(false, &collection_id);
             return None;
@@ -3111,6 +3179,19 @@ impl LauncherNav {
         self.arcade_filter.drawer_open = false;
         self.arcade_search = ArcadeSearchState::new();
         self.arcade.reset();
+    }
+
+    pub fn return_arcade_to_system_hub(&mut self) -> bool {
+        if self
+            .active_collection_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("snes"))
+        {
+            self.screen = Screen::SystemHub;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn arcade_user_list_mode(&self) -> ArcadeUserListMode {
@@ -9221,6 +9302,7 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&catalog, "snes"));
+        nav.screen = Screen::Arcade;
         let now = Instant::now();
 
         assert_eq!(
@@ -9295,5 +9377,36 @@ mod tests {
         let favourites = nav.active_arcade_game_view(&catalog, "snes");
         assert_eq!(favourites.len(), 1);
         assert_eq!(favourites.get(0).unwrap().title.as_ref(), "F-Zero");
+    }
+
+    #[test]
+    fn snes_routes_through_hub_and_lists_return_to_it() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("F-Zero")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/F-Zero.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "snes"));
+        assert_eq!(nav.screen, Screen::SystemHub);
+
+        let now = Instant::now();
+        nav.handle_input(&pad_with(|pad| pad.btn_a = true), now, &catalog);
+        assert_eq!(nav.screen, Screen::Arcade);
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(1),
+            &catalog,
+        );
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            now + Duration::from_millis(2),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::SystemHub);
     }
 }

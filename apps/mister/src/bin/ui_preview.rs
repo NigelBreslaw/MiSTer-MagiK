@@ -435,6 +435,19 @@ mod macos {
             launcher_nav.display_selected = display_selected;
             launcher_nav.display_highlighted = display_selected;
             let bridge = launcher.global::<MisterBridge>();
+            if let Ok(artwork) = mister_magik_fb::snes_artwork::SnesArtwork::load(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
+            ) {
+                let pixels = artwork.rgba8_bytes();
+                bridge.set_snes_artwork(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+                    slint::Rgba8Pixel,
+                >::clone_from_slice(
+                    &pixels,
+                    artwork.width as u32,
+                    artwork.height as u32,
+                )));
+                bridge.set_snes_artwork_visible(true);
+            }
             bridge.set_orientation_active_label(orientation.label().into());
             bridge.set_orientation_selected(launcher_nav.orientation_selected as i32);
             bridge.set_orientation_highlighted(launcher_nav.orientation_highlighted as i32);
@@ -660,6 +673,7 @@ mod macos {
         fn move_selection(&mut self, delta: isize) {
             let count = match self.scenario {
                 Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm => 6,
+                Scenario::SystemHub => 4,
                 Scenario::Settings => 6,
                 Scenario::About => 2,
                 Scenario::Licenses => 2,
@@ -677,6 +691,7 @@ mod macos {
         fn update_selection(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
             bridge.set_selected_index(self.selection as i32);
+            bridge.set_system_hub_selected(self.selection as i32);
             bridge.set_settings_focused(self.settings_focused);
             bridge.set_settings_selected(self.selection as i32);
             bridge.set_about_selected(self.selection as i32);
@@ -787,6 +802,11 @@ mod macos {
         fn configure_launcher_screen(&mut self, scenario: Scenario) {
             match scenario {
                 Scenario::Home => self.launcher_nav.go_root(),
+                Scenario::SystemHub => {
+                    if !self.launcher_nav.open_system(&self.catalog, "snes") {
+                        self.launcher_nav.screen = Screen::SystemHub;
+                    }
+                }
                 Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
                     self.launcher_nav.open_default_arcade(&self.catalog);
                     match scenario {
@@ -2032,6 +2052,7 @@ mod macos {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum Scenario {
         Home,
+        SystemHub,
         Arcade,
         ArcadeSearch,
         ArcadeCrossfade,
@@ -2058,6 +2079,7 @@ mod macos {
             matches!(
                 self,
                 Self::Home
+                    | Self::SystemHub
                     | Self::Arcade
                     | Self::ArcadeSearch
                     | Self::ArcadeCrossfade
@@ -2074,6 +2096,7 @@ mod macos {
         fn from_screen(screen: Screen) -> Self {
             match screen {
                 Screen::Home => Self::Home,
+                Screen::SystemHub => Self::SystemHub,
                 Screen::Controller => Self::Controller,
                 Screen::Arcade => Self::Arcade,
                 Screen::Settings => Self::Settings,
@@ -2087,6 +2110,7 @@ mod macos {
         fn parse(value: &str) -> Option<Self> {
             match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
                 "home" => Some(Self::Home),
+                "system-hub" | "snes-hub" | "snes" => Some(Self::SystemHub),
                 "arcade" => Some(Self::Arcade),
                 "arcade-search" | "search" => Some(Self::ArcadeSearch),
                 "arcade-crossfade" | "crossfade" => Some(Self::ArcadeCrossfade),
@@ -2115,6 +2139,7 @@ mod macos {
         fn label(self) -> &'static str {
             match self {
                 Self::Home => "Home",
+                Self::SystemHub => "SNES System Hub",
                 Self::Arcade => "Arcade",
                 Self::ArcadeSearch => "Arcade Search",
                 Self::ArcadeCrossfade => "Arcade Crossfade",
@@ -2140,6 +2165,7 @@ mod macos {
         fn shortcut(self) -> &'static str {
             match self {
                 Self::Home => "1",
+                Self::SystemHub => "headless",
                 Self::Settings => "2",
                 Self::OrientationChoice => "headless",
                 Self::Controller => "3",
@@ -2317,7 +2343,7 @@ mod macos {
             Screen::Settings => Some(1),
             Screen::Screensaver | Screen::About => Some(2),
             Screen::Info | Screen::Licenses => Some(3),
-            Screen::Controller | Screen::Arcade => None,
+            Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
         }
     }
 
@@ -2336,7 +2362,7 @@ mod macos {
             | Screen::About
             | Screen::Info
             | Screen::Licenses => activated || backed || went_home,
-            Screen::Controller | Screen::Arcade => false,
+            Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
         }
     }
 
@@ -2865,6 +2891,7 @@ mod macos {
         reset_transient_bridge(&bridge);
         bridge.set_screen_mode(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => 1,
+            Scenario::SystemHub => 8,
             Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => 2,
             Scenario::Settings | Scenario::OrientationChoice => 3,
             Scenario::About => 4,
@@ -2876,6 +2903,7 @@ mod macos {
         bridge.set_effective_view(
             match scenario {
                 Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => "arcade",
+                Scenario::SystemHub => "system-hub",
                 Scenario::Settings | Scenario::OrientationChoice => "settings",
                 Scenario::Controller | Scenario::ControllerSetup => "controller",
                 Scenario::About => "about",
@@ -2904,6 +2932,10 @@ mod macos {
         bridge.set_reduce_motion(false);
         bridge.set_info_kernel_version("Linux 6.6.68-MiSTer".into());
         bridge.set_info_database_build("1,284 ms · 12,846 games".into());
+        bridge.set_system_hub_selected(0);
+        bridge.set_system_hub_games_count(1_482);
+        bridge.set_system_hub_recent_count(12);
+        bridge.set_system_hub_favourites_count(28);
 
         match scenario {
             Scenario::Startup => bridge.set_startup_visible(true),

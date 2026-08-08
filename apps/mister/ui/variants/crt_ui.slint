@@ -13,6 +13,7 @@ import { ScreensaverSettingsScreen } from "../views/crt/screensaver_settings.sli
 import { LicensesScreen } from "../views/crt/licenses.slint";
 import { AboutScreen } from "../views/crt/about.slint";
 import { InfoScreen } from "../views/crt/info.slint";
+import { SystemHubScreen } from "../views/crt/system_hub.slint";
 import { CrtComboBoxOverlay } from "../components/crt_combo_box.slint";
 import {
     BackgroundScanBadge,
@@ -42,6 +43,7 @@ export component CrtLauncherUi inherits Rectangle {
         if MisterBridge.screen-mode == 5 : LicensesScreen { }
         if MisterBridge.screen-mode == 6 : InfoScreen { }
         if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
+        if MisterBridge.screen-mode == 8 : SystemHubScreen { }
 
         if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
         if MisterBridge.setup-visible : SetupOverlay {

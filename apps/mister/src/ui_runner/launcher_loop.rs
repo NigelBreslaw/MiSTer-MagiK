@@ -547,7 +547,7 @@ const fn settings_page_depth(screen: Screen) -> Option<u8> {
         Screen::Settings => Some(1),
         Screen::Screensaver | Screen::About => Some(2),
         Screen::Info | Screen::Licenses => Some(3),
-        Screen::Controller | Screen::Arcade => None,
+        Screen::Controller | Screen::Arcade | Screen::SystemHub => None,
     }
 }
 
@@ -566,7 +566,7 @@ fn settings_navigation_input_candidate(
         | Screen::About
         | Screen::Info
         | Screen::Licenses => activated || backed || went_home,
-        Screen::Controller | Screen::Arcade => false,
+        Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
     }
 }
 
@@ -2470,7 +2470,13 @@ pub(super) fn run_launcher_loop(
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
     let lock_screen = launcher_lock_screen_from_env()
-        .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
+        .or_else(|| {
+            env_start_system.as_ref().map(|_| {
+                env_start_screen
+                    .filter(|screen| *screen == Screen::SystemHub)
+                    .unwrap_or(Screen::Arcade)
+            })
+        })
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
     let launch_return_restore_allowed = launcher_return_to_launcher_requested()
         && env_start_screen.is_none()
@@ -2484,9 +2490,10 @@ pub(super) fn run_launcher_loop(
     }
     let startup_return_requested = launch_return_session.requested();
     let mut launch_return_restored = false;
-    let arcade_catalog_required_at_start = start_screen == Screen::Arcade
-        || lock_screen == Some(Screen::Arcade)
-        || launcher_bench_after_input_script;
+    let arcade_catalog_required_at_start =
+        matches!(start_screen, Screen::Arcade | Screen::SystemHub)
+            || matches!(lock_screen, Some(Screen::Arcade | Screen::SystemHub))
+            || launcher_bench_after_input_script;
     let mut pending_start_system = env_start_system.clone();
     let mut pending_start_menu = env_start_system
         .is_none()
@@ -9255,7 +9262,11 @@ fn effective_lock_screen(
     catalog: &ArcadeCatalog,
 ) -> Option<Screen> {
     match lock_screen {
-        Some(Screen::Arcade) if !arcade_navigation_ready(catalog_ready, catalog) => None,
+        Some(Screen::Arcade | Screen::SystemHub)
+            if !arcade_navigation_ready(catalog_ready, catalog) =>
+        {
+            None
+        }
         other => other,
     }
 }
