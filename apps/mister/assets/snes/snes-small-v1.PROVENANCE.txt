@@ -1,0 +1,19 @@
+SNES system hub artwork
+=======================
+
+Authoritative source: snes-small-v1.png
+Source SHA-256: 2a4a1f24ba7c5fb7242cee47975972faf8636872c487af90c1793b14ff8c429e
+Dimensions: 185 x 82 pixels, 8-bit RGBA
+
+Generated output: snes-small-v1.rgb565a
+Generated SHA-256: 7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766
+Format: MM565A1, little-endian RGB565 colour plane followed by 8-bit alpha
+
+Regenerate from the repository root:
+
+  python3 scripts/media/convert-rgba-to-rgb565a.py \
+    apps/mister/assets/snes/snes-small-v1.png \
+    apps/mister/assets/snes/snes-small-v1.rgb565a
+
+The runtime loads the generated file from the active MagiK directory. Neither
+the PNG nor the RGB565A asset is embedded in the executable.

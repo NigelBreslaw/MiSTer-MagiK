@@ -6,13 +6,16 @@ use super::{
     exec_failure_message, file_sha256, fs, sh, shell_sequence,
 };
 
+const SNES_ARTWORK_SHA256: &str =
+    "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766";
+
 pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
     let (root, main) = match layout {
         Layout::Development => ("/media/fat/mister-magik-dev", "/media/fat/MiSTer_MagiKDev"),
         Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
     };
     format!(
-        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; grep -qx 'format=mister-magik-platform-v3' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\""
+        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; test -r \"$root/assets/snes/snes-small-v1.rgb565a\"; grep -qx 'format=mister-magik-platform-v3' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\"; test \"$(sha256sum \"$root/assets/snes/snes-small-v1.rgb565a\" | awk '{{print $1}}')\" = {SNES_ARTWORK_SHA256}"
     )
 }
 
@@ -54,6 +57,10 @@ pub(super) const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
     (
         "game-databases-SHA256SUMS",
         "/media/fat/mister-magik-dev/game-databases-SHA256SUMS",
+    ),
+    (
+        "assets/snes/snes-small-v1.rgb565a",
+        "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
     ),
     (
         "platform-v3.manifest",

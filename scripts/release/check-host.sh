@@ -187,6 +187,7 @@ required = {
     "mister-magik/mister-magik-manager",
     "mister-magik/mame.sqlite3",
     "mister-magik/hbmame.sqlite3",
+    "mister-magik/assets/snes/snes-small-v1.rgb565a",
     "mister-magik/platform-v3.manifest",
     "mister-magik/platform-bundle-v0.2.json",
     "mister-magik/game-databases-manifest.json",
@@ -198,6 +199,7 @@ required = {
 with zipfile.ZipFile(os.environ["ZIP"]) as archive:
     names = set(archive.namelist())
     manager = archive.read("mister-magik/mister-magik-manager")
+    snes_artwork = archive.read("mister-magik/assets/snes/snes-small-v1.rgb565a")
     manager_mode = archive.getinfo("mister-magik/mister-magik-manager").external_attr >> 16
     manifest = dict(
         line.split("=", 1)
@@ -216,6 +218,9 @@ if manifest.get("manager_path") != "/media/fat/mister-magik/mister-magik-manager
     raise SystemExit(1)
 if hashlib.sha256(manager).hexdigest() != manifest.get("manager_sha256"):
     print("package validation failed: manager hash does not match manifest", file=sys.stderr)
+    raise SystemExit(1)
+if hashlib.sha256(snes_artwork).hexdigest() != "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766":
+    print("package validation failed: SNES artwork checksum mismatch", file=sys.stderr)
     raise SystemExit(1)
 forbidden = sorted(
     name for name in names

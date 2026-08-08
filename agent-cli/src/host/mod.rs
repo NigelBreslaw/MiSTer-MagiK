@@ -517,6 +517,8 @@ impl NativeDevice {
         local: &Path,
         manifest_local: &Path,
         expected_sha256: &str,
+        artwork_local: &Path,
+        artwork_expected_sha256: &str,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
         deliver_runtime_transaction(
@@ -526,6 +528,9 @@ impl NativeDevice {
             manifest_local,
             "/media/fat/mister-magik-dev/platform-v3.manifest",
             expected_sha256,
+            artwork_local,
+            "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
+            artwork_expected_sha256,
         )
         .map(|_| ())
     }
@@ -1909,6 +1914,9 @@ struct RuntimeDeliveryActions<'a> {
     manifest_local: &'a Path,
     manifest_remote: &'a str,
     expected_sha256: &'a str,
+    artwork_local: &'a Path,
+    artwork_remote: &'a str,
+    artwork_expected_sha256: &'a str,
 }
 
 impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
@@ -1917,15 +1925,29 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.session,
             "runtime bundle snapshot",
             &format!(
-                "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; sync",
+                "set -eu; cp -p {0} {0}.delivery-rollback.tmp; mv -f {0}.delivery-rollback.tmp {0}.delivery-rollback; cp -p {1} {1}.delivery-rollback.tmp; mv -f {1}.delivery-rollback.tmp {1}.delivery-rollback; mkdir -p $(dirname {2}); rm -f {2}.delivery-rollback-missing; if test -f {2}; then cp -p {2} {2}.delivery-rollback.tmp; mv -f {2}.delivery-rollback.tmp {2}.delivery-rollback; else touch {2}.delivery-rollback-missing; fi; sync",
                 sh(self.remote),
-                sh(self.manifest_remote)
+                sh(self.manifest_remote),
+                sh(self.artwork_remote)
             ),
         )
         .map_err(device_failure)
     }
 
     fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+        let artwork_upload = format!("{}.upload", self.artwork_remote);
+        put(self.session, self.artwork_local, &artwork_upload).map_err(device_failure)?;
+        exec_checked(
+            self.session,
+            "SNES artwork activation",
+            &format!(
+                "set -eu; test \"$(sha256sum {0} | awk '{{print $1}}')\" = {1}; mv -f {0} {2}; sync",
+                sh(&artwork_upload),
+                sh(self.artwork_expected_sha256),
+                sh(self.artwork_remote)
+            ),
+        )
+        .map_err(device_failure)?;
         deploy_magik_bundle(
             self.session,
             self.local,
@@ -1946,7 +1968,18 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
     }
 
     fn smoke(&mut self) -> std::result::Result<String, DeviceFailure> {
-        smoke_development_delivery(self.config, self.expected_sha256)
+        let output = smoke_development_delivery(self.config, self.expected_sha256)?;
+        exec_checked(
+            self.session,
+            "SNES artwork smoke",
+            &format!(
+                "test \"$(sha256sum {0} | awk '{{print $1}}')\" = {1}",
+                sh(self.artwork_remote),
+                sh(self.artwork_expected_sha256)
+            ),
+        )
+        .map_err(device_failure)?;
+        Ok(output)
     }
 
     fn commit(&mut self) -> std::result::Result<(), DeviceFailure> {
@@ -1954,9 +1987,10 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.session,
             "runtime bundle commit",
             &format!(
-                "rm -f {0}.delivery-rollback {1}.delivery-rollback; sync",
+                "rm -f {0}.delivery-rollback {1}.delivery-rollback {2}.delivery-rollback {2}.delivery-rollback-missing; sync",
                 sh(self.remote),
-                sh(self.manifest_remote)
+                sh(self.manifest_remote),
+                sh(self.artwork_remote)
             ),
         )
         .map_err(device_failure)
@@ -1975,9 +2009,10 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
                     self.session,
                     "runtime bundle rollback",
                     &format!(
-                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; sync",
+                        "set -eu; test -f {0}.delivery-rollback; test -f {1}.delivery-rollback; mv -f {0}.delivery-rollback {0}; chmod 755 {0}; mv -f {1}.delivery-rollback {1}; if test -f {2}.delivery-rollback; then mv -f {2}.delivery-rollback {2}; else test -f {2}.delivery-rollback-missing; rm -f {2} {2}.delivery-rollback-missing; fi; sync",
                         sh(self.remote),
-                        sh(self.manifest_remote)
+                        sh(self.manifest_remote),
+                        sh(self.artwork_remote)
                     ),
                 )
                 .map_err(device_failure)
@@ -2005,10 +2040,27 @@ fn deliver_runtime_transaction(
     manifest_local: &Path,
     manifest_remote: &str,
     expected_sha256: &str,
+    artwork_local: &Path,
+    artwork_remote: &str,
+    artwork_expected_sha256: &str,
 ) -> std::result::Result<String, DeviceFailure> {
     require_delivery_sha256(expected_sha256)?;
+    require_delivery_sha256(artwork_expected_sha256)?;
     validate_delivery_remote(remote).map_err(device_failure)?;
     validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
+    if artwork_remote != "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a"
+        || !artwork_local.is_file()
+    {
+        return Err(DeviceFailure::ArtifactMismatch(
+            "runtime delivery requires the canonical external SNES artwork".into(),
+        ));
+    }
+    let artwork_actual_sha256 = file_sha256(artwork_local.to_path_buf()).map_err(device_failure)?;
+    if artwork_actual_sha256 != artwork_expected_sha256 {
+        return Err(DeviceFailure::ArtifactMismatch(format!(
+            "SNES artwork hash mismatch expected={artwork_expected_sha256} actual={artwork_actual_sha256}"
+        )));
+    }
     MagikDeployTransaction::validate_bundle(
         local,
         remote,
@@ -2027,6 +2079,9 @@ fn deliver_runtime_transaction(
             manifest_local,
             manifest_remote,
             expected_sha256,
+            artwork_local,
+            artwork_remote,
+            artwork_expected_sha256,
         },
         false,
     )

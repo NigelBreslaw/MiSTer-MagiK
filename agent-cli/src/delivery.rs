@@ -178,6 +178,8 @@ struct RuntimeDelivery {
     local: PathBuf,
     manifest_local: PathBuf,
     expected_sha256: String,
+    artwork_local: PathBuf,
+    artwork_expected_sha256: String,
 }
 
 impl DeliveryDevice for DeviceClient {
@@ -199,6 +201,8 @@ impl DeliveryDevice for DeviceClient {
                 &delivery.local,
                 &delivery.manifest_local,
                 &delivery.expected_sha256,
+                &delivery.artwork_local,
+                &delivery.artwork_expected_sha256,
             )
         })
     }
@@ -484,6 +488,12 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                         local: self.repository.join(self.deployment.build.artifact()),
                         manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
                         expected_sha256,
+                        artwork_local: self
+                            .repository
+                            .join("apps/mister/assets/snes/snes-small-v1.rgb565a"),
+                        artwork_expected_sha256:
+                            "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
+                                .into(),
                     }),
                     DeliveryDecision::Platform => self
                         .device
@@ -545,6 +555,12 @@ fn prepare_stage_files(
     stage_published_platform_components(&extracted, stage)?;
     copy(repository.join(gui_artifact), stage.join("mister-magik-fb"))?;
     copy(manager.to_path_buf(), stage.join("mister-magik-manager"))?;
+    fs::create_dir_all(stage.join("assets/snes"))
+        .map_err(|error| format!("cannot create SNES artwork stage: {error}"))?;
+    copy(
+        repository.join("apps/mister/assets/snes/snes-small-v1.rgb565a"),
+        stage.join("assets/snes/snes-small-v1.rgb565a"),
+    )?;
     Ok(candidate_main_revision.to_owned())
 }
 

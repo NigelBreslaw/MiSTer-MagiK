@@ -17,6 +17,8 @@ HBMAME_SQLITE=""
 INSTALLER="$DEFAULT_INSTALLER"
 MANAGER="$DEFAULT_MANAGER"
 ASSET_PACK=""
+SNES_ARTWORK="$ROOT/apps/mister/assets/snes/snes-small-v1.rgb565a"
+SNES_ARTWORK_SHA256="7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
 MAIN_BIN=""
 MAIN_SOURCE_REVISION=""
 SCANOUT_MODULE=""
@@ -332,6 +334,14 @@ cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"
 fi
+
+ACTUAL_SNES_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SNES_ARTWORK")"
+if [[ "$ACTUAL_SNES_ARTWORK_SHA256" != "$SNES_ARTWORK_SHA256" ]]; then
+  echo "ERROR: SNES artwork checksum mismatch." >&2
+  exit 1
+fi
+mkdir -p "$STAGE/mister-magik/assets/snes"
+cp "$SNES_ARTWORK" "$STAGE/mister-magik/assets/snes/snes-small-v1.rgb565a"
 
 if [[ -n "$ASSET_PACK" ]]; then
   mkdir -p "$STAGE/mister-magik/assets"
