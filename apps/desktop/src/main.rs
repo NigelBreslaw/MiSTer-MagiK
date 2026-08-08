@@ -825,25 +825,13 @@ fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
         );
     }
     if !latest.magik_ownership {
-        return unavailable(
-            "Ownership lost",
-            "MagiK does not own scanout.".to_string(),
-            "bad",
-        );
+        return unavailable("Ownership lost", "MagiK does not own scanout.".to_string(), "bad");
     }
     if latest.pending {
-        return unavailable(
-            "Pending",
-            "FPGA endpoint is not settled.".to_string(),
-            "warn",
-        );
+        return unavailable("Pending", "FPGA endpoint is not settled.".to_string(), "warn");
     }
     if !latest.lifetime_invariant_valid {
-        return unavailable(
-            "Invalid",
-            "FPGA cadence invariant failed.".to_string(),
-            "bad",
-        );
+        return unavailable("Invalid", "FPGA cadence invariant failed.".to_string(), "bad");
     }
     let previous = history
         .samples
@@ -858,11 +846,7 @@ fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
                 && sample.lifetime_invariant_valid
         });
     let Some(previous) = previous else {
-        return unavailable(
-            "Settling",
-            "Waiting for a second FPGA sample.".to_string(),
-            "warn",
-        );
+        return unavailable("Settling", "Waiting for a second FPGA sample.".to_string(), "warn");
     };
     let Some((owned, presented, dropped, losses)) = latest
         .owned_vblank_count
@@ -888,18 +872,10 @@ fn scanout_health_tile(history: &RealtimeHistory) -> RealtimeHealthTileView {
         )
         .map(|(((owned, presented), dropped), losses)| (owned, presented, dropped, losses))
     else {
-        return unavailable(
-            "Unavailable",
-            "FPGA counters are incomplete.".to_string(),
-            "warn",
-        );
+        return unavailable("Unavailable", "FPGA counters are incomplete.".to_string(), "warn");
     };
     if owned != presented.wrapping_add(dropped) {
-        return unavailable(
-            "Invalid",
-            "FPGA cadence delta invariant failed.".to_string(),
-            "bad",
-        );
+        return unavailable("Invalid", "FPGA cadence delta invariant failed.".to_string(), "bad");
     }
     if losses > 0 {
         return unavailable(
@@ -1376,7 +1352,9 @@ fn realtime_view_from_history(
     }
 }
 
-fn realtime_frame_samples_from_telemetry(sample: &DeviceTelemetrySample) -> Vec<FrameSample> {
+fn realtime_frame_samples_from_telemetry(
+    sample: &DeviceTelemetrySample,
+) -> Vec<FrameSample> {
     let budget_us = sample.frame_budget.budget_us.max(1);
     let frames = sample
         .frame_budget
@@ -1742,8 +1720,8 @@ enum RealtimeFrameChartFixture {
     Large,
 }
 
-fn realtime_frame_chart_fixture_args() -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>>
-{
+fn realtime_frame_chart_fixture_args(
+) -> Result<Option<RealtimeFrameChartFixture>, Box<dyn Error>> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     parse_realtime_frame_chart_fixture_args(&args)
 }
@@ -2772,13 +2750,18 @@ fn create_live_instance(
     let resize_instance = instance.as_weak();
     let resize_frame_chart_state = Arc::clone(&realtime_frame_chart);
     instance.set_global_callback("Actions", "realtime-frame-chart-resized", move |args| {
-        let (Some(Value::Number(width)), Some(Value::Number(height))) = (args.first(), args.get(1))
+        let (Some(Value::Number(width)), Some(Value::Number(height))) =
+            (args.first(), args.get(1))
         else {
             return Value::Void;
         };
         if let (Some(instance), Some(rendered)) = (
             resize_instance.upgrade(),
-            resize_frame_chart(&resize_frame_chart_state, *width as i32, *height as i32),
+            resize_frame_chart(
+                &resize_frame_chart_state,
+                *width as i32,
+                *height as i32,
+            ),
         ) {
             apply_live_frame_chart(&instance, rendered);
         }
