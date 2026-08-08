@@ -103,6 +103,10 @@ impl FullScreenTransitionStateChart {
         }
     }
 
+    pub const fn capture_issued(&self) -> bool {
+        self.active.is_some_and(|active| active.capture_issued)
+    }
+
     pub fn policy(&self) -> FullScreenTransitionPolicy {
         match self.state {
             FullScreenTransitionState::Live => FullScreenTransitionPolicy {
@@ -270,8 +274,10 @@ mod tests {
         let mut chart = FullScreenTransitionStateChart::default();
         let generation = chart.begin(FullScreenTransitionOwner::Navigation).unwrap();
         assert!(chart.take_controlled_capture(generation).unwrap());
+        assert!(chart.capture_issued());
         assert!(!chart.policy().controlled_capture);
         chart.capture_deferred(generation).unwrap();
+        assert!(!chart.capture_issued());
         assert!(chart.policy().controlled_capture);
         assert!(chart.take_controlled_capture(generation).unwrap());
         chart.capture_completed(generation).unwrap();

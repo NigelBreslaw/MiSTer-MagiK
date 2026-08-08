@@ -6473,9 +6473,12 @@ pub(super) fn run_launcher_loop(
                 .is_some_and(|pending| pending.committed);
             let mut render_transition_frame = true;
             if destination_committed && !navigation_transition.destination_ready() {
+                let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
+                    || (full_screen_transition.owner()
+                        == Some(FullScreenTransitionOwner::Navigation)
+                        && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
-                    && slint_base_rendered
-                    && full_screen_controlled_capture_rendered;
+                    && controlled_destination_raster_ready;
                 let mut destination_layers_ready =
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
