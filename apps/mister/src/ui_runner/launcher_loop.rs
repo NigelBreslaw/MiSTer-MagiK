@@ -2278,12 +2278,8 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_launcher_frame: Option<Vec<Rgb565Pixel>> = None;
     let mut screensaver_frame_visible = false;
     let mut screensaver_active_cards = 0usize;
-    let mut screensaver_archive_loading = false;
-    let mut screensaver_has_rendered_card = false;
     let mut screensaver_render_sequence = 0u64;
     let mut screensaver_starvation_count = 0u64;
-    let mut screensaver_superseded_frames = 0u64;
-    let mut screensaver_reused_frames = 0u64;
     let mut screensaver_show_started: Option<Instant> = None;
     let mut screensaver_first_render_logged = false;
     let mut screensaver_first_present_logged = false;
@@ -5908,8 +5904,6 @@ pub(super) fn run_launcher_loop(
             }
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
-            screensaver_archive_loading = false;
-            screensaver_has_rendered_card = false;
             window.request_redraw();
             full_frame_present = true;
         }
@@ -5938,13 +5932,8 @@ pub(super) fn run_launcher_loop(
                 screensaver_pipeline = Some(ScreensaverRenderAhead::start(ready));
                 screensaver_render_sequence = 0;
                 screensaver_starvation_count = 0;
-                screensaver_superseded_frames = 0;
-                screensaver_reused_frames = 0;
                 screensaver_loader = None;
             }
-        }
-        if let Some(pipeline) = screensaver_pipeline.as_ref() {
-            pipeline.update_period_us(pacer.period_us());
         }
         if !screensaver.active {
             screensaver_loader = None;
@@ -5955,8 +5944,6 @@ pub(super) fn run_launcher_loop(
             screensaver_launcher_frame = None;
             screensaver_frame_visible = false;
             screensaver_active_cards = 0;
-            screensaver_archive_loading = false;
-            screensaver_has_rendered_card = false;
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
         let mut screensaver_frame_trace = ScreensaverFrameTrace::default();
@@ -6042,7 +6029,6 @@ pub(super) fn run_launcher_loop(
                         );
                         screensaver_frame_trace = frame.trace;
                         screensaver_render_sequence = frame.sequence;
-                        screensaver_superseded_frames = frame.superseded_frames;
                         screensaver_frame_trace.render_ahead_sequence = frame.sequence;
                         screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
                             .as_ref()
@@ -6055,10 +6041,7 @@ pub(super) fn run_launcher_loop(
                             .try_into()
                             .unwrap_or(u64::MAX);
                         screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
-                        screensaver_frame_trace.render_ahead_render_cpu_us = frame.render_cpu_us;
                         screensaver_active_cards = frame.active_cards;
-                        screensaver_archive_loading = frame.archive_loading;
-                        screensaver_has_rendered_card = frame.has_rendered_card;
                         screensaver_frame_visible = true;
                         accepted_screensaver_frame = true;
                     } else {
@@ -6091,8 +6074,6 @@ pub(super) fn run_launcher_loop(
                     }
                     screensaver_frame_visible = false;
                     screensaver_active_cards = 0;
-                    screensaver_archive_loading = false;
-                    screensaver_has_rendered_card = false;
                     window.request_redraw();
                     full_frame_present = true;
                 }
@@ -6116,8 +6097,6 @@ pub(super) fn run_launcher_loop(
                     }
                     screensaver_frame_visible = false;
                     screensaver_active_cards = 0;
-                    screensaver_archive_loading = false;
-                    screensaver_has_rendered_card = false;
                     window.request_redraw();
                     full_frame_present = true;
                 }
@@ -6145,8 +6124,6 @@ pub(super) fn run_launcher_loop(
             .map(ScreensaverRenderAhead::ready_depth)
             .unwrap_or(0);
         screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
-        screensaver_frame_trace.render_ahead_superseded_frames = screensaver_superseded_frames;
-        screensaver_frame_trace.render_ahead_reused_frames = screensaver_reused_frames;
         screensaver_frame_trace.render_ahead_cancelled =
             screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let mut slint_base_rendered = false;
@@ -6848,7 +6825,7 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
-            if !screensaver_first_card_present_logged && screensaver_has_rendered_card {
+            if !screensaver_first_card_present_logged && accepted_screensaver_frame {
                 screensaver_first_card_present_logged = true;
                 if let Some(started) = screensaver_show_started {
                     crate::ui_logln!(
@@ -6953,7 +6930,6 @@ pub(super) fn run_launcher_loop(
                 composition_status: composition_status.clone(),
                 screensaver_active: screensaver.active && screensaver_pipeline.is_some(),
                 screensaver_active_cards,
-                screensaver_archive_loading,
                 screensaver_frame_trace,
             },
             pacing: pacing_trace,

@@ -339,10 +339,7 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_render_ahead_queue_depth: u64,
     pub screensaver_render_ahead_frame_age_us: u64,
     pub screensaver_render_ahead_render_wall_us: u64,
-    pub screensaver_render_ahead_render_cpu_us: u64,
     pub screensaver_render_ahead_starvation_count: u64,
-    pub screensaver_render_ahead_superseded_frames: u64,
-    pub screensaver_render_ahead_reused_frames: u64,
     pub screensaver_render_ahead_cancelled: bool,
 }
 
@@ -1448,20 +1445,8 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         frame.screensaver_render_ahead_render_wall_us
     );
     field!(
-        "screensaver_render_ahead_render_cpu_us",
-        frame.screensaver_render_ahead_render_cpu_us
-    );
-    field!(
         "screensaver_render_ahead_starvation_count",
         frame.screensaver_render_ahead_starvation_count
-    );
-    field!(
-        "screensaver_render_ahead_superseded_frames",
-        frame.screensaver_render_ahead_superseded_frames
-    );
-    field!(
-        "screensaver_render_ahead_reused_frames",
-        frame.screensaver_render_ahead_reused_frames
     );
     field!(
         "screensaver_render_ahead_cancelled",

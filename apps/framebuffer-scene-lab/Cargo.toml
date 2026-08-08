@@ -25,7 +25,7 @@ path = "src/bin/generate_intro_assets.rs"
 required-features = ["asset-tools"]
 
 [dependencies]
-mister-magik-catalog = { path = "../../crates/catalog", default-features = false, features = ["reader"] }
+mister-magik-catalog = { path = "../../crates/catalog", default-features = false }
 mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
 mister-magik-latch-contract = { path = "../../mister/platform/contracts/latch" }
 mister-magik-core = { path = "../../crates/magik-core" }

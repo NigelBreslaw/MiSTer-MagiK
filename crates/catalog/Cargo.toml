@@ -38,9 +38,8 @@ serde_json = "1"
 walkdir = "2"
 
 [features]
-default = ["reader"]
-reader = []
-builder = ["reader"]
+default = []
+builder = []
 
 [profile.release]
 opt-level = 3

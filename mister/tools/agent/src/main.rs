@@ -36,55 +36,6 @@ mod launcher_automation;
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
 
-#[cfg(test)]
-use std::io;
-
-#[cfg(test)]
-fn parse_mac_text(text: &str) -> io::Result<[u8; 6]> {
-    let mut mac = [0u8; 6];
-    let mut parts = text.trim().split(':');
-    for byte in &mut mac {
-        let part = parts
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "too few MAC bytes"))?;
-        *byte = u8::from_str_radix(part, 16)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad MAC byte"))?;
-    }
-    if parts.next().is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "too many MAC bytes",
-        ));
-    }
-    Ok(mac)
-}
-
-#[cfg(test)]
-fn decompress_lz4_block_exact(
-    payload: &[u8],
-    expected_raw: usize,
-    max_raw: usize,
-    context: &str,
-) -> Result<Vec<u8>, String> {
-    if expected_raw > max_raw {
-        return Err(format!(
-            "{context} raw size {expected_raw} exceeds max {max_raw}"
-        ));
-    }
-    let mut raw = Vec::new();
-    raw.try_reserve_exact(expected_raw)
-        .map_err(|err| format!("allocate {context} ({expected_raw} bytes): {err}"))?;
-    raw.resize(expected_raw, 0);
-    let actual = lz4_flex::block::decompress_into(payload, &mut raw)
-        .map_err(|err| format!("decompress {context}: {err}"))?;
-    if actual != expected_raw {
-        return Err(format!(
-            "{context} raw size mismatch expected={expected_raw} actual={actual}"
-        ));
-    }
-    Ok(raw)
-}
-
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, PartialEq)]
 struct ControlRequest {
@@ -1079,14 +1030,6 @@ mod linux {
         fn create(path: &str, ring: SharedLogRing) -> io::Result<Self> {
             Ok(Self {
                 file: File::create(path)?,
-                ring,
-            })
-        }
-
-        #[allow(dead_code)]
-        fn append(path: &str, ring: SharedLogRing) -> io::Result<Self> {
-            Ok(Self {
-                file: OpenOptions::new().create(true).append(true).open(path)?,
                 ring,
             })
         }
@@ -4584,22 +4527,6 @@ mod tests {
     }
 
     #[test]
-    fn bounded_lz4_block_decode_rejects_output_larger_than_metadata() {
-        let payload = lz4_flex::block::compress(b"payload");
-        assert_eq!(
-            decompress_lz4_block_exact(&payload, 7, 16, "fixture").expect("decode fixture"),
-            b"payload"
-        );
-
-        assert!(decompress_lz4_block_exact(&payload, 6, 16, "fixture").is_err());
-        assert!(
-            decompress_lz4_block_exact(&payload, 17, 16, "fixture")
-                .expect_err("oversized metadata should fail")
-                .contains("exceeds max")
-        );
-    }
-
-    #[test]
     fn control_request_validation_is_portable_and_authenticates_before_dispatch() {
         assert!(
             parse_control_request("{", "secret", false)
@@ -4649,30 +4576,6 @@ mod tests {
                 .unwrap_err()
                 .message,
             "missing cmd"
-        );
-    }
-
-    #[test]
-    fn mac_text_parser_accepts_exact_six_octets() {
-        assert_eq!(
-            parse_mac_text("aa:BB:01:23:45:ff\n").unwrap(),
-            [0xaa, 0xbb, 0x01, 0x23, 0x45, 0xff]
-        );
-    }
-
-    #[test]
-    fn mac_text_parser_rejects_wrong_octet_count_and_bad_hex() {
-        assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee:ff:00").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-        assert_eq!(
-            parse_mac_text("aa:bb:cc:dd:ee:zz").unwrap_err().kind(),
-            io::ErrorKind::InvalidData
         );
     }
 

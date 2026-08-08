@@ -16,7 +16,7 @@ warnings = "deny"
 all = "deny"
 
 [dependencies]
-mister-magik-catalog = { path = "../catalog", default-features = false, features = ["reader"] }
+mister-magik-catalog = { path = "../catalog", default-features = false }
 mister-magik-framebuffer-scenes = { path = "../framebuffer-scenes" }
 mister-magik-perf-events = { path = "../perf-events" }
 

@@ -5580,10 +5580,6 @@ fn exact_manifest_field(manifest: &str, field: &str, length: usize) -> Result<St
     Ok(values[0].into())
 }
 
-fn legacy_launcher_restart_cleanup_command() -> &'static str {
-    "set -eu; now=$(cut -d. -f1 /proc/uptime); ticks=$(getconf CLK_TCK 2>/dev/null || echo 100); killed=0; for proc in /proc/[0-9]*; do pid=${proc##*/}; test \"$pid\" != \"$$\" || continue; target=$(readlink \"$proc/fd/8\" 2>/dev/null || true); test \"$target\" = /tmp/mister-magik/command-operation.lock || continue; command=$(tr '\\000' ' ' < \"$proc/cmdline\" 2>/dev/null || true); case \"$command\" in *mister_magik_restart_launcher*) ;; *) continue ;; esac; start=$(awk '{print $22}' \"$proc/stat\" 2>/dev/null || echo 0); age=$((now - start / ticks)); test \"$age\" -ge 30 || continue; kill \"$pid\"; killed=$((killed + 1)); done; test \"$killed\" -eq 0 || sleep 1; printf 'legacy_launcher_restart_cleanup_tsv\\tkilled=%s\\n' \"$killed\""
-}
-
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -5600,11 +5596,6 @@ fn profile_installed_launch_return(
     let magik_revision = exact_manifest_field(&installed_manifest, "magik_revision", 40)?;
     let gui_sha256 = exact_manifest_field(&installed_manifest, "gui_sha256", 64)?;
     let run_result = (|| -> Result<Value> {
-        exec_checked(
-            &session,
-            "launch-return legacy restart cleanup",
-            legacy_launcher_restart_cleanup_command(),
-        )?;
         exec_checked(
             &session,
             "launch-return benchmark preflight cleanup",
@@ -8866,10 +8857,6 @@ fn summarize_screensaver_telemetry(
         "cpu_utilization": {
             "launcher_process_pct_of_one_core": mean_frame_field(steady, "process_cpu_us")
                 * 100.0 / refresh_period_us as f64,
-            "renderer_pct_of_one_core": mean_frame_field(
-                steady,
-                "screensaver_render_ahead_render_cpu_us"
-            ) * 100.0 / refresh_period_us as f64,
             "instrumented_device_combined_busy_pct": mean_f64(&device_cpu_samples),
             "instrumented_device_core0_busy_pct": mean_f64(&core0_cpu_samples),
             "instrumented_device_core1_busy_pct": mean_f64(&core1_cpu_samples),
@@ -8940,10 +8927,6 @@ fn populated_screensaver_window(frames: &[&Value], refresh_period_us: u64) -> Va
             "launcher_process_pct_of_one_core": mean_frame_field(
                 &populated,
                 "process_cpu_us"
-            ) * 100.0 / refresh_period_us as f64,
-            "renderer_pct_of_one_core": mean_frame_field(
-                &populated,
-                "screensaver_render_ahead_render_cpu_us"
             ) * 100.0 / refresh_period_us as f64,
         },
     })
@@ -9436,10 +9419,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_render_ahead_queue_depth",
         "screensaver_render_ahead_frame_age_us",
         "screensaver_render_ahead_render_wall_us",
-        "screensaver_render_ahead_render_cpu_us",
         "screensaver_render_ahead_starvation_count",
-        "screensaver_render_ahead_superseded_frames",
-        "screensaver_render_ahead_reused_frames",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
@@ -9673,11 +9653,8 @@ fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
         "queue_depth": summary("screensaver_render_ahead_queue_depth"),
         "frame_age_us": summary("screensaver_render_ahead_frame_age_us"),
         "render_wall_us": summary("screensaver_render_ahead_render_wall_us"),
-        "render_cpu_us": summary("screensaver_render_ahead_render_cpu_us"),
         "final_sequence": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_sequence")).unwrap_or(0),
         "starvation_count": counter_delta("screensaver_render_ahead_starvation_count"),
-        "superseded_frames": counter_delta("screensaver_render_ahead_superseded_frames"),
-        "reused_frames": counter_delta("screensaver_render_ahead_reused_frames"),
         "cancelled_frames": frames.iter().filter(|frame| frame.get("screensaver_render_ahead_cancelled").and_then(Value::as_bool) == Some(true)).count(),
     })
 }
@@ -9776,17 +9753,15 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
     {
         failures.push(json!({"kind": "authoritative-fpga-cadence-missing"}));
     }
-    for (kind, pointer) in [
-        ("render-ahead-starvation", "/render_ahead/starvation_count"),
-        ("render-ahead-reuse", "/render_ahead/reused_frames"),
-    ] {
-        let count = run
-            .pointer(pointer)
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX);
-        if count > 0 {
-            failures.push(json!({"kind": kind, "count": count}));
-        }
+    let starvation_count = run
+        .pointer("/render_ahead/starvation_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    if starvation_count > 0 {
+        failures.push(json!({
+            "kind": "render-ahead-starvation",
+            "count": starvation_count,
+        }));
     }
     let unique_fps = run
         .pointer("/steady_state/physical_refresh/unique_fps")
@@ -15977,16 +15952,6 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn legacy_launcher_restart_cleanup_is_narrow_and_age_bounded() {
-        let command = legacy_launcher_restart_cleanup_command();
-        assert!(command.contains("$proc/fd/8"));
-        assert!(command.contains("/tmp/mister-magik/command-operation.lock"));
-        assert!(command.contains("mister_magik_restart_launcher"));
-        assert!(command.contains("-ge 30"));
-        assert!(command.contains("kill \"$pid\""));
-    }
-
-    #[test]
     fn delivery_smoke_retries_only_healthy_latch_startup_input() {
         let mut status = json!({
             "scene": "launcher",
@@ -16217,10 +16182,7 @@ H: Handlers=event3 js0"#
             frame["screensaver_render_ahead_queue_depth"] = json!(1);
             frame["screensaver_render_ahead_frame_age_us"] = json!(400);
             frame["screensaver_render_ahead_render_wall_us"] = json!(4_500);
-            frame["screensaver_render_ahead_render_cpu_us"] = json!(4_300);
             frame["screensaver_render_ahead_starvation_count"] = json!(0);
-            frame["screensaver_render_ahead_superseded_frames"] = json!(0);
-            frame["screensaver_render_ahead_reused_frames"] = json!(0);
             frame["screensaver_render_ahead_cancelled"] = json!(false);
             frame["status_publish_mode"] = json!("async");
             frame["status_enqueue_us"] = json!(0);
@@ -16335,13 +16297,6 @@ H: Handlers=event3 js0"#
             screensaver_qualification_failures(&missing)
                 .iter()
                 .any(|failure| failure["kind"] == "dropped-frames")
-        );
-        let mut reused = summary.clone();
-        reused["render_ahead"]["reused_frames"] = json!(1);
-        assert!(
-            screensaver_qualification_failures(&reused)
-                .iter()
-                .any(|failure| failure["kind"] == "render-ahead-reuse")
         );
         let mut starved = summary.clone();
         starved["render_ahead"]["starvation_count"] = json!(1);

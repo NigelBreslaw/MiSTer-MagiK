@@ -383,8 +383,6 @@ fn add_path_operations(
                     "--manifest-path",
                     "crates/catalog/Cargo.toml",
                     "--no-default-features",
-                    "--features",
-                    "reader",
                 ],
                 "catalog source → reader check",
             ),
