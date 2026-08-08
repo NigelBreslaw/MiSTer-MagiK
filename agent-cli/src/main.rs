@@ -126,6 +126,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::LiveParticles { .. } => "live-particles",
         CliCommand::StartupParticles { .. } => "startup-particles",
         CliCommand::SceneLab { .. } => "scene-lab",
+        CliCommand::Clean => "clean",
         CliCommand::Dependencies { .. } => "dependencies",
         CliCommand::Build { .. } => "build",
         CliCommand::Ci { .. } => "ci",
@@ -247,6 +248,10 @@ fn dispatch(
         }
         CliCommand::SceneLab { command } => {
             agent_cli::startup_particles::execute_scene_preview(repository, command, reporter)?;
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Clean => {
+            agent_cli::clean::execute(repository, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Dependencies { command } => {

@@ -90,6 +90,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SceneLabCommand,
     },
+    /// Remove Cargo build artifacts from every project in the repository.
+    Clean,
     Dependencies {
         #[command(subcommand)]
         command: DependenciesCommand,
@@ -643,6 +645,12 @@ mod tests {
     fn retired_validation_commands_are_rejected() {
         assert!(Cli::try_parse_from(["agent-cli", "check"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "verify"]).is_err());
+    }
+
+    #[test]
+    fn clean_is_a_flag_free_repository_command() {
+        assert!(Cli::try_parse_from(["agent-cli", "clean"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "clean", "--package", "catalog"]).is_err());
     }
 
     #[test]

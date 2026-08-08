@@ -14,6 +14,7 @@ scripts/agent benchmark particles
 scripts/agent benchmark catalog-lifecycle
 scripts/agent benchmark launch-return
 scripts/agent diagnose
+scripts/agent clean
 ```
 
 The normal AI loop is edit with bounded Rust analyzer diagnostics where
@@ -25,6 +26,11 @@ for full affected assurance of the exact branch commit, while CI remains
 authoritative.
 Workflow evidence analysis uses the hidden typed
 `scripts/agent db report` command rather than direct SQL.
+
+`clean` discovers every tracked or untracked, non-ignored `Cargo.toml` in the
+repository and runs `cargo clean --manifest-path` for each project. This keeps
+new first-party projects covered without traversing ignored vendor or build
+trees.
 
 `scripts/agent release qualify` is an attended operator command. Hidden typed
 build and host-assurance intents exist for CI and release tooling, not as a

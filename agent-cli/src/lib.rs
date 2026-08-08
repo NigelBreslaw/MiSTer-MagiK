@@ -10,6 +10,7 @@ pub mod build;
 pub mod capture;
 pub mod checks;
 pub mod ci;
+pub mod clean;
 pub mod cli;
 pub mod commands;
 pub mod compile_time;
