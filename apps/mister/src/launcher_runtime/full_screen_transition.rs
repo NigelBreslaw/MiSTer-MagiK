@@ -104,7 +104,10 @@ impl FullScreenTransitionStateChart {
     }
 
     pub const fn capture_issued(&self) -> bool {
-        self.active.is_some_and(|active| active.capture_issued)
+        match self.active {
+            Some(active) => active.capture_issued,
+            None => false,
+        }
     }
 
     pub fn policy(&self) -> FullScreenTransitionPolicy {
