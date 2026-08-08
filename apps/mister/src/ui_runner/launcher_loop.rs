@@ -6320,6 +6320,8 @@ pub(super) fn run_launcher_loop(
                     && let Err(error) = full_screen_transition.capture_deferred(generation)
                 {
                     crate::ui_errln!("full-screen controlled capture defer rejected: {error:?}");
+                } else if !rendered {
+                    window.request_redraw();
                 }
                 dirty
             } else {
