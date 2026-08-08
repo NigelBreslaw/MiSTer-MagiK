@@ -2646,6 +2646,7 @@ mod tests {
             .selected_preview_key
             .clone()
             .expect("selected preview key");
+        mark_preview_presented_for_test(&mut preview);
 
         let changed = request_arcade_preview_window(
             &bridge,
@@ -2757,6 +2758,7 @@ mod tests {
     #[test]
     fn stale_presentation_generation_cannot_complete_new_demand() {
         let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
         preview.has_visible_preview = true;
         preview.begin_raw_transition_to("first.png", PreviewTransitionPace::Normal);
         preview.visible_preview_key = "first.png".into();
@@ -3128,6 +3130,7 @@ mod tests {
         preview.selected_preview_key = Some("visible.png".into());
         preview.has_visible_preview = true;
         preview.visible_preview_key = "visible.png".into();
+        mark_preview_presented_for_test(&mut preview);
         let previous_transition_id = preview.raw_transition_id;
 
         preview.select_empty_preview(PreviewTransitionPace::Normal);
@@ -3162,13 +3165,14 @@ mod tests {
         preview.selected_preview_key = Some("1941.png".into());
         preview.has_visible_preview = true;
         preview.visible_preview_key = "1941.png".into();
+        mark_preview_presented_for_test(&mut preview);
 
         preview.select_empty_preview(PreviewTransitionPace::Normal);
 
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Animating {
-                generation: 1,
+                generation: 2,
                 target: PreviewPresentationTarget::Empty,
             }
         );
@@ -3189,10 +3193,10 @@ mod tests {
 
         assert_eq!(
             preview.presentation_state(),
-            PreviewPresentationState::RetirementPending { generation: 1 }
+            PreviewPresentationState::RetirementPending { generation: 2 }
         );
         assert!(preview.presentation_state().owns_direct_layer());
-        preview.confirm_retirement(1);
+        preview.confirm_retirement(2);
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Detached
@@ -3212,6 +3216,7 @@ mod tests {
         );
         preview.has_visible_preview = true;
         preview.visible_preview_key = "1941.png".into();
+        mark_preview_presented_for_test(&mut preview);
         preview.select_empty_preview(PreviewTransitionPace::Normal);
 
         let _unconfirmed = preview
@@ -3242,6 +3247,7 @@ mod tests {
         preview.selection_transition = PreviewSelectionTransition::CrossFade;
         preview.has_visible_preview = true;
         preview.visible_preview_key = "1941.png".into();
+        mark_preview_presented_for_test(&mut preview);
 
         preview.select_empty_preview(PreviewTransitionPace::Turbo);
         let empty_frame = preview.raw_transition_frame().expect("turbo empty frame");
@@ -3264,7 +3270,7 @@ mod tests {
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Animating {
-                generation: 2,
+                generation: 3,
                 target: PreviewPresentationTarget::Image,
             }
         );
@@ -3303,6 +3309,7 @@ mod tests {
         preview.selected_preview_key = Some("visible.png".into());
         preview.has_visible_preview = true;
         preview.visible_preview_key = "visible.png".into();
+        mark_preview_presented_for_test(&mut preview);
 
         preview.select_empty_preview(PreviewTransitionPace::Normal);
         let first_transition_id = preview.raw_transition_id;
@@ -3510,6 +3517,13 @@ mod tests {
             display_w: 1,
             display_h: 1,
         })
+    }
+
+    fn mark_preview_presented_for_test(preview: &mut PreviewState) {
+        preview.set_route(PreviewRoute::Eligible);
+        preview.demand = PreviewDemand::Image;
+        let generation = preview.next_presentation_generation();
+        preview.presentation_state = PreviewPresentationState::Visible { generation };
     }
 
     fn preview_game(
