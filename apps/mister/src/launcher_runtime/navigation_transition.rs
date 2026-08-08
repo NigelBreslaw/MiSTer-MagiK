@@ -1867,13 +1867,7 @@ mod tests {
         runtime.render_into(&mut output).unwrap();
 
         assert!(output.iter().all(|pixel| *pixel != Rgb565Pixel(0xffff)));
-        assert!(
-            runtime
-                .buffers
-                .working()
-                .iter()
-                .all(|pixel| *pixel == Rgb565Pixel(0))
-        );
+        assert!(runtime.buffers.working().iter().all(|pixel| pixel.0 == 0));
     }
 
     #[test]
