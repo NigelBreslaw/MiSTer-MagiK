@@ -844,7 +844,7 @@ impl PreviewState {
         }
     }
 
-    pub(crate) const fn direct_layer_desired(&self) -> bool {
+    pub(crate) fn direct_layer_desired(&self) -> bool {
         self.route == PreviewRoute::Eligible
             && self.demand == PreviewDemand::Image
             && matches!(
