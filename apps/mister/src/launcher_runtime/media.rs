@@ -2003,6 +2003,21 @@ mod tests {
     }
 
     #[test]
+    fn default_media_selection_uses_native_snes_pack_geometry() {
+        let mut snes_native = pack_with_id("snes");
+        snes_native.image_size = "256x224".to_string();
+        let mut snes_default = pack_with_id("snes");
+        snes_default.image_size = DEFAULT_IMAGE_SIZE.to_string();
+        let arcade = pack_with_id("arcade");
+
+        let selected =
+            packs_by_system_for_size(&[snes_default, snes_native, arcade], DEFAULT_IMAGE_SIZE);
+
+        assert_eq!(selected["snes"].image_size, "256x224");
+        assert_eq!(selected["arcade"].image_size, DEFAULT_IMAGE_SIZE);
+    }
+
+    #[test]
     fn progress_event_calculates_percent_and_log_detail() {
         let event = MediaProgressEvent::new("arcade", "320x320", "identity", "download")
             .with_bytes(25, 100)

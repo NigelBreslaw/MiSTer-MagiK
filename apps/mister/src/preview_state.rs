@@ -2304,9 +2304,9 @@ mod tests {
     }
 
     #[test]
-    fn preview_size_keeps_common_arcade_screenshot_native_when_resize_is_off() {
-        let size = preview_display_size(320, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
-        assert_eq!(size, PreviewDisplaySize { w: 320, h: 224 });
+    fn preview_size_keeps_native_snes_screenshot_unscaled() {
+        let size = preview_display_size(256, 224, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_H);
+        assert_eq!(size, PreviewDisplaySize { w: 256, h: 224 });
     }
 
     #[test]

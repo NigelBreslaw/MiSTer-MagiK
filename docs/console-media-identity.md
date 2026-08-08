@@ -91,7 +91,7 @@ Console screenshot packs live under:
 /media/fat/mister-magik/assets/arcade-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/neogeo-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/nes-screenshots-320x320.mmlz4b
-/media/fat/mister-magik/assets/snes-screenshots-320x320.mmlz4b
+/media/fat/mister-magik/assets/snes-screenshots-256x224.mmlz4b
 /media/fat/mister-magik/assets/n64-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/sms-screenshots-320x320.mmlz4b
 /media/fat/mister-magik/assets/megadrive-screenshots-320x320.mmlz4b
@@ -100,8 +100,9 @@ Console screenshot packs live under:
 /media/fat/mister-magik/assets/atarilynx-screenshots-160x102.mmlz4b
 ```
 
-The default public pack size is `320x320`; Atari Lynx uses its native
-`160x102` landscape geometry, with portrait titles stored as `102x160`.
+The default public pack size is `320x320`; SNES uses its native `256x224`
+geometry, and Atari Lynx uses its native `160x102` landscape geometry, with
+portrait titles stored as `102x160`.
 Legacy fixed-name packs such as
 `saturn-screenshots.mmlz4b` are still readable as fallback, but new runtime
 downloads preserve the image size in the filename. The preview worker resolves

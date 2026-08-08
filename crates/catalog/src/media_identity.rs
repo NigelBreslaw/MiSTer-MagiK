@@ -14,6 +14,7 @@ pub fn default_screenshot_asset_dir() -> PathBuf {
         .unwrap_or_else(|_| crate::device_layout::current_app_path("assets"))
 }
 pub const DEFAULT_SCREENSHOT_IMAGE_SIZE: &str = "320x320";
+pub const SNES_SCREENSHOT_IMAGE_SIZE: &str = "256x224";
 pub const ATARI_LYNX_SCREENSHOT_IMAGE_SIZE: &str = "160x102";
 pub const SCREENSHOT_MEDIA_STATE_FILENAME: &str = ".screenshot-media-state.json";
 
@@ -103,6 +104,7 @@ impl ScreenshotPackId {
 
 pub fn preferred_screenshot_image_size(system: &str) -> &'static str {
     match system {
+        "snes" => SNES_SCREENSHOT_IMAGE_SIZE,
         "atarilynx" => ATARI_LYNX_SCREENSHOT_IMAGE_SIZE,
         _ => DEFAULT_SCREENSHOT_IMAGE_SIZE,
     }
@@ -304,7 +306,8 @@ mod tests {
     }
 
     #[test]
-    fn lynx_uses_native_screenshot_geometry() {
+    fn native_console_packs_use_their_own_screenshot_geometry() {
+        assert_eq!(preferred_screenshot_image_size("snes"), "256x224");
         assert_eq!(preferred_screenshot_image_size("atarilynx"), "160x102");
         assert_eq!(preferred_screenshot_image_size("saturn"), "320x320");
         assert_eq!(
