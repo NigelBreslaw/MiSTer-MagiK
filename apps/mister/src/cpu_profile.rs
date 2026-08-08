@@ -45,7 +45,7 @@ impl BoundedProfileTrigger {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
             Self::SettingsNavigationTransitions => {
-                "mister-magik-settings-navigation-transitions-pprof-v3"
+                "mister-magik-settings-navigation-transitions-pprof-v4"
             }
             Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",

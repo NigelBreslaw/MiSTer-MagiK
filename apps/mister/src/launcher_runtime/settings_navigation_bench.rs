@@ -9,6 +9,7 @@ use crate::launcher_runtime::navigation_transition::{
     NavigationTransitionDirection, NavigationTransitionRoute,
 };
 use crate::settings::ScreenOrientation;
+use mister_magik_latch_contract::PresentationTelemetry;
 use std::time::{Duration, Instant};
 
 const ROUTE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -89,6 +90,12 @@ impl BenchmarkButton {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsNavigationPresentationCapture {
+    pub telemetry: PresentationTelemetry,
+    pub captured_at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingsNavigationRecord {
     pub orientation: ScreenOrientation,
     pub leg: SettingsNavigationLeg,
@@ -96,6 +103,10 @@ pub struct SettingsNavigationRecord {
     pub rendered_endpoint_frame: u64,
     pub presented_endpoint_frame: u64,
     pub presented_sequence: u16,
+    pub presentation_start: Option<SettingsNavigationPresentationCapture>,
+    pub presentation_end: Option<SettingsNavigationPresentationCapture>,
+    pub presentation_elapsed_us: Option<u64>,
+    pub presentation_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -242,7 +253,30 @@ impl SettingsNavigationBenchmark {
             rendered_endpoint_frame: 0,
             presented_endpoint_frame: 0,
             presented_sequence: 0,
+            presentation_start: None,
+            presentation_end: None,
+            presentation_elapsed_us: None,
+            presentation_error: None,
         });
+    }
+
+    pub fn capture_presentation_start(
+        &mut self,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
+    ) {
+        let Some(active) = self.active.as_mut() else {
+            return;
+        };
+        match telemetry {
+            Ok(telemetry) => {
+                active.presentation_start = Some(SettingsNavigationPresentationCapture {
+                    telemetry,
+                    captured_at,
+                });
+            }
+            Err(error) => active.presentation_error = Some(error.to_string()),
+        }
     }
 
     pub fn note_rendered_endpoint(&mut self, frame: u64) {
@@ -256,6 +290,8 @@ impl SettingsNavigationBenchmark {
         screen: Screen,
         frame: u64,
         sequence: u16,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
     ) -> Option<SettingsNavigationRecord> {
         if !self.enabled || self.failed() {
             return None;
@@ -273,8 +309,30 @@ impl SettingsNavigationBenchmark {
         }
         active.presented_endpoint_frame = frame;
         active.presented_sequence = sequence;
+        match telemetry {
+            Ok(telemetry) => {
+                active.presentation_end = Some(SettingsNavigationPresentationCapture {
+                    telemetry,
+                    captured_at,
+                });
+                if let Some(start) = active.presentation_start {
+                    active.presentation_elapsed_us = Some(
+                        captured_at
+                            .saturating_duration_since(start.captured_at)
+                            .as_micros()
+                            .min(u128::from(u64::MAX)) as u64,
+                    );
+                } else {
+                    active.presentation_error =
+                        Some("presentation telemetry start was not captured".to_string());
+                }
+            }
+            Err(error) => {
+                active.presentation_error = Some(error.to_string());
+            }
+        }
         self.records.push(active);
-        Some(active)
+        self.records.last().cloned()
     }
 
     pub const fn active_leg(&self) -> u8 {
@@ -315,6 +373,18 @@ impl SettingsNavigationBenchmark {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn presentation_telemetry(count: u32) -> PresentationTelemetry {
+        PresentationTelemetry {
+            owned_vblank_count: count,
+            presented_vblank_count: count,
+            repeated_vblank_count: 0,
+            ownership_loss_count: 0,
+            active_sequence: u16::try_from(count).unwrap_or(u16::MAX),
+            flags: 1 << 3,
+            crc: 0,
+        }
+    }
 
     fn pressed(state: &PadState) -> &'static str {
         if state.dpad_up {
@@ -364,12 +434,22 @@ mod tests {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         let leg = SETTINGS_NAVIGATION_ROUTE[0];
         benchmark.note_started(leg.route, leg.direction, leg.source, leg.destination, 10);
+        let started_at = Instant::now();
+        benchmark.capture_presentation_start(started_at, Ok(presentation_telemetry(10)));
         assert_eq!(benchmark.active_leg(), 1);
         benchmark.note_rendered_endpoint(20);
         let record = benchmark
-            .note_confirmed_presentation(Screen::Settings, 21, 7)
+            .note_confirmed_presentation(
+                Screen::Settings,
+                21,
+                7,
+                started_at + Duration::from_millis(300),
+                Ok(presentation_telemetry(28)),
+            )
             .unwrap();
         assert_eq!(record.presented_sequence, 7);
+        assert_eq!(record.presentation_elapsed_us, Some(300_000));
+        assert!(record.presentation_error.is_none());
         assert_eq!(benchmark.records().len(), 1);
         assert!(!benchmark.failed());
     }
@@ -399,11 +479,18 @@ mod tests {
                 leg.destination,
                 index as u64 * 10,
             );
+            let started_at = Instant::now();
+            benchmark.capture_presentation_start(
+                started_at,
+                Ok(presentation_telemetry(index as u32 * 20)),
+            );
             benchmark.note_rendered_endpoint(index as u64 * 10 + 1);
             benchmark.note_confirmed_presentation(
                 leg.destination,
                 index as u64 * 10 + 2,
                 index as u16 + 1,
+                started_at + Duration::from_millis(300),
+                Ok(presentation_telemetry(index as u32 * 20 + 18)),
             );
         }
         assert!(!benchmark.complete());
@@ -429,11 +516,18 @@ mod tests {
                 leg.destination,
                 index as u64 * 10,
             );
+            let started_at = Instant::now();
+            benchmark.capture_presentation_start(
+                started_at,
+                Ok(presentation_telemetry(index as u32 * 20)),
+            );
             benchmark.note_rendered_endpoint(index as u64 * 10 + 1);
             benchmark.note_confirmed_presentation(
                 leg.destination,
                 index as u64 * 10 + 2,
                 index as u16 + 1,
+                started_at + Duration::from_millis(300),
+                Ok(presentation_telemetry(index as u32 * 20 + 18)),
             );
         }
         assert!(benchmark.complete());

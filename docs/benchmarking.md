@@ -58,12 +58,14 @@ Settings → Home route first in the normal 1280×720 landscape layout, then in
 the monitor-counterclockwise 720×1280 portrait-left layout, at physical
 `hdmi-1280x720p60`. The benchmark drives the production input path and waits
 for each endpoint's live frame to be physically confirmed before starting the
-next leg. Every leg
-independently requires zero protocol-v5 physical dropped frames and ownership
+next leg. Protocol-v5 presentation counters are captured in-process immediately
+before the first sliding frame and immediately after the endpoint's physical
+confirmation, so idle input, launcher handoff, and host-sampling time are not
+part of the cadence window. Every leg independently requires zero protocol-v5 physical dropped frames and ownership
 losses, zero latch drops and sequence gaps, continuous hidden-slot
 presentation, at least 59.9 physical FPS, whole-frame work P99 below 15,917 µs
 and maximum below 16,667 µs, plus no snapshot-lock, locked-Slint-raster, or
-status-writer violations. Qualification v3 also reports the synchronous frame
+status-writer violations. Qualification v4 also reports the synchronous frame
 production, render-start, ready-age, post-start, post-request, immediate latch
 receipt, completion-poll, and Rust-vsync observations for each leg. These are
 diagnostic timing fields; protocol-v5 counters remain the physical cadence

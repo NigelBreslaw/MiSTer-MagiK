@@ -62,6 +62,22 @@ fn settings_navigation_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
         .map(std::path::PathBuf::from)
 }
 
+fn settings_navigation_presentation_snapshot_json(
+    capture: SettingsNavigationPresentationCapture,
+) -> serde_json::Value {
+    let telemetry = capture.telemetry;
+    serde_json::json!({
+        "owned_vblank_count": telemetry.owned_vblank_count,
+        "presented_vblank_count": telemetry.presented_vblank_count,
+        "repeated_vblank_count": telemetry.repeated_vblank_count,
+        "ownership_loss_count": telemetry.ownership_loss_count,
+        "active_sequence": telemetry.active_sequence,
+        "magik_ownership": telemetry.magik_ownership(),
+        "pending": telemetry.pending(),
+        "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
+    })
+}
+
 fn write_settings_navigation_benchmark_completion(
     directory: &Path,
     benchmark: &SettingsNavigationBenchmark,
@@ -73,6 +89,12 @@ fn write_settings_navigation_benchmark_completion(
         .iter()
         .enumerate()
         .map(|(index, record)| {
+            let presentation_start = record
+                .presentation_start
+                .map(settings_navigation_presentation_snapshot_json);
+            let presentation_end = record
+                .presentation_end
+                .map(settings_navigation_presentation_snapshot_json);
             serde_json::json!({
                 "leg": index + 1,
                 "orientation": record.orientation.id(),
@@ -85,11 +107,19 @@ fn write_settings_navigation_benchmark_completion(
                 "rendered_endpoint_frame": record.rendered_endpoint_frame,
                 "presented_endpoint_frame": record.presented_endpoint_frame,
                 "presented_sequence": record.presented_sequence,
+                "presentation_window": {
+                    "schema": "mister-magik-settings-navigation-presentation-window-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "start": presentation_start,
+                    "end": presentation_end,
+                    "elapsed_us": record.presentation_elapsed_us,
+                    "error": record.presentation_error,
+                },
             })
         })
         .collect::<Vec<_>>();
     let document = serde_json::json!({
-        "schema": "mister-magik-settings-navigation-transition-v3",
+        "schema": "mister-magik-settings-navigation-transition-v4",
         "state": if benchmark.complete() { "complete" } else { "failed" },
         "failure": benchmark.failure(),
         "orientations": SETTINGS_NAVIGATION_ORIENTATIONS.map(ScreenOrientation::id),
@@ -4586,6 +4616,11 @@ pub(super) fn run_launcher_loop(
                                 nav.screen,
                                 frames,
                             );
+                            if settings_navigation_benchmark.enabled() {
+                                let telemetry = f.read_magik_presentation_telemetry();
+                                settings_navigation_benchmark
+                                    .capture_presentation_start(Instant::now(), telemetry);
+                            }
                             pending_navigation_transition = Some(PendingNavigationTransition {
                                 event: launcher::LauncherEvent {
                                     action: LauncherAction::NavigateBack,
@@ -7342,13 +7377,19 @@ pub(super) fn run_launcher_loop(
                         match owner {
                             Some(FullScreenTransitionOwner::Navigation) => {
                                 navigation_transition_generation = None;
-                                if let Some(record) = settings_navigation_benchmark
-                                    .note_confirmed_presentation(
+                                let benchmark_record = if settings_navigation_benchmark.enabled() {
+                                    let telemetry = f.read_magik_presentation_telemetry();
+                                    settings_navigation_benchmark.note_confirmed_presentation(
                                         nav.screen,
                                         frames,
                                         confirmed_present_sequence,
+                                        Instant::now(),
+                                        telemetry,
                                     )
-                                {
+                                } else {
+                                    None
+                                };
+                                if let Some(record) = benchmark_record {
                                     print_startup_event(
                                         start,
                                         "settings_navigation_benchmark_leg_completed",

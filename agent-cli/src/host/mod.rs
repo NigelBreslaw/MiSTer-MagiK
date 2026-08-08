@@ -6365,6 +6365,7 @@ const ORIENTATION_TRANSITION_LEGS_PER_EFFECT: usize = 6;
 const SETTINGS_NAVIGATION_REMOTE_DIR: &str = "/tmp/mister-magik/settings-navigation";
 const SETTINGS_NAVIGATION_TELEMETRY_SECS: u64 = 36;
 const SETTINGS_NAVIGATION_LEGS: usize = 12;
+const SETTINGS_NAVIGATION_REFRESH_PERIOD_US: u64 = 16_667;
 
 fn settings_navigation_launcher_env(pprof: bool) -> Vec<(String, String)> {
     let mut env_vars = vec![
@@ -6419,20 +6420,20 @@ fn run_installed_settings_navigation(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("settings-navigation-transition-v3")
+        .get("settings-navigation-transition-v4")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support settings-navigation-transition-v3".into());
+        return Err("installed app does not support settings-navigation-transition-v4".into());
     }
     if pprof
         && capability
-            .get("settings-navigation-transition-pprof-v3")
+            .get("settings-navigation-transition-pprof-v4")
             .and_then(Value::as_bool)
             != Some(true)
     {
         return Err(
-            "installed app does not support settings-navigation-transition-pprof-v3".into(),
+            "installed app does not support settings-navigation-transition-pprof-v4".into(),
         );
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
@@ -6543,7 +6544,7 @@ fn run_installed_settings_navigation(
             .ok_or("Settings navigation pprof completion is missing")?;
             let profile: Value = serde_json::from_str(profile_text.trim())?;
             if profile.get("schema").and_then(Value::as_str)
-                != Some("mister-magik-settings-navigation-transitions-pprof-v3")
+                != Some("mister-magik-settings-navigation-transitions-pprof-v4")
                 || profile.get("state").and_then(Value::as_str) != Some("complete")
                 || profile
                     .get("sample_hits")
@@ -7066,6 +7067,70 @@ fn orientation_bracketed_presentation_window(
     }))
 }
 
+fn settings_navigation_presentation_snapshot(
+    snapshot: &Value,
+) -> Option<HostPresentationTelemetrySnapshot> {
+    Some(HostPresentationTelemetrySnapshot {
+        captured_monotonic_us: 0,
+        owned_vblank_count: u32::try_from(snapshot.get("owned_vblank_count")?.as_u64()?).ok()?,
+        presented_vblank_count: u32::try_from(snapshot.get("presented_vblank_count")?.as_u64()?)
+            .ok()?,
+        repeated_vblank_count: u32::try_from(snapshot.get("repeated_vblank_count")?.as_u64()?)
+            .ok()?,
+        ownership_loss_count: u32::try_from(snapshot.get("ownership_loss_count")?.as_u64()?)
+            .ok()?,
+        magik_ownership: snapshot.get("magik_ownership")?.as_bool()?,
+        pending: snapshot.get("pending")?.as_bool()?,
+    })
+}
+
+fn settings_navigation_exact_presentation_window(record: &Value) -> Result<Value> {
+    let window = record
+        .get("presentation_window")
+        .ok_or("Settings navigation leg has no exact presentation window")?;
+    if window.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-settings-navigation-presentation-window-v1")
+        || window.get("source").and_then(Value::as_str) != Some("fpga-owned-vblank-telemetry")
+    {
+        return Err("Settings navigation leg has invalid presentation-window metadata".into());
+    }
+    if let Some(error) = window.get("error").and_then(Value::as_str) {
+        return Err(format!("Settings navigation presentation capture failed: {error}").into());
+    }
+    let start = window
+        .get("start")
+        .and_then(settings_navigation_presentation_snapshot)
+        .ok_or("Settings navigation leg has no presentation start snapshot")?;
+    let end = window
+        .get("end")
+        .and_then(settings_navigation_presentation_snapshot)
+        .ok_or("Settings navigation leg has no presentation end snapshot")?;
+    let elapsed_us = window
+        .get("elapsed_us")
+        .and_then(Value::as_u64)
+        .filter(|elapsed_us| *elapsed_us > 0)
+        .ok_or("Settings navigation leg has no presentation elapsed time")?;
+    let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
+        start,
+        end,
+        elapsed_us,
+        SETTINGS_NAVIGATION_REFRESH_PERIOD_US,
+    )
+    .map_err(|error| format!("Settings navigation presentation window is invalid: {error}"))?;
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v6",
+        "source": "fpga-owned-vblank-telemetry",
+        "boundary": "transition-start-to-confirmed-endpoint",
+        "elapsed_us": delta.elapsed_us,
+        "owned_vblank_delta": delta.owned_vblank_delta,
+        "presented_vblank_delta": delta.presented_vblank_delta,
+        "repeated_vblank_delta": delta.repeated_vblank_delta,
+        "ownership_loss_delta": delta.ownership_loss_delta,
+        "physical_fps": delta.presented_vblank_delta as f64 * 1_000_000.0
+            / delta.elapsed_us as f64,
+    }))
+}
+
 fn summarize_orientation_transition_qualification(
     telemetry: &[Value],
     completion: Value,
@@ -7255,7 +7320,7 @@ fn summarize_settings_navigation_qualification(
     profile: Option<&Value>,
 ) -> Result<Value> {
     if completion.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-settings-navigation-transition-v3")
+        != Some("mister-magik-settings-navigation-transition-v4")
         || completion.get("state").and_then(Value::as_str) != Some("complete")
         || completion
             .get("orientations")
@@ -7396,9 +7461,7 @@ fn summarize_settings_navigation_qualification(
                 "max_us": values.last().copied().unwrap_or(0),
             })
         };
-        let first_us = frame_u64(selected[0], "completion_monotonic_us");
-        let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
-        let protocol = orientation_bracketed_presentation_window(telemetry, first_us, last_us)?;
+        let protocol = settings_navigation_exact_presentation_window(record)?;
         let sequence_gaps = selected
             .windows(2)
             .filter(|pair| {
@@ -7573,7 +7636,7 @@ fn summarize_settings_navigation_qualification(
     }
     let profiler_enabled = profile.is_some();
     Ok(json!({
-        "schema": "mister-magik-settings-navigation-qualification-v3",
+        "schema": "mister-magik-settings-navigation-qualification-v4",
         "scenario": if profiler_enabled {
             "settings-navigation-pprof"
         } else {
@@ -17924,12 +17987,34 @@ H: Handlers=event3 js0"#
                 "rendered_endpoint_frame": index * 10 + 2,
                 "presented_endpoint_frame": index * 10 + 3,
                 "presented_sequence": sequence + 2,
+                "presentation_window": {
+                    "schema": "mister-magik-settings-navigation-presentation-window-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "start": {
+                        "owned_vblank_count": presented,
+                        "presented_vblank_count": presented,
+                        "repeated_vblank_count": 0,
+                        "ownership_loss_count": 0,
+                        "magik_ownership": true,
+                        "pending": false,
+                    },
+                    "end": {
+                        "owned_vblank_count": presented + 18,
+                        "presented_vblank_count": presented + 18,
+                        "repeated_vblank_count": 0,
+                        "ownership_loss_count": 0,
+                        "magik_ownership": true,
+                        "pending": false,
+                    },
+                    "elapsed_us": 300_006,
+                    "error": null,
+                },
             }));
         }
         (
             telemetry,
             json!({
-                "schema": "mister-magik-settings-navigation-transition-v3",
+                "schema": "mister-magik-settings-navigation-transition-v4",
                 "state": "complete",
                 "orientations": ["normal", "monitor-counterclockwise"],
                 "route": ["home", "settings", "about", "info", "about", "settings", "home", "settings", "about", "info", "about", "settings", "home"],
@@ -17945,6 +18030,10 @@ H: Handlers=event3 js0"#
             .expect("fixture should qualify");
         assert_eq!(summary["status"], "passed");
         assert_eq!(summary["cadence_authoritative"], true);
+        assert_eq!(
+            summary["legs"][0]["protocol_v5"]["boundary"],
+            "transition-start-to-confirmed-endpoint"
+        );
         assert_eq!(summary["legs"][0]["synchronous_frame_production"], true);
         assert_eq!(
             summary["legs"][0]["phase_timing"]["render_wall_us"]["median_us"],
@@ -17998,6 +18087,20 @@ H: Handlers=event3 js0"#
             summary["legs"][0]["failure"],
             "insufficient-frame-telemetry"
         );
+    }
+
+    #[test]
+    fn settings_navigation_qualification_requires_exact_presentation_windows() {
+        let (telemetry, mut completion) = settings_navigation_qualification_fixture();
+        completion["records"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("presentation_window");
+        assert!(summarize_settings_navigation_qualification(&telemetry, completion, None).is_err());
+
+        let (telemetry, mut completion) = settings_navigation_qualification_fixture();
+        completion["schema"] = json!("mister-magik-settings-navigation-transition-v3");
+        assert!(summarize_settings_navigation_qualification(&telemetry, completion, None).is_err());
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
