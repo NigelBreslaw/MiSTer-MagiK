@@ -63,7 +63,11 @@ independently requires zero protocol-v5 physical dropped frames and ownership
 losses, zero latch drops and sequence gaps, continuous hidden-slot
 presentation, at least 59.9 physical FPS, whole-frame work P99 below 15,917 µs
 and maximum below 16,667 µs, plus no snapshot-lock, locked-Slint-raster, or
-status-writer violations.
+status-writer violations. Qualification v3 also reports the synchronous frame
+production, render-start, ready-age, post-start, post-request, immediate latch
+receipt, completion-poll, and Rust-vsync observations for each leg. These are
+diagnostic timing fields; protocol-v5 counters remain the physical cadence
+authority.
 
 The matching `settings-navigation-pprof` scenario executes all twelve directed
 legs at 999 Hz sampling and retains one route-level flamegraph and folded-stack

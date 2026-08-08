@@ -89,7 +89,7 @@ fn write_settings_navigation_benchmark_completion(
         })
         .collect::<Vec<_>>();
     let document = serde_json::json!({
-        "schema": "mister-magik-settings-navigation-transition-v2",
+        "schema": "mister-magik-settings-navigation-transition-v3",
         "state": if benchmark.complete() { "complete" } else { "failed" },
         "failure": benchmark.failure(),
         "orientations": SETTINGS_NAVIGATION_ORIENTATIONS.map(ScreenOrientation::id),
@@ -1487,6 +1487,20 @@ fn home_frame_driven_redraw_active(
     home_horizontal_input_held: bool,
 ) -> bool {
     screen == Screen::Home && (home_pan_present_active || home_horizontal_input_held)
+}
+
+fn frame_production_class(
+    screensaver_active: bool,
+    home_motion_active: bool,
+    navigation_transition_active: bool,
+) -> FrameProductionClass {
+    if screensaver_active {
+        FrameProductionClass::Prepared
+    } else if home_motion_active || navigation_transition_active {
+        FrameProductionClass::SynchronousAnimation
+    } else {
+        FrameProductionClass::EventDriven
+    }
 }
 
 fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active: bool) -> bool {
@@ -6087,6 +6101,7 @@ pub(super) fn run_launcher_loop(
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
         let mut frame_production_trace = FrameProductionTrace::default();
+        let mut frame_production_completed_at = None;
         let mut screensaver_render_trace = ScreensaverRenderTrace::default();
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
@@ -6172,16 +6187,11 @@ pub(super) fn run_launcher_loop(
                         screensaver_render_sequence = frame.sequence;
                         frame_production_trace.class = FrameProductionClass::Prepared;
                         frame_production_trace.sequence = frame.sequence;
+                        frame_production_completed_at = Some(frame.completed_at);
                         frame_production_trace.ready_depth = screensaver_pipeline
                             .as_ref()
                             .map(ScreensaverRenderAhead::ready_depth)
                             .unwrap_or(0);
-                        frame_production_trace.ready_age_us = frame
-                            .completed_at
-                            .elapsed()
-                            .as_micros()
-                            .try_into()
-                            .unwrap_or(u64::MAX);
                         frame_production_trace.render_wall_us = frame.render_wall_us;
                         screensaver_active_cards = frame.active_cards;
                         screensaver_frame_visible = true;
@@ -6262,15 +6272,15 @@ pub(super) fn run_launcher_loop(
         }
         if screensaver.active {
             frame_production_trace.class = FrameProductionClass::Prepared;
+            frame_production_trace.sequence = screensaver_render_sequence;
+            frame_production_trace.ready_depth = screensaver_pipeline
+                .as_ref()
+                .map(ScreensaverRenderAhead::ready_depth)
+                .unwrap_or(0);
+            frame_production_trace.starvation_count = screensaver_starvation_count;
+            frame_production_trace.cancelled =
+                screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         }
-        frame_production_trace.sequence = screensaver_render_sequence;
-        frame_production_trace.ready_depth = screensaver_pipeline
-            .as_ref()
-            .map(ScreensaverRenderAhead::ready_depth)
-            .unwrap_or(0);
-        frame_production_trace.starvation_count = screensaver_starvation_count;
-        frame_production_trace.cancelled =
-            screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
@@ -6597,12 +6607,31 @@ pub(super) fn run_launcher_loop(
             if render_transition_frame {
                 let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
+                    let mut direct_render_timing = None;
                     match launcher_presenter.try_render_direct_hidden_frame(
                         f,
                         display_session,
-                        |pixels| navigation_transition.render_into(pixels).is_ok(),
+                        |pixels| {
+                            let started = Instant::now();
+                            let start_phase_us = pacer.age_since_last_hit_us(started);
+                            let rendered = navigation_transition.render_into(pixels).is_ok();
+                            direct_render_timing = Some((started, Instant::now(), start_phase_us));
+                            rendered
+                        },
                     ) {
                         Ok(Some(completed)) => {
+                            let (direct_render_started, direct_render_completed, start_phase_us) =
+                                direct_render_timing.expect("successful direct render was timed");
+                            frame_production_trace.class =
+                                FrameProductionClass::SynchronousAnimation;
+                            frame_production_trace.sequence = completed.grant.generation;
+                            frame_production_trace.render_start_phase_us = start_phase_us;
+                            frame_production_trace.render_wall_us = direct_render_completed
+                                .saturating_duration_since(direct_render_started)
+                                .as_micros()
+                                .try_into()
+                                .unwrap_or(u64::MAX);
+                            frame_production_completed_at = Some(direct_render_completed);
                             completed_hidden_frame_for_present = Some(completed);
                             rendered_direct = true;
                         }
@@ -6917,6 +6946,11 @@ pub(super) fn run_launcher_loop(
             || navigation_transition_composition_active;
         let direct_hidden_present_mode =
             startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
+        frame_production_trace.class = frame_production_class(
+            screensaver.active,
+            home_motion_active,
+            navigation_transition_frame_active,
+        );
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -6947,6 +6981,13 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        if let Some(completed_at) = frame_production_completed_at {
+            frame_production_trace.ready_age_us = frame_t3
+                .saturating_duration_since(completed_at)
+                .as_micros()
+                .try_into()
+                .unwrap_or(u64::MAX);
+        }
         if let Some(frame_started) = navigation_transition_frame_started {
             navigation_transition.note_frame_work_us(
                 frame_started.elapsed().as_micros().min(u64::MAX as u128) as u64,
@@ -11454,6 +11495,26 @@ mod tests {
             true,
             true
         ));
+    }
+
+    #[test]
+    pub(super) fn frame_production_class_distinguishes_prepared_and_synchronous_frames() {
+        assert_eq!(
+            frame_production_class(false, false, false),
+            FrameProductionClass::EventDriven
+        );
+        assert_eq!(
+            frame_production_class(false, true, false),
+            FrameProductionClass::SynchronousAnimation
+        );
+        assert_eq!(
+            frame_production_class(false, false, true),
+            FrameProductionClass::SynchronousAnimation
+        );
+        assert_eq!(
+            frame_production_class(true, true, true),
+            FrameProductionClass::Prepared
+        );
     }
 
     #[test]

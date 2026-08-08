@@ -246,6 +246,9 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) set_supported: bool,
     pub(in crate::ui_runner) status_supported: bool,
     pub(in crate::ui_runner) posted_sequence: u16,
+    pub(in crate::ui_runner) post_active_sequence: u16,
+    pub(in crate::ui_runner) post_pending_sequence: u16,
+    pub(in crate::ui_runner) post_pending: bool,
     /// Includes the initial observation; values above one recovered a transient gap.
     pub(in crate::ui_runner) post_status_reads: u8,
     /// Physical GET attempts, including the one permitted transport retry per logical read.
@@ -520,6 +523,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             set_supported: receipt.set_supported,
             status_supported: receipt.status_supported,
             posted_sequence: sequence,
+            post_active_sequence: after_status.active_sequence,
+            post_pending_sequence: after_status.pending_sequence,
+            post_pending: after_status.pending(),
             post_status_reads: receipt.status_reads,
             post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count: after_status.flip_count,
@@ -750,6 +756,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             set_supported: receipt.set_supported,
             status_supported: receipt.status_supported,
             posted_sequence: sequence,
+            post_active_sequence: after_status.active_sequence,
+            post_pending_sequence: after_status.pending_sequence,
+            post_pending: after_status.pending(),
             post_status_reads: receipt.status_reads,
             post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count,
@@ -1618,6 +1627,9 @@ mod tests {
             .unwrap();
         assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
         assert_eq!(stats.copied_bytes, 0);
+        assert!(stats.post_pending);
+        assert_eq!(stats.post_pending_sequence, stats.posted_sequence);
+        assert_ne!(stats.post_active_sequence, stats.posted_sequence);
         assert_eq!(hardware.post_bases, vec![BASE2]);
         assert!(
             presenter

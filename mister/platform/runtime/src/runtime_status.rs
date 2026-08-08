@@ -305,9 +305,15 @@ pub struct FrameBudgetRecentFrame {
     pub vsync_stale_hits: u32,
     pub vsync_wait_start_age_us: u64,
     pub vsync_accepted_hit_age_us: u64,
+    pub frame_start_phase_us: u64,
+    pub present_phase_us: u64,
     pub main_present_status: &'static str,
     pub main_present_copy_path: &'static str,
+    pub main_present_request_us: u64,
     pub main_present_sequence: u16,
+    pub main_present_post_active_sequence: u16,
+    pub main_present_post_pending_sequence: u16,
+    pub main_present_post_pending: bool,
     pub main_present_active_sequence: u16,
     pub main_present_pending: bool,
     pub main_present_completion_poll_count: u16,
@@ -341,6 +347,7 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_phase_bank_bytes: u64,
     pub frame_production_class: &'static str,
     pub frame_production_sequence: u64,
+    pub frame_production_render_start_phase_us: u64,
     pub frame_production_ready_depth: u64,
     pub frame_production_ready_age_us: u64,
     pub frame_production_render_wall_us: u64,
@@ -1367,9 +1374,21 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     field!("vsync_stale_hits", frame.vsync_stale_hits);
     field!("vsync_wait_start_age_us", frame.vsync_wait_start_age_us);
     field!("vsync_accepted_hit_age_us", frame.vsync_accepted_hit_age_us);
+    field!("frame_start_phase_us", frame.frame_start_phase_us);
+    field!("present_phase_us", frame.present_phase_us);
     field!("main_present_status", frame.main_present_status);
     field!("main_present_copy_path", frame.main_present_copy_path);
+    field!("main_present_request_us", frame.main_present_request_us);
     field!("main_present_sequence", frame.main_present_sequence);
+    field!(
+        "main_present_post_active_sequence",
+        frame.main_present_post_active_sequence
+    );
+    field!(
+        "main_present_post_pending_sequence",
+        frame.main_present_post_pending_sequence
+    );
+    field!("main_present_post_pending", frame.main_present_post_pending);
     field!(
         "main_present_active_sequence",
         frame.main_present_active_sequence
@@ -1435,6 +1454,10 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
     );
     field!("frame_production_class", frame.frame_production_class);
     field!("frame_production_sequence", frame.frame_production_sequence);
+    field!(
+        "frame_production_render_start_phase_us",
+        frame.frame_production_render_start_phase_us
+    );
     field!(
         "frame_production_ready_depth",
         frame.frame_production_ready_depth
@@ -1834,8 +1857,14 @@ mod tests {
                         vsync_source: "vsync",
                         vsync_period_us: 16_667,
                         vsync_miss_streak: 1,
+                        frame_start_phase_us: 2_500,
+                        present_phase_us: 9_500,
                         main_present_status: "ok",
+                        main_present_request_us: 500,
                         main_present_sequence: 17,
+                        main_present_post_active_sequence: 16,
+                        main_present_post_pending_sequence: 17,
+                        main_present_post_pending: true,
                         main_present_active_sequence: 17,
                         main_present_flip_count: 18,
                         status_write_due: true,
@@ -1848,6 +1877,7 @@ mod tests {
                         screensaver_raster_visible_layer_mask: 3,
                         frame_production_class: "prepared",
                         frame_production_sequence: 99,
+                        frame_production_render_start_phase_us: 3_250,
                         frame_production_ready_depth: 2,
                         frame_production_ready_age_us: 400,
                         frame_production_render_wall_us: 4_500,
@@ -1934,6 +1964,14 @@ mod tests {
             17
         );
         assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["main_present_post_pending_sequence"],
+            17
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["main_present_post_pending"],
+            true
+        );
+        assert_eq!(
             value["frame_budget"]["recent_frames"][0]["runtime_status_write_us"],
             321
         );
@@ -1952,6 +1990,10 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["frame_production_sequence"],
             99
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["frame_production_render_start_phase_us"],
+            3_250
         );
         assert!(
             value["frame_budget"]["recent_frames"][0]

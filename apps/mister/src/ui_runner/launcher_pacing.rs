@@ -26,6 +26,7 @@ impl FrameProductionClass {
 pub(super) struct FrameProductionTrace {
     pub(super) class: FrameProductionClass,
     pub(super) sequence: u64,
+    pub(super) render_start_phase_us: u64,
     pub(super) ready_depth: usize,
     pub(super) ready_age_us: u64,
     pub(super) render_wall_us: u64,

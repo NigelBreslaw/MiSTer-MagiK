@@ -444,7 +444,7 @@ fn execute_settings_navigation(
     let detail = device.profile(profile, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-settings-navigation-qualification-v2")
+        != Some("mister-magik-settings-navigation-qualification-v3")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary
             .get("orientations")

@@ -6419,20 +6419,20 @@ fn run_installed_settings_navigation(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("settings-navigation-transition-v2")
+        .get("settings-navigation-transition-v3")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support settings-navigation-transition-v2".into());
+        return Err("installed app does not support settings-navigation-transition-v3".into());
     }
     if pprof
         && capability
-            .get("settings-navigation-transition-pprof-v2")
+            .get("settings-navigation-transition-pprof-v3")
             .and_then(Value::as_bool)
             != Some(true)
     {
         return Err(
-            "installed app does not support settings-navigation-transition-pprof-v2".into(),
+            "installed app does not support settings-navigation-transition-pprof-v3".into(),
         );
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
@@ -6543,7 +6543,7 @@ fn run_installed_settings_navigation(
             .ok_or("Settings navigation pprof completion is missing")?;
             let profile: Value = serde_json::from_str(profile_text.trim())?;
             if profile.get("schema").and_then(Value::as_str)
-                != Some("mister-magik-settings-navigation-transitions-pprof-v2")
+                != Some("mister-magik-settings-navigation-transitions-pprof-v3")
                 || profile.get("state").and_then(Value::as_str) != Some("complete")
                 || profile
                     .get("sample_hits")
@@ -7255,7 +7255,7 @@ fn summarize_settings_navigation_qualification(
     profile: Option<&Value>,
 ) -> Result<Value> {
     if completion.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-settings-navigation-transition-v2")
+        != Some("mister-magik-settings-navigation-transition-v3")
         || completion.get("state").and_then(Value::as_str) != Some("complete")
         || completion
             .get("orientations")
@@ -7376,9 +7376,26 @@ fn summarize_settings_navigation_qualification(
                 "locked_slint_render_calls": Value::Null,
                 "status_worker_overlap_frames": Value::Null,
                 "status_submission_frames": Value::Null,
+                "synchronous_frame_production": Value::Null,
+                "physical_dropped_frames": Value::Null,
+                "post_receipt": Value::Null,
+                "vsync_observation": Value::Null,
+                "phase_timing": Value::Null,
             }));
             continue;
         }
+        let timing_summary = |key: &str| {
+            let mut values = selected
+                .iter()
+                .map(|frame| frame_u64(frame, key))
+                .collect::<Vec<_>>();
+            values.sort_unstable();
+            json!({
+                "median_us": median_u64(&values),
+                "p99_us": percentile_99(&values),
+                "max_us": values.last().copied().unwrap_or(0),
+            })
+        };
         let first_us = frame_u64(selected[0], "completion_monotonic_us");
         let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
         let protocol = orientation_bracketed_presentation_window(telemetry, first_us, last_us)?;
@@ -7398,6 +7415,47 @@ fn summarize_settings_navigation_qualification(
                 && frame_u64(frame, "main_present_sequence")
                     == frame_u64(frame, "main_present_active_sequence")
         });
+        let synchronous_frame_production = selected.iter().all(|frame| {
+            frame.get("frame_production_class").and_then(Value::as_str)
+                == Some("synchronous-animation")
+        });
+        let post_receipt_pending_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("main_present_post_pending")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                    && frame_u64(frame, "main_present_post_pending_sequence")
+                        == frame_u64(frame, "main_present_sequence")
+            })
+            .count();
+        let post_receipt_active_frames = selected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .get("main_present_post_pending")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                    && frame_u64(frame, "main_present_post_active_sequence")
+                        == frame_u64(frame, "main_present_sequence")
+            })
+            .count();
+        let post_receipt_unobserved_frames = selected
+            .len()
+            .saturating_sub(post_receipt_pending_frames + post_receipt_active_frames);
+        let direct_vsync_frames = selected
+            .iter()
+            .filter(|frame| frame.get("vsync_source").and_then(Value::as_str) == Some("vsync"))
+            .count();
+        let stale_vsync_frames = selected
+            .iter()
+            .filter(|frame| frame_u64(frame, "vsync_stale_hits") > 0)
+            .count();
+        let vsync_miss_frames = selected
+            .iter()
+            .filter(|frame| frame_u64(frame, "vsync_miss_streak") > 0)
+            .count();
         let snapshot_lock_violations = selected
             .iter()
             .filter(|frame| {
@@ -7448,11 +7506,15 @@ fn summarize_settings_navigation_qualification(
         let p99_us = percentile_99(&whole_frame_work);
         let max_us = whole_frame_work.last().copied().unwrap_or(0);
         let physical_fps = protocol["physical_fps"].as_f64().unwrap_or(0.0);
+        let physical_dropped_frames = protocol["repeated_vblank_delta"]
+            .as_u64()
+            .unwrap_or(u64::MAX);
         let passed = protocol["repeated_vblank_delta"].as_u64() == Some(0)
             && protocol["ownership_loss_delta"].as_u64() == Some(0)
             && latch_drop_delta == 0
             && sequence_gaps == 0
             && continuous_hidden
+            && synchronous_frame_production
             && physical_fps >= 59.9
             && p99_us < 15_917
             && max_us < 16_667
@@ -7472,6 +7534,7 @@ fn summarize_settings_navigation_qualification(
             "frames": selected.len(),
             "passed": passed,
             "protocol_v5": protocol,
+            "physical_dropped_frames": physical_dropped_frames,
             "latch_drop_delta": latch_drop_delta,
             "sequence_gaps": sequence_gaps,
             "continuous_hidden_slot_presentation": continuous_hidden,
@@ -7486,11 +7549,31 @@ fn summarize_settings_navigation_qualification(
             "locked_slint_render_calls": locked_slint_render_calls,
             "status_worker_overlap_frames": status_worker_overlap_frames,
             "status_submission_frames": status_submission_frames,
+            "synchronous_frame_production": synchronous_frame_production,
+            "post_receipt": {
+                "already_active_frames": post_receipt_active_frames,
+                "pending_frames": post_receipt_pending_frames,
+                "unobserved_frames": post_receipt_unobserved_frames,
+            },
+            "vsync_observation": {
+                "direct_frames": direct_vsync_frames,
+                "stale_frames": stale_vsync_frames,
+                "miss_frames": vsync_miss_frames,
+            },
+            "phase_timing": {
+                "frame_start_phase_us": timing_summary("frame_start_phase_us"),
+                "render_start_phase_us": timing_summary("frame_production_render_start_phase_us"),
+                "render_wall_us": timing_summary("frame_production_render_wall_us"),
+                "ready_age_us": timing_summary("frame_production_ready_age_us"),
+                "post_start_phase_us": timing_summary("present_phase_us"),
+                "post_request_us": timing_summary("main_present_request_us"),
+                "completion_poll_us": timing_summary("main_present_completion_poll_wall_us"),
+            },
         }));
     }
     let profiler_enabled = profile.is_some();
     Ok(json!({
-        "schema": "mister-magik-settings-navigation-qualification-v2",
+        "schema": "mister-magik-settings-navigation-qualification-v3",
         "scenario": if profiler_enabled {
             "settings-navigation-pprof"
         } else {
@@ -10068,7 +10151,12 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "vsync_stale_hits",
         "vsync_wait_start_age_us",
         "vsync_accepted_hit_age_us",
+        "frame_start_phase_us",
+        "present_phase_us",
         "main_present_sequence",
+        "main_present_request_us",
+        "main_present_post_active_sequence",
+        "main_present_post_pending_sequence",
         "main_present_active_sequence",
         "main_present_hidden_copy_us",
         "main_present_flip_count",
@@ -10093,6 +10181,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_hold_layer_mask",
         "screensaver_raster_visible_layer_mask",
         "frame_production_sequence",
+        "frame_production_render_start_phase_us",
         "frame_production_ready_depth",
         "frame_production_ready_age_us",
         "frame_production_render_wall_us",
@@ -10101,6 +10190,7 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
         "main_present_pending",
+        "main_present_post_pending",
         "status_write_due",
         "clock_update_due",
         "frame_production_cancelled",
@@ -16820,9 +16910,15 @@ H: Handlers=event3 js0"#
                 "vsync_stale_hits": 0,
                 "vsync_wait_start_age_us": 0,
                 "vsync_accepted_hit_age_us": 0,
+                "frame_start_phase_us": 0,
+                "present_phase_us": 0,
                 "vsync_source": "vsync",
                 "main_present_status": "ok",
                 "main_present_sequence": id,
+                "main_present_request_us": 400,
+                "main_present_post_active_sequence": id,
+                "main_present_post_pending_sequence": 0,
+                "main_present_post_pending": false,
                 "main_present_active_sequence": id,
                 "main_present_pending": false,
                 "main_present_hidden_copy_us": 1_500,
@@ -16858,6 +16954,7 @@ H: Handlers=event3 js0"#
                 );
             frame["frame_production_class"] = json!("prepared");
             frame["frame_production_sequence"] = json!(id);
+            frame["frame_production_render_start_phase_us"] = json!(0);
             frame["frame_production_ready_depth"] = json!(1);
             frame["frame_production_ready_age_us"] = json!(400);
             frame["frame_production_render_wall_us"] = json!(4_500);
@@ -17773,8 +17870,23 @@ H: Handlers=event3 js0"#
                     "main_present_status": "ok",
                     "main_present_copy_path": "identity-full",
                     "main_present_sequence": sequence,
+                    "main_present_post_active_sequence": if id % 2 == 0 { 0 } else { sequence },
+                    "main_present_post_pending_sequence": if id % 2 == 0 { sequence } else { 0 },
+                    "main_present_post_pending": id % 2 == 0,
                     "main_present_active_sequence": sequence,
+                    "main_present_request_us": 800,
+                    "main_present_completion_poll_wall_us": 500,
                     "main_present_drop_count": 0,
+                    "frame_production_class": "synchronous-animation",
+                    "frame_production_sequence": sequence,
+                    "frame_production_render_start_phase_us": 4_000,
+                    "frame_production_render_wall_us": 5_000,
+                    "frame_production_ready_age_us": 100,
+                    "frame_start_phase_us": 3_000,
+                    "present_phase_us": 10_000,
+                    "vsync_source": "vsync",
+                    "vsync_stale_hits": 0,
+                    "vsync_miss_streak": 0,
                     "wall_us": 15_000,
                     "vsync_us": 5_000,
                     "process_cpu_us": 4_000,
@@ -17817,7 +17929,7 @@ H: Handlers=event3 js0"#
         (
             telemetry,
             json!({
-                "schema": "mister-magik-settings-navigation-transition-v2",
+                "schema": "mister-magik-settings-navigation-transition-v3",
                 "state": "complete",
                 "orientations": ["normal", "monitor-counterclockwise"],
                 "route": ["home", "settings", "about", "info", "about", "settings", "home", "settings", "about", "info", "about", "settings", "home"],
@@ -17833,6 +17945,16 @@ H: Handlers=event3 js0"#
             .expect("fixture should qualify");
         assert_eq!(summary["status"], "passed");
         assert_eq!(summary["cadence_authoritative"], true);
+        assert_eq!(summary["legs"][0]["synchronous_frame_production"], true);
+        assert_eq!(
+            summary["legs"][0]["phase_timing"]["render_wall_us"]["median_us"],
+            5_000
+        );
+        assert_eq!(
+            summary["legs"][0]["post_receipt"]["already_active_frames"],
+            1
+        );
+        assert_eq!(summary["legs"][0]["post_receipt"]["pending_frames"], 1);
         assert_eq!(
             summary["legs"].as_array().unwrap().len(),
             SETTINGS_NAVIGATION_LEGS
