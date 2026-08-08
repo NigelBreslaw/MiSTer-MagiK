@@ -12,3 +12,4 @@ pub mod navigation_transition;
 pub mod orientation_transition;
 pub mod orientation_transition_bench;
 pub mod settings;
+pub mod settings_navigation_bench;

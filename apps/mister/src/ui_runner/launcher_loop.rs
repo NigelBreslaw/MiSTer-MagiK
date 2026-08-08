@@ -47,11 +47,60 @@ const MODAL_INPUT_TEST_PATH_ENVS: &[&str] = &[
 ];
 const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
     "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR";
+const SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV: &str = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR";
 
 fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
         .filter(|value| !value.is_empty())
         .map(std::path::PathBuf::from)
+}
+
+fn settings_navigation_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os(SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+fn write_settings_navigation_benchmark_completion(
+    directory: &Path,
+    benchmark: &SettingsNavigationBenchmark,
+    frames: u64,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)?;
+    let records = benchmark
+        .records()
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            serde_json::json!({
+                "leg": index + 1,
+                "route": record.leg.route.label(),
+                "renderer": record.leg.route.renderer(),
+                "direction": record.leg.direction.label(),
+                "source": screen_label(record.leg.source),
+                "destination": screen_label(record.leg.destination),
+                "start_frame": record.start_frame,
+                "rendered_endpoint_frame": record.rendered_endpoint_frame,
+                "presented_endpoint_frame": record.presented_endpoint_frame,
+                "presented_sequence": record.presented_sequence,
+            })
+        })
+        .collect::<Vec<_>>();
+    let document = serde_json::json!({
+        "schema": "mister-magik-settings-navigation-transition-v1",
+        "state": if benchmark.complete() { "complete" } else { "failed" },
+        "failure": benchmark.failure(),
+        "orientation": benchmark.orientation().id(),
+        "frames": frames,
+        "route": ["home", "settings", "about", "info", "about", "settings", "home"],
+        "records": records,
+    });
+    let temporary = directory.join("completion.json.tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(&document).map_err(std::io::Error::other)?,
+    )?;
+    std::fs::rename(temporary, directory.join("completion.json"))
 }
 
 fn write_orientation_transition_benchmark_completion(
@@ -419,12 +468,33 @@ fn navigation_transition_for_intent(
     }
 }
 
-fn settings_page_transition_direction(
+fn settings_page_transition(
     source: Screen,
     destination: Screen,
-) -> Option<NavigationTransitionDirection> {
+) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
     let source_depth = settings_page_depth(source)?;
     let destination_depth = settings_page_depth(destination)?;
+    let route = match (source, destination) {
+        (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
+            Some(NavigationTransitionRoute::HomeToSettings)
+        }
+        (Screen::Settings, Screen::Screensaver) | (Screen::Screensaver, Screen::Settings) => {
+            Some(NavigationTransitionRoute::SettingsToScreensaver)
+        }
+        (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
+            Some(NavigationTransitionRoute::SettingsToAbout)
+        }
+        (Screen::About, Screen::Info) | (Screen::Info, Screen::About) => {
+            Some(NavigationTransitionRoute::AboutToInfo)
+        }
+        (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
+            Some(NavigationTransitionRoute::AboutToLicenses)
+        }
+        (source, Screen::Home) if source != Screen::Home => {
+            Some(NavigationTransitionRoute::NestedToHome)
+        }
+        _ => None,
+    }?;
     let adjacent = matches!(
         (source, destination),
         (Screen::Home, Screen::Settings)
@@ -435,11 +505,14 @@ fn settings_page_transition_direction(
             | (Screen::Info | Screen::Licenses, Screen::About)
     );
     let direct_home = source != Screen::Home && destination == Screen::Home;
-    (adjacent || direct_home).then_some(if destination_depth > source_depth {
-        NavigationTransitionDirection::Forward
-    } else {
-        NavigationTransitionDirection::Reverse
-    })
+    (adjacent || direct_home).then_some((
+        route,
+        if destination_depth > source_depth {
+            NavigationTransitionDirection::Forward
+        } else {
+            NavigationTransitionDirection::Reverse
+        },
+    ))
 }
 
 const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -2289,6 +2362,26 @@ pub(super) fn run_launcher_loop(
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let orientation_benchmark_enabled =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
+    let settings_navigation_benchmark_enabled =
+        launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
+    let settings_navigation_orientation = std::env::var("MISTER_SETTINGS_NAVIGATION_ORIENTATION")
+        .ok()
+        .as_deref()
+        .and_then(ScreenOrientation::parse)
+        .filter(|orientation| {
+            matches!(
+                orientation,
+                ScreenOrientation::Normal | ScreenOrientation::MonitorCounterclockwise
+            )
+        });
+    let mut settings_navigation_benchmark = SettingsNavigationBenchmark::new(
+        settings_navigation_benchmark_enabled,
+        settings_navigation_orientation.unwrap_or(ScreenOrientation::Normal),
+    );
+    if settings_navigation_benchmark_enabled && settings_navigation_orientation.is_none() {
+        settings_navigation_benchmark.fail("benchmark-orientation-is-missing-or-invalid");
+    }
+    let mut settings_navigation_benchmark_completed_at = None;
     let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
         .ok()
         .as_deref()
@@ -2326,7 +2419,9 @@ pub(super) fn run_launcher_loop(
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
     let media_benchmark_contention = media_benchmark_contention_enabled();
     let benchmark_media_interaction_active = benchmark_media_interaction_gate_active(
-        launcher_bench_scenario.is_some() || orientation_benchmark.enabled(),
+        launcher_bench_scenario.is_some()
+            || orientation_benchmark.enabled()
+            || settings_navigation_benchmark.enabled(),
         media_benchmark_contention,
     );
     let env_start_screen = launcher_start_screen_from_env();
@@ -2338,6 +2433,11 @@ pub(super) fn run_launcher_loop(
     let start_screen = orientation_benchmark
         .enabled()
         .then_some(Screen::Settings)
+        .or_else(|| {
+            settings_navigation_benchmark
+                .enabled()
+                .then_some(Screen::Home)
+        })
         .or_else(|| latch_v5_qualification.enabled().then_some(Screen::Arcade))
         .or(env_start_screen)
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
@@ -2377,6 +2477,10 @@ pub(super) fn run_launcher_loop(
     nav.settings = settings_store.load();
     if orientation_benchmark.enabled() {
         nav.settings.screen_orientation = ScreenOrientation::Normal;
+        nav.settings.reduce_motion = false;
+    }
+    if settings_navigation_benchmark.enabled() {
+        nav.settings.screen_orientation = settings_navigation_benchmark.orientation();
         nav.settings.reduce_motion = false;
     }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
@@ -4220,7 +4324,10 @@ pub(super) fn run_launcher_loop(
             let active_idx = pad.active_idx();
             let info = pad.info();
 
-            if launcher_bench_scenario.is_none() && setup.is_active() {
+            if launcher_bench_scenario.is_none()
+                && !settings_navigation_benchmark.enabled()
+                && setup.is_active()
+            {
                 let setup_before = SetupBridgeKey::from_setup(&setup);
                 let setup_info = pad.info_at(setup.target_pad_idx);
                 match setup.handle_input(&setup_state, frame_now, setup_info, pad.db()) {
@@ -4298,6 +4405,14 @@ pub(super) fn run_launcher_loop(
                     }
                     if let Some(script_state) = launcher_input_script.input_for() {
                         physical_nav_state = script_state;
+                    }
+                    if let Some(benchmark_state) = settings_navigation_benchmark.input_for(
+                        nav.screen,
+                        nav.settings_focused,
+                        nav.settings_selected,
+                        full_screen_transition.state() == FullScreenTransitionState::Live,
+                    ) {
+                        physical_nav_state = benchmark_state;
                     }
                     let lifecycle_view = lifecycle.view();
                     let launch_failure_visible = lifecycle_view.launch_failure_dialog().is_some();
@@ -4410,8 +4525,8 @@ pub(super) fn run_launcher_loop(
                         nav.handle_input_with_collection_intents(nav_state, frame_now, &catalog)
                     };
                     if let Some((source_screen, source_state)) = settings_transition_source
-                        && let Some(direction) =
-                            settings_page_transition_direction(source_screen, nav.screen)
+                        && let Some((route, direction)) =
+                            settings_page_transition(source_screen, nav.screen)
                     {
                         let now_us = frame_now
                             .saturating_duration_since(start)
@@ -4420,8 +4535,8 @@ pub(super) fn run_launcher_loop(
                         let source = portrait_target
                             .as_ref()
                             .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565);
-                        let started =
-                            navigation_transition.begin_settings_page(direction, source, now_us);
+                        let started = navigation_transition
+                            .begin_settings_page(route, direction, source, now_us);
                         let started = started.unwrap_or(false);
                         if started
                             && begin_navigation_full_screen_transition(
@@ -4429,6 +4544,13 @@ pub(super) fn run_launcher_loop(
                                 &mut navigation_transition_generation,
                             )
                         {
+                            settings_navigation_benchmark.note_started(
+                                route,
+                                direction,
+                                source_screen,
+                                nav.screen,
+                                frames,
+                            );
                             pending_navigation_transition = Some(PendingNavigationTransition {
                                 event: launcher::LauncherEvent {
                                     action: LauncherAction::NavigateBack,
@@ -6315,14 +6437,20 @@ pub(super) fn run_launcher_loop(
         let navigation_transition_composition_active = navigation_transition.is_active();
         let navigation_transition_frame_active = navigation_transition_composition_active
             && navigation_transition.frame().phase != NavigationTransitionPhase::Capture;
-        let (navigation_transition_edge, navigation_transition_direction) =
-            if navigation_transition_frame_active {
-                navigation_transition.request().map_or(("", ""), |request| {
-                    (request.edge.label(), request.direction.label())
+        let (
+            navigation_transition_route,
+            navigation_transition_direction,
+            navigation_transition_renderer,
+        ) = if navigation_transition_frame_active {
+            navigation_transition
+                .route()
+                .zip(navigation_transition.request())
+                .map_or(("", "", ""), |(route, request)| {
+                    (route.label(), request.direction.label(), route.renderer())
                 })
-            } else {
-                ("", "")
-            };
+        } else {
+            ("", "", "")
+        };
         let navigation_transition_frame_started =
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
@@ -6431,6 +6559,7 @@ pub(super) fn run_launcher_loop(
             full_frame_present = true;
             request_launcher_redraw!();
             if navigation_transition.frame().phase == NavigationTransitionPhase::Settled {
+                settings_navigation_benchmark.note_rendered_endpoint(frames);
                 let completion = navigation_transition.complete();
                 if completion.is_some() {
                     release_full_screen_transition(
@@ -6481,8 +6610,14 @@ pub(super) fn run_launcher_loop(
             effect_label_us,
             navigation_transition_overlay_us: navigation_transition.last_render_stats().overlay_us
                 as u128,
-            navigation_transition_edge,
+            navigation_transition_edge: navigation_transition_route,
+            navigation_transition_route,
             navigation_transition_direction,
+            navigation_transition_renderer,
+            navigation_transition_orientation: navigation_transition_frame_active
+                .then(|| nav.settings.screen_orientation.id())
+                .unwrap_or(""),
+            settings_navigation_benchmark_leg: settings_navigation_benchmark.active_leg(),
             navigation_snapshot_locked: navigation_snapshot_locked_before_render,
             navigation_slint_render_called: !screensaver.active
                 && !navigation_snapshot_locked_before_render,
@@ -6810,7 +6945,12 @@ pub(super) fn run_launcher_loop(
         // active-sequence confirmation below.
         let startup_intro_frame_posted = visible_frame_presented && accepted_startup_intro_frame;
         if navigation_transition_frame_active && visible_frame_presented {
-            screensaver_cpu_profile.begin_navigation_transition(frames.saturating_add(1));
+            if settings_navigation_benchmark.enabled() {
+                screensaver_cpu_profile
+                    .begin_settings_navigation_transition(frames.saturating_add(1));
+            } else {
+                screensaver_cpu_profile.begin_navigation_transition(frames.saturating_add(1));
+            }
         }
         if screensaver.active && visible_frame_presented {
             // Profile only completed screensaver output. Starting when Preview is pressed
@@ -7082,6 +7222,34 @@ pub(super) fn run_launcher_loop(
                         match owner {
                             Some(FullScreenTransitionOwner::Navigation) => {
                                 navigation_transition_generation = None;
+                                if let Some(record) = settings_navigation_benchmark
+                                    .note_confirmed_presentation(
+                                        nav.screen,
+                                        frames,
+                                        confirmed_present_sequence,
+                                    )
+                                {
+                                    print_startup_event(
+                                        start,
+                                        "settings_navigation_benchmark_leg_completed",
+                                        format!(
+                                            concat!(
+                                                "leg={} route={} direction={} source={} destination={} ",
+                                                "start_frame={} rendered_endpoint_frame={} ",
+                                                "presented_endpoint_frame={} sequence={}"
+                                            ),
+                                            settings_navigation_benchmark.records().len(),
+                                            record.leg.route.label(),
+                                            record.leg.direction.label(),
+                                            screen_label(record.leg.source),
+                                            screen_label(record.leg.destination),
+                                            record.start_frame,
+                                            record.rendered_endpoint_frame,
+                                            record.presented_endpoint_frame,
+                                            record.presented_sequence,
+                                        ),
+                                    );
+                                }
                             }
                             Some(FullScreenTransitionOwner::Orientation) => {
                                 orientation_transition_generation = None;
@@ -7286,6 +7454,66 @@ pub(super) fn run_launcher_loop(
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
         frames += 1;
+        if settings_navigation_benchmark.complete()
+            && settings_navigation_benchmark_completed_at.is_none()
+        {
+            if let Some(directory) = settings_navigation_benchmark_evidence_dir()
+                && let Err(error) = write_settings_navigation_benchmark_completion(
+                    &directory,
+                    &settings_navigation_benchmark,
+                    frames,
+                )
+            {
+                crate::ui_errln!(
+                    "settings_navigation_benchmark_completion_write_failed error={error}"
+                );
+                settings_navigation_benchmark.fail("completion-write-failed");
+            }
+            if settings_navigation_benchmark.complete() {
+                print_startup_event(
+                    start,
+                    "settings_navigation_benchmark_complete",
+                    format!(
+                        "orientation={} legs={} frames={frames}",
+                        settings_navigation_benchmark.orientation().id(),
+                        settings_navigation_benchmark.records().len(),
+                    ),
+                );
+                settings_navigation_benchmark_completed_at = Some(Instant::now());
+                screensaver_cpu_profile.complete_settings_navigation_transitions(frames);
+                frame_accounting.request_status_write();
+                request_launcher_redraw!();
+            }
+        }
+        if settings_navigation_benchmark_completed_at
+            .is_some_and(|completed| completed.elapsed() >= Duration::from_millis(500))
+        {
+            break;
+        }
+        if settings_navigation_benchmark.failed() {
+            if let Some(directory) = settings_navigation_benchmark_evidence_dir()
+                && let Err(error) = write_settings_navigation_benchmark_completion(
+                    &directory,
+                    &settings_navigation_benchmark,
+                    frames,
+                )
+            {
+                crate::ui_errln!(
+                    "settings_navigation_benchmark_failure_write_failed error={error}"
+                );
+            }
+            print_startup_event(
+                start,
+                "settings_navigation_benchmark_failed",
+                format!(
+                    "failure={} orientation={} legs={} frames={frames}",
+                    settings_navigation_benchmark.failure().unwrap_or("unknown"),
+                    settings_navigation_benchmark.orientation().id(),
+                    settings_navigation_benchmark.records().len(),
+                ),
+            );
+            break;
+        }
         if orientation_benchmark.complete() && orientation_benchmark_completed_at.is_none() {
             if let Some(directory) = orientation_transition_benchmark_evidence_dir()
                 && let Err(error) = write_orientation_transition_benchmark_completion(
@@ -9068,31 +9296,43 @@ mod tests {
     #[test]
     fn settings_page_routes_use_depth_for_forward_and_reverse_motion() {
         assert_eq!(
-            settings_page_transition_direction(Screen::Home, Screen::Settings),
-            Some(NavigationTransitionDirection::Forward)
+            settings_page_transition(Screen::Home, Screen::Settings),
+            Some((
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward
+            ))
         );
         assert_eq!(
-            settings_page_transition_direction(Screen::Settings, Screen::About),
-            Some(NavigationTransitionDirection::Forward)
+            settings_page_transition(Screen::Settings, Screen::About),
+            Some((
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Forward
+            ))
         );
         assert_eq!(
-            settings_page_transition_direction(Screen::About, Screen::Licenses),
-            Some(NavigationTransitionDirection::Forward)
+            settings_page_transition(Screen::About, Screen::Licenses),
+            Some((
+                NavigationTransitionRoute::AboutToLicenses,
+                NavigationTransitionDirection::Forward
+            ))
         );
         assert_eq!(
-            settings_page_transition_direction(Screen::Licenses, Screen::About),
-            Some(NavigationTransitionDirection::Reverse)
+            settings_page_transition(Screen::Licenses, Screen::About),
+            Some((
+                NavigationTransitionRoute::AboutToLicenses,
+                NavigationTransitionDirection::Reverse
+            ))
         );
         assert_eq!(
-            settings_page_transition_direction(Screen::Screensaver, Screen::Home),
-            Some(NavigationTransitionDirection::Reverse)
+            settings_page_transition(Screen::Screensaver, Screen::Home),
+            Some((
+                NavigationTransitionRoute::NestedToHome,
+                NavigationTransitionDirection::Reverse
+            ))
         );
+        assert_eq!(settings_page_transition(Screen::Home, Screen::Arcade), None);
         assert_eq!(
-            settings_page_transition_direction(Screen::Home, Screen::Arcade),
-            None
-        );
-        assert_eq!(
-            settings_page_transition_direction(Screen::Screensaver, Screen::About),
+            settings_page_transition(Screen::Screensaver, Screen::About),
             None
         );
     }
@@ -9184,7 +9424,12 @@ mod tests {
         let pixels = vec![Rgb565Pixel(0); 4 * 3];
         let mut transition = NavigationTransitionRuntime::new(4, 3, true);
         transition
-            .begin_settings_page(NavigationTransitionDirection::Reverse, &pixels, 0)
+            .begin_settings_page(
+                NavigationTransitionRoute::AboutToInfo,
+                NavigationTransitionDirection::Reverse,
+                &pixels,
+                0,
+            )
             .unwrap();
         assert!(transition.route_input(&back, &released, false).is_none());
         assert!(transition.route_input(&released, &back, false).is_none());
@@ -9200,7 +9445,12 @@ mod tests {
         );
         assert_eq!(nav.screen, Screen::Settings);
         transition
-            .begin_settings_page(NavigationTransitionDirection::Reverse, &pixels, 1)
+            .begin_settings_page(
+                NavigationTransitionRoute::SettingsToAbout,
+                NavigationTransitionDirection::Reverse,
+                &pixels,
+                1,
+            )
             .unwrap();
         transition.settle_at_destination();
         assert!(transition.complete().is_some());

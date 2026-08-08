@@ -24,6 +24,10 @@ Supported scenarios:
 - `launch-return-fallback`
 - `modal-input`
 - `navigation-transitions`
+- `settings-navigation-landscape`
+- `settings-navigation-portrait-left`
+- `settings-navigation-landscape-pprof`
+- `settings-navigation-portrait-left-pprof`
 - `orientation-transition-fade`
 - `orientation-transition-zoom`
 - `orientation-transition-fade-pprof`
@@ -50,6 +54,26 @@ Slint calls, status-writer overlap, preparation attribution, latch sequence
 continuity, physical FPS, and drop counters for all six legs, then restores the
 ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
+
+`settings-navigation-landscape` and `settings-navigation-portrait-left` each
+run the real Home → Settings → About → Info → About → Settings → Home route at
+physical `hdmi-1280x720p60`. Landscape uses the normal 1280×720 logical layout;
+portrait-left uses the monitor-counterclockwise 720×1280 logical layout. The
+benchmark drives the production input path and waits for each endpoint's live
+frame to be physically confirmed before starting the next leg. Every leg
+independently requires zero protocol-v5 repeated-vblank drops and ownership
+losses, zero latch drops and sequence gaps, continuous hidden-slot
+presentation, at least 59.9 physical FPS, whole-frame work P99 below 15,917 µs
+and maximum below 16,667 µs, plus no snapshot-lock, locked-Slint-raster, or
+status-writer violations.
+
+The matching `-pprof` scenarios execute the same six directed legs at 999 Hz
+sampling and retain a route-level flamegraph and folded stacks. Their cadence
+is diagnostic only. All four scenarios override orientation and motion only in
+memory, disable catalog refresh, retain confirmed 720p, restore the ordinary
+launcher, and verify the exact settings file, retained `MiSTer.ini`, boot
+identity, and installed manifest. Evidence is written below the selected
+scenario at `build/agent-benchmarks/<scenario>/<timestamp>/`.
 
 `orientation-transition-fade` and `orientation-transition-zoom` each run the
 real Settings view at 1280×720/60 Hz through

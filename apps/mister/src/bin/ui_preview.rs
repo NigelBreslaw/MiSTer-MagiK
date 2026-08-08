@@ -29,8 +29,8 @@ mod macos {
     };
     use mister_magik_fb::launcher_runtime::navigation_transition::{
         CrtNavigationLayout, NavigationTransitionDirection, NavigationTransitionEdge,
-        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRuntime,
-        crt_navigation_geometry, hdmi_navigation_geometry,
+        NavigationTransitionEndpoint, NavigationTransitionPhase, NavigationTransitionRoute,
+        NavigationTransitionRuntime, crt_navigation_geometry, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
     use mister_magik_fb::launcher_taxonomy::{
@@ -950,11 +950,11 @@ mod macos {
                     .handle_input(nav_state, frame_now, &self.catalog)
             };
             if let Some((source_screen, source_state)) = settings_transition_source
-                && let Some(direction) =
-                    settings_page_transition_direction(source_screen, self.launcher_nav.screen)
+                && let Some((route, direction)) =
+                    settings_page_transition(source_screen, self.launcher_nav.screen)
                 && self
                     .navigation_transition
-                    .begin_settings_page(direction, self.frame_target.cached_565(), now_us)
+                    .begin_settings_page(route, direction, self.frame_target.cached_565(), now_us)
                     .unwrap_or(false)
             {
                 self.pending_navigation_event = Some(LauncherEvent {
@@ -2264,12 +2264,33 @@ mod macos {
         }
     }
 
-    fn settings_page_transition_direction(
+    fn settings_page_transition(
         source: Screen,
         destination: Screen,
-    ) -> Option<NavigationTransitionDirection> {
+    ) -> Option<(NavigationTransitionRoute, NavigationTransitionDirection)> {
         let source_depth = settings_page_depth(source)?;
         let destination_depth = settings_page_depth(destination)?;
+        let route = match (source, destination) {
+            (Screen::Home, Screen::Settings) | (Screen::Settings, Screen::Home) => {
+                Some(NavigationTransitionRoute::HomeToSettings)
+            }
+            (Screen::Settings, Screen::Screensaver) | (Screen::Screensaver, Screen::Settings) => {
+                Some(NavigationTransitionRoute::SettingsToScreensaver)
+            }
+            (Screen::Settings, Screen::About) | (Screen::About, Screen::Settings) => {
+                Some(NavigationTransitionRoute::SettingsToAbout)
+            }
+            (Screen::About, Screen::Info) | (Screen::Info, Screen::About) => {
+                Some(NavigationTransitionRoute::AboutToInfo)
+            }
+            (Screen::About, Screen::Licenses) | (Screen::Licenses, Screen::About) => {
+                Some(NavigationTransitionRoute::AboutToLicenses)
+            }
+            (source, Screen::Home) if source != Screen::Home => {
+                Some(NavigationTransitionRoute::NestedToHome)
+            }
+            _ => None,
+        }?;
         let adjacent = matches!(
             (source, destination),
             (Screen::Home, Screen::Settings)
@@ -2280,11 +2301,14 @@ mod macos {
                 | (Screen::Info | Screen::Licenses, Screen::About)
         );
         let direct_home = source != Screen::Home && destination == Screen::Home;
-        (adjacent || direct_home).then_some(if destination_depth > source_depth {
-            NavigationTransitionDirection::Forward
-        } else {
-            NavigationTransitionDirection::Reverse
-        })
+        (adjacent || direct_home).then_some((
+            route,
+            if destination_depth > source_depth {
+                NavigationTransitionDirection::Forward
+            } else {
+                NavigationTransitionDirection::Reverse
+            },
+        ))
     }
 
     const fn settings_page_depth(screen: Screen) -> Option<u8> {
@@ -3363,7 +3387,12 @@ mod macos {
             let mut transition = NavigationTransitionRuntime::new(4, 3, true);
             let pixels = vec![Rgb565Pixel(0); 4 * 3];
             transition
-                .begin_settings_page(NavigationTransitionDirection::Forward, &pixels, 0)
+                .begin_settings_page(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    &pixels,
+                    0,
+                )
                 .unwrap();
             let released = PadState::default();
             let activate = PadState {

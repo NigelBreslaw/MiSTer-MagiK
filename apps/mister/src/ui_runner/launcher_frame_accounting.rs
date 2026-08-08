@@ -934,7 +934,11 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) effect_label_us: u128,
     pub(super) navigation_transition_overlay_us: u128,
     pub(super) navigation_transition_edge: &'static str,
+    pub(super) navigation_transition_route: &'static str,
     pub(super) navigation_transition_direction: &'static str,
+    pub(super) navigation_transition_renderer: &'static str,
+    pub(super) navigation_transition_orientation: &'static str,
+    pub(super) settings_navigation_benchmark_leg: u8,
     pub(super) navigation_snapshot_locked: bool,
     pub(super) navigation_slint_render_called: bool,
     pub(super) navigation_status_quiesce_wait_us: u64,
@@ -1875,9 +1879,19 @@ impl LauncherFrameAccounting {
                 screensaver_active_cards: frame.screensaver_active_cards,
                 screensaver_renderer: frame.screensaver_frame_trace.renderer,
                 navigation_transition_edge: frame.custom_draw_trace.navigation_transition_edge,
+                navigation_transition_route: frame.custom_draw_trace.navigation_transition_route,
                 navigation_transition_direction: frame
                     .custom_draw_trace
                     .navigation_transition_direction,
+                navigation_transition_renderer: frame
+                    .custom_draw_trace
+                    .navigation_transition_renderer,
+                navigation_transition_orientation: frame
+                    .custom_draw_trace
+                    .navigation_transition_orientation,
+                settings_navigation_benchmark_leg: frame
+                    .custom_draw_trace
+                    .settings_navigation_benchmark_leg,
                 navigation_transition_us: u128_to_u64_saturating(
                     frame.custom_draw_trace.effect_label_us,
                 ),

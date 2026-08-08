@@ -21,6 +21,67 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::VecDeque;
 use std::time::Instant;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavigationTransitionRoute {
+    HomeToConsoles,
+    HomeToArcade,
+    ConsolesToSystem,
+    HomeToSettings,
+    SettingsToScreensaver,
+    SettingsToAbout,
+    AboutToInfo,
+    AboutToLicenses,
+    NestedToHome,
+}
+
+impl NavigationTransitionRoute {
+    pub const fn from_super_scaler_edge(edge: NavigationTransitionEdge) -> Self {
+        match edge {
+            NavigationTransitionEdge::HomeToConsoles => Self::HomeToConsoles,
+            NavigationTransitionEdge::HomeToArcade => Self::HomeToArcade,
+            NavigationTransitionEdge::ConsolesToSystem => Self::ConsolesToSystem,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::HomeToConsoles => "home-consoles",
+            Self::HomeToArcade => "home-arcade",
+            Self::ConsolesToSystem => "consoles-system",
+            Self::HomeToSettings => "home-settings",
+            Self::SettingsToScreensaver => "settings-screensaver",
+            Self::SettingsToAbout => "settings-about",
+            Self::AboutToInfo => "about-info",
+            Self::AboutToLicenses => "about-licenses",
+            Self::NestedToHome => "nested-home",
+        }
+    }
+
+    pub const fn renderer(self) -> &'static str {
+        match self {
+            Self::HomeToSettings
+            | Self::SettingsToScreensaver
+            | Self::SettingsToAbout
+            | Self::AboutToInfo
+            | Self::AboutToLicenses
+            | Self::NestedToHome => "settings-page",
+            Self::HomeToConsoles | Self::HomeToArcade | Self::ConsolesToSystem => "super-scaler",
+        }
+    }
+
+    pub const fn is_settings_page(self) -> bool {
+        matches!(
+            self,
+            Self::HomeToSettings
+                | Self::SettingsToScreensaver
+                | Self::SettingsToAbout
+                | Self::AboutToInfo
+                | Self::AboutToLicenses
+                | Self::NestedToHome
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigationTransitionInput {
     pub activate: bool,
@@ -422,6 +483,7 @@ pub struct NavigationTransitionRuntime {
     geometry_history: Vec<(NavigationTransitionEdge, NavigationTransitionGeometry)>,
     last_render_stats: NavigationTransitionRenderStats,
     last_frame_work_us: u64,
+    route: Option<NavigationTransitionRoute>,
 }
 
 impl NavigationTransitionRuntime {
@@ -445,6 +507,7 @@ impl NavigationTransitionRuntime {
             geometry_history: Vec::new(),
             last_render_stats: NavigationTransitionRenderStats::default(),
             last_frame_work_us: 0,
+            route: None,
         }
     }
 
@@ -466,6 +529,7 @@ impl NavigationTransitionRuntime {
         self.controller = NavigationTransitionController::default();
         self.queued_inputs.clear();
         self.geometry_history.clear();
+        self.route = None;
         if enabled {
             warm_navigation_transition_rasterizer();
             self.buffers.resize(width, height);
@@ -487,6 +551,9 @@ impl NavigationTransitionRuntime {
             request.duration_us = duration_us;
         }
         let started = self.begin_request(request, source, now_us)?;
+        if started {
+            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
+        }
         if started && direction == NavigationTransitionDirection::Forward {
             self.geometry_history.push((edge, geometry));
         }
@@ -495,15 +562,23 @@ impl NavigationTransitionRuntime {
 
     pub fn begin_settings_page(
         &mut self,
+        route: NavigationTransitionRoute,
         direction: NavigationTransitionDirection,
         source: &[Rgb565Pixel],
         now_us: u64,
     ) -> Result<bool, NavigationTransitionFailure> {
-        self.begin_settings_page_request(
+        if !route.is_settings_page() {
+            return Ok(false);
+        }
+        let started = self.begin_settings_page_request(
             NavigationTransitionRequest::settings_page(direction),
             source,
             now_us,
-        )
+        )?;
+        if started {
+            self.route = Some(route);
+        }
+        Ok(started)
     }
 
     fn begin_settings_page_request(
@@ -757,6 +832,10 @@ impl NavigationTransitionRuntime {
         self.pending_request.or_else(|| self.controller.request())
     }
 
+    pub const fn route(&self) -> Option<NavigationTransitionRoute> {
+        self.route
+    }
+
     pub const fn is_active(&self) -> bool {
         self.pending_request.is_some() || self.controller.is_active()
     }
@@ -929,7 +1008,12 @@ mod tests {
 
         assert!(
             transition
-                .begin_settings_page(NavigationTransitionDirection::Forward, &snapshot, 1)
+                .begin_settings_page(
+                    NavigationTransitionRoute::HomeToSettings,
+                    NavigationTransitionDirection::Forward,
+                    &snapshot,
+                    1,
+                )
                 .unwrap()
         );
         assert_eq!(
@@ -1579,7 +1663,12 @@ mod tests {
         };
 
         runtime
-            .begin_settings_page(NavigationTransitionDirection::Forward, &source, 0)
+            .begin_settings_page(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward,
+                &source,
+                0,
+            )
             .unwrap();
         runtime.queue_input(activate);
         runtime.queue_input(back);
@@ -1595,6 +1684,7 @@ mod tests {
         assert_eq!(runtime.take_queued_input(), Some(activate));
         runtime
             .begin_settings_page(
+                NavigationTransitionRoute::HomeToSettings,
                 NavigationTransitionDirection::Reverse,
                 &destination,
                 duration_us + 2,
@@ -1630,7 +1720,12 @@ mod tests {
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         runtime
-            .begin_settings_page(NavigationTransitionDirection::Reverse, &source, 0)
+            .begin_settings_page(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Reverse,
+                &source,
+                0,
+            )
             .unwrap();
         let released = PadState::default();
         let pressed = PadState {

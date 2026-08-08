@@ -83,6 +83,7 @@ use mister_magik_fb::launcher_runtime::navigation_transition::*;
 use mister_magik_fb::launcher_runtime::orientation_transition::*;
 use mister_magik_fb::launcher_runtime::orientation_transition_bench::*;
 use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
+use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
 use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};

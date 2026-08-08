@@ -12,6 +12,7 @@ use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
 const NAVIGATION_TRANSITIONS_TRIGGER: &str = "navigation-transitions";
+const SETTINGS_NAVIGATION_TRANSITIONS_TRIGGER: &str = "settings-navigation-transitions";
 const ORIENTATION_TRANSITION_FADE_TRIGGER: &str = "orientation-transition-fade";
 const ORIENTATION_TRANSITION_ZOOM_TRIGGER: &str = "orientation-transition-zoom";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
@@ -21,6 +22,7 @@ const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 enum BoundedProfileTrigger {
     Screensaver,
     NavigationTransitions,
+    SettingsNavigationTransitions,
     OrientationTransitionFade,
     OrientationTransitionZoom,
     LaunchReturn,
@@ -31,6 +33,7 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => SCREENSAVER_TRIGGER,
             Self::NavigationTransitions => NAVIGATION_TRANSITIONS_TRIGGER,
+            Self::SettingsNavigationTransitions => SETTINGS_NAVIGATION_TRANSITIONS_TRIGGER,
             Self::OrientationTransitionFade => ORIENTATION_TRANSITION_FADE_TRIGGER,
             Self::OrientationTransitionZoom => ORIENTATION_TRANSITION_ZOOM_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
@@ -41,6 +44,9 @@ impl BoundedProfileTrigger {
         match self {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
+            Self::SettingsNavigationTransitions => {
+                "mister-magik-settings-navigation-transitions-pprof-v1"
+            }
             Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
@@ -102,7 +108,13 @@ fn bounded_profile_trigger() -> Option<BoundedProfileTrigger> {
 }
 
 pub fn navigation_transition_profile_requested() -> bool {
-    bounded_profile_trigger() == Some(BoundedProfileTrigger::NavigationTransitions)
+    matches!(
+        bounded_profile_trigger(),
+        Some(
+            BoundedProfileTrigger::NavigationTransitions
+                | BoundedProfileTrigger::SettingsNavigationTransitions
+        )
+    )
 }
 
 pub fn launch_return_profile_requested() -> bool {
@@ -119,6 +131,9 @@ fn bounded_profile_trigger_from_values(
     match trigger {
         Some(SCREENSAVER_TRIGGER) => Some(BoundedProfileTrigger::Screensaver),
         Some(NAVIGATION_TRANSITIONS_TRIGGER) => Some(BoundedProfileTrigger::NavigationTransitions),
+        Some(SETTINGS_NAVIGATION_TRANSITIONS_TRIGGER) => {
+            Some(BoundedProfileTrigger::SettingsNavigationTransitions)
+        }
         Some(ORIENTATION_TRANSITION_FADE_TRIGGER) => {
             Some(BoundedProfileTrigger::OrientationTransitionFade)
         }
@@ -415,6 +430,7 @@ mod imp {
                 Some(
                     BoundedProfileTrigger::Screensaver
                         | BoundedProfileTrigger::NavigationTransitions
+                        | BoundedProfileTrigger::SettingsNavigationTransitions
                         | BoundedProfileTrigger::OrientationTransitionFade
                         | BoundedProfileTrigger::OrientationTransitionZoom
                 )
@@ -442,6 +458,19 @@ mod imp {
             self.begin(BoundedProfileTrigger::NavigationTransitions, first_frame);
         }
 
+        pub fn begin_settings_navigation_transition(&mut self, first_frame: u64) {
+            self.begin(
+                BoundedProfileTrigger::SettingsNavigationTransitions,
+                first_frame,
+            );
+        }
+
+        pub fn complete_settings_navigation_transitions(&mut self, next_frame: u64) {
+            if self.trigger == Some(BoundedProfileTrigger::SettingsNavigationTransitions) {
+                self.complete(next_frame, false);
+            }
+        }
+
         pub fn begin_orientation_transitions(&mut self, first_frame: u64) {
             if let Some(
                 trigger @ (BoundedProfileTrigger::OrientationTransitionFade
@@ -456,7 +485,8 @@ mod imp {
             if matches!(
                 self.trigger,
                 Some(
-                    BoundedProfileTrigger::OrientationTransitionFade
+                    BoundedProfileTrigger::SettingsNavigationTransitions
+                        | BoundedProfileTrigger::OrientationTransitionFade
                         | BoundedProfileTrigger::OrientationTransitionZoom
                 )
             ) {
@@ -666,6 +696,10 @@ mod stub {
 
         pub fn begin_navigation_transition(&mut self, _first_frame: u64) {}
 
+        pub fn begin_settings_navigation_transition(&mut self, _first_frame: u64) {}
+
+        pub fn complete_settings_navigation_transitions(&mut self, _next_frame: u64) {}
+
         pub fn begin_orientation_transitions(&mut self, _first_frame: u64) {}
 
         pub fn complete_orientation_transitions(&mut self, _next_frame: u64) {}
@@ -728,6 +762,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("navigation-transitions")),
             Some(BoundedProfileTrigger::NavigationTransitions)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("settings-navigation-transitions")),
+            Some(BoundedProfileTrigger::SettingsNavigationTransitions)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("launch-return")),
