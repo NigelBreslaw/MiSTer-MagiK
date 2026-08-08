@@ -413,6 +413,12 @@ pub(crate) enum PreviewFrameIntent {
     },
 }
 
+impl PreviewFrameIntent {
+    pub(crate) const fn is_actionable(self) -> bool {
+        matches!(self, Self::Present { .. })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PreviewPresentationCommit {
     generation: u64,
@@ -699,11 +705,19 @@ impl PreviewState {
             self.raw_transition_duration_numerator,
             self.raw_transition_duration_denominator,
         ) = pace.duration_ratio();
+        let retained_image = self.presentation_state.owns_direct_layer();
         self.demand = PreviewDemand::Image;
         let generation = self.next_presentation_generation();
-        self.presentation_state = PreviewPresentationState::Animating {
-            generation,
-            target: PreviewPresentationTarget::Image,
+        self.presentation_state = match self.route {
+            PreviewRoute::Eligible => PreviewPresentationState::Animating {
+                generation,
+                target: PreviewPresentationTarget::Image,
+            },
+            PreviewRoute::Occluded => PreviewPresentationState::Loading {
+                generation,
+                retained_image,
+            },
+            PreviewRoute::Unavailable => PreviewPresentationState::Detached,
         };
     }
 
@@ -822,6 +836,7 @@ impl PreviewState {
                     && matches!(
                         self.presentation_state,
                         PreviewPresentationState::Detached
+                            | PreviewPresentationState::Loading { .. }
                             | PreviewPresentationState::RetirementPending { .. }
                     ) =>
             {
@@ -2780,6 +2795,23 @@ mod tests {
     }
 
     #[test]
+    fn off_route_image_completion_is_cached_without_becoming_actionable() {
+        let mut preview = PreviewState::new();
+        preview.has_visible_preview = true;
+        preview.begin_raw_transition_to("prewarmed.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "prewarmed.png".into();
+        preview.raw_dirty = true;
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Detached
+        );
+        assert!(preview.raw_dirty());
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+        assert!(!preview.frame_intent().is_actionable());
+    }
+
+    #[test]
     fn unavailable_route_retires_without_requesting_preview_frames() {
         let mut preview = PreviewState::new();
         preview.set_route(PreviewRoute::Eligible);
@@ -3194,6 +3226,7 @@ mod tests {
     #[test]
     fn turbo_empty_retarget_keeps_63_over_130_duration_and_can_retarget_to_image() {
         let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
         preview.cache.insert(
             "1941.png".into(),
             preview_image(0xf800),

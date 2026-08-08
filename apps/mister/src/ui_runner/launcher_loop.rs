@@ -5948,7 +5948,10 @@ pub(super) fn run_launcher_loop(
             LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
             arcade_search_active,
         );
-        wake_reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, preview.raw_dirty());
+        wake_reasons.insert_if(
+            LauncherWakeReasons::PREVIEW_DIRTY,
+            preview_frame_intent.is_actionable(),
+        );
         wake_reasons.insert_if(
             LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
             preview_scheduled_this_loop,
@@ -7650,7 +7653,7 @@ pub(super) fn run_launcher_loop(
                 preview.confirm_retirement(generation);
             }
         }
-        if matches!(preview.frame_intent(), PreviewFrameIntent::Present { .. }) {
+        if preview.frame_intent().is_actionable() {
             request_launcher_redraw!();
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
@@ -11531,10 +11534,9 @@ mod tests {
             let mut preview = PreviewState::new();
             preview.set_route(PreviewRoute::Unavailable);
             let mut reasons = LauncherWakeReasons::default();
-            reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, preview.raw_dirty());
             reasons.insert_if(
-                LauncherWakeReasons::REDRAW_PENDING,
-                matches!(preview.frame_intent(), PreviewFrameIntent::Present { .. }),
+                LauncherWakeReasons::PREVIEW_DIRTY,
+                preview.frame_intent().is_actionable(),
             );
 
             assert_eq!(
