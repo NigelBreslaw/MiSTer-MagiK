@@ -949,20 +949,10 @@ mod macos {
             if let Some((source_screen, source_state)) = settings_transition_source
                 && let Some(direction) =
                     settings_page_transition_direction(source_screen, self.launcher_nav.screen)
-                && (if self.orientation.is_portrait() {
-                    self.navigation_transition.begin_settings_page_portrait(
-                        direction,
-                        self.frame_target.cached_565(),
-                        now_us,
-                    )
-                } else {
-                    self.navigation_transition.begin_settings_page(
-                        direction,
-                        self.frame_target.cached_565(),
-                        now_us,
-                    )
-                })
-                .unwrap_or(false)
+                && self
+                    .navigation_transition
+                    .begin_settings_page(direction, self.frame_target.cached_565(), now_us)
+                    .unwrap_or(false)
             {
                 self.pending_navigation_event = Some(LauncherEvent {
                     action: LauncherAction::NavigateBack,

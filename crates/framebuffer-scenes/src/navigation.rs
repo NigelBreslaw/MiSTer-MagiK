@@ -83,7 +83,6 @@ enum NavigationTransitionRenderer {
     #[default]
     SuperScaler,
     SettingsPage,
-    SettingsPageVertical,
 }
 
 impl NavigationTransitionDirection {
@@ -565,17 +564,6 @@ impl NavigationTransitionRequest {
         }
     }
 
-    pub fn settings_page_portrait(direction: NavigationTransitionDirection) -> Self {
-        Self {
-            edge: NavigationTransitionEdge::HomeToConsoles,
-            direction,
-            geometry: NavigationTransitionGeometry::default(),
-            duration_us: SETTINGS_PAGE_DURATION_US,
-            preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
-            renderer: NavigationTransitionRenderer::SettingsPageVertical,
-        }
-    }
-
     #[must_use]
     pub const fn is_super_scaler(self) -> bool {
         matches!(self.renderer, NavigationTransitionRenderer::SuperScaler)
@@ -658,8 +646,7 @@ impl Default for NavigationTransitionFrame {
 pub const fn request_cover_progress_q16(request: NavigationTransitionRequest) -> u16 {
     let forward_cover = match request.renderer {
         NavigationTransitionRenderer::SuperScaler => SUPER_SCALER_COVER_PROGRESS,
-        NavigationTransitionRenderer::SettingsPage
-        | NavigationTransitionRenderer::SettingsPageVertical => PROGRESS_MAX / 2,
+        NavigationTransitionRenderer::SettingsPage => PROGRESS_MAX / 2,
     };
     match request.direction {
         NavigationTransitionDirection::Forward => forward_cover,
@@ -857,9 +844,6 @@ pub fn render_navigation_transition(
         }
         NavigationTransitionRenderer::SettingsPage => {
             render_settings_page_push(buffers, request, frame)?
-        }
-        NavigationTransitionRenderer::SettingsPageVertical => {
-            render_settings_page_vertical_push(buffers, request, frame)?
         }
     };
     stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
@@ -1298,109 +1282,6 @@ fn blit_snapshot_x(
             .copy_from_slice(&snapshot[source_start..source_start + copy_width]);
     }
     copy_width.saturating_mul(height) as u64
-}
-
-fn render_settings_page_vertical_push(
-    buffers: &mut NavigationTransitionBuffers,
-    request: NavigationTransitionRequest,
-    frame: NavigationTransitionFrame,
-) -> Result<NavigationTransitionRenderStats, NavigationTransitionFailure> {
-    if !buffers.source_ready
-        || buffers.source.len() != buffers.width.saturating_mul(buffers.height)
-        || buffers.working.len() != buffers.source.len()
-    {
-        return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
-    }
-    let source = buffers.source.as_slice();
-    let destination = buffers
-        .destination_ready
-        .then_some(buffers.destination.as_slice());
-    let working = buffers.working.as_mut_slice();
-    let mut stats = NavigationTransitionRenderStats::default();
-
-    if frame.progress_q16 == 0 || destination.is_none() {
-        working.copy_from_slice(source);
-        stats.copied_pixels = source.len() as u64;
-        return Ok(stats);
-    }
-    let destination = destination.expect("checked destination snapshot");
-    if frame.progress_q16 == PROGRESS_MAX {
-        working.copy_from_slice(destination);
-        stats.copied_pixels = destination.len() as u64;
-        return Ok(stats);
-    }
-
-    let travel_q16 = spring_ease_q16(frame.progress_q16) as isize;
-    let height = buffers.height as isize;
-    let source_travel = height / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
-    working.fill(Rgb565Pixel(0));
-    match request.direction {
-        NavigationTransitionDirection::Forward => {
-            let source_y = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
-            let destination_y = height - height * travel_q16 / PROGRESS_MAX as isize;
-            stats.copied_pixels = stats
-                .copied_pixels
-                .saturating_add(blit_snapshot_y(
-                    working,
-                    source,
-                    buffers.width,
-                    buffers.height,
-                    source_y,
-                ))
-                .saturating_add(blit_snapshot_y(
-                    working,
-                    destination,
-                    buffers.width,
-                    buffers.height,
-                    destination_y,
-                ));
-        }
-        NavigationTransitionDirection::Reverse => {
-            let destination_y = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
-            let source_y = height * travel_q16 / PROGRESS_MAX as isize;
-            stats.copied_pixels = stats
-                .copied_pixels
-                .saturating_add(blit_snapshot_y(
-                    working,
-                    destination,
-                    buffers.width,
-                    buffers.height,
-                    destination_y,
-                ))
-                .saturating_add(blit_snapshot_y(
-                    working,
-                    source,
-                    buffers.width,
-                    buffers.height,
-                    source_y,
-                ));
-        }
-    }
-    Ok(stats)
-}
-
-fn blit_snapshot_y(
-    output: &mut [Rgb565Pixel],
-    snapshot: &[Rgb565Pixel],
-    width: usize,
-    height: usize,
-    offset_y: isize,
-) -> u64 {
-    if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
-        return 0;
-    }
-    let destination_y = offset_y.max(0) as usize;
-    let source_y = offset_y.saturating_neg().max(0) as usize;
-    if destination_y >= height || source_y >= height {
-        return 0;
-    }
-    let copy_height = (height - destination_y).min(height - source_y);
-    let copy_len = copy_height.saturating_mul(width);
-    let destination_start = destination_y.saturating_mul(width);
-    let source_start = source_y.saturating_mul(width);
-    output[destination_start..destination_start + copy_len]
-        .copy_from_slice(&snapshot[source_start..source_start + copy_len]);
-    copy_len as u64
 }
 
 #[allow(clippy::too_many_arguments)]

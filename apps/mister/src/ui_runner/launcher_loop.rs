@@ -4424,12 +4424,8 @@ pub(super) fn run_launcher_loop(
                         let source = portrait_target
                             .as_ref()
                             .map_or_else(|| target.cached_565(), UiFrameTarget::cached_565);
-                        let started = if portrait_target.is_some() {
-                            navigation_transition
-                                .begin_settings_page_portrait(direction, source, now_us)
-                        } else {
-                            navigation_transition.begin_settings_page(direction, source, now_us)
-                        };
+                        let started =
+                            navigation_transition.begin_settings_page(direction, source, now_us);
                         let started = started.unwrap_or(false);
                         if started
                             && begin_navigation_full_screen_transition(
