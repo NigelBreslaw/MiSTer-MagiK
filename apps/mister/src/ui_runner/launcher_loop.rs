@@ -6453,6 +6453,7 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
+        let navigation_settings_physical_space = navigation_transition.settings_physical_space();
         let navigation_transition_frame_active = navigation_transition_composition_active
             && navigation_transition.frame().phase != NavigationTransitionPhase::Capture;
         let (
@@ -6750,7 +6751,7 @@ pub(super) fn run_launcher_loop(
         cached_damage.push_if_some(cached_arcade_rect);
         let orientation_damage_rects_before = cached_damage.len() as u32;
         let damage_rotation_started = Instant::now();
-        let mut cached_damage = if navigation_transition.settings_physical_space() {
+        let mut cached_damage = if navigation_settings_physical_space {
             DirtyRectList::from_one(DirtyRect {
                 x0: 0,
                 y0: 0,
