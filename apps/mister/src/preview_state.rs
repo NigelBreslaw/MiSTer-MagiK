@@ -2836,6 +2836,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_missing_and_suppressed_routes_never_create_frame_intent() {
+        let mut preview = PreviewState::new();
+
+        // HDMI with no selected screenshot remains physically detached.
+        preview.set_route(PreviewRoute::Eligible);
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+
+        // A missing screenshot can load without authorizing a presentation frame.
+        preview.demand_loading();
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+
+        // CRT and low-memory suppression share the unavailable route. Repeated
+        // catalog generations may supersede loading, but cannot wake rendering.
+        preview.set_route(PreviewRoute::Unavailable);
+        preview.demand_loading();
+        preview.demand_loading();
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+
+        // Navigation/overlay occlusion also retains demand without producing work.
+        preview.set_route(PreviewRoute::Occluded);
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+    }
+
+    #[test]
     fn preview_miss_classification_requires_exact_candidate() {
         assert!(!preview_state_is_miss("exact", true));
         assert!(preview_state_is_miss("blank", true));

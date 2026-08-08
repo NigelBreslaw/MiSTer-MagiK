@@ -11518,6 +11518,44 @@ mod tests {
     }
 
     #[test]
+    pub(super) fn stable_static_views_have_no_preview_intent_or_wake_reason() {
+        for screen in [
+            Screen::Home,
+            Screen::Controller,
+            Screen::Settings,
+            Screen::Screensaver,
+            Screen::About,
+            Screen::Licenses,
+            Screen::Info,
+        ] {
+            let mut preview = PreviewState::new();
+            preview.set_route(PreviewRoute::Unavailable);
+            let mut reasons = LauncherWakeReasons::default();
+            reasons.insert_if(LauncherWakeReasons::PREVIEW_DIRTY, preview.raw_dirty());
+            reasons.insert_if(
+                LauncherWakeReasons::REDRAW_PENDING,
+                matches!(preview.frame_intent(), PreviewFrameIntent::Present { .. }),
+            );
+
+            assert_eq!(
+                preview.frame_intent(),
+                PreviewFrameIntent::None,
+                "{screen:?}"
+            );
+            assert!(reasons.is_empty(), "{screen:?}");
+            assert!(
+                LauncherRenderIntent {
+                    first_visible_copy_done: true,
+                    startup_input_enabled: true,
+                    wake_reasons: reasons,
+                }
+                .can_sleep(),
+                "{screen:?}"
+            );
+        }
+    }
+
+    #[test]
     pub(super) fn presenter_recovery_keeps_launcher_awake() {
         let sleeping_intent = |wake_reasons| LauncherRenderIntent {
             first_visible_copy_done: true,

@@ -1798,4 +1798,81 @@ mod tests {
         assert_eq!(bridge.get_confirm_right_label().as_str(), "Full rebuild");
         assert_eq!(bridge.get_confirm_selected(), 0);
     }
+
+    #[test]
+    fn full_and_light_bridge_sync_leave_every_static_view_detached() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        let catalog =
+            ArcadeCatalog::new(PathBuf::from(DEFAULT_ARCADE_ROOT), Vec::new(), Vec::new());
+        let pad = PadPool::from_test_states(Vec::new());
+        let lifecycle = LauncherLifecycle::new(
+            LauncherLifecycleConfig {
+                catalog_worker_enabled: false,
+            },
+            Instant::now(),
+        );
+        let setup = SetupNav::new();
+        let ui = UiDisplay::for_framebuffer(960, 540);
+
+        for (index, screen) in [
+            Screen::Home,
+            Screen::Controller,
+            Screen::Settings,
+            Screen::Screensaver,
+            Screen::About,
+            Screen::Licenses,
+            Screen::Info,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut nav = LauncherNav::new();
+            nav.screen = screen;
+            nav.sync_launcher_taxonomy(&catalog);
+            let mut preview = PreviewState::new();
+            let mut models = LauncherBridgeModels::default();
+
+            for catalog_version in [index, index + 1] {
+                sync_bridge_launcher(
+                    &app,
+                    &pad,
+                    &nav,
+                    &lifecycle,
+                    &setup,
+                    "",
+                    "",
+                    Some(&catalog),
+                    &mut preview,
+                    &mut models,
+                    catalog_version,
+                    false,
+                    &ui,
+                );
+                sync_bridge_launcher_light(
+                    &app,
+                    &nav,
+                    &lifecycle,
+                    &mut models,
+                    &setup,
+                    "",
+                    "",
+                    &catalog,
+                    None,
+                    &mut preview,
+                    false,
+                    false,
+                    &ui,
+                );
+            }
+
+            assert_eq!(
+                preview.presentation_state(),
+                PreviewPresentationState::Detached,
+                "static screen {screen:?}"
+            );
+            assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+            assert!(!preview.raw_dirty());
+        }
+    }
 }

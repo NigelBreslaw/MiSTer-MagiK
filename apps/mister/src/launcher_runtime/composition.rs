@@ -1012,4 +1012,33 @@ mod tests {
         );
         assert!(controller.retirement.is_none());
     }
+
+    #[test]
+    fn retirement_diagnostics_publish_generation_obligations_and_receipt() {
+        let mut controller = UiCompositionController::new();
+        acquire_direct_layers(&mut controller);
+        let pending = controller.tick(input(Screen::Home));
+        let pending_status = pending.status();
+        let generation = pending.retirement_generation.expect("retirement");
+
+        assert_eq!(pending_status.retirement_state, "pending");
+        assert_eq!(pending_status.retirement_generation, generation);
+        assert_eq!(pending_status.retirement_obligations, "arcade+preview");
+
+        let active = receipt(2, pending.retirement_carrier);
+        assert!(controller.confirm_presented_layers(
+            Some(generation),
+            pending.direct_layers_desired,
+            active,
+        ));
+        let settled_status = controller.tick(input(Screen::Home)).status();
+
+        assert_eq!(settled_status.retirement_state, "idle");
+        assert_eq!(settled_status.retirement_receipt_sequence, active.sequence);
+        assert_eq!(settled_status.retirement_receipt_slot, active.slot);
+        assert_eq!(
+            settled_status.retirement_receipt_route_epoch,
+            active.route_epoch
+        );
+    }
 }

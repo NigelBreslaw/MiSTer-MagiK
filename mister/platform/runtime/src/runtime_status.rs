@@ -2206,11 +2206,17 @@ mod tests {
         assert_eq!(value["arcade_search_query"], "A");
         assert_eq!(value["arcade_search_results"], 42);
         assert_eq!(value["preview_cache_state"], "exact");
+        assert_eq!(value["preview_presentation_state"], "visible");
+        assert_eq!(value["preview_presentation_generation"], 7);
         assert_eq!(value["preview_transition_effect"], "fade");
         assert_eq!(value["preview_transition_progress"], 0.5);
         assert_eq!(value["screensaver_active_cards"], 73);
         assert_eq!(value["composition_state"], "mixed-arcade");
         assert_eq!(value["composition_recovery_count"], 0);
+        assert_eq!(value["direct_layer_retirement_state"], "idle");
+        assert_eq!(value["direct_layer_retirement_generation"], 0);
+        assert_eq!(value["direct_layer_retirement_obligations"], "none");
+        assert_eq!(value["direct_layer_retirement_receipt"], "");
         assert_eq!(value["last_composition_invariant_kind"], "");
         assert_eq!(value["last_composition_invariant_detail"], "");
         assert_eq!(value["bench_scenario"], "held-scroll");

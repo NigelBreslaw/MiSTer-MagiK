@@ -407,29 +407,50 @@ Latch acceptance is not a release acknowledgement: the chart returns to
 `Live` only after the forced frame's sequence is confirmed active at a physical
 refresh.
 
-Screenshot presentation has a separate lifecycle. `Loading` retains the
-currently presented surface: an existing image stays visible, while a request
-started from empty stays black. A transition to `Empty` keeps the direct layer
-owned until black has been written to the cached preview rectangle and the
-final black frame is confirmed active. Only then may the latch restore the
-cached base and retire the layer. Normal transitions use 130 ms and
-velocity-list turbo transitions use 63 ms, completing just before their
-respective constant-velocity row intervals.
+Screenshot presentation and direct-layer retirement are parallel state-chart
+regions. Preview demand (`Empty` or `Image`) is independent from route
+eligibility (`Eligible`, `Occluded`, or `Unavailable`). Bridge synchronization
+only projects navigation and catalog state; it does not clear or advance the
+preview lifecycle. `Loading` retains an existing image, while a request started
+from `Detached` remains black. Only actionable `PreviewFrameIntent` from an
+eligible `Animating` state wakes rendering. Normal transitions use 130 ms and
+velocity-list turbo transitions use 63 ms.
+
+Composition owns physical retirement for both the Arcade list and preview
+layers. When an owned layer becomes illegal, composition opens a parallel
+retirement transaction with a generation and layer obligations. The next
+already-authorized complete frame is its carrier: navigation playback, a modal,
+screensaver, recovery, or live Slint. The transaction completes only when that
+frame's sequence, slot, and route epoch are confirmed physically active. An
+uncertain timeout enters reconciliation; it is never blindly reposted. A route
+reversal may replace the retiring layer in that same confirmed carrier frame.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Preparing
-    Preparing --> Visible: exact screenshot ready
-    Preparing --> Empty: no screenshot
-    Preparing --> Loading: screenshot pending
+    state "Preview presentation" as Preview {
+        [*] --> Detached
+        Detached --> Loading: image demand, cache miss
+        Detached --> Animating: image demand, retained cache
+        Loading --> Loading: newer demand generation
+        Loading --> Animating: current image resolves
+        Visible --> Loading: newer image demand
+        Visible --> Animating: empty demand
+        Visible --> RetirementPending: route unavailable
+        Animating --> Animating: newer demand generation
+        Animating --> Visible: final image confirmed
+        Animating --> RetirementPending: final black confirmed
+        RetirementPending --> Detached: retirement receipt confirmed
+        RetirementPending --> Animating: eligible reversal with retained image
+    }
 
-    Empty --> Loading: select item with screenshot
-    Visible --> Loading: select item with screenshot
-    Visible --> Transitioning: select item without screenshot
-    Loading --> Transitioning: load resolves
-
-    Transitioning --> Visible: final image frame confirmed
-    Transitioning --> Empty: cached base black + final black confirmed
+    state "Direct-layer retirement (parallel)" as Retirement {
+        [*] --> Idle
+        Idle --> Pending: owned layer becomes illegal
+        Pending --> Idle: matching active receipt
+        Pending --> Reconciling: uncertain timeout
+        Reconciling --> Idle: active receipt reconciled
+        Pending --> Pending: same-frame replacement or carrier change
+    }
 ```
 
 Slint owns invalidation of the cached base UI. The launcher window adapter's
