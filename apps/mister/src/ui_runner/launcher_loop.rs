@@ -6248,7 +6248,6 @@ pub(super) fn run_launcher_loop(
         screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
         screensaver_frame_trace.render_ahead_cancelled =
             screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
-        let mut slint_base_rendered = false;
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
@@ -6287,7 +6286,6 @@ pub(super) fn run_launcher_loop(
         } else if full_screen_transition_policy_before_render.force_live_raster {
             let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
             slint_damage = damage;
-            slint_base_rendered = rendered;
             full_screen_transition_release_raster_rendered = rendered;
             dirty
         } else if full_screen_transition_policy_before_render.controlled_capture
@@ -6313,7 +6311,6 @@ pub(super) fn run_launcher_loop(
                         controlled_raster_started.elapsed().as_micros();
                 }
                 slint_damage = damage;
-                slint_base_rendered = rendered;
                 full_screen_controlled_capture_rendered = rendered;
                 if !rendered
                     && let Some(generation) = full_screen_transition.generation()
@@ -6333,9 +6330,8 @@ pub(super) fn run_launcher_loop(
             }
             None
         } else if composition_decision.force_full_slint_raster {
-            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+            let (dirty, damage, _) = layer_target.render_slint_full(&window);
             slint_damage = damage;
-            slint_base_rendered = rendered;
             dirty
         } else if startup_intro_prepare_live_launcher {
             let (dirty, damage) = layer_target.render_slint_base(&window);
