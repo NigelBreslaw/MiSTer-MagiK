@@ -149,6 +149,7 @@ pub struct DirectLayerObligations(u8);
 impl DirectLayerObligations {
     const ARCADE: u8 = 1;
     const PREVIEW: u8 = 2;
+    const ARCADE_AND_PREVIEW: u8 = Self::ARCADE | Self::PREVIEW;
 
     pub const fn new(arcade: bool, preview: bool) -> Self {
         Self((arcade as u8) * Self::ARCADE | (preview as u8) * Self::PREVIEW)
@@ -170,7 +171,7 @@ impl DirectLayerObligations {
         match self.0 {
             Self::ARCADE => "arcade",
             Self::PREVIEW => "preview",
-            Self::ARCADE | Self::PREVIEW => "arcade+preview",
+            Self::ARCADE_AND_PREVIEW => "arcade+preview",
             _ => "none",
         }
     }
