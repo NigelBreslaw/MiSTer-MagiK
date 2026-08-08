@@ -314,6 +314,10 @@ pub(crate) struct PreviewState {
     selected_preview_key: Option<String>,
     terminal_empty: bool,
     current_generation: u64,
+    presentation_generation: u64,
+    presentation_state: PreviewPresentationState,
+    demand: PreviewDemand,
+    route: PreviewRoute,
     cache: PreviewImageCache,
     has_visible_preview: bool,
     visible_preview_key: String,
@@ -353,28 +357,65 @@ pub(crate) enum PreviewPresentationTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PreviewPresentationState {
-    Preparing,
-    Empty,
-    Loading { retained_image: bool },
-    Visible,
-    Transitioning { target: PreviewPresentationTarget },
+    Detached,
+    Loading {
+        generation: u64,
+        retained_image: bool,
+    },
+    Visible {
+        generation: u64,
+    },
+    Animating {
+        generation: u64,
+        target: PreviewPresentationTarget,
+    },
+    RetirementPending {
+        generation: u64,
+    },
 }
 
 impl PreviewPresentationState {
     pub(crate) const fn owns_direct_layer(self) -> bool {
         matches!(
             self,
-            Self::Visible
+            Self::Visible { .. }
                 | Self::Loading {
-                    retained_image: true
+                    retained_image: true,
+                    ..
                 }
-                | Self::Transitioning { .. }
+                | Self::Animating { .. }
+                | Self::RetirementPending { .. }
         )
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreviewDemand {
+    #[default]
+    Empty,
+    Image,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreviewRoute {
+    Eligible,
+    Occluded,
+    #[default]
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreviewFrameIntent {
+    #[default]
+    None,
+    Present {
+        generation: u64,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PreviewPresentationCommit {
+    generation: u64,
     transition_id: u64,
     final_target_presented: bool,
     empty_base_committed: bool,
@@ -533,8 +574,12 @@ impl PreviewState {
             trace_start,
             selected_mra_path: None,
             selected_preview_key: None,
-            terminal_empty: false,
+            terminal_empty: true,
             current_generation: 0,
+            presentation_generation: 0,
+            presentation_state: PreviewPresentationState::Detached,
+            demand: PreviewDemand::Empty,
+            route: PreviewRoute::Unavailable,
             cache: PreviewImageCache::default(),
             has_visible_preview: false,
             visible_preview_key: String::new(),
@@ -561,49 +606,32 @@ impl PreviewState {
     }
 
     pub(crate) fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
-        self.terminal_empty = true;
-        self.empty_base_commit_pending = true;
-        if self.selected_mra_path.is_some()
-            || self.current_generation != 0
-            || self.has_visible_preview
+        if self.presentation_state == PreviewPresentationState::Detached
+            && self.selected_mra_path.is_none()
+            && self.current_generation == 0
+            && !self.has_visible_preview
         {
-            let fade_raw_preview_to_empty =
-                self.has_visible_preview || !self.visible_preview_key.is_empty();
-            self.selected_mra_path = None;
-            self.selected_preview_key = None;
-            self.selection_transition = PreviewSelectionTransition::InstantOnEntry;
-            self.current_generation = 0;
-            if fade_raw_preview_to_empty {
-                // The direct-preview backing is separate from Slint state; clearing
-                // the bridge alone would leave the previous screenshot pixels live.
-                self.begin_raw_transition_to_empty(PreviewTransitionPace::Normal);
-            } else {
-                self.has_visible_preview = false;
-                self.visible_preview_key.clear();
-                self.visible_preview_load_source = "none";
-                self.previous_image = None;
-                self.previous_was_empty = false;
-                self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
-                self.raw_transition_duration_numerator = 1;
-                self.raw_transition_duration_denominator = 1;
-                self.raw_dirty = false;
-            }
-            self.window_preview_keys.clear();
-            self.window_shape = None;
-            self.pending_prefetch_keys.clear();
-            self.deferred_selected_result = None;
-            self.last_prefetch_selected = None;
-            self.prefetch_direction = 0;
-            self.last_prefetch_window = None;
-            self.prefetch_throttle_until = None;
-            bridge.set_arcade_preview_placeholder_visible(true);
-            bridge.set_arcade_preview_status(PreviewStatus::Empty);
-            bridge.set_arcade_preview_title("".into());
-            clear_preview_image_bridge(bridge);
+            self.terminal_empty = true;
+            return;
         }
-        if self.empty_base_commit_pending {
-            self.raw_dirty = true;
-        }
+        self.terminal_empty = true;
+        self.demand_empty(PreviewTransitionPace::Normal);
+        self.selected_mra_path = None;
+        self.selected_preview_key = None;
+        self.selection_transition = PreviewSelectionTransition::InstantOnEntry;
+        self.current_generation = 0;
+        self.window_preview_keys.clear();
+        self.window_shape = None;
+        self.pending_prefetch_keys.clear();
+        self.deferred_selected_result = None;
+        self.last_prefetch_selected = None;
+        self.prefetch_direction = 0;
+        self.last_prefetch_window = None;
+        self.prefetch_throttle_until = None;
+        bridge.set_arcade_preview_placeholder_visible(true);
+        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+        bridge.set_arcade_preview_title("".into());
+        clear_preview_image_bridge(bridge);
     }
 
     pub(crate) fn trace_cache_state(&self) -> &'static str {
@@ -671,6 +699,12 @@ impl PreviewState {
             self.raw_transition_duration_numerator,
             self.raw_transition_duration_denominator,
         ) = pace.duration_ratio();
+        self.demand = PreviewDemand::Image;
+        let generation = self.next_presentation_generation();
+        self.presentation_state = PreviewPresentationState::Animating {
+            generation,
+            target: PreviewPresentationTarget::Image,
+        };
     }
 
     fn begin_raw_transition_to_empty(&mut self, pace: PreviewTransitionPace) {
@@ -700,51 +734,78 @@ impl PreviewState {
         self.current_generation = 0;
         self.selected_preview_key = None;
         self.terminal_empty = true;
-        self.begin_raw_transition_to_empty(pace);
-        // Empty is not presentation-complete until the cached backing is
-        // black and that update has been confirmed. Keep a renderable empty
-        // frame even when there was no prior image to fade.
-        self.empty_base_commit_pending = true;
-        self.raw_dirty = true;
+        self.demand_empty(pace);
     }
 
     pub(crate) const fn terminal_empty(&self) -> bool {
         self.terminal_empty
     }
 
-    fn presentation_transition_pending(&self) -> bool {
-        self.previous_image.is_some()
-            || self.previous_was_empty
-            || (self.empty_base_commit_pending && !self.has_visible_preview)
+    fn next_presentation_generation(&mut self) -> u64 {
+        self.presentation_generation = self.presentation_generation.wrapping_add(1).max(1);
+        self.presentation_generation
     }
 
-    pub(crate) fn presentation_state(&self) -> PreviewPresentationState {
-        if self.presentation_transition_pending() {
-            PreviewPresentationState::Transitioning {
-                target: if self.has_visible_preview {
-                    PreviewPresentationTarget::Image
-                } else {
-                    PreviewPresentationTarget::Empty
-                },
-            }
-        } else if self.current_generation != 0 {
-            PreviewPresentationState::Loading {
-                retained_image: self.has_visible_preview,
-            }
-        } else if self.has_visible_preview {
-            PreviewPresentationState::Visible
-        } else if self.terminal_empty {
-            PreviewPresentationState::Empty
+    fn demand_loading(&mut self) {
+        let retained_image = self.presentation_state.owns_direct_layer();
+        self.demand = PreviewDemand::Image;
+        let generation = self.next_presentation_generation();
+        self.presentation_state = PreviewPresentationState::Loading {
+            generation,
+            retained_image,
+        };
+    }
+
+    fn demand_empty(&mut self, pace: PreviewTransitionPace) {
+        if self.demand == PreviewDemand::Empty
+            && matches!(
+                self.presentation_state,
+                PreviewPresentationState::Detached
+                    | PreviewPresentationState::Animating {
+                        target: PreviewPresentationTarget::Empty,
+                        ..
+                    }
+                    | PreviewPresentationState::RetirementPending { .. }
+            )
+        {
+            return;
+        }
+        self.demand = PreviewDemand::Empty;
+        let generation = self.next_presentation_generation();
+        if self.presentation_state.owns_direct_layer() || self.has_visible_preview {
+            self.begin_raw_transition_to_empty(pace);
+            self.presentation_state = PreviewPresentationState::Animating {
+                generation,
+                target: PreviewPresentationTarget::Empty,
+            };
+            // Empty is not presentation-complete until the cached backing is
+            // black and that update has been confirmed.
+            self.empty_base_commit_pending = true;
+            self.raw_dirty = true;
         } else {
-            PreviewPresentationState::Preparing
+            self.previous_image = None;
+            self.previous_was_empty = false;
+            self.empty_base_commit_pending = false;
+            self.raw_dirty = false;
+            self.presentation_state = PreviewPresentationState::Detached;
         }
     }
 
-    pub(crate) fn presentation_requires_present(&self) -> bool {
-        matches!(
-            self.presentation_state(),
-            PreviewPresentationState::Transitioning { .. }
-        )
+    pub(crate) const fn presentation_state(&self) -> PreviewPresentationState {
+        self.presentation_state
+    }
+
+    pub(crate) const fn frame_intent(&self) -> PreviewFrameIntent {
+        match self.presentation_state {
+            PreviewPresentationState::Animating { generation, .. } => {
+                PreviewFrameIntent::Present { generation }
+            }
+            _ => PreviewFrameIntent::None,
+        }
+    }
+
+    pub(crate) const fn presentation_requires_present(&self) -> bool {
+        matches!(self.frame_intent(), PreviewFrameIntent::Present { .. })
     }
 
     pub(crate) const fn empty_base_commit_pending(&self) -> bool {
@@ -757,6 +818,7 @@ impl PreviewState {
         empty_base_committed: bool,
     ) -> Option<PreviewPresentationCommit> {
         (final_target_presented || empty_base_committed).then_some(PreviewPresentationCommit {
+            generation: self.presentation_generation,
             transition_id: self.raw_transition_id,
             final_target_presented,
             empty_base_committed,
@@ -764,7 +826,9 @@ impl PreviewState {
     }
 
     pub(crate) fn confirm_presentation(&mut self, commit: PreviewPresentationCommit) {
-        if commit.transition_id != self.raw_transition_id {
+        if commit.generation != self.presentation_generation
+            || commit.transition_id != self.raw_transition_id
+        {
             return;
         }
         if commit.empty_base_committed {
@@ -773,6 +837,25 @@ impl PreviewState {
         if commit.final_target_presented {
             self.previous_image = None;
             self.previous_was_empty = false;
+        }
+        if !self.empty_base_commit_pending
+            && self.previous_image.is_none()
+            && !self.previous_was_empty
+        {
+            self.presentation_state = match self.demand {
+                PreviewDemand::Image => PreviewPresentationState::Visible {
+                    generation: self.presentation_generation,
+                },
+                PreviewDemand::Empty => PreviewPresentationState::RetirementPending {
+                    generation: self.presentation_generation,
+                },
+            };
+        }
+    }
+
+    pub(crate) fn confirm_retirement(&mut self, generation: u64) {
+        if self.presentation_state == (PreviewPresentationState::RetirementPending { generation }) {
+            self.presentation_state = PreviewPresentationState::Detached;
         }
     }
 
@@ -1476,6 +1559,7 @@ fn request_selected_preview_async(
         candidate.game.preview_asset_key.to_string(),
     );
     preview.current_generation = generation;
+    preview.demand_loading();
     if preview_startup_trace_enabled() {
         crate::ui_errln!(
             "startup_timing\tpreview_selected_async_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
@@ -1855,6 +1939,7 @@ pub(crate) fn prewarm_arcade_selected_preview(
         candidate.game.preview_asset_key.to_string(),
     );
     preview.current_generation = generation;
+    preview.demand_loading();
     crate::ui_errln!(
         "startup_timing\tpreview_selected_prewarm_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
         preview.trace_elapsed_ms(),
@@ -2488,15 +2573,25 @@ mod tests {
     }
 
     #[test]
-    fn clearing_fresh_preview_marks_terminal_empty() {
+    fn empty_demand_is_idempotent_while_detached() {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let mut preview = PreviewState::new();
 
-        assert!(!preview.terminal_empty());
+        let generation = preview.presentation_generation;
+        let transition_id = preview.raw_transition_id;
         preview.clear(&bridge);
+        preview.clear(&bridge);
+
         assert!(preview.terminal_empty());
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Detached
+        );
+        assert_eq!(preview.presentation_generation, generation);
+        assert_eq!(preview.raw_transition_id, transition_id);
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
     }
 
     #[test]
@@ -2504,27 +2599,99 @@ mod tests {
         let mut preview = PreviewState::new();
         assert_eq!(
             preview.presentation_state(),
-            PreviewPresentationState::Preparing
+            PreviewPresentationState::Detached
         );
 
         preview.current_generation = 1;
+        preview.demand_loading();
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Loading {
-                retained_image: false
+                generation: 1,
+                retained_image: false,
             }
         );
         assert!(!preview.presentation_state().owns_direct_layer());
 
-        preview.has_visible_preview = true;
-        preview.visible_preview_key = "1941.png".into();
+        preview.presentation_state = PreviewPresentationState::Visible { generation: 1 };
+        preview.demand_loading();
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Loading {
-                retained_image: true
+                generation: 2,
+                retained_image: true,
             }
         );
         assert!(preview.presentation_state().owns_direct_layer());
+    }
+
+    #[test]
+    fn final_image_confirmation_completes_animation() {
+        let mut preview = PreviewState::new();
+        preview.cache.insert(
+            "1941.png".into(),
+            preview_image(0xf800),
+            &["1941.png".into()],
+            None,
+        );
+        preview.has_visible_preview = true;
+        preview.begin_raw_transition_to("1941.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "1941.png".into();
+
+        assert!(matches!(
+            preview.frame_intent(),
+            PreviewFrameIntent::Present { generation: 1 }
+        ));
+        let commit = preview
+            .presentation_commit(true, false)
+            .expect("final image commit");
+        preview.confirm_presentation(commit);
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Visible { generation: 1 }
+        );
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+    }
+
+    #[test]
+    fn stale_presentation_generation_cannot_complete_new_demand() {
+        let mut preview = PreviewState::new();
+        preview.has_visible_preview = true;
+        preview.begin_raw_transition_to("first.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "first.png".into();
+        let stale = preview
+            .presentation_commit(true, false)
+            .expect("first image commit");
+
+        preview.select_empty_preview(PreviewTransitionPace::Normal);
+        preview.confirm_presentation(stale);
+
+        assert!(matches!(
+            preview.presentation_state(),
+            PreviewPresentationState::Animating {
+                generation: 2,
+                target: PreviewPresentationTarget::Empty,
+            }
+        ));
+        assert!(preview.previous_image.is_some() || preview.empty_base_commit_pending());
+    }
+
+    #[test]
+    fn rapid_demand_supersession_advances_generation() {
+        let mut preview = PreviewState::new();
+        preview.demand_loading();
+        preview.demand_empty(PreviewTransitionPace::Normal);
+        preview.demand_loading();
+
+        assert_eq!(preview.presentation_generation, 3);
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Loading {
+                generation: 3,
+                retained_image: false,
+            }
+        );
     }
 
     #[test]
@@ -2802,8 +2969,9 @@ mod tests {
 
         assert_eq!(
             preview.presentation_state(),
-            PreviewPresentationState::Transitioning {
-                target: PreviewPresentationTarget::Empty
+            PreviewPresentationState::Animating {
+                generation: 1,
+                target: PreviewPresentationTarget::Empty,
             }
         );
         assert!(preview.presentation_state().owns_direct_layer());
@@ -2823,7 +2991,13 @@ mod tests {
 
         assert_eq!(
             preview.presentation_state(),
-            PreviewPresentationState::Empty
+            PreviewPresentationState::RetirementPending { generation: 1 }
+        );
+        assert!(preview.presentation_state().owns_direct_layer());
+        preview.confirm_retirement(1);
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Detached
         );
         assert!(!preview.presentation_state().owns_direct_layer());
     }
@@ -2889,8 +3063,9 @@ mod tests {
 
         assert_eq!(
             preview.presentation_state(),
-            PreviewPresentationState::Transitioning {
-                target: PreviewPresentationTarget::Image
+            PreviewPresentationState::Animating {
+                generation: 2,
+                target: PreviewPresentationTarget::Image,
             }
         );
         let image_frame = preview.raw_transition_frame().expect("turbo image frame");

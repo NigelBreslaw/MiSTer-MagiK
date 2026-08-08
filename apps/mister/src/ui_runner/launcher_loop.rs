@@ -6967,8 +6967,9 @@ pub(super) fn run_launcher_loop(
             && raw_preview_cached_rect.is_some()
             && matches!(
                 preview.presentation_state(),
-                PreviewPresentationState::Transitioning {
-                    target: PreviewPresentationTarget::Empty
+                PreviewPresentationState::Animating {
+                    target: PreviewPresentationTarget::Empty,
+                    ..
                 }
             );
         let preview_presentation_commit = preview.presentation_commit(
