@@ -7533,7 +7533,7 @@ fn persist_settings_navigation_qualification(output_dir: &Path, summary: &Value)
     )?;
     writeln!(
         report,
-        "| Leg | Orientation | Route | Direction | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Lock/Slint/Status | Result |"
+        "| Leg | Orientation | Route | Direction | FPS | Work p99 | Work max | Dropped frames | Latch drops | Gaps | Lock/Slint/Status | Result |"
     )?;
     writeln!(
         report,
