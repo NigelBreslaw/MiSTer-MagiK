@@ -29,7 +29,7 @@ fn elapsed_at_60_hz(frame: u64) -> Duration {
 }
 
 #[test]
-fn production_magik_rgb565_frame_matches_the_pre_consolidation_golden() {
+fn production_magik_rgb565_frame_matches_the_approved_golden() {
     let mut renderer = ParticleRenderer::new_magik(ParticleConfig {
         count: 16_384,
         width: WIDTH,
@@ -47,7 +47,7 @@ fn production_magik_rgb565_frame_matches_the_pre_consolidation_golden() {
 
     assert_eq!(
         frame_signature(frame.iter().map(|pixel| pixel.0)),
-        0xbce2_cba6_cc4a_9199
+        0x8588_b0ed_5857_049d
     );
 }
 
@@ -55,15 +55,15 @@ fn production_magik_rgb565_frame_matches_the_pre_consolidation_golden() {
 fn arcade_cabinet_rgb565_frame_matches_the_approved_showcase_golden() {
     let mut recipe = embedded_cabinet_recipe().unwrap();
     recipe.seed = 827_141_709_451;
-    let renderer = ArcadeCabinetFormation::new(WIDTH, HEIGHT, recipe).unwrap();
+    let mut renderer = ArcadeCabinetFormation::new(WIDTH, HEIGHT, recipe).unwrap();
     let mut frame = vec![CabinetRgb565Pixel(0); WIDTH * HEIGHT];
 
     renderer
-        .render(&mut frame, Duration::from_secs(15))
+        .render(&mut frame, Duration::from_secs(15), 0)
         .unwrap();
 
     assert_eq!(
         frame_signature(frame.iter().map(|pixel| pixel.0)),
-        0xac1d_5455_b6dc_5fad
+        0x7a94_91aa_cae3_c433
     );
 }

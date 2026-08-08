@@ -54,7 +54,7 @@ impl DirtyRect {
     }
 }
 
-const DIRTY_RECT_LIST_CAP: usize = 32;
+pub(super) const DIRTY_RECT_LIST_CAP: usize = 32;
 const EMPTY_DIRTY_RECT: DirtyRect = DirtyRect {
     x0: 0,
     y0: 0,

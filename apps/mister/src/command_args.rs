@@ -285,18 +285,27 @@ mod tests {
             "fb-map-bandwidth",
             "scanout-slots-map-report",
             "fpga-latch-report",
-            "fpga-latch-post-report",
-            "fpga-latch-pattern",
             "input",
             "catalog-v3-inspect",
             "hbmame-metadata-from-library",
             "library-scan-bench",
             "preview-pack-bench",
             "preview-index-refresh-bench",
-            "framebuffer-stream-scalar-bench",
         ] {
             assert!(is_known_command(command), "{command}");
         }
+        #[cfg(feature = "ui")]
+        for command in ["fpga-latch-post-report", "fpga-latch-pattern"] {
+            assert!(is_known_command(command), "{command}");
+        }
+        #[cfg(not(feature = "ui"))]
+        for command in ["fpga-latch-post-report", "fpga-latch-pattern"] {
+            assert!(!is_known_command(command), "{command}");
+        }
+        #[cfg(feature = "bench-tools")]
+        assert!(is_known_command("framebuffer-stream-scalar-bench"));
+        #[cfg(not(feature = "bench-tools"))]
+        assert!(!is_known_command("framebuffer-stream-scalar-bench"));
         assert!(!is_known_command("audio-tone"));
         assert_command_kind("read", CommandKind::Fpga);
         assert_command_kind("vsync-probe", CommandKind::PreFpga);

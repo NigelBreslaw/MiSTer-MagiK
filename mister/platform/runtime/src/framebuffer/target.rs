@@ -440,6 +440,7 @@ impl UiFrameTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framebuffer::damage::DIRTY_RECT_LIST_CAP;
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
         DirtyRect { x0, y0, x1, y1 }
@@ -454,7 +455,10 @@ mod tests {
     }
 
     fn covered_area(rects: &[DirtyRect]) -> usize {
-        rects.iter().map(|rect| rect.area()).sum()
+        rects
+            .iter()
+            .map(|rect| rect.width() * rect.rows() as usize)
+            .sum()
     }
 
     #[test]
@@ -473,7 +477,10 @@ mod tests {
         all_copies.push(direct_overlay);
 
         assert_no_intersections(&all_copies);
-        assert_eq!(covered_area(&all_copies), base.area());
+        assert_eq!(
+            covered_area(&all_copies),
+            base.width() * base.rows() as usize
+        );
     }
 
     #[test]

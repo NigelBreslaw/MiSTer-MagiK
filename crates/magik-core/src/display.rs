@@ -470,11 +470,17 @@ pub fn video_mode_geometry(value: &str) -> Option<DisplayGeometry> {
 
     let parts = value
         .split(',')
-        .filter_map(|part| part.trim().parse::<u16>().ok())
-        .collect::<Vec<_>>();
+        .map(|part| part.trim().parse::<u64>().ok())
+        .collect::<Option<Vec<_>>>()?;
     match parts.as_slice() {
-        [w, _, _, _, h, ..] => Some(DisplayGeometry::new(*w, *h)),
-        [w, h, ..] => Some(DisplayGeometry::new(*w, *h)),
+        [w, _, _, _, h, ..] => Some(DisplayGeometry::new(
+            u16::try_from(*w).ok()?,
+            u16::try_from(*h).ok()?,
+        )),
+        [w, h, ..] => Some(DisplayGeometry::new(
+            u16::try_from(*w).ok()?,
+            u16::try_from(*h).ok()?,
+        )),
         _ => None,
     }
 }
@@ -623,5 +629,12 @@ mod tests {
             video_mode_geometry("1920,1200,60"),
             Some(DisplayGeometry::new(1920, 1200))
         );
+        for invalid in [
+            "1280,invalid,40,220,720,5,5,20,74250",
+            "1920,,60",
+            "1920,1200,invalid",
+        ] {
+            assert!(video_mode_geometry(invalid).is_none(), "{invalid}");
+        }
     }
 }
