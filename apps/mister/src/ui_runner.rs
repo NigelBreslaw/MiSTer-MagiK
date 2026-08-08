@@ -98,9 +98,13 @@ fn launcher_env_flag(name: &str) -> bool {
 fn launcher_startup_orientation(
     persisted: ScreenOrientation,
     orientation_benchmark: bool,
+    settings_navigation_benchmark: bool,
+    settings_navigation_orientation: Option<ScreenOrientation>,
 ) -> ScreenOrientation {
     if orientation_benchmark {
         ScreenOrientation::Normal
+    } else if settings_navigation_benchmark {
+        settings_navigation_orientation.unwrap_or(ScreenOrientation::Normal)
     } else {
         persisted
     }
@@ -458,9 +462,18 @@ pub fn run_ui(f: &mut Fpga, launch_return_cpu_profile: Option<cpu_profile::CpuPr
         }
         "launcher" => {
             let launcher_settings = crate::settings::MagikSettings::load();
+            let settings_navigation_benchmark =
+                launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
+            let settings_navigation_orientation =
+                std::env::var("MISTER_SETTINGS_NAVIGATION_ORIENTATION")
+                    .ok()
+                    .as_deref()
+                    .and_then(ScreenOrientation::parse);
             let launcher_orientation = launcher_startup_orientation(
                 launcher_settings.screen_orientation,
                 launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"),
+                settings_navigation_benchmark,
+                settings_navigation_orientation,
             );
             let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);
             with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {

@@ -10718,11 +10718,36 @@ mod tests {
             ScreenOrientation::MonitorCounterclockwise,
         ] {
             assert_eq!(
-                launcher_startup_orientation(persisted, true),
+                launcher_startup_orientation(persisted, true, false, None),
                 ScreenOrientation::Normal
             );
-            assert_eq!(launcher_startup_orientation(persisted, false), persisted);
+            assert_eq!(
+                launcher_startup_orientation(persisted, false, false, None),
+                persisted
+            );
         }
+    }
+
+    #[test]
+    pub(super) fn settings_navigation_benchmark_selects_requested_layout_before_window_creation() {
+        let persisted = ScreenOrientation::MonitorCounterclockwise;
+        assert_eq!(
+            launcher_startup_orientation(persisted, false, true, Some(ScreenOrientation::Normal),),
+            ScreenOrientation::Normal
+        );
+        assert_eq!(
+            launcher_startup_orientation(
+                ScreenOrientation::Normal,
+                false,
+                true,
+                Some(ScreenOrientation::MonitorCounterclockwise),
+            ),
+            ScreenOrientation::MonitorCounterclockwise
+        );
+        assert_eq!(
+            launcher_startup_orientation(persisted, false, true, None),
+            ScreenOrientation::Normal
+        );
     }
 
     #[test]
