@@ -130,6 +130,30 @@ impl UserStateStore {
         count_for_system(&self.connection()?, "favourites", system_id)
     }
 
+    pub fn favourite_games(&self, system_id: &str) -> Result<Vec<UserGameIdentity>, String> {
+        let connection = self.connection()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT system_id,stable_key,title,launch_ref,payload_path
+                 FROM favourites WHERE system_id=?1
+                 ORDER BY favourited_at DESC,stable_key",
+            )
+            .map_err(|error| format!("prepare favourites: {error}"))?;
+        let rows = statement
+            .query_map([system_id], |row| {
+                Ok(UserGameIdentity {
+                    system_id: row.get(0)?,
+                    stable_key: row.get(1)?,
+                    title: row.get(2)?,
+                    launch_ref: row.get(3)?,
+                    payload_path: row.get(4)?,
+                })
+            })
+            .map_err(|error| format!("query favourites: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("read favourites: {error}"))
+    }
+
     pub fn recent_unique(&self, system_id: &str, limit: usize) -> Result<Vec<RecentGame>, String> {
         let connection = self.connection()?;
         let mut statement = connection

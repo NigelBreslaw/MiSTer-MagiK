@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -281,6 +281,7 @@ pub(crate) struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
+    favourite_launch_refs: HashSet<String>,
     surface: Vec<Rgb565Pixel>,
     band_scratch: Vec<Pixel>,
     selection_invert_scratch: Vec<Rgb565Pixel>,
@@ -302,6 +303,7 @@ pub(crate) struct ArcadeListRenderer {
 pub(crate) struct CachedArcadeRow {
     pub(crate) title: Arc<str>,
     pub(crate) is_new: bool,
+    pub(crate) is_favourite: bool,
     pub(crate) pixels: Vec<Rgb565Pixel>,
     pub(crate) last_used: u64,
 }
@@ -373,6 +375,7 @@ impl ArcadeListRenderer {
             title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.typeface),
             meta_font: ConsoleFont::new_with_typeface(ARCADE_LIST_META_FONT_PX, style.typeface),
             row_cache: HashMap::new(),
+            favourite_launch_refs: HashSet::new(),
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
@@ -447,6 +450,19 @@ impl ArcadeListRenderer {
         self.last_draw = None;
         self.last_filter_draw = None;
         self.surface_y = 0;
+    }
+
+    pub(crate) fn set_favourite_launch_refs<'a>(
+        &mut self,
+        refs: impl IntoIterator<Item = &'a str>,
+    ) {
+        let refs = refs.into_iter().map(str::to_owned).collect();
+        if self.favourite_launch_refs != refs {
+            self.favourite_launch_refs = refs;
+            self.row_cache.clear();
+            self.row_fingerprint_cache.clear();
+            self.invalidate_presented_layer();
+        }
     }
 
     pub(crate) fn draw(
@@ -757,19 +773,24 @@ impl ArcadeListRenderer {
         y: isize,
     ) {
         let needs_render = self.row_cache.get(&idx).is_none_or(|cached| {
-            !arc_str_eq(&cached.title, &game.title) || cached.is_new != game.is_new
+            !arc_str_eq(&cached.title, &game.title)
+                || cached.is_new != game.is_new
+                || cached.is_favourite
+                    != self.favourite_launch_refs.contains(game.mra_path.as_ref())
         });
         if needs_render {
             if self.row_cache.len() >= ARCADE_ROW_CACHE_MAX {
                 prune_arcade_row_cache(&mut self.row_cache);
             }
-            let row = self.render_row(game.title.as_ref(), game.is_new, idx);
+            let is_favourite = self.favourite_launch_refs.contains(game.mra_path.as_ref());
+            let row = self.render_row(game.title.as_ref(), game.is_new, is_favourite, idx);
             let last_used = self.next_row_cache_epoch();
             self.row_cache.insert(
                 idx,
                 CachedArcadeRow {
                     title: Arc::clone(&game.title),
                     is_new: game.is_new,
+                    is_favourite,
                     pixels: row,
                     last_used,
                 },
@@ -1349,11 +1370,22 @@ impl ArcadeListRenderer {
         }
     }
 
-    fn render_row(&mut self, title: &str, is_new: bool, idx: usize) -> Vec<Rgb565Pixel> {
+    fn render_row(
+        &mut self,
+        title: &str,
+        is_new: bool,
+        is_favourite: bool,
+        idx: usize,
+    ) -> Vec<Rgb565Pixel> {
         let row_height = self.style.row_height as usize;
         let mut row = vec![Pixel(0); self.width * row_height];
         draw_arcade_row_background_with_style(&mut row, self.width, idx, self.style);
-        let reserved = if is_new { 76 } else { 24 };
+        let reserved = match (is_new, is_favourite) {
+            (true, true) => 96,
+            (true, false) => 76,
+            (false, true) => 44,
+            (false, false) => 24,
+        };
         let title = self
             .title_font
             .clipped_text(title, self.width.saturating_sub(reserved));
@@ -1388,6 +1420,20 @@ impl ArcadeListRenderer {
                 self.style.badge_text,
                 self.style,
                 &mut self.meta_font,
+            );
+        }
+        if is_favourite {
+            let baseline = self.meta_font.centered_text_baseline("*", 0, row_height);
+            self.meta_font.draw_text_clipped_gradient(
+                &mut row,
+                self.width,
+                self.width,
+                0,
+                row_height,
+                self.width.saturating_sub(22) as isize,
+                baseline,
+                "*",
+                TextGradient::new(Pixel(0x00ffd166), Pixel(0x00ffd166), Pixel(0x00ffd166)),
             );
         }
         row.into_iter().map(pixel_to_rgb565).collect()
@@ -2119,7 +2165,7 @@ mod tests {
         let display = crt_240_display();
         let metrics = CrtUiMetrics::for_display(&display);
         let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
-        let row = renderer.render_row("MagiK 1984", false, 0);
+        let row = renderer.render_row("MagiK 1984", false, false, 0);
         let width = renderer.width;
         let row_height = metrics.game_row_height as usize;
         let mut destination = vec![Rgb565Pixel(0); width * row_height / 2];
@@ -2471,7 +2517,7 @@ mod tests {
     #[test]
     fn arcade_row_title_uses_gradient_pixels() {
         let mut renderer = ArcadeListRenderer::new();
-        let row = renderer.render_row("MAGIK", false, 0);
+        let row = renderer.render_row("MAGIK", false, false, 0);
         let bg = pixel_to_rgb565(Pixel(0x001a1424));
         let border = pixel_to_rgb565(Pixel(0x00251c34));
         let title_pixels = row
@@ -2758,7 +2804,7 @@ mod tests {
             metrics.font_family = font_family;
             let style = ArcadeListStyle::crt_with_raster(metrics, raster);
             let mut renderer = ArcadeListRenderer::new_with_style(style, Some(metrics));
-            let row = renderer.render_row("MagiK", true, 0);
+            let row = renderer.render_row("MagiK", true, false, 0);
             let sample_x = renderer.width - 50;
             let badge_rows = row
                 .chunks(renderer.width)
@@ -2862,6 +2908,7 @@ mod tests {
                 CachedArcadeRow {
                     title: format!("Game {idx}").into(),
                     is_new: false,
+                    is_favourite: false,
                     pixels: Vec::new(),
                     last_used: idx as u64,
                 },

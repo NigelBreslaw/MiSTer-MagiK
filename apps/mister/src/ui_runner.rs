@@ -142,6 +142,7 @@ pub(crate) mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;
+mod user_state_session;
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod video_loop;
 
@@ -180,6 +181,7 @@ use ui_boot::*;
 use ui_frame_target::*;
 use ui_platform::*;
 use update_checker::*;
+use user_state_session::*;
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 use video_loop::*;
 

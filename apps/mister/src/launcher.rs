@@ -263,6 +263,14 @@ pub enum Screen {
     Info,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ArcadeUserListMode {
+    #[default]
+    Games,
+    Recent,
+    Favourites,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmAction {
     ExitToMister,
@@ -273,6 +281,8 @@ pub enum ConfirmAction {
     DisplayResolution,
     DisplayResolutionError,
     ScreenOrientation,
+    AddFavourite,
+    RemoveFavourite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,6 +292,8 @@ pub enum LauncherAction {
     NavigateBack,
     NavigateHome,
     LaunchGame,
+    AddFavourite,
+    RemoveFavourite,
     ExitToMister,
     RebuildDatabase,
     Restart,
@@ -813,6 +825,11 @@ pub struct LauncherNav {
     pub arcade: ArcadeNav,
     pub arcade_filter: ArcadeFilterState,
     pub arcade_search: ArcadeSearchState,
+    favourite_launch_refs: HashSet<String>,
+    recent_launch_refs: Vec<String>,
+    arcade_user_list_mode: ArcadeUserListMode,
+    user_list_indexes: Vec<usize>,
+    pending_game_action_path: Option<String>,
     game_list_memory: HashMap<String, GameListMemory>,
     collection_filters: HashMap<String, ArcadeFilter>,
     collection_search_queries: HashMap<String, String>,
@@ -890,6 +907,11 @@ pub struct NavigationTransitionState {
     arcade: ArcadeNav,
     arcade_filter: ArcadeFilterState,
     arcade_search: ArcadeSearchState,
+    favourite_launch_refs: HashSet<String>,
+    recent_launch_refs: Vec<String>,
+    arcade_user_list_mode: ArcadeUserListMode,
+    user_list_indexes: Vec<usize>,
+    pending_game_action_path: Option<String>,
     game_list_memory: HashMap<String, GameListMemory>,
     collection_filters: HashMap<String, ArcadeFilter>,
     collection_search_queries: HashMap<String, String>,
@@ -1196,6 +1218,11 @@ impl LauncherNav {
             arcade: ArcadeNav::new(),
             arcade_filter: ArcadeFilterState::new(),
             arcade_search: ArcadeSearchState::new(),
+            favourite_launch_refs: HashSet::new(),
+            recent_launch_refs: Vec::new(),
+            arcade_user_list_mode: ArcadeUserListMode::Games,
+            user_list_indexes: Vec::new(),
+            pending_game_action_path: None,
             game_list_memory: HashMap::new(),
             collection_filters: HashMap::new(),
             collection_search_queries: HashMap::new(),
@@ -1754,6 +1781,8 @@ impl LauncherNav {
             self.remember_current_menu_view();
         }
         self.active_collection_id = Some(collection.id.clone());
+        self.arcade_user_list_mode = ArcadeUserListMode::Games;
+        self.user_list_indexes.clear();
         let filter = self
             .collection_filters
             .get(&collection.id)
@@ -1852,6 +1881,11 @@ impl LauncherNav {
             arcade: self.arcade.clone(),
             arcade_filter: self.arcade_filter.clone(),
             arcade_search: self.arcade_search.clone(),
+            favourite_launch_refs: self.favourite_launch_refs.clone(),
+            recent_launch_refs: self.recent_launch_refs.clone(),
+            arcade_user_list_mode: self.arcade_user_list_mode,
+            user_list_indexes: self.user_list_indexes.clone(),
+            pending_game_action_path: self.pending_game_action_path.clone(),
             game_list_memory: self.game_list_memory.clone(),
             collection_filters: self.collection_filters.clone(),
             collection_search_queries: self.collection_search_queries.clone(),
@@ -1893,6 +1927,11 @@ impl LauncherNav {
         self.arcade = state.arcade;
         self.arcade_filter = state.arcade_filter;
         self.arcade_search = state.arcade_search;
+        self.favourite_launch_refs = state.favourite_launch_refs;
+        self.recent_launch_refs = state.recent_launch_refs;
+        self.arcade_user_list_mode = state.arcade_user_list_mode;
+        self.user_list_indexes = state.user_list_indexes;
+        self.pending_game_action_path = state.pending_game_action_path;
         self.game_list_memory = state.game_list_memory;
         self.collection_filters = state.collection_filters;
         self.collection_search_queries = state.collection_search_queries;
@@ -2419,6 +2458,20 @@ impl LauncherNav {
                 });
         }
 
+        if rising(now.btn_x, self.prev.btn_x)
+            && let Some(game) =
+                self.active_arcade_game_at(catalog, &collection_id, self.arcade.selected)
+        {
+            let launch_ref = game.mra_path.to_string();
+            self.confirm_action = Some(if self.favourite_launch_refs.contains(&launch_ref) {
+                ConfirmAction::RemoveFavourite
+            } else {
+                ConfirmAction::AddFavourite
+            });
+            self.confirm_selected = 0;
+            self.pending_game_action_path = Some(launch_ref);
+        }
+
         None
     }
 
@@ -2887,6 +2940,7 @@ impl LauncherNav {
             }
             self.confirm_action = None;
             self.confirm_selected = 0;
+            self.pending_game_action_path = None;
             if home_pressed {
                 self.go_root();
             }
@@ -2958,6 +3012,16 @@ impl LauncherNav {
                         path: None,
                         settings: None,
                     }),
+                    Some(ConfirmAction::AddFavourite) => Some(LauncherEvent {
+                        action: LauncherAction::AddFavourite,
+                        path: self.pending_game_action_path.take(),
+                        settings: None,
+                    }),
+                    Some(ConfirmAction::RemoveFavourite) => Some(LauncherEvent {
+                        action: LauncherAction::RemoveFavourite,
+                        path: self.pending_game_action_path.take(),
+                        settings: None,
+                    }),
                     None => None,
                 };
             }
@@ -2975,6 +3039,7 @@ impl LauncherNav {
                     settings: None,
                 });
             }
+            self.pending_game_action_path = None;
         }
         None
     }
@@ -3009,6 +3074,9 @@ impl LauncherNav {
     }
 
     pub fn active_arcade_game_count(&self, catalog: &ArcadeCatalog, system_id: &str) -> usize {
+        if self.arcade_user_list_mode != ArcadeUserListMode::Games {
+            return self.user_list_indexes.len();
+        }
         let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
             && !self.arcade_search.query.is_empty()
@@ -3021,6 +3089,93 @@ impl LauncherNav {
         }
     }
 
+    pub fn set_favourite_launch_refs(&mut self, refs: impl IntoIterator<Item = String>) {
+        self.favourite_launch_refs = refs.into_iter().collect();
+    }
+
+    pub fn set_user_game_refs(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        favourites: impl IntoIterator<Item = String>,
+        recents: Vec<String>,
+    ) {
+        self.set_favourite_launch_refs(favourites);
+        self.recent_launch_refs = recents;
+        self.rebuild_user_list_indexes(catalog);
+    }
+
+    pub fn set_arcade_user_list_mode(&mut self, catalog: &ArcadeCatalog, mode: ArcadeUserListMode) {
+        self.arcade_user_list_mode = mode;
+        self.rebuild_user_list_indexes(catalog);
+        self.arcade_filter.active = ArcadeFilter::All;
+        self.arcade_filter.drawer_open = false;
+        self.arcade_search = ArcadeSearchState::new();
+        self.arcade.reset();
+    }
+
+    pub fn arcade_user_list_mode(&self) -> ArcadeUserListMode {
+        self.arcade_user_list_mode
+    }
+
+    fn rebuild_user_list_indexes(&mut self, catalog: &ArcadeCatalog) {
+        let refs: Vec<&str> = match self.arcade_user_list_mode {
+            ArcadeUserListMode::Games => Vec::new(),
+            ArcadeUserListMode::Recent => {
+                self.recent_launch_refs.iter().map(String::as_str).collect()
+            }
+            ArcadeUserListMode::Favourites => catalog
+                .games
+                .iter()
+                .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
+                .map(|game| game.mra_path.as_ref())
+                .filter(|launch_ref| self.favourite_launch_refs.contains(*launch_ref))
+                .collect(),
+        };
+        self.user_list_indexes = refs
+            .into_iter()
+            .filter_map(|launch_ref| {
+                catalog
+                    .games
+                    .iter()
+                    .position(|game| game.mra_path.as_ref() == launch_ref)
+            })
+            .collect();
+    }
+
+    pub fn favourite_count(&self) -> usize {
+        self.favourite_launch_refs.len()
+    }
+
+    pub fn recent_count(&self) -> usize {
+        self.recent_launch_refs.len()
+    }
+
+    pub fn apply_favourite_state(&mut self, launch_ref: &str, favourite: bool) {
+        if favourite {
+            self.favourite_launch_refs.insert(launch_ref.to_string());
+        } else {
+            self.favourite_launch_refs.remove(launch_ref);
+        }
+    }
+
+    pub fn reconcile_favourite_state(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        launch_ref: &str,
+        favourite: bool,
+    ) {
+        self.apply_favourite_state(launch_ref, favourite);
+        self.rebuild_user_list_indexes(catalog);
+    }
+
+    pub fn is_favourite_launch_ref(&self, launch_ref: &str) -> bool {
+        self.favourite_launch_refs.contains(launch_ref)
+    }
+
+    pub fn favourite_launch_refs(&self) -> impl Iterator<Item = &str> {
+        self.favourite_launch_refs.iter().map(String::as_str)
+    }
+
     #[must_use]
     pub fn arcade_search_result_count(&self) -> usize {
         self.arcade_search.results.len()
@@ -3031,6 +3186,12 @@ impl LauncherNav {
         catalog: &'a ArcadeCatalog,
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
+        if self.arcade_user_list_mode != ArcadeUserListMode::Games {
+            return crate::arcade_catalog::ArcadeGameView::indexed(
+                &catalog.games,
+                &self.user_list_indexes,
+            );
+        }
         let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
             && !self.arcade_search.query.is_empty()
@@ -9045,5 +9206,94 @@ mod tests {
         nav.sync_launcher_taxonomy(&published_without_amiga);
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.active_collection_id, None);
+    }
+
+    #[test]
+    fn x_options_emits_context_sensitive_favourite_actions() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("F-Zero")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/F-Zero.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "snes"));
+        let now = Instant::now();
+
+        assert_eq!(
+            nav.handle_input(&pad_with(|pad| pad.btn_x = true), now, &catalog),
+            None
+        );
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::AddFavourite));
+        nav.handle_input(
+            &pad_with(|pad| pad.dpad_right = true),
+            now + Duration::from_millis(1),
+            &catalog,
+        );
+        let add = nav
+            .handle_input(
+                &pad_with(|pad| pad.btn_a = true),
+                now + Duration::from_millis(2),
+                &catalog,
+            )
+            .unwrap();
+        assert_eq!(add.action, LauncherAction::AddFavourite);
+        assert_eq!(
+            add.path.as_deref(),
+            Some("/media/fat/games/SNES/F-Zero.sfc")
+        );
+
+        nav.apply_favourite_state(add.path.as_deref().unwrap(), true);
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(3),
+            &catalog,
+        );
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_x = true),
+            now + Duration::from_millis(4),
+            &catalog,
+        );
+        assert_eq!(nav.confirm_action, Some(ConfirmAction::RemoveFavourite));
+    }
+
+    #[test]
+    fn user_lists_preserve_recent_order_and_filter_favourites() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("F-Zero")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/F-Zero.sfc")
+                    .build(),
+                arcade_game("Mario World")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/Mario World.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 2)],
+        );
+        let mut nav = LauncherNav::new();
+        assert!(nav.open_system(&catalog, "snes"));
+        nav.set_user_game_refs(
+            &catalog,
+            ["/media/fat/games/SNES/F-Zero.sfc".to_string()],
+            vec![
+                "/media/fat/games/SNES/Mario World.sfc".to_string(),
+                "/media/fat/games/SNES/F-Zero.sfc".to_string(),
+            ],
+        );
+
+        nav.set_arcade_user_list_mode(&catalog, ArcadeUserListMode::Recent);
+        let recent = nav.active_arcade_game_view(&catalog, "snes");
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent.get(0).unwrap().title.as_ref(), "Mario World");
+
+        nav.set_arcade_user_list_mode(&catalog, ArcadeUserListMode::Favourites);
+        let favourites = nav.active_arcade_game_view(&catalog, "snes");
+        assert_eq!(favourites.len(), 1);
+        assert_eq!(favourites.get(0).unwrap().title.as_ref(), "F-Zero");
     }
 }

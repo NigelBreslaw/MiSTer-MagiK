@@ -436,6 +436,7 @@ fn configure_arcade_list_renderer_geometry(
 ) {
     let (geometry, render_h) = arcade_list_layout(nav, ui);
     renderer.set_geometry_for_render_h(geometry, render_h);
+    renderer.set_favourite_launch_refs(nav.favourite_launch_refs());
 }
 
 fn navigation_transition_for_intent(
@@ -2694,6 +2695,11 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
+    let user_state_session = UserStateSession::start(
+        mister_magik_catalog::catalog_config::default_user_state_path(),
+        PathBuf::from("/media/fat"),
+    );
+    let mut user_state_catalog_version = None;
     let arcade_root = std::env::var("MISTER_ARCADE_ROOT")
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     crate::ui_logln!(
@@ -3471,6 +3477,42 @@ pub(super) fn run_launcher_loop(
             frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
         let mut prepare_trace = LauncherPrepareTrace::default();
         prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
+        if catalog_ready && user_state_catalog_version != Some(catalog_version) {
+            let games = catalog
+                .games
+                .iter()
+                .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
+                .filter_map(|game| catalog.user_game_identity_for_ref(&game.mra_path))
+                .collect();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+                .unwrap_or(0);
+            user_state_session.refresh(games, now);
+            user_state_catalog_version = Some(catalog_version);
+        }
+        while let Some(event) = user_state_session.poll() {
+            match event {
+                UserStateEvent::Snapshot(snapshot) => {
+                    nav.set_user_game_refs(
+                        &catalog,
+                        snapshot.favourite_launch_refs,
+                        snapshot.recent_launch_refs,
+                    );
+                    full_bridge_dirty = true;
+                    request_launcher_redraw!();
+                }
+                UserStateEvent::Failed { error, rollback } => {
+                    if let Some((launch_ref, favourite)) = rollback {
+                        nav.reconcile_favourite_state(&catalog, &launch_ref, favourite);
+                    }
+                    crate::ui_errln!("user-state: {error}");
+                    full_bridge_dirty = true;
+                    request_launcher_redraw!();
+                }
+            }
+        }
         let return_was_waiting = lifecycle.startup_status().mode == StartupMode::ReturnFromGame
             && !lifecycle.startup_can_present_frame();
         lifecycle.tick_startup_reveal(loop_start, catalog_ready, &mut lifecycle_effects);
@@ -5158,6 +5200,23 @@ pub(super) fn run_launcher_loop(
                                             "settings: failed to save launcher settings: {error}"
                                         );
                                     }
+                                }
+                            }
+                            LauncherAction::AddFavourite | LauncherAction::RemoveFavourite => {
+                                let favourite = event.action == LauncherAction::AddFavourite;
+                                if let Some(launch_ref) = event.path.as_deref()
+                                    && let Some(game) =
+                                        catalog.user_game_identity_for_ref(launch_ref)
+                                {
+                                    nav.reconcile_favourite_state(&catalog, launch_ref, favourite);
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .ok()
+                                        .and_then(|duration| i64::try_from(duration.as_secs()).ok())
+                                        .unwrap_or(0);
+                                    user_state_session.set_favourite(game, favourite, now);
+                                    full_bridge_dirty = true;
+                                    request_launcher_redraw!();
                                 }
                             }
                             LauncherAction::LaunchGame => {}

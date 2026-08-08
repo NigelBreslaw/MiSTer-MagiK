@@ -702,6 +702,18 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
             left_label: "Cancel (20)",
             right_label: "Confirm",
         },
+        Some(launcher::ConfirmAction::AddFavourite) => ConfirmBridgeText {
+            title: "Game Options",
+            message: "Add this game to Favorites?",
+            left_label: "Cancel",
+            right_label: "Add Favorite",
+        },
+        Some(launcher::ConfirmAction::RemoveFavourite) => ConfirmBridgeText {
+            title: "Game Options",
+            message: "Remove this game from Favorites?",
+            left_label: "Cancel",
+            right_label: "Remove Favorite",
+        },
         None => ConfirmBridgeText {
             title: "",
             message: "",
