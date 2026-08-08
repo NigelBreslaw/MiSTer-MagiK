@@ -1503,8 +1503,11 @@ fn frame_production_class(
     }
 }
 
-fn latch_late_start_wait_enabled(latch_backend_active: bool, home_motion_active: bool) -> bool {
-    !(latch_backend_active && home_motion_active)
+fn latch_late_start_wait_enabled(
+    latch_backend_active: bool,
+    production_class: FrameProductionClass,
+) -> bool {
+    !(latch_backend_active && production_class == FrameProductionClass::SynchronousAnimation)
 }
 
 fn retain_or_defer_screensaver_buffer(
@@ -5999,13 +6002,18 @@ pub(super) fn run_launcher_loop(
             home_pan_present_active,
             home_horizontal_input_held,
         );
+        let scheduled_frame_class = frame_production_class(
+            screensaver.active,
+            home_motion_active,
+            navigation_transition.is_active(),
+        );
         let late_frame_start_headroom_us = if latch_backend_active {
             phase_alignment.required_headroom_us()
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
         };
         let wait_before_render =
-            latch_late_start_wait_enabled(latch_backend_active, home_motion_active)
+            latch_late_start_wait_enabled(latch_backend_active, scheduled_frame_class)
                 && pacing_policy
                     .decide(LauncherFramePacingInput {
                         first_visible_copy_done: frame_accounting.first_visible_copy_done(),
@@ -6100,7 +6108,10 @@ pub(super) fn run_launcher_loop(
             screensaver_active_cards = 0;
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
-        let mut frame_production_trace = FrameProductionTrace::default();
+        let mut frame_production_trace = FrameProductionTrace {
+            class: scheduled_frame_class,
+            ..FrameProductionTrace::default()
+        };
         let mut frame_production_completed_at = None;
         let mut screensaver_render_trace = ScreensaverRenderTrace::default();
         let mut accepted_screensaver_frame = false;
@@ -6946,11 +6957,6 @@ pub(super) fn run_launcher_loop(
             || navigation_transition_composition_active;
         let direct_hidden_present_mode =
             startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
-        frame_production_trace.class = frame_production_class(
-            screensaver.active,
-            home_motion_active,
-            navigation_transition_frame_active,
-        );
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -11532,11 +11538,27 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn latch_late_start_wait_is_disabled_only_for_active_home_motion() {
-        assert!(latch_late_start_wait_enabled(false, false));
-        assert!(latch_late_start_wait_enabled(false, true));
-        assert!(latch_late_start_wait_enabled(true, false));
-        assert!(!latch_late_start_wait_enabled(true, true));
+    pub(super) fn latch_late_start_wait_is_disabled_only_for_synchronous_animation() {
+        assert!(latch_late_start_wait_enabled(
+            false,
+            FrameProductionClass::EventDriven
+        ));
+        assert!(latch_late_start_wait_enabled(
+            false,
+            FrameProductionClass::SynchronousAnimation
+        ));
+        assert!(latch_late_start_wait_enabled(
+            true,
+            FrameProductionClass::EventDriven
+        ));
+        assert!(latch_late_start_wait_enabled(
+            true,
+            FrameProductionClass::Prepared
+        ));
+        assert!(!latch_late_start_wait_enabled(
+            true,
+            FrameProductionClass::SynchronousAnimation
+        ));
     }
 
     #[test]
