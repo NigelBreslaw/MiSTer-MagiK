@@ -35,8 +35,8 @@ pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
-    agent_telemetry_for_duration, agent_telemetry_until_screensaver_profile_complete,
-    bootstrap_agent_with,
+    agent_telemetry_for_duration, agent_telemetry_for_duration_at_cadence,
+    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
 };
 use platform_deploy::*;
 use remote::{
@@ -645,11 +645,10 @@ impl NativeDevice {
     pub(crate) fn profile_settings_navigation(
         &mut self,
         output_dir: &Path,
-        orientation: &str,
         pprof: bool,
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
-            run_installed_settings_navigation(config, output_dir, orientation, pprof)
+            run_installed_settings_navigation(config, output_dir, pprof)
         })
     }
 
@@ -6365,16 +6364,12 @@ const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 48;
 const ORIENTATION_TRANSITION_LEGS_PER_EFFECT: usize = 6;
 const SETTINGS_NAVIGATION_REMOTE_DIR: &str = "/tmp/mister-magik/settings-navigation";
 const SETTINGS_NAVIGATION_TELEMETRY_SECS: u64 = 36;
-const SETTINGS_NAVIGATION_LEGS: usize = 6;
+const SETTINGS_NAVIGATION_LEGS: usize = 12;
 
-fn settings_navigation_launcher_env(orientation: &str, pprof: bool) -> Vec<(String, String)> {
+fn settings_navigation_launcher_env(pprof: bool) -> Vec<(String, String)> {
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_SETTINGS_NAVIGATION_BENCHMARK".into(), "1".into()),
-        (
-            "MISTER_SETTINGS_NAVIGATION_ORIENTATION".into(),
-            orientation.into(),
-        ),
         (
             "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR".into(),
             SETTINGS_NAVIGATION_REMOTE_DIR.into(),
@@ -6408,12 +6403,8 @@ fn settings_navigation_launcher_env(orientation: &str, pprof: bool) -> Vec<(Stri
 fn run_installed_settings_navigation(
     config: &NativeDeviceConfig,
     output_dir: &Path,
-    orientation: &str,
     pprof: bool,
 ) -> Result<String> {
-    if !matches!(orientation, "normal" | "monitor-counterclockwise") {
-        return Err(format!("unsupported Settings navigation orientation {orientation}").into());
-    }
     let benchmark_mode = DISPLAY_MATRIX_MODES
         .iter()
         .find(|mode| mode.id == "hdmi-1280x720p60")
@@ -6428,20 +6419,20 @@ fn run_installed_settings_navigation(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("settings-navigation-transition-v1")
+        .get("settings-navigation-transition-v2")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support settings-navigation-transition-v1".into());
+        return Err("installed app does not support settings-navigation-transition-v2".into());
     }
     if pprof
         && capability
-            .get("settings-navigation-transition-pprof-v1")
+            .get("settings-navigation-transition-pprof-v2")
             .and_then(Value::as_bool)
             != Some(true)
     {
         return Err(
-            "installed app does not support settings-navigation-transition-pprof-v1".into(),
+            "installed app does not support settings-navigation-transition-pprof-v2".into(),
         );
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
@@ -6490,9 +6481,10 @@ fn run_installed_settings_navigation(
         )?;
         let telemetry_endpoint = config.agent()?.clone();
         let telemetry_thread = thread::spawn(move || {
-            agent_telemetry_for_duration(
+            agent_telemetry_for_duration_at_cadence(
                 &telemetry_endpoint,
                 Duration::from_secs(SETTINGS_NAVIGATION_TELEMETRY_SECS),
+                100,
             )
             .map_err(|error| error.to_string())
         });
@@ -6508,7 +6500,7 @@ fn run_installed_settings_navigation(
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
-                env_vars: settings_navigation_launcher_env(orientation, pprof),
+                env_vars: settings_navigation_launcher_env(pprof),
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
                 ..LauncherRestartOptions::default()
@@ -6551,7 +6543,7 @@ fn run_installed_settings_navigation(
             .ok_or("Settings navigation pprof completion is missing")?;
             let profile: Value = serde_json::from_str(profile_text.trim())?;
             if profile.get("schema").and_then(Value::as_str)
-                != Some("mister-magik-settings-navigation-transitions-pprof-v1")
+                != Some("mister-magik-settings-navigation-transitions-pprof-v2")
                 || profile.get("state").and_then(Value::as_str) != Some("complete")
                 || profile
                     .get("sample_hits")
@@ -6577,12 +6569,7 @@ fn run_installed_settings_navigation(
         } else {
             None
         };
-        summarize_settings_navigation_qualification(
-            &telemetry,
-            completion,
-            orientation,
-            profile.as_ref(),
-        )
+        summarize_settings_navigation_qualification(&telemetry, completion, profile.as_ref())
     })();
 
     let cleanup_result = restore_installed_settings_navigation_benchmark(
@@ -7265,13 +7252,17 @@ fn persist_orientation_transition_qualification(
 fn summarize_settings_navigation_qualification(
     telemetry: &[Value],
     completion: Value,
-    expected_orientation: &str,
     profile: Option<&Value>,
 ) -> Result<Value> {
     if completion.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-settings-navigation-transition-v1")
+        != Some("mister-magik-settings-navigation-transition-v2")
         || completion.get("state").and_then(Value::as_str) != Some("complete")
-        || completion.get("orientation").and_then(Value::as_str) != Some(expected_orientation)
+        || completion
+            .get("orientations")
+            .and_then(Value::as_array)
+            .is_none_or(|orientations| {
+                orientations.as_slice() != [json!("normal"), json!("monitor-counterclockwise")]
+            })
     {
         return Err("Settings navigation benchmark route did not complete".into());
     }
@@ -7279,7 +7270,7 @@ fn summarize_settings_navigation_qualification(
         .get("records")
         .and_then(Value::as_array)
         .filter(|records| records.len() == SETTINGS_NAVIGATION_LEGS)
-        .ok_or("Settings navigation benchmark did not complete its six legs")?;
+        .ok_or("Settings navigation benchmark did not complete its twelve legs")?;
     let expected = [
         ("home-settings", "forward", "home", "settings"),
         ("settings-about", "forward", "settings", "about"),
@@ -7288,11 +7279,18 @@ fn summarize_settings_navigation_qualification(
         ("settings-about", "reverse", "about", "settings"),
         ("home-settings", "reverse", "settings", "home"),
     ];
-    for (record, (route, direction, source, destination)) in records.iter().zip(expected) {
+    for (index, record) in records.iter().enumerate() {
+        let (route, direction, source, destination) = expected[index % expected.len()];
+        let orientation = if index < expected.len() {
+            "normal"
+        } else {
+            "monitor-counterclockwise"
+        };
         if record.get("route").and_then(Value::as_str) != Some(route)
             || record.get("direction").and_then(Value::as_str) != Some(direction)
             || record.get("source").and_then(Value::as_str) != Some(source)
             || record.get("destination").and_then(Value::as_str) != Some(destination)
+            || record.get("orientation").and_then(Value::as_str) != Some(orientation)
             || record.get("renderer").and_then(Value::as_str) != Some("settings-page")
         {
             return Err("Settings navigation benchmark route metadata is not exact".into());
@@ -7317,6 +7315,11 @@ fn summarize_settings_navigation_qualification(
     let mut all_pass = true;
     for (index, record) in records.iter().enumerate() {
         let leg_number = u8::try_from(index + 1)?;
+        let expected_orientation = if index < expected.len() {
+            "normal"
+        } else {
+            "monitor-counterclockwise"
+        };
         let route = record.get("route").and_then(Value::as_str).unwrap_or("");
         let direction = record
             .get("direction")
@@ -7486,20 +7489,18 @@ fn summarize_settings_navigation_qualification(
         }));
     }
     let profiler_enabled = profile.is_some();
-    let orientation_label = if expected_orientation == "normal" {
-        "landscape"
-    } else {
-        "portrait-left"
-    };
     Ok(json!({
-        "schema": "mister-magik-settings-navigation-qualification-v1",
+        "schema": "mister-magik-settings-navigation-qualification-v2",
         "scenario": if profiler_enabled {
-            format!("settings-navigation-{orientation_label}-pprof")
+            "settings-navigation-pprof"
         } else {
-            format!("settings-navigation-{orientation_label}")
+            "settings-navigation"
         },
-        "orientation": expected_orientation,
-        "logical_geometry": if expected_orientation == "normal" { json!([1280, 720]) } else { json!([720, 1280]) },
+        "orientations": ["normal", "monitor-counterclockwise"],
+        "logical_geometry": {
+            "normal": [1280, 720],
+            "monitor-counterclockwise": [720, 1280],
+        },
         "physical_mode": "hdmi-1280x720p60",
         "status": if profiler_enabled || all_pass { "passed" } else { "failed" },
         "cadence_authoritative": !profiler_enabled,
@@ -7527,24 +7528,24 @@ fn persist_settings_navigation_qualification(output_dir: &Path, summary: &Value)
     )?;
     writeln!(
         report,
-        "Orientation: **{}** · cadence authoritative: **{}**\n",
-        summary["orientation"].as_str().unwrap_or("unknown"),
+        "Orientations: **landscape, portrait-left** · cadence authoritative: **{}**\n",
         summary["cadence_authoritative"].as_bool().unwrap_or(false),
     )?;
     writeln!(
         report,
-        "| Leg | Route | Direction | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Lock/Slint/Status | Result |"
+        "| Leg | Orientation | Route | Direction | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Lock/Slint/Status | Result |"
     )?;
     writeln!(
         report,
-        "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|"
+        "|---:|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|"
     )?;
     for leg in summary["legs"].as_array().into_iter().flatten() {
         if let Some(failure) = leg["failure"].as_str() {
             writeln!(
                 report,
-                "| {} | {} | {} | — | — | — | — | — | — | — | FAIL ({}) |",
+                "| {} | {} | {} | {} | — | — | — | — | — | — | — | FAIL ({}) |",
                 leg["leg"].as_u64().unwrap_or(0),
+                leg["orientation"].as_str().unwrap_or("unknown"),
                 leg["route"].as_str().unwrap_or("unknown"),
                 leg["direction"].as_str().unwrap_or("unknown"),
                 failure,
@@ -7561,8 +7562,9 @@ fn persist_settings_navigation_qualification(output_dir: &Path, summary: &Value)
             + leg["status_submission_frames"].as_u64().unwrap_or(u64::MAX);
         writeln!(
             report,
-            "| {} | {} | {} | {:.3} | {} us | {} us | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {:.3} | {} us | {} us | {} | {} | {} | {} | {} |",
             leg["leg"].as_u64().unwrap_or(0),
+            leg["orientation"].as_str().unwrap_or("unknown"),
             leg["route"].as_str().unwrap_or("unknown"),
             leg["direction"].as_str().unwrap_or("unknown"),
             leg["protocol_v5"]["physical_fps"].as_f64().unwrap_or(0.0),
@@ -17727,7 +17729,12 @@ H: Handlers=event3 js0"#
         ];
         let mut telemetry = Vec::new();
         let mut records = Vec::new();
-        for (index, (route, direction, source, destination)) in route.into_iter().enumerate() {
+        for (index, (orientation, (route, direction, source, destination))) in
+            ["normal", "monitor-counterclockwise"]
+                .into_iter()
+                .flat_map(|orientation| route.into_iter().map(move |leg| (orientation, leg)))
+                .enumerate()
+        {
             let base_us = index as u64 * 500_000 + 1_000_000;
             let presented = index as u64 * 30;
             telemetry.push(json!({
@@ -17753,7 +17760,7 @@ H: Handlers=event3 js0"#
                     "navigation_transition_route": route,
                     "navigation_transition_direction": direction,
                     "navigation_transition_renderer": "settings-page",
-                    "navigation_transition_orientation": "normal",
+                    "navigation_transition_orientation": orientation,
                     "navigation_transition_us": 5_000,
                     "navigation_transition_overlay_us": 1_000,
                     "navigation_snapshot_locked": true,
@@ -17791,6 +17798,7 @@ H: Handlers=event3 js0"#
             }));
             records.push(json!({
                 "leg": index + 1,
+                "orientation": orientation,
                 "route": route,
                 "renderer": "settings-page",
                 "direction": direction,
@@ -17805,10 +17813,10 @@ H: Handlers=event3 js0"#
         (
             telemetry,
             json!({
-                "schema": "mister-magik-settings-navigation-transition-v1",
+                "schema": "mister-magik-settings-navigation-transition-v2",
                 "state": "complete",
-                "orientation": "normal",
-                "route": ["home", "settings", "about", "info", "about", "settings", "home"],
+                "orientations": ["normal", "monitor-counterclockwise"],
+                "route": ["home", "settings", "about", "info", "about", "settings", "home", "settings", "about", "info", "about", "settings", "home"],
                 "records": records,
             }),
         )
@@ -17817,9 +17825,8 @@ H: Handlers=event3 js0"#
     #[test]
     fn settings_navigation_qualification_applies_every_leg_gate() {
         let (telemetry, completion) = settings_navigation_qualification_fixture();
-        let summary =
-            summarize_settings_navigation_qualification(&telemetry, completion, "normal", None)
-                .expect("fixture should qualify");
+        let summary = summarize_settings_navigation_qualification(&telemetry, completion, None)
+            .expect("fixture should qualify");
         assert_eq!(summary["status"], "passed");
         assert_eq!(summary["cadence_authoritative"], true);
         assert_eq!(
@@ -17839,17 +17846,13 @@ H: Handlers=event3 js0"#
     fn settings_navigation_qualification_rejects_route_and_policy_failures() {
         let (telemetry, mut completion) = settings_navigation_qualification_fixture();
         completion["records"].as_array_mut().unwrap().pop();
-        assert!(
-            summarize_settings_navigation_qualification(&telemetry, completion, "normal", None)
-                .is_err()
-        );
+        assert!(summarize_settings_navigation_qualification(&telemetry, completion, None).is_err());
 
         let (mut telemetry, completion) = settings_navigation_qualification_fixture();
         telemetry[1]["launcher"]["frame_budget"]["recent_frames"][0]["navigation_snapshot_locked"] =
             json!(false);
         let summary =
-            summarize_settings_navigation_qualification(&telemetry, completion, "normal", None)
-                .unwrap();
+            summarize_settings_navigation_qualification(&telemetry, completion, None).unwrap();
         assert_eq!(summary["status"], "failed");
         assert_eq!(summary["legs"][0]["snapshot_lock_violations"], 1);
     }
@@ -17862,8 +17865,7 @@ H: Handlers=event3 js0"#
             .unwrap()
             .pop();
         let summary =
-            summarize_settings_navigation_qualification(&telemetry, completion, "normal", None)
-                .unwrap();
+            summarize_settings_navigation_qualification(&telemetry, completion, None).unwrap();
         assert_eq!(summary["status"], "failed");
         assert_eq!(summary["legs"][0]["frames"], 1);
         assert_eq!(

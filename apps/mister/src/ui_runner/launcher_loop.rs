@@ -74,6 +74,7 @@ fn write_settings_navigation_benchmark_completion(
         .map(|(index, record)| {
             serde_json::json!({
                 "leg": index + 1,
+                "orientation": record.orientation.id(),
                 "route": record.leg.route.label(),
                 "renderer": record.leg.route.renderer(),
                 "direction": record.leg.direction.label(),
@@ -87,12 +88,12 @@ fn write_settings_navigation_benchmark_completion(
         })
         .collect::<Vec<_>>();
     let document = serde_json::json!({
-        "schema": "mister-magik-settings-navigation-transition-v1",
+        "schema": "mister-magik-settings-navigation-transition-v2",
         "state": if benchmark.complete() { "complete" } else { "failed" },
         "failure": benchmark.failure(),
-        "orientation": benchmark.orientation().id(),
+        "orientations": SETTINGS_NAVIGATION_ORIENTATIONS.map(ScreenOrientation::id),
         "frames": frames,
-        "route": ["home", "settings", "about", "info", "about", "settings", "home"],
+        "route": ["home", "settings", "about", "info", "about", "settings", "home", "settings", "about", "info", "about", "settings", "home"],
         "records": records,
     });
     let temporary = directory.join("completion.json.tmp");
@@ -1506,13 +1507,11 @@ fn retain_or_defer_screensaver_buffer(
 
 fn visible_frame_was_presented(
     copied_rows: u32,
-    accepted_screensaver_frame: bool,
     status: LauncherPresentStatus,
     copy_path: &str,
 ) -> bool {
     copied_rows > 0
-        || (accepted_screensaver_frame
-            && status == LauncherPresentStatus::Ok
+        || (status == LauncherPresentStatus::Ok
             && copy_path == LatchCopyPath::ExternalDirect.label())
 }
 
@@ -2364,23 +2363,8 @@ pub(super) fn run_launcher_loop(
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
     let settings_navigation_benchmark_enabled =
         launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
-    let settings_navigation_orientation = std::env::var("MISTER_SETTINGS_NAVIGATION_ORIENTATION")
-        .ok()
-        .as_deref()
-        .and_then(ScreenOrientation::parse)
-        .filter(|orientation| {
-            matches!(
-                orientation,
-                ScreenOrientation::Normal | ScreenOrientation::MonitorCounterclockwise
-            )
-        });
-    let mut settings_navigation_benchmark = SettingsNavigationBenchmark::new(
-        settings_navigation_benchmark_enabled,
-        settings_navigation_orientation.unwrap_or(ScreenOrientation::Normal),
-    );
-    if settings_navigation_benchmark_enabled && settings_navigation_orientation.is_none() {
-        settings_navigation_benchmark.fail("benchmark-orientation-is-missing-or-invalid");
-    }
+    let mut settings_navigation_benchmark =
+        SettingsNavigationBenchmark::new(settings_navigation_benchmark_enabled);
     let mut settings_navigation_benchmark_completed_at = None;
     let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
         .ok()
@@ -4405,6 +4389,25 @@ pub(super) fn run_launcher_loop(
                     }
                     if let Some(script_state) = launcher_input_script.input_for() {
                         physical_nav_state = script_state;
+                    }
+                    if let Some(orientation) = settings_navigation_benchmark
+                        .take_orientation_change(
+                            nav.screen,
+                            full_screen_transition.state() == FullScreenTransitionState::Live,
+                        )
+                    {
+                        apply_orientation_layout(
+                            &app,
+                            &window,
+                            ui,
+                            orientation,
+                            &mut nav,
+                            &mut layout,
+                            &mut portrait_target,
+                            &mut navigation_transition,
+                        );
+                        full_bridge_dirty = true;
+                        request_launcher_redraw!();
                     }
                     if let Some(benchmark_state) = settings_navigation_benchmark.input_for(
                         nav.screen,
@@ -6998,7 +7001,6 @@ pub(super) fn run_launcher_loop(
         }
         let visible_frame_presented = visible_frame_was_presented(
             presentation.copied_rows,
-            accepted_screensaver_frame || accepted_startup_intro_frame,
             presentation.main_present_status,
             presentation.main_present_copy_path,
         );
@@ -7273,6 +7275,8 @@ pub(super) fn run_launcher_loop(
                 && launcher_presenter.latch_failure().is_none();
             if accepted_and_active_confirmed {
                 confirmed_present_sequence = presented_frame.main_present_sequence;
+                settings_navigation_benchmark
+                    .note_orientation_presented(nav.settings.screen_orientation);
             }
             if accepted_and_active_confirmed
                 && full_screen_transition_release_raster_rendered
@@ -7536,8 +7540,7 @@ pub(super) fn run_launcher_loop(
                     start,
                     "settings_navigation_benchmark_complete",
                     format!(
-                        "orientation={} legs={} frames={frames}",
-                        settings_navigation_benchmark.orientation().id(),
+                        "orientations=normal,monitor-counterclockwise legs={} frames={frames}",
                         settings_navigation_benchmark.records().len(),
                     ),
                 );
@@ -9653,19 +9656,16 @@ mod tests {
     fn copied_and_external_direct_frames_count_as_visible_presentations() {
         assert!(visible_frame_was_presented(
             720,
-            false,
             LauncherPresentStatus::Ok,
             LatchCopyPath::IdentityFull.label(),
         ));
         assert!(visible_frame_was_presented(
             0,
-            true,
             LauncherPresentStatus::Ok,
             LatchCopyPath::ExternalDirect.label(),
         ));
-        assert!(!visible_frame_was_presented(
+        assert!(visible_frame_was_presented(
             0,
-            false,
             LauncherPresentStatus::Ok,
             LatchCopyPath::ExternalDirect.label(),
         ));
@@ -10780,34 +10780,21 @@ mod tests {
             ScreenOrientation::MonitorCounterclockwise,
         ] {
             assert_eq!(
-                launcher_startup_orientation(persisted, true, false, None),
+                launcher_startup_orientation(persisted, true, false),
                 ScreenOrientation::Normal
             );
             assert_eq!(
-                launcher_startup_orientation(persisted, false, false, None),
+                launcher_startup_orientation(persisted, false, false),
                 persisted
             );
         }
     }
 
     #[test]
-    pub(super) fn settings_navigation_benchmark_selects_requested_layout_before_window_creation() {
+    pub(super) fn settings_navigation_benchmark_starts_in_landscape() {
         let persisted = ScreenOrientation::MonitorCounterclockwise;
         assert_eq!(
-            launcher_startup_orientation(persisted, false, true, Some(ScreenOrientation::Normal),),
-            ScreenOrientation::Normal
-        );
-        assert_eq!(
-            launcher_startup_orientation(
-                ScreenOrientation::Normal,
-                false,
-                true,
-                Some(ScreenOrientation::MonitorCounterclockwise),
-            ),
-            ScreenOrientation::MonitorCounterclockwise
-        );
-        assert_eq!(
-            launcher_startup_orientation(persisted, false, true, None),
+            launcher_startup_orientation(persisted, false, true),
             ScreenOrientation::Normal
         );
     }

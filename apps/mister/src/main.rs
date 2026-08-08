@@ -421,8 +421,8 @@ fn benchmark_capabilities() -> serde_json::Value {
         "particle-capacity-v1": true,
         "orientation-transition-v2": true,
         "orientation-transition-pprof-v1": cfg!(feature = "profile"),
-        "settings-navigation-transition-v1": true,
-        "settings-navigation-transition-pprof-v1": cfg!(feature = "profile"),
+        "settings-navigation-transition-v2": true,
+        "settings-navigation-transition-pprof-v2": cfg!(feature = "profile"),
         "pmu-probe-v1": true,
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,
@@ -2907,6 +2907,6 @@ mod tests {
         let capabilities = benchmark_capabilities();
         assert_eq!(capabilities["pmu-profile-v1"], true);
         assert_eq!(capabilities["pmu-profile-v2"], true);
-        assert_eq!(capabilities["settings-navigation-transition-v1"], true);
+        assert_eq!(capabilities["settings-navigation-transition-v2"], true);
     }
 }

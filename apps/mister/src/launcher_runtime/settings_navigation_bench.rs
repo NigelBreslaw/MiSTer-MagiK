@@ -60,6 +60,11 @@ pub const SETTINGS_NAVIGATION_ROUTE: [SettingsNavigationLeg; 6] = [
     },
 ];
 
+pub const SETTINGS_NAVIGATION_ORIENTATIONS: [ScreenOrientation; 2] = [
+    ScreenOrientation::Normal,
+    ScreenOrientation::MonitorCounterclockwise,
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BenchmarkButton {
     Up,
@@ -85,6 +90,7 @@ impl BenchmarkButton {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SettingsNavigationRecord {
+    pub orientation: ScreenOrientation,
     pub leg: SettingsNavigationLeg,
     pub start_frame: u64,
     pub rendered_endpoint_frame: u64,
@@ -95,7 +101,8 @@ pub struct SettingsNavigationRecord {
 #[derive(Debug)]
 pub struct SettingsNavigationBenchmark {
     enabled: bool,
-    orientation: ScreenOrientation,
+    orientation_index: usize,
+    orientation_ready: bool,
     started: Instant,
     release_pending: bool,
     active: Option<SettingsNavigationRecord>,
@@ -104,10 +111,11 @@ pub struct SettingsNavigationBenchmark {
 }
 
 impl SettingsNavigationBenchmark {
-    pub fn new(enabled: bool, orientation: ScreenOrientation) -> Self {
+    pub fn new(enabled: bool) -> Self {
         Self {
             enabled,
-            orientation,
+            orientation_index: 0,
+            orientation_ready: true,
             started: Instant::now(),
             release_pending: false,
             active: None,
@@ -121,7 +129,37 @@ impl SettingsNavigationBenchmark {
     }
 
     pub const fn orientation(&self) -> ScreenOrientation {
-        self.orientation
+        SETTINGS_NAVIGATION_ORIENTATIONS[self.orientation_index]
+    }
+
+    pub fn take_orientation_change(
+        &mut self,
+        screen: Screen,
+        full_screen_live: bool,
+    ) -> Option<ScreenOrientation> {
+        if !self.enabled
+            || self.failed()
+            || self.active.is_some()
+            || self.records.len() != SETTINGS_NAVIGATION_ROUTE.len()
+            || self.orientation_index != 0
+            || screen != Screen::Home
+            || !full_screen_live
+        {
+            return None;
+        }
+        self.orientation_index = 1;
+        self.orientation_ready = false;
+        Some(self.orientation())
+    }
+
+    pub fn note_orientation_presented(&mut self, orientation: ScreenOrientation) {
+        if self.enabled
+            && !self.orientation_ready
+            && self.orientation_index == 1
+            && orientation == self.orientation()
+        {
+            self.orientation_ready = true;
+        }
     }
 
     pub fn input_for(
@@ -142,11 +180,12 @@ impl SettingsNavigationBenchmark {
             self.release_pending = false;
             return Some(PadState::default());
         }
-        if !full_screen_live || self.active.is_some() {
+        if !full_screen_live || self.active.is_some() || !self.orientation_ready {
             return Some(PadState::default());
         }
-        let button = match (self.records.len(), screen) {
-            (0, Screen::Home) if self.orientation == ScreenOrientation::Normal => {
+        let leg_index = self.records.len() % SETTINGS_NAVIGATION_ROUTE.len();
+        let button = match (leg_index, screen) {
+            (0, Screen::Home) if self.orientation() == ScreenOrientation::Normal => {
                 if settings_focused {
                     BenchmarkButton::A
                 } else {
@@ -180,7 +219,10 @@ impl SettingsNavigationBenchmark {
         if !self.enabled || self.failed() {
             return;
         }
-        let Some(expected) = SETTINGS_NAVIGATION_ROUTE.get(self.records.len()).copied() else {
+        let Some(expected) = SETTINGS_NAVIGATION_ROUTE
+            .get(self.records.len() % SETTINGS_NAVIGATION_ROUTE.len())
+            .copied()
+        else {
             self.fail("unexpected-extra-leg");
             return;
         };
@@ -194,6 +236,7 @@ impl SettingsNavigationBenchmark {
             return;
         }
         self.active = Some(SettingsNavigationRecord {
+            orientation: self.orientation(),
             leg: expected,
             start_frame: frame,
             rendered_endpoint_frame: 0,
@@ -246,7 +289,8 @@ impl SettingsNavigationBenchmark {
         self.enabled
             && self.failure.is_none()
             && self.active.is_none()
-            && self.records.len() == SETTINGS_NAVIGATION_ROUTE.len()
+            && self.records.len()
+                == SETTINGS_NAVIGATION_ROUTE.len() * SETTINGS_NAVIGATION_ORIENTATIONS.len()
     }
 
     pub const fn failed(&self) -> bool {
@@ -290,7 +334,7 @@ mod tests {
 
     #[test]
     fn landscape_enters_settings_through_focus_and_activate() {
-        let mut benchmark = SettingsNavigationBenchmark::new(true, ScreenOrientation::Normal);
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
         assert_eq!(
             pressed(&benchmark.input_for(Screen::Home, false, 0, true).unwrap()),
             "up"
@@ -307,8 +351,8 @@ mod tests {
 
     #[test]
     fn portrait_enters_settings_with_home() {
-        let mut benchmark =
-            SettingsNavigationBenchmark::new(true, ScreenOrientation::MonitorCounterclockwise);
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
+        benchmark.orientation_index = 1;
         assert_eq!(
             pressed(&benchmark.input_for(Screen::Home, false, 0, true).unwrap()),
             "home"
@@ -317,7 +361,7 @@ mod tests {
 
     #[test]
     fn route_requires_ordered_rendered_and_presented_endpoints() {
-        let mut benchmark = SettingsNavigationBenchmark::new(true, ScreenOrientation::Normal);
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
         let leg = SETTINGS_NAVIGATION_ROUTE[0];
         benchmark.note_started(leg.route, leg.direction, leg.source, leg.destination, 10);
         assert_eq!(benchmark.active_leg(), 1);
@@ -332,7 +376,7 @@ mod tests {
 
     #[test]
     fn wrong_route_fails_without_recording() {
-        let mut benchmark = SettingsNavigationBenchmark::new(true, ScreenOrientation::Normal);
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
         benchmark.note_started(
             NavigationTransitionRoute::SettingsToAbout,
             NavigationTransitionDirection::Forward,
@@ -342,5 +386,57 @@ mod tests {
         );
         assert!(benchmark.failed());
         assert!(benchmark.records().is_empty());
+    }
+
+    #[test]
+    fn runs_landscape_then_waits_for_presented_portrait_before_second_route() {
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
+        for (index, leg) in SETTINGS_NAVIGATION_ROUTE.into_iter().enumerate() {
+            benchmark.note_started(
+                leg.route,
+                leg.direction,
+                leg.source,
+                leg.destination,
+                index as u64 * 10,
+            );
+            benchmark.note_rendered_endpoint(index as u64 * 10 + 1);
+            benchmark.note_confirmed_presentation(
+                leg.destination,
+                index as u64 * 10 + 2,
+                index as u16 + 1,
+            );
+        }
+        assert!(!benchmark.complete());
+        assert_eq!(
+            benchmark.take_orientation_change(Screen::Home, true),
+            Some(ScreenOrientation::MonitorCounterclockwise)
+        );
+        assert_eq!(
+            pressed(&benchmark.input_for(Screen::Home, false, 60, true).unwrap()),
+            "released"
+        );
+        benchmark.note_orientation_presented(ScreenOrientation::MonitorCounterclockwise);
+        assert_eq!(
+            pressed(&benchmark.input_for(Screen::Home, false, 61, true).unwrap()),
+            "home"
+        );
+        for (offset, leg) in SETTINGS_NAVIGATION_ROUTE.into_iter().enumerate() {
+            let index = offset + SETTINGS_NAVIGATION_ROUTE.len();
+            benchmark.note_started(
+                leg.route,
+                leg.direction,
+                leg.source,
+                leg.destination,
+                index as u64 * 10,
+            );
+            benchmark.note_rendered_endpoint(index as u64 * 10 + 1);
+            benchmark.note_confirmed_presentation(
+                leg.destination,
+                index as u64 * 10 + 2,
+                index as u16 + 1,
+            );
+        }
+        assert!(benchmark.complete());
+        assert_eq!(benchmark.records().len(), 12);
     }
 }

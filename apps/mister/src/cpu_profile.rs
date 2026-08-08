@@ -45,7 +45,7 @@ impl BoundedProfileTrigger {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
             Self::NavigationTransitions => "mister-magik-navigation-transitions-pprof-v1",
             Self::SettingsNavigationTransitions => {
-                "mister-magik-settings-navigation-transitions-pprof-v1"
+                "mister-magik-settings-navigation-transitions-pprof-v2"
             }
             Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
@@ -485,8 +485,7 @@ mod imp {
             if matches!(
                 self.trigger,
                 Some(
-                    BoundedProfileTrigger::SettingsNavigationTransitions
-                        | BoundedProfileTrigger::OrientationTransitionFade
+                    BoundedProfileTrigger::OrientationTransitionFade
                         | BoundedProfileTrigger::OrientationTransitionZoom
                 )
             ) {
@@ -579,6 +578,8 @@ mod imp {
                         "bytes": summary.bytes,
                         "first_frame": first_frame,
                         "last_frame": last_frame,
+                        "orientations": (trigger == BoundedProfileTrigger::SettingsNavigationTransitions)
+                            .then_some(["normal", "monitor-counterclockwise"]),
                         "route": include_orientation_route.then_some([
                             "normal",
                             "monitor-clockwise",

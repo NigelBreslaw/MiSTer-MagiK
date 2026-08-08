@@ -636,6 +636,14 @@ pub(crate) fn agent_telemetry_for_duration(
     endpoint: &AgentEndpoint,
     duration: Duration,
 ) -> Result<Vec<Value>> {
+    agent_telemetry_for_duration_at_cadence(endpoint, duration, 250)
+}
+
+pub(crate) fn agent_telemetry_for_duration_at_cadence(
+    endpoint: &AgentEndpoint,
+    duration: Duration,
+    cadence_ms: u64,
+) -> Result<Vec<Value>> {
     let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
@@ -644,7 +652,7 @@ pub(crate) fn agent_telemetry_for_duration(
         &endpoint.token,
         1,
         "device_telemetry_stream_v2",
-        json!({"analytics_mode": "process", "cadence_ms": 250}),
+        json!({"analytics_mode": "process", "cadence_ms": cadence_ms}),
     );
     let started = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;

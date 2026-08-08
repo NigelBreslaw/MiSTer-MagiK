@@ -37,10 +37,8 @@ enum BenchmarkProfile {
     ModalInput,
     ColdBoot,
     NavigationTransitions,
-    SettingsNavigationLandscape,
-    SettingsNavigationPortraitLeft,
-    SettingsNavigationLandscapePprof,
-    SettingsNavigationPortraitLeftPprof,
+    SettingsNavigation,
+    SettingsNavigationPprof,
     OrientationTransitionFade,
     OrientationTransitionZoom,
     OrientationTransitionFadePprof,
@@ -85,17 +83,11 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
             }
-            BenchmarkProfile::SettingsNavigationLandscape => {
-                device.profile_settings_navigation(&output_dir, "normal", false)
+            BenchmarkProfile::SettingsNavigation => {
+                device.profile_settings_navigation(&output_dir, false)
             }
-            BenchmarkProfile::SettingsNavigationPortraitLeft => {
-                device.profile_settings_navigation(&output_dir, "monitor-counterclockwise", false)
-            }
-            BenchmarkProfile::SettingsNavigationLandscapePprof => {
-                device.profile_settings_navigation(&output_dir, "normal", true)
-            }
-            BenchmarkProfile::SettingsNavigationPortraitLeftPprof => {
-                device.profile_settings_navigation(&output_dir, "monitor-counterclockwise", true)
+            BenchmarkProfile::SettingsNavigationPprof => {
+                device.profile_settings_navigation(&output_dir, true)
             }
             BenchmarkProfile::OrientationTransitionFade => {
                 device.profile_orientation_transition(&output_dir, "brightness-fade", false)
@@ -188,40 +180,20 @@ fn require_clean_installed_commit(
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
-        BenchmarkScenario::SettingsNavigationLandscape => execute_settings_navigation(
+        BenchmarkScenario::SettingsNavigation => execute_settings_navigation(
             &mut device,
             manifest,
             output_dir,
             reporter,
-            BenchmarkProfile::SettingsNavigationLandscape,
-            "normal",
+            BenchmarkProfile::SettingsNavigation,
             false,
         ),
-        BenchmarkScenario::SettingsNavigationPortraitLeft => execute_settings_navigation(
+        BenchmarkScenario::SettingsNavigationPprof => execute_settings_navigation(
             &mut device,
             manifest,
             output_dir,
             reporter,
-            BenchmarkProfile::SettingsNavigationPortraitLeft,
-            "monitor-counterclockwise",
-            false,
-        ),
-        BenchmarkScenario::SettingsNavigationLandscapePprof => execute_settings_navigation(
-            &mut device,
-            manifest,
-            output_dir,
-            reporter,
-            BenchmarkProfile::SettingsNavigationLandscapePprof,
-            "normal",
-            true,
-        ),
-        BenchmarkScenario::SettingsNavigationPortraitLeftPprof => execute_settings_navigation(
-            &mut device,
-            manifest,
-            output_dir,
-            reporter,
-            BenchmarkProfile::SettingsNavigationPortraitLeftPprof,
-            "monitor-counterclockwise",
+            BenchmarkProfile::SettingsNavigationPprof,
             true,
         ),
         BenchmarkScenario::OrientationTransitionFade => execute_orientation_transition(
@@ -382,10 +354,8 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LaunchReturnFallback
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::NavigationTransitions
-        | BenchmarkScenario::SettingsNavigationLandscape
-        | BenchmarkScenario::SettingsNavigationPortraitLeft
-        | BenchmarkScenario::SettingsNavigationLandscapePprof
-        | BenchmarkScenario::SettingsNavigationPortraitLeftPprof
+        | BenchmarkScenario::SettingsNavigation
+        | BenchmarkScenario::SettingsNavigationPprof
         | BenchmarkScenario::OrientationTransitionFade
         | BenchmarkScenario::OrientationTransitionZoom
         | BenchmarkScenario::OrientationTransitionFadePprof
@@ -452,7 +422,6 @@ fn execute_settings_navigation(
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
     profile: BenchmarkProfile,
-    orientation: &str,
     profiler_enabled: bool,
 ) -> AgentResult<Outcome> {
     reporter.emit(
@@ -463,7 +432,7 @@ fn execute_settings_navigation(
             "qualification"
         },
         &format!(
-            "{} six real Settings navigation transitions in {orientation}",
+            "{} six landscape then six portrait-left Settings navigation transitions",
             if profiler_enabled {
                 "profiling"
             } else {
@@ -475,12 +444,16 @@ fn execute_settings_navigation(
     let detail = device.profile(profile, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-settings-navigation-qualification-v1")
+        != Some("mister-magik-settings-navigation-qualification-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
-        || summary.get("orientation").and_then(Value::as_str) != Some(orientation)
+        || summary
+            .get("orientations")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            != Some(2)
         || summary.get("profiler_enabled").and_then(Value::as_bool) != Some(profiler_enabled)
     {
-        return Err("Settings navigation run did not complete its isolated orientation".into());
+        return Err("Settings navigation run did not complete both orientations".into());
     }
     device.verify_health()?;
     reporter.emit(
