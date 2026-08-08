@@ -4,6 +4,35 @@
 use mister_magik_fb::framebuffer::vsync::{VsyncPace, VsyncPaceSource};
 use std::time::Instant;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum FrameProductionClass {
+    #[default]
+    EventDriven,
+    SynchronousAnimation,
+    Prepared,
+}
+
+impl FrameProductionClass {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::EventDriven => "event-driven",
+            Self::SynchronousAnimation => "synchronous-animation",
+            Self::Prepared => "prepared",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct FrameProductionTrace {
+    pub(super) class: FrameProductionClass,
+    pub(super) sequence: u64,
+    pub(super) ready_depth: usize,
+    pub(super) ready_age_us: u64,
+    pub(super) render_wall_us: u64,
+    pub(super) starvation_count: u64,
+    pub(super) cancelled: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct LauncherFramePacingInput {
     pub(super) first_visible_copy_done: bool,

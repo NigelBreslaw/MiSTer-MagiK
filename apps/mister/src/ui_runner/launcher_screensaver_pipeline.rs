@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::launcher_screensaver::{
-    LauncherScreenshotBuffer, LauncherScreenshotRuntime, ScreensaverFrameTrace, shared_parade_trace,
+    LauncherScreenshotBuffer, LauncherScreenshotRuntime, ScreensaverRenderTrace,
+    shared_parade_trace,
 };
 use super::*;
 use mister_magik_screenshot_parade::LiveScreenshotPoll;
@@ -13,7 +14,7 @@ pub(crate) struct RenderedScreensaverFrame {
     pub(crate) completed_at: Instant,
     pub(crate) render_wall_us: u64,
     pub(crate) active_cards: usize,
-    pub(crate) trace: ScreensaverFrameTrace,
+    pub(crate) trace: ScreensaverRenderTrace,
 }
 
 pub(crate) enum RenderAheadPoll {
@@ -72,7 +73,7 @@ impl ScreensaverRenderAhead {
                     completed_at: Instant::now(),
                     render_wall_us: 0,
                     active_cards: 0,
-                    trace: ScreensaverFrameTrace::default(),
+                    trace: ScreensaverRenderTrace::default(),
                 },
             },
         }

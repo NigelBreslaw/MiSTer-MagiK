@@ -30,7 +30,7 @@ pub struct LauncherScreensaver {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ScreensaverFrameTrace {
+pub struct ScreensaverRenderTrace {
     pub(super) renderer: &'static str,
     pub(super) archive_poll_us: u128,
     pub(super) card_adopt_us: u128,
@@ -46,16 +46,10 @@ pub struct ScreensaverFrameTrace {
     pub(super) raster_hold_layer_mask: u8,
     pub(super) raster_visible_layer_mask: u8,
     pub(super) phase_bank_resident_bytes: usize,
-    pub(super) render_ahead_sequence: u64,
-    pub(super) render_ahead_queue_depth: usize,
-    pub(super) render_ahead_frame_age_us: u64,
-    pub(super) render_ahead_render_wall_us: u64,
-    pub(super) render_ahead_starvation_count: u64,
-    pub(super) render_ahead_cancelled: bool,
 }
 
-pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverFrameTrace {
-    ScreensaverFrameTrace {
+pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverRenderTrace {
+    ScreensaverRenderTrace {
         card_adopt_us: stats.card_adopt_us,
         cards_adopted: stats.cards_adopted,
         parade_advance_us: stats.parade_advance_us,
@@ -69,7 +63,7 @@ pub(crate) fn shared_parade_trace(stats: ScreenshotParadeStats) -> ScreensaverFr
         raster_hold_layer_mask: stats.raster_hold_layer_mask,
         raster_visible_layer_mask: stats.raster_visible_layer_mask,
         phase_bank_resident_bytes: stats.phase_bank_resident_bytes,
-        ..ScreensaverFrameTrace::default()
+        ..ScreensaverRenderTrace::default()
     }
 }
 
@@ -167,7 +161,12 @@ impl ScreenshotBuffer for LauncherScreenshotBuffer {
 pub(crate) type LauncherScreenshotRuntime = LiveScreenshotParade<LauncherScreenshotBuffer>;
 
 impl LauncherScreensaver {
-    pub fn render(&mut self, dst: &mut [Rgb565Pixel], w: usize, h: usize) -> ScreensaverFrameTrace {
+    pub fn render(
+        &mut self,
+        dst: &mut [Rgb565Pixel],
+        w: usize,
+        h: usize,
+    ) -> ScreensaverRenderTrace {
         let now = Instant::now();
         self.render_at(
             dst,
@@ -183,7 +182,7 @@ impl LauncherScreensaver {
         w: usize,
         h: usize,
         elapsed: Duration,
-    ) -> ScreensaverFrameTrace {
+    ) -> ScreensaverRenderTrace {
         self.render_at_target(dst, w, h, elapsed, None)
     }
 
@@ -194,7 +193,7 @@ impl LauncherScreensaver {
         h: usize,
         presentation_tick: u64,
         fallback_elapsed: Duration,
-    ) -> ScreensaverFrameTrace {
+    ) -> ScreensaverRenderTrace {
         self.render_at_target(dst, w, h, fallback_elapsed, Some(presentation_tick))
     }
 
@@ -205,7 +204,7 @@ impl LauncherScreensaver {
         _h: usize,
         elapsed: Duration,
         presentation_tick: Option<u64>,
-    ) -> ScreensaverFrameTrace {
+    ) -> ScreensaverRenderTrace {
         let mut trace = if let Some(parade) = self.parade.as_mut() {
             let render_result = match presentation_tick {
                 Some(tick) => {
@@ -229,12 +228,12 @@ impl LauncherScreensaver {
                 Err(error) => {
                     dst.fill(Rgb565Pixel(0));
                     crate::ui_errln!("screenshot parade render failed: {error}");
-                    ScreensaverFrameTrace::default()
+                    ScreensaverRenderTrace::default()
                 }
             }
         } else {
             dst.fill(Rgb565Pixel(0));
-            ScreensaverFrameTrace::default()
+            ScreensaverRenderTrace::default()
         };
         trace.renderer = "parade";
         if self.frame > 0 && self.frame % 600 == 0 {

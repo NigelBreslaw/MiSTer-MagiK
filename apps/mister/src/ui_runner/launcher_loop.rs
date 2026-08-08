@@ -8,10 +8,11 @@ use super::launcher_frame_accounting::{
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
 use super::launcher_pacing::{
-    FB0_LATE_FRAME_START_HEADROOM_US, LauncherFramePacingInput, LauncherFramePacingPolicy,
-    LauncherPacingTrace, LauncherPhaseAlignment,
+    FB0_LATE_FRAME_START_HEADROOM_US, FrameProductionClass, FrameProductionTrace,
+    LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
+    LauncherPhaseAlignment,
 };
-use super::launcher_screensaver::ScreensaverFrameTrace;
+use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
 #[cfg(test)]
 use super::launcher_worker_intents::{
@@ -6085,7 +6086,8 @@ pub(super) fn run_launcher_loop(
             screensaver_active_cards = 0;
         }
         let screensaver_fade_alpha = screensaver.preview_fade_alpha(Instant::now());
-        let mut screensaver_frame_trace = ScreensaverFrameTrace::default();
+        let mut frame_production_trace = FrameProductionTrace::default();
+        let mut screensaver_render_trace = ScreensaverRenderTrace::default();
         let mut accepted_screensaver_frame = false;
         let mut screensaver_buffer_to_recycle_after_present = None;
         let mut completed_hidden_frame_for_present = None;
@@ -6166,20 +6168,21 @@ pub(super) fn run_launcher_loop(
                             &mut screensaver_buffer_to_recycle_after_present,
                             pixels,
                         );
-                        screensaver_frame_trace = frame.trace;
+                        screensaver_render_trace = frame.trace;
                         screensaver_render_sequence = frame.sequence;
-                        screensaver_frame_trace.render_ahead_sequence = frame.sequence;
-                        screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
+                        frame_production_trace.class = FrameProductionClass::Prepared;
+                        frame_production_trace.sequence = frame.sequence;
+                        frame_production_trace.ready_depth = screensaver_pipeline
                             .as_ref()
                             .map(ScreensaverRenderAhead::ready_depth)
                             .unwrap_or(0);
-                        screensaver_frame_trace.render_ahead_frame_age_us = frame
+                        frame_production_trace.ready_age_us = frame
                             .completed_at
                             .elapsed()
                             .as_micros()
                             .try_into()
                             .unwrap_or(u64::MAX);
-                        screensaver_frame_trace.render_ahead_render_wall_us = frame.render_wall_us;
+                        frame_production_trace.render_wall_us = frame.render_wall_us;
                         screensaver_active_cards = frame.active_cards;
                         screensaver_frame_visible = true;
                         accepted_screensaver_frame = true;
@@ -6257,13 +6260,16 @@ pub(super) fn run_launcher_loop(
             window.request_redraw();
             full_frame_present = true;
         }
-        screensaver_frame_trace.render_ahead_sequence = screensaver_render_sequence;
-        screensaver_frame_trace.render_ahead_queue_depth = screensaver_pipeline
+        if screensaver.active {
+            frame_production_trace.class = FrameProductionClass::Prepared;
+        }
+        frame_production_trace.sequence = screensaver_render_sequence;
+        frame_production_trace.ready_depth = screensaver_pipeline
             .as_ref()
             .map(ScreensaverRenderAhead::ready_depth)
             .unwrap_or(0);
-        screensaver_frame_trace.render_ahead_starvation_count = screensaver_starvation_count;
-        screensaver_frame_trace.render_ahead_cancelled =
+        frame_production_trace.starvation_count = screensaver_starvation_count;
+        frame_production_trace.cancelled =
             screensaver_pipeline.is_none() && !retiring_screensaver_pipelines.is_empty();
         let mut slint_damage = DirtyRectList::new();
         let mut full_screen_transition_release_raster_rendered = false;
@@ -7134,7 +7140,8 @@ pub(super) fn run_launcher_loop(
                 composition_status: composition_status.clone(),
                 screensaver_active: screensaver.active && screensaver_pipeline.is_some(),
                 screensaver_active_cards,
-                screensaver_frame_trace,
+                frame_production_trace,
+                screensaver_render_trace,
             },
             pacing: pacing_trace,
             presentation,

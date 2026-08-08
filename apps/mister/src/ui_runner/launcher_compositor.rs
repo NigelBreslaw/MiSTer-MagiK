@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::launcher_screensaver::ScreensaverFrameTrace;
+use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,7 +147,7 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn render_screensaver(
         &mut self,
         saver: &mut LauncherScreensaver,
-    ) -> (DirtyRect, ScreensaverFrameTrace) {
+    ) -> (DirtyRect, ScreensaverRenderTrace) {
         let width = self.layout.logical_w();
         let height = self.layout.logical_h();
         let trace = saver.render(self.drawing_target_mut().cached_565_mut(), width, height);
@@ -189,7 +189,7 @@ impl<'a> LayerTarget<'a> {
         saver: &mut LauncherScreensaver,
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
-    ) -> (DirtyRect, ScreensaverFrameTrace) {
+    ) -> (DirtyRect, ScreensaverRenderTrace) {
         let width = self.layout.logical_w();
         let height = self.layout.logical_h();
         let trace = saver.render(self.drawing_target_mut().cached_565_mut(), width, height);

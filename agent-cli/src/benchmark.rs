@@ -1110,7 +1110,7 @@ fn evaluate_run(run: &Value) -> AgentResult<()> {
         && physical
             .pointer("/presentation_telemetry/schema")
             .and_then(Value::as_str)
-            == Some("mister-magik-frame-evidence-v5");
+            == Some("mister-magik-frame-evidence-v6");
     let frames = u64_field(steady, "frames", 0);
     let p99_work = u64_field(steady, "p99_work_us", u64::MAX);
     let p99_wall = u64_field(steady, "p99_wall_us", u64::MAX);
@@ -1216,7 +1216,7 @@ mod tests {
                     "unique_fps": 60.0,
                     "dropped_frames": 0,
                     "presentation_telemetry": {
-                        "schema": "mister-magik-frame-evidence-v5"
+                        "schema": "mister-magik-frame-evidence-v6"
                     },
                     "software_refresh_diagnostics": {
                         "long_completion_intervals": []

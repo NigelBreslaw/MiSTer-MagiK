@@ -339,12 +339,13 @@ pub struct FrameBudgetRecentFrame {
     pub screensaver_raster_hold_layer_mask: u8,
     pub screensaver_raster_visible_layer_mask: u8,
     pub screensaver_phase_bank_bytes: u64,
-    pub screensaver_render_ahead_sequence: u64,
-    pub screensaver_render_ahead_queue_depth: u64,
-    pub screensaver_render_ahead_frame_age_us: u64,
-    pub screensaver_render_ahead_render_wall_us: u64,
-    pub screensaver_render_ahead_starvation_count: u64,
-    pub screensaver_render_ahead_cancelled: bool,
+    pub frame_production_class: &'static str,
+    pub frame_production_sequence: u64,
+    pub frame_production_ready_depth: u64,
+    pub frame_production_ready_age_us: u64,
+    pub frame_production_render_wall_us: u64,
+    pub frame_production_starvation_count: u64,
+    pub frame_production_cancelled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -1432,29 +1433,27 @@ fn frame_budget_recent_frame_value(frame: &FrameBudgetRecentFrame) -> Value {
         "screensaver_phase_bank_bytes",
         frame.screensaver_phase_bank_bytes
     );
+    field!("frame_production_class", frame.frame_production_class);
+    field!("frame_production_sequence", frame.frame_production_sequence);
     field!(
-        "screensaver_render_ahead_sequence",
-        frame.screensaver_render_ahead_sequence
+        "frame_production_ready_depth",
+        frame.frame_production_ready_depth
     );
     field!(
-        "screensaver_render_ahead_queue_depth",
-        frame.screensaver_render_ahead_queue_depth
+        "frame_production_ready_age_us",
+        frame.frame_production_ready_age_us
     );
     field!(
-        "screensaver_render_ahead_frame_age_us",
-        frame.screensaver_render_ahead_frame_age_us
+        "frame_production_render_wall_us",
+        frame.frame_production_render_wall_us
     );
     field!(
-        "screensaver_render_ahead_render_wall_us",
-        frame.screensaver_render_ahead_render_wall_us
+        "frame_production_starvation_count",
+        frame.frame_production_starvation_count
     );
     field!(
-        "screensaver_render_ahead_starvation_count",
-        frame.screensaver_render_ahead_starvation_count
-    );
-    field!(
-        "screensaver_render_ahead_cancelled",
-        frame.screensaver_render_ahead_cancelled
+        "frame_production_cancelled",
+        frame.frame_production_cancelled
     );
     Value::Object(object)
 }
@@ -1847,6 +1846,11 @@ mod tests {
                         screensaver_raster_moved_cards: 8,
                         screensaver_raster_hold_layer_mask: 1,
                         screensaver_raster_visible_layer_mask: 3,
+                        frame_production_class: "prepared",
+                        frame_production_sequence: 99,
+                        frame_production_ready_depth: 2,
+                        frame_production_ready_age_us: 400,
+                        frame_production_render_wall_us: 4_500,
                         ..FrameBudgetRecentFrame::default()
                     }],
                     slow_frames: vec![FrameBudgetSlowFrame {
@@ -1940,6 +1944,19 @@ mod tests {
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["screensaver_renderer"],
             "parade"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["frame_production_class"],
+            "prepared"
+        );
+        assert_eq!(
+            value["frame_budget"]["recent_frames"][0]["frame_production_sequence"],
+            99
+        );
+        assert!(
+            value["frame_budget"]["recent_frames"][0]
+                .get("screensaver_render_ahead_sequence")
+                .is_none()
         );
         assert_eq!(
             value["frame_budget"]["recent_frames"][0]["orientation_transition_leg"],

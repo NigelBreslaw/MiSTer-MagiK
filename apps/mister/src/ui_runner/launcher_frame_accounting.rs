@@ -5,8 +5,8 @@ use super::launcher_compositor::{
     LauncherPresentBackend, LauncherPresentResult, LauncherPresentStatus,
 };
 use super::launcher_loop::LaunchReturnSession;
-use super::launcher_pacing::LauncherPacingTrace;
-use super::launcher_screensaver::ScreensaverFrameTrace;
+use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
+use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
 use mister_magik_fb::latch_readiness::LatchFailure;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -177,7 +177,8 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) composition_status: UiCompositionStatus,
     pub(super) screensaver_active: bool,
     pub(super) screensaver_active_cards: usize,
-    pub(super) screensaver_frame_trace: ScreensaverFrameTrace,
+    pub(super) frame_production_trace: FrameProductionTrace,
+    pub(super) screensaver_render_trace: ScreensaverRenderTrace,
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
     pub(super) status_string_copy_bytes: usize,
@@ -283,7 +284,8 @@ pub(super) struct LauncherFrameRenderData {
     pub(super) composition_status: UiCompositionStatus,
     pub(super) screensaver_active: bool,
     pub(super) screensaver_active_cards: usize,
-    pub(super) screensaver_frame_trace: ScreensaverFrameTrace,
+    pub(super) frame_production_trace: FrameProductionTrace,
+    pub(super) screensaver_render_trace: ScreensaverRenderTrace,
 }
 
 pub(super) struct LauncherFrameStatusData {
@@ -389,7 +391,8 @@ impl LauncherFrameSnapshotBuilder {
             composition_status: self.render.composition_status,
             screensaver_active: self.render.screensaver_active,
             screensaver_active_cards: self.render.screensaver_active_cards,
-            screensaver_frame_trace: self.render.screensaver_frame_trace,
+            frame_production_trace: self.render.frame_production_trace,
+            screensaver_render_trace: self.render.screensaver_render_trace,
             status_write_due: self.status.status_write_due,
             status_string_copy_us: self.status.status_string_copy_us,
             status_string_copy_bytes: self.status.status_string_copy_bytes,
@@ -888,15 +891,15 @@ fn preview_scroll_trace_row_from_frame(
         ),
         screensaver_active: u8::from(frame.screensaver_active),
         screensaver_active_cards: frame.screensaver_active_cards,
-        screensaver_archive_poll_us: frame.screensaver_frame_trace.archive_poll_us,
-        screensaver_card_adopt_us: frame.screensaver_frame_trace.card_adopt_us,
-        screensaver_cards_adopted: frame.screensaver_frame_trace.cards_adopted,
-        screensaver_parade_advance_us: frame.screensaver_frame_trace.parade_advance_us,
-        screensaver_background_us: frame.screensaver_frame_trace.background_us,
-        screensaver_draw_order_us: frame.screensaver_frame_trace.draw_order_us,
-        screensaver_tile_blit_us: frame.screensaver_frame_trace.tile_blit_us,
-        screensaver_cards_drawn: frame.screensaver_frame_trace.cards_drawn,
-        screensaver_cards_culled: frame.screensaver_frame_trace.cards_culled,
+        screensaver_archive_poll_us: frame.screensaver_render_trace.archive_poll_us,
+        screensaver_card_adopt_us: frame.screensaver_render_trace.card_adopt_us,
+        screensaver_cards_adopted: frame.screensaver_render_trace.cards_adopted,
+        screensaver_parade_advance_us: frame.screensaver_render_trace.parade_advance_us,
+        screensaver_background_us: frame.screensaver_render_trace.background_us,
+        screensaver_draw_order_us: frame.screensaver_render_trace.draw_order_us,
+        screensaver_tile_blit_us: frame.screensaver_render_trace.tile_blit_us,
+        screensaver_cards_drawn: frame.screensaver_render_trace.cards_drawn,
+        screensaver_cards_culled: frame.screensaver_render_trace.cards_culled,
     }
 }
 
@@ -1877,7 +1880,7 @@ impl LauncherFrameAccounting {
                 frame: frame.frames,
                 screensaver_active: frame.screensaver_active,
                 screensaver_active_cards: frame.screensaver_active_cards,
-                screensaver_renderer: frame.screensaver_frame_trace.renderer,
+                screensaver_renderer: frame.screensaver_render_trace.renderer,
                 navigation_transition_edge: frame.custom_draw_trace.navigation_transition_edge,
                 navigation_transition_route: frame.custom_draw_trace.navigation_transition_route,
                 navigation_transition_direction: frame
@@ -2058,56 +2061,47 @@ impl LauncherFrameAccounting {
                 clock_update_due: frame.clock_update_due,
                 clock_update_us: u128_to_u64_saturating(frame.clock_update_us),
                 screensaver_archive_poll_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.archive_poll_us,
+                    frame.screensaver_render_trace.archive_poll_us,
                 ),
                 screensaver_card_adopt_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.card_adopt_us,
+                    frame.screensaver_render_trace.card_adopt_us,
                 ),
                 screensaver_parade_advance_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.parade_advance_us,
+                    frame.screensaver_render_trace.parade_advance_us,
                 ),
                 screensaver_background_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.background_us,
+                    frame.screensaver_render_trace.background_us,
                 ),
                 screensaver_draw_order_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.draw_order_us,
+                    frame.screensaver_render_trace.draw_order_us,
                 ),
                 screensaver_tile_blit_us: u128_to_u64_saturating(
-                    frame.screensaver_frame_trace.tile_blit_us,
+                    frame.screensaver_render_trace.tile_blit_us,
                 ),
                 screensaver_raster_held_cards: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.raster_held_cards,
+                    frame.screensaver_render_trace.raster_held_cards,
                 ),
                 screensaver_raster_moved_cards: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.raster_moved_cards,
+                    frame.screensaver_render_trace.raster_moved_cards,
                 ),
                 screensaver_raster_hold_layer_mask: frame
-                    .screensaver_frame_trace
+                    .screensaver_render_trace
                     .raster_hold_layer_mask,
                 screensaver_raster_visible_layer_mask: frame
-                    .screensaver_frame_trace
+                    .screensaver_render_trace
                     .raster_visible_layer_mask,
                 screensaver_phase_bank_bytes: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.phase_bank_resident_bytes,
+                    frame.screensaver_render_trace.phase_bank_resident_bytes,
                 ),
-                screensaver_render_ahead_sequence: frame
-                    .screensaver_frame_trace
-                    .render_ahead_sequence,
-                screensaver_render_ahead_queue_depth: usize_to_u64_saturating(
-                    frame.screensaver_frame_trace.render_ahead_queue_depth,
+                frame_production_class: frame.frame_production_trace.class.label(),
+                frame_production_sequence: frame.frame_production_trace.sequence,
+                frame_production_ready_depth: usize_to_u64_saturating(
+                    frame.frame_production_trace.ready_depth,
                 ),
-                screensaver_render_ahead_frame_age_us: frame
-                    .screensaver_frame_trace
-                    .render_ahead_frame_age_us,
-                screensaver_render_ahead_render_wall_us: frame
-                    .screensaver_frame_trace
-                    .render_ahead_render_wall_us,
-                screensaver_render_ahead_starvation_count: frame
-                    .screensaver_frame_trace
-                    .render_ahead_starvation_count,
-                screensaver_render_ahead_cancelled: frame
-                    .screensaver_frame_trace
-                    .render_ahead_cancelled,
+                frame_production_ready_age_us: frame.frame_production_trace.ready_age_us,
+                frame_production_render_wall_us: frame.frame_production_trace.render_wall_us,
+                frame_production_starvation_count: frame.frame_production_trace.starvation_count,
+                frame_production_cancelled: frame.frame_production_trace.cancelled,
             });
     }
 
@@ -2927,7 +2921,8 @@ mod tests {
             composition_status: UiCompositionStatus::default(),
             screensaver_active: false,
             screensaver_active_cards: 0,
-            screensaver_frame_trace: ScreensaverFrameTrace::default(),
+            frame_production_trace: FrameProductionTrace::default(),
+            screensaver_render_trace: ScreensaverRenderTrace::default(),
             status_write_due: false,
             status_string_copy_us: 10,
             status_string_copy_bytes: 128,
@@ -2984,7 +2979,8 @@ mod tests {
                 composition_status: frame.composition_status.clone(),
                 screensaver_active: frame.screensaver_active,
                 screensaver_active_cards: frame.screensaver_active_cards,
-                screensaver_frame_trace: frame.screensaver_frame_trace,
+                frame_production_trace: frame.frame_production_trace,
+                screensaver_render_trace: frame.screensaver_render_trace,
             },
             pacing: LauncherPacingTrace {
                 vsync_source: frame.vsync_source,
@@ -3298,11 +3294,11 @@ mod tests {
         frame.status_write_due = true;
         frame.clock_update_due = true;
         frame.clock_update_us = 45;
-        frame.screensaver_frame_trace.raster_held_cards = 2;
-        frame.screensaver_frame_trace.raster_moved_cards = 8;
-        frame.screensaver_frame_trace.raster_hold_layer_mask = 1;
-        frame.screensaver_frame_trace.raster_visible_layer_mask = 3;
-        frame.screensaver_frame_trace.phase_bank_resident_bytes = 12_345;
+        frame.screensaver_render_trace.raster_held_cards = 2;
+        frame.screensaver_render_trace.raster_moved_cards = 8;
+        frame.screensaver_render_trace.raster_hold_layer_mask = 1;
+        frame.screensaver_render_trace.raster_visible_layer_mask = 3;
+        frame.screensaver_render_trace.phase_bank_resident_bytes = 12_345;
 
         accounting.accumulate_frame_budget(&frame, 321);
 

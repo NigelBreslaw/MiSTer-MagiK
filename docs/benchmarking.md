@@ -73,6 +73,11 @@ launcher, and verify the exact settings file, retained `MiSTer.ini`, boot
 identity, and installed manifest. Evidence is written below the selected
 scenario at `build/agent-benchmarks/<scenario>/<timestamp>/`.
 
+Frame-evidence v6 reports workload-neutral `frame_production_*` fields for
+event-driven, synchronous-animation, and prepared frames. Screensaver-specific
+card and raster measurements retain their `screensaver_*` names; queue depth,
+ready age, render time, sequence, starvation, and cancellation do not.
+
 `orientation-transition-fade` and `orientation-transition-zoom` each run the
 real Settings view at 1280×720/60 Hz through
 Normal → Clockwise → Counterclockwise → Normal → Counterclockwise → Clockwise

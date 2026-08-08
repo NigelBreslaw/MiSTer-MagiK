@@ -7055,7 +7055,7 @@ fn orientation_bracketed_presentation_window(
         .ownership_loss_count
         .wrapping_sub(start.ownership_loss_count);
     Ok(json!({
-        "schema": "mister-magik-frame-evidence-v5",
+        "schema": "mister-magik-frame-evidence-v6",
         "start_captured_monotonic_us": start.captured_monotonic_us,
         "end_captured_monotonic_us": end.captured_monotonic_us,
         "elapsed_us": elapsed_us,
@@ -9330,8 +9330,8 @@ fn summarize_screensaver_telemetry(
                 "source": current.get("vsync_source").cloned().unwrap_or(Value::Null),
             }));
         }
-        let previous_render_sequence = frame_u64(previous, "screensaver_render_ahead_sequence");
-        let current_render_sequence = frame_u64(current, "screensaver_render_ahead_sequence");
+        let previous_render_sequence = frame_u64(previous, "frame_production_sequence");
+        let current_render_sequence = frame_u64(current, "frame_production_sequence");
         if current_render_sequence != previous_render_sequence.saturating_add(1) {
             presentation_failures.push(json!({
                 "frame": frame_id,
@@ -9411,7 +9411,7 @@ fn summarize_screensaver_telemetry(
         "presentation_interval": periodic_signal(&interval_signal, refresh_period_us),
     });
     let raster = raster_cadence_summary(steady);
-    let render_ahead = screensaver_render_ahead_summary(steady);
+    let frame_production = frame_production_summary(steady);
     let maintenance = maintenance_cohorts(steady);
     let status_publishing = status_publishing_summary(steady, &active);
     let presentation_paths = steady
@@ -9515,7 +9515,7 @@ fn summarize_screensaver_telemetry(
         "outliers": outliers,
         "periodic_timing": periodic,
         "raster_cadence": raster,
-        "render_ahead": render_ahead,
+        "frame_production": frame_production,
         "screenshot_runtime": screenshot_runtime,
         "status_publishing": status_publishing,
         "main_present_copy_paths": presentation_paths,
@@ -9599,7 +9599,7 @@ fn populated_screensaver_window(frames: &[&Value], refresh_period_us: u64) -> Va
             "cpu_custom_draw_us": mean_frame_field(&populated, "cpu_custom_draw_us"),
             "process_cpu_us": mean_frame_field(&populated, "process_cpu_us"),
         },
-        "render_ahead": screensaver_render_ahead_summary(&populated),
+        "frame_production": frame_production_summary(&populated),
         "cpu_utilization": {
             "launcher_process_pct_of_one_core": mean_frame_field(
                 &populated,
@@ -9766,7 +9766,7 @@ fn authoritative_presentation_window(
     )
     .map_err(|error| format!("FPGA cadence run {run} is invalid: {error}"))?;
     Ok(json!({
-        "schema": "mister-magik-frame-evidence-v5",
+        "schema": "mister-magik-frame-evidence-v6",
         "source": "fpga-owned-vblank-telemetry",
         "available": true,
         "elapsed_us": delta.elapsed_us,
@@ -10092,20 +10092,21 @@ fn validate_screensaver_frame_evidence(run: usize, frame_id: u64, frame: &Value)
         "screensaver_raster_moved_cards",
         "screensaver_raster_hold_layer_mask",
         "screensaver_raster_visible_layer_mask",
-        "screensaver_render_ahead_sequence",
-        "screensaver_render_ahead_queue_depth",
-        "screensaver_render_ahead_frame_age_us",
-        "screensaver_render_ahead_render_wall_us",
-        "screensaver_render_ahead_starvation_count",
+        "frame_production_sequence",
+        "frame_production_ready_depth",
+        "frame_production_ready_age_us",
+        "frame_production_render_wall_us",
+        "frame_production_starvation_count",
     ];
     const BOOL_FIELDS: &[&str] = &[
         "screensaver_active",
         "main_present_pending",
         "status_write_due",
         "clock_update_due",
-        "screensaver_render_ahead_cancelled",
+        "frame_production_cancelled",
     ];
     const STRING_FIELDS: &[&str] = &[
+        "frame_production_class",
         "vsync_source",
         "main_present_status",
         "status_publish_mode",
@@ -10298,7 +10299,7 @@ fn raster_cadence_summary(frames: &[&Value]) -> Value {
     })
 }
 
-fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
+fn frame_production_summary(frames: &[&Value]) -> Value {
     let values = |key: &str| {
         frames
             .iter()
@@ -10327,12 +10328,12 @@ fn screensaver_render_ahead_summary(frames: &[&Value]) -> Value {
             )
     };
     json!({
-        "queue_depth": summary("screensaver_render_ahead_queue_depth"),
-        "frame_age_us": summary("screensaver_render_ahead_frame_age_us"),
-        "render_wall_us": summary("screensaver_render_ahead_render_wall_us"),
-        "final_sequence": frames.last().map(|frame| frame_u64(frame, "screensaver_render_ahead_sequence")).unwrap_or(0),
-        "starvation_count": counter_delta("screensaver_render_ahead_starvation_count"),
-        "cancelled_frames": frames.iter().filter(|frame| frame.get("screensaver_render_ahead_cancelled").and_then(Value::as_bool) == Some(true)).count(),
+        "ready_depth": summary("frame_production_ready_depth"),
+        "ready_age_us": summary("frame_production_ready_age_us"),
+        "render_wall_us": summary("frame_production_render_wall_us"),
+        "final_sequence": frames.last().map(|frame| frame_u64(frame, "frame_production_sequence")).unwrap_or(0),
+        "starvation_count": counter_delta("frame_production_starvation_count"),
+        "cancelled_frames": frames.iter().filter(|frame| frame.get("frame_production_cancelled").and_then(Value::as_bool) == Some(true)).count(),
     })
 }
 
@@ -10356,7 +10357,7 @@ fn normalized_production_screenshot_runtime(frames: &[&Value], physical: &Value)
         .collect::<Vec<_>>();
     let fifo_depth = frames
         .iter()
-        .map(|frame| frame_u64(frame, "screensaver_render_ahead_queue_depth"))
+        .map(|frame| frame_u64(frame, "frame_production_ready_depth"))
         .collect::<Vec<_>>();
     let counter_delta = |key: &str| {
         frames
@@ -10373,8 +10374,8 @@ fn normalized_production_screenshot_runtime(frames: &[&Value], physical: &Value)
     let sequence_failures = frames
         .windows(2)
         .filter(|pair| {
-            frame_u64(pair[1], "screensaver_render_ahead_sequence")
-                != frame_u64(pair[0], "screensaver_render_ahead_sequence").saturating_add(1)
+            frame_u64(pair[1], "frame_production_sequence")
+                != frame_u64(pair[0], "frame_production_sequence").saturating_add(1)
         })
         .count();
     json!({
@@ -10384,13 +10385,13 @@ fn normalized_production_screenshot_runtime(frames: &[&Value], physical: &Value)
             "average": mean_u64(&population),
             "maximum": population.iter().copied().max().unwrap_or(0),
         },
-        "render": normalized_frame_timing(frames, "screensaver_render_ahead_render_wall_us"),
+        "render": normalized_frame_timing(frames, "frame_production_render_wall_us"),
         "transfer": normalized_frame_timing(frames, "main_present_hidden_copy_us"),
         "fifo": {
             "ready_depth_minimum": fifo_depth.iter().copied().min().unwrap_or(0),
             "ready_depth_average": mean_u64(&fifo_depth),
             "ready_depth_maximum": fifo_depth.iter().copied().max().unwrap_or(0),
-            "starvations": counter_delta("screensaver_render_ahead_starvation_count"),
+            "starvations": counter_delta("frame_production_starvation_count"),
             "sequence_failures": sequence_failures,
         },
         "fpga": physical,
@@ -10426,17 +10427,17 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
         || run
             .pointer("/steady_state/physical_refresh/presentation_telemetry/schema")
             .and_then(Value::as_str)
-            != Some("mister-magik-frame-evidence-v5")
+            != Some("mister-magik-frame-evidence-v6")
     {
         failures.push(json!({"kind": "authoritative-fpga-cadence-missing"}));
     }
     let starvation_count = run
-        .pointer("/render_ahead/starvation_count")
+        .pointer("/frame_production/starvation_count")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
     if starvation_count > 0 {
         failures.push(json!({
-            "kind": "render-ahead-starvation",
+            "kind": "frame-production-starvation",
             "count": starvation_count,
         }));
     }
@@ -10457,7 +10458,7 @@ fn screensaver_qualification_failures(run: &Value) -> Vec<Value> {
         }));
     }
     let worker_p99_us = run
-        .pointer("/populated_window/render_ahead/render_wall_us/p99")
+        .pointer("/populated_window/frame_production/render_wall_us/p99")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
     let refresh_period_us = run
@@ -10687,8 +10688,8 @@ fn screensaver_benchmark_report(summary: &Value) -> Result<String> {
         )?;
         writeln!(
             report,
-            "Render-ahead pipeline: `{}`.\n",
-            run.get("render_ahead").cloned().unwrap_or(Value::Null),
+            "Frame production: `{}`.\n",
+            run.get("frame_production").cloned().unwrap_or(Value::Null),
         )?;
         writeln!(
             report,
@@ -16855,12 +16856,13 @@ H: Handlers=event3 js0"#
                         .expect("remaining screensaver evidence must be an object")
                         .clone(),
                 );
-            frame["screensaver_render_ahead_sequence"] = json!(id);
-            frame["screensaver_render_ahead_queue_depth"] = json!(1);
-            frame["screensaver_render_ahead_frame_age_us"] = json!(400);
-            frame["screensaver_render_ahead_render_wall_us"] = json!(4_500);
-            frame["screensaver_render_ahead_starvation_count"] = json!(0);
-            frame["screensaver_render_ahead_cancelled"] = json!(false);
+            frame["frame_production_class"] = json!("prepared");
+            frame["frame_production_sequence"] = json!(id);
+            frame["frame_production_ready_depth"] = json!(1);
+            frame["frame_production_ready_age_us"] = json!(400);
+            frame["frame_production_render_wall_us"] = json!(4_500);
+            frame["frame_production_starvation_count"] = json!(0);
+            frame["frame_production_cancelled"] = json!(false);
             frame["status_publish_mode"] = json!("async");
             frame["status_enqueue_us"] = json!(0);
             frame["status_worker_write_us"] = json!(24_000);
@@ -16940,7 +16942,7 @@ H: Handlers=event3 js0"#
         assert_eq!(summary["steady_state"]["presentation_failures"], json!([]));
         assert_eq!(summary["latch_drop_delta"], 0);
         assert_eq!(summary["raster_cadence"]["held_frames"], 1);
-        assert_eq!(summary["render_ahead"]["starvation_count"], 0);
+        assert_eq!(summary["frame_production"]["starvation_count"], 0);
         assert_eq!(summary["qualification"]["qualified"], true);
         let populated_cpu =
             summary["populated_window"]["cpu_utilization"]["launcher_process_pct_of_one_core"]
@@ -16955,7 +16957,8 @@ H: Handlers=event3 js0"#
         .unwrap();
         assert!(report.contains("Presentation failures"));
         assert!(report.contains("Visible raster holds"));
-        assert!(report.contains("Render-ahead pipeline"));
+        assert!(report.contains("Frame production"));
+        assert!(!report.contains("Render-ahead pipeline"));
         assert!(report.contains("Normalized CPU utilization"));
         assert!(report.contains("Qualification"));
         let mut dropped = summary.clone();
@@ -16976,11 +16979,11 @@ H: Handlers=event3 js0"#
                 .any(|failure| failure["kind"] == "dropped-frames")
         );
         let mut starved = summary.clone();
-        starved["render_ahead"]["starvation_count"] = json!(1);
+        starved["frame_production"]["starvation_count"] = json!(1);
         assert!(
             screensaver_qualification_failures(&starved)
                 .iter()
-                .any(|failure| failure["kind"] == "render-ahead-starvation")
+                .any(|failure| failure["kind"] == "frame-production-starvation")
         );
         let mut sequence_gap = summary.clone();
         sequence_gap["steady_state"]["presentation_failures"] = json!([{
@@ -16995,7 +16998,8 @@ H: Handlers=event3 js0"#
                 .any(|failure| failure["kind"] == "presentation-failures")
         );
         let mut slow_worker = summary.clone();
-        slow_worker["populated_window"]["render_ahead"]["render_wall_us"]["p99"] = json!(16_668);
+        slow_worker["populated_window"]["frame_production"]["render_wall_us"]["p99"] =
+            json!(16_668);
         assert!(
             screensaver_qualification_failures(&slow_worker)
                 .iter()
@@ -17046,7 +17050,7 @@ H: Handlers=event3 js0"#
                 "run": 1,
                 "qualification": {
                     "qualified": false,
-                    "failures": [{"kind": "render-ahead-starvation", "count": 1}]
+                    "failures": [{"kind": "frame-production-starvation", "count": 1}]
                 }
             }]
         });
