@@ -6315,6 +6315,12 @@ pub(super) fn run_launcher_loop(
                 slint_damage = damage;
                 slint_base_rendered = rendered;
                 full_screen_controlled_capture_rendered = rendered;
+                if !rendered
+                    && let Some(generation) = full_screen_transition.generation()
+                    && let Err(error) = full_screen_transition.capture_deferred(generation)
+                {
+                    crate::ui_errln!("full-screen controlled capture defer rejected: {error:?}");
+                }
                 dirty
             } else {
                 None

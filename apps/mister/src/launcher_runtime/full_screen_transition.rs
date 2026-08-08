@@ -177,6 +177,21 @@ impl FullScreenTransitionStateChart {
         Ok(())
     }
 
+    pub fn capture_deferred(
+        &mut self,
+        generation: FullScreenTransitionGeneration,
+    ) -> Result<(), FullScreenTransitionError> {
+        if self.state != FullScreenTransitionState::CapturePending {
+            return Err(FullScreenTransitionError::InvalidState);
+        }
+        let active = self.active_mut(generation)?;
+        if !active.capture_issued {
+            return Err(FullScreenTransitionError::CaptureNotIssued);
+        }
+        active.capture_issued = false;
+        Ok(())
+    }
+
     pub fn release(
         &mut self,
         generation: FullScreenTransitionGeneration,
@@ -248,6 +263,19 @@ mod tests {
         assert!(chart.policy().force_live_raster);
         assert!(chart.live_frame_presented(generation).unwrap());
         assert_eq!(chart.state(), FullScreenTransitionState::Live);
+    }
+
+    #[test]
+    fn deferred_raster_restores_controlled_capture_authorization() {
+        let mut chart = FullScreenTransitionStateChart::default();
+        let generation = chart.begin(FullScreenTransitionOwner::Navigation).unwrap();
+        assert!(chart.take_controlled_capture(generation).unwrap());
+        assert!(!chart.policy().controlled_capture);
+        chart.capture_deferred(generation).unwrap();
+        assert!(chart.policy().controlled_capture);
+        assert!(chart.take_controlled_capture(generation).unwrap());
+        chart.capture_completed(generation).unwrap();
+        assert_eq!(chart.state(), FullScreenTransitionState::SnapshotLocked);
     }
 
     #[test]
