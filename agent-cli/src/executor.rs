@@ -112,8 +112,7 @@ pub fn execute_with_changes(
         let heartbeat = operation_heartbeat(operation);
         let cache = operation_cache_key(operation, &fingerprints)?;
         if let Some(fingerprint) = cache.as_ref()
-            && let Some((result, detail)) =
-                evidence.cached_validation(&operation.id, fingerprint)?
+            && evidence.has_cached_validation_success(&operation.id, fingerprint)?
         {
             evidence.record_reused_command(
                 request_id,
@@ -122,14 +121,11 @@ pub fn execute_with_changes(
                 &operation.args,
                 operation.resource_class().as_str(),
             )?;
-            if result == "failed" {
-                return Err(detail.unwrap_or_else(|| "cached validation failed".into()));
-            }
             index += 1;
             continue;
         }
         if let Some(fingerprint) = cache.as_ref()
-            && let Some((result, detail)) = claim_or_wait(
+            && claim_or_wait(
                 evidence,
                 request_id,
                 reporter,
@@ -138,9 +134,6 @@ pub fn execute_with_changes(
                 fingerprint,
             )?
         {
-            if result == "failed" {
-                return Err(detail.unwrap_or_else(|| "joined validation failed".into()));
-            }
             index += 1;
             continue;
         }
@@ -156,14 +149,6 @@ pub fn execute_with_changes(
             cache.as_deref(),
         ) {
             if let Some(fingerprint) = cache.as_ref() {
-                if deterministic_failure(&error) {
-                    evidence.cache_validation(
-                        &operation.id,
-                        fingerprint,
-                        "failed",
-                        Some(&error),
-                    )?;
-                }
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
             return Err(error);
@@ -171,7 +156,7 @@ pub fn execute_with_changes(
         if operation.risk == crate::model::Risk::ReadOnly
             && let Some(fingerprint) = cache
         {
-            evidence.cache_validation(&operation.id, &fingerprint, "passed", None)?;
+            evidence.cache_validation_success(&operation.id, &fingerprint)?;
             evidence.release_validation(&operation.id, &fingerprint, request_id)?;
         }
         index += 1;
@@ -197,10 +182,10 @@ fn claim_or_wait(
     phase: &str,
     operation: &Operation,
     fingerprint: &str,
-) -> Result<Option<(String, Option<String>)>, String> {
+) -> Result<bool, String> {
     loop {
         if evidence.claim_validation(&operation.id, fingerprint, request_id)? {
-            return Ok(None);
+            return Ok(false);
         }
         let queued = Instant::now();
         let owner = evidence.validation_owner(&operation.id, fingerprint)?;
@@ -219,8 +204,8 @@ fn claim_or_wait(
                 operation.resource_class().as_str(),
             )?;
         }
-        if result.is_some() {
-            return Ok(result);
+        if result {
+            return Ok(true);
         }
     }
 }
@@ -231,18 +216,18 @@ fn wait_for_validation(
     phase: &str,
     operation: &Operation,
     fingerprint: &str,
-) -> Result<Option<(String, Option<String>)>, String> {
+) -> Result<bool, String> {
     let started = Instant::now();
     let mut next_progress = Duration::from_secs(10);
     while started.elapsed() < Duration::from_secs(31 * 60) {
-        if let Some(result) = evidence.cached_validation(&operation.id, fingerprint)? {
-            return Ok(Some(result));
+        if evidence.has_cached_validation_success(&operation.id, fingerprint)? {
+            return Ok(true);
         }
         if evidence
             .validation_owner(&operation.id, fingerprint)?
             .is_none()
         {
-            return Ok(None);
+            return Ok(false);
         }
         if started.elapsed() >= next_progress {
             reporter.emit(
@@ -274,10 +259,7 @@ fn run_builtin_batch(
     for operation in operations {
         let cache = operation_cache_key(operation, fingerprints)?;
         if let Some(fingerprint) = cache.as_ref() {
-            if evidence
-                .cached_validation(&operation.id, fingerprint)?
-                .is_some_and(|(result, _)| result == "passed")
-            {
+            if evidence.has_cached_validation_success(&operation.id, fingerprint)? {
                 evidence.record_reused_command(
                     request_id,
                     &operation.id,
@@ -287,7 +269,7 @@ fn run_builtin_batch(
                 )?;
                 continue;
             }
-            if let Some((result, detail)) = claim_or_wait(
+            if claim_or_wait(
                 evidence,
                 request_id,
                 reporter,
@@ -295,9 +277,6 @@ fn run_builtin_batch(
                 operation,
                 fingerprint,
             )? {
-                if result == "failed" {
-                    return Err(detail.unwrap_or_else(|| "cached builtin validation failed".into()));
-                }
                 continue;
             }
         }
@@ -323,17 +302,11 @@ fn run_builtin_batch(
             if let Err(error) = result {
                 let detail = format!("{command}: failed — {}\nerror: {error}", operation.title);
                 if let Some(fingerprint) = cache {
-                    evidence.cache_validation(
-                        &operation.id,
-                        fingerprint,
-                        "failed",
-                        Some(&detail),
-                    )?;
                     evidence.release_validation(&operation.id, fingerprint, request_id)?;
                 }
                 first_error.get_or_insert(detail);
             } else if let Some(fingerprint) = cache {
-                evidence.cache_validation(&operation.id, fingerprint, "passed", None)?;
+                evidence.cache_validation_success(&operation.id, fingerprint)?;
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
         }
@@ -404,20 +377,6 @@ fn operation_cache_key_with_schema(
     Ok(Some(
         digest.iter().map(|byte| format!("{byte:02x}")).collect(),
     ))
-}
-
-fn deterministic_failure(error: &str) -> bool {
-    (error.contains("test_failure") || error.contains("command_failed"))
-        && ![
-            "timed out",
-            "permission",
-            "network",
-            "cancelled",
-            "container",
-            "index lock",
-        ]
-        .iter()
-        .any(|value| error.to_ascii_lowercase().contains(value))
 }
 
 #[derive(Debug)]
@@ -1166,23 +1125,6 @@ mod tests {
         assert!(!is_cacheable(&operation));
         operation.risk = Risk::DeviceWrite;
         assert!(!is_cacheable(&operation));
-    }
-
-    #[test]
-    fn only_deterministic_failures_are_cacheable() {
-        assert!(deterministic_failure(
-            "error: test_failure (exit 101): assertion failed"
-        ));
-        assert!(deterministic_failure(
-            "error: command_failed (exit 1): compiler error"
-        ));
-        assert!(!deterministic_failure(
-            "error: command_failed: operation timed out"
-        ));
-        assert!(!deterministic_failure(
-            "error: command_failed: permission denied"
-        ));
-        assert!(!deterministic_failure("error: network_required"));
     }
 
     #[test]

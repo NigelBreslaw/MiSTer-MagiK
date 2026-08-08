@@ -270,38 +270,33 @@ impl Evidence {
         Ok(())
     }
 
-    pub fn cached_validation(
+    pub fn has_cached_validation_success(
         &self,
         operation_id: &str,
         fingerprint: &str,
-    ) -> Result<Option<(String, Option<String>)>, String> {
+    ) -> Result<bool, String> {
         self.connection
             .query_row(
-                "SELECT result, detail FROM validation_results WHERE operation_id=?1 AND fingerprint=?2 AND expires_ms>=?3",
+                "SELECT 1 FROM validation_results WHERE operation_id=?1 AND fingerprint=?2 AND result='passed' AND expires_ms>=?3",
                 params![operation_id, fingerprint, now_ms()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |_| Ok(()),
             )
             .optional()
+            .map(|result| result.is_some())
             .map_err(|error| error.to_string())
     }
 
-    pub fn cache_validation(
+    pub fn cache_validation_success(
         &self,
         operation_id: &str,
         fingerprint: &str,
-        result: &str,
-        detail: Option<&str>,
     ) -> Result<(), String> {
-        let lifetime_ms = if result == "passed" {
-            30 * 24 * 60 * 60 * 1_000_i64
-        } else {
-            10 * 60 * 1_000_i64
-        };
+        let lifetime_ms = 30 * 24 * 60 * 60 * 1_000_i64;
         let completed = now_ms();
         self.connection
             .execute(
                 "INSERT OR REPLACE INTO validation_results (operation_id, fingerprint, result, detail, completed_ms, expires_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![operation_id, fingerprint, result, detail, completed, completed.saturating_add(lifetime_ms)],
+                params![operation_id, fingerprint, "passed", Option::<&str>::None, completed, completed.saturating_add(lifetime_ms)],
             )
             .map_err(|error| error.to_string())?;
         Ok(())
@@ -1117,13 +1112,12 @@ mod tests {
         let root = temporary_root("validation-cache");
         let evidence = Evidence::open_at(&root).unwrap();
         evidence
-            .cache_validation("check.one", "fingerprint", "passed", None)
+            .cache_validation_success("check.one", "fingerprint")
             .unwrap();
-        assert_eq!(
+        assert!(
             evidence
-                .cached_validation("check.one", "fingerprint")
-                .unwrap(),
-            Some(("passed".into(), None))
+                .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
         );
         assert!(
             evidence
@@ -1166,16 +1160,47 @@ mod tests {
                 .unwrap()
         );
         first
-            .cache_validation("check.one", "fingerprint", "passed", None)
+            .cache_validation_success("check.one", "fingerprint")
             .unwrap();
         first
             .release_validation("check.one", "fingerprint", "owner")
             .unwrap();
-        assert_eq!(
+        assert!(
             second
-                .cached_validation("check.one", "fingerprint")
-                .unwrap(),
-            Some(("passed".into(), None))
+                .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_validation_rows_never_block_an_immediate_retry() {
+        let root = temporary_root("failed-validation-cache");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let completed = now_ms();
+        evidence
+            .connection
+            .execute(
+                "INSERT INTO validation_results (operation_id, fingerprint, result, detail, completed_ms, expires_ms) VALUES (?1, ?2, 'failed', ?3, ?4, ?5)",
+                params![
+                    "check.one",
+                    "fingerprint",
+                    "No space left on device",
+                    completed,
+                    completed.saturating_add(10 * 60 * 1_000),
+                ],
+            )
+            .unwrap();
+
+        assert!(
+            !evidence
+                .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
+        );
+        assert!(
+            evidence
+                .claim_validation("check.one", "fingerprint", "retry")
+                .unwrap()
         );
         fs::remove_dir_all(root).unwrap();
     }
