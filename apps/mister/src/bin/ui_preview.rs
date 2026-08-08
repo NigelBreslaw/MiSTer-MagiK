@@ -111,7 +111,7 @@ mod macos {
         let ui = launcher.global::<MisterUi>();
         configure_display_profile(&ui, options.display_profile, options.orientation);
         let bridge = launcher.global::<MisterBridge>();
-        initialize_bridge(&bridge);
+        initialize_bridge(&bridge, options.display_profile);
         launcher.show()?;
         slint_window.request_redraw();
 
@@ -431,6 +431,9 @@ mod macos {
             launcher_nav.settings.screen_orientation = orientation;
             launcher_nav.set_portrait_layout(layout.is_portrait());
             launcher_nav.sync_orientation_selection();
+            let display_selected = display_profile.display_resolution_index();
+            launcher_nav.display_selected = display_selected;
+            launcher_nav.display_highlighted = display_selected;
             let bridge = launcher.global::<MisterBridge>();
             bridge.set_orientation_active_label(orientation.label().into());
             bridge.set_orientation_selected(launcher_nav.orientation_selected as i32);
@@ -2557,6 +2560,20 @@ mod macos {
             })
         }
 
+        fn display_resolution_index(self) -> usize {
+            let id = match self {
+                Self::Hdmi => "hdmi-1920x1080p60",
+                Self::Crt240p => "crt-240p60",
+                Self::Crt288p => "crt-288p50",
+                Self::Crt480p => "crt-480p60",
+                Self::Crt576p => "crt-576p50",
+            };
+            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                .iter()
+                .position(|mode| mode.id == id)
+                .expect("preview display profile has a launcher resolution")
+        }
+
         const fn label(self) -> &'static str {
             match self {
                 Self::Hdmi => "display:hdmi",
@@ -2772,7 +2789,7 @@ mod macos {
         composition
     }
 
-    fn initialize_bridge(bridge: &MisterBridge) {
+    fn initialize_bridge(bridge: &MisterBridge, display_profile: DisplayProfile) {
         bridge.set_clock_text("12:34".into());
         bridge.set_build_label("Mac visual preview".into());
         bridge.set_present_mode_label("RGB565 host composition".into());
@@ -2786,13 +2803,18 @@ mod macos {
         bridge.set_pressed_now("A · D-pad Right".into());
         bridge.set_last_event_label("Button A pressed".into());
         bridge.set_last_raw_event("type=1 code=304 value=1".into());
-        bridge.set_display_options(strings(&[
-            "Current mode",
-            "1920×1080 60 Hz",
-            "1280×720 60 Hz",
-            "CRT 240p 60 Hz",
-        ]));
-        bridge.set_display_active_label("1920×1080 60 Hz".into());
+        let display_resolutions =
+            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS;
+        bridge.set_display_options(ModelRc::new(VecModel::from(
+            display_resolutions
+                .iter()
+                .map(|mode| SharedString::from(mode.label))
+                .collect::<Vec<_>>(),
+        )));
+        let display_selected = display_profile.display_resolution_index();
+        bridge.set_display_active_label(display_resolutions[display_selected].label.into());
+        bridge.set_display_selected(display_selected as i32);
+        bridge.set_display_highlighted(display_selected as i32);
         bridge.set_orientation_options(ModelRc::new(VecModel::from(
             ScreenOrientation::ALL
                 .iter()
@@ -3425,6 +3447,23 @@ mod macos {
                 assert_eq!(
                     CrtUiMetrics::for_display(&display).font_family.label(),
                     font_family
+                );
+            }
+        }
+
+        #[test]
+        fn display_profiles_bind_their_launcher_resolution() {
+            for (profile, expected_id) in [
+                (DisplayProfile::Hdmi, "hdmi-1920x1080p60"),
+                (DisplayProfile::Crt240p, "crt-240p60"),
+                (DisplayProfile::Crt288p, "crt-288p50"),
+                (DisplayProfile::Crt480p, "crt-480p60"),
+                (DisplayProfile::Crt576p, "crt-576p50"),
+            ] {
+                let index = profile.display_resolution_index();
+                assert_eq!(
+                    mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS[index].id,
+                    expected_id
                 );
             }
         }

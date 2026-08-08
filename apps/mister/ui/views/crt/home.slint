@@ -9,8 +9,12 @@ import { MenuItemStatus } from "../../launcher_menu.slint";
 export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
     property <length> card-gap: MisterUi.grid-y;
+    property <int> root-card-count: MisterUi.portrait-layout
+        ? max(1, MisterBridge.menu-items.length)
+        : 4;
     property <length> card-height: root.root-menu
-        ? (menu-viewport.height - root.card-gap * 3) / 4
+        ? (menu-viewport.height - root.card-gap * (root.root-card-count - 1))
+            / root.root-card-count
         : (menu-viewport.height - root.card-gap * 4) / 4.5;
     property <length> card-pitch: root.card-height + root.card-gap;
     property <bool> bottom-window: !root.root-menu

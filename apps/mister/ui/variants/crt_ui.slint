@@ -3,6 +3,7 @@
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
+import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
 import { ArcadeListScreen } from "../views/crt/arcade_list.slint";
@@ -23,7 +24,7 @@ import {
 } from "crt_overlays.slint";
 
 export component CrtLauncherUi inherits Rectangle {
-    background: MisterBridge.screen-mode == 0 ? #0b0d14 : #1a1424;
+    background: CrtTheme.background;
 
     content := Rectangle {
         x: MisterUi.content-x;
