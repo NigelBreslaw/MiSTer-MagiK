@@ -177,7 +177,6 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) composition_status: UiCompositionStatus,
     pub(super) screensaver_active: bool,
     pub(super) screensaver_active_cards: usize,
-    pub(super) screensaver_archive_loading: bool,
     pub(super) screensaver_frame_trace: ScreensaverFrameTrace,
     pub(super) status_write_due: bool,
     pub(super) status_string_copy_us: u128,
@@ -284,7 +283,6 @@ pub(super) struct LauncherFrameRenderData {
     pub(super) composition_status: UiCompositionStatus,
     pub(super) screensaver_active: bool,
     pub(super) screensaver_active_cards: usize,
-    pub(super) screensaver_archive_loading: bool,
     pub(super) screensaver_frame_trace: ScreensaverFrameTrace,
 }
 
@@ -391,7 +389,6 @@ impl LauncherFrameSnapshotBuilder {
             composition_status: self.render.composition_status,
             screensaver_active: self.render.screensaver_active,
             screensaver_active_cards: self.render.screensaver_active_cards,
-            screensaver_archive_loading: self.render.screensaver_archive_loading,
             screensaver_frame_trace: self.render.screensaver_frame_trace,
             status_write_due: self.status.status_write_due,
             status_string_copy_us: self.status.status_string_copy_us,
@@ -612,7 +609,6 @@ struct PreviewScrollTraceRow {
     monotonic_us: u128,
     screensaver_active: u8,
     screensaver_active_cards: usize,
-    screensaver_archive_loading: u8,
     screensaver_archive_poll_us: u128,
     screensaver_card_adopt_us: u128,
     screensaver_cards_adopted: usize,
@@ -749,12 +745,11 @@ impl PreviewScrollTraceRow {
         out.pop();
         let _ = writeln!(
             out,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.frame_finish_us,
             self.post_finish_tail_us,
             self.screensaver_active,
             self.screensaver_active_cards,
-            self.screensaver_archive_loading,
             self.screensaver_archive_poll_us,
             self.screensaver_card_adopt_us,
             self.screensaver_cards_adopted,
@@ -893,7 +888,6 @@ fn preview_scroll_trace_row_from_frame(
         ),
         screensaver_active: u8::from(frame.screensaver_active),
         screensaver_active_cards: frame.screensaver_active_cards,
-        screensaver_archive_loading: u8::from(frame.screensaver_archive_loading),
         screensaver_archive_poll_us: frame.screensaver_frame_trace.archive_poll_us,
         screensaver_card_adopt_us: frame.screensaver_frame_trace.card_adopt_us,
         screensaver_cards_adopted: frame.screensaver_frame_trace.cards_adopted,
@@ -2094,18 +2088,9 @@ impl LauncherFrameAccounting {
                 screensaver_render_ahead_render_wall_us: frame
                     .screensaver_frame_trace
                     .render_ahead_render_wall_us,
-                screensaver_render_ahead_render_cpu_us: frame
-                    .screensaver_frame_trace
-                    .render_ahead_render_cpu_us,
                 screensaver_render_ahead_starvation_count: frame
                     .screensaver_frame_trace
                     .render_ahead_starvation_count,
-                screensaver_render_ahead_superseded_frames: frame
-                    .screensaver_frame_trace
-                    .render_ahead_superseded_frames,
-                screensaver_render_ahead_reused_frames: frame
-                    .screensaver_frame_trace
-                    .render_ahead_reused_frames,
                 screensaver_render_ahead_cancelled: frame
                     .screensaver_frame_trace
                     .render_ahead_cancelled,
@@ -2928,7 +2913,6 @@ mod tests {
             composition_status: UiCompositionStatus::default(),
             screensaver_active: false,
             screensaver_active_cards: 0,
-            screensaver_archive_loading: false,
             screensaver_frame_trace: ScreensaverFrameTrace::default(),
             status_write_due: false,
             status_string_copy_us: 10,
@@ -2986,7 +2970,6 @@ mod tests {
                 composition_status: frame.composition_status.clone(),
                 screensaver_active: frame.screensaver_active,
                 screensaver_active_cards: frame.screensaver_active_cards,
-                screensaver_archive_loading: frame.screensaver_archive_loading,
                 screensaver_frame_trace: frame.screensaver_frame_trace,
             },
             pacing: LauncherPacingTrace {
@@ -3447,7 +3430,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_loading\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;

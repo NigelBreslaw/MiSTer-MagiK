@@ -50,10 +50,7 @@ pub struct ScreensaverFrameTrace {
     pub(super) render_ahead_queue_depth: usize,
     pub(super) render_ahead_frame_age_us: u64,
     pub(super) render_ahead_render_wall_us: u64,
-    pub(super) render_ahead_render_cpu_us: u64,
     pub(super) render_ahead_starvation_count: u64,
-    pub(super) render_ahead_superseded_frames: u64,
-    pub(super) render_ahead_reused_frames: u64,
     pub(super) render_ahead_cancelled: bool,
 }
 

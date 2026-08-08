@@ -12,11 +12,7 @@ pub(crate) struct RenderedScreensaverFrame {
     pub(crate) sequence: u64,
     pub(crate) completed_at: Instant,
     pub(crate) render_wall_us: u64,
-    pub(crate) render_cpu_us: u64,
     pub(crate) active_cards: usize,
-    pub(crate) archive_loading: bool,
-    pub(crate) has_rendered_card: bool,
-    pub(crate) superseded_frames: u64,
     pub(crate) trace: ScreensaverFrameTrace,
 }
 
@@ -44,8 +40,6 @@ impl ScreensaverRenderAhead {
         }
     }
 
-    pub(crate) fn update_period_us(&self, _period_us: u64) {}
-
     pub(crate) fn try_next(&mut self) -> RenderAheadPoll {
         if !self.live {
             if let Err(error) = self.runtime.begin_live() {
@@ -63,11 +57,7 @@ impl ScreensaverRenderAhead {
                     sequence: frame.tick,
                     completed_at: Instant::now(),
                     render_wall_us: frame.telemetry.timing.wall_us,
-                    render_cpu_us: 0,
                     active_cards,
-                    archive_loading: false,
-                    has_rendered_card: true,
-                    superseded_frames: 0,
                     trace,
                 })
             }
@@ -81,11 +71,7 @@ impl ScreensaverRenderAhead {
                     sequence: failure.actual_tick,
                     completed_at: Instant::now(),
                     render_wall_us: 0,
-                    render_cpu_us: 0,
                     active_cards: 0,
-                    archive_loading: false,
-                    has_rendered_card: false,
-                    superseded_frames: 0,
                     trace: ScreensaverFrameTrace::default(),
                 },
             },
@@ -208,7 +194,6 @@ mod tests {
         }
 
         assert_eq!(sequences, vec![0, 1, 2, 3]);
-        pipeline.update_period_us(16_667);
         pipeline.cancel();
         while !pipeline.poll_stopped() && Instant::now() < deadline {
             std::thread::yield_now();
