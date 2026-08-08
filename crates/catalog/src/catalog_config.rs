@@ -19,6 +19,7 @@ pub const DEFAULT_MAME_SQLITE_PATH: &str = "/media/fat/mister-magik/mame.sqlite3
 pub const DEFAULT_HBMAME_SQLITE_PATH: &str = "/media/fat/mister-magik/hbmame.sqlite3";
 pub const DEFAULT_SQLITE_BUILD_DIR: &str = "/tmp/mister-magik/sqlite-build";
 pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-v3";
+pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
 
 pub const SCHEMA_VERSION: u32 = 67;
 pub const CATALOG_BUILD_VERSION: u32 = 16;
@@ -48,6 +49,13 @@ pub fn default_sharded_catalog_path() -> PathBuf {
     std::env::var("MISTER_SHARDED_CATALOG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| current_app_path("catalog-v3"))
+}
+
+pub fn default_user_state_path() -> PathBuf {
+    configured_path(
+        std::env::var("MISTER_USER_STATE_SQLITE").ok().as_deref(),
+        "user-state.sqlite3",
+    )
 }
 
 /// Mutable, non-authoritative progress for an interrupted catalog build.
@@ -154,6 +162,10 @@ mod tests {
         assert_eq!(
             configured_path(None, "hbmame.sqlite3"),
             PathBuf::from(DEFAULT_HBMAME_SQLITE_PATH)
+        );
+        assert_eq!(
+            configured_path(None, "user-state.sqlite3"),
+            PathBuf::from(DEFAULT_USER_STATE_PATH)
         );
     }
 

@@ -81,6 +81,7 @@ pub mod synthetic_fixture;
 pub mod system_shard;
 #[cfg(test)]
 mod test_support;
+pub mod user_state;
 pub mod work_coordinator;
 
 pub(crate) mod pmu_phase {

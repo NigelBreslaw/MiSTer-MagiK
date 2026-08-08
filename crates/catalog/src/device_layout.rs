@@ -89,6 +89,7 @@ fn initialize_process_env_with(
         ("MISTER_HBMAME_SQLITE", "hbmame.sqlite3"),
         ("MISTER_PREVIEW_CACHE_DIR", "assets"),
         ("MISTER_MEDIA_ASSET_DIR", "assets"),
+        ("MISTER_USER_STATE_SQLITE", "user-state.sqlite3"),
         ("MISTER_LIBRARY_BENCH_SQLITE", "library-scan-bench.sqlite3"),
     ] {
         if !is_set(name) {
@@ -143,6 +144,12 @@ mod tests {
             seeded.get("MISTER_MEDIA_ASSET_DIR"),
             Some(&PathBuf::from("/media/fat/mister-magik-dev/assets"))
         );
-        assert_eq!(seeded.len(), 5);
+        assert_eq!(
+            seeded.get("MISTER_USER_STATE_SQLITE"),
+            Some(&PathBuf::from(
+                "/media/fat/mister-magik-dev/user-state.sqlite3"
+            ))
+        );
+        assert_eq!(seeded.len(), 6);
     }
 }
