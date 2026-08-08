@@ -421,13 +421,6 @@ fn navigation_preview_snapshot_ready(
         || (cache_state == "exact" && frame_status == PreviewRawFrameStatus::Ready)
 }
 
-fn should_clear_suppressed_preview(
-    allow_preview_blit: bool,
-    preserve_navigation_source_preview: bool,
-) -> bool {
-    !allow_preview_blit && !preserve_navigation_source_preview
-}
-
 fn should_defer_or_preserve_selected_preview(
     defer_selected_preview: bool,
     navigation_transition_active: bool,
@@ -5683,14 +5676,31 @@ pub(super) fn run_launcher_loop(
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
             && should_draw_arcade_overlay(&nav, launching, active_arcade_games_available);
-        let preview_presentation_state = preview.presentation_state();
+        let presentation_route = if preserve_navigation_source_preview {
+            PreviewRoute::Occluded
+        } else if preview_route.allows_preview_work()
+            && nav.screen == Screen::Arcade
+            && !memory_guard.active()
+            && !screensaver.active
+            && !confirm_visible
+            && !catalog_scan_visible
+            && !nav.arcade_search.is_active(&nav.arcade_filter.active)
+        {
+            PreviewRoute::Eligible
+        } else {
+            PreviewRoute::Unavailable
+        };
+        preview.set_route(presentation_route);
+        let preview_frame_intent = preview.frame_intent();
+        let wants_preview_layer = preview.direct_layer_desired();
         let wants_preview = preview_route.allows_preview_work()
             && !screensaver.active
             && !nav.arcade_search.is_active(&nav.arcade_filter.active)
             && direct_preview_requested(
                 nav.screen,
                 memory_guard.active(),
-                preview_presentation_state.owns_direct_layer(),
+                wants_preview_layer
+                    || matches!(preview_frame_intent, PreviewFrameIntent::Present { .. }),
             );
         let preview_frame_status = preview.raw_frame_status();
         let preview_cache_state_before_composition = preview.trace_cache_state();
@@ -5746,7 +5756,7 @@ pub(super) fn run_launcher_loop(
             arcade_ready: active_arcade_games_available,
             route_ok: display_session.route_ok(),
             wants_arcade_list,
-            wants_preview,
+            wants_preview: wants_preview_layer,
             preview_cache_exact: preview_cache_state_before_composition == "exact",
             preview_frame_ready: preview_frame_status == PreviewRawFrameStatus::Ready,
         });
@@ -5770,17 +5780,12 @@ pub(super) fn run_launcher_loop(
         }
         if composition_decision.clear_direct_layers {
             arcade_list_renderer.invalidate_presented_layer();
-            if should_clear_suppressed_preview(
-                composition_decision.allow_preview_blit,
-                preserve_navigation_source_preview,
-            ) {
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                preview.clear(&bridge);
-            }
             request_launcher_redraw!();
         }
         let startup_status = lifecycle.startup_status();
-        let composition_status = composition_decision.status();
+        let mut composition_status = composition_decision.status();
+        composition_status.preview_state = preview.presentation_label();
+        composition_status.preview_generation = preview.presentation_generation();
         let automation_frame_stamp = if launcher_automation.active() {
             let selected_system_id = nav.active_collection_scope_id(&catalog);
             let selected_game = (nav.screen == Screen::Arcade)
@@ -6797,8 +6802,10 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let preview_layer_desired =
-            should_desire_direct_layer(wants_preview, composition_decision.allow_preview_blit);
+        let preview_layer_desired = should_desire_direct_layer(
+            wants_preview_layer,
+            composition_decision.allow_preview_blit,
+        );
         let preview_desired =
             if !layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
                 Some(DirectLayerState::new(
@@ -7249,6 +7256,7 @@ pub(super) fn run_launcher_loop(
         .build();
         let mut accepted_and_active_confirmed = false;
         let mut confirmed_present_sequence = 0u16;
+        let mut confirmed_direct_layer_receipt = None;
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -7348,8 +7356,17 @@ pub(super) fn run_launcher_loop(
                     presented_frame.main_present_completion_poll_count = completion.poll_count;
                     presented_frame.main_present_completion_poll_wall_us = completion.wall_us;
                     presented_frame.main_present_completion_poll_cpu_us = completion.cpu_us;
+                    confirmed_direct_layer_receipt = Some(DirectLayerPresentationReceipt {
+                        sequence: status.active_sequence,
+                        slot: presented_frame.main_present_buffer,
+                        route_epoch: status.active_route_epoch,
+                        carrier: composition_decision.retirement_carrier,
+                    });
                 }
                 Err(failure) => {
+                    if let Some(generation) = composition_decision.retirement_generation {
+                        let _ = composition.mark_retirement_uncertain(generation);
+                    }
                     launcher_presenter.fail_latch_completion(failure);
                     if let Some(failure) = launcher_presenter.latch_failure() {
                         frame_accounting.record_latch_failure(failure);
@@ -7611,7 +7628,29 @@ pub(super) fn run_launcher_loop(
         if preview_present_confirmed && let Some(commit) = preview_presentation_commit {
             preview.confirm_presentation(commit);
         }
-        if preview.presentation_requires_present() {
+        let direct_layer_receipt = if accepted_and_active_confirmed {
+            confirmed_direct_layer_receipt
+        } else if !latch_trace_flush_deferred && visible_frame_presented {
+            Some(DirectLayerPresentationReceipt {
+                sequence: (frames as u16).wrapping_add(1).max(1),
+                slot: 0,
+                route_epoch: 0,
+                carrier: composition_decision.retirement_carrier,
+            })
+        } else {
+            None
+        };
+        if let Some(receipt) = direct_layer_receipt {
+            let retired = composition.confirm_presented_layers(
+                composition_decision.retirement_generation,
+                composition_decision.direct_layers_desired,
+                receipt,
+            );
+            if retired && let Some(generation) = preview.retirement_generation() {
+                preview.confirm_retirement(generation);
+            }
+        }
+        if matches!(preview.frame_intent(), PreviewFrameIntent::Present { .. }) {
             request_launcher_redraw!();
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
@@ -9657,14 +9696,6 @@ mod tests {
             "empty",
             PreviewRawFrameStatus::Empty,
         ));
-    }
-
-    #[test]
-    fn arcade_source_preview_survives_suppressed_transition_composition() {
-        assert!(should_clear_suppressed_preview(false, false));
-        assert!(!should_clear_suppressed_preview(false, true));
-        assert!(!should_clear_suppressed_preview(true, false));
-        assert!(!should_clear_suppressed_preview(true, true));
     }
 
     #[test]

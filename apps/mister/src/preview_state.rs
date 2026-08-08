@@ -795,9 +795,93 @@ impl PreviewState {
         self.presentation_state
     }
 
-    pub(crate) const fn frame_intent(&self) -> PreviewFrameIntent {
+    pub(crate) fn set_route(&mut self, route: PreviewRoute) {
+        if self.route == route {
+            return;
+        }
+        self.route = route;
+        match route {
+            PreviewRoute::Unavailable => {
+                if self.presentation_state.owns_direct_layer()
+                    && !matches!(
+                        self.presentation_state,
+                        PreviewPresentationState::RetirementPending { .. }
+                    )
+                {
+                    let generation = self.next_presentation_generation();
+                    self.presentation_state =
+                        PreviewPresentationState::RetirementPending { generation };
+                    self.previous_image = None;
+                    self.previous_was_empty = false;
+                    self.empty_base_commit_pending = false;
+                    self.raw_dirty = false;
+                }
+            }
+            PreviewRoute::Eligible
+                if self.demand == PreviewDemand::Image
+                    && matches!(
+                        self.presentation_state,
+                        PreviewPresentationState::Detached
+                            | PreviewPresentationState::RetirementPending { .. }
+                    ) =>
+            {
+                let generation = self.next_presentation_generation();
+                if self.has_visible_preview {
+                    self.raw_transition_id = self.raw_transition_id.wrapping_add(1);
+                    self.raw_dirty = true;
+                    self.presentation_state = PreviewPresentationState::Animating {
+                        generation,
+                        target: PreviewPresentationTarget::Image,
+                    };
+                } else {
+                    self.presentation_state = PreviewPresentationState::Loading {
+                        generation,
+                        retained_image: false,
+                    };
+                }
+            }
+            PreviewRoute::Eligible | PreviewRoute::Occluded => {}
+        }
+    }
+
+    pub(crate) const fn direct_layer_desired(&self) -> bool {
+        self.route == PreviewRoute::Eligible
+            && self.demand == PreviewDemand::Image
+            && matches!(
+                self.presentation_state,
+                PreviewPresentationState::Visible { .. }
+                    | PreviewPresentationState::Loading {
+                        retained_image: true,
+                        ..
+                    }
+                    | PreviewPresentationState::Animating { .. }
+            )
+    }
+
+    pub(crate) const fn retirement_generation(&self) -> Option<u64> {
         match self.presentation_state {
-            PreviewPresentationState::Animating { generation, .. } => {
+            PreviewPresentationState::RetirementPending { generation } => Some(generation),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn presentation_generation(&self) -> u64 {
+        self.presentation_generation
+    }
+
+    pub(crate) const fn presentation_label(&self) -> &'static str {
+        match self.presentation_state {
+            PreviewPresentationState::Detached => "detached",
+            PreviewPresentationState::Loading { .. } => "loading",
+            PreviewPresentationState::Visible { .. } => "visible",
+            PreviewPresentationState::Animating { .. } => "animating",
+            PreviewPresentationState::RetirementPending { .. } => "retirement-pending",
+        }
+    }
+
+    pub(crate) const fn frame_intent(&self) -> PreviewFrameIntent {
+        match (self.route, self.presentation_state) {
+            (PreviewRoute::Eligible, PreviewPresentationState::Animating { generation, .. }) => {
                 PreviewFrameIntent::Present { generation }
             }
             _ => PreviewFrameIntent::None,
@@ -2628,6 +2712,7 @@ mod tests {
     #[test]
     fn final_image_confirmation_completes_animation() {
         let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
         preview.cache.insert(
             "1941.png".into(),
             preview_image(0xf800),
@@ -2692,6 +2777,62 @@ mod tests {
                 retained_image: false,
             }
         );
+    }
+
+    #[test]
+    fn unavailable_route_retires_without_requesting_preview_frames() {
+        let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
+        preview.has_visible_preview = true;
+        preview.begin_raw_transition_to("1941.png", PreviewTransitionPace::Normal);
+        preview.visible_preview_key = "1941.png".into();
+        let commit = preview
+            .presentation_commit(true, false)
+            .expect("visible image commit");
+        preview.confirm_presentation(commit);
+
+        preview.set_route(PreviewRoute::Unavailable);
+
+        assert!(preview.retirement_generation().is_some());
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
+        assert!(!preview.direct_layer_desired());
+    }
+
+    #[test]
+    fn route_reversal_reacquires_retained_image_in_the_same_frame() {
+        let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
+        preview.has_visible_preview = true;
+        preview.demand = PreviewDemand::Image;
+        preview.presentation_state = PreviewPresentationState::Visible { generation: 1 };
+        preview.set_route(PreviewRoute::Unavailable);
+        let retirement_generation = preview.retirement_generation().expect("retirement pending");
+
+        preview.set_route(PreviewRoute::Eligible);
+
+        assert!(preview.presentation_generation() > retirement_generation);
+        assert!(preview.direct_layer_desired());
+        assert!(matches!(
+            preview.frame_intent(),
+            PreviewFrameIntent::Present { .. }
+        ));
+    }
+
+    #[test]
+    fn occluded_route_preserves_navigation_snapshot_state_without_waking() {
+        let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
+        preview.has_visible_preview = true;
+        preview.demand = PreviewDemand::Image;
+        preview.presentation_state = PreviewPresentationState::Visible { generation: 1 };
+
+        preview.set_route(PreviewRoute::Occluded);
+
+        assert_eq!(
+            preview.presentation_state(),
+            PreviewPresentationState::Visible { generation: 1 }
+        );
+        assert_eq!(preview.frame_intent(), PreviewFrameIntent::None);
     }
 
     #[test]
@@ -2955,6 +3096,7 @@ mod tests {
     #[test]
     fn empty_presentation_retires_only_after_black_base_and_final_frame_confirm() {
         let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
         preview.cache.insert(
             "1941.png".into(),
             preview_image(0xf800),
@@ -3005,6 +3147,7 @@ mod tests {
     #[test]
     fn failed_final_black_present_keeps_direct_layer_owned() {
         let mut preview = PreviewState::new();
+        preview.set_route(PreviewRoute::Eligible);
         preview.cache.insert(
             "1941.png".into(),
             preview_image(0xf800),

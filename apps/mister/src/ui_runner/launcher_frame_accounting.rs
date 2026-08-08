@@ -2560,11 +2560,22 @@ impl LauncherFrameAccounting {
             arcade_search_query: &nav.arcade_search.query,
             arcade_search_results: nav.arcade_search_result_count(),
             preview_cache_state,
+            preview_presentation_state: composition_status.preview_state,
+            preview_presentation_generation: composition_status.preview_generation,
             preview_transition_effect,
             preview_transition_progress,
             screensaver_active_cards,
             composition_state: composition_status.state,
             composition_recovery_count: composition_status.recovery_count,
+            direct_layer_retirement_state: composition_status.retirement_state,
+            direct_layer_retirement_generation: composition_status.retirement_generation,
+            direct_layer_retirement_obligations: composition_status.retirement_obligations,
+            direct_layer_retirement_receipt: &composition_status.retirement_receipt,
+            direct_layer_retirement_receipt_sequence: composition_status
+                .retirement_receipt_sequence,
+            direct_layer_retirement_receipt_slot: composition_status.retirement_receipt_slot,
+            direct_layer_retirement_receipt_route_epoch: composition_status
+                .retirement_receipt_route_epoch,
             last_composition_invariant_kind: &composition_status.last_invariant_kind,
             last_composition_invariant_detail: &composition_status.last_invariant_detail,
             bench_scenario: launcher_bench_scenario

@@ -37,6 +37,15 @@ impl UiCompositionState {
 #[derive(Clone, Debug)]
 pub struct UiCompositionStatus {
     pub state: &'static str,
+    pub preview_state: &'static str,
+    pub preview_generation: u64,
+    pub retirement_state: &'static str,
+    pub retirement_generation: u64,
+    pub retirement_obligations: &'static str,
+    pub retirement_receipt: String,
+    pub retirement_receipt_sequence: u16,
+    pub retirement_receipt_slot: u8,
+    pub retirement_receipt_route_epoch: u16,
     pub recovery_count: u64,
     pub last_invariant_kind: String,
     pub last_invariant_detail: String,
@@ -46,6 +55,15 @@ impl Default for UiCompositionStatus {
     fn default() -> Self {
         Self {
             state: UiCompositionState::FullSlint.label(),
+            preview_state: "detached",
+            preview_generation: 0,
+            retirement_state: "idle",
+            retirement_generation: 0,
+            retirement_obligations: "none",
+            retirement_receipt: String::new(),
+            retirement_receipt_sequence: 0,
+            retirement_receipt_slot: 0,
+            retirement_receipt_route_epoch: 0,
             recovery_count: 0,
             last_invariant_kind: String::new(),
             last_invariant_detail: String::new(),
@@ -81,6 +99,12 @@ pub struct UiCompositionDecision {
     pub force_full_slint_raster: bool,
     pub force_full_slint_present: bool,
     pub clear_direct_layers: bool,
+    pub direct_layers_desired: DirectLayerObligations,
+    pub retirement_generation: Option<u64>,
+    pub retirement_carrier: DirectLayerCarrier,
+    retirement_state: &'static str,
+    retirement_obligations: DirectLayerObligations,
+    retirement_receipt: Option<DirectLayerPresentationReceipt>,
     pub recovery_count: u64,
     pub last_invariant_kind: String,
     pub last_invariant_detail: String,
@@ -91,6 +115,21 @@ impl UiCompositionDecision {
     pub fn status(&self) -> UiCompositionStatus {
         UiCompositionStatus {
             state: self.state.label(),
+            preview_state: "detached",
+            preview_generation: 0,
+            retirement_state: self.retirement_state,
+            retirement_generation: self.retirement_generation.unwrap_or(0),
+            retirement_obligations: self.retirement_obligations.label(),
+            retirement_receipt: self
+                .retirement_receipt
+                .map_or_else(String::new, DirectLayerPresentationReceipt::label),
+            retirement_receipt_sequence: self
+                .retirement_receipt
+                .map_or(0, |receipt| receipt.sequence),
+            retirement_receipt_slot: self.retirement_receipt.map_or(0, |receipt| receipt.slot),
+            retirement_receipt_route_epoch: self
+                .retirement_receipt
+                .map_or(0, |receipt| receipt.route_epoch),
             recovery_count: self.recovery_count,
             last_invariant_kind: self.last_invariant_kind.clone(),
             last_invariant_detail: self.last_invariant_detail.clone(),
@@ -104,12 +143,104 @@ pub struct UiCompositionEvent {
     pub detail: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DirectLayerObligations(u8);
+
+impl DirectLayerObligations {
+    const ARCADE: u8 = 1;
+    const PREVIEW: u8 = 2;
+
+    pub const fn new(arcade: bool, preview: bool) -> Self {
+        Self((arcade as u8) * Self::ARCADE | (preview as u8) * Self::PREVIEW)
+    }
+
+    const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self.0 {
+            Self::ARCADE => "arcade",
+            Self::PREVIEW => "preview",
+            Self::ARCADE | Self::PREVIEW => "arcade+preview",
+            _ => "none",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectLayerCarrier {
+    Navigation,
+    Modal,
+    Screensaver,
+    Recovery,
+    LiveSlint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectLayerPresentationReceipt {
+    pub sequence: u16,
+    pub slot: u8,
+    pub route_epoch: u16,
+    pub carrier: DirectLayerCarrier,
+}
+
+impl DirectLayerPresentationReceipt {
+    fn valid(self) -> bool {
+        self.sequence != 0 && matches!(self.slot, 0..=2)
+    }
+
+    fn label(self) -> String {
+        format!(
+            "sequence={} slot={} route_epoch={} carrier={:?}",
+            self.sequence, self.slot, self.route_epoch, self.carrier
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DirectLayerRetirementState {
+    Idle,
+    Pending,
+    Reconciling,
+}
+
+impl DirectLayerRetirementState {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Pending => "pending",
+            Self::Reconciling => "reconciling",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DirectLayerRetirement {
+    state: DirectLayerRetirementState,
+    generation: u64,
+    obligations: DirectLayerObligations,
+    receipt: Option<DirectLayerPresentationReceipt>,
+}
+
 #[derive(Debug)]
 pub struct UiCompositionController {
     state: UiCompositionState,
     recovery_count: u64,
     last_invariant_kind: String,
     last_invariant_detail: String,
+    owned_direct_layers: DirectLayerObligations,
+    retirement_generation: u64,
+    retirement: Option<DirectLayerRetirement>,
+    last_retirement_receipt: Option<DirectLayerPresentationReceipt>,
 }
 
 impl UiCompositionController {
@@ -119,6 +250,10 @@ impl UiCompositionController {
             recovery_count: 0,
             last_invariant_kind: String::new(),
             last_invariant_detail: String::new(),
+            owned_direct_layers: DirectLayerObligations::default(),
+            retirement_generation: 0,
+            retirement: None,
+            last_retirement_receipt: None,
         }
     }
 
@@ -179,6 +314,54 @@ impl UiCompositionController {
             });
         }
 
+        let direct_layers_desired = if state == UiCompositionState::MixedArcade {
+            DirectLayerObligations::new(input.wants_arcade_list, input.wants_preview)
+        } else {
+            DirectLayerObligations::default()
+        };
+        let illegal_layers = self.owned_direct_layers.without(direct_layers_desired);
+        if !illegal_layers.is_empty() {
+            match self.retirement.as_mut() {
+                Some(retirement) => {
+                    retirement.obligations = retirement.obligations.union(illegal_layers);
+                }
+                None => {
+                    self.retirement_generation = self.retirement_generation.wrapping_add(1).max(1);
+                    self.retirement = Some(DirectLayerRetirement {
+                        state: DirectLayerRetirementState::Pending,
+                        generation: self.retirement_generation,
+                        obligations: illegal_layers,
+                        receipt: None,
+                    });
+                    events.push(UiCompositionEvent {
+                        name: "direct_layer_retirement_started",
+                        detail: format!(
+                            "generation={} obligations={}",
+                            self.retirement_generation,
+                            illegal_layers.label()
+                        ),
+                    });
+                }
+            }
+        }
+        let retirement_generation = self.retirement.map(|retirement| retirement.generation);
+        let retirement_carrier = retirement_carrier(state);
+        let retirement_state = self
+            .retirement
+            .map_or(DirectLayerRetirementState::Idle, |retirement| {
+                retirement.state
+            })
+            .label();
+        let retirement_obligations = self
+            .retirement
+            .map_or_else(DirectLayerObligations::default, |retirement| {
+                retirement.obligations
+            });
+        let retirement_receipt = self
+            .retirement
+            .and_then(|retirement| retirement.receipt)
+            .or(self.last_retirement_receipt);
+
         UiCompositionDecision {
             state,
             allow_arcade_list_blit: state == UiCompositionState::MixedArcade,
@@ -192,11 +375,83 @@ impl UiCompositionController {
             prepare_navigation_destination: state == UiCompositionState::NavigationDestination,
             force_full_slint_raster,
             force_full_slint_present,
-            clear_direct_layers,
+            clear_direct_layers: clear_direct_layers || !illegal_layers.is_empty(),
+            direct_layers_desired,
+            retirement_generation,
+            retirement_carrier,
+            retirement_state,
+            retirement_obligations,
+            retirement_receipt,
             recovery_count: self.recovery_count,
             last_invariant_kind: self.last_invariant_kind.clone(),
             last_invariant_detail: self.last_invariant_detail.clone(),
             events,
+        }
+    }
+
+    pub fn confirm_presented_layers(
+        &mut self,
+        generation: Option<u64>,
+        desired: DirectLayerObligations,
+        receipt: DirectLayerPresentationReceipt,
+    ) -> bool {
+        if !receipt.valid() {
+            return false;
+        }
+        match (generation, self.retirement) {
+            (Some(generation), Some(retirement)) if generation == retirement.generation => {
+                self.owned_direct_layers = desired;
+                self.last_retirement_receipt = Some(receipt);
+                self.retirement = None;
+                true
+            }
+            (None, None) => {
+                self.owned_direct_layers = desired;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    pub fn mark_retirement_uncertain(&mut self, generation: u64) -> bool {
+        let Some(retirement) = self.retirement.as_mut() else {
+            return false;
+        };
+        if retirement.generation != generation {
+            return false;
+        }
+        retirement.state = DirectLayerRetirementState::Reconciling;
+        true
+    }
+
+    pub fn reconcile_retirement(
+        &mut self,
+        generation: u64,
+        desired: DirectLayerObligations,
+        active_receipt: DirectLayerPresentationReceipt,
+    ) -> bool {
+        let Some(retirement) = self.retirement else {
+            return false;
+        };
+        if retirement.state != DirectLayerRetirementState::Reconciling {
+            return false;
+        }
+        self.confirm_presented_layers(Some(generation), desired, active_receipt)
+    }
+}
+
+fn retirement_carrier(state: UiCompositionState) -> DirectLayerCarrier {
+    match state {
+        UiCompositionState::NavigationTransition | UiCompositionState::NavigationDestination => {
+            DirectLayerCarrier::Navigation
+        }
+        UiCompositionState::Screensaver => DirectLayerCarrier::Screensaver,
+        UiCompositionState::ModalFullSlint | UiCompositionState::ModalOverArcade => {
+            DirectLayerCarrier::Modal
+        }
+        UiCompositionState::Recovering => DirectLayerCarrier::Recovery,
+        UiCompositionState::FullSlint | UiCompositionState::MixedArcade => {
+            DirectLayerCarrier::LiveSlint
         }
     }
 }
@@ -266,6 +521,30 @@ fn composition_invariant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn receipt(sequence: u16, carrier: DirectLayerCarrier) -> DirectLayerPresentationReceipt {
+        DirectLayerPresentationReceipt {
+            sequence,
+            slot: if sequence % 2 == 0 { 2 } else { 1 },
+            route_epoch: sequence,
+            carrier,
+        }
+    }
+
+    fn acquire_direct_layers(controller: &mut UiCompositionController) {
+        let decision = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            wants_preview: true,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
+            ..input(Screen::Arcade)
+        });
+        assert!(!controller.confirm_presented_layers(
+            None,
+            decision.direct_layers_desired,
+            receipt(1, DirectLayerCarrier::LiveSlint),
+        ));
+    }
 
     fn input(screen: Screen) -> UiCompositionInput {
         UiCompositionInput {
@@ -609,5 +888,128 @@ mod tests {
                 .iter()
                 .any(|event| event.name == "ui_composition_recovered")
         );
+    }
+
+    #[test]
+    fn every_authorized_complete_frame_can_carry_retirement() {
+        let cases = [
+            (
+                UiCompositionInput {
+                    navigation_transition_active: true,
+                    ..input(Screen::Home)
+                },
+                DirectLayerCarrier::Navigation,
+            ),
+            (
+                UiCompositionInput {
+                    fullscreen_overlay_visible: true,
+                    ..input(Screen::Home)
+                },
+                DirectLayerCarrier::Modal,
+            ),
+            (
+                UiCompositionInput {
+                    screensaver_active: true,
+                    return_screen: None,
+                    ..input(Screen::Home)
+                },
+                DirectLayerCarrier::Screensaver,
+            ),
+            (
+                UiCompositionInput {
+                    route_ok: false,
+                    ..input(Screen::Home)
+                },
+                DirectLayerCarrier::Recovery,
+            ),
+            (input(Screen::Home), DirectLayerCarrier::LiveSlint),
+        ];
+
+        for (retirement_input, expected_carrier) in cases {
+            let mut controller = UiCompositionController::new();
+            acquire_direct_layers(&mut controller);
+            let decision = controller.tick(retirement_input);
+            let generation = decision
+                .retirement_generation
+                .expect("retirement generation");
+
+            assert_eq!(decision.retirement_carrier, expected_carrier);
+            assert_eq!(decision.retirement_obligations.label(), "arcade+preview");
+            assert!(controller.confirm_presented_layers(
+                Some(generation),
+                decision.direct_layers_desired,
+                receipt(2, expected_carrier),
+            ));
+            assert!(controller.retirement.is_none());
+            assert!(controller.owned_direct_layers.is_empty());
+        }
+    }
+
+    #[test]
+    fn uncertain_retirement_reconciles_before_any_retry() {
+        let mut controller = UiCompositionController::new();
+        acquire_direct_layers(&mut controller);
+        let decision = controller.tick(input(Screen::Home));
+        let generation = decision.retirement_generation.expect("retirement");
+
+        assert!(!controller.confirm_presented_layers(
+            Some(generation.wrapping_add(1)),
+            decision.direct_layers_desired,
+            receipt(2, decision.retirement_carrier),
+        ));
+        assert!(controller.mark_retirement_uncertain(generation));
+        assert_eq!(
+            controller.retirement.expect("transaction").state,
+            DirectLayerRetirementState::Reconciling
+        );
+        assert!(controller.reconcile_retirement(
+            generation,
+            decision.direct_layers_desired,
+            receipt(2, decision.retirement_carrier),
+        ));
+        assert!(controller.retirement.is_none());
+    }
+
+    #[test]
+    fn navigation_snapshot_lock_uses_navigation_carrier_without_live_raster() {
+        let mut controller = UiCompositionController::new();
+        acquire_direct_layers(&mut controller);
+        let decision = controller.tick(UiCompositionInput {
+            navigation_transition_active: true,
+            ..input(Screen::Home)
+        });
+
+        assert_eq!(decision.retirement_carrier, DirectLayerCarrier::Navigation);
+        assert!(decision.transition_owns_full_frame);
+        assert!(!decision.force_full_slint_raster);
+        assert!(decision.retirement_generation.is_some());
+    }
+
+    #[test]
+    fn same_frame_retire_and_reacquire_keeps_replacement_layers() {
+        let mut controller = UiCompositionController::new();
+        acquire_direct_layers(&mut controller);
+        let retirement = controller.tick(input(Screen::Home));
+        let generation = retirement.retirement_generation.expect("retirement");
+
+        let replacement = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            wants_preview: true,
+            preview_cache_exact: true,
+            preview_frame_ready: true,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(replacement.retirement_generation, Some(generation));
+        assert!(controller.confirm_presented_layers(
+            Some(generation),
+            replacement.direct_layers_desired,
+            receipt(2, replacement.retirement_carrier),
+        ));
+        assert_eq!(
+            controller.owned_direct_layers,
+            DirectLayerObligations::new(true, true)
+        );
+        assert!(controller.retirement.is_none());
     }
 }

@@ -93,8 +93,13 @@ launcher_status_types! {
         arcade_search_active: bool,
         arcade_search_results: usize,
         preview_transition_progress: f32,
+        preview_presentation_generation: u64,
         screensaver_active_cards: usize,
         composition_recovery_count: u64,
+        direct_layer_retirement_generation: u64,
+        direct_layer_retirement_receipt_sequence: u16,
+        direct_layer_retirement_receipt_slot: u8,
+        direct_layer_retirement_receipt_route_epoch: u16,
         route_reassert_count: u64,
         last_route_reassert_frame: u64,
         last_route_reassert_ok: bool,
@@ -152,8 +157,12 @@ launcher_status_types! {
         arcade_search_status,
         arcade_search_query,
         preview_cache_state,
+        preview_presentation_state,
         preview_transition_effect,
         composition_state,
+        direct_layer_retirement_state,
+        direct_layer_retirement_obligations,
+        direct_layer_retirement_receipt,
         last_composition_invariant_kind,
         last_composition_invariant_detail,
         bench_scenario,
@@ -833,6 +842,14 @@ fn write_launcher_status_json_tail(
     field!("arcade_search_query", status.arcade_search_query);
     field!("arcade_search_results", status.arcade_search_results);
     field!("preview_cache_state", status.preview_cache_state);
+    field!(
+        "preview_presentation_state",
+        status.preview_presentation_state
+    );
+    field!(
+        "preview_presentation_generation",
+        status.preview_presentation_generation
+    );
     field!("return_source", status.return_source);
     field!("return_phase", status.return_phase);
     field!("return_fallback_reason", status.return_fallback_reason);
@@ -862,6 +879,34 @@ fn write_launcher_status_json_tail(
     );
     field!("screensaver_active_cards", status.screensaver_active_cards);
     field!("composition_state", status.composition_state);
+    field!(
+        "direct_layer_retirement_state",
+        status.direct_layer_retirement_state
+    );
+    field!(
+        "direct_layer_retirement_generation",
+        status.direct_layer_retirement_generation
+    );
+    field!(
+        "direct_layer_retirement_obligations",
+        status.direct_layer_retirement_obligations
+    );
+    field!(
+        "direct_layer_retirement_receipt",
+        status.direct_layer_retirement_receipt
+    );
+    field!(
+        "direct_layer_retirement_receipt_sequence",
+        status.direct_layer_retirement_receipt_sequence
+    );
+    field!(
+        "direct_layer_retirement_receipt_slot",
+        status.direct_layer_retirement_receipt_slot
+    );
+    field!(
+        "direct_layer_retirement_receipt_route_epoch",
+        status.direct_layer_retirement_receipt_route_epoch
+    );
     field!(
         "composition_recovery_count",
         status.composition_recovery_count
@@ -1106,6 +1151,14 @@ fn launcher_status_value(
     insert!("arcade_search_query", status.arcade_search_query);
     insert!("arcade_search_results", status.arcade_search_results);
     insert!("preview_cache_state", status.preview_cache_state);
+    insert!(
+        "preview_presentation_state",
+        status.preview_presentation_state
+    );
+    insert!(
+        "preview_presentation_generation",
+        status.preview_presentation_generation
+    );
     insert!("return_source", status.return_source);
     insert!("return_phase", status.return_phase);
     insert!("return_fallback_reason", status.return_fallback_reason);
@@ -1135,6 +1188,34 @@ fn launcher_status_value(
     );
     insert!("screensaver_active_cards", status.screensaver_active_cards);
     insert!("composition_state", status.composition_state);
+    insert!(
+        "direct_layer_retirement_state",
+        status.direct_layer_retirement_state
+    );
+    insert!(
+        "direct_layer_retirement_generation",
+        status.direct_layer_retirement_generation
+    );
+    insert!(
+        "direct_layer_retirement_obligations",
+        status.direct_layer_retirement_obligations
+    );
+    insert!(
+        "direct_layer_retirement_receipt",
+        status.direct_layer_retirement_receipt
+    );
+    insert!(
+        "direct_layer_retirement_receipt_sequence",
+        status.direct_layer_retirement_receipt_sequence
+    );
+    insert!(
+        "direct_layer_retirement_receipt_slot",
+        status.direct_layer_retirement_receipt_slot
+    );
+    insert!(
+        "direct_layer_retirement_receipt_route_epoch",
+        status.direct_layer_retirement_receipt_route_epoch
+    );
     insert!(
         "composition_recovery_count",
         status.composition_recovery_count
@@ -1752,11 +1833,20 @@ mod tests {
                 arcade_search_query: "A",
                 arcade_search_results: 42,
                 preview_cache_state: "exact",
+                preview_presentation_state: "visible",
+                preview_presentation_generation: 7,
                 preview_transition_effect: "fade",
                 preview_transition_progress: 0.5,
                 screensaver_active_cards: 73,
                 composition_state: "mixed-arcade",
                 composition_recovery_count: 0,
+                direct_layer_retirement_state: "idle",
+                direct_layer_retirement_generation: 0,
+                direct_layer_retirement_obligations: "none",
+                direct_layer_retirement_receipt: "",
+                direct_layer_retirement_receipt_sequence: 0,
+                direct_layer_retirement_receipt_slot: 0,
+                direct_layer_retirement_receipt_route_epoch: 0,
                 last_composition_invariant_kind: "",
                 last_composition_invariant_detail: "",
                 bench_scenario: "held-scroll",
@@ -2253,11 +2343,20 @@ mod tests {
             arcade_search_query: "",
             arcade_search_results: 0,
             preview_cache_state: "placeholder",
+            preview_presentation_state: "detached",
+            preview_presentation_generation: 0,
             preview_transition_effect: "fade",
             preview_transition_progress: 1.0,
             screensaver_active_cards: 0,
             composition_state: "full-slint",
             composition_recovery_count: 0,
+            direct_layer_retirement_state: "idle",
+            direct_layer_retirement_generation: 0,
+            direct_layer_retirement_obligations: "none",
+            direct_layer_retirement_receipt: "",
+            direct_layer_retirement_receipt_sequence: 0,
+            direct_layer_retirement_receipt_slot: 0,
+            direct_layer_retirement_receipt_route_epoch: 0,
             last_composition_invariant_kind: "",
             last_composition_invariant_detail: "",
             bench_scenario: "none",
