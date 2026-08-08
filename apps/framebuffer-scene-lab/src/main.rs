@@ -2345,7 +2345,7 @@ fn run_window(
                 telemetry,
             );
             println!(
-                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_repeated_vblanks={} software_estimated_dropped_frames={} ownership_losses={} telemetry_invariant={} telemetry_plausible={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "scene-lab-cadence scene={} profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_dropped_frames={} software_estimated_dropped_frames={} ownership_losses={} telemetry_invariant={} telemetry_plausible={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 scene_effect.label(),
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
@@ -3107,7 +3107,7 @@ fn run_card_flip_mister(
                 telemetry,
             );
             println!(
-                "card-flip-cadence profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_repeated_vblanks={} software_estimated_dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
+                "card-flip-cadence profiler_enabled={} authoritative={} source={} refresh_period_us={} confirmed_frames={} expected_refresh_intervals={} unique_latch_flips={} fpga_dropped_frames={} software_estimated_dropped_frames={} confirmation_sequence_failures={} latch_drop_delta={} completion_failures={} long_completion_intervals={} max_completion_interval_us={} unique_fps={:.3}",
                 cadence.profiler_enabled,
                 cadence.cadence_authoritative,
                 cadence.cadence_source,

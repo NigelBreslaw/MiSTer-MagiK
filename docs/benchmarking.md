@@ -59,7 +59,7 @@ the monitor-counterclockwise 720×1280 portrait-left layout, at physical
 `hdmi-1280x720p60`. The benchmark drives the production input path and waits
 for each endpoint's live frame to be physically confirmed before starting the
 next leg. Every leg
-independently requires zero protocol-v5 repeated-vblank drops and ownership
+independently requires zero protocol-v5 physical dropped frames and ownership
 losses, zero latch drops and sequence gaps, continuous hidden-slot
 presentation, at least 59.9 physical FPS, whole-frame work P99 below 15,917 µs
 and maximum below 16,667 µs, plus no snapshot-lock, locked-Slint-raster, or
@@ -78,7 +78,7 @@ real Settings view at 1280×720/60 Hz through
 Normal → Clockwise → Counterclockwise → Normal → Counterclockwise → Clockwise
 → Normal once with exactly one selected effect. Each endpoint must complete a physical hidden-slot presentation
 before the next leg starts. Every leg independently requires zero protocol-v5
-repeated-vblank drops, zero latch drops and sequence gaps, continuous accepted
+physical dropped frames, zero latch drops and sequence gaps, continuous accepted
 hidden-slot presentation, at least 59.9 physical FPS, whole-frame work P99 below
 15,917 µs, and maximum whole-frame work below 16,667 µs. The scenario changes
 orientation and motion state only in memory, disables catalog refresh, retains
@@ -171,7 +171,7 @@ external-direct post count as `ceil(20 seconds / measured refresh period)`, plus
 any reported spinning-cabinet wait frames before the live launcher is ready.
 This applies to HDMI and to `crt-240p60`, `crt-288p50`, `crt-480p60`, and
 `crt-576p50`. All must sustain the resolved physical refresh within the ordinary
-tolerance and zero FPGA repeated-vblank drops, with latch-protocol drops and
+tolerance and zero FPGA physical dropped frames, with latch-protocol drops and
 completion failures gated independently. Pacing and completion timing remain
 diagnostic. Catalog coordinator and walker
 affinity must remain on CPU0. The run also requires a snapshot milestone before
@@ -345,7 +345,7 @@ PMU counters attribute CPU work; wall time remains the optimization outcome.
 Filesystem and SQLite waits can dominate elapsed time without accumulating
 corresponding calling-thread cycles. The PMU-enabled workload is therefore not
 a cadence or final correctness qualification. Two PMU-off `catalog-lifecycle`
-runs with zero FPGA repeated-vblank drops remain the final device gate.
+runs with zero FPGA physical dropped frames remain the final device gate.
 
 Catalog optimization campaigns use two clean baseline PMU suites. Each
 single-hypothesis commit receives one screening run and, only if promising, two

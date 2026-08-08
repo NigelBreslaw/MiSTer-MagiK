@@ -7214,7 +7214,7 @@ fn persist_orientation_transition_qualification(
     )?;
     writeln!(
         report,
-        "| Effect | Leg | FPS | Work p99 | Work max | Repeated | Latch drops | Gaps | Result |"
+        "| Effect | Leg | FPS | Work p99 | Work max | Dropped frames | Latch drops | Gaps | Result |"
     )?;
     writeln!(report, "|---|---|---:|---:|---:|---:|---:|---:|---|")?;
     for leg in summary["legs"].as_array().into_iter().flatten() {
@@ -9816,7 +9816,7 @@ fn authoritative_physical_refresh(
         .ok_or("FPGA cadence evidence has no presented-vblank delta")?;
     let dropped_frames = presentation_telemetry["repeated_vblank_delta"]
         .as_u64()
-        .ok_or("FPGA cadence evidence has no repeated-vblank delta")?;
+        .ok_or("FPGA cadence evidence has no dropped-frame counter delta")?;
     Ok(json!({
         "source": "fpga-owned-vblank-telemetry",
         "refresh_period_us": refresh_period_us,

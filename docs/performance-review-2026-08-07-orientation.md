@@ -24,7 +24,7 @@ All three runs completed all six legs but failed the cadence and frame-work
 limits. Every leg retained continuous accepted hidden-slot presentation, zero
 latch drops, and zero latch sequence gaps.
 
-| Leg | Median physical FPS | Median work P99/max (µs) | Median repeated-vblank drops |
+| Leg | Median physical FPS | Median work P99/max (µs) | Median dropped frames |
 | --- | ---: | ---: | ---: |
 | Normal → Clockwise | 6.01 | 198,482 | 27 |
 | Clockwise → Counterclockwise | 6.48 | 191,450 | 41 |

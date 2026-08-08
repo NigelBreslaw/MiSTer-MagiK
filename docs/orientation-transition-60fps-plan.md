@@ -289,7 +289,7 @@ Checklist:
 - [ ] Test capture preparation and ordinary idle behavior.
 - [ ] Test starts around the headroom threshold without protocol regression.
 
-Promotion requires fewer repeated vblanks with no latch, sequence,
+Promotion requires fewer physical dropped frames with no latch, sequence,
 presentation, or whole-frame P99 regression.
 
 Benchmark: `scripts/agent benchmark orientation-transition-zoom`
@@ -437,7 +437,7 @@ A performance candidate is promoted only when its named benchmark demonstrates
 at least one of:
 
 - at least 5% improvement in the targeted P99 phase;
-- fewer protocol-v5 repeated vblanks;
+- fewer protocol-v5 physical dropped frames;
 - removal of a deterministic over-budget boundary frame.
 
 It must also retain:
@@ -461,7 +461,7 @@ Fade and zoom qualify independently and are never combined into one workload.
 Each effect requires three clean unprofiled qualification runs. Every directed
 leg must have:
 
-- zero protocol-v5 repeated-vblank drops;
+- zero protocol-v5 physical dropped frames;
 - zero latch-protocol drops;
 - zero sequence gaps;
 - continuous accepted hidden-slot presentation;
