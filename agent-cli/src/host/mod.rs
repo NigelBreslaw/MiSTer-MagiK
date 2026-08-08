@@ -7346,10 +7346,35 @@ fn summarize_settings_navigation_qualification(
             .map(|(_, frame)| frame)
             .collect::<Vec<_>>();
         if selected.len() < 2 {
-            return Err(format!(
-                "Settings navigation leg {leg_number} has insufficient frame telemetry"
-            )
-            .into());
+            all_pass = false;
+            legs.push(json!({
+                "leg": leg_number,
+                "route": route,
+                "direction": direction,
+                "source": record.get("source"),
+                "destination": record.get("destination"),
+                "orientation": expected_orientation,
+                "renderer": "settings-page",
+                "frames": selected.len(),
+                "passed": false,
+                "failure": "insufficient-frame-telemetry",
+                "protocol_v5": Value::Null,
+                "latch_drop_delta": Value::Null,
+                "sequence_gaps": Value::Null,
+                "continuous_hidden_slot_presentation": Value::Null,
+                "whole_frame_work_p99_us": Value::Null,
+                "whole_frame_work_max_us": Value::Null,
+                "transition_p99_us": Value::Null,
+                "transition_max_us": Value::Null,
+                "overlay_p99_us": Value::Null,
+                "overlay_max_us": Value::Null,
+                "process_cpu_us": Value::Null,
+                "snapshot_lock_violations": Value::Null,
+                "locked_slint_render_calls": Value::Null,
+                "status_worker_overlap_frames": Value::Null,
+                "status_submission_frames": Value::Null,
+            }));
+            continue;
         }
         let first_us = frame_u64(selected[0], "completion_monotonic_us");
         let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
@@ -7515,6 +7540,17 @@ fn persist_settings_navigation_qualification(output_dir: &Path, summary: &Value)
         "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|"
     )?;
     for leg in summary["legs"].as_array().into_iter().flatten() {
+        if let Some(failure) = leg["failure"].as_str() {
+            writeln!(
+                report,
+                "| {} | {} | {} | — | — | — | — | — | — | — | FAIL ({}) |",
+                leg["leg"].as_u64().unwrap_or(0),
+                leg["route"].as_str().unwrap_or("unknown"),
+                leg["direction"].as_str().unwrap_or("unknown"),
+                failure,
+            )?;
+            continue;
+        }
         let policy_violations = leg["snapshot_lock_violations"].as_u64().unwrap_or(u64::MAX)
             + leg["locked_slint_render_calls"]
                 .as_u64()
@@ -17816,6 +17852,24 @@ H: Handlers=event3 js0"#
                 .unwrap();
         assert_eq!(summary["status"], "failed");
         assert_eq!(summary["legs"][0]["snapshot_lock_violations"], 1);
+    }
+
+    #[test]
+    fn settings_navigation_qualification_records_insufficient_frame_failure() {
+        let (mut telemetry, completion) = settings_navigation_qualification_fixture();
+        telemetry[1]["launcher"]["frame_budget"]["recent_frames"]
+            .as_array_mut()
+            .unwrap()
+            .pop();
+        let summary =
+            summarize_settings_navigation_qualification(&telemetry, completion, "normal", None)
+                .unwrap();
+        assert_eq!(summary["status"], "failed");
+        assert_eq!(summary["legs"][0]["frames"], 1);
+        assert_eq!(
+            summary["legs"][0]["failure"],
+            "insufficient-frame-telemetry"
+        );
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
