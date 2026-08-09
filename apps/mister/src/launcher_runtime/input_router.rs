@@ -1,0 +1,591 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Central launcher focus, capture, transition, and repeat policy.
+
+use crate::input_event::{InputEvent, InputPhase, LogicalAction, PressId};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
+
+const MENU_REPEAT_DELAY: Duration = Duration::from_millis(300);
+const MENU_REPEAT_INTERVAL: Duration = Duration::from_millis(80);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum InputContextKind {
+    Disabled,
+    Screensaver,
+    LifecycleDialog,
+    ControllerSetup,
+    LauncherModal,
+    Transition,
+    Diagnostic,
+    Screen,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FocusTarget {
+    pub kind: InputContextKind,
+    /// Identity of the concrete screen, dialog, or transition instance.
+    pub owner: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ContextId {
+    pub target: FocusTarget,
+    pub generation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectionalPolicy {
+    EdgeOnly,
+    MenuRepeat,
+    HomeContinuous,
+    ArcadeContinuous,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FocusRequest {
+    pub target: FocusTarget,
+    pub directional_policy: DirectionalPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatchKind {
+    Initial,
+    Repeat,
+    TransitionReplay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsumedReason {
+    InputDisabled,
+    OpposingDirections,
+    StaleRelease,
+    ExclusiveBatch,
+    IntegrityFault,
+    LaunchHandoff,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputOutcome {
+    Dispatch {
+        event: InputEvent,
+        context: ContextId,
+        kind: DispatchKind,
+    },
+    WakeScreensaver {
+        event: InputEvent,
+        context: ContextId,
+    },
+    TransitionControl {
+        event: InputEvent,
+        context: ContextId,
+    },
+    TransitionQueued {
+        event: InputEvent,
+        context: ContextId,
+    },
+    Released {
+        press_id: PressId,
+        context: ContextId,
+    },
+    Consumed {
+        press_id: PressId,
+        reason: ConsumedReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Capture {
+    context: ContextId,
+    action: LogicalAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RepeatState {
+    event: InputEvent,
+    context: ContextId,
+    next_at: Instant,
+}
+
+#[derive(Debug)]
+pub struct InputRouter {
+    context: ContextId,
+    policy: DirectionalPolicy,
+    captures: HashMap<PressId, Capture>,
+    held_actions: HashSet<LogicalAction>,
+    repeats: HashMap<LogicalAction, RepeatState>,
+    transition_queue: VecDeque<InputEvent>,
+    horizontal_neutral_lock: bool,
+    vertical_neutral_lock: bool,
+    last_flush_reason: Option<ConsumedReason>,
+}
+
+impl InputRouter {
+    pub fn new(initial: FocusRequest) -> Self {
+        Self {
+            context: ContextId {
+                target: initial.target,
+                generation: 1,
+            },
+            policy: initial.directional_policy,
+            captures: HashMap::new(),
+            held_actions: HashSet::new(),
+            repeats: HashMap::new(),
+            transition_queue: VecDeque::new(),
+            horizontal_neutral_lock: false,
+            vertical_neutral_lock: false,
+            last_flush_reason: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn context(&self) -> ContextId {
+        self.context
+    }
+
+    pub fn set_focus(&mut self, request: FocusRequest) -> ContextId {
+        if self.context.target != request.target {
+            self.context = ContextId {
+                target: request.target,
+                generation: self.context.generation.saturating_add(1),
+            };
+            self.repeats.clear();
+        }
+        self.policy = request.directional_policy;
+        self.context
+    }
+
+    pub fn route_event(
+        &mut self,
+        event: InputEvent,
+        request: FocusRequest,
+        now: Instant,
+    ) -> InputOutcome {
+        let context = self.set_focus(request);
+        match event.phase {
+            InputPhase::Pressed => self.route_pressed(event, context, now),
+            InputPhase::Released => self.route_released(event),
+        }
+    }
+
+    fn route_pressed(
+        &mut self,
+        event: InputEvent,
+        context: ContextId,
+        now: Instant,
+    ) -> InputOutcome {
+        self.held_actions.insert(event.action);
+        self.captures.insert(
+            event.press_id,
+            Capture {
+                context,
+                action: event.action,
+            },
+        );
+        if self.opposing_direction_locked(event.action) {
+            self.repeats.remove(&event.action);
+            if let Some(opposite) = opposite(event.action) {
+                self.repeats.remove(&opposite);
+            }
+            return InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::OpposingDirections,
+            };
+        }
+
+        match context.target.kind {
+            InputContextKind::Disabled => InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::InputDisabled,
+            },
+            InputContextKind::Screensaver => InputOutcome::WakeScreensaver { event, context },
+            InputContextKind::Transition
+                if matches!(event.action, LogicalAction::Back | LogicalAction::Home) =>
+            {
+                InputOutcome::TransitionControl { event, context }
+            }
+            InputContextKind::Transition => {
+                self.transition_queue.push_back(event);
+                InputOutcome::TransitionQueued { event, context }
+            }
+            _ => {
+                self.arm_repeat(event, context, now);
+                InputOutcome::Dispatch {
+                    event,
+                    context,
+                    kind: DispatchKind::Initial,
+                }
+            }
+        }
+    }
+
+    fn route_released(&mut self, event: InputEvent) -> InputOutcome {
+        self.held_actions.remove(&event.action);
+        self.repeats.remove(&event.action);
+        self.update_neutral_locks();
+        let Some(capture) = self.captures.remove(&event.press_id) else {
+            return InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::StaleRelease,
+            };
+        };
+        debug_assert_eq!(capture.action, event.action);
+        InputOutcome::Released {
+            press_id: event.press_id,
+            context: capture.context,
+        }
+    }
+
+    fn arm_repeat(&mut self, event: InputEvent, context: ContextId, now: Instant) {
+        if self.policy == DirectionalPolicy::MenuRepeat && is_direction(event.action) {
+            self.repeats.insert(
+                event.action,
+                RepeatState {
+                    event,
+                    context,
+                    next_at: now + MENU_REPEAT_DELAY,
+                },
+            );
+        }
+    }
+
+    pub fn tick_repeats(&mut self, now: Instant) -> Vec<InputOutcome> {
+        let mut due = Vec::new();
+        for action in LogicalAction::ALL {
+            let Some(repeat) = self.repeats.get_mut(&action) else {
+                continue;
+            };
+            if repeat.context != self.context || now < repeat.next_at {
+                continue;
+            }
+            repeat.next_at = now + MENU_REPEAT_INTERVAL;
+            due.push(InputOutcome::Dispatch {
+                event: repeat.event,
+                context: repeat.context,
+                kind: DispatchKind::Repeat,
+            });
+        }
+        due
+    }
+
+    pub fn replay_next_transition(
+        &mut self,
+        request: FocusRequest,
+        now: Instant,
+    ) -> Option<InputOutcome> {
+        let event = self.transition_queue.pop_front()?;
+        let context = self.set_focus(request);
+        if self.captures.contains_key(&event.press_id) {
+            self.captures.insert(
+                event.press_id,
+                Capture {
+                    context,
+                    action: event.action,
+                },
+            );
+            self.arm_repeat(event, context, now);
+        }
+        Some(InputOutcome::Dispatch {
+            event,
+            context,
+            kind: DispatchKind::TransitionReplay,
+        })
+    }
+
+    pub fn flush_transition_queue(&mut self, reason: ConsumedReason) -> usize {
+        let count = self.transition_queue.len();
+        self.transition_queue.clear();
+        self.last_flush_reason = Some(reason);
+        count
+    }
+
+    #[must_use]
+    pub fn transition_queue_len(&self) -> usize {
+        self.transition_queue.len()
+    }
+
+    #[must_use]
+    pub const fn last_flush_reason(&self) -> Option<ConsumedReason> {
+        self.last_flush_reason
+    }
+
+    pub fn consume_remaining_batch(
+        &mut self,
+        events: impl IntoIterator<Item = InputEvent>,
+        reason: ConsumedReason,
+    ) -> Vec<InputOutcome> {
+        events
+            .into_iter()
+            .map(|event| {
+                if event.phase == InputPhase::Pressed {
+                    self.held_actions.insert(event.action);
+                    self.captures.insert(
+                        event.press_id,
+                        Capture {
+                            context: self.context,
+                            action: event.action,
+                        },
+                    );
+                } else {
+                    self.held_actions.remove(&event.action);
+                    self.captures.remove(&event.press_id);
+                    self.update_neutral_locks();
+                }
+                InputOutcome::Consumed {
+                    press_id: event.press_id,
+                    reason,
+                }
+            })
+            .collect()
+    }
+
+    fn opposing_direction_locked(&mut self, action: LogicalAction) -> bool {
+        let Some(opposite) = opposite(action) else {
+            return false;
+        };
+        let pair_held = self.held_actions.contains(&opposite);
+        match action {
+            LogicalAction::Left | LogicalAction::Right => {
+                self.horizontal_neutral_lock |= pair_held;
+                self.horizontal_neutral_lock
+            }
+            LogicalAction::Up | LogicalAction::Down => {
+                self.vertical_neutral_lock |= pair_held;
+                self.vertical_neutral_lock
+            }
+            _ => false,
+        }
+    }
+
+    fn update_neutral_locks(&mut self) {
+        if !self.held_actions.contains(&LogicalAction::Left)
+            && !self.held_actions.contains(&LogicalAction::Right)
+        {
+            self.horizontal_neutral_lock = false;
+        }
+        if !self.held_actions.contains(&LogicalAction::Up)
+            && !self.held_actions.contains(&LogicalAction::Down)
+        {
+            self.vertical_neutral_lock = false;
+        }
+    }
+}
+
+fn is_direction(action: LogicalAction) -> bool {
+    matches!(
+        action,
+        LogicalAction::Up | LogicalAction::Down | LogicalAction::Left | LogicalAction::Right
+    )
+}
+
+fn opposite(action: LogicalAction) -> Option<LogicalAction> {
+    match action {
+        LogicalAction::Up => Some(LogicalAction::Down),
+        LogicalAction::Down => Some(LogicalAction::Up),
+        LogicalAction::Left => Some(LogicalAction::Right),
+        LogicalAction::Right => Some(LogicalAction::Left),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input_event::{InputSourceId, InputSourceKind, SourceEpoch};
+
+    fn request(kind: InputContextKind, owner: u64, policy: DirectionalPolicy) -> FocusRequest {
+        FocusRequest {
+            target: FocusTarget { kind, owner },
+            directional_policy: policy,
+        }
+    }
+
+    fn event(sequence: u64, action: LogicalAction, phase: InputPhase) -> InputEvent {
+        InputEvent {
+            source: InputSourceId {
+                kind: InputSourceKind::Preview,
+                instance: 1,
+            },
+            source_epoch: SourceEpoch(1),
+            sequence,
+            press_id: PressId(sequence.div_ceil(2)),
+            captured_at_us: sequence,
+            action,
+            phase,
+        }
+    }
+
+    #[test]
+    fn context_change_captures_release_to_original_owner() {
+        let screen = request(InputContextKind::Screen, 1, DirectionalPolicy::MenuRepeat);
+        let modal = request(
+            InputContextKind::LauncherModal,
+            2,
+            DirectionalPolicy::MenuRepeat,
+        );
+        let mut router = InputRouter::new(screen);
+        let now = Instant::now();
+        let pressed = event(1, LogicalAction::Activate, InputPhase::Pressed);
+        assert!(matches!(
+            router.route_event(pressed, screen, now),
+            InputOutcome::Dispatch { .. }
+        ));
+        router.set_focus(modal);
+        let released = event(2, LogicalAction::Activate, InputPhase::Released);
+        assert!(matches!(
+            router.route_event(released, modal, now),
+            InputOutcome::Released { context, .. } if context.target == screen.target
+        ));
+    }
+
+    #[test]
+    fn menu_repeat_starts_at_300ms_and_never_catches_up() {
+        let screen = request(InputContextKind::Screen, 1, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(screen);
+        let now = Instant::now();
+        router.route_event(
+            event(1, LogicalAction::Down, InputPhase::Pressed),
+            screen,
+            now,
+        );
+        assert!(
+            router
+                .tick_repeats(now + Duration::from_millis(299))
+                .is_empty()
+        );
+        assert_eq!(
+            router.tick_repeats(now + Duration::from_millis(300)).len(),
+            1
+        );
+        assert_eq!(router.tick_repeats(now + Duration::from_secs(2)).len(), 1);
+        assert!(
+            router
+                .tick_repeats(now + Duration::from_secs(2) + Duration::from_millis(79))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn transition_queues_commands_but_back_controls_immediately() {
+        let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
+        let mut router = InputRouter::new(transition);
+        let now = Instant::now();
+        assert!(matches!(
+            router.route_event(
+                event(1, LogicalAction::Activate, InputPhase::Pressed),
+                transition,
+                now
+            ),
+            InputOutcome::TransitionQueued { .. }
+        ));
+        assert!(matches!(
+            router.route_event(
+                event(3, LogicalAction::Back, InputPhase::Pressed),
+                transition,
+                now
+            ),
+            InputOutcome::TransitionControl { .. }
+        ));
+        assert_eq!(router.transition_queue_len(), 1);
+    }
+
+    #[test]
+    fn released_transition_tap_replays_once_without_repeat() {
+        let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
+        let screen = request(InputContextKind::Screen, 2, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(transition);
+        let now = Instant::now();
+        router.route_event(
+            event(1, LogicalAction::Down, InputPhase::Pressed),
+            transition,
+            now,
+        );
+        router.route_event(
+            event(2, LogicalAction::Down, InputPhase::Released),
+            transition,
+            now,
+        );
+        assert!(matches!(
+            router.replay_next_transition(screen, now),
+            Some(InputOutcome::Dispatch {
+                kind: DispatchKind::TransitionReplay,
+                ..
+            })
+        ));
+        assert!(router.tick_repeats(now + Duration::from_secs(1)).is_empty());
+        assert!(router.replay_next_transition(screen, now).is_none());
+    }
+
+    #[test]
+    fn opposing_directions_require_full_neutral() {
+        let screen = request(InputContextKind::Screen, 1, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(screen);
+        let now = Instant::now();
+        router.route_event(
+            event(1, LogicalAction::Left, InputPhase::Pressed),
+            screen,
+            now,
+        );
+        assert!(matches!(
+            router.route_event(
+                event(3, LogicalAction::Right, InputPhase::Pressed),
+                screen,
+                now
+            ),
+            InputOutcome::Consumed {
+                reason: ConsumedReason::OpposingDirections,
+                ..
+            }
+        ));
+        router.route_event(
+            event(2, LogicalAction::Left, InputPhase::Released),
+            screen,
+            now,
+        );
+        router.route_event(
+            event(4, LogicalAction::Right, InputPhase::Released),
+            screen,
+            now,
+        );
+        assert!(matches!(
+            router.route_event(
+                event(5, LogicalAction::Right, InputPhase::Pressed),
+                screen,
+                now
+            ),
+            InputOutcome::Dispatch { .. }
+        ));
+    }
+
+    #[test]
+    fn disabled_and_screensaver_contexts_are_explicit() {
+        let disabled = request(InputContextKind::Disabled, 0, DirectionalPolicy::EdgeOnly);
+        let screensaver = request(
+            InputContextKind::Screensaver,
+            1,
+            DirectionalPolicy::EdgeOnly,
+        );
+        let mut router = InputRouter::new(disabled);
+        let now = Instant::now();
+        assert!(matches!(
+            router.route_event(
+                event(1, LogicalAction::Activate, InputPhase::Pressed),
+                disabled,
+                now
+            ),
+            InputOutcome::Consumed {
+                reason: ConsumedReason::InputDisabled,
+                ..
+            }
+        ));
+        assert!(matches!(
+            router.route_event(
+                event(3, LogicalAction::Activate, InputPhase::Pressed),
+                screensaver,
+                now
+            ),
+            InputOutcome::WakeScreensaver { .. }
+        ));
+    }
+}
