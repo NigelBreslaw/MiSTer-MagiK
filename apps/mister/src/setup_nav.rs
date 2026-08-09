@@ -4,6 +4,8 @@
 //! Controller setup flow — detect unknown / moved pads and offer rebinding.
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
+use crate::input_event::DeviceInstanceId;
+use crate::input_event::{InputEvent, InputPhase};
 use crate::input_repeat::RepeatNav;
 use crate::input_state::{PadInfo, PadState, layout_profile_name};
 use std::time::Instant;
@@ -29,6 +31,8 @@ pub struct SetupNav {
     pub trigger_status: PadRegistryStatus,
     /// Which pad in the pool this dialog refers to.
     pub target_pad_idx: usize,
+    /// Stable identity used by the event-driven input path.
+    pub target_device: Option<DeviceInstanceId>,
     pub list_index: usize,
     pub draft_label: String,
     pub draft_kind: ControllerKind,
@@ -67,6 +71,7 @@ impl SetupNav {
             phase: SetupPhase::None,
             trigger_status: PadRegistryStatus::Unknown,
             target_pad_idx: 0,
+            target_device: None,
             list_index: 0,
             draft_label: String::new(),
             draft_kind: ControllerKind::Unknown,
@@ -79,10 +84,21 @@ impl SetupNav {
     pub fn open_for(&mut self, status: PadRegistryStatus, pad_idx: usize) {
         self.trigger_status = status;
         self.target_pad_idx = pad_idx;
+        self.target_device = None;
         self.phase = SetupPhase::Detected;
         self.list_index = 0;
         // Startup / programmatic open — accept input on the first press.
         self.armed = true;
+    }
+
+    pub fn open_for_device(
+        &mut self,
+        status: PadRegistryStatus,
+        device: DeviceInstanceId,
+        current_index: usize,
+    ) {
+        self.open_for(status, current_index);
+        self.target_device = Some(device);
     }
 
     pub fn is_active(&self) -> bool {
@@ -104,6 +120,7 @@ impl SetupNav {
         if db.needs_setup(info) {
             self.trigger_status = status;
             self.target_pad_idx = pad_idx;
+            self.target_device = None;
             self.phase = SetupPhase::Detected;
             self.list_index = 0;
             // Debounce the button press that triggered detection.
@@ -160,6 +177,7 @@ impl SetupNav {
     /// After saving or skipping, open the next pad that still needs setup.
     pub fn advance_to_next_pad(&mut self, pad: &impl SetupPadSource) {
         self.phase = SetupPhase::None;
+        self.target_device = None;
         if let Some(idx) = pad.index_needing_setup() {
             let status = pad.db().registry_status(pad.info_at(idx));
             crate::ui_errln!("controller setup: advancing to pad {idx} ({status:?})");
@@ -309,6 +327,18 @@ impl SetupNav {
 
         self.prev = now.clone();
         action
+    }
+
+    pub fn handle_action(
+        &mut self,
+        event: &InputEvent,
+        frame_now: Instant,
+        info: &PadInfo,
+        db: &ControllerDb,
+    ) -> SetupAction {
+        let mut now = self.prev.clone();
+        now.set_logical_action(event.action, event.phase == InputPhase::Pressed);
+        self.handle_input(&now, frame_now, info, db)
     }
 
     fn handle_detected(&mut self, now: &PadState, _info: &PadInfo) -> SetupAction {
@@ -523,6 +553,39 @@ mod tests {
 
         assert!(matches!(action, SetupAction::None));
         assert_eq!(nav.phase, SetupPhase::Detected);
+    }
+
+    #[test]
+    fn event_driven_setup_tracks_stable_device_generation() {
+        let info = pad_info("1-1.3");
+        let db = empty_db("stable-device");
+        let mut nav = SetupNav::new();
+        let device = DeviceInstanceId {
+            plug_id: "usb-1-1.3".to_string(),
+            generation: 7,
+        };
+        nav.open_for_device(PadRegistryStatus::PendingSetup, device.clone(), 2);
+
+        assert_eq!(nav.target_device, Some(device));
+        assert_eq!(nav.target_pad_idx, 2);
+
+        let event = InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: crate::input_event::InputSourceKind::MainProxy,
+                instance: 1,
+            },
+            source_epoch: crate::input_event::SourceEpoch(1),
+            sequence: 1,
+            press_id: crate::input_event::PressId(1),
+            captured_at_us: 1,
+            action: crate::input_event::LogicalAction::Start,
+            phase: InputPhase::Pressed,
+        };
+        assert!(matches!(
+            nav.handle_action(&event, Instant::now(), &info, &db),
+            SetupAction::None
+        ));
+        assert_eq!(nav.phase, SetupPhase::Configure);
     }
 
     #[test]

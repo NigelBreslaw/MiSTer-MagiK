@@ -3,6 +3,7 @@
 
 //! Portable controller state and layout-profile naming.
 
+use crate::input_event::LogicalAction;
 pub use crate::input_info::PadInfo;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -99,6 +100,25 @@ pub struct PadState {
 }
 
 impl PadState {
+    pub fn set_logical_action(&mut self, action: LogicalAction, held: bool) {
+        match action {
+            LogicalAction::Up => self.dpad_up = held,
+            LogicalAction::Down => self.dpad_down = held,
+            LogicalAction::Left => self.dpad_left = held,
+            LogicalAction::Right => self.dpad_right = held,
+            LogicalAction::Activate => self.btn_a = held,
+            LogicalAction::Back => self.btn_b = held,
+            LogicalAction::Home => self.btn_home = held,
+            LogicalAction::X => self.btn_x = held,
+            LogicalAction::Y => self.btn_y = held,
+            LogicalAction::L => self.btn_l = held,
+            LogicalAction::R => self.btn_r = held,
+            LogicalAction::Select => self.btn_select = held,
+            LogicalAction::Start => self.btn_start = held,
+        }
+        self.rebuild_pressed_now();
+    }
+
     pub fn record_raw_event(&mut self, event_type: u8, number: u8, value: i16, debug_labels: bool) {
         self.last_raw_event = Some(PadRawEvent {
             event_type,
@@ -580,6 +600,22 @@ mod tests {
         let first = DirectionalEdges::rising(current, DirectionalState::default());
         assert!(first.up);
         assert!(!DirectionalEdges::rising(current, current).up);
+    }
+
+    #[test]
+    fn logical_actions_update_only_their_normalized_control() {
+        let mut state = PadState::default();
+
+        state.set_logical_action(LogicalAction::Activate, true);
+        state.set_logical_action(LogicalAction::Left, true);
+        assert!(state.btn_a);
+        assert!(state.dpad_left);
+        assert_eq!(state.pressed_now, "D-Left+A");
+
+        state.set_logical_action(LogicalAction::Activate, false);
+        assert!(!state.btn_a);
+        assert!(state.dpad_left);
+        assert_eq!(state.pressed_now, "D-Left");
     }
 
     fn js_button(number: u8, value: i16) -> PadRawEvent {

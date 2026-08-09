@@ -8,6 +8,7 @@ use crate::arcade_catalog::{
     ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, HOME_LIST_VISIBLE_W,
     HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget, StructuredLaunchPlan,
 };
+use crate::input_event::{InputEvent, InputPhase};
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::launcher_taxonomy::{
@@ -2078,6 +2079,26 @@ impl LauncherNav {
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
         self.handle_input_internal(now, frame_now, catalog, true, true)
+    }
+
+    pub fn handle_action_with_navigation_intents(
+        &mut self,
+        event: &InputEvent,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+    ) -> Option<LauncherEvent> {
+        let mut now = self.prev.clone();
+        now.set_logical_action(event.action, event.phase == InputPhase::Pressed);
+        self.handle_input_internal(&now, frame_now, catalog, true, true)
+    }
+
+    pub fn handle_held_tick_with_navigation_intents(
+        &mut self,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+    ) -> Option<LauncherEvent> {
+        let held = self.prev.clone();
+        self.handle_input_internal(&held, frame_now, catalog, true, true)
     }
 
     pub fn commit_navigation_intent(

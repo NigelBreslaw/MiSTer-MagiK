@@ -1,11 +1,11 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! D-pad hold-to-repeat: first press immediate, 1 s pause, then every 80 ms.
+//! D-pad hold-to-repeat: first press immediate, 300 ms pause, then every 80 ms.
 
 use std::time::{Duration, Instant};
 
-const INITIAL_DELAY: Duration = Duration::from_millis(1000);
+const INITIAL_DELAY: Duration = Duration::from_millis(300);
 const REPEAT_INTERVAL: Duration = Duration::from_millis(80);
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -85,8 +85,8 @@ mod tests {
         let mut gate = RepeatGate::default();
         let t0 = Instant::now();
         assert!(gate.tick(true, t0));
-        assert!(!gate.tick(true, t0 + Duration::from_millis(500)));
-        assert!(!gate.tick(true, t0 + Duration::from_millis(999)));
+        assert!(!gate.tick(true, t0 + Duration::from_millis(150)));
+        assert!(!gate.tick(true, t0 + Duration::from_millis(299)));
     }
 
     #[test]
@@ -94,9 +94,9 @@ mod tests {
         let mut gate = RepeatGate::default();
         let t0 = Instant::now();
         assert!(gate.tick(true, t0));
-        assert!(gate.tick(true, t0 + Duration::from_millis(1000)));
-        assert!(!gate.tick(true, t0 + Duration::from_millis(1050)));
-        assert!(gate.tick(true, t0 + Duration::from_millis(1080)));
+        assert!(gate.tick(true, t0 + Duration::from_millis(300)));
+        assert!(!gate.tick(true, t0 + Duration::from_millis(350)));
+        assert!(gate.tick(true, t0 + Duration::from_millis(380)));
     }
 
     #[test]
@@ -105,10 +105,10 @@ mod tests {
         let t0 = Instant::now();
         assert!(gate.tick(true, t0));
         assert!(!gate.repeat_active(t0));
-        assert!(!gate.repeat_active(t0 + Duration::from_millis(999)));
-        assert!(gate.repeat_active(t0 + Duration::from_millis(1000)));
-        gate.tick(false, t0 + Duration::from_millis(1001));
-        assert!(!gate.repeat_active(t0 + Duration::from_millis(1001)));
+        assert!(!gate.repeat_active(t0 + Duration::from_millis(299)));
+        assert!(gate.repeat_active(t0 + Duration::from_millis(300)));
+        gate.tick(false, t0 + Duration::from_millis(301));
+        assert!(!gate.repeat_active(t0 + Duration::from_millis(301)));
     }
 
     #[test]
@@ -129,7 +129,7 @@ mod tests {
         assert!(nav.tick_down(true, t0 + Duration::from_millis(1)));
         assert!(nav.tick_left(true, t0 + Duration::from_millis(2)));
         assert!(nav.tick_right(true, t0 + Duration::from_millis(3)));
-        assert!(!nav.tick_up(true, t0 + Duration::from_millis(500)));
+        assert!(!nav.tick_up(true, t0 + Duration::from_millis(299)));
         assert!(!nav.tick_down(false, t0 + Duration::from_millis(500)));
         assert!(nav.tick_down(true, t0 + Duration::from_millis(501)));
     }
