@@ -180,6 +180,11 @@ pub struct LocalMainIdentity {
 
 impl InstalledManifest {
     #[must_use]
+    pub fn platform_release(&self) -> &str {
+        &self.values["platform_release"]
+    }
+
+    #[must_use]
     pub fn qualification_candidate_id(&self) -> &str {
         &self.values["qualification_candidate_id"]
     }

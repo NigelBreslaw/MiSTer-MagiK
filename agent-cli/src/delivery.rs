@@ -20,8 +20,8 @@ pub enum Phase {
     Classify,
     ValidateCommit,
     Connect,
-    Reconcile,
     GithubResolution,
+    Reconcile,
     RuntimeBuild,
     ManagerQualification,
     LocalStaging,
@@ -105,8 +105,8 @@ pub fn run_transaction(
         (Phase::Classify, 2),
         (Phase::ValidateCommit, 7),
         (Phase::Connect, 12),
-        (Phase::Reconcile, 15),
-        (Phase::GithubResolution, 22),
+        (Phase::GithubResolution, 15),
+        (Phase::Reconcile, 22),
         (Phase::RuntimeBuild, 32),
         (Phase::ManagerQualification, 50),
         (Phase::LocalStaging, 55),
@@ -450,10 +450,20 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
             Phase::GithubResolution => self.resolve_github(),
             Phase::Reconcile => {
                 let installed_manifest = self.device.read_development_manifest()?;
-                let reconciliation = crate::deploy::reconcile(
+                let platform_candidate =
+                    self.deployment.platform_candidate.as_ref().ok_or(
+                        "delivery reconciliation is missing its published platform candidate",
+                    )?;
+                let release_tag = platform_candidate
+                    .release_tag
+                    .as_deref()
+                    .ok_or("published platform candidate is missing its release tag")?;
+                let reconciliation = crate::deploy::reconcile_with_platform(
                     self.repository,
                     &installed_manifest,
                     self.expected_commit,
+                    release_tag,
+                    &platform_candidate.bundle_id,
                 );
                 let platform_candidate = self.deployment.platform_candidate.take();
                 self.deployment =
@@ -507,7 +517,8 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
 
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
-            Phase::GithubResolution | Phase::ManagerQualification | Phase::DatabasePreparation => {
+            Phase::GithubResolution => true,
+            Phase::ManagerQualification | Phase::DatabasePreparation => {
                 self.decision == DeliveryDecision::Platform
             }
             Phase::RuntimeBuild
@@ -765,8 +776,8 @@ mod tests {
         Phase::Classify,
         Phase::ValidateCommit,
         Phase::Connect,
-        Phase::Reconcile,
         Phase::GithubResolution,
+        Phase::Reconcile,
         Phase::RuntimeBuild,
         Phase::ManagerQualification,
         Phase::LocalStaging,
@@ -937,14 +948,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_delivery_skips_platform_resolution_and_reboot() {
+    fn runtime_delivery_resolves_platform_before_skipping_platform_staging_and_reboot() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let actions = scenario_actions(
             crate::deploy::DeploymentKind::Runtime,
             RequestRecorder(Rc::clone(&requests)),
         );
         for phase in [
-            Phase::GithubResolution,
             Phase::ManagerQualification,
             Phase::DatabasePreparation,
             Phase::RebootIfNeeded,
@@ -956,6 +966,7 @@ mod tests {
                 "runtime delivery unexpectedly runs {phase:?}"
             );
         }
+        assert!(actions.should_run(Phase::GithubResolution));
         assert!(actions.should_run(Phase::RuntimeBuild));
         assert!(actions.should_run(Phase::LocalStaging));
         assert!(actions.should_run(Phase::RemoteInventoryUpload));

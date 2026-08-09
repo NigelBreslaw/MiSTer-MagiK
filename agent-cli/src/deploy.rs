@@ -163,13 +163,16 @@ pub fn reconcile_with_platform(
     repository: &Path,
     installed_manifest: &str,
     head: &str,
-    desired_main_revision: &str,
+    desired_release_tag: &str,
+    desired_bundle_id: &str,
 ) -> Reconciliation {
     let Ok(installed) = platform_manifest::parse_installed(installed_manifest, Layout::Development)
     else {
         return conservative_reconciliation();
     };
-    if installed.main_revision() != desired_main_revision {
+    if installed.platform_release() != desired_release_tag
+        || installed.platform_bundle_id() != desired_bundle_id
+    {
         return conservative_reconciliation();
     }
     reconcile(repository, installed_manifest, head)
@@ -316,15 +319,41 @@ mod tests {
     }
 
     #[test]
-    fn newer_published_main_requires_platform_delivery() {
+    fn newer_published_platform_requires_platform_delivery() {
         let revision = "a".repeat(40);
-        let installed_main = "b".repeat(40);
-        let published_main = "c".repeat(40);
-        let installed = manifest(&revision, &installed_main);
-        assert_eq!(
-            reconcile_with_platform(Path::new("."), &installed, &revision, &published_main)
+        let installed = manifest(&revision, &"b".repeat(40));
+        for (release_tag, bundle_id) in [
+            ("platform-v0.17", "c".repeat(64)),
+            ("platform-v0.16", "d".repeat(64)),
+        ] {
+            assert_eq!(
+                reconcile_with_platform(
+                    Path::new("."),
+                    &installed,
+                    &revision,
+                    release_tag,
+                    &bundle_id,
+                )
                 .decision,
-            DeliveryDecision::Platform
+                DeliveryDecision::Platform
+            );
+        }
+    }
+
+    #[test]
+    fn current_published_platform_preserves_app_only_reconciliation() {
+        let revision = "a".repeat(40);
+        let installed = manifest(&revision, &"b".repeat(40));
+        assert_eq!(
+            reconcile_with_platform(
+                Path::new("."),
+                &installed,
+                &revision,
+                "platform-v0.16",
+                &"e".repeat(64),
+            )
+            .decision,
+            DeliveryDecision::NoOp
         );
     }
 
