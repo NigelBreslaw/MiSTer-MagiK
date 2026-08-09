@@ -104,9 +104,11 @@ export component CrtMenuRow inherits Rectangle {
     in property <bool> enabled: true;
 
     min-height: MisterUi.footer-height;
-    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    background: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #123d35 : CrtTheme.panel-alt;
     border-width: MisterUi.border;
-    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+    border-color: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #4e8f80 : CrtTheme.border;
 
     HorizontalLayout {
         padding-left: MisterUi.grid-x;
@@ -117,7 +119,8 @@ export component CrtMenuRow inherits Rectangle {
         PixelText8 {
             text: (root.focused ? "> " : "  ") + root.label;
             color: !root.enabled ? CrtTheme.muted
-                : root.focused ? CrtTheme.accent-text : CrtTheme.text;
+                : root.focused ? CrtTheme.accent-text
+                : root.acknowledged ? #7fe0c5 : CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
@@ -138,6 +141,7 @@ export component CrtCard inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
     in property <bool> show-marker: true;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
