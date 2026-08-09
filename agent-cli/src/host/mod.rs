@@ -4390,7 +4390,12 @@ fn run_launcher_response_scenario(
     thread::sleep(Duration::from_millis(400));
     let reversed = read_launcher_status(session)?;
     if reversed.get("menu_id").and_then(Value::as_str) != Some("menu:root") {
-        return Err("Back did not reverse the launcher transition immediately".into());
+        let trace = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+            .unwrap_or_else(|| "missing".to_string());
+        return Err(format!(
+            "Back did not reverse the launcher transition immediately: status={reversed} trace={trace}"
+        )
+        .into());
     }
 
     run_launcher_response_driver(session, "transition-right")?;
