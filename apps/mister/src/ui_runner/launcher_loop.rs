@@ -8710,7 +8710,7 @@ pub(super) fn run_launcher_loop(
                     launcher_response_trace.observe_presentation(
                         telemetry,
                         pace.period_us,
-                        presented_frame.main_present_drop_count,
+                        presented_frame.main_present_drop_count.into(),
                     );
                 }
                 if let Some(post) = readiness_post {

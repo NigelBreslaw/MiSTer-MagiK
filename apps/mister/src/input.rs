@@ -11,7 +11,6 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::input_event::DeviceInstanceId;
-use crate::input_event::InputBatch;
 use crate::input_hub::{DrainedInput, InputHub, InputObservation, InputWaitOutcome};
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
