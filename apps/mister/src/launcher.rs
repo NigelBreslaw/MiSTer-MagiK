@@ -9,6 +9,7 @@ use crate::arcade_catalog::{
     HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget, StructuredLaunchPlan,
 };
 use crate::input_event::{InputEvent, InputPhase};
+#[cfg(test)]
 use crate::input_repeat::RepeatNav;
 use crate::input_state::PadState;
 use crate::launcher_taxonomy::{
@@ -846,10 +847,12 @@ pub struct LauncherNav {
     active_collection_id: Option<String>,
     active_collection_source: Option<HomeViewState>,
     arcade_exit_locked: bool,
-    repeat: RepeatNav,
     home_scroll: HomeScrollState,
     home_scroll_animation: SpringAnimation,
-    prev: PadState,
+    #[cfg(test)]
+    test_repeat: RepeatNav,
+    #[cfg(test)]
+    test_prev: PadState,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1241,10 +1244,12 @@ impl LauncherNav {
             active_collection_id: None,
             active_collection_source: None,
             arcade_exit_locked: false,
-            repeat: RepeatNav::default(),
             home_scroll: HomeScrollState::default(),
             home_scroll_animation: SpringAnimation::new(0.0, SpringConfiguration::smooth()),
-            prev: PadState::default(),
+            #[cfg(test)]
+            test_repeat: RepeatNav::default(),
+            #[cfg(test)]
+            test_prev: PadState::default(),
         }
     }
 
@@ -2053,32 +2058,35 @@ impl LauncherNav {
         self.arcade_exit_locked = locked;
     }
 
-    /// Returns an event when a launch or system action was requested.
+    /// Snapshot adapter retained only for the existing reducer test suite.
+    #[cfg(test)]
     pub fn handle_input(
         &mut self,
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        self.handle_input_internal(now, frame_now, catalog, false, false)
+        self.handle_test_snapshot(now, frame_now, catalog, false, false)
     }
 
+    #[cfg(test)]
     pub fn handle_input_with_collection_intents(
         &mut self,
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        self.handle_input_internal(now, frame_now, catalog, true, false)
+        self.handle_test_snapshot(now, frame_now, catalog, true, false)
     }
 
+    #[cfg(test)]
     pub fn handle_input_with_navigation_intents(
         &mut self,
         now: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        self.handle_input_internal(now, frame_now, catalog, true, true)
+        self.handle_test_snapshot(now, frame_now, catalog, true, true)
     }
 
     pub fn handle_action_with_navigation_intents(
@@ -2087,18 +2095,96 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let mut now = self.prev.clone();
-        now.set_logical_action(event.action, event.phase == InputPhase::Pressed);
-        self.handle_input_internal(&now, frame_now, catalog, true, true)
+        let mut pressed = PadState::default();
+        let mut released = PadState::default();
+        match event.phase {
+            InputPhase::Pressed => pressed.set_logical_action(event.action, true),
+            InputPhase::Released => released.set_logical_action(event.action, true),
+        }
+        self.handle_input_internal(
+            &pressed,
+            &released,
+            &PadState::default(),
+            false,
+            frame_now,
+            catalog,
+            true,
+            true,
+        )
     }
 
     pub fn handle_held_tick_with_navigation_intents(
         &mut self,
+        held: &PadState,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        let held = self.prev.clone();
-        self.handle_input_internal(&held, frame_now, catalog, true, true)
+        self.handle_input_internal(
+            &PadState::default(),
+            &PadState::default(),
+            held,
+            true,
+            frame_now,
+            catalog,
+            true,
+            true,
+        )
+    }
+
+    #[cfg(test)]
+    fn handle_test_snapshot(
+        &mut self,
+        now: &PadState,
+        frame_now: Instant,
+        catalog: &ArcadeCatalog,
+        emit_collection_intents: bool,
+        emit_navigation_intents: bool,
+    ) -> Option<LauncherEvent> {
+        let previous = self.test_prev.clone();
+        let mut pressed = PadState::default();
+        let mut released = PadState::default();
+        for action in crate::input_event::LogicalAction::ALL {
+            let is_held = pad_action_held(now, action);
+            let was_held = pad_action_held(&previous, action);
+            let fire = match action {
+                crate::input_event::LogicalAction::Up => {
+                    self.test_repeat.tick_up(is_held, frame_now)
+                }
+                crate::input_event::LogicalAction::Down => {
+                    self.test_repeat.tick_down(is_held, frame_now)
+                }
+                crate::input_event::LogicalAction::Left => {
+                    self.test_repeat.tick_left(is_held, frame_now)
+                }
+                crate::input_event::LogicalAction::Right => {
+                    self.test_repeat.tick_right(is_held, frame_now)
+                }
+                _ => is_held && !was_held,
+            };
+            if fire {
+                pressed.set_logical_action(action, true);
+            }
+            if was_held && !is_held {
+                released.set_logical_action(action, true);
+            }
+        }
+        self.test_prev = now.clone();
+        self.handle_input_internal(
+            &pressed,
+            &released,
+            now,
+            true,
+            frame_now,
+            catalog,
+            emit_collection_intents,
+            emit_navigation_intents,
+        )
+    }
+
+    #[cfg(test)]
+    pub fn reset_test_snapshot(&mut self, now: &PadState) {
+        self.test_prev = now.clone();
+        self.test_repeat = RepeatNav::default();
     }
 
     pub fn commit_navigation_intent(
@@ -2142,7 +2228,10 @@ impl LauncherNav {
 
     fn handle_input_internal(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
+        released: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
@@ -2150,53 +2239,60 @@ impl LauncherNav {
     ) -> Option<LauncherEvent> {
         self.sync_launcher_taxonomy(catalog);
         let result = if self.confirm_action.is_some() {
-            self.handle_confirm(now, frame_now)
+            self.handle_confirm(pressed)
         } else {
             match self.screen {
                 Screen::Home => self.handle_home(
-                    now,
+                    pressed,
+                    held,
+                    tick_continuous,
                     frame_now,
                     catalog,
                     emit_collection_intents,
                     emit_navigation_intents,
                 ),
-                Screen::SystemHub => self.handle_system_hub(now, catalog),
+                Screen::SystemHub => self.handle_system_hub(pressed, catalog),
                 Screen::Controller => {
-                    if rising(now.btn_home, self.prev.btn_home) {
+                    if pressed.btn_home {
                         self.go_root();
-                    } else if rising(now.btn_b, self.prev.btn_b) {
+                    } else if pressed.btn_b {
                         self.screen = Screen::Home;
                         self.restore_current_menu_view();
                     }
                     None
                 }
-                Screen::Arcade => {
-                    self.handle_arcade(now, frame_now, catalog, emit_navigation_intents)
-                }
-                Screen::Settings => self.handle_settings(now, frame_now),
-                Screen::Screensaver => self.handle_screensaver_settings(now, frame_now),
-                Screen::About => self.handle_about(now, frame_now),
+                Screen::Arcade => self.handle_arcade(
+                    pressed,
+                    released,
+                    held,
+                    tick_continuous,
+                    frame_now,
+                    catalog,
+                    emit_navigation_intents,
+                ),
+                Screen::Settings => self.handle_settings(pressed),
+                Screen::Screensaver => self.handle_screensaver_settings(pressed),
+                Screen::About => self.handle_about(pressed),
                 Screen::Info => {
-                    self.handle_settings_subscreen(now);
+                    self.handle_settings_subscreen(pressed);
                     None
                 }
-                Screen::Licenses => self.handle_licenses(now, frame_now),
+                Screen::Licenses => self.handle_licenses(pressed, held, tick_continuous, frame_now),
             }
         };
-        self.prev = now.clone();
         result
     }
 
     fn handle_system_hub(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             self.go_root();
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.active_collection_id = None;
             self.screen = Screen::Home;
             self.settings_focused = false;
@@ -2207,20 +2303,19 @@ impl LauncherNav {
             }
             return None;
         }
-        if rising(now.dpad_right, self.prev.dpad_right) && matches!(self.system_hub_selected, 0 | 2)
-        {
+        if pressed.dpad_right && matches!(self.system_hub_selected, 0 | 2) {
             self.system_hub_selected += 1;
         }
-        if rising(now.dpad_left, self.prev.dpad_left) && matches!(self.system_hub_selected, 1 | 3) {
+        if pressed.dpad_left && matches!(self.system_hub_selected, 1 | 3) {
             self.system_hub_selected -= 1;
         }
-        if rising(now.dpad_down, self.prev.dpad_down) && self.system_hub_selected < 2 {
+        if pressed.dpad_down && self.system_hub_selected < 2 {
             self.system_hub_selected += 2;
         }
-        if rising(now.dpad_up, self.prev.dpad_up) && self.system_hub_selected >= 2 {
+        if pressed.dpad_up && self.system_hub_selected >= 2 {
             self.system_hub_selected -= 2;
         }
-        if rising(now.btn_a, self.prev.btn_a) && self.system_hub_selected < 3 {
+        if pressed.btn_a && self.system_hub_selected < 3 {
             let mode = match self.system_hub_selected {
                 0 => ArcadeUserListMode::Games,
                 1 => ArcadeUserListMode::Recent,
@@ -2235,13 +2330,15 @@ impl LauncherNav {
 
     fn handle_home(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
         emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             if (self.crt_layout || self.portrait_layout) && self.current_menu_id() == ROOT_MENU_ID {
                 self.remember_current_menu_view();
                 self.settings_selected = 0;
@@ -2258,7 +2355,7 @@ impl LauncherNav {
             }
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             if emit_navigation_intents && self.menu_path.len() > 1 {
                 return Some(LauncherEvent {
                     action: LauncherAction::NavigateBack,
@@ -2272,16 +2369,16 @@ impl LauncherNav {
 
         let item_count = self.current_menu_count();
         if !self.crt_layout && !self.portrait_layout {
-            if self.repeat.tick_up(now.dpad_up, frame_now) {
+            if pressed.dpad_up {
                 self.settings_focused = true;
             }
-            if self.repeat.tick_down(now.dpad_down, frame_now) {
+            if pressed.dpad_down {
                 self.settings_focused = false;
             }
             if self.settings_focused {
                 self.home_scroll = HomeScrollState::default();
                 self.home_scroll_animation.snap_to(self.scroll_x as f64);
-                if rising(now.btn_a, self.prev.btn_a) {
+                if pressed.btn_a {
                     self.remember_current_menu_view();
                     self.settings_selected = 0;
                     self.screen = Screen::Settings;
@@ -2302,9 +2399,11 @@ impl LauncherNav {
             self.home_scroll_animation.snap_to(self.scroll_x as f64);
             self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
         }
-        self.update_home_scroll(now, frame_now, item_count);
+        if tick_continuous {
+            self.update_home_scroll(held, frame_now, item_count);
+        }
 
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             let item = self.current_menu_items().get(self.selected).cloned();
             if let Some(item) = item {
                 match item.kind {
@@ -2340,7 +2439,7 @@ impl LauncherNav {
         None
     }
 
-    fn update_home_scroll(&mut self, now: &PadState, frame_now: Instant, count: usize) {
+    fn update_home_scroll(&mut self, held: &PadState, frame_now: Instant, count: usize) {
         let delta = self
             .home_scroll
             .last_frame_at
@@ -2349,19 +2448,12 @@ impl LauncherNav {
             });
         self.home_scroll.last_frame_at = Some(frame_now);
 
-        let (dir, previous_dir) = if self.crt_layout || self.portrait_layout {
-            (
-                i32::from(now.dpad_down || now.dpad_right)
-                    - i32::from(now.dpad_up || now.dpad_left),
-                i32::from(self.prev.dpad_down || self.prev.dpad_right)
-                    - i32::from(self.prev.dpad_up || self.prev.dpad_left),
-            )
+        let dir = if self.crt_layout || self.portrait_layout {
+            i32::from(held.dpad_down || held.dpad_right) - i32::from(held.dpad_up || held.dpad_left)
         } else {
-            (
-                i32::from(now.dpad_right) - i32::from(now.dpad_left),
-                i32::from(self.prev.dpad_right) - i32::from(self.prev.dpad_left),
-            )
+            i32::from(held.dpad_right) - i32::from(held.dpad_left)
         };
+        let previous_dir = self.home_scroll.held_dir;
         if dir == 0 {
             let settle_direction = if previous_dir != 0 {
                 previous_dir
@@ -2472,7 +2564,10 @@ impl LauncherNav {
 
     fn handle_arcade(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
+        released: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         emit_navigation_intents: bool,
@@ -2481,14 +2576,29 @@ impl LauncherNav {
         let count = self.active_arcade_game_count(catalog, &collection_id);
 
         if self.arcade_filter.drawer_open {
-            return self.handle_arcade_filter(now, frame_now, catalog, &collection_id);
+            return self.handle_arcade_filter(
+                pressed,
+                released,
+                held,
+                tick_continuous,
+                frame_now,
+                catalog,
+                &collection_id,
+            );
         }
 
         if self.arcade_search.is_active(&self.arcade_filter.active) {
-            return self.handle_arcade_search(now, frame_now, catalog, &collection_id);
+            return self.handle_arcade_search(
+                pressed,
+                held,
+                tick_continuous,
+                frame_now,
+                catalog,
+                &collection_id,
+            );
         }
 
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             if emit_navigation_intents {
                 return Some(LauncherEvent {
                     action: LauncherAction::NavigateHome,
@@ -2499,7 +2609,7 @@ impl LauncherNav {
             self.leave_arcade(true, &collection_id);
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             if emit_navigation_intents {
                 return Some(LauncherEvent {
                     action: LauncherAction::NavigateBack,
@@ -2515,13 +2625,13 @@ impl LauncherNav {
         }
 
         if count == 0 {
-            if rising(now.dpad_left, self.prev.dpad_left) {
+            if pressed.dpad_left {
                 self.open_arcade_filter(catalog, &collection_id);
             }
             return None;
         }
 
-        if rising(now.dpad_left, self.prev.dpad_left) {
+        if pressed.dpad_left {
             self.open_arcade_alphabet(catalog, &collection_id);
             return None;
         }
@@ -2531,13 +2641,15 @@ impl LauncherNav {
             self.arcade.snap_to_selected();
         }
 
-        let dir = arcade_dpad_dir(now);
-        let previous_dir = arcade_dpad_dir(&self.prev);
-        self.arcade
-            .handle_direction_input(dir, previous_dir, frame_now, count);
-        self.arcade.tick(count, frame_now);
+        if tick_continuous {
+            let dir = arcade_dpad_dir(held);
+            let previous_dir = self.arcade.scroll.held_dir;
+            self.arcade
+                .handle_direction_input(dir, previous_dir, frame_now, count);
+            self.arcade.tick(count, frame_now);
+        }
 
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             return self
                 .active_arcade_game_at(catalog, &collection_id, self.arcade.selected)
                 .map(|game| LauncherEvent {
@@ -2547,7 +2659,7 @@ impl LauncherNav {
                 });
         }
 
-        if rising(now.btn_x, self.prev.btn_x)
+        if pressed.btn_x
             && let Some(game) =
                 self.active_arcade_game_at(catalog, &collection_id, self.arcade.selected)
         {
@@ -2566,20 +2678,22 @@ impl LauncherNav {
 
     fn handle_arcade_search(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Option<LauncherEvent> {
         self.ensure_arcade_search_results(catalog, system_id);
         let count = self.active_arcade_game_count(catalog, system_id);
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             self.leave_arcade(true, system_id);
             return None;
         }
         match self.arcade_search.pane {
             ArcadeSearchPane::Keyboard => {
-                if rising(now.btn_b, self.prev.btn_b) {
+                if pressed.btn_b {
                     if self.arcade_search.query.is_empty() {
                         self.apply_arcade_filter(catalog, system_id, ArcadeFilter::All);
                     } else {
@@ -2588,21 +2702,21 @@ impl LauncherNav {
                     }
                     return None;
                 }
-                if rising(now.btn_y, self.prev.btn_y) {
+                if pressed.btn_y {
                     self.accept_arcade_search_suggestion(catalog, system_id);
                     return None;
                 }
-                if self.repeat.tick_left(now.dpad_left, frame_now) {
+                if pressed.dpad_left {
                     self.move_arcade_search_key(-1, 0);
                 }
-                if self.repeat.tick_right(now.dpad_right, frame_now) {
+                if pressed.dpad_right {
                     if search_key_is_row_end(self.arcade_search.selected_key) && count > 0 {
                         self.arcade_search.pane = ArcadeSearchPane::Results;
                     } else {
                         self.move_arcade_search_key(1, 0);
                     }
                 }
-                if self.repeat.tick_up(now.dpad_up, frame_now) {
+                if pressed.dpad_up {
                     if self.portrait_layout
                         && self.arcade_search.selected_key < ARCADE_SEARCH_KEY_COLUMNS
                         && count > 0
@@ -2612,16 +2726,15 @@ impl LauncherNav {
                         self.move_arcade_search_key(0, -1);
                     }
                 }
-                if self.repeat.tick_down(now.dpad_down, frame_now) {
+                if pressed.dpad_down {
                     self.move_arcade_search_key(0, 1);
                 }
-                if rising(now.btn_a, self.prev.btn_a) {
+                if pressed.btn_a {
                     self.activate_arcade_search_key(catalog, system_id);
                 }
             }
             ArcadeSearchPane::Results => {
-                if rising(now.btn_b, self.prev.btn_b) || rising(now.dpad_left, self.prev.dpad_left)
-                {
+                if pressed.btn_b || pressed.dpad_left {
                     self.arcade_search.pane = ArcadeSearchPane::Keyboard;
                     return None;
                 }
@@ -2634,19 +2747,18 @@ impl LauncherNav {
                     self.arcade.selected = count - 1;
                     self.arcade.snap_to_selected();
                 }
-                if self.portrait_layout
-                    && self.arcade.selected + 1 >= count
-                    && rising(now.dpad_down, self.prev.dpad_down)
-                {
+                if self.portrait_layout && self.arcade.selected + 1 >= count && pressed.dpad_down {
                     self.arcade_search.pane = ArcadeSearchPane::Keyboard;
                     return None;
                 }
-                let dir = arcade_dpad_dir(now);
-                let previous_dir = arcade_dpad_dir(&self.prev);
-                self.arcade
-                    .handle_direction_input(dir, previous_dir, frame_now, count);
-                self.arcade.tick(count, frame_now);
-                if rising(now.btn_a, self.prev.btn_a) {
+                if tick_continuous {
+                    let dir = arcade_dpad_dir(held);
+                    let previous_dir = self.arcade.scroll.held_dir;
+                    self.arcade
+                        .handle_direction_input(dir, previous_dir, frame_now, count);
+                    self.arcade.tick(count, frame_now);
+                }
+                if pressed.btn_a {
                     return self
                         .active_arcade_game_at(catalog, system_id, self.arcade.selected)
                         .map(|game| LauncherEvent {
@@ -2662,37 +2774,41 @@ impl LauncherNav {
 
     fn handle_arcade_filter(
         &mut self,
-        now: &PadState,
+        pressed: &PadState,
+        released: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
         frame_now: Instant,
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Option<LauncherEvent> {
         let items = self.arcade_filter_items(catalog, system_id);
-        if self.arcade_filter.activation_release_required && !now.btn_a && !now.dpad_right {
+        if self.arcade_filter.activation_release_required && (released.btn_a || released.dpad_right)
+        {
             self.arcade_filter.activation_release_required = false;
         }
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             self.close_arcade_filter();
             self.leave_arcade(true, system_id);
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.back_out_of_arcade_filter_level(catalog, system_id, true);
             return None;
         }
-        if rising(now.dpad_left, self.prev.dpad_left) {
+        if pressed.dpad_left {
             self.back_out_of_arcade_filter_level(catalog, system_id, false);
             return None;
         }
         let activation_requested = !self.arcade_filter.activation_release_required
-            && (rising(now.dpad_right, self.prev.dpad_right) || rising(now.btn_a, self.prev.btn_a));
+            && (pressed.dpad_right || pressed.btn_a);
         if activation_requested {
             self.activate_arcade_filter_selection(catalog, system_id, &items);
             return None;
         }
-        if !items.is_empty() {
-            let dir = arcade_dpad_dir(now);
-            let previous_dir = arcade_dpad_dir(&self.prev);
+        if !items.is_empty() && tick_continuous {
+            let dir = arcade_dpad_dir(held);
+            let previous_dir = self.arcade_filter.scroll.scroll.held_dir;
             self.arcade_filter.scroll.handle_direction_input(
                 dir,
                 previous_dir,
@@ -2701,17 +2817,17 @@ impl LauncherNav {
             );
             self.arcade_filter.scroll.tick(items.len(), frame_now);
             self.sync_arcade_filter_from_scroll();
-        } else {
+        } else if items.is_empty() {
             self.arcade_filter.scroll.reset();
             self.sync_arcade_filter_from_scroll();
         }
         None
     }
 
-    fn handle_settings(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
+    fn handle_settings(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
         if self.display_combo_open {
             let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
-            if rising(now.btn_b, self.prev.btn_b) {
+            if pressed.btn_b {
                 self.display_combo_open = false;
                 self.display_highlighted = if self.display_selected < count {
                     self.display_selected
@@ -2720,15 +2836,13 @@ impl LauncherNav {
                 };
                 return None;
             }
-            if self.repeat.tick_down(now.dpad_down, frame_now)
-                && self.display_highlighted + 1 < count
-            {
+            if pressed.dpad_down && self.display_highlighted + 1 < count {
                 self.display_highlighted += 1;
             }
-            if self.repeat.tick_up(now.dpad_up, frame_now) && self.display_highlighted > 0 {
+            if pressed.dpad_up && self.display_highlighted > 0 {
                 self.display_highlighted -= 1;
             }
-            if rising(now.btn_a, self.prev.btn_a) {
+            if pressed.btn_a {
                 self.display_combo_open = false;
                 if self.display_highlighted == self.display_selected {
                     return None;
@@ -2746,20 +2860,18 @@ impl LauncherNav {
         }
         if self.orientation_combo_open {
             let count = ScreenOrientation::ALL.len();
-            if rising(now.btn_b, self.prev.btn_b) {
+            if pressed.btn_b {
                 self.orientation_combo_open = false;
                 self.orientation_highlighted = self.orientation_selected.min(count - 1);
                 return None;
             }
-            if self.repeat.tick_down(now.dpad_down, frame_now)
-                && self.orientation_highlighted + 1 < count
-            {
+            if pressed.dpad_down && self.orientation_highlighted + 1 < count {
                 self.orientation_highlighted += 1;
             }
-            if self.repeat.tick_up(now.dpad_up, frame_now) && self.orientation_highlighted > 0 {
+            if pressed.dpad_up && self.orientation_highlighted > 0 {
                 self.orientation_highlighted -= 1;
             }
-            if rising(now.btn_a, self.prev.btn_a) {
+            if pressed.btn_a {
                 self.orientation_combo_open = false;
                 if self.orientation_highlighted == self.orientation_selected {
                     return None;
@@ -2776,24 +2888,22 @@ impl LauncherNav {
             }
             return None;
         }
-        if rising(now.btn_home, self.prev.btn_home) {
+        if pressed.btn_home {
             self.go_root();
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.screen = Screen::Home;
             self.restore_current_menu_view();
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now)
-            && self.settings_selected < SETTINGS_MAX_SELECTED
-        {
+        if pressed.dpad_down && self.settings_selected < SETTINGS_MAX_SELECTED {
             self.settings_selected += 1;
         }
-        if self.repeat.tick_up(now.dpad_up, frame_now) && self.settings_selected > 0 {
+        if pressed.dpad_up && self.settings_selected > 0 {
             self.settings_selected -= 1;
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             if self.settings_selected == SETTINGS_DISPLAY_SELECTED {
                 self.display_combo_open = true;
                 let count =
@@ -2840,24 +2950,22 @@ impl LauncherNav {
         None
     }
 
-    fn handle_about(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) {
+    fn handle_about(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
+        if pressed.btn_home {
             self.go_root();
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.screen = Screen::Settings;
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now)
-            && self.about_selected < ABOUT_MAX_SELECTED
-        {
+        if pressed.dpad_down && self.about_selected < ABOUT_MAX_SELECTED {
             self.about_selected += 1;
         }
-        if self.repeat.tick_up(now.dpad_up, frame_now) && self.about_selected > 0 {
+        if pressed.dpad_up && self.about_selected > 0 {
             self.about_selected -= 1;
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             if self.about_selected == 0 {
                 self.screen = Screen::Info;
             } else {
@@ -2870,28 +2978,22 @@ impl LauncherNav {
         None
     }
 
-    fn handle_screensaver_settings(
-        &mut self,
-        now: &PadState,
-        frame_now: Instant,
-    ) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) {
+    fn handle_screensaver_settings(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
+        if pressed.btn_home {
             self.go_root();
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.screen = Screen::Settings;
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now)
-            && self.screensaver_selected < SCREENSAVER_SETTINGS_MAX_SELECTED
-        {
+        if pressed.dpad_down && self.screensaver_selected < SCREENSAVER_SETTINGS_MAX_SELECTED {
             self.screensaver_selected += 1;
         }
-        if self.repeat.tick_up(now.dpad_up, frame_now) && self.screensaver_selected > 0 {
+        if pressed.dpad_up && self.screensaver_selected > 0 {
             self.screensaver_selected -= 1;
         }
-        if !rising(now.btn_a, self.prev.btn_a) {
+        if !pressed.btn_a {
             return None;
         }
         if self.screensaver_selected == 2 {
@@ -2917,58 +3019,60 @@ impl LauncherNav {
         })
     }
 
-    pub fn absorb_input(&mut self, now: &PadState) {
-        self.prev = now.clone();
-        self.repeat = RepeatNav::default();
-    }
-
-    fn handle_licenses(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        if rising(now.btn_home, self.prev.btn_home) {
+    fn handle_licenses(
+        &mut self,
+        pressed: &PadState,
+        held: &PadState,
+        tick_continuous: bool,
+        frame_now: Instant,
+    ) -> Option<LauncherEvent> {
+        if pressed.btn_home {
             self.licenses_expanded = false;
             self.licenses_scroll.reset();
             self.go_root();
             return None;
         }
         if self.licenses_expanded {
-            if rising(now.btn_a, self.prev.btn_a) || rising(now.btn_b, self.prev.btn_b) {
+            if pressed.btn_a || pressed.btn_b {
                 self.licenses_expanded = false;
                 self.licenses_scroll.reset();
             } else {
                 let count = crate::licenses::max_scroll_line(self.licenses_selected) + 1;
-                self.licenses_scroll.handle_direction_input(
-                    arcade_dpad_dir(now),
-                    arcade_dpad_dir(&self.prev),
-                    frame_now,
-                    count,
-                );
-                self.licenses_scroll.tick(count, frame_now);
+                if tick_continuous {
+                    let previous_dir = self.licenses_scroll.scroll.held_dir;
+                    self.licenses_scroll.handle_direction_input(
+                        arcade_dpad_dir(held),
+                        previous_dir,
+                        frame_now,
+                        count,
+                    );
+                    self.licenses_scroll.tick(count, frame_now);
+                }
             }
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) {
+        if pressed.btn_b {
             self.screen = Screen::About;
             self.licenses_scroll.reset();
             return None;
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now)
-            && self.licenses_selected < LICENSES_MAX_SELECTED
-        {
+        if pressed.dpad_down && self.licenses_selected < LICENSES_MAX_SELECTED {
             self.licenses_selected += 1;
         }
-        if self.repeat.tick_up(now.dpad_up, frame_now) && self.licenses_selected > 0 {
+        if pressed.dpad_up && self.licenses_selected > 0 {
             self.licenses_selected -= 1;
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             self.licenses_expanded = true;
             self.licenses_scroll.reset();
         }
         None
     }
 
-    fn handle_settings_subscreen(&mut self, now: &PadState) {
-        if rising(now.btn_home, self.prev.btn_home) {
+    fn handle_settings_subscreen(&mut self, pressed: &PadState) {
+        if pressed.btn_home {
             self.go_root();
-        } else if rising(now.btn_b, self.prev.btn_b) {
+        } else if pressed.btn_b {
             self.screen = Screen::About;
         }
     }
@@ -2983,20 +3087,17 @@ impl LauncherNav {
             && self.licenses_scroll.is_scroll_active()
     }
 
-    fn handle_confirm(&mut self, now: &PadState, frame_now: Instant) -> Option<LauncherEvent> {
-        let home_pressed = rising(now.btn_home, self.prev.btn_home);
+    fn handle_confirm(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
+        let home_pressed = pressed.btn_home;
         if self.confirm_action == Some(ConfirmAction::DisplayResolutionError) {
-            if rising(now.btn_a, self.prev.btn_a)
-                || rising(now.btn_b, self.prev.btn_b)
-                || home_pressed
-            {
+            if pressed.btn_a || pressed.btn_b || home_pressed {
                 self.confirm_action = None;
                 self.confirm_selected = 0;
                 self.display_error = None;
             }
             return None;
         }
-        if rising(now.btn_b, self.prev.btn_b) || home_pressed {
+        if pressed.btn_b || home_pressed {
             if self.confirm_action == Some(ConfirmAction::DisplayResolution) {
                 self.confirm_action = None;
                 self.confirm_selected = 0;
@@ -3039,14 +3140,13 @@ impl LauncherNav {
         if self.confirm_selected > max_selected {
             self.confirm_selected = max_selected;
         }
-        if self.repeat.tick_left(now.dpad_left, frame_now) && self.confirm_selected > 0 {
+        if pressed.dpad_left && self.confirm_selected > 0 {
             self.confirm_selected -= 1;
         }
-        if self.repeat.tick_right(now.dpad_right, frame_now) && self.confirm_selected < max_selected
-        {
+        if pressed.dpad_right && self.confirm_selected < max_selected {
             self.confirm_selected += 1;
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if pressed.btn_a {
             let action = self.confirm_action;
             let selected = self.confirm_selected;
             let confirmed = match action {
@@ -4499,8 +4599,23 @@ fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
     *scroll_x = (*scroll_x).clamp(0, home_max_scroll(count));
 }
 
-fn rising(now: bool, prev: bool) -> bool {
-    now && !prev
+#[cfg(test)]
+fn pad_action_held(state: &PadState, action: crate::input_event::LogicalAction) -> bool {
+    match action {
+        crate::input_event::LogicalAction::Up => state.dpad_up,
+        crate::input_event::LogicalAction::Down => state.dpad_down,
+        crate::input_event::LogicalAction::Left => state.dpad_left,
+        crate::input_event::LogicalAction::Right => state.dpad_right,
+        crate::input_event::LogicalAction::Activate => state.btn_a,
+        crate::input_event::LogicalAction::Back => state.btn_b,
+        crate::input_event::LogicalAction::Home => state.btn_home,
+        crate::input_event::LogicalAction::X => state.btn_x,
+        crate::input_event::LogicalAction::Y => state.btn_y,
+        crate::input_event::LogicalAction::L => state.btn_l,
+        crate::input_event::LogicalAction::R => state.btn_r,
+        crate::input_event::LogicalAction::Select => state.btn_select,
+        crate::input_event::LogicalAction::Start => state.btn_start,
+    }
 }
 
 fn confirm_max_selected(action: Option<ConfirmAction>) -> usize {
@@ -5821,6 +5936,52 @@ mod tests {
         let mut pad = PadState::default();
         set(&mut pad);
         pad
+    }
+
+    fn ordered_event(
+        sequence: u64,
+        press_id: u64,
+        action: crate::input_event::LogicalAction,
+        phase: InputPhase,
+    ) -> InputEvent {
+        InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: crate::input_event::InputSourceKind::Preview,
+                instance: 1,
+            },
+            source_epoch: crate::input_event::SourceEpoch(1),
+            sequence,
+            press_id: crate::input_event::PressId(press_id),
+            captured_at_us: sequence,
+            action,
+            phase,
+        }
+    }
+
+    #[test]
+    fn ordered_menu_taps_are_not_collapsed() {
+        let catalog = image_less_amiga_catalog();
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        let now = Instant::now();
+        for (sequence, press_id, phase) in [
+            (1, 1, InputPhase::Pressed),
+            (2, 1, InputPhase::Released),
+            (3, 2, InputPhase::Pressed),
+            (4, 2, InputPhase::Released),
+        ] {
+            nav.handle_action_with_navigation_intents(
+                &ordered_event(
+                    sequence,
+                    press_id,
+                    crate::input_event::LogicalAction::Down,
+                    phase,
+                ),
+                now,
+                &catalog,
+            );
+        }
+        assert_eq!(nav.settings_selected, 2);
     }
 
     fn release(nav: &mut LauncherNav, catalog: &ArcadeCatalog, t: Instant, ms: u64) {
@@ -7260,7 +7421,7 @@ mod tests {
         assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
         let held_back = pad_with(|pad| pad.btn_b = true);
 
-        nav.absorb_input(&held_back);
+        nav.reset_test_snapshot(&held_back);
         assert!(
             nav.handle_input_with_navigation_intents(&held_back, Instant::now(), &catalog,)
                 .is_none()

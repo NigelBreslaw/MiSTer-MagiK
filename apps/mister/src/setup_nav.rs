@@ -5,7 +5,8 @@
 
 use crate::controller_db::{ControllerDb, ControllerKind, PadRegistryStatus};
 use crate::input_event::DeviceInstanceId;
-use crate::input_event::{InputEvent, InputPhase};
+use crate::input_event::{InputEvent, InputPhase, LogicalAction};
+#[cfg(test)]
 use crate::input_repeat::RepeatNav;
 use crate::input_state::{PadInfo, PadState, layout_profile_name};
 use std::time::Instant;
@@ -36,8 +37,10 @@ pub struct SetupNav {
     pub list_index: usize,
     pub draft_label: String,
     pub draft_kind: ControllerKind,
-    repeat: RepeatNav,
-    prev: PadState,
+    #[cfg(test)]
+    test_repeat: RepeatNav,
+    #[cfg(test)]
+    test_prev: PadState,
     /// Ignore the triggering edge on the same frame we opened from pad activity.
     armed: bool,
 }
@@ -75,8 +78,10 @@ impl SetupNav {
             list_index: 0,
             draft_label: String::new(),
             draft_kind: ControllerKind::Unknown,
-            repeat: RepeatNav::default(),
-            prev: PadState::default(),
+            #[cfg(test)]
+            test_repeat: RepeatNav::default(),
+            #[cfg(test)]
+            test_prev: PadState::default(),
             armed: false,
         }
     }
@@ -297,7 +302,8 @@ impl SetupNav {
         }
     }
 
-    /// Handle input while setup overlay is visible. Returns an action for the caller.
+    /// Snapshot adapter retained only for the existing setup reducer tests.
+    #[cfg(test)]
     pub fn handle_input(
         &mut self,
         now: &PadState,
@@ -305,46 +311,65 @@ impl SetupNav {
         info: &PadInfo,
         db: &ControllerDb,
     ) -> SetupAction {
-        if self.phase == SetupPhase::None {
-            self.prev = now.clone();
-            return SetupAction::None;
+        let previous = self.test_prev.clone();
+        let mut fired = None;
+        for action in LogicalAction::ALL {
+            let held = pad_action_held(now, action);
+            let was_held = pad_action_held(&previous, action);
+            let repeat = match action {
+                LogicalAction::Up => self.test_repeat.tick_up(held, frame_now),
+                LogicalAction::Down => self.test_repeat.tick_down(held, frame_now),
+                LogicalAction::Left => self.test_repeat.tick_left(held, frame_now),
+                LogicalAction::Right => self.test_repeat.tick_right(held, frame_now),
+                _ => held && !was_held,
+            };
+            if fired.is_none() && repeat {
+                fired = Some(action);
+            }
         }
-
-        if !self.armed {
-            self.armed = true;
-            self.prev = now.clone();
-            return SetupAction::None;
-        }
-
-        let action = match self.phase {
-            SetupPhase::Detected => self.handle_detected(now, info),
-            SetupPhase::NewOrExisting => self.handle_new_or_existing(now, frame_now, db),
-            SetupPhase::PickExisting => self.handle_pick_existing(now, frame_now, db),
-            SetupPhase::Configure => self.handle_configure(now, info, db),
-            SetupPhase::NameKind => self.handle_name_kind(now, frame_now),
-            SetupPhase::None => SetupAction::None,
-        };
-
-        self.prev = now.clone();
-        action
+        self.test_prev = now.clone();
+        fired.map_or(SetupAction::None, |action| {
+            self.handle_pressed(action, info, db)
+        })
     }
 
     pub fn handle_action(
         &mut self,
         event: &InputEvent,
-        frame_now: Instant,
+        _frame_now: Instant,
         info: &PadInfo,
         db: &ControllerDb,
     ) -> SetupAction {
-        let mut now = self.prev.clone();
-        now.set_logical_action(event.action, event.phase == InputPhase::Pressed);
-        self.handle_input(&now, frame_now, info, db)
-    }
-
-    fn handle_detected(&mut self, now: &PadState, _info: &PadInfo) -> SetupAction {
-        if !any_control_rising(now, &self.prev) {
+        if event.phase == InputPhase::Released {
             return SetupAction::None;
         }
+        self.handle_pressed(event.action, info, db)
+    }
+
+    fn handle_pressed(
+        &mut self,
+        action: LogicalAction,
+        info: &PadInfo,
+        db: &ControllerDb,
+    ) -> SetupAction {
+        if self.phase == SetupPhase::None {
+            return SetupAction::None;
+        }
+        if !self.armed {
+            self.armed = true;
+            return SetupAction::None;
+        }
+        match self.phase {
+            SetupPhase::Detected => self.handle_detected(),
+            SetupPhase::NewOrExisting => self.handle_new_or_existing(action, db),
+            SetupPhase::PickExisting => self.handle_pick_existing(action, db),
+            SetupPhase::Configure => self.handle_configure(action, info, db),
+            SetupPhase::NameKind => self.handle_name_kind(action),
+            SetupPhase::None => SetupAction::None,
+        }
+    }
+
+    fn handle_detected(&mut self) -> SetupAction {
         if self.trigger_status == PadRegistryStatus::MovedPort {
             self.phase = SetupPhase::NewOrExisting;
             self.list_index = 0;
@@ -354,23 +379,14 @@ impl SetupNav {
         SetupAction::None
     }
 
-    fn handle_new_or_existing(
-        &mut self,
-        now: &PadState,
-        frame_now: Instant,
-        db: &ControllerDb,
-    ) -> SetupAction {
-        if self.repeat.tick_left(now.dpad_left, frame_now)
-            || self.repeat.tick_up(now.dpad_up, frame_now)
-        {
+    fn handle_new_or_existing(&mut self, action: LogicalAction, db: &ControllerDb) -> SetupAction {
+        if matches!(action, LogicalAction::Left | LogicalAction::Up) {
             self.list_index = 0;
         }
-        if self.repeat.tick_right(now.dpad_right, frame_now)
-            || self.repeat.tick_down(now.dpad_down, frame_now)
-        {
+        if matches!(action, LogicalAction::Right | LogicalAction::Down) {
             self.list_index = 1;
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if action == LogicalAction::Activate {
             if self.list_index == 0 {
                 self.phase = SetupPhase::Configure;
                 SetupAction::RegisterNew
@@ -386,25 +402,20 @@ impl SetupNav {
         }
     }
 
-    fn handle_pick_existing(
-        &mut self,
-        now: &PadState,
-        frame_now: Instant,
-        db: &ControllerDb,
-    ) -> SetupAction {
+    fn handle_pick_existing(&mut self, action: LogicalAction, db: &ControllerDb) -> SetupAction {
         let count = db.list_entries().len();
         if count == 0 {
             self.phase = SetupPhase::NewOrExisting;
             return SetupAction::None;
         }
 
-        if self.repeat.tick_up(now.dpad_up, frame_now) {
+        if action == LogicalAction::Up {
             self.list_index = self.list_index.saturating_sub(1);
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) {
+        if action == LogicalAction::Down {
             self.list_index = (self.list_index + 1).min(count - 1);
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if action == LogicalAction::Activate {
             let idx = self.list_index;
             self.phase = SetupPhase::Configure;
             SetupAction::ClaimExisting { list_index: idx }
@@ -415,11 +426,11 @@ impl SetupNav {
 
     fn handle_configure(
         &mut self,
-        now: &PadState,
+        action: LogicalAction,
         info: &PadInfo,
         db: &ControllerDb,
     ) -> SetupAction {
-        if !rising(now.btn_a, self.prev.btn_a) {
+        if action != LogicalAction::Activate {
             return SetupAction::None;
         }
         if db.is_setup(info) {
@@ -431,17 +442,17 @@ impl SetupNav {
         }
     }
 
-    fn handle_name_kind(&mut self, now: &PadState, frame_now: Instant) -> SetupAction {
-        if self.repeat.tick_up(now.dpad_up, frame_now) {
+    fn handle_name_kind(&mut self, action: LogicalAction) -> SetupAction {
+        if action == LogicalAction::Up {
             let idx = self.draft_kind.index();
             self.draft_kind = ControllerKind::from_index(idx.saturating_sub(1));
         }
-        if self.repeat.tick_down(now.dpad_down, frame_now) {
+        if action == LogicalAction::Down {
             let idx = self.draft_kind.index();
             self.draft_kind =
                 ControllerKind::from_index((idx + 1).min(ControllerKind::ALL.len() - 1));
         }
-        if rising(now.btn_a, self.prev.btn_a) {
+        if action == LogicalAction::Activate {
             self.phase = SetupPhase::None;
             return SetupAction::SaveFinish {
                 label: self.draft_label.clone(),
@@ -469,29 +480,23 @@ fn default_draft_label(info: &PadInfo) -> String {
     )
 }
 
-fn rising(now: bool, prev: bool) -> bool {
-    now && !prev
-}
-
-fn any_control_rising(now: &PadState, prev: &PadState) -> bool {
-    rising(now.dpad_up, prev.dpad_up)
-        || rising(now.dpad_down, prev.dpad_down)
-        || rising(now.dpad_left, prev.dpad_left)
-        || rising(now.dpad_right, prev.dpad_right)
-        || rising(now.btn_a, prev.btn_a)
-        || rising(now.btn_b, prev.btn_b)
-        || rising(now.btn_x, prev.btn_x)
-        || rising(now.btn_y, prev.btn_y)
-        || rising(now.btn_l, prev.btn_l)
-        || rising(now.btn_r, prev.btn_r)
-        || rising(now.btn_zl, prev.btn_zl)
-        || rising(now.btn_zr, prev.btn_zr)
-        || rising(now.btn_select, prev.btn_select)
-        || rising(now.btn_start, prev.btn_start)
-        || rising(now.btn_l3, prev.btn_l3)
-        || rising(now.btn_r3, prev.btn_r3)
-        || rising(now.btn_home, prev.btn_home)
-        || rising(now.btn_capture, prev.btn_capture)
+#[cfg(test)]
+fn pad_action_held(state: &PadState, action: LogicalAction) -> bool {
+    match action {
+        LogicalAction::Up => state.dpad_up,
+        LogicalAction::Down => state.dpad_down,
+        LogicalAction::Left => state.dpad_left,
+        LogicalAction::Right => state.dpad_right,
+        LogicalAction::Activate => state.btn_a,
+        LogicalAction::Back => state.btn_b,
+        LogicalAction::Home => state.btn_home,
+        LogicalAction::X => state.btn_x,
+        LogicalAction::Y => state.btn_y,
+        LogicalAction::L => state.btn_l,
+        LogicalAction::R => state.btn_r,
+        LogicalAction::Select => state.btn_select,
+        LogicalAction::Start => state.btn_start,
+    }
 }
 
 #[cfg(test)]

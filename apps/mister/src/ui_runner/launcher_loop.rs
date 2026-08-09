@@ -4948,7 +4948,11 @@ pub(super) fn run_launcher_loop(
                     } else if let Some(input_event) = routed_event_this_loop.as_ref() {
                         nav.handle_action_with_navigation_intents(input_event, frame_now, &catalog)
                     } else {
-                        nav.handle_held_tick_with_navigation_intents(frame_now, &catalog)
+                        nav.handle_held_tick_with_navigation_intents(
+                            &launcher_state,
+                            frame_now,
+                            &catalog,
+                        )
                     };
                     if let Some((source_screen, source_state)) = settings_transition_source
                         && let Some((route, direction)) =
@@ -9959,7 +9963,7 @@ mod tests {
         ));
         assert_eq!(nav.screen, Screen::Home);
 
-        nav.absorb_input(&released);
+        nav.reset_test_snapshot(&released);
         let event = nav
             .handle_input_with_navigation_intents(
                 &pressed,
@@ -9994,7 +9998,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let held = pad_state_with(|state| state.dpad_right = true);
         let now = Instant::now();
-        nav.absorb_input(&held);
+        nav.reset_test_snapshot(&held);
 
         let catalog = catalog_for_media_systems(&["arcade"]);
         assert!(nav.handle_input(&held, now, &catalog).is_none());
@@ -10012,7 +10016,7 @@ mod tests {
             ..PadState::default()
         };
         let now = Instant::now();
-        nav.absorb_input(&released);
+        nav.reset_test_snapshot(&released);
         assert!(
             nav.handle_input_with_navigation_intents(&back, now, &catalog)
                 .is_none()
@@ -10036,7 +10040,7 @@ mod tests {
         assert!(transition.complete().is_some());
 
         let to_settings = transition.route_input(&released, &back, false).unwrap();
-        nav.absorb_input(&to_settings.previous);
+        nav.reset_test_snapshot(&to_settings.previous);
         assert!(
             nav.handle_input_with_navigation_intents(&to_settings.now, now, &catalog)
                 .is_none()
@@ -10054,7 +10058,7 @@ mod tests {
         assert!(transition.complete().is_some());
 
         let to_home = transition.route_input(&released, &released, false).unwrap();
-        nav.absorb_input(&to_home.previous);
+        nav.reset_test_snapshot(&to_home.previous);
         assert!(
             nav.handle_input_with_navigation_intents(&to_home.now, now, &catalog)
                 .is_none()

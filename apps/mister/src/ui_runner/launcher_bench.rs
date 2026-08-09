@@ -279,7 +279,7 @@ pub(super) fn launcher_bench_step(
             } else {
                 input.dpad_right = true;
             }
-            let _ = nav.handle_input(&input, now, catalog);
+            let _ = nav.handle_held_tick_with_navigation_intents(&input, now, catalog);
             true
         }
         LauncherBenchScenario::ModelSync => {

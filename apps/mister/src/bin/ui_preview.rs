@@ -895,7 +895,6 @@ mod macos {
             self.launcher_active_presses.clear();
             self.input_router =
                 InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
-            self.launcher_nav.absorb_input(&self.launcher_pad);
         }
 
         fn configure_navigation_transition_demo(
@@ -931,7 +930,6 @@ mod macos {
             self.launcher_active_presses.clear();
             self.input_router =
                 InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
-            self.launcher_nav.absorb_input(&self.launcher_pad);
             self.sync_launcher_navigation();
             Ok(())
         }
@@ -1071,8 +1069,11 @@ mod macos {
                     &self.catalog,
                 )
             } else {
-                self.launcher_nav
-                    .handle_held_tick_with_navigation_intents(frame_now, &self.catalog)
+                self.launcher_nav.handle_held_tick_with_navigation_intents(
+                    &self.launcher_pad,
+                    frame_now,
+                    &self.catalog,
+                )
             };
             if let Some((source_screen, source_state)) = settings_transition_source
                 && let Some((route, direction)) =
@@ -2129,7 +2130,12 @@ mod macos {
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
                     self.launcher_pad = PadState::default();
-                    self.launcher_nav.absorb_input(&self.launcher_pad);
+                    self.launcher_input_events.clear();
+                    self.launcher_active_presses.clear();
+                    self.input_router = InputRouter::new(preview_input_focus(
+                        self.launcher_nav.screen,
+                        self.navigation_transition.is_active(),
+                    ));
                     self.reset_focus_clock();
                     if focused && let Some(window) = self.native_window.as_ref() {
                         window.request_redraw();
