@@ -34,6 +34,19 @@ export component PixelText8 {
 }
 """
 
+JERSEY_PRIMITIVE_TEXT = """
+export component JerseyTitleText inherits Text {
+    font-size: 41px;
+}
+"""
+
+
+def primitives() -> list[object]:
+    return [
+        CONTRACT.Source(CONTRACT.PRIMITIVE, PRIMITIVE_TEXT),
+        CONTRACT.Source(CONTRACT.JERSEY_PRIMITIVE, JERSEY_PRIMITIVE_TEXT),
+    ]
+
 
 class ContractTests(unittest.TestCase):
     def test_all_legal_enum_values_are_required_in_order(self) -> None:
@@ -41,9 +54,7 @@ class ContractTests(unittest.TestCase):
             CONTRACT.EXPECTED_ENUM_VALUES,
             ("px8", "px16", "px24", "px32"),
         )
-        CONTRACT.check_sources(
-            [CONTRACT.Source(CONTRACT.PRIMITIVE, PRIMITIVE_TEXT)]
-        )
+        CONTRACT.check_sources(primitives())
         for invalid in (
             PRIMITIVE_TEXT.replace("    px8,\n", ""),
             PRIMITIVE_TEXT.replace("    px16,\n", "    px12,\n"),
@@ -51,7 +62,10 @@ class ContractTests(unittest.TestCase):
         ):
             with self.assertRaises(CONTRACT.ContractError):
                 CONTRACT.check_sources(
-                    [CONTRACT.Source(CONTRACT.PRIMITIVE, invalid)]
+                    [
+                        CONTRACT.Source(CONTRACT.PRIMITIVE, invalid),
+                        CONTRACT.Source(CONTRACT.JERSEY_PRIMITIVE, JERSEY_PRIMITIVE_TEXT),
+                    ]
                 )
 
     def test_raw_text_and_direct_font_size_fixtures_are_rejected(self) -> None:
@@ -63,7 +77,7 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(CONTRACT.ContractError, message):
                     CONTRACT.check_sources(
                         [
-                            CONTRACT.Source(CONTRACT.PRIMITIVE, PRIMITIVE_TEXT),
+                            *primitives(),
                             CONTRACT.Source(
                                 PurePosixPath("apps/mister/ui/fixture.slint"),
                                 body,
@@ -74,7 +88,7 @@ class ContractTests(unittest.TestCase):
     def test_comments_and_strings_do_not_trigger_the_contract(self) -> None:
         CONTRACT.check_sources(
             [
-                CONTRACT.Source(CONTRACT.PRIMITIVE, PRIMITIVE_TEXT),
+                *primitives(),
                 CONTRACT.Source(
                     PurePosixPath("apps/mister/ui/fixture.slint"),
                     '// Text { font-size: 12px; }\n'
@@ -91,6 +105,8 @@ class ContractTests(unittest.TestCase):
             primitive = repository / CONTRACT.PRIMITIVE
             primitive.parent.mkdir(parents=True)
             primitive.write_text(PRIMITIVE_TEXT)
+            jersey_primitive = repository / CONTRACT.JERSEY_PRIMITIVE
+            jersey_primitive.write_text(JERSEY_PRIMITIVE_TEXT)
             scene = repository / "apps/mister/ui/scene.slint"
             scene.write_text("PixelText8 { size: PixelTextSize.px8; }\n")
             subprocess.run(

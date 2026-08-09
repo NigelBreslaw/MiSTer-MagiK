@@ -16,6 +16,7 @@ from typing import Iterable, NoReturn
 
 UI_ROOT = PurePosixPath("apps/mister/ui")
 PRIMITIVE = UI_ROOT / "components/pixel_text_8.slint"
+JERSEY_PRIMITIVE = UI_ROOT / "components/jersey_text.slint"
 EXPECTED_ENUM_VALUES = ("px8", "px16", "px24", "px32")
 
 RAW_TEXT = re.compile(r"(?<![A-Za-z0-9_])Text\s*\{")
@@ -173,14 +174,32 @@ def check_primitive(source: Source, code: str) -> list[str]:
     return errors
 
 
+def check_jersey_primitive(source: Source, code: str) -> list[str]:
+    errors = []
+    raw_text = describe_matches(source.path, code, RAW_TEXT)
+    font_size = describe_matches(source.path, code, DIRECT_FONT_SIZE)
+    if len(raw_text) != 1:
+        errors.append(f"{source.path}: Jersey primitive must contain exactly one Text component")
+    if len(font_size) != 1:
+        errors.append(
+            f"{source.path}: Jersey primitive must contain exactly one fixed font-size"
+        )
+    return errors
+
+
 def check_sources(sources: Iterable[Source]) -> None:
     violations: list[str] = []
     primitive_seen = False
+    jersey_primitive_seen = False
     for source in sources:
         code = code_only(source.text)
         if source.path == PRIMITIVE:
             primitive_seen = True
             violations.extend(check_primitive(source, code))
+            continue
+        if source.path == JERSEY_PRIMITIVE:
+            jersey_primitive_seen = True
+            violations.extend(check_jersey_primitive(source, code))
             continue
         for location in describe_matches(source.path, code, RAW_TEXT):
             violations.append(f"{location}: raw Text is forbidden; use PixelText8")
@@ -190,6 +209,8 @@ def check_sources(sources: Iterable[Source]) -> None:
             )
     if not primitive_seen:
         violations.append(f"{PRIMITIVE}: PixelText8 primitive is missing")
+    if not jersey_primitive_seen:
+        violations.append(f"{JERSEY_PRIMITIVE}: Jersey text primitive is missing")
     if violations:
         raise ContractError("\n".join(violations))
 

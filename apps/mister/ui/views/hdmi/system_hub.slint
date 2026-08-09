@@ -4,6 +4,7 @@
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { JerseyTitleText } from "../../components/jersey_text.slint";
 
 component HubIcon inherits Rectangle {
     in property <int> kind;
@@ -113,11 +114,10 @@ export component SystemHubScreen inherits Rectangle {
     Rectangle { x: 8px; y: 20px; width: 2px; height: parent.height - 40px; background: #3c2d4b; }
     Rectangle { x: 18px; y: 24px; width: 48px; height: 2px; background: #6f5287; }
 
-    Image {
-        x: 28px; y: 36px; width: 266px; height: 25px;
-        source: @image-url("../../images/jersey25-super-nintendo.png");
-        image-fit: fill;
-        image-rendering: pixelated;
+    JerseyTitleText {
+        x: 28px; y: 28px; width: 300px; height: 41px;
+        text: "SUPER NINTENDO";
+        color: #f8f5fa;
     }
     PixelText8 {
         x: 30px; y: 78px; width: 360px; height: 12px;
