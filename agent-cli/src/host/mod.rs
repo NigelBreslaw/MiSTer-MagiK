@@ -4372,6 +4372,7 @@ fn run_launcher_response_scenario(
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                ("MISTER_HOME_SELECTED_INDEX".into(), "1".into()),
                 ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
             ],
             timeout_secs: 45,
@@ -4526,7 +4527,7 @@ fn select_launcher_response_item(session: &Session, target: &str) -> Result<()> 
         if status.get("selected_item_id").and_then(Value::as_str) == Some(target) {
             return Ok(());
         }
-        run_launcher_response_driver(session, "right 10 1 1")?;
+        run_launcher_response_driver(session, "right 100 1 1")?;
         thread::sleep(Duration::from_millis(80));
     }
     Err(format!("launcher could not focus {target} within 32 moves").into())
