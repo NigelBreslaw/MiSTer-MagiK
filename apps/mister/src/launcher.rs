@@ -866,6 +866,15 @@ struct HomeScrollState {
     settle_direction: i32,
 }
 
+#[derive(Clone, Copy)]
+struct NavigationInput<'a> {
+    pressed: &'a PadState,
+    released: &'a PadState,
+    held: &'a PadState,
+    tick_continuous: bool,
+    frame_now: Instant,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GameListMemory {
     selected: usize,
@@ -2107,12 +2116,15 @@ impl LauncherNav {
             InputPhase::Pressed => pressed.set_logical_action(event.action, true),
             InputPhase::Released => released.set_logical_action(event.action, true),
         }
+        let held = PadState::default();
         self.handle_input_internal(
-            &pressed,
-            &released,
-            &PadState::default(),
-            false,
-            frame_now,
+            NavigationInput {
+                pressed: &pressed,
+                released: &released,
+                held: &held,
+                tick_continuous: false,
+                frame_now,
+            },
             catalog,
             true,
             true,
@@ -2125,12 +2137,16 @@ impl LauncherNav {
         frame_now: Instant,
         catalog: &ArcadeCatalog,
     ) -> Option<LauncherEvent> {
+        let pressed = PadState::default();
+        let released = PadState::default();
         self.handle_input_internal(
-            &PadState::default(),
-            &PadState::default(),
-            held,
-            true,
-            frame_now,
+            NavigationInput {
+                pressed: &pressed,
+                released: &released,
+                held,
+                tick_continuous: true,
+                frame_now,
+            },
             catalog,
             true,
             true,
@@ -2176,11 +2192,13 @@ impl LauncherNav {
         }
         self.test_prev = now.clone();
         self.handle_input_internal(
-            &pressed,
-            &released,
-            now,
-            true,
-            frame_now,
+            NavigationInput {
+                pressed: &pressed,
+                released: &released,
+                held: now,
+                tick_continuous: true,
+                frame_now,
+            },
             catalog,
             emit_collection_intents,
             emit_navigation_intents,
@@ -2234,25 +2252,25 @@ impl LauncherNav {
 
     fn handle_input_internal(
         &mut self,
-        pressed: &PadState,
-        released: &PadState,
-        held: &PadState,
-        tick_continuous: bool,
-        frame_now: Instant,
+        input: NavigationInput<'_>,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
         emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
+        let NavigationInput {
+            pressed,
+            held,
+            tick_continuous,
+            frame_now,
+            ..
+        } = input;
         self.sync_launcher_taxonomy(catalog);
-        let result = if self.confirm_action.is_some() {
+        if self.confirm_action.is_some() {
             self.handle_confirm(pressed)
         } else {
             match self.screen {
                 Screen::Home => self.handle_home(
-                    pressed,
-                    held,
-                    tick_continuous,
-                    frame_now,
+                    input,
                     catalog,
                     emit_collection_intents,
                     emit_navigation_intents,
@@ -2267,15 +2285,7 @@ impl LauncherNav {
                     }
                     None
                 }
-                Screen::Arcade => self.handle_arcade(
-                    pressed,
-                    released,
-                    held,
-                    tick_continuous,
-                    frame_now,
-                    catalog,
-                    emit_navigation_intents,
-                ),
+                Screen::Arcade => self.handle_arcade(input, catalog, emit_navigation_intents),
                 Screen::Settings => self.handle_settings(pressed),
                 Screen::Screensaver => self.handle_screensaver_settings(pressed),
                 Screen::About => self.handle_about(pressed),
@@ -2285,8 +2295,7 @@ impl LauncherNav {
                 }
                 Screen::Licenses => self.handle_licenses(pressed, held, tick_continuous, frame_now),
             }
-        };
-        result
+        }
     }
 
     fn handle_system_hub(
@@ -2336,14 +2345,18 @@ impl LauncherNav {
 
     fn handle_home(
         &mut self,
-        pressed: &PadState,
-        held: &PadState,
-        tick_continuous: bool,
-        frame_now: Instant,
+        input: NavigationInput<'_>,
         catalog: &ArcadeCatalog,
         emit_collection_intents: bool,
         emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
+        let NavigationInput {
+            pressed,
+            held,
+            tick_continuous,
+            frame_now,
+            ..
+        } = input;
         if pressed.btn_home {
             if (self.crt_layout || self.portrait_layout) && self.current_menu_id() == ROOT_MENU_ID {
                 self.remember_current_menu_view();
@@ -2570,27 +2583,22 @@ impl LauncherNav {
 
     fn handle_arcade(
         &mut self,
-        pressed: &PadState,
-        released: &PadState,
-        held: &PadState,
-        tick_continuous: bool,
-        frame_now: Instant,
+        input: NavigationInput<'_>,
         catalog: &ArcadeCatalog,
         emit_navigation_intents: bool,
     ) -> Option<LauncherEvent> {
+        let NavigationInput {
+            pressed,
+            released,
+            held,
+            tick_continuous,
+            frame_now,
+        } = input;
         let collection_id = self.active_collection_scope_id(catalog).to_string();
         let count = self.active_arcade_game_count(catalog, &collection_id);
 
         if self.arcade_filter.drawer_open {
-            return self.handle_arcade_filter(
-                pressed,
-                released,
-                held,
-                tick_continuous,
-                frame_now,
-                catalog,
-                &collection_id,
-            );
+            return self.handle_arcade_filter(input, catalog, &collection_id);
         }
 
         if self.arcade_search.is_active(&self.arcade_filter.active) {
@@ -2780,14 +2788,17 @@ impl LauncherNav {
 
     fn handle_arcade_filter(
         &mut self,
-        pressed: &PadState,
-        released: &PadState,
-        held: &PadState,
-        tick_continuous: bool,
-        frame_now: Instant,
+        input: NavigationInput<'_>,
         catalog: &ArcadeCatalog,
         system_id: &str,
     ) -> Option<LauncherEvent> {
+        let NavigationInput {
+            pressed,
+            released,
+            held,
+            tick_continuous,
+            frame_now,
+        } = input;
         let items = self.arcade_filter_items(catalog, system_id);
         if self.arcade_filter.activation_release_required && (released.btn_a || released.dpad_right)
         {
