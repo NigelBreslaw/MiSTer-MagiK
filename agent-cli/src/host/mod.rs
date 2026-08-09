@@ -4255,7 +4255,7 @@ fn run_input_integrity_scenario(
 ) -> Result<Value> {
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "settings".into()),
         ("MISTER_INPUT_INTEGRITY_TRACE".into(), "1".into()),
     ];
     if let Some(stall_ms) = stall_ms {
@@ -4399,12 +4399,12 @@ fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result
     loop {
         let status = read_launcher_status(session)?;
         if status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
-            && status.get("return_screen").and_then(Value::as_str) == Some("arcade")
+            && status.get("return_screen").and_then(Value::as_str) == Some("settings")
         {
             return Ok(status);
         }
         if started.elapsed() >= timeout {
-            return Err("input integrity launcher did not become ready on Arcade".into());
+            return Err("input integrity launcher did not become ready on Settings".into());
         }
         thread::sleep(Duration::from_millis(20));
     }
