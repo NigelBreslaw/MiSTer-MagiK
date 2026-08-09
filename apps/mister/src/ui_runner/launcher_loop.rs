@@ -1865,6 +1865,7 @@ impl LauncherWakeReasons {
     const COMPOSITION_CLEARS_DIRECT_LAYERS: Self = Self(1 << 22);
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
     const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
+    const LATENCY_CRITICAL_INPUT: Self = Self(1 << 25);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -2075,8 +2076,10 @@ fn frame_production_class(
 fn latch_late_start_wait_enabled(
     latch_backend_active: bool,
     production_class: FrameProductionClass,
+    latency_critical_input: bool,
 ) -> bool {
-    !(latch_backend_active && production_class == FrameProductionClass::SynchronousAnimation)
+    !latency_critical_input
+        && !(latch_backend_active && production_class == FrameProductionClass::SynchronousAnimation)
 }
 
 fn retain_or_defer_screensaver_buffer(
@@ -3883,6 +3886,7 @@ pub(super) fn run_launcher_loop(
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
     let mut navigation_source_bridge_sync_pending = false;
+    let mut latency_critical_input_pending = false;
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
@@ -5018,10 +5022,9 @@ pub(super) fn run_launcher_loop(
         if screensaver.active {
             while let Some(event) = incoming_input_events.pop_front() {
                 let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
-                if matches!(
-                    input_router.route_event(event, focus, frame_now),
-                    InputOutcome::WakeScreensaver { .. }
-                ) {
+                let outcome = input_router.route_event(event, focus, frame_now);
+                if matches!(outcome, InputOutcome::WakeScreensaver { .. }) {
+                    latency_critical_input_pending = true;
                     screensaver_wake = true;
                     let _ = input_router.consume_remaining_batch(
                         incoming_input_events.drain(..),
@@ -5110,6 +5113,12 @@ pub(super) fn run_launcher_loop(
                         let outcome = input_router.route_event(event, focus, frame_now);
                         input_integrity_trace.record_outcome(outcome);
                         launcher_response_trace.record_route(event, outcome);
+                        latency_critical_input_pending |= matches!(
+                            outcome,
+                            InputOutcome::Dispatch { .. }
+                                | InputOutcome::TransitionControl { .. }
+                                | InputOutcome::WakeScreensaver { .. }
+                        );
                         match outcome {
                             InputOutcome::Dispatch { event, .. } => Some(event),
                             InputOutcome::Released { event, context, .. }
@@ -5138,6 +5147,7 @@ pub(super) fn run_launcher_loop(
                     {
                         input_integrity_trace.record_outcome(outcome);
                         launcher_response_trace.record_route(event, outcome);
+                        latency_critical_input_pending = true;
                         Some(event)
                     } else {
                         final_input_tick = true;
@@ -6772,6 +6782,10 @@ pub(super) fn run_launcher_loop(
             full_bridge_dirty || light_bridge_dirty,
         );
         wake_reasons.insert_if(
+            LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
+            latency_critical_input_pending,
+        );
+        wake_reasons.insert_if(
             LauncherWakeReasons::CATALOG_MESSAGES_ACTIVE,
             prepare_trace.catalog_message_count > 0
                 || prepare_trace.catalog_backlog > 0
@@ -6917,16 +6931,18 @@ pub(super) fn run_launcher_loop(
         } else {
             FB0_LATE_FRAME_START_HEADROOM_US
         };
-        let wait_before_render =
-            latch_late_start_wait_enabled(latch_backend_active, scheduled_frame_class)
-                && pacing_policy
-                    .decide(LauncherFramePacingInput {
-                        first_visible_copy_done: frame_accounting.first_visible_copy_done(),
-                        frame_start_phase_us,
-                        period_us: pacer.period_us(),
-                        late_frame_start_headroom_us,
-                    })
-                    .wait_before_render;
+        let wait_before_render = latch_late_start_wait_enabled(
+            latch_backend_active,
+            scheduled_frame_class,
+            latency_critical_input_pending,
+        ) && pacing_policy
+            .decide(LauncherFramePacingInput {
+                first_visible_copy_done: frame_accounting.first_visible_copy_done(),
+                frame_start_phase_us,
+                period_us: pacer.period_us(),
+                late_frame_start_headroom_us,
+            })
+            .wait_before_render;
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
@@ -8525,6 +8541,13 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
+        if if latch_backend_active {
+            accepted_and_active_confirmed
+        } else {
+            visible_frame_presented
+        } {
+            latency_critical_input_pending = false;
+        }
         frames += 1;
         if settings_navigation_benchmark.complete()
             && settings_navigation_benchmark_completed_at.is_none()
@@ -12430,6 +12453,7 @@ mod tests {
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,
+            LauncherWakeReasons::LATENCY_CRITICAL_INPUT,
         ] {
             assert!(
                 !LauncherRenderIntent {
@@ -12589,26 +12613,41 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn latch_late_start_wait_is_disabled_only_for_synchronous_animation() {
+    pub(super) fn latch_late_start_wait_is_disabled_for_interactive_frames_and_latch_animation() {
         assert!(latch_late_start_wait_enabled(
             false,
-            FrameProductionClass::EventDriven
+            FrameProductionClass::EventDriven,
+            false,
         ));
         assert!(latch_late_start_wait_enabled(
             false,
-            FrameProductionClass::SynchronousAnimation
+            FrameProductionClass::SynchronousAnimation,
+            false,
         ));
         assert!(latch_late_start_wait_enabled(
             true,
-            FrameProductionClass::EventDriven
+            FrameProductionClass::EventDriven,
+            false,
         ));
         assert!(latch_late_start_wait_enabled(
             true,
-            FrameProductionClass::Prepared
+            FrameProductionClass::Prepared,
+            false,
         ));
         assert!(!latch_late_start_wait_enabled(
             true,
-            FrameProductionClass::SynchronousAnimation
+            FrameProductionClass::SynchronousAnimation,
+            false,
+        ));
+        assert!(!latch_late_start_wait_enabled(
+            false,
+            FrameProductionClass::EventDriven,
+            true,
+        ));
+        assert!(!latch_late_start_wait_enabled(
+            true,
+            FrameProductionClass::Prepared,
+            true,
         ));
     }
 
