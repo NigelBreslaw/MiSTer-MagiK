@@ -2589,7 +2589,7 @@ impl LauncherNav {
     ) -> Option<LauncherEvent> {
         let NavigationInput {
             pressed,
-            released,
+            released: _,
             held,
             tick_continuous,
             frame_now,
