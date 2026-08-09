@@ -109,6 +109,8 @@ struct SystemShardRequest {
     priority: SystemShardPriority,
     reason: &'static str,
     requested_at: Instant,
+    base_catalog: ArcadeCatalog,
+    base_catalog_version: usize,
 }
 
 enum MediaJobState {
@@ -185,6 +187,8 @@ impl LauncherScheduler {
         system_id: String,
         priority: SystemShardPriority,
         reason: &'static str,
+        base_catalog: ArcadeCatalog,
+        base_catalog_version: usize,
         now: Instant,
     ) -> bool {
         if self.system_shard_generation.is_none() {
@@ -200,6 +204,8 @@ impl LauncherScheduler {
                     queued.priority = priority;
                     queued.reason = reason;
                     queued.requested_at = now;
+                    queued.base_catalog = base_catalog;
+                    queued.base_catalog_version = base_catalog_version;
                 }
             }
             return false;
@@ -210,6 +216,8 @@ impl LauncherScheduler {
             priority,
             reason,
             requested_at: now,
+            base_catalog,
+            base_catalog_version,
         });
         self.start_next_system_shard_load();
         true
@@ -229,6 +237,8 @@ impl LauncherScheduler {
         &mut self,
         system_id: String,
         reason: &'static str,
+        base_catalog: ArcadeCatalog,
+        base_catalog_version: usize,
         now: Instant,
     ) -> bool {
         if self.system_shard_loading(&system_id) {
@@ -237,16 +247,14 @@ impl LauncherScheduler {
         self.system_shard_attempted.remove(&system_id);
         self.system_shard_queue
             .retain(|request| request.system_id != system_id);
-        self.request_system_shard(system_id, SystemShardPriority::Urgent, reason, now)
-    }
-
-    pub(super) fn start_system_shard_load(&mut self, system_id: String) {
-        let _ = self.request_system_shard(
+        self.request_system_shard(
             system_id,
             SystemShardPriority::Urgent,
-            "selected-system",
-            Instant::now(),
-        );
+            reason,
+            base_catalog,
+            base_catalog_version,
+            now,
+        )
     }
 
     fn start_next_system_shard_load(&mut self) {
@@ -266,6 +274,8 @@ impl LauncherScheduler {
             .remove(index)
             .expect("queued shard request");
         let system_id = request.system_id;
+        let base_catalog = request.base_catalog;
+        let base_catalog_version = request.base_catalog_version;
         crate::ui_logln!(
             "catalog_system_prefetch_start system={} priority={:?} reason={} queue_wait_us={}",
             system_id,
@@ -308,10 +318,28 @@ impl LauncherScheduler {
                 });
                 let navigation_decode_us = load_started.elapsed().as_micros();
                 let message = match result {
-                    Ok(system) => CatalogWorkerMessage::SystemShardReady {
-                        system_id: worker_system_id.clone(),
-                        games: system.games().to_vec(),
-                    },
+                    Ok(system) => {
+                        let prepare_started = Instant::now();
+                        let games = system.games();
+                        let game_count = games.len();
+                        let (replacement, launch_plans) =
+                            arcade_rows_from_shard(&worker_system_id, games);
+                        let catalog = base_catalog.replacing_system_games(
+                            &worker_system_id,
+                            replacement,
+                            launch_plans,
+                        );
+                        CatalogWorkerMessage::SystemShardReady {
+                            system_id: worker_system_id.clone(),
+                            catalog,
+                            base_catalog_version,
+                            game_count,
+                            prepare_us: prepare_started
+                                .elapsed()
+                                .as_micros()
+                                .min(u64::MAX as u128) as u64,
+                        }
+                    }
                     Err(error) => CatalogWorkerMessage::SystemShardFailed {
                         system_id: worker_system_id.clone(),
                         error: error.to_string(),
@@ -618,11 +646,16 @@ impl LauncherScheduler {
                     now,
                 );
             }
-            CatalogWorkerMessage::SystemShardReady { system_id, games } => {
+            CatalogWorkerMessage::SystemShardReady {
+                system_id,
+                game_count,
+                prepare_us,
+                ..
+            } => {
                 self.note_catalog_progress(
                     "system-ready",
                     "publishing-systems",
-                    &format!("system={system_id} games={}", games.len()),
+                    &format!("system={system_id} games={game_count} prepare_us={prepare_us}"),
                     -1,
                     now,
                 );
@@ -978,12 +1011,16 @@ mod tests {
             "c64".to_string(),
             SystemShardPriority::Prefetch,
             "menu",
+            empty_arcade_catalog("/tmp"),
+            1,
             now
         ));
         assert!(!scheduler.request_system_shard(
             "c64".to_string(),
             SystemShardPriority::Urgent,
             "open",
+            empty_arcade_catalog("/tmp"),
+            2,
             now
         ));
 
@@ -994,6 +1031,7 @@ mod tests {
             SystemShardPriority::Urgent
         );
         assert_eq!(scheduler.system_shard_queue[0].reason, "open");
+        assert_eq!(scheduler.system_shard_queue[0].base_catalog_version, 2);
     }
 
     #[test]
@@ -1011,12 +1049,16 @@ mod tests {
             "acornatom".to_string(),
             SystemShardPriority::Prefetch,
             "menu",
+            empty_arcade_catalog("/tmp"),
+            1,
             now
         ));
         assert!(scheduler.request_system_shard(
             "c64".to_string(),
             SystemShardPriority::Urgent,
             "open",
+            empty_arcade_catalog("/tmp"),
+            1,
             now
         ));
 
@@ -1042,6 +1084,8 @@ mod tests {
             "c64".to_string(),
             SystemShardPriority::Prefetch,
             "menu",
+            empty_arcade_catalog("/tmp"),
+            1,
             Instant::now()
         ));
 
@@ -1063,7 +1107,13 @@ mod tests {
         };
         scheduler.system_shard_attempted.insert("c64".to_string());
 
-        assert!(scheduler.retry_system_shard("c64".to_string(), "explicit-retry", Instant::now()));
+        assert!(scheduler.retry_system_shard(
+            "c64".to_string(),
+            "explicit-retry",
+            empty_arcade_catalog("/tmp"),
+            1,
+            Instant::now()
+        ));
         assert_eq!(scheduler.system_shard_queue.len(), 1);
         assert_eq!(
             scheduler.system_shard_queue[0].priority,
@@ -1079,6 +1129,8 @@ mod tests {
             "c64".to_string(),
             SystemShardPriority::Urgent,
             "open",
+            empty_arcade_catalog("/tmp"),
+            1,
             Instant::now()
         ));
         assert!(scheduler.system_shard_queue.is_empty());
@@ -1130,7 +1182,13 @@ mod tests {
         scheduler.poll_catalog(&mut events);
 
         assert!(!scheduler.system_shard_loading("c64"));
-        assert!(scheduler.retry_system_shard("c64".to_string(), "explicit-retry", Instant::now()));
+        assert!(scheduler.retry_system_shard(
+            "c64".to_string(),
+            "explicit-retry",
+            empty_arcade_catalog("/tmp"),
+            1,
+            Instant::now()
+        ));
     }
 
     #[test]

@@ -2123,12 +2123,21 @@ fn initialize_catalog_generation(
 fn request_system_shard_hydration(
     scheduler: &mut LauncherScheduler,
     nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    catalog_version: usize,
     system_id: &str,
     priority: SystemShardPriority,
     reason: &'static str,
     now: Instant,
 ) -> bool {
-    if !scheduler.request_system_shard(system_id.to_string(), priority, reason, now) {
+    if !scheduler.request_system_shard(
+        system_id.to_string(),
+        priority,
+        reason,
+        catalog.clone(),
+        catalog_version,
+        now,
+    ) {
         return false;
     }
     nav.catalog_system_hydration_started(system_id);
@@ -2138,11 +2147,19 @@ fn request_system_shard_hydration(
 fn retry_system_shard_hydration(
     scheduler: &mut LauncherScheduler,
     nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    catalog_version: usize,
     system_id: &str,
     reason: &'static str,
     now: Instant,
 ) -> bool {
-    if !scheduler.retry_system_shard(system_id.to_string(), reason, now) {
+    if !scheduler.retry_system_shard(
+        system_id.to_string(),
+        reason,
+        catalog.clone(),
+        catalog_version,
+        now,
+    ) {
         return false;
     }
     nav.catalog_system_hydration_started(system_id);
@@ -2152,6 +2169,7 @@ fn retry_system_shard_hydration(
 fn request_pending_launch_return_shard(
     pending: Option<&launcher::LaunchReturnState>,
     catalog: &ArcadeCatalog,
+    catalog_version: usize,
     nav: &mut LauncherNav,
     scheduler: &mut LauncherScheduler,
     now: Instant,
@@ -2175,6 +2193,8 @@ fn request_pending_launch_return_shard(
     if !request_system_shard_hydration(
         scheduler,
         nav,
+        catalog,
+        catalog_version,
         system_id,
         SystemShardPriority::Urgent,
         "launch-return",
@@ -3360,6 +3380,7 @@ pub(super) fn run_launcher_loop(
         let _ = request_pending_launch_return_shard(
             launch_return_session.state(),
             &catalog,
+            catalog_version,
             &mut nav,
             &mut scheduler,
             Instant::now(),
@@ -4052,6 +4073,8 @@ pub(super) fn run_launcher_loop(
                 let _ = request_system_shard_hydration(
                     &mut scheduler,
                     &mut nav,
+                    &catalog,
+                    catalog_version,
                     &system_id,
                     priority,
                     if index == 0 {
@@ -5215,19 +5238,20 @@ pub(super) fn run_launcher_loop(
                                             let accepted = retry_system_shard_hydration(
                                                 &mut scheduler,
                                                 &mut nav,
+                                                &catalog,
+                                                catalog_version,
                                                 collection_id,
                                                 "explicit-retry",
                                                 requested_at,
                                             );
-                                            if accepted {
-                                                catalog_version = catalog_version.wrapping_add(1);
-                                                full_bridge_dirty = true;
-                                            }
+                                            full_bridge_dirty |= accepted;
                                             accepted
                                         } else {
                                             request_system_shard_hydration(
                                                 &mut scheduler,
                                                 &mut nav,
+                                                &catalog,
+                                                catalog_version,
                                                 collection_id,
                                                 SystemShardPriority::Urgent,
                                                 "open-collection",
@@ -9467,10 +9491,36 @@ fn apply_catalog_session_effects(
                 );
                 apply_lifecycle_effects(lifecycle_effects, scheduler, start);
             }
-            CatalogSessionEffect::ApplySystemShard { system_id, games } => {
+            CatalogSessionEffect::ApplySystemShard {
+                system_id,
+                catalog: prepared_catalog,
+                base_catalog_version,
+                game_count,
+                prepare_us,
+            } => {
+                if base_catalog_version != *catalog_version {
+                    let _ = retry_system_shard_hydration(
+                        scheduler,
+                        nav,
+                        catalog,
+                        *catalog_version,
+                        &system_id,
+                        "stale-prepared-catalog",
+                        now,
+                    );
+                    print_startup_event(
+                        start,
+                        "catalog_system_shard_stale",
+                        format!(
+                            "system={system_id} base_version={base_catalog_version} current_version={}",
+                            *catalog_version
+                        ),
+                    );
+                    continue;
+                }
+                let adoption_started = Instant::now();
                 nav.catalog_system_hydration_finished(&system_id);
-                let (replacement, launch_plans) = arcade_rows_from_shard(&system_id, &games);
-                *catalog = catalog.replacing_system_games(&system_id, replacement, launch_plans);
+                *catalog = prepared_catalog;
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 let return_restored =
@@ -9492,7 +9542,10 @@ fn apply_catalog_session_effects(
                 print_startup_event(
                     start,
                     "catalog_system_shard_ready",
-                    format!("system={system_id} games={}", games.len()),
+                    format!(
+                        "system={system_id} games={game_count} prepare_us={prepare_us} adoption_us={}",
+                        adoption_started.elapsed().as_micros()
+                    ),
                 );
             }
             CatalogSessionEffect::RequestLibraryRebuildOnNextBoot => {
@@ -10675,6 +10728,8 @@ mod tests {
             "c64".to_string(),
             SystemShardPriority::Urgent,
             "startup-regression-test",
+            empty_arcade_catalog("/tmp"),
+            1,
             Instant::now()
         ));
     }
@@ -10683,10 +10738,13 @@ mod tests {
     fn shard_request_state_changes_only_after_scheduler_acceptance() {
         let mut nav = LauncherNav::new();
         let mut scheduler = LauncherScheduler::new(false);
+        let catalog = empty_arcade_catalog("/tmp");
 
         assert!(!request_system_shard_hydration(
             &mut scheduler,
             &mut nav,
+            &catalog,
+            0,
             "c64",
             SystemShardPriority::Urgent,
             "rejected-without-generation",
@@ -10698,6 +10756,8 @@ mod tests {
         assert!(!retry_system_shard_hydration(
             &mut scheduler,
             &mut nav,
+            &catalog,
+            0,
             "c64",
             "rejected-retry-without-generation",
             Instant::now()
@@ -10708,6 +10768,8 @@ mod tests {
         assert!(retry_system_shard_hydration(
             &mut scheduler,
             &mut nav,
+            &catalog,
+            0,
             "c64",
             "accepted-retry",
             Instant::now()
@@ -10736,6 +10798,7 @@ mod tests {
         assert!(request_pending_launch_return_shard(
             Some(&state),
             &registry,
+            0,
             &mut restored_nav,
             &mut scheduler,
             now,
@@ -10746,6 +10809,8 @@ mod tests {
             "c64".to_string(),
             SystemShardPriority::Selected,
             "home-highlight",
+            registry.clone(),
+            0,
             now,
         ));
     }
@@ -10791,6 +10856,7 @@ mod tests {
         assert!(request_pending_launch_return_shard(
             Some(&state),
             &partial_catalog,
+            0,
             &mut restored_nav,
             &mut scheduler,
             now,

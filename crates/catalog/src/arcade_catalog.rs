@@ -109,14 +109,14 @@ pub struct ArcadeCatalog {
     pub games: Arc<Vec<ArcadeGameEntry>>,
     pub systems: Vec<GameSystemEntry>,
     platform_kinds: Arc<HashMap<String, PlatformKind>>,
-    games_by_system: HashMap<String, Vec<usize>>,
-    games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
-    filter_options_by_system: HashMap<String, ArcadeSystemFilterOptions>,
-    preview_games_by_system: HashMap<String, Vec<usize>>,
-    launch_plans_by_ref: HashMap<Arc<str>, StructuredLaunchPlan>,
-    projection_stats_by_system: HashMap<String, SystemProjectionStats>,
-    search_keys: Vec<ArcadeSearchKey>,
-    autocomplete: ArcadeAutocompleteIndex,
+    games_by_system: Arc<HashMap<String, Vec<usize>>>,
+    games_by_filter: Arc<HashMap<ArcadeFilterKey, Vec<usize>>>,
+    filter_options_by_system: Arc<HashMap<String, ArcadeSystemFilterOptions>>,
+    preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
+    launch_plans_by_ref: Arc<HashMap<Arc<str>, StructuredLaunchPlan>>,
+    projection_stats_by_system: Arc<HashMap<String, SystemProjectionStats>>,
+    search_keys: Arc<Vec<ArcadeSearchKey>>,
+    autocomplete: Arc<ArcadeAutocompleteIndex>,
     lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
 }
 
@@ -404,14 +404,14 @@ impl ArcadeCatalog {
             games: Arc::new(games),
             systems,
             platform_kinds,
-            games_by_system: indexes.games_by_system,
-            games_by_filter: indexes.games_by_filter,
-            filter_options_by_system: indexes.filter_options_by_system,
-            preview_games_by_system: indexes.preview_games_by_system,
-            launch_plans_by_ref: indexes.launch_plans_by_ref,
-            projection_stats_by_system: HashMap::new(),
-            search_keys: indexes.search_keys,
-            autocomplete: indexes.autocomplete,
+            games_by_system: Arc::new(indexes.games_by_system),
+            games_by_filter: Arc::new(indexes.games_by_filter),
+            filter_options_by_system: Arc::new(indexes.filter_options_by_system),
+            preview_games_by_system: Arc::new(indexes.preview_games_by_system),
+            launch_plans_by_ref: Arc::new(indexes.launch_plans_by_ref),
+            projection_stats_by_system: Arc::new(HashMap::new()),
+            search_keys: Arc::new(indexes.search_keys),
+            autocomplete: Arc::new(indexes.autocomplete),
             lazy_text_indexes: Arc::new(OnceLock::new()),
         }
     }
@@ -475,7 +475,7 @@ impl ArcadeCatalog {
         mut self,
         stats: HashMap<String, SystemProjectionStats>,
     ) -> Self {
-        self.projection_stats_by_system.extend(stats);
+        Arc::make_mut(&mut self.projection_stats_by_system).extend(stats);
         self
     }
 
@@ -636,21 +636,20 @@ impl ArcadeCatalog {
         if self.systems.iter().any(|system| system.id == system_id) {
             return self.clone();
         }
-        let mut systems = self.systems.clone();
-        systems.push(GameSystemEntry {
+        let mut catalog = self.clone();
+        catalog.systems.push(GameSystemEntry {
             id: system_id.to_string(),
             title: crate::catalog_classify::system_definition(system_id)
                 .map(|definition| definition.title.clone())
                 .unwrap_or_else(|| system_id.to_ascii_uppercase()),
             count: 0,
         });
-        Self::new_with_deferred_text_indexes_and_platform_kinds(
-            self.root.clone(),
-            self.games.iter().cloned().collect(),
-            systems,
-            self.launch_plans_by_ref.values().cloned().collect(),
-            self.platform_kinds.as_ref().clone(),
-        )
+        sort_systems_by_title(&mut catalog.systems);
+        Arc::make_mut(&mut catalog.platform_kinds).insert(
+            system_id.to_string(),
+            crate::catalog_classify::platform_kind_for_system(system_id),
+        );
+        catalog
     }
 
     /// Removes zero-game system shells after an authoritative catalog replaces
@@ -670,8 +669,7 @@ impl ArcadeCatalog {
             .collect::<HashSet<_>>();
         Arc::make_mut(&mut catalog.platform_kinds)
             .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
-        catalog
-            .projection_stats_by_system
+        Arc::make_mut(&mut catalog.projection_stats_by_system)
             .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
         catalog
     }
@@ -2159,6 +2157,30 @@ mod tests {
                 .projection_stats_by_system
                 .contains_key("apple-iigs")
         );
+    }
+
+    #[test]
+    fn adding_a_placeholder_shares_existing_catalog_indexes() {
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/fixture"),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let with_placeholder = catalog.with_system_placeholder("snes");
+
+        assert!(Arc::ptr_eq(&catalog.games, &with_placeholder.games));
+        assert!(Arc::ptr_eq(
+            &catalog.games_by_system,
+            &with_placeholder.games_by_system
+        ));
+        assert!(Arc::ptr_eq(
+            &catalog.games_by_filter,
+            &with_placeholder.games_by_filter
+        ));
+        assert_eq!(with_placeholder.systems.len(), 1);
+        assert_eq!(with_placeholder.systems[0].id, "snes");
     }
 
     #[cfg(feature = "builder")]

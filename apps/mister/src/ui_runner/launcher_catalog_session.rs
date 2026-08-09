@@ -96,7 +96,10 @@ pub(super) enum CatalogSessionEffect {
     },
     ApplySystemShard {
         system_id: String,
-        games: Vec<mister_magik_catalog::sharded_catalog::CatalogGame>,
+        catalog: ArcadeCatalog,
+        base_catalog_version: usize,
+        game_count: usize,
+        prepare_us: u64,
     },
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
@@ -365,9 +368,19 @@ impl LauncherCatalogSession {
                     removed,
                 });
             }
-            CatalogWorkerMessage::SystemShardReady { system_id, games } => {
-                effects.push(CatalogSessionEffect::ApplySystemShard { system_id, games });
-            }
+            CatalogWorkerMessage::SystemShardReady {
+                system_id,
+                catalog,
+                base_catalog_version,
+                game_count,
+                prepare_us,
+            } => effects.push(CatalogSessionEffect::ApplySystemShard {
+                system_id,
+                catalog,
+                base_catalog_version,
+                game_count,
+                prepare_us,
+            }),
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
                 effects.push(CatalogSessionEffect::CatalogSystemHydrationFailed {
                     system_id: system_id.clone(),
@@ -1164,7 +1177,10 @@ mod tests {
             context(),
             CatalogWorkerMessage::SystemShardReady {
                 system_id: "snes".to_string(),
-                games: Vec::new(),
+                catalog: empty_arcade_catalog("/tmp"),
+                base_catalog_version: 7,
+                game_count: 0,
+                prepare_us: 42,
             },
             now,
         );

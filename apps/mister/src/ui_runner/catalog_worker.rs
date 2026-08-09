@@ -1379,7 +1379,10 @@ pub(super) enum CatalogWorkerMessage {
     },
     SystemShardReady {
         system_id: String,
-        games: Vec<mister_magik_catalog::sharded_catalog::CatalogGame>,
+        catalog: ArcadeCatalog,
+        base_catalog_version: usize,
+        game_count: usize,
+        prepare_us: u64,
     },
     SystemShardFailed {
         system_id: String,
