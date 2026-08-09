@@ -4348,7 +4348,18 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
                 .unwrap_or(u64::MAX)
                 > 16_667)
     {
-        return Err("input integrity trace summary failed".into());
+        return Err(format!(
+            "input integrity trace summary failed: schema={} presses={} releases={} repeats={} replays={} final_down_held={} queue_high_water={} dispatch_p99_us={} latency_gate={enforce_latency}",
+            trace["schema"].as_str().unwrap_or("missing"),
+            trace["initial_presses"].as_u64().unwrap_or(0),
+            trace["releases"].as_u64().unwrap_or(0),
+            trace["repeats"].as_u64().unwrap_or(0),
+            trace["transition_replays"].as_u64().unwrap_or(0),
+            trace["final_down_held"].as_bool().unwrap_or(false),
+            trace["queue_high_water"].as_u64().unwrap_or(0),
+            trace["dispatch_p99_us"].as_u64().unwrap_or(0),
+        )
+        .into());
     }
     let physical: Vec<&Value> = trace["records"]
         .as_array()
