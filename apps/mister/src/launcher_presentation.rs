@@ -37,8 +37,6 @@ macro_rules! set_string_if_changed {
 pub struct LauncherBridgePresenter {
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
-    menu_items_selected: Option<usize>,
-    menu_items_transition_previous: Option<usize>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
 }
@@ -188,11 +186,7 @@ impl LauncherBridgePresenter {
             let key = (catalog_version, nav.current_menu_id().to_string());
             if self.menu_items_key.as_ref() != Some(&key) {
                 bridge.set_menu_items(self.menu_items(nav, catalog_version));
-            } else {
-                self.sync_menu_item_focus(nav.selected);
             }
-        } else {
-            self.sync_menu_item_focus(nav.selected);
         }
 
         let games = active_game_view(catalog, nav);
@@ -237,11 +231,6 @@ impl LauncherBridgePresenter {
         if self.menu_items_key.as_ref() != Some(&key) {
             self.menu_items = Some(build_menu_items(nav));
             self.menu_items_key = Some(key);
-            self.menu_items_selected =
-                (nav.selected < nav.current_menu_count()).then_some(nav.selected);
-            self.menu_items_transition_previous = None;
-        } else {
-            self.sync_menu_item_focus(nav.selected);
         }
         ModelRc::from(
             self.menu_items
@@ -267,45 +256,6 @@ impl LauncherBridgePresenter {
                 .clone(),
         )
     }
-
-    pub fn license_lines_index(&self) -> Option<usize> {
-        self.license_lines_index
-    }
-
-    pub fn sync_menu_item_focus(&mut self, selected: usize) {
-        let Some(model) = self.menu_items.as_ref() else {
-            return;
-        };
-        let selected = (selected < model.row_count()).then_some(selected);
-        if self.menu_items_selected == selected {
-            return;
-        }
-        let previous = self.menu_items_selected;
-        let update_row = |index: usize, focused: bool, focus_transition_enabled: bool| {
-            if let Some(mut row) = model.row_data(index)
-                && (row.focused != focused
-                    || row.focus_transition_enabled != focus_transition_enabled)
-            {
-                row.focused = focused;
-                row.focus_transition_enabled = focus_transition_enabled;
-                model.set_row_data(index, row);
-            }
-        };
-        if let Some(stale) = self.menu_items_transition_previous
-            && Some(stale) != previous
-            && Some(stale) != selected
-        {
-            update_row(stale, false, false);
-        }
-        if let Some(previous) = previous {
-            update_row(previous, false, true);
-        }
-        if let Some(current) = selected {
-            update_row(current, true, true);
-        }
-        self.menu_items_transition_previous = previous;
-        self.menu_items_selected = selected;
-    }
 }
 
 pub fn screen_mode(screen: Screen) -> i32 {
@@ -326,8 +276,7 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
     let rows = nav
         .current_menu_items()
         .iter()
-        .enumerate()
-        .map(|(index, item)| {
+        .map(|item| {
             let presentation = nav.menu_item_catalog_presentation(item);
             MenuItem {
                 id: item.id.clone().into(),
@@ -358,8 +307,6 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                     CatalogMenuItemStatus::LoadFailed => "Load failed — A to retry".into(),
                     CatalogMenuItemStatus::Ready => format!("{} games", item.count).into(),
                 },
-                focused: index == nav.selected,
-                focus_transition_enabled: false,
                 available: presentation.available,
                 node_kind: match item.kind {
                     LauncherMenuItemKind::Menu => MenuItemKind::Group,

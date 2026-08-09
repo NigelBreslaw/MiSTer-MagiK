@@ -124,9 +124,7 @@ export component HomeGrid inherits Rectangle {
                         subtitle: MisterBridge.menu-items[menu-index].subtitle;
                         status: MisterBridge.menu-items[menu-index].status;
                         focused: !MisterBridge.settings-focused
-                            && MisterBridge.menu-items[menu-index].focused;
-                        focus-transition-enabled:
-                            MisterBridge.menu-items[menu-index].focus-transition-enabled;
+                            && menu-index == MisterBridge.selected-index;
                         flat-focus-style: true;
                     }
                 }
@@ -196,8 +194,7 @@ export component HomeGrid inherits Rectangle {
                 label: item.label;
                 subtitle: item.subtitle;
                 status: item.status;
-                focused: item.focused;
-                focus-transition-enabled: item.focus-transition-enabled;
+                focused: index == MisterBridge.selected-index;
                 flat-focus-style: true;
             }
         }

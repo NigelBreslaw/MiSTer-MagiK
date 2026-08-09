@@ -70,8 +70,6 @@ export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
     in property <bool> focused;
-    // Model-backed tiles disable this until they participate in a focus move.
-    in property <bool> focus-transition-enabled: true;
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 

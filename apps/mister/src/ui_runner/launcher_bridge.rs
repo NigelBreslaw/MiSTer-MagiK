@@ -771,7 +771,7 @@ pub(super) fn sync_bridge_launcher(
     setup: &SetupNav,
     loading_message: &str,
     loading_detail: &str,
-    catalog: Option<&ArcadeCatalog>,
+    catalog: &ArcadeCatalog,
     preview: &mut PreviewState,
     models: &mut LauncherBridgeModels,
     catalog_version: usize,
@@ -779,77 +779,26 @@ pub(super) fn sync_bridge_launcher(
     ui: &UiDisplay,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    if let Some(catalog) = catalog {
-        models.sync(
-            app,
-            nav,
-            catalog,
-            Some(catalog_version),
-            defer_selected_preview,
-        );
-    }
+    models.sync(
+        app,
+        nav,
+        catalog,
+        Some(catalog_version),
+        defer_selected_preview,
+    );
     bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
-    bridge.set_screen_mode(match nav.screen {
-        Screen::Home => 0,
-        Screen::SystemHub => 8,
-        Screen::Controller => 1,
-        Screen::Arcade => 2,
-        Screen::Settings => 3,
-        Screen::About => 4,
-        Screen::Licenses => 5,
-        Screen::Info => 6,
-        Screen::Screensaver => 7,
-    });
     bridge.set_clock_text(launcher_clock_text().into());
-    bridge.set_selected_index(nav.selected as i32);
     bridge.set_system_hub_selected(nav.system_hub_selected as i32);
-    bridge.set_home_scroll_held(nav.home_horizontal_held());
-    bridge.set_home_scroll_repeat_active(nav.home_horizontal_repeat_active());
-    bridge.set_home_scroll_x(nav.scroll_x);
-    bridge.set_menu_title(nav.current_menu_title().into());
-    bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
-    bridge.set_settings_focused(nav.settings_focused);
-    bridge.set_settings_selected(nav.settings_selected as i32);
-    bridge.set_about_selected(nav.about_selected as i32);
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)
         .map_or("Custom/current mode", |mode| mode.label);
     bridge.set_display_active_label(active_label.into());
-    bridge.set_display_combo_open(nav.display_combo_open);
-    bridge.set_display_selected(nav.display_selected as i32);
-    bridge.set_display_highlighted(nav.display_highlighted as i32);
-    bridge.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
-    bridge.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
-    bridge.set_reduce_motion(nav.settings.reduce_motion);
-    bridge.set_screensaver_settings_selected(nav.screensaver_selected as i32);
-    bridge.set_screensaver_enabled(nav.settings.screensaver_enabled);
-    bridge.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
-    bridge.set_licenses_selected(nav.licenses_selected as i32);
-    bridge.set_licenses_expanded(nav.licenses_expanded);
-    bridge.set_licenses_scroll_y(nav.licenses_scroll_y());
-    bridge.set_license_lines(models.license_lines(nav.licenses_selected));
     sync_arcade_list_geometry_bridge(&bridge, nav, ui);
-    if !(defer_selected_preview && nav.screen == Screen::Arcade) {
-        bridge.set_arcade_selected(nav.arcade.selected as i32);
-        bridge.set_arcade_scroll_y(nav.arcade.scroll_y);
-    }
-    let mut active_games_for_preview: Option<ArcadeGameView<'_>> = None;
-    let mut active_games_loading = false;
-    if let Some(catalog) = catalog {
-        let games = active_system_game_view(catalog, nav);
-        let header = active_system_header(catalog, nav, games.len());
-        active_games_loading = active_system_games_loading(catalog, nav);
-        bridge.set_menu_items(models.menu_items(nav, catalog_version));
-        bridge.set_active_system_title(header.title.into());
-        bridge.set_active_system_count(header.count as i32);
-        bridge.set_system_hub_games_count(catalog.system_game_count("snes") as i32);
-        bridge.set_system_hub_recent_count(nav.recent_count() as i32);
-        bridge.set_system_hub_favourites_count(nav.favourite_count() as i32);
-        active_games_for_preview = Some(games);
-    }
-    bridge.set_arcade_games_loading(active_games_loading);
-    sync_arcade_search_bridge(&bridge, nav);
+    bridge.set_system_hub_games_count(catalog.system_game_count("snes") as i32);
+    bridge.set_system_hub_recent_count(nav.recent_count() as i32);
+    bridge.set_system_hub_favourites_count(nav.favourite_count() as i32);
+    let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade
@@ -857,9 +806,7 @@ pub(super) fn sync_bridge_launcher(
         && !active_games_loading
         && !nav.arcade_search.is_active(&nav.arcade_filter.active)
     {
-        let games = active_games_for_preview
-            .or_else(|| catalog.map(|catalog| active_system_game_view(catalog, nav)))
-            .unwrap_or_else(ArcadeGameView::empty);
+        let games = active_system_game_view(catalog, nav);
         let _ = request_arcade_preview_window(
             &bridge,
             games,
@@ -889,48 +836,8 @@ pub(super) fn sync_bridge_launcher_light(
     ui: &UiDisplay,
 ) {
     models.sync(app, nav, catalog, None, defer_arcade_overlay_bridge);
-    models.sync_menu_item_focus(nav.selected);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
-    let active_games_len = active_arcade_games.as_ref().map_or_else(
-        || active_system_game_view(catalog, nav).len(),
-        |games| games.len(),
-    );
-    let header = active_system_header(catalog, nav, active_games_len);
-    set_bridge_string_if_changed!(
-        bridge,
-        get_active_system_title,
-        set_active_system_title,
-        header.title
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_active_system_count,
-        set_active_system_count,
-        header.count as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screen_mode,
-        set_screen_mode,
-        match nav.screen {
-            Screen::Home => 0,
-            Screen::SystemHub => 8,
-            Screen::Controller => 1,
-            Screen::Arcade => 2,
-            Screen::Settings => 3,
-            Screen::About => 4,
-            Screen::Licenses => 5,
-            Screen::Info => 6,
-            Screen::Screensaver => 7,
-        }
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_selected_index,
-        set_selected_index,
-        nav.selected as i32
-    );
     set_bridge_if_changed!(
         bridge,
         get_system_hub_selected,
@@ -955,122 +862,7 @@ pub(super) fn sync_bridge_launcher_light(
         set_system_hub_favourites_count,
         nav.favourite_count() as i32
     );
-    set_bridge_if_changed!(
-        bridge,
-        get_home_scroll_held,
-        set_home_scroll_held,
-        nav.home_horizontal_held()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_home_scroll_repeat_active,
-        set_home_scroll_repeat_active,
-        nav.home_horizontal_repeat_active()
-    );
-    set_bridge_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
-    set_bridge_string_if_changed!(
-        bridge,
-        get_menu_title,
-        set_menu_title,
-        nav.current_menu_title()
-    );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_menu_breadcrumb,
-        set_menu_breadcrumb,
-        nav.current_menu_breadcrumb()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_settings_focused,
-        set_settings_focused,
-        nav.settings_focused
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_settings_selected,
-        set_settings_selected,
-        nav.settings_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_about_selected,
-        set_about_selected,
-        nav.about_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_simple_joystick_handling,
-        set_simple_joystick_handling,
-        nav.settings.simple_joystick_handling
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_reduce_motion,
-        set_reduce_motion,
-        nav.settings.reduce_motion
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_settings_selected,
-        set_screensaver_settings_selected,
-        nav.screensaver_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_enabled,
-        set_screensaver_enabled,
-        nav.settings.screensaver_enabled
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_delay_minutes,
-        set_screensaver_delay_minutes,
-        nav.settings.screensaver_delay_minutes as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_licenses_selected,
-        set_licenses_selected,
-        nav.licenses_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_licenses_expanded,
-        set_licenses_expanded,
-        nav.licenses_expanded
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_licenses_scroll_y,
-        set_licenses_scroll_y,
-        nav.licenses_scroll_y()
-    );
-    if models.license_lines_index() != Some(nav.licenses_selected) {
-        bridge.set_license_lines(models.license_lines(nav.licenses_selected));
-    }
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, ui);
-    if !(defer_arcade_overlay_bridge && nav.screen == Screen::Arcade) {
-        set_bridge_if_changed!(
-            bridge,
-            get_arcade_selected,
-            set_arcade_selected,
-            nav.arcade.selected as i32
-        );
-        set_bridge_if_changed!(
-            bridge,
-            get_arcade_scroll_y,
-            set_arcade_scroll_y,
-            nav.arcade.scroll_y
-        );
-    }
-    set_bridge_if_changed!(
-        bridge,
-        get_arcade_games_loading,
-        set_arcade_games_loading,
-        active_games_loading
-    );
-    sync_arcade_search_bridge_if_changed(&bridge, nav);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
     status_presenter.sync_loading(loading_message, loading_detail);
@@ -1127,67 +919,6 @@ pub(super) fn active_system_game_view<'a>(
     active_system(catalog, nav)
         .map(|system| nav.active_arcade_game_view(catalog, &system.id))
         .unwrap_or_else(ArcadeGameView::empty)
-}
-
-struct ActiveSystemHeader {
-    title: String,
-    count: usize,
-}
-
-fn active_system_header(
-    catalog: &ArcadeCatalog,
-    nav: &LauncherNav,
-    fallback_count: usize,
-) -> ActiveSystemHeader {
-    let Some(system) = active_system(catalog, nav) else {
-        return ActiveSystemHeader {
-            title: "Games".to_string(),
-            count: fallback_count,
-        };
-    };
-    let base_title = match nav.arcade_user_list_mode() {
-        crate::launcher::ArcadeUserListMode::Games => system.title.clone(),
-        crate::launcher::ArcadeUserListMode::Recent => format!("{} - Recent", system.title),
-        crate::launcher::ArcadeUserListMode::Favourites => {
-            format!("{} - Favorites", system.title)
-        }
-    };
-    let filter_label = nav.arcade_filter.active_label();
-    let title = if filter_label == "Games A-Z" {
-        base_title
-    } else {
-        format!("{base_title} - {filter_label}")
-    };
-    let hydrated_count = nav.active_arcade_game_count(catalog, &system.id);
-    ActiveSystemHeader {
-        title,
-        count: if hydrated_count == 0 && system.count > 0 {
-            system.count
-        } else {
-            hydrated_count
-        },
-    }
-}
-
-fn sync_arcade_search_bridge(bridge: &slint_ui::launcher::MisterBridge, nav: &LauncherNav) {
-    bridge.set_arcade_search_active(nav.arcade_search.is_active(&nav.arcade_filter.active));
-    bridge.set_arcade_search_query(nav.arcade_search.query.clone().into());
-    bridge.set_arcade_search_suggestion(nav.arcade_search.suggestion.clone().into());
-    bridge.set_arcade_search_status(arcade_search_status_value(nav.arcade_search.status));
-    bridge.set_arcade_search_key_selected(nav.arcade_search.selected_key as i32);
-    bridge.set_arcade_search_pane(match nav.arcade_search.pane {
-        launcher::ArcadeSearchPane::Keyboard => 0,
-        launcher::ArcadeSearchPane::Results => 1,
-    });
-}
-
-fn arcade_search_status_value(status: launcher::ArcadeSearchStatus) -> i32 {
-    match status {
-        launcher::ArcadeSearchStatus::Idle => 0,
-        launcher::ArcadeSearchStatus::Searching => 1,
-        launcher::ArcadeSearchStatus::Ready => 2,
-        launcher::ArcadeSearchStatus::Failed => 3,
-    }
 }
 
 fn sync_arcade_list_geometry_bridge_if_changed(
@@ -1252,51 +983,6 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         get_arcade_preview_box_height,
         set_arcade_preview_box_height,
         preview.rows() as i32
-    );
-}
-
-fn sync_arcade_search_bridge_if_changed(
-    bridge: &slint_ui::launcher::MisterBridge,
-    nav: &LauncherNav,
-) {
-    set_bridge_if_changed!(
-        bridge,
-        get_arcade_search_active,
-        set_arcade_search_active,
-        nav.arcade_search.is_active(&nav.arcade_filter.active)
-    );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_arcade_search_query,
-        set_arcade_search_query,
-        nav.arcade_search.query.clone()
-    );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_arcade_search_suggestion,
-        set_arcade_search_suggestion,
-        nav.arcade_search.suggestion.clone()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_arcade_search_status,
-        set_arcade_search_status,
-        arcade_search_status_value(nav.arcade_search.status)
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_arcade_search_key_selected,
-        set_arcade_search_key_selected,
-        nav.arcade_search.selected_key as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_arcade_search_pane,
-        set_arcade_search_pane,
-        match nav.arcade_search.pane {
-            launcher::ArcadeSearchPane::Keyboard => 0,
-            launcher::ArcadeSearchPane::Results => 1,
-        }
     );
 }
 
@@ -1420,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_only_system_header_keeps_known_game_count_while_rows_load() {
+    fn summary_only_system_reports_loading_while_rows_hydrate() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             Vec::new(),
@@ -1434,7 +1120,6 @@ mod tests {
         assert!(nav.open_system(&catalog, "pet2001"));
 
         assert!(active_system_games_loading(&catalog, &nav));
-        assert_eq!(active_system_header(&catalog, &nav, 0).count, 15);
     }
 
     #[test]
@@ -1462,7 +1147,7 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             1
         );
-        assert_eq!(active_system_header(&catalog, &nav, 0).count, 1);
+        assert_eq!(active_system_game_view(&catalog, &nav).len(), 1);
         assert!(!active_system_games_loading(&catalog, &nav));
     }
 
@@ -1602,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_item_focus_updates_rows_without_replacing_the_model() {
+    fn menu_item_selection_does_not_mutate_model_rows() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             Vec::new(),
@@ -1635,71 +1320,17 @@ mod tests {
         let rows = models.menu_items(&nav, 1);
 
         assert_eq!(rows.row_count(), 3);
-        assert!(rows.row_data(0).expect("first row").focused);
-        assert!(!rows.row_data(1).expect("second row").focused);
-        assert!((0..rows.row_count()).all(|index| {
-            !rows
-                .row_data(index)
-                .expect("initial launcher row")
-                .focus_transition_enabled
-        }));
+        let before = (0..rows.row_count())
+            .map(|index| rows.row_data(index).expect("initial launcher row"))
+            .collect::<Vec<_>>();
 
         nav.selected = 1;
         let updated_rows = models.menu_items(&nav, 1);
 
-        let first = rows.row_data(0).expect("first row");
-        let second = rows.row_data(1).expect("second row");
-        assert!(!first.focused);
-        assert!(first.focus_transition_enabled);
-        assert!(second.focused);
-        assert!(second.focus_transition_enabled);
-        assert!((2..rows.row_count()).all(|index| {
-            !rows
-                .row_data(index)
-                .expect("untouched launcher row")
-                .focus_transition_enabled
-        }));
-        assert!(
-            updated_rows
-                .row_data(1)
-                .expect("updated second row")
-                .focused
-        );
-
-        nav.selected = 2;
-        let moved_again = models.menu_items(&nav, 1);
-        assert!(
-            !moved_again
-                .row_data(0)
-                .expect("settled first row")
-                .focus_transition_enabled
-        );
-        assert!(
-            moved_again
-                .row_data(1)
-                .expect("previous second row")
-                .focus_transition_enabled
-        );
-        assert!(
-            moved_again
-                .row_data(2)
-                .expect("current third row")
-                .focus_transition_enabled
-        );
-
-        let rebuilt_rows = models.menu_items(&nav, 2);
-        assert!(
-            rebuilt_rows
-                .row_data(2)
-                .expect("selected rebuilt row")
-                .focused
-        );
-        assert!((0..rebuilt_rows.row_count()).all(|index| {
-            !rebuilt_rows
-                .row_data(index)
-                .expect("rebuilt launcher row")
-                .focus_transition_enabled
-        }));
+        let after = (0..updated_rows.row_count())
+            .map(|index| updated_rows.row_data(index).expect("retained launcher row"))
+            .collect::<Vec<_>>();
+        assert_eq!(before, after);
     }
 
     #[test]
@@ -1735,12 +1366,6 @@ mod tests {
 
         assert_ne!(root_rows.row_count(), computer_rows.row_count());
         assert_eq!(computer_rows.row_count(), 1);
-        assert!(
-            !computer_rows
-                .row_data(0)
-                .expect("flattened computer collection")
-                .focus_transition_enabled
-        );
         assert_eq!(
             computer_rows
                 .row_data(0)
@@ -1787,9 +1412,6 @@ mod tests {
         for index in 0..rows.row_count() {
             let row = rows.row_data(index).expect("Nintendo launcher row");
             assert_eq!(row.status, slint_ui::launcher::MenuItemStatus::Ready);
-            if !row.focused {
-                assert!(!row.focus_transition_enabled);
-            }
         }
 
         nav.catalog_system_hydration_failed("snes");
@@ -1942,7 +1564,7 @@ mod tests {
                     &setup,
                     "",
                     "",
-                    Some(&catalog),
+                    &catalog,
                     &mut preview,
                     &mut models,
                     catalog_version,

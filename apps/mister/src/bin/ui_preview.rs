@@ -756,12 +756,6 @@ mod macos {
                     .collect::<Vec<_>>();
                 apply_arcade_fixture_bridge(&self.launcher, "Arcade", &games, self.selection);
             }
-            if matches!(
-                self.scenario,
-                Scenario::Home | Scenario::BackgroundScan | Scenario::Confirm
-            ) {
-                bridge.set_menu_items(home_menu_items(self.selection));
-            }
             self.slint_window.request_redraw();
         }
 
@@ -3052,7 +3046,7 @@ mod macos {
         bridge.set_menu_title("MiSTer MagiK".into());
         bridge.set_menu_breadcrumb("Systems".into());
         if !scenario.uses_launcher_navigation() {
-            bridge.set_menu_items(home_menu_items(0));
+            bridge.set_menu_items(home_menu_items());
         }
         bridge.set_selected_index(0);
         bridge.set_settings_focused(false);
@@ -3150,7 +3144,7 @@ mod macos {
         bridge.set_arcade_preview_placeholder_visible(true);
     }
 
-    fn home_menu_items(selected: usize) -> ModelRc<MenuItem> {
+    fn home_menu_items() -> ModelRc<MenuItem> {
         let definitions = [
             ("ready", "Ready", "2,184 games", MenuItemStatus::Ready, true),
             (
@@ -3192,19 +3186,14 @@ mod macos {
         ModelRc::new(VecModel::from(
             definitions
                 .into_iter()
-                .enumerate()
-                .map(
-                    |(index, (id, label, subtitle, status, available))| MenuItem {
-                        id: id.into(),
-                        label: label.into(),
-                        subtitle: subtitle.into(),
-                        focused: index == selected,
-                        focus_transition_enabled: false,
-                        available,
-                        node_kind: MenuItemKind::Collection,
-                        status,
-                    },
-                )
+                .map(|(id, label, subtitle, status, available)| MenuItem {
+                    id: id.into(),
+                    label: label.into(),
+                    subtitle: subtitle.into(),
+                    available,
+                    node_kind: MenuItemKind::Collection,
+                    status,
+                })
                 .collect::<Vec<_>>(),
         ))
     }
