@@ -634,6 +634,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| verify_installed_input_integrity(config, output_dir))
     }
 
+    pub(crate) fn verify_launcher_response(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| verify_installed_launcher_response(config, output_dir))
+    }
+
     pub(crate) fn profile_launch_return(
         &mut self,
         output_dir: &Path,
@@ -4163,6 +4170,7 @@ const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const INPUT_INTEGRITY_DRIVER: &str =
     "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
 const INPUT_INTEGRITY_TRACE_REMOTE: &str = "/tmp/mister-magik/input-integrity-trace.json";
+const LAUNCHER_RESPONSE_TRACE_REMOTE: &str = "/tmp/mister-magik/launcher-response-trace.json";
 const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
@@ -4247,6 +4255,336 @@ fn verify_installed_input_integrity(
         },
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn verify_installed_launcher_response(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let main: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(2) {
+        return Err("launcher response requires Main proxy protocol v2".into());
+    }
+    let idle = run_launcher_response_scenario(&session, "idle", "off")?;
+    let catalog = run_launcher_response_scenario(&session, "catalog", "force")?;
+    let scenarios = [&idle, &catalog];
+    let mut latencies = scenarios
+        .iter()
+        .flat_map(|scenario| {
+            scenario["confirmed_latencies_us"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    latencies.sort_unstable();
+    let mut transition_durations = scenarios
+        .iter()
+        .flat_map(|scenario| {
+            scenario["transition_durations_us"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    transition_durations.sort_unstable();
+    let p99_index = latencies.len().saturating_sub(1) * 99 / 100;
+    let confirmed_p99_us = latencies.get(p99_index).copied().unwrap_or(u64::MAX);
+    let confirmed_max_us = latencies.last().copied().unwrap_or(u64::MAX);
+    let transition_duration_min_us = transition_durations.first().copied().unwrap_or(0);
+    let transition_duration_max_us = transition_durations.last().copied().unwrap_or(u64::MAX);
+    let sum = |field: &str| {
+        scenarios
+            .iter()
+            .map(|scenario| scenario[field].as_u64().unwrap_or(u64::MAX))
+            .fold(0_u64, u64::saturating_add)
+    };
+    let catalog_adoption_max_us = catalog["catalog_adoption_max_us"]
+        .as_u64()
+        .unwrap_or(u64::MAX);
+    let passed = !latencies.is_empty()
+        && confirmed_p99_us <= 33_000
+        && confirmed_max_us <= 50_000
+        && transition_duration_min_us >= 250_000
+        && transition_duration_max_us <= 350_000
+        && sum("lost_actions") == 0
+        && sum("duplicated_actions") == 0
+        && sum("reordered_actions") == 0
+        && sum("proxy_write_failures") == 0
+        && sum("journal_overflows") == 0
+        && sum("sequence_gaps") == 0
+        && sum("latch_drops") == 0
+        && sum("dropped_frames") == 0
+        && catalog_adoption_max_us < 4_000;
+    let summary = json!({
+        "schema": "mister-magik-launcher-response-v1",
+        "status": if passed { "passed" } else { "failed" },
+        "protocol": 2,
+        "route": ["launcher", "consoles", "nintendo", "snes"],
+        "confirmed_p99_us": confirmed_p99_us,
+        "confirmed_max_us": confirmed_max_us,
+        "transition_duration_min_us": transition_duration_min_us,
+        "transition_duration_max_us": transition_duration_max_us,
+        "lost_actions": sum("lost_actions"),
+        "duplicated_actions": sum("duplicated_actions"),
+        "reordered_actions": sum("reordered_actions"),
+        "proxy_write_failures": sum("proxy_write_failures"),
+        "journal_overflows": sum("journal_overflows"),
+        "sequence_gaps": sum("sequence_gaps"),
+        "latch_drops": sum("latch_drops"),
+        "dropped_frames": sum("dropped_frames"),
+        "catalog_adoption_max_us": catalog_adoption_max_us,
+        "scenarios": [idle, catalog],
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn run_launcher_response_scenario(
+    session: &Session,
+    label: &str,
+    catalog_refresh: &str,
+) -> Result<Value> {
+    let main_before: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
+    })?;
+    select_launcher_response_item(session, "menu:consoles")?;
+
+    run_launcher_response_driver(session, "transition-back")?;
+    thread::sleep(Duration::from_millis(400));
+    let reversed = read_launcher_status(session)?;
+    if reversed.get("menu_id").and_then(Value::as_str) != Some("menu:root") {
+        return Err("Back did not reverse the launcher transition immediately".into());
+    }
+
+    run_launcher_response_driver(session, "transition-right")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:consoles")
+    })?;
+    thread::sleep(Duration::from_millis(350));
+    select_launcher_response_item(session, "menu:consoles:nintendo")?;
+    run_launcher_response_driver(session, "a 10 1 1")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:consoles:nintendo")
+    })?;
+    thread::sleep(Duration::from_millis(350));
+    select_launcher_response_item(session, "snes")?;
+    run_launcher_response_driver(session, "a 10 1 1")?;
+    wait_launcher_response_status(session, Duration::from_secs(15), |status| {
+        status.get("return_screen").and_then(Value::as_str) == Some("system-hub")
+    })?;
+    thread::sleep(Duration::from_millis(350));
+    run_launcher_response_driver(session, "launcher-response")?;
+    thread::sleep(Duration::from_millis(250));
+
+    let trace = wait_launcher_response_trace(session, Duration::from_secs(5))?;
+    let records = trace["records"]
+        .as_array()
+        .ok_or("launcher response trace has no records")?;
+    let focus_records = records
+        .iter()
+        .filter(|record| {
+            record.pointer("/before/screen").and_then(Value::as_str) == Some("system-hub")
+                && record.get("trigger").and_then(Value::as_str) == Some("initial")
+                && matches!(
+                    record.get("action").and_then(Value::as_str),
+                    Some("up" | "down" | "left" | "right")
+                )
+                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
+        })
+        .collect::<Vec<_>>();
+    if focus_records.len() < 17 {
+        return Err(format!(
+            "launcher response confirmed only {} of 17 expected focus changes",
+            focus_records.len()
+        )
+        .into());
+    }
+    let confirmed_latencies_us = focus_records
+        .iter()
+        .filter_map(|record| record.get("confirmed_latency_us").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let confirmed_frames = focus_records
+        .iter()
+        .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let transition_durations_us = records
+        .iter()
+        .filter(|record| {
+            record.get("action").and_then(Value::as_str) == Some("activate")
+                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
+                && record.pointer("/before/screen").and_then(Value::as_str) == Some("home")
+                && record.pointer("/after/screen").and_then(Value::as_str) == Some("home")
+                && record.pointer("/before/menu_id") != record.pointer("/after/menu_id")
+        })
+        .filter_map(|record| record.get("confirmed_latency_us").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    if transition_durations_us.len() < 2
+        || transition_durations_us
+            .iter()
+            .any(|duration| !(250_000..=350_000).contains(duration))
+    {
+        return Err(format!(
+            "launcher transitions were not latch-confirmed near 300 ms: {transition_durations_us:?}"
+        )
+        .into());
+    }
+    let reordered_actions = confirmed_frames
+        .windows(2)
+        .filter(|pair| pair[1] <= pair[0])
+        .count() as u64;
+    let transition_swallowed = records.iter().any(|record| {
+        record.get("disposition").and_then(Value::as_str) == Some("transition-swallowed")
+            && record.get("action").and_then(Value::as_str) == Some("right")
+    });
+    let transition_control = records.iter().any(|record| {
+        record.get("disposition").and_then(Value::as_str) == Some("transition-control")
+            && record.get("action").and_then(Value::as_str) == Some("back")
+    });
+    if !transition_swallowed || !transition_control {
+        return Err("launcher response trace missed transition swallow or Back control".into());
+    }
+    let main_after: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
+    )?;
+    let launcher = read_launcher_status(session)?;
+    let delta = |field: &str| {
+        main_after[field]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
+    };
+    let events = remote_read(session, "/tmp/mister-magik/events.jsonl").unwrap_or_default();
+    let catalog_adoption_max_us = parse_catalog_adoption_max_us(&events).unwrap_or(0);
+    Ok(json!({
+        "label": label,
+        "catalog_refresh": catalog_refresh,
+        "confirmed_latencies_us": confirmed_latencies_us,
+        "confirmed_frames": confirmed_frames,
+        "transition_durations_us": transition_durations_us,
+        "lost_actions": u64::from(focus_records.len() < 17),
+        "duplicated_actions": focus_records.len().saturating_sub(17) as u64,
+        "reordered_actions": reordered_actions,
+        "proxy_write_failures": delta("input_proxy_write_failures"),
+        "journal_overflows": delta("input_proxy_journal_overflows"),
+        "sequence_gaps": delta("input_proxy_desyncs"),
+        "latch_drops": launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX),
+        "dropped_frames": launcher.pointer("/frame_budget/physical_refresh/dropped_frames").and_then(Value::as_u64).unwrap_or(u64::MAX),
+        "catalog_adoption_max_us": catalog_adoption_max_us,
+        "queue_high_water": trace["queue_high_water"],
+        "trace": trace,
+    }))
+}
+
+fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()> {
+    exec_checked(
+        session,
+        "launcher response input",
+        &format!("{INPUT_INTEGRITY_DRIVER} {arguments}"),
+    )?;
+    Ok(())
+}
+
+fn select_launcher_response_item(session: &Session, target: &str) -> Result<()> {
+    for _ in 0..32 {
+        let status = read_launcher_status(session)?;
+        if status.get("selected_item_id").and_then(Value::as_str) == Some(target) {
+            return Ok(());
+        }
+        run_launcher_response_driver(session, "right 10 1 1")?;
+        thread::sleep(Duration::from_millis(80));
+    }
+    Err(format!("launcher could not focus {target} within 32 moves").into())
+}
+
+fn wait_launcher_response_status<F>(
+    session: &Session,
+    timeout: Duration,
+    mut ready: F,
+) -> Result<Value>
+where
+    F: FnMut(&Value) -> bool,
+{
+    let started = Instant::now();
+    loop {
+        let status = read_launcher_status(session)?;
+        if ready(&status) {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!("launcher response state timed out: {status}").into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_launcher_response_trace(session: &Session, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(raw) = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+            && let Ok(trace) = serde_json::from_str::<Value>(&raw)
+            && trace["records"]
+                .as_array()
+                .is_some_and(|records| records.len() >= 20)
+        {
+            return Ok(trace);
+        }
+        if started.elapsed() >= timeout {
+            return Err("timed out waiting for launcher response trace".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn parse_catalog_adoption_max_us(events: &str) -> Option<u64> {
+    events
+        .lines()
+        .filter(|line| line.contains("catalog_system_shard_ready"))
+        .filter_map(|line| {
+            line.split("adoption_us=")
+                .nth(1)
+                .and_then(|tail| {
+                    tail.split(|character: char| !character.is_ascii_digit())
+                        .next()
+                })
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .max()
 }
 
 fn run_input_integrity_driver(session: &Session, load: bool) -> Result<()> {
@@ -14739,6 +15077,15 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_adoption_parser_uses_the_largest_prepared_swap() {
+        let events = concat!(
+            "catalog_system_shard_ready system=nes adoption_us=1200\n",
+            "catalog_system_shard_ready system=snes games=20 adoption_us=3456 detail=ok\n",
+        );
+        assert_eq!(parse_catalog_adoption_max_us(events), Some(3_456));
+    }
 
     fn passing_catalog_pmu_summary() -> Value {
         let profile = json!({

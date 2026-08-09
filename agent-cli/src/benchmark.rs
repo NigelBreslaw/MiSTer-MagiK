@@ -36,6 +36,7 @@ enum BenchmarkProfile {
     LaunchReturnFallback,
     ModalInput,
     InputIntegrity,
+    LauncherResponse,
     ColdBoot,
     NavigationTransitions,
     SettingsNavigation,
@@ -81,6 +82,7 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
+            BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
             BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
@@ -178,6 +180,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::InputIntegrity => {
             execute_input_integrity(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::LauncherResponse => {
+            execute_launcher_response(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::ColdBoot => {
             execute_cold_boot(&mut device, manifest, output_dir, reporter)
@@ -359,6 +364,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LaunchReturnFallback
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::InputIntegrity
+        | BenchmarkScenario::LauncherResponse
         | BenchmarkScenario::NavigationTransitions
         | BenchmarkScenario::SettingsNavigation
         | BenchmarkScenario::SettingsNavigationPprof
@@ -534,6 +540,85 @@ fn execute_input_integrity(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_launcher_response(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "launcher-response",
+        "verifying latch-confirmed launcher response through Main proxy v2",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::LauncherResponse, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_launcher_response_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launcher-response-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("protocol").and_then(Value::as_u64) != Some(2)
+        || summary
+            .get("confirmed_p99_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            > 33_000
+        || summary
+            .get("confirmed_max_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            > 50_000
+        || summary
+            .get("transition_duration_min_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            < 250_000
+        || summary
+            .get("transition_duration_max_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            > 350_000
+        || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("reordered_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("proxy_write_failures").and_then(Value::as_u64) != Some(0)
+        || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
+        || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
+        || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
+        || summary.get("dropped_frames").and_then(Value::as_u64) != Some(0)
+        || summary
+            .get("catalog_adoption_max_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            >= 4_000
+        || summary
+            .get("catalog_adoption_max_us")
+            .and_then(Value::as_u64)
+            == Some(0)
+    {
+        return Err(
+            "launcher response qualification did not satisfy the game-quality gates".into(),
+        );
+    }
+    Ok(())
 }
 
 fn evaluate_input_integrity_summary(summary: &Value) -> AgentResult<()> {
@@ -1368,6 +1453,32 @@ mod tests {
         let mut failed = passing;
         failed["lost_actions"] = json!(1);
         assert!(evaluate_input_integrity_summary(&failed).is_err());
+    }
+
+    #[test]
+    fn launcher_response_requires_visible_latency_and_catalog_adoption_gates() {
+        let passing = json!({
+            "schema": "mister-magik-launcher-response-v1",
+            "status": "passed",
+            "protocol": 2,
+            "confirmed_p99_us": 32_000,
+            "confirmed_max_us": 49_000,
+            "transition_duration_min_us": 290_000,
+            "transition_duration_max_us": 320_000,
+            "lost_actions": 0,
+            "duplicated_actions": 0,
+            "reordered_actions": 0,
+            "proxy_write_failures": 0,
+            "journal_overflows": 0,
+            "sequence_gaps": 0,
+            "latch_drops": 0,
+            "dropped_frames": 0,
+            "catalog_adoption_max_us": 3_999,
+        });
+        evaluate_launcher_response_summary(&passing).unwrap();
+        let mut failed = passing;
+        failed["confirmed_max_us"] = json!(50_001);
+        assert!(evaluate_launcher_response_summary(&failed).is_err());
     }
 
     #[test]

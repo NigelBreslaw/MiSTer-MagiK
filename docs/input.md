@@ -21,10 +21,14 @@ setup, activity, or diagnostic data; they cannot navigate the application.
 
 The UI loop drains the hub before catalog, media, Slint, or rendering work. One
 `InputRouter` owns focus priority, press-to-release capture, context generations,
-source epochs, transition queuing, opposing-direction neutral locks, and menu
+source epochs, transition consumption, opposing-direction neutral locks, and menu
 repeat. Menu repeat is immediate, then 300 ms, then every 80 ms. Home and Arcade
 retain their continuous motion policies. Integrity faults clear router state and
 require a neutral batch before recovery.
+
+Launcher navigation transitions are 300 ms. Back and Home reverse an active
+transition immediately. Every other press received while a transition owns
+focus is consumed; it is never cached or replayed on the destination screen.
 
 Events are routed and applied one at a time. Focus is recomputed after each
 event, so a modal opened by one event can receive the next event from the same
@@ -69,6 +73,23 @@ dispatch; it may not lose or duplicate input. Rendering cadence is reported but
 is not an input-correctness gate—cadence qualification belongs to the rendering
 benchmarks. The JSON report is stored under
 `build/agent-benchmarks/input-integrity/`.
+
+Run the visible-response gate after any launcher input, catalog, transition, or
+presentation change:
+
+```bash
+scripts/agent benchmark launcher-response
+```
+
+It drives the real Launcher → Consoles → Nintendo → SNES route through Main's
+proxy-v2 and kernel path, then sends 5/10/20/40 ms directional pulses at 50 ms
+start-to-start spacing plus a repeat hold. Each accepted focus move must reach a
+distinct physically confirmed frame in order. Confirmed response P99 must be at
+most 33 ms and no sample may exceed 50 ms. The same run repeats during catalog
+work, requires prepared catalog adoption below 4 ms, verifies Back reversal and
+transition-time input consumption, and requires zero input, latch, or physical
+frame faults. Evidence is stored under
+`build/agent-benchmarks/launcher-response/`.
 
 The automated gate does not replace the attended controller pass. Before
 release, verify custom Main mappings, overlapping inputs from two controllers,

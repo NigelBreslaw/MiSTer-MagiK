@@ -26,6 +26,15 @@ struct DriverPlan {
     count: u32,
     qualification: bool,
     cpu_load: bool,
+    sequence: DriverSequence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverSequence {
+    Pulses,
+    TransitionRight,
+    TransitionBack,
+    LauncherResponse,
 }
 
 impl DriverPlan {
@@ -41,6 +50,25 @@ impl DriverPlan {
                 count: 109,
                 qualification: true,
                 cpu_load: args.first().map(String::as_str) == Some("qualification-load"),
+                sequence: DriverSequence::Pulses,
+            });
+        }
+        if matches!(
+            args.first().map(String::as_str),
+            Some("transition-right" | "transition-back" | "launcher-response")
+        ) {
+            return Ok(Self {
+                key_code: 28,
+                pulse_ms: 10,
+                gap_ms: 50,
+                count: 1,
+                qualification: false,
+                cpu_load: false,
+                sequence: match args.first().map(String::as_str) {
+                    Some("transition-right") => DriverSequence::TransitionRight,
+                    Some("transition-back") => DriverSequence::TransitionBack,
+                    _ => DriverSequence::LauncherResponse,
+                },
             });
         }
         let key_code = match args.first().map(String::as_str) {
@@ -63,6 +91,7 @@ impl DriverPlan {
             count,
             qualification: false,
             cpu_load: false,
+            sequence: DriverSequence::Pulses,
         })
     }
 }
@@ -102,6 +131,7 @@ pub(crate) fn run(args: &[String]) {
                 "count": plan.count,
                 "qualification": plan.qualification,
                 "cpu_load": plan.cpu_load,
+                "sequence": format!("{:?}", plan.sequence).to_ascii_lowercase(),
             })
         ),
         Err(error) => {
@@ -163,6 +193,30 @@ impl UinputDevice {
                 let _ = thread.join();
             }
             return Ok(());
+        }
+        match plan.sequence {
+            DriverSequence::TransitionRight | DriverSequence::TransitionBack => {
+                self.pulse(28, 10)?;
+                std::thread::sleep(Duration::from_millis(40));
+                return self.pulse(
+                    if plan.sequence == DriverSequence::TransitionRight {
+                        106
+                    } else {
+                        1
+                    },
+                    10,
+                );
+            }
+            DriverSequence::LauncherResponse => {
+                for _ in 0..4 {
+                    for (key_code, pulse_ms) in [(106, 5), (105, 10), (108, 20), (103, 40)] {
+                        self.pulse(key_code, pulse_ms)?;
+                        std::thread::sleep(Duration::from_millis(50 - pulse_ms));
+                    }
+                }
+                return self.pulse(106, 500);
+            }
+            DriverSequence::Pulses => {}
         }
         for index in 0..plan.count {
             self.pulse(plan.key_code, plan.pulse_ms)?;
@@ -238,6 +292,7 @@ mod tests {
                 count: 8,
                 qualification: false,
                 cpu_load: false,
+                sequence: DriverSequence::Pulses,
             }
         );
         assert!(DriverPlan::parse(&["right", "0", "1", "1"].map(str::to_string)).is_err());
@@ -250,6 +305,12 @@ mod tests {
             DriverPlan::parse(&["qualification-load".to_string()])
                 .unwrap()
                 .cpu_load
+        );
+        assert_eq!(
+            DriverPlan::parse(&["launcher-response".to_string()])
+                .unwrap()
+                .sequence,
+            DriverSequence::LauncherResponse
         );
     }
 }

@@ -714,6 +714,7 @@ mod tests {
             "launch-return-fallback",
             "modal-input",
             "input-integrity",
+            "launcher-response",
             "cold-boot",
             "search",
             "streamline",

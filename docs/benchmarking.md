@@ -23,6 +23,7 @@ Supported scenarios:
 - `screensaver` (the default)
 - `cold-boot`
 - `input-integrity`
+- `launcher-response`
 - `particles`
 - `particle-demo-40k`
 - `particle-capacity`
@@ -61,6 +62,16 @@ Slint calls, status-writer overlap, preparation attribution, latch sequence
 continuity, physical FPS, and drop counters for all six legs, then restores the
 ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
+
+`launcher-response` is the release gate for interactive menu latency. It drives
+Launcher → Consoles → Nintendo → SNES through Main proxy v2, checks 5/10/20/40
+ms pulses at 50 ms pacing and a repeat hold, and correlates dispatch with the
+semantic state and exact latch-confirmed frame. Every paced accepted move must
+be visible in its own ordered frame; confirmed response P99 is at most 33 ms
+and the maximum is at most 50 ms. The catalog-stress pass must publish a real
+prepared shard with UI adoption below 4 ms. Both passes require transition-time
+ordinary input to be swallowed, Back to remain immediate, and zero input,
+latch, or physical dropped-frame faults.
 
 `settings-navigation` runs the real Home → Settings → About → Info → About →
 Settings → Home route first in the normal 1280×720 landscape layout, then in

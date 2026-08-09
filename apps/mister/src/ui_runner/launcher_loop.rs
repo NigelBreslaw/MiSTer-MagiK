@@ -1133,6 +1133,8 @@ struct LibraryChangedDialogTestDriver {
 
 const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trace.json";
 const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
+const LAUNCHER_RESPONSE_TRACE_PATH: &str = "/tmp/mister-magik/launcher-response-trace.json";
+const LAUNCHER_RESPONSE_TRACE_LIMIT: usize = 256;
 
 struct InputIntegrityTrace {
     enabled: bool,
@@ -1144,6 +1146,222 @@ struct InputIntegrityTrace {
     dispatch_latencies_us: Vec<u64>,
     dirty: bool,
     last_write: Instant,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LauncherResponseState {
+    screen: String,
+    menu_id: String,
+    selected_item_id: String,
+    selected_index: usize,
+}
+
+impl LauncherResponseState {
+    fn capture(nav: &LauncherNav) -> Self {
+        Self {
+            screen: screen_label(nav.screen).to_string(),
+            menu_id: nav.current_menu_id().to_string(),
+            selected_item_id: nav.current_menu_selected_item_id().to_string(),
+            selected_index: match nav.screen {
+                Screen::Arcade => nav.arcade.selected,
+                Screen::SystemHub => nav.system_hub_selected,
+                _ => nav.selected,
+            },
+        }
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "screen": self.screen,
+            "menu_id": self.menu_id,
+            "selected_item_id": self.selected_item_id,
+            "selected_index": self.selected_index,
+        })
+    }
+}
+
+struct LauncherResponseRecord {
+    action: LogicalAction,
+    trigger: DispatchKind,
+    press_id: u64,
+    captured_at_us: u64,
+    dispatch_at_us: u64,
+    before: LauncherResponseState,
+    after: Option<LauncherResponseState>,
+    disposition: &'static str,
+    confirmed_at_us: Option<u64>,
+    confirmed_frame: Option<u64>,
+    confirmed_sequence: Option<u16>,
+}
+
+struct LauncherResponseTrace {
+    enabled: bool,
+    records: Vec<LauncherResponseRecord>,
+    pending_dispatches: VecDeque<usize>,
+    pending_confirmations: VecDeque<usize>,
+    state: LauncherResponseState,
+    queue_high_water: usize,
+    dirty: bool,
+}
+
+impl LauncherResponseTrace {
+    fn from_env(nav: &LauncherNav) -> Self {
+        let enabled = launcher_env_flag("MISTER_LAUNCHER_RESPONSE_TRACE");
+        if enabled {
+            let _ = std::fs::remove_file(LAUNCHER_RESPONSE_TRACE_PATH);
+        }
+        Self {
+            enabled,
+            records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
+            pending_dispatches: VecDeque::new(),
+            pending_confirmations: VecDeque::new(),
+            state: LauncherResponseState::capture(nav),
+            queue_high_water: 0,
+            dirty: enabled,
+        }
+    }
+
+    #[cfg(test)]
+    fn enabled_for_test(nav: &LauncherNav) -> Self {
+        Self {
+            enabled: true,
+            records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
+            pending_dispatches: VecDeque::new(),
+            pending_confirmations: VecDeque::new(),
+            state: LauncherResponseState::capture(nav),
+            queue_high_water: 0,
+            dirty: false,
+        }
+    }
+
+    fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
+        if self.enabled {
+            self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
+        }
+    }
+
+    fn record_route(&mut self, event: crate::input_event::InputEvent, outcome: InputOutcome) {
+        if !self.enabled
+            || event.source.kind != InputSourceKind::MainProxy
+            || event.phase != InputPhase::Pressed
+            || self.records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
+        {
+            return;
+        }
+        let dispatch_at_us = crate::input_hub::monotonic_us();
+        let (trigger, disposition) = match outcome {
+            InputOutcome::Dispatch { kind, .. } => (kind, "dispatched"),
+            InputOutcome::TransitionControl { .. } => (DispatchKind::Initial, "transition-control"),
+            InputOutcome::Consumed {
+                reason: ConsumedReason::TransitionActive,
+                ..
+            } => (DispatchKind::Initial, "transition-swallowed"),
+            _ => return,
+        };
+        let index = self.records.len();
+        self.records.push(LauncherResponseRecord {
+            action: event.action,
+            trigger,
+            press_id: event.press_id.0,
+            captured_at_us: event.captured_at_us,
+            dispatch_at_us,
+            before: self.state.clone(),
+            after: None,
+            disposition,
+            confirmed_at_us: None,
+            confirmed_frame: None,
+            confirmed_sequence: None,
+        });
+        if disposition == "dispatched" {
+            self.pending_dispatches.push_back(index);
+        }
+        self.dirty = true;
+    }
+
+    fn observe_state(&mut self, nav: &LauncherNav, transition_active: bool) {
+        if !self.enabled {
+            return;
+        }
+        let state = LauncherResponseState::capture(nav);
+        if state != self.state {
+            self.state = state.clone();
+            if let Some(index) = self.pending_dispatches.pop_front() {
+                self.records[index].after = Some(state);
+                self.records[index].disposition = "state-changed";
+                self.pending_confirmations.push_back(index);
+            }
+            self.dirty = true;
+        } else if !transition_active && let Some(index) = self.pending_dispatches.pop_front() {
+            self.records[index].disposition = "no-change";
+            self.dirty = true;
+        }
+    }
+
+    fn confirm(&mut self, nav: &LauncherNav, frame: u64, sequence: u16) {
+        if !self.enabled {
+            return;
+        }
+        let state = LauncherResponseState::capture(nav);
+        let Some(position) = self
+            .pending_confirmations
+            .iter()
+            .rposition(|index| self.records[*index].after.as_ref() == Some(&state))
+        else {
+            return;
+        };
+        let index = self
+            .pending_confirmations
+            .remove(position)
+            .expect("confirmed response index");
+        let confirmed_at_us = crate::input_hub::monotonic_us();
+        let record = &mut self.records[index];
+        record.disposition = "confirmed";
+        record.confirmed_at_us = Some(confirmed_at_us);
+        record.confirmed_frame = Some(frame);
+        record.confirmed_sequence = Some(sequence);
+        self.dirty = true;
+    }
+
+    fn flush(&mut self) {
+        if !self.enabled || !self.dirty {
+            return;
+        }
+        let records = self
+            .records
+            .iter()
+            .map(|record| {
+                serde_json::json!({
+                    "action": format!("{:?}", record.action).to_ascii_lowercase(),
+                    "trigger": match record.trigger {
+                        DispatchKind::Initial => "initial",
+                        DispatchKind::Repeat => "repeat",
+                    },
+                    "press_id": record.press_id,
+                    "captured_at_us": record.captured_at_us,
+                    "dispatch_at_us": record.dispatch_at_us,
+                    "dispatch_latency_us": record.dispatch_at_us.saturating_sub(record.captured_at_us),
+                    "before": record.before.json(),
+                    "after": record.after.as_ref().map(LauncherResponseState::json),
+                    "disposition": record.disposition,
+                    "confirmed_at_us": record.confirmed_at_us,
+                    "confirmed_latency_us": record.confirmed_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
+                    "confirmed_frame": record.confirmed_frame,
+                    "confirmed_sequence": record.confirmed_sequence,
+                })
+            })
+            .collect::<Vec<_>>();
+        let payload = serde_json::json!({
+            "schema": "mister-magik-launcher-response-trace-v1",
+            "queue_high_water": self.queue_high_water,
+            "records": records,
+        });
+        if let Some(parent) = std::path::Path::new(LAUNCHER_RESPONSE_TRACE_PATH).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::write(LAUNCHER_RESPONSE_TRACE_PATH, format!("{}\n", payload)).is_ok() {
+            self.dirty = false;
+        }
+    }
 }
 
 impl InputIntegrityTrace {
@@ -2940,6 +3158,7 @@ pub(super) fn run_launcher_loop(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (1..=1_000).contains(value));
     let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
+    let mut launcher_response_trace = LauncherResponseTrace::from_env(&nav);
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -3671,6 +3890,7 @@ pub(super) fn run_launcher_loop(
         // busy frame can delay dispatch but cannot erase an edge.
         let input_batch = pad.drain_input_batch();
         input_integrity_trace.observe_batch(&input_batch);
+        launcher_response_trace.observe_batch(&input_batch);
         if !input_batch.events.is_empty()
             && let Some(stall_ms) = input_integrity_stall.take()
         {
@@ -4887,6 +5107,7 @@ pub(super) fn run_launcher_loop(
                         }
                         let outcome = input_router.route_event(event, focus, frame_now);
                         input_integrity_trace.record_outcome(outcome);
+                        launcher_response_trace.record_route(event, outcome);
                         match outcome {
                             InputOutcome::Dispatch { event, .. } => Some(event),
                             InputOutcome::Released { event, context, .. }
@@ -4914,6 +5135,7 @@ pub(super) fn run_launcher_loop(
                             input_router.tick_repeat(frame_now)
                     {
                         input_integrity_trace.record_outcome(outcome);
+                        launcher_response_trace.record_route(event, outcome);
                         Some(event)
                     } else {
                         final_input_tick = true;
@@ -5929,6 +6151,7 @@ pub(super) fn run_launcher_loop(
                 if final_input_tick {
                     break;
                 }
+                launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
             }
             input_integrity_trace.flush_if_due(Instant::now(), &input_router);
 
@@ -6408,6 +6631,7 @@ pub(super) fn run_launcher_loop(
         if !startup_intro_suppress_launcher_ui {
             sync_navigation_transition_active(&app, &navigation_transition);
         }
+        launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
         if composition_decision.force_full_slint_present {
             full_frame_present = true;
         }
@@ -8088,6 +8312,12 @@ pub(super) fn run_launcher_loop(
                     presented_frame.automation,
                     presented_frame.main_present_sequence,
                 );
+                launcher_response_trace.confirm(
+                    &nav,
+                    frames,
+                    presented_frame.main_present_sequence,
+                );
+                launcher_response_trace.flush();
                 if let Some(post) = readiness_post {
                     launcher_readiness.observe(post, lifecycle.startup_can_present_frame());
                     if launcher_readiness.needs_full_present() {
@@ -10003,6 +10233,38 @@ mod tests {
         assert!(should_defer_launcher_background_work(0, true, false, false));
         assert!(should_defer_launcher_background_work(0, false, true, false));
         assert!(should_defer_launcher_background_work(0, false, false, true));
+    }
+
+    #[test]
+    fn launcher_response_trace_confirms_the_visible_state_change() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::SystemHub;
+        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        let mut event = normalized_test_press(LogicalAction::Right);
+        event.source.kind = InputSourceKind::MainProxy;
+        let context = ContextId {
+            target: FocusTarget {
+                kind: InputContextKind::Screen,
+                owner: 1,
+            },
+            generation: 1,
+        };
+        trace.record_route(
+            event,
+            InputOutcome::Dispatch {
+                event,
+                context,
+                kind: DispatchKind::Initial,
+            },
+        );
+        nav.system_hub_selected = 1;
+        trace.observe_state(&nav, false);
+        trace.confirm(&nav, 42, 7);
+
+        assert_eq!(trace.records.len(), 1);
+        assert_eq!(trace.records[0].disposition, "confirmed");
+        assert_eq!(trace.records[0].confirmed_frame, Some(42));
+        assert_eq!(trace.records[0].confirmed_sequence, Some(7));
     }
 
     #[test]
