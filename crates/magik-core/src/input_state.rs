@@ -610,7 +610,7 @@ mod tests {
         state.set_logical_action(LogicalAction::Left, true);
         assert!(state.btn_a);
         assert!(state.dpad_left);
-        assert_eq!(state.pressed_now, "D-Left+A");
+        assert_eq!(state.pressed_now, "D-Left, A");
 
         state.set_logical_action(LogicalAction::Activate, false);
         assert!(!state.btn_a);
