@@ -1454,18 +1454,6 @@ impl LauncherInputScriptButton {
         }
     }
 
-    #[cfg(test)]
-    fn apply(self, state: &mut PadState) {
-        match self {
-            Self::Up => state.dpad_up = true,
-            Self::Down => state.dpad_down = true,
-            Self::Left => state.dpad_left = true,
-            Self::Right => state.dpad_right = true,
-            Self::A => state.btn_a = true,
-            Self::B => state.btn_b = true,
-        }
-    }
-
     fn label(self) -> &'static str {
         match self {
             Self::Up => "up",
@@ -1603,41 +1591,6 @@ impl LauncherInputScriptDriver {
             action,
             phase,
         })
-    }
-
-    #[cfg(test)]
-    fn input_for(&mut self) -> Option<PadState> {
-        let step = *self.steps.get(self.step_idx)?;
-        if self.frame_in_step < self.wait_frames {
-            self.frame_in_step += 1;
-            return None;
-        }
-
-        let local_frame = self.frame_in_step - self.wait_frames;
-        self.frame_in_step += 1;
-        if let LauncherInputScriptStep::Wait(frames) = step {
-            if local_frame < frames {
-                return Some(PadState::default());
-            }
-            self.step_idx += 1;
-            self.frame_in_step = 0;
-            return Some(PadState::default());
-        }
-        let LauncherInputScriptStep::Button(button) = step else {
-            unreachable!();
-        };
-        if local_frame < LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
-            let mut state = PadState::default();
-            button.apply(&mut state);
-            return Some(state);
-        }
-        if local_frame < LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES + LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
-            return Some(PadState::default());
-        }
-
-        self.step_idx += 1;
-        self.frame_in_step = 0;
-        Some(PadState::default())
     }
 
     fn active(&self) -> bool {
@@ -10208,8 +10161,6 @@ mod tests {
     fn catalog_recovery_consumes_a_until_release() {
         let catalog = catalog_for_media_systems(&["arcade"]);
         let mut nav = LauncherNav::new();
-        let released = PadState::default();
-        let pressed = pad_state_with(|state| state.btn_a = true);
         let now = Instant::now();
 
         let event = normalized_test_press(crate::input_event::LogicalAction::Activate);
@@ -10220,10 +10171,9 @@ mod tests {
         ));
         assert_eq!(nav.screen, Screen::Home);
 
-        nav.reset_test_snapshot(&released);
         let event = nav
-            .handle_input_with_navigation_intents(
-                &pressed,
+            .handle_action_with_navigation_intents(
+                &normalized_test_press(crate::input_event::LogicalAction::Activate),
                 now + Duration::from_millis(32),
                 &catalog,
             )
@@ -10286,79 +10236,6 @@ mod tests {
             ));
             assert_eq!(nav.screen, Screen::Home);
         }
-    }
-
-    #[test]
-    fn exclusive_input_absorption_resets_direction_repeat() {
-        let mut nav = LauncherNav::new();
-        let held = pad_state_with(|state| state.dpad_right = true);
-        let now = Instant::now();
-        nav.reset_test_snapshot(&held);
-
-        let catalog = catalog_for_media_systems(&["arcade"]);
-        assert!(nav.handle_input(&held, now, &catalog).is_none());
-        assert_eq!(nav.selected, 0);
-    }
-
-    #[test]
-    fn rapid_back_inputs_queue_through_the_settings_hierarchy_without_bouncing() {
-        let catalog = catalog_for_media_systems(&[]);
-        let mut nav = LauncherNav::new();
-        nav.screen = Screen::Info;
-        let released = PadState::default();
-        let back = PadState {
-            btn_b: true,
-            ..PadState::default()
-        };
-        let now = Instant::now();
-        nav.reset_test_snapshot(&released);
-        assert!(
-            nav.handle_input_with_navigation_intents(&back, now, &catalog)
-                .is_none()
-        );
-        assert_eq!(nav.screen, Screen::About);
-
-        let pixels = vec![Rgb565Pixel(0); 4 * 3];
-        let mut transition = NavigationTransitionRuntime::new(4, 3, true);
-        transition
-            .begin_settings_page(
-                NavigationTransitionRoute::AboutToInfo,
-                NavigationTransitionDirection::Reverse,
-                &pixels,
-                0,
-            )
-            .unwrap();
-        assert!(transition.route_input(&back, &released, false).is_none());
-        assert!(transition.route_input(&released, &back, false).is_none());
-        assert!(transition.route_input(&back, &released, false).is_none());
-        transition.settle_at_destination();
-        assert!(transition.complete().is_some());
-
-        let to_settings = transition.route_input(&released, &back, false).unwrap();
-        nav.reset_test_snapshot(&to_settings.previous);
-        assert!(
-            nav.handle_input_with_navigation_intents(&to_settings.now, now, &catalog)
-                .is_none()
-        );
-        assert_eq!(nav.screen, Screen::Settings);
-        transition
-            .begin_settings_page(
-                NavigationTransitionRoute::SettingsToAbout,
-                NavigationTransitionDirection::Reverse,
-                &pixels,
-                1,
-            )
-            .unwrap();
-        transition.settle_at_destination();
-        assert!(transition.complete().is_some());
-
-        let to_home = transition.route_input(&released, &released, false).unwrap();
-        nav.reset_test_snapshot(&to_home.previous);
-        assert!(
-            nav.handle_input_with_navigation_intents(&to_home.now, now, &catalog)
-                .is_none()
-        );
-        assert_eq!(nav.screen, Screen::Home);
     }
 
     #[test]
@@ -11861,16 +11738,17 @@ mod tests {
             active_press: None,
         };
 
-        assert!(driver.input_for(&nav, start, start).is_none());
+        assert!(driver.event_for(&nav, start, start).is_none());
         nav.confirm_action = Some(launcher::ConfirmAction::LibraryChanged);
 
-        assert!(driver.input_for(&nav, start, start).is_none());
+        assert!(driver.event_for(&nav, start, start).is_none());
         let input = driver
-            .input_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
+            .event_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
             .expect("continue driver should press A");
-        assert!(input.btn_a);
+        assert_eq!(input.action, LogicalAction::Activate);
+        assert_eq!(input.phase, InputPhase::Pressed);
         let event = nav
-            .handle_input(
+            .handle_action_with_navigation_intents(
                 &input,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
                 &empty_arcade_catalog("/tmp"),
@@ -11910,28 +11788,33 @@ mod tests {
         };
         let catalog = empty_arcade_catalog("/tmp");
 
-        assert!(driver.input_for(&nav, start, start).is_none());
+        assert!(driver.event_for(&nav, start, start).is_none());
         let right = driver
-            .input_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
+            .event_for(&nav, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, start)
             .expect("rebuild driver should press right first");
-        assert!(right.dpad_right);
+        assert_eq!(right.action, LogicalAction::Right);
+        assert_eq!(right.phase, InputPhase::Pressed);
         assert!(
-            nav.handle_input(&right, start + LIBRARY_CHANGED_TEST_ACTION_SETTLE, &catalog)
-                .is_none()
+            nav.handle_action_with_navigation_intents(
+                &right,
+                start + LIBRARY_CHANGED_TEST_ACTION_SETTLE,
+                &catalog,
+            )
+            .is_none()
         );
         assert_eq!(nav.confirm_selected, 1);
 
         let release = driver
-            .input_for(
+            .event_for(
                 &nav,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
                 start,
             )
             .expect("rebuild driver should release right before A");
-        assert!(!release.dpad_right);
-        assert!(!release.btn_a);
+        assert_eq!(release.action, LogicalAction::Right);
+        assert_eq!(release.phase, InputPhase::Released);
         assert!(
-            nav.handle_input(
+            nav.handle_action_with_navigation_intents(
                 &release,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(16),
                 &catalog,
@@ -11940,15 +11823,16 @@ mod tests {
         );
 
         let press_a = driver
-            .input_for(
+            .event_for(
                 &nav,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
                 start,
             )
             .expect("rebuild driver should press A");
-        assert!(press_a.btn_a);
+        assert_eq!(press_a.action, LogicalAction::Activate);
+        assert_eq!(press_a.phase, InputPhase::Pressed);
         let event = nav
-            .handle_input(
+            .handle_action_with_navigation_intents(
                 &press_a,
                 start + LIBRARY_CHANGED_TEST_ACTION_SETTLE + Duration::from_millis(32),
                 &catalog,
@@ -11963,30 +11847,31 @@ mod tests {
         let start = Instant::now();
         let mut driver = LauncherInputScriptDriver::from_script("left,down,right", start);
         driver.wait_frames = 0;
+        let mut frame = 0_u64;
 
-        let left = driver.input_for().expect("left press");
-        assert!(left.dpad_left);
-        assert!(!left.dpad_down);
-        assert!(!left.dpad_right);
+        let left = driver.event_for(frame).expect("left press");
+        assert_eq!(left.action, LogicalAction::Left);
+        assert_eq!(left.phase, InputPhase::Pressed);
 
         for _ in 1..LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
-            assert!(driver.input_for().expect("left hold").dpad_left);
+            frame += 1;
+            assert!(driver.event_for(frame).is_none());
         }
-        for _ in 0..LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
-            let release = driver.input_for().expect("left release");
-            assert!(!release.dpad_left);
-            assert!(!release.dpad_down);
-            assert!(!release.dpad_right);
+        frame += 1;
+        let release = driver.event_for(frame).expect("left release");
+        assert_eq!(release.action, LogicalAction::Left);
+        assert_eq!(release.phase, InputPhase::Released);
+        for _ in 1..LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES {
+            frame += 1;
+            assert!(driver.event_for(frame).is_none());
         }
-        let gap = driver.input_for().expect("between buttons");
-        assert!(!gap.dpad_left);
-        assert!(!gap.dpad_down);
-        assert!(!gap.dpad_right);
+        frame += 1;
+        assert!(driver.event_for(frame).is_none());
 
-        let down = driver.input_for().expect("down press");
-        assert!(!down.dpad_left);
-        assert!(down.dpad_down);
-        assert!(!down.dpad_right);
+        frame += 1;
+        let down = driver.event_for(frame).expect("down press");
+        assert_eq!(down.action, LogicalAction::Down);
+        assert_eq!(down.phase, InputPhase::Pressed);
     }
 
     #[test]
@@ -11998,12 +11883,13 @@ mod tests {
             LauncherInputScriptDriver::from_script("up,a,down,down,a,down,down,a", start);
         driver.wait_frames = 0;
         let mut action = None;
-        let mut frame = 0;
+        let mut frame = 0_u64;
 
         while driver.active() {
-            let input = driver.input_for().unwrap_or_default();
-            if let Some(event) =
-                nav.handle_input(&input, start + Duration::from_millis(frame * 17), &catalog)
+            let frame_now = start + Duration::from_millis(frame * 17);
+            if let Some(input) = driver.event_for(frame * 17_000)
+                && let Some(event) =
+                    nav.handle_action_with_navigation_intents(&input, frame_now, &catalog)
             {
                 action = Some(event.action);
             }

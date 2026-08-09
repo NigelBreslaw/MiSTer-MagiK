@@ -34,8 +34,26 @@ impl<'a> ControllerSetupInputSession<'a> {
 mod tests {
     use super::*;
     use crate::controller_db::PadRegistryStatus;
+    use crate::input_event::{
+        InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
+    };
     use crate::setup_nav::{SetupAction, SetupPhase};
     use std::time::Instant;
+
+    fn activate_press() -> InputEvent {
+        InputEvent {
+            source: InputSourceId {
+                kind: InputSourceKind::MainProxy,
+                instance: 1,
+            },
+            source_epoch: SourceEpoch(1),
+            sequence: 1,
+            press_id: PressId(1),
+            captured_at_us: 1,
+            action: LogicalAction::Activate,
+            phase: InputPhase::Pressed,
+        }
+    }
 
     trait PadStateTestExt {
         fn with_a(pressed: bool) -> Self;
@@ -118,12 +136,16 @@ mod tests {
         let setup_state = ControllerSetupInputSession::new(&fixture.pool, &setup)
             .setup_state()
             .clone();
-        let action = setup.handle_input(
-            &setup_state,
-            Instant::now(),
-            fixture.pool.info_at(1),
-            fixture.pool.db(),
-        );
+        let action = if setup_state.btn_a {
+            setup.handle_action(
+                &activate_press(),
+                Instant::now(),
+                fixture.pool.info_at(1),
+                fixture.pool.db(),
+            )
+        } else {
+            SetupAction::None
+        };
 
         assert!(matches!(action, SetupAction::None));
         assert_eq!(setup.phase, SetupPhase::Detected);
@@ -138,8 +160,9 @@ mod tests {
         let setup_state = ControllerSetupInputSession::new(&fixture.pool, &setup)
             .setup_state()
             .clone();
-        let action = setup.handle_input(
-            &setup_state,
+        assert!(setup_state.btn_a);
+        let action = setup.handle_action(
+            &activate_press(),
             Instant::now(),
             fixture.pool.info_at(1),
             fixture.pool.db(),

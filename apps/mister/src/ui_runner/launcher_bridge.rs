@@ -1548,19 +1548,27 @@ mod tests {
         let mut held = PadState::default();
         held.dpad_right = true;
         let start = Instant::now();
-        nav.handle_input(&held, start, &catalog);
+        nav.handle_held_tick_with_navigation_intents(&held, start, &catalog);
         let pressed = LauncherBridgeKey::from_nav(&nav);
         assert!(pressed.home_scroll_held);
         assert!(!pressed.home_scroll_repeat_active);
-        nav.handle_input(&held, start + Duration::from_millis(199), &catalog);
+        nav.handle_held_tick_with_navigation_intents(
+            &held,
+            start + Duration::from_millis(199),
+            &catalog,
+        );
         assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
-        nav.handle_input(&held, start + Duration::from_millis(200), &catalog);
+        nav.handle_held_tick_with_navigation_intents(
+            &held,
+            start + Duration::from_millis(200),
+            &catalog,
+        );
 
         let repeating = LauncherBridgeKey::from_nav(&nav);
         assert!(repeating.home_scroll_held);
         assert!(repeating.home_scroll_repeat_active);
 
-        nav.handle_input(
+        nav.handle_held_tick_with_navigation_intents(
             &PadState::default(),
             start + Duration::from_millis(201),
             &catalog,

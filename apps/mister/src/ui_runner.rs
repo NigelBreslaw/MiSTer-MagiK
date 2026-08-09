@@ -150,8 +150,6 @@ mod video_loop;
 
 use catalog_worker::*;
 use controller_loop::*;
-#[cfg(test)]
-use controller_setup_input_session::*;
 use crt_trial_loop::*;
 #[cfg(mister_experiments)]
 use experiments::effects::{
