@@ -1186,7 +1186,7 @@ impl InputIntegrityTrace {
         }
     }
 
-    fn record_dispatch(&mut self, event: InputEvent, kind: DispatchKind) {
+    fn record_dispatch(&mut self, event: crate::input_event::InputEvent, kind: DispatchKind) {
         if event.source.kind != InputSourceKind::MainProxy {
             return;
         }
@@ -1205,7 +1205,7 @@ impl InputIntegrityTrace {
         self.record_event(event, kind);
     }
 
-    fn record_event(&mut self, event: InputEvent, kind: &'static str) {
+    fn record_event(&mut self, event: crate::input_event::InputEvent, kind: &'static str) {
         if event.source.kind != InputSourceKind::MainProxy {
             return;
         }
