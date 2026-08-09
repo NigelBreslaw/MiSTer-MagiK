@@ -158,8 +158,9 @@ supervised launcher is active, Main keeps its evdev discovery, controller
 quirks, user menu maps, gamecontrollerdb fallback, hot-plug handling, and
 custom Menu OK/Back precedence authoritative. Resolved menu actions are emitted
 through Main's virtual input device for Rust to consume. Rust retains direct
-`js*` profiles only for setup, diagnostics, and compatibility with an older
-Main that does not advertise `MISTER_MAGIK_INPUT_PROXY=1`.
+`js*` profiles only for setup and diagnostics. Production navigation requires
+`MISTER_MAGIK_INPUT_PROXY_PROTOCOL=2`; missing or unhealthy v2 input is shown as
+a fault and never falls back to raw navigation.
 
 Runtime display transactions preserve automatic sink detection only while
 applying `auto`. Every explicit HDMI or CRT mode clears Main's automatic-routing
