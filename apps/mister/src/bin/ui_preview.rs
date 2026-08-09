@@ -3866,7 +3866,7 @@ mod macos {
             };
             pad.rebuild_pressed_now();
             for frame in 0..refresh_hz {
-                nav.handle_input(
+                nav.handle_held_tick_with_navigation_intents(
                     &pad,
                     epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
                     &fixtures.catalog,
@@ -3874,7 +3874,7 @@ mod macos {
             }
             pad = PadState::default();
             for frame in refresh_hz..=refresh_hz * 2 {
-                nav.handle_input(
+                nav.handle_held_tick_with_navigation_intents(
                     &pad,
                     epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
                     &fixtures.catalog,
@@ -3893,7 +3893,7 @@ mod macos {
             };
             pad.rebuild_pressed_now();
             for frame in 0..refresh_hz {
-                nav.handle_input(
+                nav.handle_held_tick_with_navigation_intents(
                     &pad,
                     epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
                     &fixtures.catalog,
@@ -3901,7 +3901,7 @@ mod macos {
             }
             pad = PadState::default();
             for frame in refresh_hz..=refresh_hz * 2 {
-                nav.handle_input(
+                nav.handle_held_tick_with_navigation_intents(
                     &pad,
                     epoch + elapsed_for_frame(u64::from(frame), refresh_hz),
                     &fixtures.catalog,
