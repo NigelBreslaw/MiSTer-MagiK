@@ -1307,19 +1307,32 @@ struct LauncherResponseState {
     menu_id: String,
     selected_item_id: String,
     selected_index: usize,
+    arcade_visual_index_milli: Option<i64>,
 }
 
 impl LauncherResponseState {
     fn capture(nav: &LauncherNav) -> Self {
+        let feedback_target = nav_selection_feedback_target(nav);
         Self {
             screen: screen_label(nav.screen).to_string(),
-            menu_id: nav.current_menu_id().to_string(),
-            selected_item_id: nav.current_menu_selected_item_id().to_string(),
+            menu_id: feedback_target
+                .as_ref()
+                .map(|target| target.surface.clone())
+                .unwrap_or_else(|| nav.current_menu_id().to_string()),
+            selected_item_id: feedback_target
+                .map(|target| target.item)
+                .unwrap_or_else(|| nav.current_menu_selected_item_id().to_string()),
             selected_index: match nav.screen {
                 Screen::Arcade => nav.arcade.selected,
                 Screen::SystemHub => nav.system_hub_selected,
+                Screen::Settings => nav.settings_selected,
+                Screen::Screensaver => nav.screensaver_selected,
+                Screen::About => nav.about_selected,
+                Screen::Licenses => nav.licenses_selected,
                 _ => nav.selected,
             },
+            arcade_visual_index_milli: (nav.screen == Screen::Arcade)
+                .then(|| (f64::from(nav.arcade.visual_index) * 1_000.0).round() as i64),
         }
     }
 
@@ -1329,8 +1342,39 @@ impl LauncherResponseState {
             "menu_id": self.menu_id,
             "selected_item_id": self.selected_item_id,
             "selected_index": self.selected_index,
+            "arcade_visual_index_milli": self.arcade_visual_index_milli,
         })
     }
+
+    fn matches_presented(&self, before: &Self, presented: &Self) -> bool {
+        if self.screen != "arcade" {
+            return self == presented;
+        }
+        self.screen == presented.screen
+            && self.selected_index == presented.selected_index
+            && before.arcade_visual_index_milli != presented.arcade_visual_index_milli
+    }
+}
+
+struct LauncherResponseFeedbackRecord {
+    phase: &'static str,
+    event_id: u64,
+    surface: String,
+    item: String,
+    confirmed_at_us: u64,
+    confirmed_frame: u64,
+    confirmed_sequence: u16,
+    dwell_us: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct LauncherResponsePresentationSnapshot {
+    owned_vblank_count: u32,
+    presented_vblank_count: u32,
+    repeated_vblank_count: u32,
+    ownership_loss_count: u32,
+    latch_drop_count: u32,
+    magik_ownership: bool,
 }
 
 struct LauncherResponseRecord {
@@ -1350,10 +1394,14 @@ struct LauncherResponseRecord {
 struct LauncherResponseTrace {
     enabled: bool,
     records: Vec<LauncherResponseRecord>,
+    feedback_records: Vec<LauncherResponseFeedbackRecord>,
     pending_dispatches: VecDeque<usize>,
     pending_confirmations: VecDeque<usize>,
     state: LauncherResponseState,
     queue_high_water: usize,
+    refresh_period_us: u64,
+    presentation_start: Option<LauncherResponsePresentationSnapshot>,
+    presentation_end: Option<LauncherResponsePresentationSnapshot>,
     dirty: bool,
 }
 
@@ -1366,10 +1414,14 @@ impl LauncherResponseTrace {
         Self {
             enabled,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
+            feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
+            refresh_period_us: 0,
+            presentation_start: None,
+            presentation_end: None,
             dirty: enabled,
         }
     }
@@ -1379,10 +1431,14 @@ impl LauncherResponseTrace {
         Self {
             enabled: true,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
+            feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
+            refresh_period_us: 0,
+            presentation_start: None,
+            presentation_end: None,
             dirty: false,
         }
     }
@@ -1455,11 +1511,13 @@ impl LauncherResponseTrace {
             return;
         }
         let state = LauncherResponseState::capture(nav);
-        let Some(position) = self
-            .pending_confirmations
-            .iter()
-            .rposition(|index| self.records[*index].after.as_ref() == Some(&state))
-        else {
+        let Some(position) = self.pending_confirmations.iter().rposition(|index| {
+            let record = &self.records[*index];
+            record
+                .after
+                .as_ref()
+                .is_some_and(|after| after.matches_presented(&record.before, &state))
+        }) else {
             return;
         };
         let index = self
@@ -1472,6 +1530,69 @@ impl LauncherResponseTrace {
         record.confirmed_at_us = Some(confirmed_at_us);
         record.confirmed_frame = Some(frame);
         record.confirmed_sequence = Some(sequence);
+        self.dirty = true;
+    }
+
+    fn record_feedback_confirmation(
+        &mut self,
+        confirmation: &crate::launcher_presentation::SelectionFeedbackConfirmation,
+        frame: u64,
+        sequence: u16,
+    ) {
+        if !self.enabled || self.feedback_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT {
+            return;
+        }
+        let (phase, event_id, target, dwell_us) = match confirmation {
+            crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                event_id,
+                target,
+                ..
+            } => ("visible", *event_id, target, None),
+            crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                event_id,
+                target,
+                visible_for,
+                ..
+            } => (
+                "hidden",
+                *event_id,
+                target,
+                Some(u64::try_from(visible_for.as_micros()).unwrap_or(u64::MAX)),
+            ),
+        };
+        self.feedback_records.push(LauncherResponseFeedbackRecord {
+            phase,
+            event_id,
+            surface: target.surface.clone(),
+            item: target.item.clone(),
+            confirmed_at_us: crate::input_hub::monotonic_us(),
+            confirmed_frame: frame,
+            confirmed_sequence: sequence,
+            dwell_us,
+        });
+        self.dirty = true;
+    }
+
+    fn observe_presentation(
+        &mut self,
+        telemetry: mister_magik_latch_contract::PresentationTelemetry,
+        refresh_period_us: u64,
+        latch_drop_count: u32,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let snapshot = LauncherResponsePresentationSnapshot {
+            owned_vblank_count: telemetry.owned_vblank_count,
+            presented_vblank_count: telemetry.presented_vblank_count,
+            repeated_vblank_count: telemetry.repeated_vblank_count,
+            ownership_loss_count: telemetry.ownership_loss_count,
+            latch_drop_count,
+            magik_ownership: telemetry.magik_ownership(),
+        };
+        self.presentation_start.get_or_insert(snapshot);
+        self.presentation_end = Some(snapshot);
+        self.refresh_period_us = refresh_period_us;
         self.dirty = true;
     }
 
@@ -1503,10 +1624,56 @@ impl LauncherResponseTrace {
                 })
             })
             .collect::<Vec<_>>();
+        let feedback_records = self
+            .feedback_records
+            .iter()
+            .map(|record| {
+                serde_json::json!({
+                    "phase": record.phase,
+                    "event_id": record.event_id,
+                    "surface": record.surface,
+                    "item": record.item,
+                    "confirmed_at_us": record.confirmed_at_us,
+                    "confirmed_frame": record.confirmed_frame,
+                    "confirmed_sequence": record.confirmed_sequence,
+                    "dwell_us": record.dwell_us,
+                })
+            })
+            .collect::<Vec<_>>();
+        let presentation = self
+            .presentation_start
+            .zip(self.presentation_end)
+            .map(|(start, end)| {
+                serde_json::json!({
+                    "source": "fpga-owned-vblank-telemetry",
+                    "refresh_period_us": self.refresh_period_us,
+                    "start": {
+                        "owned_vblank_count": start.owned_vblank_count,
+                        "presented_vblank_count": start.presented_vblank_count,
+                        "repeated_vblank_count": start.repeated_vblank_count,
+                        "ownership_loss_count": start.ownership_loss_count,
+                        "latch_drop_count": start.latch_drop_count,
+                        "magik_ownership": start.magik_ownership,
+                    },
+                    "end": {
+                        "owned_vblank_count": end.owned_vblank_count,
+                        "presented_vblank_count": end.presented_vblank_count,
+                        "repeated_vblank_count": end.repeated_vblank_count,
+                        "ownership_loss_count": end.ownership_loss_count,
+                        "latch_drop_count": end.latch_drop_count,
+                        "magik_ownership": end.magik_ownership,
+                    },
+                    "repeated_vblank_delta": end.repeated_vblank_count.wrapping_sub(start.repeated_vblank_count),
+                    "ownership_loss_delta": end.ownership_loss_count.wrapping_sub(start.ownership_loss_count),
+                    "latch_drop_delta": end.latch_drop_count.wrapping_sub(start.latch_drop_count),
+                })
+            });
         let payload = serde_json::json!({
-            "schema": "mister-magik-launcher-response-trace-v1",
+            "schema": "mister-magik-launcher-response-trace-v2",
             "queue_high_water": self.queue_high_water,
             "records": records,
+            "feedback_records": feedback_records,
+            "presentation": presentation,
         });
         if let Some(parent) = std::path::Path::new(LAUNCHER_RESPONSE_TRACE_PATH).parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -8539,7 +8706,13 @@ pub(super) fn run_launcher_loop(
                     frames,
                     presented_frame.main_present_sequence,
                 );
-                launcher_response_trace.flush();
+                if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
+                    launcher_response_trace.observe_presentation(
+                        telemetry,
+                        pace.period_us,
+                        presented_frame.main_present_drop_count,
+                    );
+                }
                 if let Some(post) = readiness_post {
                     launcher_readiness.observe(post, lifecycle.startup_can_present_frame());
                     if launcher_readiness.needs_full_present() {
@@ -8683,6 +8856,11 @@ pub(super) fn run_launcher_loop(
             for confirmation in bridge_models
                 .confirm_selection_feedback(&presented_frame.selection_feedback, confirmed_at)
             {
+                launcher_response_trace.record_feedback_confirmation(
+                    &confirmation,
+                    frames,
+                    confirmed_present_sequence,
+                );
                 match confirmation {
                     crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
                         event_id,
@@ -8713,6 +8891,7 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        launcher_response_trace.flush();
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
@@ -10643,6 +10822,57 @@ mod tests {
         assert_eq!(trace.records[0].disposition, "confirmed");
         assert_eq!(trace.records[0].confirmed_frame, Some(42));
         assert_eq!(trace.records[0].confirmed_sequence, Some(7));
+    }
+
+    #[test]
+    fn launcher_response_trace_records_exact_feedback_on_and_off_frames() {
+        let nav = LauncherNav::new();
+        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        let target = SelectionFeedbackTarget::new("menu:computers", "menu:computers:other");
+        let visible_at = Instant::now();
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                event_id: 9,
+                target: target.clone(),
+                confirmed_at: visible_at,
+            },
+            40,
+            6,
+        );
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                event_id: 9,
+                target,
+                visible_for: Duration::from_millis(84),
+                confirmed_at: visible_at + Duration::from_millis(84),
+            },
+            45,
+            11,
+        );
+
+        assert_eq!(trace.feedback_records.len(), 2);
+        assert_eq!(trace.feedback_records[0].phase, "visible");
+        assert_eq!(trace.feedback_records[0].confirmed_frame, 40);
+        assert_eq!(trace.feedback_records[1].phase, "hidden");
+        assert_eq!(trace.feedback_records[1].dwell_us, Some(84_000));
+        assert_eq!(trace.feedback_records[1].confirmed_sequence, 11);
+    }
+
+    #[test]
+    fn arcade_response_confirmation_waits_for_first_visible_motion() {
+        let mut before = LauncherNav::new();
+        before.screen = Screen::Arcade;
+        let before = LauncherResponseState::capture(&before);
+        let mut selected = before.clone();
+        selected.selected_index = 1;
+        let mut stationary = selected.clone();
+        stationary.arcade_visual_index_milli = before.arcade_visual_index_milli;
+        let mut moved = stationary.clone();
+        moved.arcade_visual_index_milli =
+            Some(before.arcade_visual_index_milli.unwrap_or_default() + 25);
+
+        assert!(!selected.matches_presented(&before, &stationary));
+        assert!(selected.matches_presented(&before, &moved));
     }
 
     #[test]

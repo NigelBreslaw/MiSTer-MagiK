@@ -573,21 +573,41 @@ fn execute_launcher_response(
 }
 
 fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launcher-response-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launcher-response-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary.get("protocol").and_then(Value::as_u64) != Some(2)
+        || summary.get("input_response_status").and_then(Value::as_str) != Some("passed")
+        || summary.get("pulse_status").and_then(Value::as_str) != Some("passed")
+        || summary.get("integrity_status").and_then(Value::as_str) != Some("passed")
         || summary
-            .get("confirmed_max_us")
+            .get("background_adoption_status")
+            .and_then(Value::as_str)
+            != Some("passed")
+        || summary
+            .get("dispatch_p95_us")
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX)
-            >= 50_000
+            > 3_000
+        || summary
+            .get("dispatch_max_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            > 5_000
+        || summary
+            .get("confirmed_median_us")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            > 12_000
         || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("coalesced_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("reordered_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("proxy_write_failures").and_then(Value::as_u64) != Some(0)
         || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
         || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
         || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
+        || summary.get("repeated_vblanks").and_then(Value::as_u64) != Some(0)
+        || summary.get("ownership_losses").and_then(Value::as_u64) != Some(0)
         || summary
             .get("catalog_adoption_max_us")
             .and_then(Value::as_u64)
@@ -1440,25 +1460,33 @@ mod tests {
     }
 
     #[test]
-    fn launcher_response_requires_visible_latency_and_catalog_adoption_gates() {
+    fn launcher_response_requires_independent_response_pulse_and_background_gates() {
         let passing = json!({
-            "schema": "mister-magik-launcher-response-v1",
+            "schema": "mister-magik-launcher-response-v2",
             "status": "passed",
             "protocol": 2,
-            "confirmed_p99_us": 32_000,
-            "confirmed_max_us": 49_000,
+            "input_response_status": "passed",
+            "pulse_status": "passed",
+            "integrity_status": "passed",
+            "background_adoption_status": "passed",
+            "dispatch_p95_us": 3_000,
+            "dispatch_max_us": 5_000,
+            "confirmed_median_us": 12_000,
             "lost_actions": 0,
             "duplicated_actions": 0,
+            "coalesced_actions": 0,
             "reordered_actions": 0,
             "proxy_write_failures": 0,
             "journal_overflows": 0,
             "sequence_gaps": 0,
             "latch_drops": 0,
+            "repeated_vblanks": 0,
+            "ownership_losses": 0,
             "catalog_adoption_max_us": 7_999,
         });
         evaluate_launcher_response_summary(&passing).unwrap();
         let mut failed = passing;
-        failed["confirmed_max_us"] = json!(50_000);
+        failed["pulse_status"] = json!("failed");
         assert!(evaluate_launcher_response_summary(&failed).is_err());
     }
 

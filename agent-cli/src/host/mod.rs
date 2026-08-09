@@ -4269,63 +4269,143 @@ fn verify_installed_launcher_response(
     if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(2) {
         return Err("launcher response requires Main proxy protocol v2".into());
     }
-    let idle = run_launcher_response_scenario(&session, "idle", "off")?;
-    let catalog = run_launcher_response_scenario(&session, "catalog", "force")?;
-    let scenarios = [&idle, &catalog];
-    let mut latencies = scenarios
+    let original_reply = exec_checked_output(
+        &session,
+        "query launcher response display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("launcher response cannot start during a display transaction".into());
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
         .iter()
-        .flat_map(|scenario| {
-            scenario["confirmed_latencies_us"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_u64)
-        })
-        .collect::<Vec<_>>();
-    latencies.sort_unstable();
-    let p99_index = latencies.len().saturating_sub(1) * 99 / 100;
-    let confirmed_p99_us = latencies.get(p99_index).copied().unwrap_or(u64::MAX);
-    let confirmed_max_us = latencies.last().copied().unwrap_or(u64::MAX);
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| format!("launcher response cannot restore unknown mode {original_id}"))?;
+    drop(session);
+
+    let mut scenario_values = Vec::new();
+    let run_result = (|| -> Result<()> {
+        for (display_label, mode_id) in [("60-hz", "hdmi-1280x720p60"), ("50-hz", "crt-288p50")] {
+            let mode = DISPLAY_MATRIX_MODES
+                .iter()
+                .find(|mode| mode.id == mode_id)
+                .copied()
+                .ok_or_else(|| format!("missing launcher response mode {mode_id}"))?;
+            apply_confirmed_display_mode(config, mode, "launcher response qualification")?;
+            let session = connect_with(&config.connection, 10)?;
+            scenario_values.push(run_launcher_response_scenario(
+                &session,
+                display_label,
+                "idle",
+                "off",
+            )?);
+            scenario_values.push(run_launcher_response_scenario(
+                &session,
+                display_label,
+                "catalog",
+                "force",
+            )?);
+        }
+        Ok(())
+    })();
+    let restore_result = apply_confirmed_display_mode(
+        config,
+        original_mode,
+        "launcher response display restoration",
+    );
+    match (run_result, restore_result) {
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; display restoration failed: {restore}").into());
+        }
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(()), Err(error)) => return Err(error),
+        (Ok(()), Ok(())) => {}
+    }
+
+    let scenarios = scenario_values.iter().collect::<Vec<_>>();
+    let mut dispatch_latencies_us = launcher_response_values(&scenarios, "dispatch_latencies_us");
+    let mut confirmed_latencies_us = launcher_response_values(&scenarios, "confirmed_latencies_us");
+    dispatch_latencies_us.sort_unstable();
+    confirmed_latencies_us.sort_unstable();
+    let dispatch_p95_us = percentile_nearest_rank(&dispatch_latencies_us, 95);
+    let dispatch_max_us = dispatch_latencies_us.last().copied().unwrap_or(u64::MAX);
+    let confirmed_median_us = median_u64(&confirmed_latencies_us).unwrap_or(u64::MAX);
+    let confirmed_p95_us = percentile_nearest_rank(&confirmed_latencies_us, 95);
+    let confirmed_max_us = confirmed_latencies_us.last().copied().unwrap_or(u64::MAX);
     let sum = |field: &str| {
         scenarios
             .iter()
             .map(|scenario| scenario[field].as_u64().unwrap_or(u64::MAX))
             .fold(0_u64, u64::saturating_add)
     };
-    let catalog_adoption_max_us = catalog["catalog_adoption_max_us"]
-        .as_u64()
+    let input_response_passed = !confirmed_latencies_us.is_empty()
+        && dispatch_p95_us <= 3_000
+        && dispatch_max_us <= 5_000
+        && confirmed_median_us <= 12_000
+        && scenarios
+            .iter()
+            .all(|scenario| scenario["input_response_status"].as_str() == Some("passed"));
+    let pulse_passed = scenarios
+        .iter()
+        .all(|scenario| scenario["pulse_status"].as_str() == Some("passed"));
+    let integrity_passed = [
+        "lost_actions",
+        "duplicated_actions",
+        "coalesced_actions",
+        "reordered_actions",
+        "proxy_write_failures",
+        "journal_overflows",
+        "sequence_gaps",
+        "latch_drops",
+        "repeated_vblanks",
+        "ownership_losses",
+    ]
+    .into_iter()
+    .all(|field| sum(field) == 0);
+    let catalog_adoption_max_us = scenarios
+        .iter()
+        .filter(|scenario| scenario["catalog_refresh"].as_str() == Some("force"))
+        .filter_map(|scenario| scenario["catalog_adoption_max_us"].as_u64())
+        .max()
         .unwrap_or(u64::MAX);
-    let passed = !latencies.is_empty()
-        && confirmed_max_us < 50_000
-        && sum("lost_actions") == 0
-        && sum("duplicated_actions") == 0
-        && sum("reordered_actions") == 0
-        && sum("proxy_write_failures") == 0
-        && sum("journal_overflows") == 0
-        && sum("sequence_gaps") == 0
-        && sum("latch_drops") == 0
-        && catalog_adoption_max_us < 8_000;
+    let background_adoption_passed = catalog_adoption_max_us > 0 && catalog_adoption_max_us < 8_000;
+    let passed =
+        input_response_passed && pulse_passed && integrity_passed && background_adoption_passed;
     let summary = json!({
-        "schema": "mister-magik-launcher-response-v1",
+        "schema": "mister-magik-launcher-response-v2",
         "status": if passed { "passed" } else { "failed" },
         "protocol": 2,
-        "route": ["launcher-transition", "snes-system-hub"],
-        "confirmed_p99_us": confirmed_p99_us,
+        "routes": ["computers-acorn-to-other", "snes-system-hub", "settings", "arcade-press-to-motion"],
+        "display_rates_hz": [60, 50],
+        "input_response_status": if input_response_passed { "passed" } else { "failed" },
+        "pulse_status": if pulse_passed { "passed" } else { "failed" },
+        "integrity_status": if integrity_passed { "passed" } else { "failed" },
+        "background_adoption_status": if background_adoption_passed { "passed" } else { "failed" },
+        "dispatch_p95_us": dispatch_p95_us,
+        "dispatch_max_us": dispatch_max_us,
+        "confirmed_median_us": confirmed_median_us,
+        "confirmed_p95_us": confirmed_p95_us,
         "confirmed_max_us": confirmed_max_us,
         "lost_actions": sum("lost_actions"),
         "duplicated_actions": sum("duplicated_actions"),
+        "coalesced_actions": sum("coalesced_actions"),
         "reordered_actions": sum("reordered_actions"),
         "proxy_write_failures": sum("proxy_write_failures"),
         "journal_overflows": sum("journal_overflows"),
         "sequence_gaps": sum("sequence_gaps"),
         "latch_drops": sum("latch_drops"),
+        "repeated_vblanks": sum("repeated_vblanks"),
+        "ownership_losses": sum("ownership_losses"),
         "catalog_adoption_max_us": catalog_adoption_max_us,
-        "scenarios": [idle, catalog],
+        "scenarios": scenario_values,
     });
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
+    let session = connect_with(&config.connection, 10)?;
     launcher_restart(
         &session,
         &LauncherRestartOptions {
@@ -4340,51 +4420,156 @@ fn verify_installed_launcher_response(
 
 fn run_launcher_response_scenario(
     session: &Session,
+    display_label: &str,
     label: &str,
     catalog_refresh: &str,
 ) -> Result<Value> {
     let main_before: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
-    restart_launcher_with_one_shot_env(
-        session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-                ("MISTER_HOME_SELECTED_INDEX".into(), "1".into()),
-                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
-            ],
-            timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
-    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
-            && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:consoles")
-    })?;
-
-    run_launcher_response_driver(session, "transition-back")?;
-    thread::sleep(Duration::from_millis(400));
-    let reversed = read_launcher_status(session)?;
-    if reversed.get("menu_id").and_then(Value::as_str) != Some("menu:root") {
-        let trace = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
-            .unwrap_or_else(|| "missing".to_string());
-        return Err(format!(
-            "Back did not reverse the launcher transition immediately: status={reversed} trace={trace}"
-        )
-        .into());
+    let schedules = [(100_u64, 0_u64), (50, 7), (57, 13), (64, 3), (71, 11)];
+    let mut computers_sweeps = Vec::new();
+    for (interval_ms, start_delay_ms) in schedules {
+        let trace = run_launcher_response_computers_sweep(
+            session,
+            catalog_refresh,
+            interval_ms,
+            start_delay_ms,
+        )?;
+        computers_sweeps.push(summarize_computers_sweep(
+            trace,
+            interval_ms,
+            start_delay_ms,
+        )?);
     }
+    let system_hub = run_launcher_response_focus_route(
+        session,
+        catalog_refresh,
+        "system-hub",
+        Some("snes"),
+        "launcher-response",
+        17,
+        "system-hub",
+    )?;
+    let settings = run_launcher_response_focus_route(
+        session,
+        catalog_refresh,
+        "settings",
+        None,
+        "down 10 4 50",
+        4,
+        "settings",
+    )?;
+    let arcade = run_launcher_response_arcade_route(session, catalog_refresh)?;
 
-    run_launcher_response_driver(session, "transition-right")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
-        status.get("menu_id").and_then(Value::as_str) == Some("menu:consoles")
-    })?;
-    thread::sleep(Duration::from_millis(350));
-    let transition_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 4)?;
+    let routes = computers_sweeps
+        .iter()
+        .chain([&system_hub, &settings, &arcade])
+        .collect::<Vec<_>>();
+    let dispatch_latencies_us = launcher_response_values(&routes, "dispatch_latencies_us");
+    let confirmed_latencies_us = launcher_response_values(&routes, "confirmed_latencies_us");
+    let refresh_period_us = routes
+        .iter()
+        .filter_map(|route| route["refresh_period_us"].as_u64())
+        .find(|period| *period > 0)
+        .unwrap_or(u64::MAX);
+    let mut sorted_confirmed = confirmed_latencies_us.clone();
+    sorted_confirmed.sort_unstable();
+    let confirmed_median_us = median_u64(&sorted_confirmed).unwrap_or(u64::MAX);
+    let confirmed_p95_us = percentile_nearest_rank(&sorted_confirmed, 95);
+    let confirmed_max_us = sorted_confirmed.last().copied().unwrap_or(u64::MAX);
+    let mut sorted_dispatch = dispatch_latencies_us.clone();
+    sorted_dispatch.sort_unstable();
+    let dispatch_p95_us = percentile_nearest_rank(&sorted_dispatch, 95);
+    let dispatch_max_us = sorted_dispatch.last().copied().unwrap_or(u64::MAX);
+    let expected_rate = if display_label == "50-hz" { 50 } else { 60 };
+    let rate_matches = if expected_rate == 50 {
+        (18_500..=21_500).contains(&refresh_period_us)
+    } else {
+        (15_000..=18_500).contains(&refresh_period_us)
+    };
+    let input_response_passed = rate_matches
+        && dispatch_p95_us <= 3_000
+        && dispatch_max_us <= 5_000
+        && confirmed_median_us <= 12_000
+        && confirmed_p95_us <= refresh_period_us.saturating_add(3_000)
+        && confirmed_max_us <= refresh_period_us.saturating_add(8_000)
+        && routes
+            .iter()
+            .all(|route| route["route_status"].as_str() == Some("passed"));
+    let pulse_passed = computers_sweeps
+        .iter()
+        .chain([&system_hub, &settings])
+        .all(|route| route["pulse_status"].as_str() == Some("passed"))
+        && arcade["pulse_status"].as_str() == Some("not-applicable");
+    let main_after: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
+    )?;
+    let launcher = read_launcher_status(session)?;
+    let delta = |field: &str| {
+        main_after[field]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
+    };
+    let events = remote_read(session, "/tmp/mister-magik/events.jsonl").unwrap_or_default();
+    let catalog_adoption_max_us = parse_catalog_adoption_max_us(&events).unwrap_or(0);
+    let route_sum = |field: &str| {
+        routes
+            .iter()
+            .map(|route| route[field].as_u64().unwrap_or(u64::MAX))
+            .fold(0_u64, u64::saturating_add)
+    };
+    Ok(json!({
+        "display": display_label,
+        "expected_refresh_hz": expected_rate,
+        "label": label,
+        "catalog_refresh": catalog_refresh,
+        "input_response_status": if input_response_passed { "passed" } else { "failed" },
+        "pulse_status": if pulse_passed { "passed" } else { "failed" },
+        "refresh_period_us": refresh_period_us,
+        "dispatch_p95_us": dispatch_p95_us,
+        "dispatch_max_us": dispatch_max_us,
+        "confirmed_median_us": confirmed_median_us,
+        "confirmed_p95_us": confirmed_p95_us,
+        "confirmed_max_us": confirmed_max_us,
+        "dispatch_latencies_us": dispatch_latencies_us,
+        "confirmed_latencies_us": confirmed_latencies_us,
+        "lost_actions": route_sum("lost_actions"),
+        "duplicated_actions": route_sum("duplicated_actions"),
+        "coalesced_actions": route_sum("coalesced_actions"),
+        "reordered_actions": route_sum("reordered_actions"),
+        "proxy_write_failures": delta("input_proxy_write_failures"),
+        "journal_overflows": delta("input_proxy_journal_overflows"),
+        "sequence_gaps": delta("input_proxy_desyncs"),
+        "latch_drops": route_sum("latch_drops").max(launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX)),
+        "repeated_vblanks": route_sum("repeated_vblanks"),
+        "ownership_losses": route_sum("ownership_losses"),
+        "catalog_adoption_max_us": catalog_adoption_max_us,
+        "computers_sweeps": computers_sweeps,
+        "system_hub": system_hub,
+        "settings": settings,
+        "arcade_press_to_motion": arcade,
+    }))
+}
 
+const LAUNCHER_RESPONSE_COMPUTER_IDS: [&str; 8] = [
+    "menu:computers:apple-ii",
+    "menu:computers:commodore",
+    "menu:computers:atari",
+    "menu:computers:sinclair",
+    "menu:computers:coco2",
+    "menu:computers:dos",
+    "menu:computers:japanese",
+    "menu:computers:other",
+];
+
+fn run_launcher_response_computers_sweep(
+    session: &Session,
+    catalog_refresh: &str,
+    interval_ms: u64,
+    start_delay_ms: u64,
+) -> Result<Value> {
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
@@ -4401,7 +4586,6 @@ fn run_launcher_response_scenario(
     )?;
     wait_launcher_response_status(session, Duration::from_secs(45), |status| {
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
             && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
     })?;
     run_launcher_response_driver(session, "transition-right")?;
@@ -4410,43 +4594,19 @@ fn run_launcher_response_scenario(
             && status.get("selected_item_id").and_then(Value::as_str)
                 == Some("menu:computers:acorn")
     })?;
-    thread::sleep(Duration::from_millis(350));
-    run_launcher_response_driver(session, "computers-sweep")?;
-    thread::sleep(Duration::from_millis(350));
-    let computers_sweep_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 10)?;
-    let computers_focus_records = computers_sweep_trace["records"]
-        .as_array()
-        .ok_or("Computers sweep trace has no records")?
-        .iter()
-        .filter(|record| {
-            record.pointer("/before/screen").and_then(Value::as_str) == Some("home")
-                && record.pointer("/before/menu_id").and_then(Value::as_str)
-                    == Some("menu:computers")
-                && record.get("trigger").and_then(Value::as_str) == Some("initial")
-                && record.get("action").and_then(Value::as_str) == Some("right")
-                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
-        })
-        .collect::<Vec<_>>();
-    if computers_focus_records.len() != 8 {
-        return Err(format!(
-            "Computers sweep confirmed {} of 8 expected focus changes",
-            computers_focus_records.len()
-        )
-        .into());
-    }
-    let computers_confirmed_frames = computers_focus_records
-        .iter()
-        .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    let computers_confirmed_at_us = computers_focus_records
-        .iter()
-        .filter_map(|record| record.get("confirmed_at_us").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    let computers_visible_dwell_us = computers_confirmed_at_us
-        .windows(2)
-        .map(|pair| pair[1].saturating_sub(pair[0]))
-        .collect::<Vec<_>>();
-    let computers_selected_ids = computers_focus_records
+    thread::sleep(Duration::from_millis(200));
+    run_launcher_response_driver(
+        session,
+        &format!("computers-sweep {interval_ms} {start_delay_ms}"),
+    )?;
+    thread::sleep(Duration::from_millis(300));
+    wait_launcher_response_trace(session, Duration::from_secs(5), 9)
+}
+
+fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64) -> Result<Value> {
+    validate_launcher_response_trace(&trace)?;
+    let records = launcher_response_confirmed_records(&trace, Some("menu:computers"));
+    let selected_item_ids = records
         .iter()
         .filter_map(|record| {
             record
@@ -4454,21 +4614,101 @@ fn run_launcher_response_scenario(
                 .and_then(Value::as_str)
         })
         .collect::<Vec<_>>();
-    if computers_selected_ids.last().copied() != Some("menu:computers:other") {
-        return Err(format!(
-            "Computers sweep ended at {:?}, expected Other",
-            computers_selected_ids.last()
-        )
-        .into());
-    }
+    let expected = LAUNCHER_RESPONSE_COMPUTER_IDS.to_vec();
+    let route_status = selected_item_ids == expected;
+    let pulse = summarize_launcher_response_pulses(&trace, "menu:computers", &expected)?;
+    let final_confirmed_at_us = records
+        .last()
+        .and_then(|record| record["confirmed_at_us"].as_u64())
+        .unwrap_or(u64::MAX);
+    let previous_hidden_at_us = trace["feedback_records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|record| {
+            record["phase"].as_str() == Some("hidden")
+                && record["item"].as_str() == Some("menu:computers:japanese")
+        })
+        .and_then(|record| record["confirmed_at_us"].as_u64())
+        .unwrap_or(0);
+    let final_independent = interval_ms >= 80 || final_confirmed_at_us < previous_hidden_at_us;
+    Ok(launcher_response_route_summary(
+        &trace,
+        records,
+        route_status && final_independent,
+        pulse,
+        json!({
+            "press_duration_ms": 40,
+            "press_interval_ms": interval_ms,
+            "start_delay_ms": start_delay_ms,
+            "selected_item_ids": selected_item_ids,
+            "expected_item_ids": expected,
+            "expected_focus_changes": 8,
+            "final_selection_preceded_prior_pulse_expiry": final_independent,
+        }),
+    ))
+}
 
+fn run_launcher_response_focus_route(
+    session: &Session,
+    catalog_refresh: &str,
+    start_screen: &str,
+    start_system: Option<&str>,
+    driver: &str,
+    expected_records: usize,
+    pulse_surface: &str,
+) -> Result<Value> {
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), start_screen.into()),
+        ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+    ];
+    if let Some(system) = start_system {
+        env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), system.into()));
+    }
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars,
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("screen").and_then(Value::as_str) == Some(start_screen)
+    })?;
+    run_launcher_response_driver(session, driver)?;
+    thread::sleep(Duration::from_millis(300));
+    let trace = wait_launcher_response_trace(session, Duration::from_secs(5), expected_records)?;
+    validate_launcher_response_trace(&trace)?;
+    let records = launcher_response_confirmed_records(&trace, Some(pulse_surface));
+    let expected_items = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .pointer("/after/selected_item_id")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    let pulse = summarize_launcher_response_pulses(&trace, pulse_surface, &expected_items)?;
+    Ok(launcher_response_route_summary(
+        &trace,
+        records,
+        expected_items.len() == expected_records,
+        pulse,
+        json!({"expected_focus_changes": expected_records}),
+    ))
+}
+
+fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) -> Result<Value> {
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "system-hub".into()),
-                ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
                 ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
             ],
             timeout_secs: 45,
@@ -4478,108 +4718,189 @@ fn run_launcher_response_scenario(
     )?;
     wait_launcher_response_status(session, Duration::from_secs(45), |status| {
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("screen").and_then(Value::as_str) == Some("system-hub")
+            && status.get("screen").and_then(Value::as_str) == Some("arcade")
     })?;
-    run_launcher_response_driver(session, "launcher-response")?;
-    thread::sleep(Duration::from_millis(250));
-
-    let response_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 17)?;
-    let records = transition_trace["records"]
+    run_launcher_response_driver(session, "down 10 1 1")?;
+    thread::sleep(Duration::from_millis(150));
+    let trace = wait_launcher_response_trace(session, Duration::from_secs(5), 1)?;
+    validate_launcher_response_trace(&trace)?;
+    let records = launcher_response_confirmed_records(&trace, None);
+    let excluded_pulses = trace["feedback_records"]
         .as_array()
-        .ok_or("launcher transition trace has no records")?
-        .iter()
-        .chain(
-            response_trace["records"]
-                .as_array()
-                .ok_or("launcher response trace has no records")?,
-        )
-        .collect::<Vec<_>>();
-    let focus_records = records
+        .into_iter()
+        .flatten()
+        .filter(|record| record["surface"].as_str() == Some("arcade-list"))
+        .count();
+    Ok(launcher_response_route_summary(
+        &trace,
+        records,
+        excluded_pulses == 0,
+        json!({"status": "not-applicable", "excluded_pulse_records": excluded_pulses}),
+        json!({"expected_motion_confirmations": 1}),
+    ))
+}
+
+fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v2") {
+        return Err("launcher response trace is not schema v2".into());
+    }
+    if trace["records"].as_array().is_none()
+        || trace["feedback_records"].as_array().is_none()
+        || trace["presentation"].as_object().is_none()
+    {
+        return Err("launcher response trace omitted required v2 evidence".into());
+    }
+    Ok(())
+}
+
+fn launcher_response_confirmed_records<'a>(
+    trace: &'a Value,
+    menu_id: Option<&str>,
+) -> Vec<&'a Value> {
+    trace["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|record| {
+            record["trigger"].as_str() == Some("initial")
+                && record["disposition"].as_str() == Some("confirmed")
+                && menu_id.is_none_or(|menu| {
+                    record.pointer("/before/menu_id").and_then(Value::as_str) == Some(menu)
+                })
+        })
+        .collect()
+}
+
+fn summarize_launcher_response_pulses(
+    trace: &Value,
+    surface: &str,
+    expected_items: &[&str],
+) -> Result<Value> {
+    let feedback = trace["feedback_records"]
+        .as_array()
+        .ok_or("launcher response trace has no feedback records")?;
+    let visible = feedback
         .iter()
         .filter(|record| {
-            record.pointer("/before/screen").and_then(Value::as_str) == Some("system-hub")
-                && record.get("trigger").and_then(Value::as_str) == Some("initial")
-                && matches!(
-                    record.get("action").and_then(Value::as_str),
-                    Some("up" | "down" | "left" | "right")
-                )
-                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
+            record["phase"].as_str() == Some("visible")
+                && record["surface"].as_str() == Some(surface)
+                && expected_items.contains(&record["item"].as_str().unwrap_or(""))
         })
         .collect::<Vec<_>>();
-    if focus_records.len() < 17 {
-        return Err(format!(
-            "launcher response confirmed only {} of 17 expected focus changes",
-            focus_records.len()
-        )
-        .into());
-    }
-    let confirmed_latencies_us = focus_records
+    let visible_items = visible
         .iter()
-        .filter_map(|record| record.get("confirmed_latency_us").and_then(Value::as_u64))
+        .filter_map(|record| record["item"].as_str())
         .collect::<Vec<_>>();
-    let confirmed_frames = focus_records
-        .iter()
-        .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    let reordered_actions = confirmed_frames
-        .windows(2)
-        .filter(|pair| pair[1] <= pair[0])
-        .count() as u64;
-    let transition_swallowed = records.iter().any(|record| {
-        record.get("disposition").and_then(Value::as_str) == Some("transition-swallowed")
-            && record.get("action").and_then(Value::as_str) == Some("right")
+    let mut dwell_us = Vec::new();
+    let exact_pairs = visible.iter().all(|on| {
+        let event_id = on["event_id"].as_u64();
+        let on_frame = on["confirmed_frame"].as_u64().unwrap_or(u64::MAX);
+        let matches = feedback
+            .iter()
+            .filter(|off| {
+                off["phase"].as_str() == Some("hidden")
+                    && off["event_id"].as_u64() == event_id
+                    && off["surface"].as_str() == Some(surface)
+            })
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return false;
+        }
+        let off = matches[0];
+        let dwell = off["dwell_us"].as_u64().unwrap_or(0);
+        dwell_us.push(dwell);
+        off["confirmed_frame"].as_u64().unwrap_or(0) > on_frame && dwell >= 80_000
     });
-    let transition_control = records.iter().any(|record| {
-        record.get("disposition").and_then(Value::as_str) == Some("transition-control")
-            && record.get("action").and_then(Value::as_str) == Some("back")
-    });
-    if !transition_swallowed || !transition_control {
-        return Err("launcher response trace missed transition swallow or Back control".into());
-    }
-    let main_after: Value = serde_json::from_str(
-        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
-    )?;
-    let launcher = read_launcher_status(session)?;
-    let delta = |field: &str| {
-        main_after[field]
-            .as_u64()
-            .unwrap_or(u64::MAX)
-            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
-    };
-    let events = remote_read(session, "/tmp/mister-magik/events.jsonl").unwrap_or_default();
-    let catalog_adoption_max_us = parse_catalog_adoption_max_us(&events).unwrap_or(0);
+    let passed = visible_items == expected_items && exact_pairs;
     Ok(json!({
-        "label": label,
-        "catalog_refresh": catalog_refresh,
-        "confirmed_latencies_us": confirmed_latencies_us,
-        "confirmed_frames": confirmed_frames,
-        "lost_actions": u64::from(focus_records.len() < 17),
-        "duplicated_actions": focus_records.len().saturating_sub(17) as u64,
-        "reordered_actions": reordered_actions,
-        "proxy_write_failures": delta("input_proxy_write_failures"),
-        "journal_overflows": delta("input_proxy_journal_overflows"),
-        "sequence_gaps": delta("input_proxy_desyncs"),
-        "latch_drops": launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX),
-        "catalog_adoption_max_us": catalog_adoption_max_us,
-        "queue_high_water": transition_trace["queue_high_water"]
-            .as_u64()
-            .unwrap_or(0)
-            .max(computers_sweep_trace["queue_high_water"].as_u64().unwrap_or(0))
-            .max(response_trace["queue_high_water"].as_u64().unwrap_or(0)),
-        "computers_sweep": {
-            "press_duration_ms": 40,
-            "press_interval_ms": 100,
-            "selected_item_ids": computers_selected_ids,
-            "confirmed_frames": computers_confirmed_frames,
-            "confirmed_at_us": computers_confirmed_at_us,
-            "visible_dwell_us": computers_visible_dwell_us,
-            "trace": computers_sweep_trace,
-        },
-        "trace": {
-            "transition": transition_trace,
-            "response": response_trace,
-        },
+        "status": if passed { "passed" } else { "failed" },
+        "surface": surface,
+        "expected_items": expected_items,
+        "visible_items": visible_items,
+        "dwell_us": dwell_us,
+        "minimum_dwell_us": 80_000,
+        "exact_on_off_pairs": exact_pairs,
     }))
+}
+
+fn launcher_response_route_summary(
+    trace: &Value,
+    records: Vec<&Value>,
+    route_passed: bool,
+    pulse: Value,
+    detail: Value,
+) -> Value {
+    let dispatch_latencies_us = records
+        .iter()
+        .filter_map(|record| record["dispatch_latency_us"].as_u64())
+        .collect::<Vec<_>>();
+    let confirmed_latencies_us = records
+        .iter()
+        .filter_map(|record| record["confirmed_latency_us"].as_u64())
+        .collect::<Vec<_>>();
+    let frames = records
+        .iter()
+        .filter_map(|record| record["confirmed_frame"].as_u64())
+        .collect::<Vec<_>>();
+    let reordered = frames.windows(2).filter(|pair| pair[1] <= pair[0]).count() as u64;
+    let expected = detail
+        .get("expected_focus_changes")
+        .or_else(|| detail.get("expected_motion_confirmations"))
+        .and_then(Value::as_u64)
+        .unwrap_or(records.len() as u64);
+    let observed = records.len() as u64;
+    let latch_drops = trace
+        .pointer("/presentation/latch_drop_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let repeated = trace
+        .pointer("/presentation/repeated_vblank_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let ownership = trace
+        .pointer("/presentation/ownership_loss_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let ownership_held = trace
+        .pointer("/presentation/start/magik_ownership")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && trace
+            .pointer("/presentation/end/magik_ownership")
+            .and_then(Value::as_bool)
+            == Some(true);
+    json!({
+        "route_status": if route_passed && reordered == 0 { "passed" } else { "failed" },
+        "pulse_status": pulse["status"],
+        "refresh_period_us": trace.pointer("/presentation/refresh_period_us").and_then(Value::as_u64),
+        "dispatch_latencies_us": dispatch_latencies_us,
+        "confirmed_latencies_us": confirmed_latencies_us,
+        "lost_actions": expected.saturating_sub(observed),
+        "duplicated_actions": observed.saturating_sub(expected),
+        "coalesced_actions": expected.saturating_sub(observed),
+        "reordered_actions": reordered,
+        "latch_drops": latch_drops,
+        "repeated_vblanks": repeated,
+        "ownership_losses": if ownership_held { ownership } else { u64::MAX },
+        "pulse": pulse,
+        "detail": detail,
+        "trace": trace.clone(),
+    })
+}
+
+fn launcher_response_values(values: &[&Value], field: &str) -> Vec<u64> {
+    values
+        .iter()
+        .flat_map(|value| value[field].as_array().into_iter().flatten())
+        .filter_map(Value::as_u64)
+        .collect()
+}
+
+fn percentile_nearest_rank(values: &[u64], percentile: usize) -> u64 {
+    if values.is_empty() {
+        return u64::MAX;
+    }
+    values[(values.len() * percentile).div_ceil(100).saturating_sub(1)]
 }
 
 fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()> {
@@ -15148,6 +15469,43 @@ mod tests {
             "catalog_system_shard_ready system=snes games=20 adoption_us=3456 detail=ok\n",
         );
         assert_eq!(parse_catalog_adoption_max_us(events), Some(3_456));
+    }
+
+    #[test]
+    fn launcher_response_pulse_gate_requires_exact_confirmed_pairs_and_dwell() {
+        let trace = json!({
+            "feedback_records": [
+                {"phase": "visible", "event_id": 1, "surface": "settings", "item": "orientation", "confirmed_frame": 10},
+                {"phase": "visible", "event_id": 2, "surface": "settings", "item": "screensaver", "confirmed_frame": 13},
+                {"phase": "hidden", "event_id": 1, "surface": "settings", "item": "orientation", "confirmed_frame": 15, "dwell_us": 83_000},
+                {"phase": "hidden", "event_id": 2, "surface": "settings", "item": "screensaver", "confirmed_frame": 18, "dwell_us": 84_000},
+            ],
+        });
+        let summary =
+            summarize_launcher_response_pulses(&trace, "settings", &["orientation", "screensaver"])
+                .unwrap();
+        assert_eq!(summary["status"], "passed");
+
+        let mut short = trace;
+        short["feedback_records"][3]["dwell_us"] = json!(79_999);
+        assert_eq!(
+            summarize_launcher_response_pulses(
+                &short,
+                "settings",
+                &["orientation", "screensaver"],
+            )
+            .unwrap()["status"],
+            "failed"
+        );
+    }
+
+    #[test]
+    fn launcher_response_percentiles_use_nearest_rank() {
+        let values = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ];
+        assert_eq!(percentile_nearest_rank(&values, 95), 19);
+        assert_eq!(percentile_nearest_rank(&[], 95), u64::MAX);
     }
 
     fn passing_catalog_pmu_summary() -> Value {

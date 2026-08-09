@@ -30,6 +30,7 @@ struct DriverPlan {
     key_code: u16,
     pulse_ms: u64,
     gap_ms: u64,
+    start_delay_ms: u64,
     count: u32,
     qualification: bool,
     cpu_load: bool,
@@ -55,27 +56,45 @@ impl DriverPlan {
                 key_code: 108,
                 pulse_ms: 0,
                 gap_ms: 0,
+                start_delay_ms: 0,
                 count: 109,
                 qualification: true,
                 cpu_load: args.first().map(String::as_str) == Some("qualification-load"),
                 sequence: DriverSequence::Pulses,
             });
         }
+        if args.first().map(String::as_str) == Some("computers-sweep") {
+            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 200)?;
+            let start_delay_ms = parse_bounded(args.get(2), "start_delay_ms", 0, interval_ms - 1)?;
+            if args.len() != 3 {
+                return Err("usage: computers-sweep interval_ms start_delay_ms".to_string());
+            }
+            return Ok(Self {
+                key_code: 106,
+                pulse_ms: 40,
+                gap_ms: interval_ms - 40,
+                start_delay_ms,
+                count: 8,
+                qualification: false,
+                cpu_load: false,
+                sequence: DriverSequence::ComputersSweep,
+            });
+        }
         if matches!(
             args.first().map(String::as_str),
-            Some("transition-right" | "transition-back" | "computers-sweep" | "launcher-response")
+            Some("transition-right" | "transition-back" | "launcher-response")
         ) {
             return Ok(Self {
                 key_code: 28,
                 pulse_ms: 10,
                 gap_ms: 50,
+                start_delay_ms: 0,
                 count: 1,
                 qualification: false,
                 cpu_load: false,
                 sequence: match args.first().map(String::as_str) {
                     Some("transition-right") => DriverSequence::TransitionRight,
                     Some("transition-back") => DriverSequence::TransitionBack,
-                    Some("computers-sweep") => DriverSequence::ComputersSweep,
                     _ => DriverSequence::LauncherResponse,
                 },
             });
@@ -97,6 +116,7 @@ impl DriverPlan {
             key_code,
             pulse_ms,
             gap_ms,
+            start_delay_ms: 0,
             count,
             qualification: false,
             cpu_load: false,
@@ -137,6 +157,7 @@ pub(crate) fn run(args: &[String]) {
                 "status": "passed",
                 "pulse_ms": plan.pulse_ms,
                 "gap_ms": plan.gap_ms,
+                "start_delay_ms": plan.start_delay_ms,
                 "count": plan.count,
                 "qualification": plan.qualification,
                 "cpu_load": plan.cpu_load,
@@ -232,10 +253,11 @@ impl UinputDevice {
                 return self.pulse(106, 500);
             }
             DriverSequence::ComputersSweep => {
+                std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
-                    self.pulse(106, 40)?;
+                    self.pulse(106, plan.pulse_ms)?;
                     if index < 7 {
-                        std::thread::sleep(Duration::from_millis(60));
+                        std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
                 }
                 return Ok(());
@@ -335,6 +357,7 @@ mod tests {
                 key_code: 106,
                 pulse_ms: 5,
                 gap_ms: 10,
+                start_delay_ms: 0,
                 count: 8,
                 qualification: false,
                 cpu_load: false,
@@ -359,10 +382,16 @@ mod tests {
             DriverSequence::LauncherResponse
         );
         assert_eq!(
-            DriverPlan::parse(&["computers-sweep".to_string()])
+            DriverPlan::parse(&["computers-sweep", "57", "7"].map(str::to_string))
                 .unwrap()
                 .sequence,
             DriverSequence::ComputersSweep
         );
+        assert!(DriverPlan::parse(&["computers-sweep".to_string()]).is_err());
+        let sweep =
+            DriverPlan::parse(&["computers-sweep", "50", "13"].map(str::to_string)).unwrap();
+        assert_eq!(sweep.pulse_ms, 40);
+        assert_eq!(sweep.gap_ms, 10);
+        assert_eq!(sweep.start_delay_ms, 13);
     }
 }

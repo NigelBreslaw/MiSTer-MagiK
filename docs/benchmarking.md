@@ -63,20 +63,28 @@ continuity, physical FPS, and drop counters for all six legs, then restores the
 ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
 
-`launcher-response` is the release gate for interactive menu latency. It checks
-transition input handling, then measures 5/10/20/40 ms gamepad pulses at 50 ms
-pacing and a repeat hold on the SNES system hub through Main proxy v2. It
-correlates dispatch with the semantic state and exact latch-confirmed frame.
-It also opens Computers at Acorn and drives all eight moves through Other at a
-human-scale 100 ms press interval (40 ms pressed, 60 ms released), recording
-each tile's confirmed frame plus the visible dwell before the next tile is
-confirmed.
-Every paced accepted move must be visible in its own ordered frame and every
-confirmed response must be under 50 ms. The
-catalog-stress pass must publish a real prepared shard with UI adoption below 8
-ms. Both passes require transition-time ordinary input to be swallowed, Back to
-remain immediate, and zero input or latch faults. Physical cadence remains a
-separate gate in `navigation-transitions`.
+`launcher-response` is the release gate for interactive selection latency and
+confirmed focus feedback. Schema v2 has no v1 compatibility parser. It drives
+the exact Computers route from Acorn through Apple II, Commodore, Atari,
+Sinclair, CoCo 2, DOS, Japanese, and Other with a 100 ms baseline plus rotated
+50/57/64/71 ms start-to-start schedules. It also covers discrete System Hub and
+Settings focus and Arcade press-to-first-motion through Main proxy v2.
+
+Each eligible destination must have one exact pulse-on and pulse-off active
+latch sequence with at least 80,000 µs between their physical confirmations.
+Pulses may overlap; the final Other selection must confirm without waiting for
+an older pulse deadline. Arcade's velocity list deliberately has no pulse and
+is gated on first confirmed motion instead. Runs execute idle and during forced
+catalog work at physical 60 Hz and 50 Hz, with zero input loss, duplication,
+coalescing, reorder, overflow, desync, latch drops, protocol-v5 repeated
+vblanks, or ownership loss.
+
+Dispatch P95 must be at most 3 ms and its maximum at most 5 ms. Input-to-visible
+median must be at most 12 ms; each display-rate leg independently limits P95 to
+one refresh period plus 3 ms and the maximum to one refresh period plus 8 ms.
+The report exposes independent input-response, pulse, integrity, and background
+adoption statuses. Forced catalog adoption remains a separate below-8-ms gate,
+and the overall result passes only when every status passes.
 
 `settings-navigation` runs the real Home → Settings → About → Info → About →
 Settings → Home route first in the normal 1280×720 landscape layout, then in

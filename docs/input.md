@@ -30,6 +30,16 @@ repeat. Menu repeat is immediate, then 300 ms, then every 80 ms. Home and Arcade
 retain their continuous motion policies. Integrity faults clear router state and
 require a neutral batch before recovery.
 
+Authoritative selection changes immediately. A small Rust-owned feedback state
+machine separately acknowledges eligible discrete focus destinations. It keys
+entries by stable surface and item identities, permits overlapping pulses, and
+never queues selection behind feedback. An acknowledgement's 80 ms clock starts
+only when the exact submitted frame is confirmed as the active protocol-v5
+latch sequence; removal is likewise complete only when its later frame is
+physically confirmed. Re-entering a destination rearms it, while releases,
+boundaries, swallowed input, asynchronous state changes, and Arcade's
+fixed-selector velocity list do not create acknowledgements.
+
 Launcher navigation transitions are 300 ms. Back and Home reverse an active
 transition immediately. Every other press received while a transition owns
 focus is consumed; it is never cached or replayed on the destination screen.
@@ -85,15 +95,16 @@ presentation change:
 scripts/agent benchmark launcher-response
 ```
 
-It verifies launcher transition input, then sends 5/10/20/40 ms gamepad pulses
-at 50 ms start-to-start spacing plus a repeat hold on the SNES system hub. The
-input travels through Main's proxy-v2 and kernel path. Each accepted focus move
-must reach a distinct physically confirmed frame in order. Every confirmed
-response must be under 50 ms. The same run repeats
-during catalog work, requires prepared catalog adoption below 8 ms, verifies
-Back reversal and transition-time input consumption, and requires zero input or
-latch faults. Physical cadence is qualified separately by
-`navigation-transitions`. Evidence is stored under
+It drives Computers from Acorn through Other at 100/50/57/64/71 ms schedules,
+plus System Hub, Settings, and Arcade press-to-motion routes. Every eligible
+discrete destination must have exact active-latch pulse-on and pulse-off
+confirmations separated by at least 80 ms, while final selection remains
+immediate and Arcade velocity motion remains pulse-free. Idle and forced-catalog
+runs execute at 60 Hz and 50 Hz. Dispatch P95/maximum are gated at 3/5 ms;
+input-to-visible median is gated at 12 ms and P95/maximum at the measured refresh
+period plus 3/8 ms. The schema-v2 report separately states input-response,
+pulse, integrity, and background-adoption results and requires zero logical,
+mailbox, latch, or protocol-v5 physical faults. Evidence is stored under
 `build/agent-benchmarks/launcher-response/`.
 
 The automated gate does not replace the attended controller pass. Before
