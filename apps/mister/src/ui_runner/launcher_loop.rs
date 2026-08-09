@@ -21,6 +21,7 @@ use super::launcher_worker_intents::{
 use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
+use crate::launcher_presentation::SelectionFeedbackTarget;
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
@@ -3939,6 +3940,10 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
+        if bridge_models.expire_selection_feedback(loop_start) {
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
+        }
         if (!orientation_benchmark_requires_analytics
             || frame_accounting.frame_analytics_mode() != FrameAnalyticsMode::Off)
             && let Some(leg) =
@@ -5220,6 +5225,11 @@ pub(super) fn run_launcher_loop(
                     }
                     if !setup.is_active() {
                         let nav_before = LauncherBridgeKey::from_nav(&nav);
+                        let selection_feedback_before = SelectionFeedbackTarget::home(&nav);
+                        let selection_feedback_input = routed_event_this_loop
+                            .as_ref()
+                            .is_some_and(|event| event.phase == InputPhase::Pressed)
+                            || final_input_tick;
                         let arcade_selected_before_input = nav.arcade.selected;
                         if transition_picker_enabled && nav.screen == Screen::Arcade {
                             let left = routed_event_this_loop.as_ref().is_some_and(|event| {
@@ -6106,6 +6116,18 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                         let nav_after = LauncherBridgeKey::from_nav(&nav);
+                        let selection_feedback_after = SelectionFeedbackTarget::home(&nav);
+                        let feedback_surface_changed = bridge_models
+                            .sync_selection_feedback_surface(selection_feedback_after.as_ref());
+                        let feedback_registered = selection_feedback_input
+                            && bridge_models.note_selection_feedback_change(
+                                selection_feedback_before.as_ref(),
+                                selection_feedback_after.as_ref(),
+                            );
+                        if feedback_surface_changed || feedback_registered {
+                            full_bridge_dirty = true;
+                            request_launcher_redraw!();
+                        }
                         if nav_before != nav_after {
                             if let Some(entry) = pending_collection_entry.take() {
                                 nav.catalog_system_hydration_finished(&entry.collection_id);
@@ -8071,6 +8093,7 @@ pub(super) fn run_launcher_loop(
             identity: LauncherFrameIdentity {
                 frames,
                 automation: automation_frame_stamp,
+                selection_feedback: bridge_models.selection_feedback_stamp(),
                 selected: nav.arcade.selected,
                 visual_index: nav.arcade.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -8138,6 +8161,8 @@ pub(super) fn run_launcher_loop(
         let mut accepted_and_active_confirmed = false;
         let mut confirmed_present_sequence = 0u16;
         let mut confirmed_direct_layer_receipt = None;
+        let mut selection_feedback_confirmed_at =
+            (!latch_trace_flush_deferred && visible_frame_presented).then_some(frame_t4);
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -8263,6 +8288,7 @@ pub(super) fn run_launcher_loop(
                 && launcher_presenter.latch_failure().is_none();
             if accepted_and_active_confirmed {
                 confirmed_present_sequence = presented_frame.main_present_sequence;
+                selection_feedback_confirmed_at = Some(pace.hit_at.unwrap_or(wait_done));
                 settings_navigation_benchmark
                     .note_orientation_presented(nav.settings.screen_orientation);
             }
@@ -8474,6 +8500,40 @@ pub(super) fn run_launcher_loop(
                 &launch_return_session,
                 latch_trace_flush_deferred,
             );
+        }
+        if let Some(confirmed_at) = selection_feedback_confirmed_at {
+            for confirmation in bridge_models
+                .confirm_selection_feedback(&presented_frame.selection_feedback, confirmed_at)
+            {
+                match confirmation {
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                        event_id,
+                        target,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=visible event={} surface={} item={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        frames,
+                        confirmed_present_sequence,
+                    ),
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                        event_id,
+                        target,
+                        visible_for,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=hidden event={} surface={} item={} dwell_us={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        visible_for.as_micros(),
+                        frames,
+                        confirmed_present_sequence,
+                    ),
+                }
+            }
         }
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,

@@ -125,6 +125,7 @@ export component HomeGrid inherits Rectangle {
                         status: MisterBridge.menu-items[menu-index].status;
                         focused: !MisterBridge.settings-focused
                             && menu-index == MisterBridge.selected-index;
+                        acknowledged: MisterBridge.menu-items[menu-index].acknowledged;
                         flat-focus-style: true;
                     }
                 }
@@ -195,6 +196,7 @@ export component HomeGrid inherits Rectangle {
                 subtitle: item.subtitle;
                 status: item.status;
                 focused: index == MisterBridge.selected-index;
+                acknowledged: item.acknowledged;
                 flat-focus-style: true;
             }
         }

@@ -14,6 +14,202 @@ use crate::launcher_taxonomy::LauncherMenuItemKind;
 use mister_magik_ui::launcher::{Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+pub const SELECTION_FEEDBACK_MIN_VISIBLE: Duration = Duration::from_millis(80);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionFeedbackTarget {
+    pub surface: String,
+    pub item: String,
+}
+
+impl SelectionFeedbackTarget {
+    pub fn home(nav: &LauncherNav) -> Option<Self> {
+        (nav.screen == Screen::Home)
+            .then(|| Self {
+                surface: nav.current_menu_id().to_string(),
+                item: nav.current_menu_selected_item_id().to_string(),
+            })
+            .filter(|target| !target.item.is_empty())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SelectionFeedbackStamp {
+    pub revision: u64,
+    pub entries: Vec<SelectionFeedbackEntryStamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SelectionFeedbackEntryStamp {
+    pub event_id: u64,
+    pub target: SelectionFeedbackTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SelectionFeedbackConfirmation {
+    Visible {
+        event_id: u64,
+        target: SelectionFeedbackTarget,
+        confirmed_at: Instant,
+    },
+    Hidden {
+        event_id: u64,
+        target: SelectionFeedbackTarget,
+        visible_for: Duration,
+        confirmed_at: Instant,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct ActiveSelectionFeedback {
+    event_id: u64,
+    target: SelectionFeedbackTarget,
+    visible_since: Option<Instant>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingSelectionFeedbackRemoval {
+    event_id: u64,
+    target: SelectionFeedbackTarget,
+    visible_since: Instant,
+    requested_revision: u64,
+}
+
+#[derive(Default)]
+struct SelectionFeedback {
+    revision: u64,
+    next_event_id: u64,
+    surface: Option<String>,
+    active: Vec<ActiveSelectionFeedback>,
+    pending_removals: Vec<PendingSelectionFeedbackRemoval>,
+}
+
+impl SelectionFeedback {
+    fn sync_surface(&mut self, target: Option<&SelectionFeedbackTarget>) -> bool {
+        let surface = target.map(|target| target.surface.as_str());
+        if self.surface.as_deref() == surface {
+            return false;
+        }
+        let changed = !self.active.is_empty() || !self.pending_removals.is_empty();
+        self.active.clear();
+        self.pending_removals.clear();
+        self.surface = surface.map(str::to_string);
+        if changed {
+            self.bump_revision();
+        }
+        changed
+    }
+
+    fn register(&mut self, target: SelectionFeedbackTarget) -> bool {
+        if self.surface.as_deref() != Some(target.surface.as_str()) {
+            self.sync_surface(Some(&target));
+        }
+        self.next_event_id = self.next_event_id.wrapping_add(1).max(1);
+        let event_id = self.next_event_id;
+        self.pending_removals.retain(|entry| entry.target != target);
+        if let Some(entry) = self.active.iter_mut().find(|entry| entry.target == target) {
+            entry.event_id = event_id;
+            entry.visible_since = None;
+        } else {
+            self.active.push(ActiveSelectionFeedback {
+                event_id,
+                target,
+                visible_since: None,
+            });
+        }
+        self.bump_revision();
+        true
+    }
+
+    fn expire_due(&mut self, now: Instant) -> bool {
+        let mut expired = Vec::new();
+        self.active.retain(|entry| {
+            let due = entry.visible_since.is_some_and(|since| {
+                now.saturating_duration_since(since) >= SELECTION_FEEDBACK_MIN_VISIBLE
+            });
+            if due {
+                expired.push(entry.clone());
+            }
+            !due
+        });
+        if expired.is_empty() {
+            return false;
+        }
+        self.bump_revision();
+        self.pending_removals
+            .extend(expired.into_iter().map(|entry| {
+                PendingSelectionFeedbackRemoval {
+                    event_id: entry.event_id,
+                    target: entry.target,
+                    visible_since: entry
+                        .visible_since
+                        .expect("only physically visible feedback can expire"),
+                    requested_revision: self.revision,
+                }
+            }));
+        true
+    }
+
+    fn stamp(&self) -> SelectionFeedbackStamp {
+        SelectionFeedbackStamp {
+            revision: self.revision,
+            entries: self
+                .active
+                .iter()
+                .map(|entry| SelectionFeedbackEntryStamp {
+                    event_id: entry.event_id,
+                    target: entry.target.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn confirm(
+        &mut self,
+        stamp: &SelectionFeedbackStamp,
+        confirmed_at: Instant,
+    ) -> Vec<SelectionFeedbackConfirmation> {
+        let mut confirmations = Vec::new();
+        for stamped in &stamp.entries {
+            if let Some(active) = self
+                .active
+                .iter_mut()
+                .find(|entry| entry.event_id == stamped.event_id && entry.target == stamped.target)
+                && active.visible_since.is_none()
+            {
+                active.visible_since = Some(confirmed_at);
+                confirmations.push(SelectionFeedbackConfirmation::Visible {
+                    event_id: active.event_id,
+                    target: active.target.clone(),
+                    confirmed_at,
+                });
+            }
+        }
+        self.pending_removals.retain(|entry| {
+            let hidden = entry.requested_revision <= stamp.revision
+                && !stamp
+                    .entries
+                    .iter()
+                    .any(|stamped| stamped.target == entry.target);
+            if hidden {
+                confirmations.push(SelectionFeedbackConfirmation::Hidden {
+                    event_id: entry.event_id,
+                    target: entry.target.clone(),
+                    visible_for: confirmed_at.saturating_duration_since(entry.visible_since),
+                    confirmed_at,
+                });
+            }
+            !hidden
+        });
+        confirmations
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1).max(1);
+    }
+}
 
 macro_rules! set_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
@@ -39,6 +235,8 @@ pub struct LauncherBridgePresenter {
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
+    selection_feedback: SelectionFeedback,
+    projected_selection_feedback: SelectionFeedbackStamp,
 }
 
 impl LauncherBridgePresenter {
@@ -188,6 +386,7 @@ impl LauncherBridgePresenter {
                 bridge.set_menu_items(self.menu_items(nav, catalog_version));
             }
         }
+        self.sync_menu_item_feedback(nav);
 
         let games = active_game_view(catalog, nav);
         let (title, count) = active_header(catalog, nav, games.len());
@@ -229,8 +428,9 @@ impl LauncherBridgePresenter {
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {
         let key = (catalog_version, nav.current_menu_id().to_string());
         if self.menu_items_key.as_ref() != Some(&key) {
-            self.menu_items = Some(build_menu_items(nav));
+            self.menu_items = Some(build_menu_items(nav, &self.selection_feedback.stamp()));
             self.menu_items_key = Some(key);
+            self.projected_selection_feedback = self.selection_feedback.stamp();
         }
         ModelRc::from(
             self.menu_items
@@ -256,6 +456,67 @@ impl LauncherBridgePresenter {
                 .clone(),
         )
     }
+
+    pub fn sync_selection_feedback_surface(
+        &mut self,
+        target: Option<&SelectionFeedbackTarget>,
+    ) -> bool {
+        self.selection_feedback.sync_surface(target)
+    }
+
+    pub fn note_selection_feedback_change(
+        &mut self,
+        before: Option<&SelectionFeedbackTarget>,
+        after: Option<&SelectionFeedbackTarget>,
+    ) -> bool {
+        let Some(after) = after else {
+            return false;
+        };
+        if before.is_some_and(|before| before.surface == after.surface && before.item != after.item)
+        {
+            self.selection_feedback.register(after.clone())
+        } else {
+            false
+        }
+    }
+
+    pub fn expire_selection_feedback(&mut self, now: Instant) -> bool {
+        self.selection_feedback.expire_due(now)
+    }
+
+    pub fn selection_feedback_stamp(&self) -> SelectionFeedbackStamp {
+        self.projected_selection_feedback.clone()
+    }
+
+    pub fn confirm_selection_feedback(
+        &mut self,
+        stamp: &SelectionFeedbackStamp,
+        confirmed_at: Instant,
+    ) -> Vec<SelectionFeedbackConfirmation> {
+        self.selection_feedback.confirm(stamp, confirmed_at)
+    }
+
+    fn sync_menu_item_feedback(&mut self, nav: &LauncherNav) {
+        let stamp = self.selection_feedback.stamp();
+        if self.projected_selection_feedback == stamp {
+            return;
+        }
+        if let Some(model) = self.menu_items.as_ref() {
+            for index in 0..model.row_count() {
+                if let Some(mut row) = model.row_data(index) {
+                    let acknowledged = stamp.entries.iter().any(|entry| {
+                        entry.target.surface == nav.current_menu_id()
+                            && entry.target.item == row.id.as_str()
+                    });
+                    if row.acknowledged != acknowledged {
+                        row.acknowledged = acknowledged;
+                        model.set_row_data(index, row);
+                    }
+                }
+            }
+        }
+        self.projected_selection_feedback = stamp;
+    }
 }
 
 pub fn screen_mode(screen: Screen) -> i32 {
@@ -272,7 +533,10 @@ pub fn screen_mode(screen: Screen) -> i32 {
     }
 }
 
-fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
+fn build_menu_items(
+    nav: &LauncherNav,
+    feedback: &SelectionFeedbackStamp,
+) -> Rc<VecModel<MenuItem>> {
     let rows = nav
         .current_menu_items()
         .iter()
@@ -307,6 +571,9 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
                     CatalogMenuItemStatus::LoadFailed => "Load failed — A to retry".into(),
                     CatalogMenuItemStatus::Ready => format!("{} games", item.count).into(),
                 },
+                acknowledged: feedback.entries.iter().any(|entry| {
+                    entry.target.surface == nav.current_menu_id() && entry.target.item == item.id
+                }),
                 available: presentation.available,
                 node_kind: match item.kind {
                     LauncherMenuItemKind::Menu => MenuItemKind::Group,
@@ -409,4 +676,124 @@ fn sync_search(bridge: &MisterBridge, nav: &LauncherNav) {
             ArcadeSearchPane::Results => 1,
         }
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target(item: &str) -> SelectionFeedbackTarget {
+        SelectionFeedbackTarget {
+            surface: "menu:computers".to_string(),
+            item: item.to_string(),
+        }
+    }
+
+    #[test]
+    fn feedback_clock_starts_on_exact_visible_confirmation() {
+        let mut feedback = SelectionFeedback::default();
+        feedback.register(target("apple-ii"));
+        let visible_stamp = feedback.stamp();
+        let origin = Instant::now();
+
+        assert!(
+            feedback
+                .confirm(&SelectionFeedbackStamp::default(), origin)
+                .is_empty()
+        );
+        assert!(!feedback.expire_due(origin + Duration::from_secs(1)));
+
+        let confirmations = feedback.confirm(&visible_stamp, origin);
+        assert!(matches!(
+            confirmations.as_slice(),
+            [SelectionFeedbackConfirmation::Visible { event_id: 1, .. }]
+        ));
+        assert!(!feedback.expire_due(origin + Duration::from_millis(79)));
+        assert!(feedback.expire_due(origin + SELECTION_FEEDBACK_MIN_VISIBLE));
+
+        let removal_stamp = feedback.stamp();
+        assert!(
+            feedback
+                .confirm(&visible_stamp, origin + Duration::from_millis(81))
+                .is_empty()
+        );
+        let confirmations = feedback.confirm(&removal_stamp, origin + Duration::from_millis(83));
+        assert!(matches!(
+            confirmations.as_slice(),
+            [SelectionFeedbackConfirmation::Hidden { visible_for, .. }]
+                if *visible_for >= SELECTION_FEEDBACK_MIN_VISIBLE
+        ));
+    }
+
+    #[test]
+    fn feedback_overlaps_and_reentry_rearms_from_confirmation() {
+        let mut feedback = SelectionFeedback::default();
+        let origin = Instant::now();
+        feedback.register(target("apple-ii"));
+        let first_stamp = feedback.stamp();
+        feedback.confirm(&first_stamp, origin);
+
+        feedback.register(target("commodore"));
+        let overlap_stamp = feedback.stamp();
+        assert_eq!(overlap_stamp.entries.len(), 2);
+        feedback.confirm(&overlap_stamp, origin + Duration::from_millis(50));
+
+        feedback.register(target("apple-ii"));
+        let reentry_stamp = feedback.stamp();
+        let apple_event = reentry_stamp
+            .entries
+            .iter()
+            .find(|entry| entry.target.item == "apple-ii")
+            .expect("re-entered Apple II feedback");
+        assert_eq!(apple_event.event_id, 3);
+        feedback.confirm(&reentry_stamp, origin + Duration::from_millis(70));
+
+        assert!(!feedback.expire_due(origin + Duration::from_millis(129)));
+        assert!(feedback.expire_due(origin + Duration::from_millis(150)));
+        let remaining = feedback.stamp();
+        assert!(remaining.entries.is_empty());
+    }
+
+    #[test]
+    fn replacing_surface_clears_feedback_without_creating_a_pulse() {
+        let mut feedback = SelectionFeedback::default();
+        feedback.register(target("apple-ii"));
+        assert_eq!(feedback.stamp().entries.len(), 1);
+
+        let other = SelectionFeedbackTarget {
+            surface: "menu:consoles".to_string(),
+            item: "nintendo".to_string(),
+        };
+        assert!(feedback.sync_surface(Some(&other)));
+        assert!(feedback.stamp().entries.is_empty());
+    }
+
+    #[test]
+    fn complete_computers_path_keeps_every_destination_pending() {
+        let mut feedback = SelectionFeedback::default();
+        let path = [
+            "apple-ii",
+            "commodore",
+            "atari",
+            "sinclair",
+            "coco2",
+            "dos",
+            "japanese",
+            "other",
+        ];
+        for item in path {
+            feedback.register(target(item));
+        }
+
+        let stamp = feedback.stamp();
+        assert_eq!(stamp.entries.len(), path.len());
+        assert_eq!(
+            stamp
+                .entries
+                .iter()
+                .map(|entry| entry.target.item.as_str())
+                .collect::<Vec<_>>(),
+            path
+        );
+    }
 }

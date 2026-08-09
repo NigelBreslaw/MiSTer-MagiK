@@ -8,6 +8,7 @@ use super::launcher_loop::LaunchReturnSession;
 use super::launcher_pacing::{FrameProductionTrace, LauncherPacingTrace};
 use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
+use crate::launcher_presentation::SelectionFeedbackStamp;
 use mister_magik_fb::latch_readiness::LatchFailure;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use std::fmt::Write as _;
@@ -104,6 +105,7 @@ pub(super) struct LauncherFrameAccounting {
 pub(super) struct LauncherPresentedFrame {
     pub(super) frames: u64,
     pub(super) automation: AutomationFrameStamp,
+    pub(super) selection_feedback: SelectionFeedbackStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -210,6 +212,7 @@ pub(super) struct LauncherFrameSnapshotBuilder {
 pub(super) struct LauncherFrameIdentity {
     pub(super) frames: u64,
     pub(super) automation: AutomationFrameStamp,
+    pub(super) selection_feedback: SelectionFeedbackStamp,
     pub(super) selected: usize,
     pub(super) visual_index: f32,
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -321,6 +324,7 @@ impl LauncherFrameSnapshotBuilder {
         LauncherPresentedFrame {
             frames: self.identity.frames,
             automation: self.identity.automation,
+            selection_feedback: self.identity.selection_feedback,
             selected: self.identity.selected,
             visual_index: self.identity.visual_index,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -2975,6 +2979,7 @@ mod tests {
             identity: LauncherFrameIdentity {
                 frames: frame.frames,
                 automation: frame.automation,
+                selection_feedback: frame.selection_feedback.clone(),
                 selected: frame.selected,
                 visual_index: frame.visual_index,
                 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]

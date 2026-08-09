@@ -70,18 +70,22 @@ export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
     in property <bool> focused;
+    in property <bool> acknowledged;
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
-    border-width: 2px;
-    border-color: status == MenuItemStatus.failed
+    border-width: focused ? 3px : 2px;
+    border-color: focused ? #06d6a0
+        : acknowledged ? #4e8f80
+        : status == MenuItemStatus.failed
         ? #a9445b
         : status == MenuItemStatus.update-failed ? #c58b3a
         : status == MenuItemStatus.partial ? #c58b3a
         : status == MenuItemStatus.scanning
             ? #7b91ad
             : #5a4973;
-    background: status == MenuItemStatus.failed
+    background: acknowledged ? #203a36
+        : status == MenuItemStatus.failed
         ? #291820
         : status == MenuItemStatus.update-failed ? #292318
         : status == MenuItemStatus.partial ? #292318

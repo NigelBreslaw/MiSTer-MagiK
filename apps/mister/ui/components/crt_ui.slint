@@ -100,6 +100,7 @@ export component CrtMenuRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
     in property <bool> enabled: true;
 
     min-height: MisterUi.footer-height;
@@ -141,12 +142,14 @@ export component CrtCard inherits Rectangle {
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
     background: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #123d35
         : root.status == MenuItemStatus.failed ? #250918
         : root.status == MenuItemStatus.update-failed ? #211807
         : root.status == MenuItemStatus.scanning ? #071b2f
         : CrtTheme.panel-alt;
     border-width: MisterUi.border;
     border-color: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #4e8f80
         : root.status == MenuItemStatus.failed ? CrtTheme.danger
         : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
         : root.status == MenuItemStatus.scanning ? CrtTheme.accent
@@ -174,6 +177,7 @@ export component CrtCard inherits Rectangle {
             PixelText8 {
                 text: root.label;
                 color: root.focused ? CrtTheme.accent-text
+                    : root.acknowledged ? #7fe0c5
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent

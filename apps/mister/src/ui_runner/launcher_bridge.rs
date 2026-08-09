@@ -1287,7 +1287,9 @@ mod tests {
     }
 
     #[test]
-    fn menu_item_selection_does_not_mutate_model_rows() {
+    fn menu_item_feedback_mutates_only_the_acknowledged_row() {
+        init_test_slint_platform();
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             Vec::new(),
@@ -1324,13 +1326,23 @@ mod tests {
             .map(|index| rows.row_data(index).expect("initial launcher row"))
             .collect::<Vec<_>>();
 
+        let feedback_before = SelectionFeedbackTarget::home(&nav);
         nav.selected = 1;
+        let feedback_after = SelectionFeedbackTarget::home(&nav);
+        assert!(
+            models
+                .note_selection_feedback_change(feedback_before.as_ref(), feedback_after.as_ref(),)
+        );
+        models.sync(&app, &nav, &catalog, Some(1), false);
         let updated_rows = models.menu_items(&nav, 1);
 
         let after = (0..updated_rows.row_count())
             .map(|index| updated_rows.row_data(index).expect("retained launcher row"))
             .collect::<Vec<_>>();
-        assert_eq!(before, after);
+        assert_eq!(before[0], after[0]);
+        assert!(!after[0].acknowledged);
+        assert!(after[1].acknowledged);
+        assert_eq!(before[2], after[2]);
     }
 
     #[test]

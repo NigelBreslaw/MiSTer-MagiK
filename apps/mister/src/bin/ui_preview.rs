@@ -3190,6 +3190,7 @@ mod macos {
                     id: id.into(),
                     label: label.into(),
                     subtitle: subtitle.into(),
+                    acknowledged: false,
                     available,
                     node_kind: MenuItemKind::Collection,
                     status,
