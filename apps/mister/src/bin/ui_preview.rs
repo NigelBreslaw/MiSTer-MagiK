@@ -2794,14 +2794,13 @@ mod macos {
         ui.set_crt_grid_y(metrics.grid_y);
         ui.set_crt_border_x(metrics.border_x);
         ui.set_crt_border_y(metrics.border_y);
-        ui.set_crt_font_family(metrics.font_family.label().into());
         let pixel_text_size = |size| match size {
             UiPixelSize::Px8 => mister_magik_ui::launcher::PixelTextSize::Px8,
             UiPixelSize::Px16 => mister_magik_ui::launcher::PixelTextSize::Px16,
             UiPixelSize::Px24 => mister_magik_ui::launcher::PixelTextSize::Px24,
             UiPixelSize::Px32 => mister_magik_ui::launcher::PixelTextSize::Px32,
         };
-        ui.set_crt_body_font(pixel_text_size(metrics.body_font));
+        ui.set_crt_body_font(mister_magik_ui::launcher::PixelTextSize::Body12);
         ui.set_crt_heading_font(pixel_text_size(metrics.heading_font));
         ui.set_crt_card_title_font(pixel_text_size(metrics.card_title_font));
         ui.set_crt_card_detail_font(pixel_text_size(metrics.card_detail_font));
