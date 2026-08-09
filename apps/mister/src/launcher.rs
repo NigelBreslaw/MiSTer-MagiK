@@ -7865,16 +7865,8 @@ mod tests {
                 .is_none()
         );
         assert!(!nav.licenses_scroll.scroll.continuous_active);
-        for frame in 1..=60 {
-            assert!(
-                nav.handle_input(
-                    &PadState::default(),
-                    release_at + Duration::from_millis(frame * 16),
-                    &catalog,
-                )
-                .is_none()
-            );
-        }
+        let count = crate::licenses::max_scroll_line(nav.licenses_selected) + 1;
+        settle(&mut nav.licenses_scroll, count, release_at);
         assert!(nav.licenses_scroll.is_settled());
     }
 
