@@ -67,6 +67,9 @@ ordinary launcher. Evidence is written below
 transition input handling, then measures 5/10/20/40 ms gamepad pulses at 50 ms
 pacing and a repeat hold on the SNES system hub through Main proxy v2. It
 correlates dispatch with the semantic state and exact latch-confirmed frame.
+It also drives three consecutive Home tiles at a human-scale 100 ms press
+interval (40 ms pressed, 60 ms released) and records each tile's confirmed
+frame plus the visible dwell before the next tile is confirmed.
 Every paced accepted move must be visible in its own ordered frame and every
 confirmed response must be under 50 ms. The
 catalog-stress pass must publish a real prepared shard with UI adoption below 8

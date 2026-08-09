@@ -41,6 +41,7 @@ enum DriverSequence {
     Pulses,
     TransitionRight,
     TransitionBack,
+    HomeRapid,
     LauncherResponse,
 }
 
@@ -62,7 +63,7 @@ impl DriverPlan {
         }
         if matches!(
             args.first().map(String::as_str),
-            Some("transition-right" | "transition-back" | "launcher-response")
+            Some("transition-right" | "transition-back" | "home-rapid" | "launcher-response")
         ) {
             return Ok(Self {
                 key_code: 28,
@@ -74,6 +75,7 @@ impl DriverPlan {
                 sequence: match args.first().map(String::as_str) {
                     Some("transition-right") => DriverSequence::TransitionRight,
                     Some("transition-back") => DriverSequence::TransitionBack,
+                    Some("home-rapid") => DriverSequence::HomeRapid,
                     _ => DriverSequence::LauncherResponse,
                 },
             });
@@ -229,6 +231,15 @@ impl UinputDevice {
                 }
                 return self.pulse(106, 500);
             }
+            DriverSequence::HomeRapid => {
+                for index in 0..3 {
+                    self.pulse(106, 40)?;
+                    if index < 2 {
+                        std::thread::sleep(Duration::from_millis(60));
+                    }
+                }
+                return Ok(());
+            }
             DriverSequence::Pulses => {}
         }
         for index in 0..plan.count {
@@ -346,6 +357,12 @@ mod tests {
                 .unwrap()
                 .sequence,
             DriverSequence::LauncherResponse
+        );
+        assert_eq!(
+            DriverPlan::parse(&["home-rapid".to_string()])
+                .unwrap()
+                .sequence,
+            DriverSequence::HomeRapid
         );
     }
 }

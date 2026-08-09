@@ -4390,6 +4390,59 @@ fn run_launcher_response_scenario(
         LauncherRestartOptions {
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
+                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
+            && status.get("selected_index").and_then(Value::as_u64) == Some(0)
+    })?;
+    run_launcher_response_driver(session, "home-rapid")?;
+    thread::sleep(Duration::from_millis(350));
+    let home_rapid_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 3)?;
+    let home_focus_records = home_rapid_trace["records"]
+        .as_array()
+        .ok_or("Home rapid-navigation trace has no records")?
+        .iter()
+        .filter(|record| {
+            record.pointer("/before/screen").and_then(Value::as_str) == Some("home")
+                && record.get("trigger").and_then(Value::as_str) == Some("initial")
+                && record.get("action").and_then(Value::as_str) == Some("right")
+                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
+        })
+        .collect::<Vec<_>>();
+    if home_focus_records.len() != 3 {
+        return Err(format!(
+            "Home rapid navigation confirmed {} of 3 expected focus changes",
+            home_focus_records.len()
+        )
+        .into());
+    }
+    let home_confirmed_frames = home_focus_records
+        .iter()
+        .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let home_confirmed_at_us = home_focus_records
+        .iter()
+        .filter_map(|record| record.get("confirmed_at_us").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let home_visible_dwell_us = home_confirmed_at_us
+        .windows(2)
+        .map(|pair| pair[1].saturating_sub(pair[0]))
+        .collect::<Vec<_>>();
+
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "system-hub".into()),
                 ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
                 ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
@@ -4487,7 +4540,16 @@ fn run_launcher_response_scenario(
         "queue_high_water": transition_trace["queue_high_water"]
             .as_u64()
             .unwrap_or(0)
+            .max(home_rapid_trace["queue_high_water"].as_u64().unwrap_or(0))
             .max(response_trace["queue_high_water"].as_u64().unwrap_or(0)),
+        "home_rapid": {
+            "press_duration_ms": 40,
+            "press_interval_ms": 100,
+            "confirmed_frames": home_confirmed_frames,
+            "confirmed_at_us": home_confirmed_at_us,
+            "visible_dwell_us": home_visible_dwell_us,
+            "trace": home_rapid_trace,
+        },
         "trace": {
             "transition": transition_trace,
             "response": response_trace,
