@@ -63,7 +63,7 @@ export component HomeGrid inherits Rectangle {
                                 width: 100%;
                                 text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
                                 color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
-                                size: PixelTextSize.px8;
+                                size: PixelTextSize.body12;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -72,7 +72,7 @@ export component HomeGrid inherits Rectangle {
                                 width: 100%;
                                 text: MisterBridge.menu-breadcrumb;
                                 color: #8ca4b5;
-                                size: PixelTextSize.px8;
+                                size: PixelTextSize.body12;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -164,14 +164,14 @@ export component HomeGrid inherits Rectangle {
                             : MisterBridge.dev-mode ? "DEV MODE"
                             : MisterBridge.update-available ? "Update Available" : "";
                         color: MisterBridge.dev-mode ? #ffb347 : #8ca4b5;
-                        size: PixelTextSize.px8;
+                        size: PixelTextSize.body12;
                         overflow: elide;
                     }
                 }
                 PixelText8 {
                     text: MisterBridge.clock-text;
                     color: #d7eef8;
-                    size: PixelTextSize.px8;
+                    size: PixelTextSize.body12;
                     horizontal-alignment: right;
                 }
                 SettingsButton { width: 36px; height: 36px; focused: false; }
@@ -211,7 +211,7 @@ export component HomeGrid inherits Rectangle {
                 text: root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
                     : "UP/DOWN Move    A Open    B Back    HOME Launcher";
                 color: #8ca4b5;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;

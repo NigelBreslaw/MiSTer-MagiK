@@ -8,7 +8,6 @@ import { MisterBridge, PreviewStatus, ScreenshotPackProgress } from "api.slint";
 import { CrtLauncherUi } from "variants/crt_ui.slint";
 import { HdmiLauncherUi } from "variants/hdmi_ui.slint";
 import "fonts/PressStart2P-Regular.ttf";
-import "fonts/Jersey10-Regular.ttf";
 
 export { MisterUi }
 export { MisterBridge, PreviewStatus, ScreenshotPackProgress }
@@ -38,7 +37,7 @@ export component Launcher inherits MisterWindow {
             height: parent.height;
             text: MisterBridge.input-fault-notice;
             color: white;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             vertical-alignment: center;
             horizontal-alignment: center;
             wrap: word-wrap;

@@ -31,7 +31,7 @@ export component ComboBoxOverlay inherits Rectangle {
                 PixelText8 {
                     text: (index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "✓ " : "  ") + option;
                     color: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #06d6a0 : #e8e0f0;
-                    size: PixelTextSize.px8;
+                    size: PixelTextSize.body12;
                     vertical-alignment: center;
                 }
             }

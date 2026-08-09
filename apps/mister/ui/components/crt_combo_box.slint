@@ -25,13 +25,11 @@ component CrtResolutionRow inherits Rectangle {
         PixelText8 {
             width: MisterUi.body-font;
             text: root.focused ? ">" : "";
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.accent-text;
             size: MisterUi.crt-body-font;
         }
         PixelText8 {
             text: root.label;
-            font-family: MisterUi.crt-font-family;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
@@ -39,7 +37,6 @@ component CrtResolutionRow inherits Rectangle {
         }
         PixelText8 {
             text: root.detail;
-            font-family: MisterUi.crt-font-family;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             size: MisterUi.crt-body-font;
             horizontal-alignment: right;
@@ -56,17 +53,15 @@ component CrtResolutionRow inherits Rectangle {
 
         PixelText8 {
             text: root.label;
-            font-family: MisterUi.crt-font-family;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
         if root.detail != "" : PixelText8 {
             text: root.detail;
-            font-family: MisterUi.crt-font-family;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }

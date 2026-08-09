@@ -19,14 +19,14 @@ component ScanningSubtitle inherits VerticalLayout {
         PixelText8 {
             text: "Scanning";
             color: #8ca4b5;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
 
         PixelText8 {
             text: ".";
             color: root.detail == "" && root.dot-visible ? #8ca4b5 : transparent;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }
@@ -37,14 +37,14 @@ component ScanningSubtitle inherits VerticalLayout {
         PixelText8 {
             text: root.detail;
             color: #8ca4b5;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
 
         PixelText8 {
             text: ".";
             color: root.dot-visible ? #8ca4b5 : transparent;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }
@@ -149,7 +149,7 @@ export component LauncherTile inherits Rectangle {
                 ? #ef8da2
                 : root.status == MenuItemStatus.update-failed ? #f0c36e
                 : root.status == MenuItemStatus.partial ? #f0c36e : #9080a800;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }

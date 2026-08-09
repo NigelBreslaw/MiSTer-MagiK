@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 export enum PixelTextSize {
+    body12,
     px8,
     px16,
     px24,
@@ -10,7 +11,9 @@ export enum PixelTextSize {
 
 export global PixelText8Metrics {
     pure public function resolve(size: PixelTextSize) -> length {
-        return size == PixelTextSize.px8 ? 8px
+        // The unhinted Jersey 10 resource has 12px physical capitals at this size.
+        return size == PixelTextSize.body12 ? 22px
+            : size == PixelTextSize.px8 ? 8px
             : size == PixelTextSize.px16 ? 16px
             : size == PixelTextSize.px24 ? 24px
             : 32px;
@@ -20,6 +23,7 @@ export global PixelText8Metrics {
 export component PixelText8 inherits Text {
     in property <PixelTextSize> size: PixelTextSize.px8;
     color: white;
+    font-family: root.size == PixelTextSize.body12 ? "Jersey 10" : "Press Start 2P";
     font-size: PixelText8Metrics.resolve(root.size);
     horizontal-alignment: start;
     vertical-alignment: top;

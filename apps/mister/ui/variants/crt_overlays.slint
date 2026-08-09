@@ -20,7 +20,6 @@ component CrtProgressRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
             size: MisterUi.crt-body-font;
@@ -28,7 +27,6 @@ component CrtProgressRow inherits Rectangle {
             horizontal-stretch: 1;
         }
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -65,7 +63,6 @@ export component CatalogScanPopup inherits Rectangle {
             Rectangle { vertical-stretch: 1; background: transparent; }
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: CrtTheme.accent;
@@ -74,7 +71,6 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
@@ -84,7 +80,6 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -93,7 +88,6 @@ export component CatalogScanPopup inherits Rectangle {
             }
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
@@ -107,7 +101,6 @@ export component CatalogScanPopup inherits Rectangle {
                 spacing: 5px;
 
                 PixelText8 {
-            font-family: MisterUi.crt-font-family;
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
                     size: MisterUi.crt-body-font;
@@ -143,7 +136,6 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px;
 
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
             size: MisterUi.crt-body-font;
@@ -165,7 +157,6 @@ export component StartupSplash inherits Rectangle {
         spacing: 12px;
 
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: "MiSTer MagiK";
             color: CrtTheme.text;
             size: MisterUi.crt-heading-font;
@@ -190,7 +181,6 @@ export component BackgroundScanBadge inherits Rectangle {
         alignment: start;
         width: self.preferred-width;
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: "Building library";
             color: #d7eef8;
             size: MisterUi.crt-body-font;
@@ -198,7 +188,6 @@ export component BackgroundScanBadge inherits Rectangle {
             vertical-alignment: center;
         }
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
             size: MisterUi.crt-body-font;
@@ -219,11 +208,10 @@ component CompactDialogButton inherits Rectangle {
     border-color: focused ? CrtTheme.accent : CrtTheme.border;
 
     PixelText8 {
-            font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         size: MisterUi.portrait-layout && MisterUi.window-width < 400
-            ? PixelTextSize.px8
+            ? PixelTextSize.body12
             : MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -252,19 +240,17 @@ export component ConfirmDialog inherits Rectangle {
             spacing: MisterUi.grid-y;
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
-                size: root.narrow-portrait ? PixelTextSize.px8 : MisterUi.crt-heading-font;
+                size: root.narrow-portrait ? PixelTextSize.body12 : MisterUi.crt-heading-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
-                size: root.narrow-portrait ? PixelTextSize.px8 : MisterUi.crt-body-font;
+                size: root.narrow-portrait ? PixelTextSize.body12 : MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -297,20 +283,18 @@ export component LoadingOverlay inherits Rectangle {
         spacing: 12px;
 
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
             size: MisterUi.portrait-layout && MisterUi.window-width < 400
-                ? PixelTextSize.px8
+                ? PixelTextSize.body12
                 : MisterUi.portrait-layout ? PixelTextSize.px16 : MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
 
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.body12 : MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
     }

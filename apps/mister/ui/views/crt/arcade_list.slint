@@ -18,7 +18,6 @@ component SearchKey inherits Rectangle {
     border-color: selected ? CrtTheme.accent : CrtTheme.border;
 
     PixelText8 {
-            font-family: MisterUi.crt-font-family;
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
         size: MisterUi.crt-body-font;
@@ -58,7 +57,6 @@ component SearchKeyboard inherits Rectangle {
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
             PixelText8 {
-            font-family: MisterUi.crt-font-family;
                 x: MisterUi.grid-x;
                 width: parent.width - 16px;
                 height: parent.height;
@@ -130,7 +128,6 @@ export component ArcadeListScreen inherits Rectangle {
             height: parent.height;
             visible: MisterBridge.arcade-search-active
                 && (MisterBridge.arcade-search-status != 2 || root.count == 0);
-            font-family: MisterUi.crt-font-family;
             text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
                 (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                 (root.count == 0 ? "No matches" : ""));
@@ -168,7 +165,6 @@ export component ArcadeListScreen inherits Rectangle {
         background: CrtTheme.panel-alt;
 
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: "Loading list...";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;

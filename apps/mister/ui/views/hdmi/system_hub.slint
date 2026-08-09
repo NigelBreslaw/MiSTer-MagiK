@@ -93,10 +93,13 @@ component HubCard inherits Rectangle {
         background: root.focused ? #477a70 : #493b59;
     }
     PixelText8 {
-        x: 18px; y: 116px; width: parent.width - 36px; height: 12px;
+        x: 18px;
+        y: MisterUi.portrait-layout ? 104px : 116px;
+        width: parent.width - 36px;
+        height: 22px;
         text: root.detail;
         color: root.ink;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
         horizontal-alignment: center;
     }
 }
@@ -120,10 +123,10 @@ export component SystemHubScreen inherits Rectangle {
         color: #f8f5fa;
     }
     PixelText8 {
-        x: 30px; y: 78px; width: 360px; height: 12px;
+        x: 30px; y: 78px; width: 360px; height: 22px;
         text: "1990  /  16-BIT CONSOLE";
         color: #a56dd1;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
     }
     PixelText8 {
         x: 30px; y: 104px; width: 300px; height: 18px;
@@ -133,10 +136,10 @@ export component SystemHubScreen inherits Rectangle {
     }
     PixelText8 {
         visible: !MisterUi.portrait-layout;
-        x: 740px; y: 46px; width: 190px; height: 12px;
+        x: 740px; y: 46px; width: 190px; height: 22px;
         text: "SYSTEM  /  SNES";
         color: #766486;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
         horizontal-alignment: right;
     }
 
@@ -158,10 +161,10 @@ export component SystemHubScreen inherits Rectangle {
             image-rendering: pixelated;
         }
         PixelText8 {
-            x: 0px; y: 194px; width: parent.width; height: 12px;
+            x: 0px; y: 194px; width: parent.width; height: 22px;
             text: "SUPER FAMICOM  /  SUPER NINTENDO";
             color: #8d779d;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }
@@ -180,10 +183,10 @@ export component SystemHubScreen inherits Rectangle {
         }
         Rectangle { x: 18px; y: 45px; width: parent.width - 36px; height: 1px; background: #493b59; }
         PixelText8 {
-            x: 18px; y: 56px; width: parent.width - 36px; height: 10px;
+            x: 18px; y: 48px; width: parent.width - 36px; height: 22px;
             text: "CARTRIDGE     /     2 CONTROLLER PORTS";
             color: #766486;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }
@@ -198,10 +201,10 @@ export component SystemHubScreen inherits Rectangle {
         background: #33283e;
     }
     PixelText8 {
-        x: 28px; y: parent.height - 31px; width: parent.width - 56px; height: 12px;
+        x: 28px; y: parent.height - 31px; width: parent.width - 56px; height: 22px;
         text: "A OPEN          B BACK          HOME LAUNCHER";
         color: #8f819e;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
         horizontal-alignment: center;
     }
 }

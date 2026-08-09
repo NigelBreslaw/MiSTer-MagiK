@@ -34,7 +34,6 @@ export component SetupOverlay inherits Rectangle {
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
         if root.phase != 4 : PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -69,7 +68,6 @@ export component SetupOverlay inherits Rectangle {
         }
 
         if root.phase == 4 : PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: root.subtitle;
             color: CrtTheme.accent;
             size: MisterUi.crt-body-font;

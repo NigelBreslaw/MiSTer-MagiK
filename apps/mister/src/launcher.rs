@@ -79,7 +79,7 @@ const SETTINGS_MAX_SELECTED: usize = SETTINGS_ABOUT_SELECTED;
 const ABOUT_MAX_SELECTED: usize = 1;
 const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
-const LICENSE_SCROLL_LINE_PX: f64 = 10.0;
+const LICENSE_SCROLL_LINE_PX: f64 = 22.0;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArcadeSearchKeyAction {

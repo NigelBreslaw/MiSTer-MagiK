@@ -15,8 +15,8 @@ component InfoRow inherits Rectangle {
     VerticalLayout {
         padding: 10px;
         spacing: 5px;
-        PixelText8 { text: label; color: #06d6a0; size: PixelTextSize.px8; }
-        PixelText8 { text: value; color: #e8e0f0; size: PixelTextSize.px8; overflow: elide; }
+        PixelText8 { text: label; color: #06d6a0; size: PixelTextSize.body12; }
+        PixelText8 { text: value; color: #e8e0f0; size: PixelTextSize.body12; overflow: elide; }
     }
 }
 
@@ -30,7 +30,7 @@ export component InfoScreen inherits Rectangle {
         InfoRow { label: "Database build"; value: MisterBridge.info-database-build; }
         InfoRow { label: "MiSTer kernel"; value: MisterBridge.info-kernel-version; }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.px8; horizontal-alignment: center; }
+        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.body12; horizontal-alignment: center; }
     }
 }
 

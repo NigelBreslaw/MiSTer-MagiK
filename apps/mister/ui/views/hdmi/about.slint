@@ -19,7 +19,7 @@ component AboutRow inherits Rectangle {
         padding: 10px;
         spacing: 4px;
         PixelText8 { text: label; color: focused ? #06d6a0 : #e8e0f0; size: PixelTextSize.px16; }
-        PixelText8 { text: detail; color: #9080a8; size: PixelTextSize.px8; }
+        PixelText8 { text: detail; color: #9080a8; size: PixelTextSize.body12; }
     }
 }
 
@@ -67,7 +67,7 @@ export component AboutScreen inherits Rectangle {
             focused: MisterBridge.about-selected == 1;
         }
 
-        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.px8; horizontal-alignment: center; }
+        PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.body12; horizontal-alignment: center; }
     }
 
 }

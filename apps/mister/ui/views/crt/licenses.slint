@@ -35,7 +35,6 @@ export component LicensesScreen inherits Rectangle {
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
         PixelText8 {
-            font-family: MisterUi.crt-font-family;
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
@@ -58,7 +57,6 @@ export component LicensesScreen inherits Rectangle {
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
                 for line in MisterBridge.license-lines : PixelText8 {
-                    font-family: MisterUi.crt-font-family;
                     text: line;
                     color: CrtTheme.text;
                     size: MisterUi.crt-body-font;

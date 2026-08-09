@@ -24,13 +24,16 @@ SPEC.loader.exec_module(CONTRACT)
 
 PRIMITIVE_TEXT = """
 export enum PixelTextSize {
+    body12,
     px8,
     px16,
     px24,
     px32,
 }
-export component PixelText8 {
-    Text { font-size: 8px; }
+export component PixelText8 inherits Text {
+    in property <PixelTextSize> size: PixelTextSize.px8;
+    font-family: root.size == PixelTextSize.body12 ? "Jersey 10" : "Press Start 2P";
+    font-size: size == PixelTextSize.body12 ? 22px : 8px;
 }
 """
 
@@ -52,15 +55,29 @@ class ContractTests(unittest.TestCase):
     def test_all_legal_enum_values_are_required_in_order(self) -> None:
         self.assertEqual(
             CONTRACT.EXPECTED_ENUM_VALUES,
-            ("px8", "px16", "px24", "px32"),
+            ("body12", "px8", "px16", "px24", "px32"),
         )
         CONTRACT.check_sources(primitives())
         for invalid in (
+            PRIMITIVE_TEXT.replace("    body12,\n", ""),
             PRIMITIVE_TEXT.replace("    px8,\n", ""),
             PRIMITIVE_TEXT.replace("    px16,\n", "    px12,\n"),
             PRIMITIVE_TEXT.replace("    px32,\n", "    px32,\n    px40,\n"),
         ):
             with self.assertRaises(CONTRACT.ContractError):
+                CONTRACT.check_sources(
+                    [
+                        CONTRACT.Source(CONTRACT.PRIMITIVE, invalid),
+                        CONTRACT.Source(CONTRACT.JERSEY_PRIMITIVE, JERSEY_PRIMITIVE_TEXT),
+                    ]
+                )
+
+    def test_body12_size_and_family_are_fixed(self) -> None:
+        for invalid, message in (
+            (PRIMITIVE_TEXT.replace("? 22px : 8px", "? 21px : 8px"), "22px"),
+            (PRIMITIVE_TEXT.replace('"Jersey 10"', '"Press Start 2P"'), "Jersey 10"),
+        ):
+            with self.assertRaisesRegex(CONTRACT.ContractError, message):
                 CONTRACT.check_sources(
                     [
                         CONTRACT.Source(CONTRACT.PRIMITIVE, invalid),

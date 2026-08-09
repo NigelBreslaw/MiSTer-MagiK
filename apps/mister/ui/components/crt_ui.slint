@@ -41,17 +41,15 @@ export component CrtHeader inherits Rectangle {
 
             PixelText8 {
                 text: root.title;
-                font-family: MisterUi.crt-font-family;
                 color: CrtTheme.text;
                 size: MisterUi.portrait-layout && MisterUi.window-width < 400
-                    ? PixelTextSize.px8
+                    ? PixelTextSize.body12
                     : MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-heading-font;
                 overflow: elide;
             }
 
             if root.subtitle != "" : PixelText8 {
                 text: root.subtitle;
-                font-family: MisterUi.crt-font-family;
                 color: CrtTheme.warning;
                 size: MisterUi.crt-body-font;
                 overflow: elide;
@@ -60,9 +58,8 @@ export component CrtHeader inherits Rectangle {
 
         PixelText8 {
             text: root.status;
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.text;
-            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.body12 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -85,17 +82,15 @@ export component CrtFooter inherits Rectangle {
 
         PixelText8 {
             text: root.left-hint;
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.body12 : MisterUi.crt-body-font;
             horizontal-stretch: 1;
         }
 
         PixelText8 {
             text: root.right-hint;
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? PixelTextSize.body12 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -120,7 +115,6 @@ export component CrtMenuRow inherits Rectangle {
 
         PixelText8 {
             text: (root.focused ? "> " : "  ") + root.label;
-            font-family: MisterUi.crt-font-family;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.text;
             size: MisterUi.crt-body-font;
@@ -130,7 +124,6 @@ export component CrtMenuRow inherits Rectangle {
 
         PixelText8 {
             text: root.detail;
-            font-family: MisterUi.crt-font-family;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -168,7 +161,6 @@ export component CrtCard inherits Rectangle {
         PixelText8 {
             width: MisterUi.portrait-layout ? MisterUi.body-font : MisterUi.card-title-font;
             text: root.focused && root.show-marker ? ">" : "";
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.accent-text;
             size: MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-card-title-font;
             vertical-alignment: center;
@@ -181,7 +173,6 @@ export component CrtCard inherits Rectangle {
 
             PixelText8 {
                 text: root.label;
-                font-family: MisterUi.crt-font-family;
                 color: root.focused ? CrtTheme.accent-text
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
@@ -194,13 +185,12 @@ export component CrtCard inherits Rectangle {
 
             if root.detail != "" : PixelText8 {
                 text: root.detail;
-                font-family: MisterUi.crt-font-family;
                 color: root.focused ? #17304a
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.muted;
-                size: MisterUi.portrait-layout ? PixelTextSize.px8 : MisterUi.crt-card-detail-font;
+                size: MisterUi.portrait-layout ? PixelTextSize.body12 : MisterUi.crt-card-detail-font;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -222,7 +212,6 @@ export component CrtNavHint inherits HorizontalLayout {
 
         PixelText8 {
             text: root.button;
-            font-family: MisterUi.crt-font-family;
             color: CrtTheme.accent-text;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
@@ -232,7 +221,6 @@ export component CrtNavHint inherits HorizontalLayout {
 
     PixelText8 {
         text: root.label;
-        font-family: MisterUi.crt-font-family;
         color: CrtTheme.text;
         size: MisterUi.crt-body-font;
         vertical-alignment: center;

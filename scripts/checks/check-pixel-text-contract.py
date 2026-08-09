@@ -17,12 +17,17 @@ from typing import Iterable, NoReturn
 UI_ROOT = PurePosixPath("apps/mister/ui")
 PRIMITIVE = UI_ROOT / "components/pixel_text_8.slint"
 JERSEY_PRIMITIVE = UI_ROOT / "components/jersey_text.slint"
-EXPECTED_ENUM_VALUES = ("px8", "px16", "px24", "px32")
+EXPECTED_ENUM_VALUES = ("body12", "px8", "px16", "px24", "px32")
 
 RAW_TEXT = re.compile(r"(?<![A-Za-z0-9_])Text\s*\{")
 DIRECT_FONT_SIZE = re.compile(r"(?<![A-Za-z0-9_-])font-size\s*:")
 ENUM = re.compile(r"\bexport\s+enum\s+PixelTextSize\s*\{(?P<body>.*?)\}", re.DOTALL)
-ENUM_VALUE = re.compile(r"\b(px[0-9]+)\s*,")
+ENUM_VALUE = re.compile(r"\b(body[0-9]+|px[0-9]+)\s*,")
+BODY12_SIZE = re.compile(r"\bsize\s*==\s*PixelTextSize\.body12\s*\?\s*22px\b")
+BODY12_FAMILY = re.compile(
+    r'\bfont-family\s*:\s*root\.size\s*==\s*PixelTextSize\.body12\s*'
+    r'\?\s*"Jersey 10"\s*:\s*"Press Start 2P"\s*;'
+)
 
 
 @dataclass(frozen=True)
@@ -171,6 +176,10 @@ def check_primitive(source: Source, code: str) -> list[str]:
         errors.append(
             f"{source.path}: PixelTextSize must be exactly [{expected}], got [{actual}]"
         )
+    if len(BODY12_SIZE.findall(source.text)) != 1:
+        errors.append(f"{source.path}: body12 must resolve to exactly 22px")
+    if len(BODY12_FAMILY.findall(source.text)) != 1:
+        errors.append(f"{source.path}: body12 must select Jersey 10 exactly once")
     return errors
 
 

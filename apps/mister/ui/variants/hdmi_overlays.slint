@@ -59,7 +59,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
             }
 
@@ -67,7 +67,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: #9080a8;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -79,7 +79,7 @@ export component CatalogScanPopup inherits Rectangle {
                 PixelText8 {
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
-                    size: PixelTextSize.px8;
+                    size: PixelTextSize.body12;
                     horizontal-alignment: center;
                 }
 
@@ -114,7 +114,7 @@ export component MediaProgressPopup inherits Rectangle {
         PixelText8 {
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
 
@@ -159,14 +159,14 @@ export component BackgroundScanBadge inherits Rectangle {
         PixelText8 {
             text: "Building library";
             color: #d7eef8;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
         PixelText8 {
             text: ".";
             color: root.dot-visible ? #d7eef8 : transparent;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
@@ -186,7 +186,7 @@ component CompactDialogButton inherits Rectangle {
     PixelText8 {
         text: root.label;
         color: root.focused ? #06d6a0 : #e8e0f0;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
         horizontal-alignment: center;
         vertical-alignment: center;
         wrap: word-wrap;
@@ -222,7 +222,7 @@ export component ConfirmDialog inherits Rectangle {
             PixelText8 {
                 text: MisterBridge.confirm-message;
                 color: #e8e0f0;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -253,7 +253,7 @@ export component ConfirmDialog inherits Rectangle {
             PixelText8 {
                 text: MisterBridge.confirm-title;
                 color: #06d6a0;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -261,7 +261,7 @@ export component ConfirmDialog inherits Rectangle {
             PixelText8 {
                 text: MisterBridge.confirm-message;
                 color: #e8e0f0;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -303,7 +303,7 @@ export component LoadingOverlay inherits Rectangle {
         PixelText8 {
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: #9080a8;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
     }

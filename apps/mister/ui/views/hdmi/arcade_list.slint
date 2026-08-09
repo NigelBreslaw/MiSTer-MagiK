@@ -19,7 +19,7 @@ component SearchKey inherits Rectangle {
     PixelText8 {
         text: root.label;
         color: root.selected && root.keyboard-focused ? #101420 : #e8e0f0;
-        size: PixelTextSize.px8;
+        size: PixelTextSize.body12;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -72,7 +72,7 @@ component SearchKeyboard inherits Rectangle {
                 height: parent.height;
                 text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
                 color: MisterBridge.arcade-search-query == "" ? #706080 : #d7eef8;
-                size: PixelTextSize.px8;
+                size: PixelTextSize.body12;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -99,7 +99,7 @@ component SearchKeyboard inherits Rectangle {
                     PixelText8 {
                         text: "Y";
                         color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #101420;
-                        size: PixelTextSize.px8;
+                        size: PixelTextSize.body12;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -110,7 +110,7 @@ component SearchKeyboard inherits Rectangle {
                         (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                         (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion));
                     color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
-                    size: PixelTextSize.px8;
+                    size: PixelTextSize.body12;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
@@ -205,7 +205,7 @@ export component ArcadeListScreen inherits Rectangle {
                         (count == 0 && MisterBridge.arcade-search-status == 2 ? "No matches" :
                         count + " matches"));
                     color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #706080;
-                    size: PixelTextSize.px8;
+                    size: PixelTextSize.body12;
                 }
 
                 Rectangle {
@@ -226,7 +226,7 @@ export component ArcadeListScreen inherits Rectangle {
                             (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                             (count == 0 ? "No matches" : ""));
                         color: #706080;
-                        size: PixelTextSize.px8;
+                        size: PixelTextSize.body12;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -295,7 +295,7 @@ export component ArcadeListScreen inherits Rectangle {
             y: 44px;
             text: root.count + " games";
             color: #706080;
-            size: PixelTextSize.px8;
+            size: PixelTextSize.body12;
         }
     }
 
