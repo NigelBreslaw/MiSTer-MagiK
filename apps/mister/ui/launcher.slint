@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterWindow, MisterUi } from "mister_window.slint";
+import { PixelText8, PixelTextSize } from "components/pixel_text_8.slint";
 export { PixelTextSize } from "components/pixel_text_8.slint";
 import { MisterBridge, PreviewStatus, ScreenshotPackProgress } from "api.slint";
 import { CrtLauncherUi } from "variants/crt_ui.slint";
@@ -22,4 +23,26 @@ export component Launcher inherits MisterWindow {
 
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
+
+    if MisterBridge.input-fault-notice != "" : Rectangle {
+        x: 12px;
+        y: 12px;
+        width: parent.width - 24px;
+        height: 48px;
+        background: #b00020;
+        border-width: 2px;
+        border-color: white;
+
+        PixelText8 {
+            x: 12px;
+            width: parent.width - 24px;
+            height: parent.height;
+            text: MisterBridge.input-fault-notice;
+            color: white;
+            size: PixelTextSize.px8;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+    }
 }

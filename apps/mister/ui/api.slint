@@ -53,6 +53,8 @@ export global MisterBridge {
     in-out property <string> pressed-now;
     in-out property <string> last-event-label;
     in-out property <string> last-raw-event;
+    // Non-empty when the sole Main proxy v2 navigation path is unavailable.
+    in-out property <string> input-fault-notice;
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;
     // Launcher navigation: 0=home, 1=controller test, 2=game list, 3=settings, 4=about, 5=licenses, 6=info, 7=screensaver, 8=system hub.

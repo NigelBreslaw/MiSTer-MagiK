@@ -50,6 +50,73 @@ const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
     "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR";
 const SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV: &str = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR";
 
+fn launcher_screen_input_focus(screen: Screen) -> FocusRequest {
+    let (owner, directional_policy) = match screen {
+        Screen::Home => (1, DirectionalPolicy::HomeContinuous),
+        Screen::SystemHub => (2, DirectionalPolicy::MenuRepeat),
+        Screen::Controller => (3, DirectionalPolicy::EdgeOnly),
+        Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
+        Screen::Settings => (5, DirectionalPolicy::MenuRepeat),
+        Screen::Screensaver => (6, DirectionalPolicy::EdgeOnly),
+        Screen::About => (7, DirectionalPolicy::MenuRepeat),
+        Screen::Licenses => (8, DirectionalPolicy::MenuRepeat),
+        Screen::Info => (9, DirectionalPolicy::MenuRepeat),
+    };
+    FocusRequest {
+        target: FocusTarget {
+            kind: InputContextKind::Screen,
+            owner,
+        },
+        directional_policy,
+    }
+}
+
+fn launcher_input_focus(
+    enabled: bool,
+    screensaver: bool,
+    lifecycle_dialog: bool,
+    setup: bool,
+    modal: bool,
+    transition: bool,
+    screen: Screen,
+) -> FocusRequest {
+    let (kind, owner, directional_policy) = if !enabled {
+        (InputContextKind::Disabled, 0, DirectionalPolicy::EdgeOnly)
+    } else if screensaver {
+        (
+            InputContextKind::Screensaver,
+            1,
+            DirectionalPolicy::EdgeOnly,
+        )
+    } else if lifecycle_dialog {
+        (
+            InputContextKind::LifecycleDialog,
+            1,
+            DirectionalPolicy::MenuRepeat,
+        )
+    } else if setup {
+        (
+            InputContextKind::ControllerSetup,
+            1,
+            DirectionalPolicy::MenuRepeat,
+        )
+    } else if modal {
+        (
+            InputContextKind::LauncherModal,
+            1,
+            DirectionalPolicy::MenuRepeat,
+        )
+    } else if transition {
+        (InputContextKind::Transition, 1, DirectionalPolicy::EdgeOnly)
+    } else {
+        return launcher_screen_input_focus(screen);
+    };
+    FocusRequest {
+        target: FocusTarget { kind, owner },
+        directional_policy,
+    }
+}
+
 fn orientation_transition_benchmark_evidence_dir() -> Option<std::path::PathBuf> {
     std::env::var_os(ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV)
         .filter(|value| !value.is_empty())
@@ -2583,6 +2650,12 @@ pub(super) fn run_launcher_loop(
         }
     }
     let mut setup = SetupNav::new();
+    let mut input_router = InputRouter::new(launcher_input_focus(
+        false, false, false, false, false, false, nav.screen,
+    ));
+    let mut pending_input_events = VecDeque::new();
+    let mut proxy_navigation_state = PadState::default();
+    let mut input_fault_notice: Option<&'static str> = None;
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -3308,6 +3381,9 @@ pub(super) fn run_launcher_loop(
     while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        // Input is drained before catalog, media, Slint, and rendering work so a
+        // busy frame can delay dispatch but cannot erase an edge.
+        let input_batch = pad.drain_input_batch();
         screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
@@ -4361,8 +4437,64 @@ pub(super) fn run_launcher_loop(
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
         let frame_now = Instant::now();
+        let lifecycle_view = lifecycle.view();
+        let focus = launcher_input_focus(
+            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+            screensaver.active,
+            lifecycle_view.launch_failure_dialog().is_some()
+                || lifecycle_view.catalog_recovery_dialog().is_some(),
+            setup.is_active(),
+            nav.confirm_action.is_some(),
+            navigation_transition.is_active()
+                || orientation_transition.is_active()
+                || full_screen_transition.state() != FullScreenTransitionState::Live,
+            nav.screen,
+        );
+        let mut screensaver_wake = false;
+        match input_router.accept_batch(&input_batch) {
+            Ok(()) => {
+                input_fault_notice = None;
+                for event in input_batch.events.iter().copied() {
+                    match input_router.route_event(event, focus, frame_now) {
+                        InputOutcome::Dispatch { event, .. }
+                        | InputOutcome::TransitionControl { event, .. }
+                        | InputOutcome::Released { event, .. } => {
+                            pending_input_events.push_back(event);
+                        }
+                        InputOutcome::WakeScreensaver { .. } => screensaver_wake = true,
+                        InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
+                    }
+                }
+                if !navigation_transition.is_active()
+                    && let Some(InputOutcome::Dispatch { event, .. }) = input_router
+                        .replay_next_transition(launcher_screen_input_focus(nav.screen), frame_now)
+                {
+                    pending_input_events.push_back(event);
+                }
+            }
+            Err(fault) => {
+                input_fault_notice = Some(fault.notice());
+                pending_input_events.clear();
+                proxy_navigation_state = PadState::default();
+            }
+        }
+        if screensaver_wake {
+            let _ = input_router.consume_remaining_batch(
+                input_batch.events.iter().copied(),
+                ConsumedReason::ExclusiveBatch,
+            );
+            pending_input_events.clear();
+            proxy_navigation_state = PadState::default();
+        } else if let Some(event) = pending_input_events.pop_front() {
+            proxy_navigation_state.set_logical_action(
+                event.action,
+                event.phase == crate::input_event::InputPhase::Pressed,
+            );
+        }
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        bridge.set_input_fault_notice(input_fault_notice.unwrap_or_default().into());
         let launcher_state = launcher_automation.poll_input(
-            ControllerSetupInputSession::new(&pad, &setup).launcher_state(),
+            proxy_navigation_state.clone(),
             effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
             setup.is_active(),
             frame_now,
@@ -4383,7 +4515,7 @@ pub(super) fn run_launcher_loop(
                 pad.user_activity() || launcher_automation.active();
             if screensaver.handle_input(
                 frame_now,
-                pad_state_has_active_input(&launcher_state),
+                screensaver_wake || pad_state_has_active_input(&launcher_state),
                 raw_screensaver_input_activity,
             ) {
                 nav.absorb_input(&launcher_state);

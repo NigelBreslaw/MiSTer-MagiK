@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::input_event::InputBatch;
 use crate::input_hub::InputHub;
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
@@ -63,8 +64,7 @@ pub struct PadPool {
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
     prefer_main_proxy: bool,
-    shadow_hub: Option<InputHub>,
-    shadow_mismatch_reported: bool,
+    input_hub: Option<InputHub>,
 }
 
 impl PadPool {
@@ -91,6 +91,7 @@ impl PadPool {
         let keyboards: Vec<_> = discover_keyboard_devices()
             .into_iter()
             .filter_map(|path| match KeyboardReader::open(&path) {
+                Ok(reader) if reader.is_main_proxy => None,
                 Ok(reader) => Some(reader),
                 Err(e) => {
                     crate::ui_errln!("keyboard: skip {path}: {e}");
@@ -101,7 +102,7 @@ impl PadPool {
         let prefer_main_proxy = std::env::var(MAIN_INPUT_PROXY_ENV).as_deref() == Ok("1");
         crate::ui_errln!(
             "input proxy: preferred={prefer_main_proxy} detected={}",
-            keyboards.iter().any(|keyboard| keyboard.is_main_proxy)
+            prefer_main_proxy
         );
         Ok(Self {
             pads,
@@ -113,8 +114,7 @@ impl PadPool {
             db,
             last_rescan: Instant::now(),
             prefer_main_proxy,
-            shadow_hub: Some(InputHub::start()),
-            shadow_mismatch_reported: false,
+            input_hub: Some(InputHub::start()),
         })
     }
 
@@ -317,7 +317,6 @@ impl PadPool {
         if changed {
             self.rebuild_merged_state();
         }
-        self.compare_shadow_input();
         changed
     }
 
@@ -326,33 +325,19 @@ impl PadPool {
     }
 
     pub fn wait_for_input(&self, timeout: Duration) {
-        if let Some(hub) = &self.shadow_hub {
+        if let Some(hub) = &self.input_hub {
             hub.wait_for_input(timeout);
         } else {
             std::thread::sleep(timeout);
         }
     }
 
-    fn compare_shadow_input(&mut self) {
-        let Some(hub) = &self.shadow_hub else {
-            return;
-        };
-        let batch = hub.drain();
-        if batch.events.is_empty() {
-            return;
-        }
-        let matches = shadow_held_matches_pad(batch.held_after_last, &self.merged);
-        if !matches && !self.shadow_mismatch_reported {
-            crate::ui_errln!(
-                "input shadow mismatch: epoch={} first={:?} last={:?}",
-                batch.source_epoch.0,
-                batch.first_sequence,
-                batch.last_sequence
-            );
-            self.shadow_mismatch_reported = true;
-        } else if matches {
-            self.shadow_mismatch_reported = false;
-        }
+    /// Drain the sole production navigation source. Raw devices remain available
+    /// through the other accessors for setup and diagnostics only.
+    pub fn drain_input_batch(&self) -> InputBatch {
+        self.input_hub
+            .as_ref()
+            .map_or_else(InputBatch::default, InputHub::drain)
     }
 
     fn active_pad(&self) -> Option<&PadReader> {
@@ -388,6 +373,7 @@ impl PadPool {
                 continue;
             }
             match KeyboardReader::open(&path) {
+                Ok(reader) if reader.is_main_proxy => continue,
                 Ok(reader) => {
                     crate::ui_errln!("keyboard: hotplug added {path}");
                     self.keyboards.push(reader);
@@ -460,8 +446,7 @@ impl PadPool {
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
             prefer_main_proxy: false,
-            shadow_hub: None,
-            shadow_mismatch_reported: false,
+            input_hub: None,
         };
         pool.rebuild_merged_state();
         pool
@@ -485,23 +470,6 @@ impl PadPool {
         }];
         self.rebuild_merged_state();
     }
-}
-
-fn shadow_held_matches_pad(held: crate::input_event::HeldState, pad: &PadState) -> bool {
-    use crate::input_event::LogicalAction;
-    held.is_held(LogicalAction::Up) == pad.dpad_up
-        && held.is_held(LogicalAction::Down) == pad.dpad_down
-        && held.is_held(LogicalAction::Left) == pad.dpad_left
-        && held.is_held(LogicalAction::Right) == pad.dpad_right
-        && held.is_held(LogicalAction::Activate) == pad.btn_a
-        && held.is_held(LogicalAction::Back) == pad.btn_b
-        && held.is_held(LogicalAction::Home) == pad.btn_home
-        && held.is_held(LogicalAction::X) == pad.btn_x
-        && held.is_held(LogicalAction::Y) == pad.btn_y
-        && held.is_held(LogicalAction::L) == pad.btn_l
-        && held.is_held(LogicalAction::R) == pad.btn_r
-        && held.is_held(LogicalAction::Select) == pad.btn_select
-        && held.is_held(LogicalAction::Start) == pad.btn_start
 }
 
 fn open_mouse_activity() -> Option<File> {
@@ -1443,6 +1411,7 @@ mod tests {
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
             prefer_main_proxy: false,
+            input_hub: None,
         }
     }
 

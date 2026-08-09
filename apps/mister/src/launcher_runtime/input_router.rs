@@ -3,7 +3,10 @@
 
 //! Central launcher focus, capture, transition, and repeat policy.
 
-use crate::input_event::{InputEvent, InputPhase, LogicalAction, PressId};
+use crate::input_event::{
+    HeldState, InputBatch, InputEvent, InputPhase, InputProtocolHealth, LogicalAction, PressId,
+    SourceEpoch,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -67,6 +70,35 @@ pub enum ConsumedReason {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputFault {
+    ProxyUnavailable,
+    Overflow,
+    Desync,
+    SequenceGap,
+    SourceChangedWhileHeld,
+    WaitingForNeutral,
+}
+
+impl InputFault {
+    pub const fn notice(self) -> &'static str {
+        match self {
+            Self::ProxyUnavailable => {
+                "Controller input unavailable — Main input proxy v2 is required"
+            }
+            Self::Overflow => "Controller input paused after queue overflow — release all controls",
+            Self::Desync => "Controller input paused after device desync — release all controls",
+            Self::SequenceGap => {
+                "Controller input paused after an event sequence gap — release all controls"
+            }
+            Self::SourceChangedWhileHeld => {
+                "Controller input changed while held — release all controls"
+            }
+            Self::WaitingForNeutral => "Controller input paused — release all controls",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputOutcome {
     Dispatch {
         event: InputEvent,
@@ -86,6 +118,7 @@ pub enum InputOutcome {
         context: ContextId,
     },
     Released {
+        event: InputEvent,
         press_id: PressId,
         context: ContextId,
     },
@@ -119,6 +152,12 @@ pub struct InputRouter {
     horizontal_neutral_lock: bool,
     vertical_neutral_lock: bool,
     last_flush_reason: Option<ConsumedReason>,
+    source_epoch: Option<SourceEpoch>,
+    last_sequence: Option<u64>,
+    validated_held: HeldState,
+    overflow_count: u64,
+    desync_count: u64,
+    requires_neutral: bool,
 }
 
 impl InputRouter {
@@ -136,7 +175,76 @@ impl InputRouter {
             horizontal_neutral_lock: false,
             vertical_neutral_lock: false,
             last_flush_reason: None,
+            source_epoch: None,
+            last_sequence: None,
+            validated_held: HeldState::default(),
+            overflow_count: 0,
+            desync_count: 0,
+            requires_neutral: true,
         }
+    }
+
+    /// Validate the hub's atomic watermark before any event reaches application
+    /// focus. Fault recovery is explicit and always crosses a neutral barrier.
+    pub fn accept_batch(&mut self, batch: &InputBatch) -> Result<(), InputFault> {
+        if batch.health.protocol != InputProtocolHealth::ProxyV2 {
+            self.integrity_flush();
+            return Err(InputFault::ProxyUnavailable);
+        }
+        if batch.health.overflow_count != self.overflow_count {
+            self.overflow_count = batch.health.overflow_count;
+            self.integrity_flush();
+            return Err(InputFault::Overflow);
+        }
+        if batch.health.desync_count != self.desync_count {
+            self.desync_count = batch.health.desync_count;
+            self.integrity_flush();
+            return Err(InputFault::Desync);
+        }
+        if self.source_epoch != Some(batch.source_epoch) {
+            let source_was_known = self.source_epoch.is_some();
+            self.source_epoch = Some(batch.source_epoch);
+            self.last_sequence = batch
+                .first_sequence
+                .map(|sequence| sequence.saturating_sub(1));
+            self.integrity_flush();
+            if source_was_known || batch.held_after_last != HeldState::default() {
+                return Err(InputFault::SourceChangedWhileHeld);
+            }
+        }
+        if let (Some(expected), Some(actual)) = (
+            self.last_sequence.map(|value| value.saturating_add(1)),
+            batch.first_sequence,
+        ) && expected != actual
+        {
+            self.integrity_flush();
+            return Err(InputFault::SequenceGap);
+        }
+        if batch.validate_from(self.validated_held).is_err() {
+            self.integrity_flush();
+            return Err(InputFault::Desync);
+        }
+        self.validated_held = batch.held_after_last;
+        self.last_sequence = batch.last_sequence.or(self.last_sequence);
+        if self.requires_neutral {
+            if batch.held_after_last != HeldState::default() || !batch.events.is_empty() {
+                return Err(InputFault::WaitingForNeutral);
+            }
+            self.requires_neutral = false;
+        }
+        Ok(())
+    }
+
+    fn integrity_flush(&mut self) {
+        self.captures.clear();
+        self.held_actions.clear();
+        self.repeats.clear();
+        self.transition_queue.clear();
+        self.horizontal_neutral_lock = false;
+        self.vertical_neutral_lock = false;
+        self.validated_held = HeldState::default();
+        self.requires_neutral = true;
+        self.last_flush_reason = Some(ConsumedReason::IntegrityFault);
     }
 
     #[must_use]
@@ -232,6 +340,7 @@ impl InputRouter {
         };
         debug_assert_eq!(capture.action, event.action);
         InputOutcome::Released {
+            event,
             press_id: event.press_id,
             context: capture.context,
         }
@@ -414,6 +523,49 @@ mod tests {
             action,
             phase,
         }
+    }
+
+    fn healthy_batch(events: Vec<InputEvent>, held_after_last: HeldState) -> InputBatch {
+        InputBatch {
+            source_epoch: SourceEpoch(1),
+            first_sequence: events.first().map(|event| event.sequence),
+            last_sequence: events.last().map(|event| event.sequence),
+            events,
+            held_after_last,
+            health: crate::input_event::InputHealth {
+                protocol: InputProtocolHealth::ProxyV2,
+                ..crate::input_event::InputHealth::default()
+            },
+            ..InputBatch::default()
+        }
+    }
+
+    #[test]
+    fn batch_gate_requires_healthy_v2_and_contiguous_watermarks() {
+        let screen = request(InputContextKind::Screen, 1, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(screen);
+        assert_eq!(
+            router.accept_batch(&InputBatch::default()),
+            Err(InputFault::ProxyUnavailable)
+        );
+        assert_eq!(
+            router.accept_batch(&healthy_batch(Vec::new(), HeldState::default())),
+            Ok(())
+        );
+
+        let press = event(1, LogicalAction::Down, InputPhase::Pressed);
+        let mut held = HeldState::default();
+        held.apply_event(&press).unwrap();
+        assert_eq!(
+            router.accept_batch(&healthy_batch(vec![press], held)),
+            Ok(())
+        );
+
+        let release = event(3, LogicalAction::Down, InputPhase::Released);
+        assert_eq!(
+            router.accept_batch(&healthy_batch(vec![release], HeldState::default())),
+            Err(InputFault::SequenceGap)
+        );
     }
 
     #[test]

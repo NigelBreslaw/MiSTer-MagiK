@@ -66,7 +66,7 @@ struct MailboxState {
 }
 
 impl MailboxState {
-    fn publish(&mut self, pending: crate::input_event::PendingInputEvent) {
+    fn publish(&mut self, pending: crate::input_event::PendingInputEvent) -> bool {
         if self.events.len() >= JOURNAL_CAPACITY {
             self.health.overflow_count = self.health.overflow_count.saturating_add(1);
             self.health.desync_count = self.health.desync_count.saturating_add(1);
@@ -76,20 +76,21 @@ impl MailboxState {
             self.held = HeldState::default();
             self.source_epoch.0 = self.source_epoch.0.saturating_add(1);
             self.wake_generation = self.wake_generation.saturating_add(1);
-            return;
+            return false;
         }
         self.next_sequence = self.next_sequence.saturating_add(1).max(1);
         let event = pending.with_sequence(self.next_sequence);
         if self.held.apply_event(&event).is_err() {
             self.health.desync_count = self.health.desync_count.saturating_add(1);
             self.health.protocol = InputProtocolHealth::Unhealthy;
-            return;
+            return false;
         }
         self.events.push_back(event);
         self.health.queue_depth = self.events.len();
         self.health.queue_high_water = self.health.queue_high_water.max(self.events.len());
         self.activity_generation = self.activity_generation.saturating_add(1);
         self.wake_generation = self.wake_generation.saturating_add(1);
+        true
     }
 
     fn mark_proxy_open(&mut self, generation: u64, path: &str) -> SourceEpoch {
@@ -333,12 +334,18 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
                     monotonic_us(),
                 ) {
                     Ok(Some(pending)) => {
-                        mailbox
+                        let published = mailbox
                             .state
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .publish(pending);
                         mailbox.wake.notify_all();
+                        if !published {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "input journal overflow",
+                            ));
+                        }
                     }
                     Ok(None) => {}
                     Err(crate::input_event::InputReductionError::UnmatchedRelease { .. }) => {}
