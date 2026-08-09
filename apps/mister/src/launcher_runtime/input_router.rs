@@ -4,10 +4,10 @@
 //! Central launcher focus, capture, transition, and repeat policy.
 
 use crate::input_event::{
-    HeldState, InputBatch, InputEvent, InputPhase, InputProtocolHealth, LogicalAction, PressId,
-    SourceEpoch,
+    HeldState, InputBatch, InputEvent, InputPhase, InputProtocolHealth, InputSourceId,
+    LogicalAction, PressId, SourceEpoch,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 const MENU_REPEAT_DELAY: Duration = Duration::from_millis(300);
@@ -134,6 +134,23 @@ struct Capture {
     action: LogicalAction,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CaptureKey {
+    source: InputSourceId,
+    source_epoch: SourceEpoch,
+    press_id: PressId,
+}
+
+impl From<InputEvent> for CaptureKey {
+    fn from(event: InputEvent) -> Self {
+        Self {
+            source: event.source,
+            source_epoch: event.source_epoch,
+            press_id: event.press_id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct RepeatState {
     event: InputEvent,
@@ -145,8 +162,7 @@ struct RepeatState {
 pub struct InputRouter {
     context: ContextId,
     policy: DirectionalPolicy,
-    captures: HashMap<PressId, Capture>,
-    held_actions: HashSet<LogicalAction>,
+    captures: HashMap<CaptureKey, Capture>,
     repeats: HashMap<LogicalAction, RepeatState>,
     transition_queue: VecDeque<InputEvent>,
     horizontal_neutral_lock: bool,
@@ -169,7 +185,6 @@ impl InputRouter {
             },
             policy: initial.directional_policy,
             captures: HashMap::new(),
-            held_actions: HashSet::new(),
             repeats: HashMap::new(),
             transition_queue: VecDeque::new(),
             horizontal_neutral_lock: false,
@@ -237,7 +252,6 @@ impl InputRouter {
 
     fn integrity_flush(&mut self) {
         self.captures.clear();
-        self.held_actions.clear();
         self.repeats.clear();
         self.transition_queue.clear();
         self.horizontal_neutral_lock = false;
@@ -259,6 +273,8 @@ impl InputRouter {
                 generation: self.context.generation.saturating_add(1),
             };
             self.repeats.clear();
+            self.horizontal_neutral_lock = false;
+            self.vertical_neutral_lock = false;
         }
         self.policy = request.directional_policy;
         self.context
@@ -283,9 +299,15 @@ impl InputRouter {
         context: ContextId,
         now: Instant,
     ) -> InputOutcome {
-        self.held_actions.insert(event.action);
+        let capture_key = CaptureKey::from(event);
+        if self.captures.contains_key(&capture_key) {
+            return InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::IntegrityFault,
+            };
+        }
         self.captures.insert(
-            event.press_id,
+            capture_key,
             Capture {
                 context,
                 action: event.action,
@@ -329,15 +351,16 @@ impl InputRouter {
     }
 
     fn route_released(&mut self, event: InputEvent) -> InputOutcome {
-        self.held_actions.remove(&event.action);
-        self.repeats.remove(&event.action);
-        self.update_neutral_locks();
-        let Some(capture) = self.captures.remove(&event.press_id) else {
+        let Some(capture) = self.captures.remove(&CaptureKey::from(event)) else {
             return InputOutcome::Consumed {
                 press_id: event.press_id,
                 reason: ConsumedReason::StaleRelease,
             };
         };
+        if !self.action_held_in_context(event.action, capture.context) {
+            self.repeats.remove(&event.action);
+        }
+        self.update_neutral_locks(capture.context);
         debug_assert_eq!(capture.action, event.action);
         InputOutcome::Released {
             event,
@@ -359,8 +382,7 @@ impl InputRouter {
         }
     }
 
-    pub fn tick_repeats(&mut self, now: Instant) -> Vec<InputOutcome> {
-        let mut due = Vec::new();
+    pub fn tick_repeat(&mut self, now: Instant) -> Option<InputOutcome> {
         for action in LogicalAction::ALL {
             let Some(repeat) = self.repeats.get_mut(&action) else {
                 continue;
@@ -369,13 +391,13 @@ impl InputRouter {
                 continue;
             }
             repeat.next_at = now + MENU_REPEAT_INTERVAL;
-            due.push(InputOutcome::Dispatch {
+            return Some(InputOutcome::Dispatch {
                 event: repeat.event,
                 context: repeat.context,
                 kind: DispatchKind::Repeat,
             });
         }
-        due
+        None
     }
 
     pub fn replay_next_transition(
@@ -385,9 +407,10 @@ impl InputRouter {
     ) -> Option<InputOutcome> {
         let event = self.transition_queue.pop_front()?;
         let context = self.set_focus(request);
-        if self.captures.contains_key(&event.press_id) {
+        let capture_key = CaptureKey::from(event);
+        if self.captures.contains_key(&capture_key) {
             self.captures.insert(
-                event.press_id,
+                capture_key,
                 Capture {
                     context,
                     action: event.action,
@@ -428,18 +451,19 @@ impl InputRouter {
             .into_iter()
             .map(|event| {
                 if event.phase == InputPhase::Pressed {
-                    self.held_actions.insert(event.action);
                     self.captures.insert(
-                        event.press_id,
+                        CaptureKey::from(event),
                         Capture {
                             context: self.context,
                             action: event.action,
                         },
                     );
                 } else {
-                    self.held_actions.remove(&event.action);
-                    self.captures.remove(&event.press_id);
-                    self.update_neutral_locks();
+                    let context = self
+                        .captures
+                        .remove(&CaptureKey::from(event))
+                        .map_or(self.context, |capture| capture.context);
+                    self.update_neutral_locks(context);
                 }
                 InputOutcome::Consumed {
                     press_id: event.press_id,
@@ -453,7 +477,7 @@ impl InputRouter {
         let Some(opposite) = opposite(action) else {
             return false;
         };
-        let pair_held = self.held_actions.contains(&opposite);
+        let pair_held = self.action_held_in_context(opposite, self.context);
         match action {
             LogicalAction::Left | LogicalAction::Right => {
                 self.horizontal_neutral_lock |= pair_held;
@@ -467,17 +491,39 @@ impl InputRouter {
         }
     }
 
-    fn update_neutral_locks(&mut self) {
-        if !self.held_actions.contains(&LogicalAction::Left)
-            && !self.held_actions.contains(&LogicalAction::Right)
+    fn update_neutral_locks(&mut self, context: ContextId) {
+        if context != self.context {
+            return;
+        }
+        if !self.action_held_in_context(LogicalAction::Left, context)
+            && !self.action_held_in_context(LogicalAction::Right, context)
         {
             self.horizontal_neutral_lock = false;
         }
-        if !self.held_actions.contains(&LogicalAction::Up)
-            && !self.held_actions.contains(&LogicalAction::Down)
+        if !self.action_held_in_context(LogicalAction::Up, context)
+            && !self.action_held_in_context(LogicalAction::Down, context)
         {
             self.vertical_neutral_lock = false;
         }
+    }
+
+    fn action_held_in_context(&self, action: LogicalAction, context: ContextId) -> bool {
+        self.captures
+            .values()
+            .any(|capture| capture.context == context && capture.action == action)
+    }
+
+    #[must_use]
+    pub fn action_held(&self, action: LogicalAction) -> bool {
+        if matches!(action, LogicalAction::Left | LogicalAction::Right)
+            && self.horizontal_neutral_lock
+        {
+            return false;
+        }
+        if matches!(action, LogicalAction::Up | LogicalAction::Down) && self.vertical_neutral_lock {
+            return false;
+        }
+        self.action_held_in_context(action, self.context)
     }
 }
 
@@ -603,18 +649,19 @@ mod tests {
         );
         assert!(
             router
-                .tick_repeats(now + Duration::from_millis(299))
-                .is_empty()
+                .tick_repeat(now + Duration::from_millis(299))
+                .is_none()
         );
-        assert_eq!(
-            router.tick_repeats(now + Duration::from_millis(300)).len(),
-            1
-        );
-        assert_eq!(router.tick_repeats(now + Duration::from_secs(2)).len(), 1);
         assert!(
             router
-                .tick_repeats(now + Duration::from_secs(2) + Duration::from_millis(79))
-                .is_empty()
+                .tick_repeat(now + Duration::from_millis(300))
+                .is_some()
+        );
+        assert!(router.tick_repeat(now + Duration::from_secs(2)).is_some());
+        assert!(
+            router
+                .tick_repeat(now + Duration::from_secs(2) + Duration::from_millis(79))
+                .is_none()
         );
     }
 
@@ -665,7 +712,7 @@ mod tests {
                 ..
             })
         ));
-        assert!(router.tick_repeats(now + Duration::from_secs(1)).is_empty());
+        assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
         assert!(router.replay_next_transition(screen, now).is_none());
     }
 
@@ -690,6 +737,8 @@ mod tests {
                 ..
             }
         ));
+        assert!(!router.action_held(LogicalAction::Left));
+        assert!(!router.action_held(LogicalAction::Right));
         router.route_event(
             event(2, LogicalAction::Left, InputPhase::Released),
             screen,
@@ -708,6 +757,67 @@ mod tests {
             ),
             InputOutcome::Dispatch { .. }
         ));
+        assert!(router.action_held(LogicalAction::Right));
+    }
+
+    #[test]
+    fn equal_press_ids_from_distinct_sources_do_not_collide() {
+        let screen = request(InputContextKind::Screen, 1, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(screen);
+        let now = Instant::now();
+        let first = event(1, LogicalAction::Down, InputPhase::Pressed);
+        let mut second = first;
+        second.source.instance = 2;
+        second.sequence = 2;
+        assert!(matches!(
+            router.route_event(first, screen, now),
+            InputOutcome::Dispatch { .. }
+        ));
+        assert!(matches!(
+            router.route_event(second, screen, now),
+            InputOutcome::Dispatch { .. }
+        ));
+
+        let mut first_release = event(3, LogicalAction::Down, InputPhase::Released);
+        first_release.press_id = first.press_id;
+        assert!(matches!(
+            router.route_event(first_release, screen, now),
+            InputOutcome::Released { .. }
+        ));
+        assert!(router.action_held(LogicalAction::Down));
+
+        let mut second_release = first_release;
+        second_release.source.instance = 2;
+        second_release.sequence = 4;
+        assert!(matches!(
+            router.route_event(second_release, screen, now),
+            InputOutcome::Released { .. }
+        ));
+        assert!(!router.action_held(LogicalAction::Down));
+    }
+
+    #[test]
+    fn held_action_does_not_leak_across_context_generation() {
+        let screen = request(
+            InputContextKind::Screen,
+            1,
+            DirectionalPolicy::HomeContinuous,
+        );
+        let modal = request(
+            InputContextKind::LauncherModal,
+            2,
+            DirectionalPolicy::MenuRepeat,
+        );
+        let mut router = InputRouter::new(screen);
+        let now = Instant::now();
+        router.route_event(
+            event(1, LogicalAction::Right, InputPhase::Pressed),
+            screen,
+            now,
+        );
+        assert!(router.action_held(LogicalAction::Right));
+        router.set_focus(modal);
+        assert!(!router.action_held(LogicalAction::Right));
     }
 
     #[test]
