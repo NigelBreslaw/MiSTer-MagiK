@@ -8503,6 +8503,7 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
+        let selection_feedback_stamp = presented_frame.selection_feedback.clone();
         let mut accepted_and_active_confirmed = false;
         let mut confirmed_present_sequence = 0u16;
         let mut confirmed_direct_layer_receipt = None;
@@ -8853,8 +8854,8 @@ pub(super) fn run_launcher_loop(
             );
         }
         if let Some(confirmed_at) = selection_feedback_confirmed_at {
-            for confirmation in bridge_models
-                .confirm_selection_feedback(&presented_frame.selection_feedback, confirmed_at)
+            for confirmation in
+                bridge_models.confirm_selection_feedback(&selection_feedback_stamp, confirmed_at)
             {
                 launcher_response_trace.record_feedback_confirmation(
                     &confirmation,
