@@ -2852,6 +2852,7 @@ mod tests {
         LauncherPresentedFrame {
             frames: frame,
             automation: AutomationFrameStamp::default(),
+            selection_feedback: SelectionFeedbackStamp::default(),
             selected: 0,
             visual_index: 0.0,
             #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]

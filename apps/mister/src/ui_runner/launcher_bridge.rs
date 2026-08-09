@@ -1091,6 +1091,7 @@ mod tests {
     use super::*;
     use crate::arcade_catalog::{ArcadeCatalog, DEFAULT_ARCADE_ROOT, GameSystemEntry};
     use crate::input_state::PadState;
+    use crate::launcher_presentation::SelectionFeedbackTarget;
     use crate::test_support::arcade_game;
     use std::cell::Cell;
     use std::path::PathBuf;
