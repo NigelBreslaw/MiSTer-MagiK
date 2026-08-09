@@ -647,7 +647,7 @@ mod tests {
         ));
         assert!(matches!(
             router.route_event(
-                event(4, LogicalAction::Home, InputPhase::Pressed),
+                event(5, LogicalAction::Home, InputPhase::Pressed),
                 transition,
                 now
             ),
