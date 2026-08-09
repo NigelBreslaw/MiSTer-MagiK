@@ -6770,7 +6770,7 @@ mod tests {
 
                 // Even if a runtime boundary loses edge history while the
                 // control is held, the hierarchy transition stays consumed.
-                nav.prev = PadState::default();
+                nav.reset_test_snapshot(&PadState::default());
                 let _ = nav.handle_input(&activation, t0 + Duration::from_millis(16), &catalog);
                 assert!(nav.arcade_filter.drawer_open);
                 assert_eq!(nav.arcade_filter.level, *level);
@@ -9493,9 +9493,9 @@ mod tests {
         nav.screen = Screen::Arcade;
         let now = Instant::now();
 
-        assert_eq!(
-            nav.handle_input(&pad_with(|pad| pad.btn_x = true), now, &catalog),
-            None
+        assert!(
+            nav.handle_input(&pad_with(|pad| pad.btn_x = true), now, &catalog)
+                .is_none()
         );
         assert_eq!(nav.confirm_action, Some(ConfirmAction::AddFavourite));
         nav.handle_input(
