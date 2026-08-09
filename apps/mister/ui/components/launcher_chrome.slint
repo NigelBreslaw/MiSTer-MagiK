@@ -52,41 +52,16 @@ component ScanningSubtitle inherits VerticalLayout {
 
 component LauncherTileText inherits PixelText8 {
     in property <bool> focused;
-    in property <bool> transition-enabled;
     in property <color> selected-color;
     in property <color> unselected-color;
 
     states [
-        immediate-selected when root.focused && !root.transition-enabled: {
+        selected when root.focused: {
             color: root.selected-color;
         }
 
-        immediate-unselected when !root.focused && !root.transition-enabled: {
+        unselected when !root.focused: {
             color: root.unselected-color;
-        }
-
-        animated-selected when root.focused && root.transition-enabled: {
-            color: root.selected-color;
-
-            in {
-                animate color {
-                    enabled: !MisterBridge.navigation-transition-active;
-                    duration: 100ms;
-                    easing: Easing.ease-in-out;
-                }
-            }
-        }
-
-        animated-unselected when !root.focused && root.transition-enabled: {
-            color: root.unselected-color;
-
-            in {
-                animate color {
-                    enabled: !MisterBridge.navigation-transition-active;
-                    duration: 100ms;
-                    easing: Easing.ease-in-out;
-                }
-            }
         }
     ]
 }
@@ -122,7 +97,6 @@ export component LauncherTile inherits Rectangle {
         LauncherTileText {
             text: root.label;
             focused: root.focused;
-            transition-enabled: root.focus-transition-enabled;
             selected-color: #06d6a0;
             unselected-color: root.status == MenuItemStatus.failed
                 ? #ef8da2
@@ -143,7 +117,6 @@ export component LauncherTile inherits Rectangle {
         if subtitle != "" && status != MenuItemStatus.scanning : LauncherTileText {
             text: root.subtitle;
             focused: root.focused;
-            transition-enabled: root.focus-transition-enabled;
             selected-color: #d8d4dd;
             unselected-color: root.status == MenuItemStatus.failed
                 ? #ef8da2
