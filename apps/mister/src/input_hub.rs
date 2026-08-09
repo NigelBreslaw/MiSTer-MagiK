@@ -17,7 +17,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const INPUT_PROXY_CAPABILITY_ENV: &str = "MISTER_MAGIK_INPUT_PROXY";
 const INPUT_PROXY_PROTOCOL_ENV: &str = "MISTER_MAGIK_INPUT_PROXY_PROTOCOL";

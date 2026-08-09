@@ -2967,7 +2967,7 @@ pub(super) fn run_launcher_loop(
     let mut input_router = InputRouter::new(launcher_input_focus(
         false, false, false, false, false, false, &nav,
     ));
-    let mut input_fault_notice: Option<&'static str> = None;
+    let mut input_fault_notice: Option<&'static str>;
     let mut setup_disconnect_notice = false;
     let mut input_integrity_stall = std::env::var("MISTER_INPUT_INTEGRITY_STALL_MS")
         .ok()
@@ -5003,7 +5003,7 @@ pub(super) fn run_launcher_loop(
                 {
                     if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                         let setup_before = SetupBridgeKey::from_setup(&setup);
-                        setup.maybe_open(&info, active_device, pad.db(), true);
+                        setup.maybe_open(&info, active_device.clone(), pad.db(), true);
                         if setup.is_active() {
                             setup_disconnect_notice = false;
                         }
