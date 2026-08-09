@@ -4426,7 +4426,7 @@ fn run_launcher_response_scenario(
     run_launcher_response_driver(session, "launcher-response")?;
     thread::sleep(Duration::from_millis(250));
 
-    let response_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 20)?;
+    let response_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 17)?;
     let records = transition_trace["records"]
         .as_array()
         .ok_or("launcher transition trace has no records")?
