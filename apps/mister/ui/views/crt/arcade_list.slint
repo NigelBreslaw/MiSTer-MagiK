@@ -11,11 +11,13 @@ component SearchKey inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
     in property <bool> keyboard-focused;
+    in property <bool> acknowledged;
 
     height: MisterUi.footer-height;
-    background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    background: selected && keyboard-focused ? CrtTheme.accent
+        : acknowledged ? #123d35 : CrtTheme.panel-alt;
     border-width: MisterUi.border;
-    border-color: selected ? CrtTheme.accent : CrtTheme.border;
+    border-color: selected ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 
     PixelText8 {
         text: root.label;
@@ -39,6 +41,9 @@ component SearchKeyboardRow inherits Rectangle {
             label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
             selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
             keyboard-focused: MisterBridge.arcade-search-pane == 0;
+            acknowledged: MisterBridge.selection-feedback-query(
+                "", "key:" + (root.start-index + key-offset),
+                MisterBridge.selection-feedback-revision);
         }
     }
 }
