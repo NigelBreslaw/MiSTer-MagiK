@@ -527,14 +527,16 @@ impl NativeDevice {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
         deliver_runtime_transaction(
             &prepared.config,
-            local,
-            "/media/fat/mister-magik-dev/mister-magik-fb",
-            manifest_local,
-            "/media/fat/mister-magik-dev/platform-v3.manifest",
-            expected_sha256,
-            artwork_local,
-            "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
-            artwork_expected_sha256,
+            RuntimeDeliveryBundle {
+                local,
+                remote: "/media/fat/mister-magik-dev/mister-magik-fb",
+                manifest_local,
+                manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest",
+                expected_sha256,
+                artwork_local,
+                artwork_remote: "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
+                artwork_expected_sha256,
+            },
         )
         .map(|_| ())
     }
@@ -2000,17 +2002,31 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
     }
 }
 
+struct RuntimeDeliveryBundle<'a> {
+    local: &'a Path,
+    remote: &'a str,
+    manifest_local: &'a Path,
+    manifest_remote: &'a str,
+    expected_sha256: &'a str,
+    artwork_local: &'a Path,
+    artwork_remote: &'a str,
+    artwork_expected_sha256: &'a str,
+}
+
 fn deliver_runtime_transaction(
     config: &NativeDeviceConfig,
-    local: &Path,
-    remote: &str,
-    manifest_local: &Path,
-    manifest_remote: &str,
-    expected_sha256: &str,
-    artwork_local: &Path,
-    artwork_remote: &str,
-    artwork_expected_sha256: &str,
+    bundle: RuntimeDeliveryBundle<'_>,
 ) -> std::result::Result<String, DeviceFailure> {
+    let RuntimeDeliveryBundle {
+        local,
+        remote,
+        manifest_local,
+        manifest_remote,
+        expected_sha256,
+        artwork_local,
+        artwork_remote,
+        artwork_expected_sha256,
+    } = bundle;
     require_delivery_sha256(expected_sha256)?;
     require_delivery_sha256(artwork_expected_sha256)?;
     validate_delivery_remote(remote).map_err(device_failure)?;
