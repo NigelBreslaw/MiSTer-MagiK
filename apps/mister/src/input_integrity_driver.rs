@@ -246,8 +246,8 @@ impl UinputDevice {
             105 => (EV_ABS, ABS_HAT0X, -1),
             106 => (EV_ABS, ABS_HAT0X, 1),
             108 => (EV_ABS, ABS_HAT0Y, 1),
-            28 => (EV_KEY, BTN_SOUTH, 1),
-            1 => (EV_KEY, BTN_EAST, 1),
+            28 => (EV_KEY, BTN_EAST, 1),
+            1 => (EV_KEY, BTN_SOUTH, 1),
             139 => (EV_KEY, BTN_MODE, 1),
             _ => {
                 return Err(io::Error::new(
