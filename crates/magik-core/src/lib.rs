@@ -8,6 +8,7 @@
 //! implementing [`platform::MagikPlatform`].
 
 pub mod display;
+pub mod input_event;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
