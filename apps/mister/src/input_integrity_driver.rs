@@ -43,6 +43,7 @@ enum DriverSequence {
     TransitionRight,
     TransitionBack,
     ComputersSweep,
+    ComputersRoundTrip,
     LauncherResponse,
 }
 
@@ -78,6 +79,23 @@ impl DriverPlan {
                 qualification: false,
                 cpu_load: false,
                 sequence: DriverSequence::ComputersSweep,
+            });
+        }
+        if args.first().map(String::as_str) == Some("computers-round-trip") {
+            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 600)?;
+            let cycles = parse_bounded(args.get(2), "cycles", 1, 8)? as u32;
+            if args.len() != 3 {
+                return Err("usage: computers-round-trip interval_ms cycles".to_string());
+            }
+            return Ok(Self {
+                key_code: 106,
+                pulse_ms: 40,
+                gap_ms: interval_ms - 40,
+                start_delay_ms: 0,
+                count: cycles * 16,
+                qualification: false,
+                cpu_load: false,
+                sequence: DriverSequence::ComputersRoundTrip,
             });
         }
         if matches!(
@@ -262,6 +280,15 @@ impl UinputDevice {
                 }
                 return Ok(());
             }
+            DriverSequence::ComputersRoundTrip => {
+                for index in 0..plan.count {
+                    self.pulse(computers_round_trip_key(index), plan.pulse_ms)?;
+                    if index + 1 < plan.count {
+                        std::thread::sleep(Duration::from_millis(plan.gap_ms));
+                    }
+                }
+                return Ok(());
+            }
             DriverSequence::Pulses => {}
         }
         for index in 0..plan.count {
@@ -310,6 +337,14 @@ impl UinputDevice {
         bytes[offset + 2..offset + 4].copy_from_slice(&code.to_ne_bytes());
         bytes[offset + 4..offset + 8].copy_from_slice(&value.to_ne_bytes());
         self.file.write_all(&bytes)
+    }
+}
+
+fn computers_round_trip_key(index: u32) -> u16 {
+    if (index / 8).is_multiple_of(2) {
+        106
+    } else {
+        105
     }
 }
 
@@ -398,5 +433,16 @@ mod tests {
         assert_eq!(isolated.gap_ms, 560);
         assert_eq!(isolated.start_delay_ms, 455);
         assert!(DriverPlan::parse(&["computers-sweep", "601", "0"].map(str::to_string)).is_err());
+        let round_trip =
+            DriverPlan::parse(&["computers-round-trip", "600", "4"].map(str::to_string)).unwrap();
+        assert_eq!(round_trip.sequence, DriverSequence::ComputersRoundTrip);
+        assert_eq!(round_trip.pulse_ms, 40);
+        assert_eq!(round_trip.gap_ms, 560);
+        assert_eq!(round_trip.count, 64);
+        assert_eq!(computers_round_trip_key(0), 106);
+        assert_eq!(computers_round_trip_key(7), 106);
+        assert_eq!(computers_round_trip_key(8), 105);
+        assert_eq!(computers_round_trip_key(15), 105);
+        assert_eq!(computers_round_trip_key(16), 106);
     }
 }

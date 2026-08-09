@@ -4304,20 +4304,30 @@ fn verify_installed_launcher_response(
                 .ok_or_else(|| format!("missing launcher response mode {mode_id}"))?;
             apply_confirmed_display_mode(config, mode, "launcher response qualification")?;
             let session = connect_with(&config.connection, 10)?;
-            scenario_values.push(run_launcher_response_scenario(
-                &session,
-                display_label,
-                "idle",
-                "off",
-                isolated_profile,
-            )?);
-            scenario_values.push(run_launcher_response_scenario(
-                &session,
-                display_label,
-                "catalog",
-                "force",
-                isolated_profile,
-            )?);
+            if isolated_profile {
+                scenario_values.push(run_launcher_response_scenario(
+                    &session,
+                    display_label,
+                    "catalog-round-trip",
+                    "force",
+                    true,
+                )?);
+            } else {
+                scenario_values.push(run_launcher_response_scenario(
+                    &session,
+                    display_label,
+                    "idle",
+                    "off",
+                    false,
+                )?);
+                scenario_values.push(run_launcher_response_scenario(
+                    &session,
+                    display_label,
+                    "catalog",
+                    "force",
+                    false,
+                )?);
+            }
         }
         Ok(())
     })();
@@ -4394,7 +4404,7 @@ fn verify_installed_launcher_response(
             json!(["computers-acorn-to-other", "snes-system-hub", "settings", "arcade-press-to-motion"])
         },
         "display_rates_hz": if isolated_profile { json!([60]) } else { json!([60, 50]) },
-        "diagnostic_mode": isolated_profile.then_some("1920x1200-600ms-isolated-profile"),
+        "diagnostic_mode": isolated_profile.then_some("1920x1200-600ms-four-round-trips"),
         "input_response_status": if input_response_passed { "passed" } else { "failed" },
         "pulse_status": if pulse_passed { "passed" } else { "failed" },
         "integrity_status": if integrity_passed { "passed" } else { "failed" },
@@ -4445,13 +4455,7 @@ fn run_launcher_response_scenario(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
     let schedules = if isolated_profile {
-        vec![
-            (600_u64, 0_u64),
-            (600, 113),
-            (600, 227),
-            (600, 341),
-            (600, 455),
-        ]
+        vec![(600_u64, 0_u64)]
     } else {
         vec![(100_u64, 0_u64), (50, 7), (57, 13), (64, 3), (71, 11)]
     };
@@ -4464,11 +4468,11 @@ fn run_launcher_response_scenario(
             start_delay_ms,
             isolated_profile,
         )?;
-        computers_sweeps.push(summarize_computers_sweep(
-            trace,
-            interval_ms,
-            start_delay_ms,
-        )?);
+        computers_sweeps.push(if isolated_profile {
+            summarize_computers_round_trip(trace, interval_ms, 4)?
+        } else {
+            summarize_computers_sweep(trace, interval_ms, start_delay_ms)?
+        });
     }
     let (system_hub, settings, arcade) = if isolated_profile {
         (
@@ -4624,7 +4628,7 @@ fn run_launcher_response_computers_sweep(
                 "MISTER_PREVIEW_SCROLL_TRACE".into(),
                 "/tmp/mister-magik/launcher-response-frames.tsv".into(),
             ),
-            ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "8".into()),
+            ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "45".into()),
         ]);
     }
     restart_launcher_with_one_shot_env(
@@ -4647,12 +4651,15 @@ fn run_launcher_response_computers_sweep(
                 == Some("menu:computers:acorn")
     })?;
     thread::sleep(Duration::from_millis(200));
-    run_launcher_response_driver(
-        session,
-        &format!("computers-sweep {interval_ms} {start_delay_ms}"),
-    )?;
+    let (driver, expected_records) = if isolated_profile {
+        (format!("computers-round-trip {interval_ms} 4"), 65)
+    } else {
+        (format!("computers-sweep {interval_ms} {start_delay_ms}"), 9)
+    };
+    run_launcher_response_driver(session, &driver)?;
     thread::sleep(Duration::from_millis(300));
-    let mut trace = wait_launcher_response_trace(session, Duration::from_secs(5), 9)?;
+    let mut trace =
+        wait_launcher_response_trace(session, Duration::from_secs(5), expected_records)?;
     if isolated_profile {
         trace["frame_profile_tsv"] = Value::String(
             remote_read(session, "/tmp/mister-magik/launcher-response-frames.tsv")
@@ -4704,6 +4711,48 @@ fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64
             "expected_item_ids": expected,
             "expected_focus_changes": 8,
             "final_selection_preceded_prior_pulse_expiry": final_independent,
+        }),
+    ))
+}
+
+fn summarize_computers_round_trip(trace: Value, interval_ms: u64, cycles: usize) -> Result<Value> {
+    validate_launcher_response_trace(&trace)?;
+    let records = launcher_response_confirmed_records(&trace, Some("menu:computers"));
+    let selected_indices = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .pointer("/after/selected_index")
+                .and_then(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    let mut expected_indices = Vec::with_capacity(cycles * 16);
+    for _ in 0..cycles {
+        expected_indices.extend(1_u64..=8);
+        expected_indices.extend((0_u64..8).rev());
+    }
+    let selected_item_ids = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .pointer("/after/selected_item_id")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    let pulse = summarize_launcher_response_pulses(&trace, "menu:computers", &selected_item_ids)?;
+    Ok(launcher_response_route_summary(
+        &trace,
+        records,
+        selected_indices == expected_indices,
+        pulse,
+        json!({
+            "press_duration_ms": 40,
+            "press_interval_ms": interval_ms,
+            "round_trip_cycles": cycles,
+            "selected_indices": selected_indices,
+            "expected_indices": expected_indices,
+            "selected_item_ids": selected_item_ids,
+            "expected_focus_changes": cycles * 16,
         }),
     ))
 }
