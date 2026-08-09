@@ -14,7 +14,7 @@ component HubCard inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
-    background: focused ? CrtTheme.panel-alt : acknowledged ? #123d35 : CrtTheme.panel;
+    background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
     border-width: focused ? MisterUi.border * 2 : MisterUi.border;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
     PixelText8 { x: MisterUi.grid-x; y: MisterUi.grid-y; width: 32px; text: root.glyph; color: root.focused ? CrtTheme.accent : CrtTheme.muted; size: MisterUi.crt-heading-font; horizontal-alignment: center; }

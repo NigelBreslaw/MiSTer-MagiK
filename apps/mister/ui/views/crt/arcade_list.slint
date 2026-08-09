@@ -14,8 +14,7 @@ component SearchKey inherits Rectangle {
     in property <bool> acknowledged;
 
     height: MisterUi.footer-height;
-    background: selected && keyboard-focused ? CrtTheme.accent
-        : acknowledged ? #123d35 : CrtTheme.panel-alt;
+    background: selected && keyboard-focused ? CrtTheme.accent : CrtTheme.panel-alt;
     border-width: MisterUi.border;
     border-color: selected ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 

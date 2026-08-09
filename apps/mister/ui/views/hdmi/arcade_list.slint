@@ -13,8 +13,7 @@ component SearchKey inherits Rectangle {
     in property <bool> acknowledged;
 
     height: 42px;
-    background: selected ? (keyboard-focused ? #06d6a0 : #2a2236)
-        : acknowledged ? #203a36 : #181220;
+    background: selected ? (keyboard-focused ? #06d6a0 : #2a2236) : #181220;
     border-width: selected ? 2px : 1px;
     border-color: selected ? (keyboard-focused ? #ffffff : #5c4a72)
         : acknowledged ? #4e8f80 : #352848;

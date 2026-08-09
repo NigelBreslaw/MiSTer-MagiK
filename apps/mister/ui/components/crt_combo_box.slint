@@ -13,8 +13,7 @@ component CrtResolutionRow inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
 
-    background: root.focused ? CrtTheme.accent
-        : root.acknowledged ? #123d35 : CrtTheme.panel-alt;
+    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
     border-width: MisterUi.border;
     border-color: root.focused ? CrtTheme.accent
         : root.acknowledged ? #4e8f80 : CrtTheme.border;

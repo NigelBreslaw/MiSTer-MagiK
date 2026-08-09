@@ -27,7 +27,7 @@ export component ComboBoxOverlay inherits Rectangle {
                 property <bool> acknowledged: MisterBridge.selection-feedback-query(
                     "", "option:" + index, MisterBridge.selection-feedback-revision);
                 height: 34px;
-                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : acknowledged ? #203a36 : transparent;
+                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : transparent;
                 border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : acknowledged ? 1px : 0px;
                 border-color: acknowledged ? #4e8f80 : #06d6a0;
                 PixelText8 {

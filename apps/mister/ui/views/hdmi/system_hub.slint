@@ -66,10 +66,9 @@ component HubCard inherits Rectangle {
     in property <bool> focused;
     in property <bool> acknowledged;
     in property <bool> enabled: true;
-    property <color> ink: !enabled ? #665574 : focused ? #06d6a0
-        : acknowledged ? #7fe0c5 : #9b88ae;
+    property <color> ink: !enabled ? #665574 : focused ? #06d6a0 : #9b88ae;
 
-    background: focused ? #1d1728 : acknowledged ? #203a36 : #100d18;
+    background: focused ? #1d1728 : #100d18;
     border-width: focused ? 3px : 1px;
     border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #57466b;
 

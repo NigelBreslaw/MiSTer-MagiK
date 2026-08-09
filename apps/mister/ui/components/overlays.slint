@@ -181,7 +181,7 @@ component CompactDialogButton inherits Rectangle {
     in property <bool> acknowledged;
 
     height: 32px;
-    background: focused ? CrtTheme.accent : acknowledged ? #123d35 : CrtTheme.panel-alt;
+    background: focused ? CrtTheme.accent : CrtTheme.panel-alt;
     border-width: 1px;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 

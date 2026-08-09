@@ -84,8 +84,7 @@ export component LauncherTile inherits Rectangle {
         : status == MenuItemStatus.scanning
             ? #7b91ad
             : #5a4973;
-    background: acknowledged ? #203a36
-        : status == MenuItemStatus.failed
+    background: status == MenuItemStatus.failed
         ? #291820
         : status == MenuItemStatus.update-failed ? #292318
         : status == MenuItemStatus.partial ? #292318
@@ -144,7 +143,7 @@ export component SettingsButton inherits Rectangle {
 
     width: 56px;
     height: 56px;
-    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
+    background: focused ? #2a2236 : #1e1828;
     border-width: focused ? 2px : 1px;
     border-color: focused ? white : acknowledged ? #4e8f80 : #5c4a72;
 
