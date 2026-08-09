@@ -2507,25 +2507,6 @@ mod macos {
         }
     }
 
-    fn settings_navigation_input_candidate(
-        screen: Screen,
-        now: &PadState,
-        previous: &PadState,
-    ) -> bool {
-        let activated = now.btn_a && !previous.btn_a;
-        let backed = now.btn_b && !previous.btn_b;
-        let went_home = now.btn_home && !previous.btn_home;
-        match screen {
-            Screen::Home => activated || went_home,
-            Screen::Settings
-            | Screen::Screensaver
-            | Screen::About
-            | Screen::Info
-            | Screen::Licenses => activated || backed || went_home,
-            Screen::Controller | Screen::Arcade | Screen::SystemHub => false,
-        }
-    }
-
     struct PreviewOptions {
         scenario: Scenario,
         frame: u64,
