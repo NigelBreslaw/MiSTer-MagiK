@@ -2830,6 +2830,7 @@ pub(super) fn run_launcher_loop(
         false, false, false, false, false, false, &nav,
     ));
     let mut input_fault_notice: Option<&'static str> = None;
+    let mut setup_disconnect_notice = false;
     let mut input_integrity_stall = std::env::var("MISTER_INPUT_INTEGRITY_STALL_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -2888,12 +2889,16 @@ pub(super) fn run_launcher_loop(
         );
     }
     if AUTO_CONTROLLER_SETUP_ENABLED {
-        if let Some(idx) = pad.index_needing_setup() {
-            let status = pad.db().registry_status(pad.info_at(idx));
+        if let Some(device) = pad.device_needing_setup()
+            && let Some(info) = pad.info_for_device(&device)
+        {
+            let status = pad.db().registry_status(info);
             crate::ui_errln!(
-                "controller setup: pad {idx} needs setup ({status:?}) - showing prompt"
+                "controller setup: {} generation {} needs setup ({status:?}) - showing prompt",
+                device.plug_id,
+                device.generation
             );
-            setup.open_for(status, idx);
+            setup.open_for(status, device);
         }
     }
     let mut pacer = ui
@@ -4683,7 +4688,12 @@ pub(super) fn run_launcher_loop(
             }
         }
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        bridge.set_input_fault_notice(input_fault_notice.unwrap_or_default().into());
+        let input_notice = input_fault_notice.or_else(|| {
+            setup_disconnect_notice.then_some(
+                "Controller disconnected. Press a button after reconnecting to restart setup.",
+            )
+        });
+        bridge.set_input_fault_notice(input_notice.unwrap_or_default().into());
         frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
         let application_input_enabled =
@@ -4697,12 +4707,19 @@ pub(super) fn run_launcher_loop(
         }
 
         if application_input_enabled {
-            if setup_active && setup.target_pad_idx >= pad.len() {
-                crate::ui_errln!(
-                    "controller setup: pad {} disappeared; closing setup flow",
-                    setup.target_pad_idx
+            if setup.is_active()
+                && setup
+                    .target_device
+                    .as_ref()
+                    .is_none_or(|device| pad.info_for_device(device).is_none())
+            {
+                crate::ui_errln!("controller setup: target disconnected; closing setup flow");
+                setup.cancel_disconnected();
+                setup_disconnect_notice = true;
+                bridge.set_input_fault_notice(
+                    "Controller disconnected. Press a button after reconnecting to restart setup."
+                        .into(),
                 );
-                setup.advance_to_next_pad(&pad);
                 full_bridge_dirty = true;
             }
 
@@ -4713,8 +4730,8 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
                 continue;
             }
-            let active_idx = pad.active_idx();
-            let info = pad.info();
+            let active_device = pad.active_device();
+            let info = pad.info().clone();
             let proxy_latest_captured_at_us =
                 input_batch.events.last().map(|event| event.captured_at_us);
 
@@ -4793,32 +4810,38 @@ pub(super) fn run_launcher_loop(
                     && setup.is_active()
                 {
                     let setup_before = SetupBridgeKey::from_setup(&setup);
-                    let setup_info = pad.info_at(setup.target_pad_idx);
+                    let target_device = setup
+                        .target_device
+                        .clone()
+                        .expect("active setup has an exact device identity");
+                    let Some(setup_info) = pad.info_for_device(&target_device).cloned() else {
+                        setup.cancel_disconnected();
+                        setup_disconnect_notice = true;
+                        full_bridge_dirty = true;
+                        continue;
+                    };
                     let setup_action = routed_event_this_loop.map_or(SetupAction::None, |event| {
-                        setup.handle_action(&event, frame_now, setup_info, pad.db())
+                        setup.handle_action(&event, frame_now, &setup_info, pad.db())
                     });
                     match setup_action {
                         SetupAction::None => {}
                         SetupAction::RegisterNew => {
-                            let idx = setup.target_pad_idx;
-                            if let Err(e) = pad.register_new_at(idx) {
+                            if let Err(e) = pad.register_new(&target_device) {
                                 crate::ui_errln!("controller setup: register new: {e}");
                             }
                         }
                         SetupAction::ClaimExisting { list_index } => {
-                            let idx = setup.target_pad_idx;
-                            if let Err(e) = pad.claim_existing_at(idx, list_index) {
+                            if let Err(e) = pad.claim_existing(&target_device, list_index) {
                                 crate::ui_errln!("controller setup: claim existing: {e}");
                             }
                         }
                         SetupAction::SaveFinish { label, kind } => {
-                            let idx = setup.target_pad_idx;
-                            if let Err(e) = pad.finish_setup_at(idx, label, kind) {
+                            if let Err(e) = pad.finish_setup(&target_device, label, kind) {
                                 crate::ui_errln!("controller setup: save: {e}");
-                            } else {
+                            } else if let Some(info) = pad.info_for_device(&target_device) {
                                 crate::ui_errln!(
                                     "controller setup: saved \"{}\" ({})",
-                                    pad.db().display_label(pad.info_at(idx)),
+                                    pad.db().display_label(info),
                                     kind.as_str()
                                 );
                             }
@@ -4836,7 +4859,10 @@ pub(super) fn run_launcher_loop(
                 {
                     if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
                         let setup_before = SetupBridgeKey::from_setup(&setup);
-                        setup.maybe_open(info, active_idx, pad.db(), true);
+                        setup.maybe_open(&info, active_device, pad.db(), true);
+                        if setup.is_active() {
+                            setup_disconnect_notice = false;
+                        }
                         full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
                     }
                     if !setup.is_active() {
@@ -11685,6 +11711,9 @@ mod tests {
             choice: Some(launcher::LibraryChangedTestDialogChoice::Continue),
             dialog_seen_at: None,
             phase: LibraryChangedDialogTestPhase::Waiting,
+            next_sequence: 0,
+            next_press_id: 0,
+            active_press: None,
         };
 
         assert!(driver.input_for(&nav, start, start).is_none());
@@ -11730,6 +11759,9 @@ mod tests {
             choice: Some(launcher::LibraryChangedTestDialogChoice::Rebuild),
             dialog_seen_at: None,
             phase: LibraryChangedDialogTestPhase::Waiting,
+            next_sequence: 0,
+            next_press_id: 0,
+            active_press: None,
         };
         let catalog = empty_arcade_catalog("/tmp");
 

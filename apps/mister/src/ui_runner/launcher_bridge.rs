@@ -1307,18 +1307,18 @@ pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &Launche
 }
 
 pub(super) fn setup_pad_info<'a>(pad: &'a PadPool, setup: &SetupNav) -> &'a PadInfo {
-    if setup.is_active() {
-        pad.info_at(setup.target_pad_idx)
-    } else {
-        pad.info()
-    }
+    setup
+        .target_device
+        .as_ref()
+        .and_then(|device| pad.info_for_device(device))
+        .unwrap_or_else(|| pad.info())
 }
 
 #[derive(PartialEq, Eq)]
 pub(super) struct SetupBridgeKey {
     phase: SetupPhase,
     trigger_status: crate::controller_db::PadRegistryStatus,
-    target_pad_idx: usize,
+    target_device: Option<crate::input_event::DeviceInstanceId>,
     list_index: usize,
     draft_label: String,
     draft_kind: crate::controller_db::ControllerKind,
@@ -1329,7 +1329,7 @@ impl SetupBridgeKey {
         Self {
             phase: setup.phase,
             trigger_status: setup.trigger_status,
-            target_pad_idx: setup.target_pad_idx,
+            target_device: setup.target_device.clone(),
             list_index: setup.list_index,
             draft_label: setup.draft_label.clone(),
             draft_kind: setup.draft_kind,

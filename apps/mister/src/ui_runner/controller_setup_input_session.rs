@@ -22,11 +22,11 @@ impl<'a> ControllerSetupInputSession<'a> {
     }
 
     pub(super) fn setup_state(&self) -> PadState {
-        if self.setup.is_active() {
-            self.pad.navigation_state_at(self.setup.target_pad_idx)
-        } else {
-            self.pad.state().clone()
-        }
+        self.setup
+            .target_device
+            .as_ref()
+            .and_then(|device| self.pad.navigation_state_for_device(device))
+            .unwrap_or_else(|| self.pad.state().clone())
     }
 }
 
@@ -61,13 +61,17 @@ mod tests {
             let pool = PadPool::from_test_states(states);
             Self { pool }
         }
+
+        fn device(&self, index: usize) -> crate::input_event::DeviceInstanceId {
+            self.pool.device_at(index).expect("test pad identity")
+        }
     }
 
     #[test]
     fn setup_focus_uses_target_pad_state_not_merged_state() {
         let fixture = PadPoolFixture::new(vec![PadState::with_a(true), PadState::with_a(false)]);
         let mut setup = SetupNav::new();
-        setup.open_for(PadRegistryStatus::Unknown, 1);
+        setup.open_for(PadRegistryStatus::Unknown, fixture.device(1));
 
         let session = ControllerSetupInputSession::new(&fixture.pool, &setup);
 
@@ -79,14 +83,14 @@ mod tests {
     fn setup_focus_uses_new_target_after_advancing() {
         let fixture = PadPoolFixture::new(vec![PadState::with_a(true), PadState::with_a(false)]);
         let mut setup = SetupNav::new();
-        setup.open_for(PadRegistryStatus::Unknown, 0);
+        setup.open_for(PadRegistryStatus::Unknown, fixture.device(0));
         assert!(
             ControllerSetupInputSession::new(&fixture.pool, &setup)
                 .setup_state()
                 .btn_a
         );
 
-        setup.open_for(PadRegistryStatus::Unknown, 1);
+        setup.open_for(PadRegistryStatus::Unknown, fixture.device(1));
         assert!(
             !ControllerSetupInputSession::new(&fixture.pool, &setup)
                 .setup_state()
@@ -109,7 +113,7 @@ mod tests {
     fn setup_does_not_advance_from_non_target_pad_activity() {
         let fixture = PadPoolFixture::new(vec![PadState::with_a(true), PadState::with_a(false)]);
         let mut setup = SetupNav::new();
-        setup.open_for(PadRegistryStatus::Unknown, 1);
+        setup.open_for(PadRegistryStatus::Unknown, fixture.device(1));
 
         let setup_state = ControllerSetupInputSession::new(&fixture.pool, &setup)
             .setup_state()
@@ -129,7 +133,7 @@ mod tests {
     fn setup_advances_from_target_pad_activity() {
         let fixture = PadPoolFixture::new(vec![PadState::with_a(false), PadState::with_a(true)]);
         let mut setup = SetupNav::new();
-        setup.open_for(PadRegistryStatus::Unknown, 1);
+        setup.open_for(PadRegistryStatus::Unknown, fixture.device(1));
 
         let setup_state = ControllerSetupInputSession::new(&fixture.pool, &setup)
             .setup_state()
@@ -150,7 +154,7 @@ mod tests {
         let mut fixture = PadPoolFixture::new(vec![PadState::with_a(false)]);
         fixture.pool.set_test_keyboard_state(PadState::with_a(true));
         let mut setup = SetupNav::new();
-        setup.open_for(PadRegistryStatus::MovedPort, 0);
+        setup.open_for(PadRegistryStatus::MovedPort, fixture.device(0));
 
         assert!(
             ControllerSetupInputSession::new(&fixture.pool, &setup)

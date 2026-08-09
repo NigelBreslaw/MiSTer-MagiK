@@ -30,9 +30,7 @@ pub struct SetupNav {
     pub phase: SetupPhase,
     /// Registry status that triggered the current flow.
     pub trigger_status: PadRegistryStatus,
-    /// Which pad in the pool this dialog refers to.
-    pub target_pad_idx: usize,
-    /// Stable identity used by the event-driven input path.
+    /// Exact physical connection generation this dialog may mutate.
     pub target_device: Option<DeviceInstanceId>,
     pub list_index: usize,
     pub draft_label: String,
@@ -63,9 +61,9 @@ pub enum SetupAction {
 }
 
 pub trait SetupPadSource {
-    fn index_needing_setup(&self) -> Option<usize>;
+    fn device_needing_setup(&self) -> Option<DeviceInstanceId>;
     fn db(&self) -> &ControllerDb;
-    fn info_at(&self, idx: usize) -> &PadInfo;
+    fn info_for_device(&self, device: &DeviceInstanceId) -> Option<&PadInfo>;
 }
 
 impl SetupNav {
@@ -73,7 +71,6 @@ impl SetupNav {
         Self {
             phase: SetupPhase::None,
             trigger_status: PadRegistryStatus::Unknown,
-            target_pad_idx: 0,
             target_device: None,
             list_index: 0,
             draft_label: String::new(),
@@ -86,24 +83,13 @@ impl SetupNav {
         }
     }
 
-    pub fn open_for(&mut self, status: PadRegistryStatus, pad_idx: usize) {
+    pub fn open_for(&mut self, status: PadRegistryStatus, device: DeviceInstanceId) {
         self.trigger_status = status;
-        self.target_pad_idx = pad_idx;
-        self.target_device = None;
+        self.target_device = Some(device);
         self.phase = SetupPhase::Detected;
         self.list_index = 0;
         // Startup / programmatic open — accept input on the first press.
         self.armed = true;
-    }
-
-    pub fn open_for_device(
-        &mut self,
-        status: PadRegistryStatus,
-        device: DeviceInstanceId,
-        current_index: usize,
-    ) {
-        self.open_for(status, current_index);
-        self.target_device = Some(device);
     }
 
     pub fn is_active(&self) -> bool {
@@ -114,7 +100,7 @@ impl SetupNav {
     pub fn maybe_open(
         &mut self,
         info: &PadInfo,
-        pad_idx: usize,
+        device: Option<DeviceInstanceId>,
         db: &ControllerDb,
         had_activity: bool,
     ) {
@@ -122,10 +108,11 @@ impl SetupNav {
             return;
         }
         let status = db.registry_status(info);
-        if db.needs_setup(info) {
+        if db.needs_setup(info)
+            && let Some(device) = device
+        {
             self.trigger_status = status;
-            self.target_pad_idx = pad_idx;
-            self.target_device = None;
+            self.target_device = Some(device);
             self.phase = SetupPhase::Detected;
             self.list_index = 0;
             // Debounce the button press that triggered detection.
@@ -183,11 +170,22 @@ impl SetupNav {
     pub fn advance_to_next_pad(&mut self, pad: &impl SetupPadSource) {
         self.phase = SetupPhase::None;
         self.target_device = None;
-        if let Some(idx) = pad.index_needing_setup() {
-            let status = pad.db().registry_status(pad.info_at(idx));
-            crate::ui_errln!("controller setup: advancing to pad {idx} ({status:?})");
-            self.open_for(status, idx);
+        if let Some(device) = pad.device_needing_setup()
+            && let Some(info) = pad.info_for_device(&device)
+        {
+            let status = pad.db().registry_status(info);
+            crate::ui_errln!(
+                "controller setup: advancing to {} generation {} ({status:?})",
+                device.plug_id,
+                device.generation
+            );
+            self.open_for(status, device);
         }
+    }
+
+    pub fn cancel_disconnected(&mut self) {
+        self.phase = SetupPhase::None;
+        self.target_device = None;
     }
 
     fn begin_name_kind(&mut self, info: &PadInfo, db: &ControllerDb) {
@@ -520,6 +518,13 @@ mod tests {
         }
     }
 
+    fn device(index: usize) -> DeviceInstanceId {
+        DeviceInstanceId {
+            plug_id: format!("test-port-{index}"),
+            generation: 1,
+        }
+    }
+
     fn press_a() -> PadState {
         PadState {
             btn_a: true,
@@ -551,7 +556,7 @@ mod tests {
         let info = pad_info("1-1.3");
         let db = empty_db("debounce");
         let mut nav = SetupNav::new();
-        nav.maybe_open(&info, 0, &db, true);
+        nav.maybe_open(&info, Some(device(0)), &db, true);
 
         let now = Instant::now();
         let action = nav.handle_input(&press_a(), now, &info, &db);
@@ -569,10 +574,9 @@ mod tests {
             plug_id: "usb-1-1.3".to_string(),
             generation: 7,
         };
-        nav.open_for_device(PadRegistryStatus::PendingSetup, device.clone(), 2);
+        nav.open_for(PadRegistryStatus::PendingSetup, device.clone());
 
         assert_eq!(nav.target_device, Some(device));
-        assert_eq!(nav.target_pad_idx, 2);
 
         let event = InputEvent {
             source: crate::input_event::InputSourceId {
@@ -598,7 +602,7 @@ mod tests {
         let info = pad_info("1-1.7");
         let db = empty_db("empty-registry");
         let mut nav = SetupNav::new();
-        nav.open_for(PadRegistryStatus::MovedPort, 0);
+        nav.open_for(PadRegistryStatus::MovedPort, device(0));
         let now = Instant::now();
         let mut first = PadState {
             btn_start: true,
@@ -635,7 +639,7 @@ mod tests {
         let mut db = empty_db("configured");
         db.upsert(&info, configured_entry("1-1.3"));
         let mut nav = SetupNav::new();
-        nav.open_for(PadRegistryStatus::PendingSetup, 0);
+        nav.open_for(PadRegistryStatus::PendingSetup, device(0));
         nav.phase = SetupPhase::Configure;
 
         let action = nav.handle_input(&press_a(), Instant::now(), &info, &db);
@@ -703,7 +707,7 @@ mod tests {
         let mut db = empty_db("pick-existing");
         db.upsert(&pad_info("1-1.1"), configured_entry("1-1.1"));
         let mut nav = SetupNav::new();
-        nav.open_for(PadRegistryStatus::MovedPort, 0);
+        nav.open_for(PadRegistryStatus::MovedPort, device(0));
         let now = Instant::now();
 
         let _ = nav.handle_input(
@@ -762,7 +766,7 @@ mod tests {
         info.name.clear();
         let db = empty_db("name-kind");
         let mut nav = SetupNav::new();
-        nav.open_for(PadRegistryStatus::Unknown, 0);
+        nav.open_for(PadRegistryStatus::Unknown, device(0));
         nav.phase = SetupPhase::Configure;
         let now = Instant::now();
 

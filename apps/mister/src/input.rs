@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::input_event::DeviceInstanceId;
 use crate::input_event::InputBatch;
 use crate::input_hub::InputHub;
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
@@ -50,6 +51,7 @@ pub struct PadReader {
     pub info: PadInfo,
     profile: InputProfile,
     state: PadState,
+    device: Option<DeviceInstanceId>,
 }
 
 /// Poll connected joysticks, keyboards, and mouse activity and merge navigation into [`PadState`].
@@ -63,6 +65,7 @@ pub struct PadPool {
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
     input_hub: Option<InputHub>,
+    next_device_generation: u64,
 }
 
 impl PadPool {
@@ -72,9 +75,12 @@ impl PadPool {
         crate::ui_errln!("controller db: {} entries from {}", db.len(), db.path());
         let paths = discover_js_devices();
         let mut pads = Vec::new();
+        let mut next_device_generation = 1;
         for path in paths {
             match PadReader::open_path_with_db(&path, &db) {
-                Ok(r) => {
+                Ok(mut r) => {
+                    r.assign_device(next_device_generation);
+                    next_device_generation += 1;
                     db.note_sighting(r.info());
                     pads.push(r);
                 }
@@ -108,6 +114,7 @@ impl PadPool {
             db,
             last_rescan: Instant::now(),
             input_hub: Some(InputHub::start()),
+            next_device_generation,
         })
     }
 
@@ -142,6 +149,15 @@ impl PadPool {
         self.clamped_active_idx()
     }
 
+    pub fn active_device(&self) -> Option<DeviceInstanceId> {
+        self.active_pad().and_then(|pad| pad.device.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn device_at(&self, idx: usize) -> Option<DeviceInstanceId> {
+        self.pads.get(idx).and_then(|pad| pad.device.clone())
+    }
+
     pub fn info_at(&self, idx: usize) -> &PadInfo {
         match self.pads.get(idx) {
             Some(pad) => &pad.info,
@@ -152,6 +168,25 @@ impl PadPool {
     /// First connected pad that has not completed setup (`setup_complete`).
     pub fn index_needing_setup(&self) -> Option<usize> {
         self.pads.iter().position(|p| self.db.needs_setup(&p.info))
+    }
+
+    pub fn device_needing_setup(&self) -> Option<DeviceInstanceId> {
+        self.pads
+            .iter()
+            .find(|pad| pad.device.is_some() && self.db.needs_setup(&pad.info))
+            .and_then(|pad| pad.device.clone())
+    }
+
+    pub fn info_for_device(&self, device: &DeviceInstanceId) -> Option<&PadInfo> {
+        self.pad_for_device(device).map(|pad| &pad.info)
+    }
+
+    pub fn path_for_device(&self, device: &DeviceInstanceId) -> Option<&str> {
+        self.pad_for_device(device).map(|pad| pad.path.as_str())
+    }
+
+    pub fn state_for_device(&self, device: &DeviceInstanceId) -> Option<&PadState> {
+        self.pad_for_device(device).map(|pad| &pad.state)
     }
 
     pub fn path_at(&self, idx: usize) -> &str {
@@ -181,8 +216,23 @@ impl PadPool {
         state
     }
 
+    #[cfg(test)]
+    pub fn navigation_state_for_device(&self, device: &DeviceInstanceId) -> Option<PadState> {
+        let mut state = self.state_for_device(device)?.clone();
+        for keyboard in self
+            .keyboards
+            .iter()
+            .filter(|keyboard| !keyboard.is_main_proxy)
+        {
+            keyboard.merge_into(&mut state);
+        }
+        state.rebuild_pressed_now();
+        Some(state)
+    }
+
     /// Save a new default registry entry for a pad (does not mark setup complete).
-    pub fn register_new_at(&mut self, idx: usize) -> io::Result<()> {
+    pub fn register_new(&mut self, device: &DeviceInstanceId) -> io::Result<()> {
+        let idx = self.device_index(device)?;
         let info = self
             .pads
             .get(idx)
@@ -198,7 +248,12 @@ impl PadPool {
     }
 
     /// Bind a pad to an existing registry entry (USB port change).
-    pub fn claim_existing_at(&mut self, idx: usize, list_index: usize) -> io::Result<()> {
+    pub fn claim_existing(
+        &mut self,
+        device: &DeviceInstanceId,
+        list_index: usize,
+    ) -> io::Result<()> {
+        let idx = self.device_index(device)?;
         let info = self
             .pads
             .get(idx)
@@ -217,12 +272,13 @@ impl PadPool {
     }
 
     /// Save name + type and mark this pad's setup complete.
-    pub fn finish_setup_at(
+    pub fn finish_setup(
         &mut self,
-        idx: usize,
+        device: &DeviceInstanceId,
         label: String,
         kind: crate::controller_db::ControllerKind,
     ) -> io::Result<()> {
+        let idx = self.device_index(device)?;
         let info = self
             .pads
             .get(idx)
@@ -337,6 +393,27 @@ impl PadPool {
         self.pads.get(self.clamped_active_idx())
     }
 
+    fn pad_for_device(&self, device: &DeviceInstanceId) -> Option<&PadReader> {
+        self.pads
+            .iter()
+            .find(|pad| pad.device.as_ref() == Some(device))
+    }
+
+    fn device_index(&self, device: &DeviceInstanceId) -> io::Result<usize> {
+        self.pads
+            .iter()
+            .position(|pad| pad.device.as_ref() == Some(device))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!(
+                        "controller {} generation {} is no longer connected",
+                        device.plug_id, device.generation
+                    ),
+                )
+            })
+    }
+
     fn clamped_active_idx(&self) -> usize {
         if self.pads.is_empty() {
             0
@@ -352,7 +429,9 @@ impl PadPool {
                 continue;
             }
             match PadReader::open_path_with_db(&path, &self.db) {
-                Ok(reader) => {
+                Ok(mut reader) => {
+                    reader.assign_device(self.next_device_generation);
+                    self.next_device_generation += 1;
                     self.db.note_sighting(reader.info());
                     self.pads.push(reader);
                     crate::ui_errln!("pad: hotplug added {path} ({} device(s))", self.pads.len());
@@ -425,6 +504,10 @@ impl PadPool {
                     },
                     profile: InputProfile::generic(),
                     state,
+                    device: Some(DeviceInstanceId {
+                        plug_id: format!("test-port-{idx}"),
+                        generation: 1,
+                    }),
                 })
                 .collect(),
             keyboards: Vec::new(),
@@ -435,6 +518,7 @@ impl PadPool {
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
             input_hub: None,
+            next_device_generation: 2,
         };
         pool.rebuild_merged_state();
         pool
@@ -467,16 +551,16 @@ fn open_mouse_activity() -> Option<File> {
 }
 
 impl crate::setup_nav::SetupPadSource for PadPool {
-    fn index_needing_setup(&self) -> Option<usize> {
-        self.index_needing_setup()
+    fn device_needing_setup(&self) -> Option<DeviceInstanceId> {
+        self.device_needing_setup()
     }
 
     fn db(&self) -> &crate::controller_db::ControllerDb {
         self.db()
     }
 
-    fn info_at(&self, idx: usize) -> &PadInfo {
-        self.info_at(idx)
+    fn info_for_device(&self, device: &DeviceInstanceId) -> Option<&PadInfo> {
+        self.info_for_device(device)
     }
 }
 
@@ -637,11 +721,25 @@ impl PadReader {
             info,
             profile,
             state: PadState::default(),
+            device: None,
         })
     }
 
     pub fn info(&self) -> &PadInfo {
         &self.info
+    }
+
+    fn assign_device(&mut self, generation: u64) {
+        self.device = stable_plug_id(&self.info).map(|plug_id| DeviceInstanceId {
+            plug_id,
+            generation,
+        });
+        if self.device.is_none() {
+            crate::ui_errln!(
+                "pad: {} has no stable physical identity; setup writes disabled",
+                self.path
+            );
+        }
     }
 
     fn refresh_profile(&mut self) {
@@ -713,6 +811,20 @@ fn pad_index_error(idx: usize) -> io::Error {
         io::ErrorKind::InvalidInput,
         format!("pad index {idx} out of range"),
     )
+}
+
+fn stable_plug_id(info: &PadInfo) -> Option<String> {
+    let connection = if !info.usb_port.is_empty() && info.usb_port != "unknown" {
+        format!("usb:{}", info.usb_port)
+    } else if !info.phys.is_empty() {
+        format!("phys:{}", info.phys)
+    } else {
+        return None;
+    };
+    Some(format!(
+        "{connection}|vid={}|pid={}|serial={}",
+        info.vendor_id, info.product_id, info.serial
+    ))
 }
 
 fn discover_js_devices() -> Vec<String> {
@@ -1399,6 +1511,7 @@ mod tests {
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
             input_hub: None,
+            next_device_generation: 1,
         }
     }
 
@@ -1556,24 +1669,56 @@ mod tests {
     #[test]
     fn empty_pool_setup_mutations_return_errors() {
         let mut pool = empty_pool();
+        let device = DeviceInstanceId {
+            plug_id: "usb:test".into(),
+            generation: 1,
+        };
 
         assert_eq!(
-            pool.register_new_at(0).unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
+            pool.register_new(&device).unwrap_err().kind(),
+            io::ErrorKind::NotFound
         );
         assert_eq!(
-            pool.claim_existing_at(0, 0).unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
+            pool.claim_existing(&device, 0).unwrap_err().kind(),
+            io::ErrorKind::NotFound
         );
         assert_eq!(
-            pool.finish_setup_at(
-                0,
+            pool.finish_setup(
+                &device,
                 "Pad".to_string(),
                 crate::controller_db::ControllerKind::Gamepad,
             )
             .unwrap_err()
             .kind(),
-            io::ErrorKind::InvalidInput
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn setup_identity_uses_physical_port_not_js_index() {
+        let mut first = PadInfo {
+            usb_port: "1-1.2".into(),
+            vendor_id: "0x1234".into(),
+            product_id: "0xabcd".into(),
+            ..PadInfo::default()
+        };
+        let first_id = stable_plug_id(&first).expect("stable first port");
+        first.usb_port = "1-1.3".into();
+        let second_id = stable_plug_id(&first).expect("stable second port");
+
+        assert_ne!(first_id, second_id);
+        assert!(!first_id.contains("js"));
+    }
+
+    #[test]
+    fn reconnect_generation_cannot_mutate_previous_setup_target() {
+        let mut pool = PadPool::from_test_states(vec![PadState::default()]);
+        let mut stale = pool.device_at(0).expect("test identity");
+        stale.generation += 1;
+
+        assert_eq!(
+            pool.register_new(&stale).unwrap_err().kind(),
+            io::ErrorKind::NotFound
         );
     }
 

@@ -479,8 +479,11 @@ pub(super) fn sync_setup_bridge(
     if active {
         bridge.set_setup_title(setup.title().into());
         bridge.set_setup_selected(setup.list_index as i32);
-        let idx = setup.target_pad_idx;
-        let js_path = pad.path_at(idx);
+        let js_path = setup
+            .target_device
+            .as_ref()
+            .and_then(|device| pad.path_for_device(device))
+            .unwrap_or("(controller disconnected)");
 
         if setup.phase == SetupPhase::Configure {
             let fields = SetupNav::configure_fields(info, js_path, db);
@@ -489,7 +492,12 @@ pub(super) fn sync_setup_bridge(
             bridge.set_setup_config_labels(ModelRc::new(VecModel::from(labels)));
             bridge.set_setup_config_values(ModelRc::new(VecModel::from(values)));
             bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            let live = SetupNav::configure_live_hint(pad.state_at(idx));
+            let live = setup
+                .target_device
+                .as_ref()
+                .and_then(|device| pad.state_for_device(device))
+                .map(SetupNav::configure_live_hint)
+                .unwrap_or_else(|| "Controller disconnected".into());
             bridge.set_setup_subtitle(live.into());
             bridge.set_setup_name(String::new().into());
             bridge.set_setup_kind_label(String::new().into());
