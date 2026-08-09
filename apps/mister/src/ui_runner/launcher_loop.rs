@@ -1227,6 +1227,7 @@ impl LauncherInputScriptButton {
         }
     }
 
+    #[cfg(test)]
     fn apply(self, state: &mut PadState) {
         match self {
             Self::Up => state.dpad_up = true,
@@ -1255,6 +1256,9 @@ struct LauncherInputScriptDriver {
     step_idx: usize,
     frame_in_step: usize,
     wait_frames: usize,
+    event_sequence: u64,
+    press_sequence: u64,
+    active_press: Option<(LauncherInputScriptButton, crate::input_event::PressId)>,
 }
 
 impl LauncherInputScriptDriver {
@@ -1298,6 +1302,9 @@ impl LauncherInputScriptDriver {
             step_idx: 0,
             frame_in_step: 0,
             wait_frames: launcher_input_script_wait_frames(),
+            event_sequence: 0,
+            press_sequence: 0,
+            active_press: None,
         }
     }
 
@@ -1307,9 +1314,71 @@ impl LauncherInputScriptDriver {
             step_idx: 0,
             frame_in_step: 0,
             wait_frames: 0,
+            event_sequence: 0,
+            press_sequence: 0,
+            active_press: None,
         }
     }
 
+    fn event_for(&mut self, captured_at_us: u64) -> Option<crate::input_event::InputEvent> {
+        let step = *self.steps.get(self.step_idx)?;
+        if self.frame_in_step < self.wait_frames {
+            self.frame_in_step += 1;
+            return None;
+        }
+        let local_frame = self.frame_in_step - self.wait_frames;
+        self.frame_in_step += 1;
+        if let LauncherInputScriptStep::Wait(frames) = step {
+            if local_frame >= frames {
+                self.step_idx += 1;
+                self.frame_in_step = 0;
+            }
+            return None;
+        }
+        let LauncherInputScriptStep::Button(button) = step else {
+            unreachable!();
+        };
+        let (phase, press_id) = if local_frame == 0 {
+            self.press_sequence = self.press_sequence.saturating_add(1).max(1);
+            let press_id = crate::input_event::PressId((1_u64 << 62) | self.press_sequence);
+            self.active_press = Some((button, press_id));
+            (crate::input_event::InputPhase::Pressed, press_id)
+        } else if local_frame == LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES {
+            let (_, press_id) = self.active_press.take()?;
+            (crate::input_event::InputPhase::Released, press_id)
+        } else {
+            if local_frame
+                >= LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES + LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES
+            {
+                self.step_idx += 1;
+                self.frame_in_step = 0;
+            }
+            return None;
+        };
+        self.event_sequence = self.event_sequence.saturating_add(1).max(1);
+        let action = match button {
+            LauncherInputScriptButton::Up => crate::input_event::LogicalAction::Up,
+            LauncherInputScriptButton::Down => crate::input_event::LogicalAction::Down,
+            LauncherInputScriptButton::Left => crate::input_event::LogicalAction::Left,
+            LauncherInputScriptButton::Right => crate::input_event::LogicalAction::Right,
+            LauncherInputScriptButton::A => crate::input_event::LogicalAction::Activate,
+            LauncherInputScriptButton::B => crate::input_event::LogicalAction::Back,
+        };
+        Some(crate::input_event::InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: crate::input_event::InputSourceKind::Automation,
+                instance: 2,
+            },
+            source_epoch: crate::input_event::SourceEpoch(1),
+            sequence: self.event_sequence,
+            press_id,
+            captured_at_us,
+            action,
+            phase,
+        })
+    }
+
+    #[cfg(test)]
     fn input_for(&mut self) -> Option<PadState> {
         let step = *self.steps.get(self.step_idx)?;
         if self.frame_in_step < self.wait_frames {
@@ -4478,27 +4547,59 @@ pub(super) fn run_launcher_loop(
                 proxy_navigation_state = PadState::default();
             }
         }
-        if screensaver_wake {
+        let mut physical_for_automation = proxy_navigation_state.clone();
+        for action in crate::input_event::LogicalAction::ALL {
+            physical_for_automation
+                .set_logical_action(action, input_batch.held_after_last.is_held(action));
+        }
+        for event in launcher_automation.poll_events(
+            &physical_for_automation,
+            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+            setup.is_active(),
+            frame_now,
+        ) {
+            match input_router.route_event(event, focus, frame_now) {
+                InputOutcome::Dispatch { event, .. }
+                | InputOutcome::TransitionControl { event, .. }
+                | InputOutcome::Released { event, .. } => pending_input_events.push_back(event),
+                InputOutcome::WakeScreensaver { .. } => screensaver_wake = true,
+                InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
+            }
+        }
+        if let Some(event) = launcher_input_script.event_for(
+            frame_now
+                .saturating_duration_since(start)
+                .as_micros()
+                .min(u64::MAX as u128) as u64,
+        ) {
+            match input_router.route_event(event, focus, frame_now) {
+                InputOutcome::Dispatch { event, .. }
+                | InputOutcome::TransitionControl { event, .. }
+                | InputOutcome::Released { event, .. } => pending_input_events.push_back(event),
+                InputOutcome::WakeScreensaver { .. } => screensaver_wake = true,
+                InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
+            }
+        }
+        let routed_event_this_loop = if screensaver_wake {
             let _ = input_router.consume_remaining_batch(
                 input_batch.events.iter().copied(),
                 ConsumedReason::ExclusiveBatch,
             );
             pending_input_events.clear();
             proxy_navigation_state = PadState::default();
+            None
         } else if let Some(event) = pending_input_events.pop_front() {
             proxy_navigation_state.set_logical_action(
                 event.action,
                 event.phase == crate::input_event::InputPhase::Pressed,
             );
-        }
+            Some(event)
+        } else {
+            None
+        };
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         bridge.set_input_fault_notice(input_fault_notice.unwrap_or_default().into());
-        let launcher_state = launcher_automation.poll_input(
-            proxy_navigation_state.clone(),
-            effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
-            setup.is_active(),
-            frame_now,
-        );
+        let launcher_state = proxy_navigation_state.clone();
         frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
         if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
@@ -4536,7 +4637,10 @@ pub(super) fn run_launcher_loop(
             {
                 let setup_before = SetupBridgeKey::from_setup(&setup);
                 let setup_info = pad.info_at(setup.target_pad_idx);
-                match setup.handle_input(&setup_state, frame_now, setup_info, pad.db()) {
+                let setup_action = routed_event_this_loop.map_or(SetupAction::None, |event| {
+                    setup.handle_action(&event, frame_now, setup_info, pad.db())
+                });
+                match setup_action {
                     SetupAction::None => {}
                     SetupAction::RegisterNew => {
                         let idx = setup.target_pad_idx;
@@ -4608,9 +4712,6 @@ pub(super) fn run_launcher_loop(
                         library_changed_dialog_test.input_for(&nav, loop_start, start)
                     {
                         physical_nav_state = test_state;
-                    }
-                    if let Some(script_state) = launcher_input_script.input_for() {
-                        physical_nav_state = script_state;
                     }
                     if let Some(orientation) = settings_navigation_benchmark
                         .take_orientation_change(
@@ -4744,10 +4845,10 @@ pub(super) fn run_launcher_loop(
                         event
                     } else if scheduler.launch_benchmark_enabled() {
                         None
-                    } else if navigation_transition.enabled() {
-                        nav.handle_input_with_navigation_intents(nav_state, frame_now, &catalog)
+                    } else if let Some(input_event) = routed_event_this_loop.as_ref() {
+                        nav.handle_action_with_navigation_intents(input_event, frame_now, &catalog)
                     } else {
-                        nav.handle_input_with_collection_intents(nav_state, frame_now, &catalog)
+                        nav.handle_held_tick_with_navigation_intents(frame_now, &catalog)
                     };
                     if let Some((source_screen, source_state)) = settings_transition_source
                         && let Some((route, direction)) =

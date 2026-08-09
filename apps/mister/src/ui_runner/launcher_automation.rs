@@ -4,14 +4,19 @@
 //! Volatile, authenticated logical-input automation for alpha acceptance.
 
 use crate::build_identity::BuildIdentity;
+use crate::input_event::{
+    InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
+};
 use crate::input_state::PadState;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SESSION_SCHEMA: &str = "mister-magik-ui-automation-session-v1";
@@ -125,8 +130,16 @@ enum AutomationButton {
 
 #[derive(Clone, Copy, Debug)]
 enum PressLifecycle {
-    TapPressed { sequence: u64 },
-    HeldUntil(Instant),
+    TapPressed {
+        sequence: u64,
+        button: AutomationButton,
+        press_id: PressId,
+    },
+    HeldUntil {
+        deadline: Instant,
+        button: AutomationButton,
+        press_id: PressId,
+    },
 }
 
 struct ActiveSession {
@@ -137,6 +150,10 @@ struct ActiveSession {
     press: Option<PressLifecycle>,
     action_sequence: u64,
     adopted_action_sequence: u64,
+    source_epoch: SourceEpoch,
+    next_event_sequence: u64,
+    next_press_id: u64,
+    events: VecDeque<InputEvent>,
 }
 
 pub(super) struct LauncherAutomation {
@@ -174,20 +191,20 @@ impl LauncherAutomation {
         self.session.is_some()
     }
 
-    pub(super) fn poll_input(
+    pub(super) fn poll_events(
         &mut self,
         physical: &PadState,
         input_enabled: bool,
         setup_active: bool,
         now: Instant,
-    ) -> PadState {
+    ) -> Vec<InputEvent> {
         self.refresh_session(now);
         if self.session.is_none() {
-            return physical.clone();
+            return Vec::new();
         }
         if setup_active || pad_state_has_active_input(physical) {
             self.abort("unsafe_input_context");
-            return physical.clone();
+            return Vec::new();
         }
         let expired = self.session.as_ref().is_some_and(|session| {
             session.last_request.elapsed() > REQUEST_LEASE
@@ -196,15 +213,14 @@ impl LauncherAutomation {
         });
         if expired {
             self.abort("session_expired");
-            return physical.clone();
+            return Vec::new();
         }
-
         self.advance_press_lifecycle(now);
         self.drain_requests(input_enabled, now);
         self.session
-            .as_ref()
-            .map(|session| session.logical_state.clone())
-            .unwrap_or_else(|| physical.clone())
+            .as_mut()
+            .map(|session| session.events.drain(..).collect())
+            .unwrap_or_default()
     }
 
     pub(super) fn action_sequence(&self) -> u64 {
@@ -269,6 +285,7 @@ impl LauncherAutomation {
             let _ = fs::remove_file(&self.socket_path);
             return;
         }
+        let source_epoch = SourceEpoch(descriptor.main_generation);
         self.session = Some(ActiveSession {
             descriptor,
             socket,
@@ -277,6 +294,10 @@ impl LauncherAutomation {
             press: None,
             action_sequence: self.presented_action_sequence,
             adopted_action_sequence: self.presented_action_sequence,
+            source_epoch,
+            next_event_sequence: 0,
+            next_press_id: 0,
+            events: VecDeque::new(),
         });
     }
 
@@ -285,18 +306,27 @@ impl LauncherAutomation {
             return;
         };
         let release = match session.press {
-            Some(PressLifecycle::TapPressed { sequence }) => {
+            Some(PressLifecycle::TapPressed {
+                sequence,
+                button,
+                press_id,
+            }) => {
                 session.adopted_action_sequence = sequence;
-                true
+                Some((button, press_id))
             }
-            Some(PressLifecycle::HeldUntil(deadline)) if now >= deadline => {
+            Some(PressLifecycle::HeldUntil {
+                deadline,
+                button,
+                press_id,
+            }) if now >= deadline => {
                 session.action_sequence = session.action_sequence.saturating_add(1);
                 session.adopted_action_sequence = session.action_sequence;
-                true
+                Some((button, press_id))
             }
-            _ => false,
+            _ => None,
         };
-        if release {
+        if let Some((button, press_id)) = release {
+            push_automation_event(session, button, press_id, InputPhase::Released);
             session.logical_state = PadState::default();
             session.press = None;
         }
@@ -366,8 +396,12 @@ impl LauncherAutomation {
                 let session = self.session.as_mut().ok_or("session_ended")?;
                 session.logical_state = button_state(button);
                 session.action_sequence = session.action_sequence.saturating_add(1);
+                let press_id = next_automation_press_id(session);
+                push_automation_event(session, button, press_id, InputPhase::Pressed);
                 session.press = Some(PressLifecycle::TapPressed {
                     sequence: session.action_sequence,
+                    button,
+                    press_id,
                 });
                 Ok(json!({"action_sequence":session.action_sequence,"phase":"press"}))
             }
@@ -383,14 +417,21 @@ impl LauncherAutomation {
                 session.logical_state = button_state(button);
                 session.action_sequence = session.action_sequence.saturating_add(1);
                 session.adopted_action_sequence = session.action_sequence;
-                session.press = Some(PressLifecycle::HeldUntil(
-                    now + Duration::from_millis(duration_ms),
-                ));
+                let press_id = next_automation_press_id(session);
+                push_automation_event(session, button, press_id, InputPhase::Pressed);
+                session.press = Some(PressLifecycle::HeldUntil {
+                    deadline: now + Duration::from_millis(duration_ms),
+                    button,
+                    press_id,
+                });
                 Ok(json!({"action_sequence":session.action_sequence,"phase":"hold"}))
             }
             AutomationCommand::ReleaseAll => {
                 self.require_input_enabled(input_enabled)?;
                 let session = self.session.as_mut().ok_or("session_ended")?;
+                if let Some((button, press_id)) = active_press(session.press) {
+                    push_automation_event(session, button, press_id, InputPhase::Released);
+                }
                 session.logical_state = PadState::default();
                 session.press = None;
                 session.action_sequence = session.action_sequence.saturating_add(1);
@@ -439,6 +480,67 @@ impl LauncherAutomation {
         let _ = fs::remove_file(&self.socket_path);
         let _ = fs::remove_file(&self.descriptor_path);
     }
+}
+
+fn active_press(press: Option<PressLifecycle>) -> Option<(AutomationButton, PressId)> {
+    match press {
+        Some(PressLifecycle::TapPressed {
+            button, press_id, ..
+        })
+        | Some(PressLifecycle::HeldUntil {
+            button, press_id, ..
+        }) => Some((button, press_id)),
+        None => None,
+    }
+}
+
+fn next_automation_press_id(session: &mut ActiveSession) -> PressId {
+    session.next_press_id = session.next_press_id.saturating_add(1).max(1);
+    PressId((1_u64 << 63) | session.next_press_id)
+}
+
+fn push_automation_event(
+    session: &mut ActiveSession,
+    button: AutomationButton,
+    press_id: PressId,
+    phase: InputPhase,
+) {
+    session.next_event_sequence = session.next_event_sequence.saturating_add(1).max(1);
+    session.events.push_back(InputEvent {
+        source: InputSourceId {
+            kind: InputSourceKind::Automation,
+            instance: u64::from(session.descriptor.launcher_pid),
+        },
+        source_epoch: session.source_epoch,
+        sequence: session.next_event_sequence,
+        press_id,
+        captured_at_us: automation_monotonic_us(),
+        action: automation_action(button),
+        phase,
+    });
+}
+
+fn automation_action(button: AutomationButton) -> LogicalAction {
+    match button {
+        AutomationButton::Up => LogicalAction::Up,
+        AutomationButton::Down => LogicalAction::Down,
+        AutomationButton::Left => LogicalAction::Left,
+        AutomationButton::Right => LogicalAction::Right,
+        AutomationButton::A => LogicalAction::Activate,
+        AutomationButton::B => LogicalAction::Back,
+        AutomationButton::Home => LogicalAction::Home,
+        AutomationButton::X => LogicalAction::X,
+        AutomationButton::Y => LogicalAction::Y,
+    }
+}
+
+fn automation_monotonic_us() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_micros()
+        .min(u64::MAX as u128) as u64
 }
 
 impl Drop for LauncherAutomation {
@@ -552,6 +654,52 @@ mod tests {
     }
 
     #[test]
+    fn automation_press_and_release_share_a_press_id() {
+        let now = Instant::now();
+        let mut session = ActiveSession {
+            descriptor: AutomationSessionDescriptor {
+                schema: SESSION_SCHEMA.to_string(),
+                nonce: "c".repeat(32),
+                expected_build_version: "test".to_string(),
+                expected_source_revision: "test".to_string(),
+                launcher_pid: std::process::id(),
+                main_generation: 3,
+                created_unix_ms: 1,
+                expires_unix_ms: 2,
+            },
+            socket: UnixDatagram::unbound().unwrap(),
+            last_request: now,
+            logical_state: PadState::default(),
+            press: None,
+            action_sequence: 0,
+            adopted_action_sequence: 0,
+            source_epoch: SourceEpoch(3),
+            next_event_sequence: 0,
+            next_press_id: 0,
+            events: VecDeque::new(),
+        };
+        let press_id = next_automation_press_id(&mut session);
+        push_automation_event(
+            &mut session,
+            AutomationButton::A,
+            press_id,
+            InputPhase::Pressed,
+        );
+        push_automation_event(
+            &mut session,
+            AutomationButton::A,
+            press_id,
+            InputPhase::Released,
+        );
+
+        assert_eq!(session.events.len(), 2);
+        assert_eq!(session.events[0].press_id, session.events[1].press_id);
+        assert_eq!(session.events[0].action, LogicalAction::Activate);
+        assert_eq!(session.events[0].phase, InputPhase::Pressed);
+        assert_eq!(session.events[1].phase, InputPhase::Released);
+    }
+
+    #[test]
     fn tap_is_adopted_only_after_release_frame() {
         let now = Instant::now();
         let mut session = ActiveSession {
@@ -568,12 +716,20 @@ mod tests {
             socket: UnixDatagram::unbound().unwrap(),
             last_request: now,
             logical_state: button_state(AutomationButton::A),
-            press: Some(PressLifecycle::TapPressed { sequence: 7 }),
+            press: Some(PressLifecycle::TapPressed {
+                sequence: 7,
+                button: AutomationButton::A,
+                press_id: PressId(1_u64 << 63 | 1),
+            }),
             action_sequence: 7,
             adopted_action_sequence: 6,
+            source_epoch: SourceEpoch(1),
+            next_event_sequence: 1,
+            next_press_id: 1,
+            events: VecDeque::new(),
         };
         assert!(session.logical_state.btn_a);
-        if let Some(PressLifecycle::TapPressed { sequence }) = session.press {
+        if let Some(PressLifecycle::TapPressed { sequence, .. }) = session.press {
             session.logical_state = PadState::default();
             session.adopted_action_sequence = sequence;
             session.press = None;
@@ -602,6 +758,10 @@ mod tests {
             press: None,
             action_sequence: 0,
             adopted_action_sequence: 0,
+            source_epoch: SourceEpoch(1),
+            next_event_sequence: 0,
+            next_press_id: 0,
+            events: VecDeque::new(),
         });
         let state = AutomationSemanticState {
             effective_view: "home".to_string(),

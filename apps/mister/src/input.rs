@@ -42,7 +42,6 @@ const KEY_DOWN: u16 = 108;
 const KEY_PAGEDOWN: u16 = 109;
 const KEY_MENU: u16 = 139;
 const KEY_TAB: u16 = 15;
-const MAIN_INPUT_PROXY_ENV: &str = "MISTER_MAGIK_INPUT_PROXY";
 const MAIN_INPUT_PROXY_NAME: &str = "MiSTer virtual input";
 
 pub struct PadReader {
@@ -63,7 +62,6 @@ pub struct PadPool {
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
-    prefer_main_proxy: bool,
     input_hub: Option<InputHub>,
 }
 
@@ -99,11 +97,7 @@ impl PadPool {
                 }
             })
             .collect();
-        let prefer_main_proxy = std::env::var(MAIN_INPUT_PROXY_ENV).as_deref() == Ok("1");
-        crate::ui_errln!(
-            "input proxy: preferred={prefer_main_proxy} detected={}",
-            prefer_main_proxy
-        );
+        crate::ui_errln!("input proxy: navigation owned by input hub protocol v2");
         Ok(Self {
             pads,
             keyboards,
@@ -113,7 +107,6 @@ impl PadPool {
             active_idx: 0,
             db,
             last_rescan: Instant::now(),
-            prefer_main_proxy,
             input_hub: Some(InputHub::start()),
         })
     }
@@ -389,11 +382,7 @@ impl PadPool {
     }
 
     fn rebuild_merged_state(&mut self) {
-        let states: Vec<&PadState> = if self.prefer_main_proxy {
-            Vec::new()
-        } else {
-            self.pads.iter().map(|p| p.state()).collect()
-        };
+        let states: Vec<&PadState> = self.pads.iter().map(|p| p.state()).collect();
         let active_idx = self.clamped_active_idx();
         let active_raw = self
             .pads
@@ -445,7 +434,6 @@ impl PadPool {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
-            prefer_main_proxy: false,
             input_hub: None,
         };
         pool.rebuild_merged_state();
@@ -1410,7 +1398,6 @@ mod tests {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
-            prefer_main_proxy: false,
             input_hub: None,
         }
     }
@@ -1492,56 +1479,6 @@ mod tests {
         assert!(state.btn_select);
         assert!(state.btn_start);
         assert!(state.btn_home);
-    }
-
-    #[test]
-    fn main_proxy_is_authoritative_but_setup_keeps_raw_pad_state() {
-        let mut raw = PadState {
-            btn_a: true,
-            btn_y: true,
-            ..PadState::default()
-        };
-        raw.rebuild_pressed_now();
-        let mut pool = PadPool::from_test_states(vec![raw]);
-        pool.prefer_main_proxy = true;
-        pool.keyboards.push(KeyboardReader {
-            file: File::open("/dev/null").expect("open /dev/null"),
-            path: "proxy".into(),
-            is_main_proxy: true,
-            state: KeyboardState {
-                escape: true,
-                ..KeyboardState::default()
-            },
-        });
-        pool.rebuild_merged_state();
-
-        assert!(pool.state().btn_b);
-        assert!(!pool.state().btn_a);
-        assert!(!pool.state().btn_y);
-        let setup = pool.navigation_state_at(0);
-        assert!(setup.btn_a);
-        assert!(setup.btn_y);
-        assert!(!setup.btn_b);
-    }
-
-    #[test]
-    fn advertised_main_proxy_suppresses_raw_navigation_while_device_is_missing() {
-        let mut raw = PadState {
-            btn_a: true,
-            btn_b: true,
-            ..PadState::default()
-        };
-        raw.rebuild_pressed_now();
-        let mut pool = PadPool::from_test_states(vec![raw]);
-        pool.prefer_main_proxy = true;
-
-        pool.rebuild_merged_state();
-
-        assert!(!pool.state().btn_a);
-        assert!(!pool.state().btn_b);
-        let setup = pool.navigation_state_at(0);
-        assert!(setup.btn_a);
-        assert!(setup.btn_b);
     }
 
     #[test]

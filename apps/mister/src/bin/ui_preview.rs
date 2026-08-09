@@ -14,6 +14,9 @@ mod macos {
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
+    use mister_magik_fb::input_event::{
+        InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
+    };
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
         ArcadeSearchPane, LauncherAction, LauncherEvent, LauncherNav, NavigationTransitionState,
@@ -62,7 +65,7 @@ mod macos {
     use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
     use std::cell::Cell;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::error::Error;
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -350,6 +353,10 @@ mod macos {
         settings_focused: bool,
         launcher_nav: LauncherNav,
         launcher_pad: PadState,
+        launcher_input_events: VecDeque<InputEvent>,
+        launcher_active_presses: HashMap<LogicalAction, PressId>,
+        launcher_input_sequence: u64,
+        launcher_press_sequence: u64,
         launcher_epoch: Instant,
         bridge_presenter: LauncherBridgePresenter,
         content: PreviewContent,
@@ -548,6 +555,10 @@ mod macos {
                 pending_navigation_committed: false,
                 pending_navigation_source_state: None,
                 navigation_previous_pad: PadState::default(),
+                launcher_input_events: VecDeque::new(),
+                launcher_active_presses: HashMap::new(),
+                launcher_input_sequence: 0,
+                launcher_press_sequence: 0,
             };
             application.select_scenario(scenario);
             if headless {
@@ -846,6 +857,8 @@ mod macos {
                 _ => {}
             }
             self.launcher_pad = PadState::default();
+            self.launcher_input_events.clear();
+            self.launcher_active_presses.clear();
             self.launcher_nav.absorb_input(&self.launcher_pad);
         }
 
@@ -878,33 +891,62 @@ mod macos {
                 .ok_or("requested transition destination is unavailable")?;
             self.launcher_nav.scroll_x = 0;
             self.launcher_pad = PadState::default();
+            self.launcher_input_events.clear();
+            self.launcher_active_presses.clear();
             self.launcher_nav.absorb_input(&self.launcher_pad);
             self.sync_launcher_navigation();
             Ok(())
         }
 
         fn handle_launcher_key(&mut self, code: KeyCode, state: ElementState) -> bool {
-            let pressed = state == ElementState::Pressed;
-            let field = match code {
-                KeyCode::ArrowUp => Some(&mut self.launcher_pad.dpad_up),
-                KeyCode::ArrowDown => Some(&mut self.launcher_pad.dpad_down),
-                KeyCode::ArrowLeft => Some(&mut self.launcher_pad.dpad_left),
-                KeyCode::ArrowRight => Some(&mut self.launcher_pad.dpad_right),
+            let action = match code {
+                KeyCode::ArrowUp => Some(LogicalAction::Up),
+                KeyCode::ArrowDown => Some(LogicalAction::Down),
+                KeyCode::ArrowLeft => Some(LogicalAction::Left),
+                KeyCode::ArrowRight => Some(LogicalAction::Right),
                 KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
-                    Some(&mut self.launcher_pad.btn_a)
+                    Some(LogicalAction::Activate)
                 }
-                KeyCode::Escape | KeyCode::Backspace => Some(&mut self.launcher_pad.btn_b),
-                KeyCode::Home => Some(&mut self.launcher_pad.btn_home),
-                KeyCode::KeyX => Some(&mut self.launcher_pad.btn_x),
+                KeyCode::Escape | KeyCode::Backspace => Some(LogicalAction::Back),
+                KeyCode::Home => Some(LogicalAction::Home),
+                KeyCode::KeyX => Some(LogicalAction::X),
                 _ => None,
             };
-            if let Some(field) = field {
-                *field = pressed;
-                self.launcher_pad.rebuild_pressed_now();
-                true
-            } else {
-                false
-            }
+            let Some(action) = action else {
+                return false;
+            };
+            let (phase, press_id) = match state {
+                ElementState::Pressed => {
+                    if self.launcher_active_presses.contains_key(&action) {
+                        return true;
+                    }
+                    self.launcher_press_sequence =
+                        self.launcher_press_sequence.saturating_add(1).max(1);
+                    let press_id = PressId(self.launcher_press_sequence);
+                    self.launcher_active_presses.insert(action, press_id);
+                    (InputPhase::Pressed, press_id)
+                }
+                ElementState::Released => {
+                    let Some(press_id) = self.launcher_active_presses.remove(&action) else {
+                        return true;
+                    };
+                    (InputPhase::Released, press_id)
+                }
+            };
+            self.launcher_input_sequence = self.launcher_input_sequence.saturating_add(1).max(1);
+            self.launcher_input_events.push_back(InputEvent {
+                source: InputSourceId {
+                    kind: InputSourceKind::Preview,
+                    instance: 1,
+                },
+                source_epoch: SourceEpoch(1),
+                sequence: self.launcher_input_sequence,
+                press_id,
+                captured_at_us: self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64,
+                action,
+                phase,
+            });
+            true
         }
 
         fn tick_launcher_navigation(&mut self) {
@@ -912,6 +954,10 @@ mod macos {
                 return;
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
+            if let Some(event) = self.launcher_input_events.pop_front() {
+                self.launcher_pad
+                    .set_logical_action(event.action, event.phase == InputPhase::Pressed);
+            }
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
             let physical_previous = self.navigation_previous_pad.clone();
             self.navigation_previous_pad = self.launcher_pad.clone();
