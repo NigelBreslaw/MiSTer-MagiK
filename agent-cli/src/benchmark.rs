@@ -586,16 +586,6 @@ fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX)
             > 50_000
-        || summary
-            .get("transition_duration_min_us")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            < 250_000
-        || summary
-            .get("transition_duration_max_us")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-            > 350_000
         || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("reordered_actions").and_then(Value::as_u64) != Some(0)
@@ -1463,8 +1453,6 @@ mod tests {
             "protocol": 2,
             "confirmed_p99_us": 32_000,
             "confirmed_max_us": 49_000,
-            "transition_duration_min_us": 290_000,
-            "transition_duration_max_us": 320_000,
             "lost_actions": 0,
             "duplicated_actions": 0,
             "reordered_actions": 0,

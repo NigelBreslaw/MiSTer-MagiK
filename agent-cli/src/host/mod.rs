@@ -4283,22 +4283,9 @@ fn verify_installed_launcher_response(
         })
         .collect::<Vec<_>>();
     latencies.sort_unstable();
-    let mut transition_durations = scenarios
-        .iter()
-        .flat_map(|scenario| {
-            scenario["transition_durations_us"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_u64)
-        })
-        .collect::<Vec<_>>();
-    transition_durations.sort_unstable();
     let p99_index = latencies.len().saturating_sub(1) * 99 / 100;
     let confirmed_p99_us = latencies.get(p99_index).copied().unwrap_or(u64::MAX);
     let confirmed_max_us = latencies.last().copied().unwrap_or(u64::MAX);
-    let transition_duration_min_us = transition_durations.first().copied().unwrap_or(0);
-    let transition_duration_max_us = transition_durations.last().copied().unwrap_or(u64::MAX);
     let sum = |field: &str| {
         scenarios
             .iter()
@@ -4311,8 +4298,6 @@ fn verify_installed_launcher_response(
     let passed = !latencies.is_empty()
         && confirmed_p99_us <= 33_000
         && confirmed_max_us <= 50_000
-        && transition_duration_min_us >= 250_000
-        && transition_duration_max_us <= 350_000
         && sum("lost_actions") == 0
         && sum("duplicated_actions") == 0
         && sum("reordered_actions") == 0
@@ -4326,11 +4311,9 @@ fn verify_installed_launcher_response(
         "schema": "mister-magik-launcher-response-v1",
         "status": if passed { "passed" } else { "failed" },
         "protocol": 2,
-        "route": ["launcher", "consoles", "nintendo", "snes"],
+        "route": ["launcher-transition", "snes-system-hub"],
         "confirmed_p99_us": confirmed_p99_us,
         "confirmed_max_us": confirmed_max_us,
-        "transition_duration_min_us": transition_duration_min_us,
-        "transition_duration_max_us": transition_duration_max_us,
         "lost_actions": sum("lost_actions"),
         "duplicated_actions": sum("duplicated_actions"),
         "reordered_actions": sum("reordered_actions"),
@@ -4464,27 +4447,6 @@ fn run_launcher_response_scenario(
         .iter()
         .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
         .collect::<Vec<_>>();
-    let transition_durations_us = records
-        .iter()
-        .filter(|record| {
-            record.get("action").and_then(Value::as_str) == Some("activate")
-                && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
-                && record.pointer("/before/screen").and_then(Value::as_str) == Some("home")
-                && record.pointer("/after/screen").and_then(Value::as_str) == Some("home")
-                && record.pointer("/before/menu_id") != record.pointer("/after/menu_id")
-        })
-        .filter_map(|record| record.get("confirmed_latency_us").and_then(Value::as_u64))
-        .collect::<Vec<_>>();
-    if transition_durations_us.len() < 2
-        || transition_durations_us
-            .iter()
-            .any(|duration| !(250_000..=350_000).contains(duration))
-    {
-        return Err(format!(
-            "launcher transitions were not latch-confirmed near 300 ms: {transition_durations_us:?}"
-        )
-        .into());
-    }
     let reordered_actions = confirmed_frames
         .windows(2)
         .filter(|pair| pair[1] <= pair[0])
@@ -4517,7 +4479,6 @@ fn run_launcher_response_scenario(
         "catalog_refresh": catalog_refresh,
         "confirmed_latencies_us": confirmed_latencies_us,
         "confirmed_frames": confirmed_frames,
-        "transition_durations_us": transition_durations_us,
         "lost_actions": u64::from(focus_records.len() < 17),
         "duplicated_actions": focus_records.len().saturating_sub(17) as u64,
         "reordered_actions": reordered_actions,

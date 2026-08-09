@@ -81,14 +81,14 @@ presentation change:
 scripts/agent benchmark launcher-response
 ```
 
-It drives the real Launcher → Consoles → Nintendo → SNES route through Main's
-proxy-v2 and kernel path, then sends 5/10/20/40 ms directional pulses at 50 ms
-start-to-start spacing plus a repeat hold. Each accepted focus move must reach a
-distinct physically confirmed frame in order. Confirmed response P99 must be at
-most 33 ms and no sample may exceed 50 ms. The same run repeats during catalog
-work, requires prepared catalog adoption below 4 ms, verifies Back reversal and
-transition-time input consumption, and requires zero input, latch, or physical
-frame faults. Evidence is stored under
+It verifies launcher transition input, then sends 5/10/20/40 ms gamepad pulses
+at 50 ms start-to-start spacing plus a repeat hold on the SNES system hub. The
+input travels through Main's proxy-v2 and kernel path. Each accepted focus move
+must reach a distinct physically confirmed frame in order. Confirmed response
+P99 must be at most 33 ms and no sample may exceed 50 ms. The same run repeats
+during catalog work, requires prepared catalog adoption below 4 ms, verifies
+Back reversal and transition-time input consumption, and requires zero input,
+latch, or physical frame faults. Evidence is stored under
 `build/agent-benchmarks/launcher-response/`.
 
 The automated gate does not replace the attended controller pass. Before
