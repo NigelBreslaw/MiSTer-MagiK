@@ -13,6 +13,7 @@ use crate::launcher::{
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use mister_magik_ui::launcher::{Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -25,11 +26,22 @@ pub struct SelectionFeedbackTarget {
 }
 
 impl SelectionFeedbackTarget {
+    pub fn new(surface: impl Into<String>, item: impl Into<String>) -> Self {
+        Self {
+            surface: surface.into(),
+            item: item.into(),
+        }
+    }
+
     pub fn home(nav: &LauncherNav) -> Option<Self> {
         (nav.screen == Screen::Home)
             .then(|| Self {
                 surface: nav.current_menu_id().to_string(),
-                item: nav.current_menu_selected_item_id().to_string(),
+                item: if nav.settings_focused {
+                    "__settings".to_string()
+                } else {
+                    nav.current_menu_selected_item_id().to_string()
+                },
             })
             .filter(|target| !target.item.is_empty())
     }
@@ -237,6 +249,8 @@ pub struct LauncherBridgePresenter {
     license_lines: Option<Rc<VecModel<SharedString>>>,
     selection_feedback: SelectionFeedback,
     projected_selection_feedback: SelectionFeedbackStamp,
+    published_selection_feedback: Rc<RefCell<SelectionFeedbackStamp>>,
+    selection_feedback_callback_installed: bool,
 }
 
 impl LauncherBridgePresenter {
@@ -387,6 +401,7 @@ impl LauncherBridgePresenter {
             }
         }
         self.sync_menu_item_feedback(nav);
+        self.publish_selection_feedback(&bridge);
 
         let games = active_game_view(catalog, nav);
         let (title, count) = active_header(catalog, nav, games.len());
@@ -516,6 +531,25 @@ impl LauncherBridgePresenter {
             }
         }
         self.projected_selection_feedback = stamp;
+    }
+
+    fn publish_selection_feedback(&mut self, bridge: &MisterBridge) {
+        if !self.selection_feedback_callback_installed {
+            let published = self.published_selection_feedback.clone();
+            bridge.on_selection_feedback_query(move |surface, item, _revision| {
+                published.borrow().entries.iter().any(|entry| {
+                    (surface.is_empty() || entry.target.surface == surface.as_str())
+                        && entry.target.item == item.as_str()
+                })
+            });
+            self.selection_feedback_callback_installed = true;
+        }
+        if *self.published_selection_feedback.borrow() != self.projected_selection_feedback {
+            *self.published_selection_feedback.borrow_mut() =
+                self.projected_selection_feedback.clone();
+            bridge
+                .set_selection_feedback_revision(self.projected_selection_feedback.revision as i32);
+        }
     }
 }
 

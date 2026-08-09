@@ -1343,6 +1343,12 @@ mod tests {
         assert!(!after[0].acknowledged);
         assert!(after[1].acknowledged);
         assert_eq!(before[2], after[2]);
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        assert!(bridge.invoke_selection_feedback_query(
+            "".into(),
+            after[1].id.clone(),
+            bridge.get_selection_feedback_revision(),
+        ));
     }
 
     #[test]

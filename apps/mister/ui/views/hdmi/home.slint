@@ -91,6 +91,8 @@ export component HomeGrid inherits Rectangle {
                         width: 34px;
                         height: 34px;
                         focused: MisterBridge.settings-focused;
+                        acknowledged: MisterBridge.selection-feedback-query(
+                            "", "__settings", MisterBridge.selection-feedback-revision);
                     }
                 }
             }
@@ -173,7 +175,13 @@ export component HomeGrid inherits Rectangle {
                     size: PixelTextSize.body12;
                     horizontal-alignment: right;
                 }
-                SettingsButton { width: 36px; height: 36px; focused: false; }
+                SettingsButton {
+                    width: 36px;
+                    height: 36px;
+                    focused: false;
+                    acknowledged: MisterBridge.selection-feedback-query(
+                        "", "__settings", MisterBridge.selection-feedback-revision);
+                }
             }
         }
 

@@ -140,12 +140,13 @@ component CogIcon inherits Image {
 
 export component SettingsButton inherits Rectangle {
     in property <bool> focused;
+    in property <bool> acknowledged;
 
     width: 56px;
     height: 56px;
-    background: focused ? #2a2236 : #1e1828;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? white : #5c4a72;
+    border-color: focused ? white : acknowledged ? #4e8f80 : #5c4a72;
 
     CogIcon {
         width: 24px;

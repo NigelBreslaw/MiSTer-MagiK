@@ -75,6 +75,10 @@ export global MisterBridge {
     // Home focus: selected row in the responsive launcher list; Settings is Home-only.
     in-out property <int> selected-index;
     in-out property <bool> settings-focused;
+    // Rust-owned physically confirmed focus acknowledgements. The revision is
+    // an explicit Slint dependency; the callback resolves stable surface/item IDs.
+    in-out property <int> selection-feedback-revision;
+    callback selection-feedback-query(string, string, int) -> bool;
     // Settings focus: 0=display, 1=orientation, 2=screensaver, 3=reduce motion, 4=exit, 5=rebuild, 6=about.
     in-out property <int> settings-selected;
     // About focus: 0=info, 1=licenses.
