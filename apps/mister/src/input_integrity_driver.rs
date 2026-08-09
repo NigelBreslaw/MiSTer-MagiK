@@ -11,9 +11,16 @@ use std::time::Duration;
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
+const EV_ABS: u16 = 3;
 const SYN_REPORT: u16 = 0;
+const ABS_HAT0X: u16 = 16;
+const ABS_HAT0Y: u16 = 17;
+const BTN_SOUTH: u16 = 304;
+const BTN_EAST: u16 = 305;
+const BTN_MODE: u16 = 316;
 const UI_SET_EVBIT: libc::c_ulong = 0x4004_5564;
 const UI_SET_KEYBIT: libc::c_ulong = 0x4004_5565;
+const UI_SET_ABSBIT: libc::c_ulong = 0x4004_5567;
 const UI_DEV_CREATE: libc::c_ulong = 0x0000_5501;
 const UI_DEV_DESTROY: libc::c_ulong = 0x0000_5502;
 const UINPUT_USER_DEV_SIZE: usize = 1116;
@@ -120,7 +127,7 @@ pub(crate) fn run(args: &[String]) {
             std::process::exit(2);
         }
     };
-    match UinputDevice::create(plan.key_code).and_then(|mut device| device.run(plan)) {
+    match UinputDevice::create().and_then(|mut device| device.run(plan)) {
         Ok(()) => crate::ui_logln!(
             "{}",
             serde_json::json!({
@@ -146,14 +153,18 @@ struct UinputDevice {
 }
 
 impl UinputDevice {
-    fn create(key_code: u16) -> io::Result<Self> {
+    fn create() -> io::Result<Self> {
         let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open("/dev/uinput")?;
         ioctl_int(&file, UI_SET_EVBIT, i32::from(EV_KEY))?;
-        for code in [1_u16, 28, 30, 48, 103, 105, 106, 108, 139, key_code] {
+        ioctl_int(&file, UI_SET_EVBIT, i32::from(EV_ABS))?;
+        for code in [BTN_SOUTH, BTN_EAST, BTN_MODE] {
             ioctl_int(&file, UI_SET_KEYBIT, i32::from(code))?;
+        }
+        for code in [ABS_HAT0X, ABS_HAT0Y] {
+            ioctl_int(&file, UI_SET_ABSBIT, i32::from(code))?;
         }
         let mut descriptor = [0_u8; UINPUT_USER_DEV_SIZE];
         let name = b"MiSTer MagiK input integrity\0";
@@ -162,6 +173,8 @@ impl UinputDevice {
         descriptor[82..84].copy_from_slice(&0x1209_u16.to_ne_bytes());
         descriptor[84..86].copy_from_slice(&0x4d4b_u16.to_ne_bytes());
         descriptor[86..88].copy_from_slice(&1_u16.to_ne_bytes());
+        set_abs_range(&mut descriptor, ABS_HAT0X, -1, 1);
+        set_abs_range(&mut descriptor, ABS_HAT0Y, -1, 1);
         file.write_all(&descriptor)?;
         ioctl_no_arg(&file, UI_DEV_CREATE)?;
         std::thread::sleep(Duration::from_millis(500));
@@ -228,10 +241,25 @@ impl UinputDevice {
     }
 
     fn pulse(&mut self, key_code: u16, duration_ms: u64) -> io::Result<()> {
-        self.emit(EV_KEY, key_code, 1)?;
+        let (event_type, code, pressed) = match key_code {
+            103 => (EV_ABS, ABS_HAT0Y, -1),
+            105 => (EV_ABS, ABS_HAT0X, -1),
+            106 => (EV_ABS, ABS_HAT0X, 1),
+            108 => (EV_ABS, ABS_HAT0Y, 1),
+            28 => (EV_KEY, BTN_SOUTH, 1),
+            1 => (EV_KEY, BTN_EAST, 1),
+            139 => (EV_KEY, BTN_MODE, 1),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "unknown control",
+                ));
+            }
+        };
+        self.emit(event_type, code, pressed)?;
         self.emit(EV_SYN, SYN_REPORT, 0)?;
         std::thread::sleep(Duration::from_millis(duration_ms));
-        self.emit(EV_KEY, key_code, 0)?;
+        self.emit(event_type, code, 0)?;
         self.emit(EV_SYN, SYN_REPORT, 0)
     }
 
@@ -250,6 +278,12 @@ impl UinputDevice {
         bytes[offset + 4..offset + 8].copy_from_slice(&value.to_ne_bytes());
         self.file.write_all(&bytes)
     }
+}
+
+fn set_abs_range(descriptor: &mut [u8; UINPUT_USER_DEV_SIZE], code: u16, min: i32, max: i32) {
+    let index = usize::from(code);
+    descriptor[92 + index * 4..96 + index * 4].copy_from_slice(&max.to_ne_bytes());
+    descriptor[348 + index * 4..352 + index * 4].copy_from_slice(&min.to_ne_bytes());
 }
 
 impl Drop for UinputDevice {
