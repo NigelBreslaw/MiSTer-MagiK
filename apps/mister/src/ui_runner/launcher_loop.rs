@@ -42,8 +42,13 @@ const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
 fn discrete_selection_feedback_target(
     nav: &LauncherNav,
+    setup: &SetupNav,
     lifecycle: &LauncherLifecycle,
 ) -> Option<SelectionFeedbackTarget> {
+    if setup.is_active() {
+        return setup_selection_feedback_target(setup);
+    }
+
     let lifecycle_view = lifecycle.view();
     if let Some(dialog) = lifecycle_view.catalog_recovery_dialog() {
         return Some(SelectionFeedbackTarget::new(
@@ -73,6 +78,25 @@ fn discrete_selection_feedback_target(
     }
 
     nav_selection_feedback_target(nav)
+}
+
+fn setup_selection_feedback_target(setup: &SetupNav) -> Option<SelectionFeedbackTarget> {
+    let surface = format!("setup:{:?}:{:?}", setup.phase, setup.target_device);
+    match setup.phase {
+        SetupPhase::NewOrExisting => Some(SelectionFeedbackTarget::new(
+            surface,
+            if setup.list_index == 0 {
+                "new"
+            } else {
+                "existing"
+            },
+        )),
+        SetupPhase::PickExisting => Some(SelectionFeedbackTarget::new(
+            surface,
+            format!("saved:{}", setup.list_index),
+        )),
+        _ => None,
+    }
 }
 
 fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackTarget> {
@@ -4041,7 +4065,7 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
-        let current_feedback_target = discrete_selection_feedback_target(&nav, &lifecycle);
+        let current_feedback_target = discrete_selection_feedback_target(&nav, &setup, &lifecycle);
         if bridge_models.sync_selection_feedback_surface(current_feedback_target.as_ref()) {
             full_bridge_dirty = true;
             request_launcher_redraw!();
@@ -5269,7 +5293,7 @@ pub(super) fn run_launcher_loop(
                     launcher_state.set_logical_action(action, input_router.action_held(action));
                 }
                 let selection_feedback_before =
-                    discrete_selection_feedback_target(&nav, &lifecycle);
+                    discrete_selection_feedback_target(&nav, &setup, &lifecycle);
                 let selection_feedback_input = routed_event_this_loop
                     .as_ref()
                     .is_some_and(|event| event.phase == InputPhase::Pressed);
@@ -6276,7 +6300,8 @@ pub(super) fn run_launcher_loop(
                         }
                     }
                 }
-                let selection_feedback_after = discrete_selection_feedback_target(&nav, &lifecycle);
+                let selection_feedback_after =
+                    discrete_selection_feedback_target(&nav, &setup, &lifecycle);
                 let feedback_surface_changed = bridge_models
                     .sync_selection_feedback_surface(selection_feedback_after.as_ref());
                 let feedback_registered = selection_feedback_input
@@ -10472,6 +10497,29 @@ mod tests {
         assert_eq!(nav_selection_feedback_target(&nav), None);
         nav.screen = Screen::Info;
         assert_eq!(nav_selection_feedback_target(&nav), None);
+    }
+
+    #[test]
+    fn controller_setup_feedback_is_limited_to_discrete_choices() {
+        let mut setup = SetupNav::new();
+        setup.phase = SetupPhase::NewOrExisting;
+        setup.list_index = 1;
+        assert_eq!(
+            setup_selection_feedback_target(&setup)
+                .expect("new-or-existing target")
+                .item,
+            "existing"
+        );
+        setup.phase = SetupPhase::PickExisting;
+        setup.list_index = 5;
+        assert_eq!(
+            setup_selection_feedback_target(&setup)
+                .expect("saved controller target")
+                .item,
+            "saved:5"
+        );
+        setup.phase = SetupPhase::Configure;
+        assert_eq!(setup_selection_feedback_target(&setup), None);
     }
 
     #[test]

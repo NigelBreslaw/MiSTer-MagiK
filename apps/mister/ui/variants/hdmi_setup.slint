@@ -3,6 +3,7 @@
 
 import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
 import { MisterUi } from "../mister_window.slint";
+import { MisterBridge } from "../api.slint";
 
 // Controller setup overlay — new pad detection and USB port change rebinding.
 component ConfigRow inherits HorizontalLayout {
@@ -69,12 +70,14 @@ export component SetupOverlay inherits Rectangle {
             alignment: center;
 
             Rectangle {
+                property <bool> acknowledged: MisterBridge.selection-feedback-query(
+                    "", "new", MisterBridge.selection-feedback-revision);
                 width: 180px;
                 height: 60px;
                 border-radius: 8px;
                 border-width: 2px;
-                border-color: list-selected == 0 ? #06d6a0 : #5c4a72;
-                background: list-selected == 0 ? #2a2236 : #1e1828;
+                border-color: list-selected == 0 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
+                background: list-selected == 0 ? #2a2236 : acknowledged ? #203a36 : #1e1828;
 
                 PixelText8 {
                     text: "New controller";
@@ -86,12 +89,14 @@ export component SetupOverlay inherits Rectangle {
             }
 
             Rectangle {
+                property <bool> acknowledged: MisterBridge.selection-feedback-query(
+                    "", "existing", MisterBridge.selection-feedback-revision);
                 width: 180px;
                 height: 60px;
                 border-radius: 8px;
                 border-width: 2px;
-                border-color: list-selected == 1 ? #06d6a0 : #5c4a72;
-                background: list-selected == 1 ? #2a2236 : #1e1828;
+                border-color: list-selected == 1 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
+                background: list-selected == 1 ? #2a2236 : acknowledged ? #203a36 : #1e1828;
 
                 PixelText8 {
                     text: "Existing controller";
@@ -108,12 +113,14 @@ export component SetupOverlay inherits Rectangle {
             alignment: center;
 
             for item[i] in list-items : Rectangle {
+                property <bool> acknowledged: MisterBridge.selection-feedback-query(
+                    "", "saved:" + i, MisterBridge.selection-feedback-revision);
                 width: 450px;
                 height: 36px;
                 border-radius: 6px;
                 border-width: list-selected == i ? 2px : 1px;
-                border-color: list-selected == i ? #06d6a0 : #5c4a72;
-                background: list-selected == i ? #2a2236 : #1e1828;
+                border-color: list-selected == i ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
+                background: list-selected == i ? #2a2236 : acknowledged ? #203a36 : #1e1828;
 
                 PixelText8 {
                     text: item;

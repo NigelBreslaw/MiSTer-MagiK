@@ -4,6 +4,7 @@
 import { PixelText8, PixelTextSize } from "components/pixel_text_8.slint";
 
 import { MisterUi } from "mister_window.slint";
+import { MisterBridge } from "api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "components/crt_ui.slint";
 
 export component SetupOverlay inherits Rectangle {
@@ -37,11 +38,13 @@ export component SetupOverlay inherits Rectangle {
             label: "New controller";
             detail: "Create";
             focused: root.list-selected == 0;
+            acknowledged: MisterBridge.selection-feedback-query("", "new", MisterBridge.selection-feedback-revision);
         }
         if root.phase == 2 : CrtMenuRow {
             label: "Existing controller";
             detail: "Rebind";
             focused: root.list-selected == 1;
+            acknowledged: MisterBridge.selection-feedback-query("", "existing", MisterBridge.selection-feedback-revision);
         }
 
         if root.phase == 3 : Rectangle {
@@ -54,6 +57,7 @@ export component SetupOverlay inherits Rectangle {
                     label: item;
                     detail: "";
                     focused: root.list-selected == i;
+                    acknowledged: MisterBridge.selection-feedback-query("", "saved:" + i, MisterBridge.selection-feedback-revision);
                 }
             }
         }
