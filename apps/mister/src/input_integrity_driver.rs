@@ -64,7 +64,7 @@ impl DriverPlan {
             });
         }
         if args.first().map(String::as_str) == Some("computers-sweep") {
-            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 200)?;
+            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 600)?;
             let start_delay_ms = parse_bounded(args.get(2), "start_delay_ms", 0, interval_ms - 1)?;
             if args.len() != 3 {
                 return Err("usage: computers-sweep interval_ms start_delay_ms".to_string());
@@ -393,5 +393,10 @@ mod tests {
         assert_eq!(sweep.pulse_ms, 40);
         assert_eq!(sweep.gap_ms, 10);
         assert_eq!(sweep.start_delay_ms, 13);
+        let isolated =
+            DriverPlan::parse(&["computers-sweep", "600", "455"].map(str::to_string)).unwrap();
+        assert_eq!(isolated.gap_ms, 560);
+        assert_eq!(isolated.start_delay_ms, 455);
+        assert!(DriverPlan::parse(&["computers-sweep", "601", "0"].map(str::to_string)).is_err());
     }
 }
