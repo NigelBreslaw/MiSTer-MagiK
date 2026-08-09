@@ -288,6 +288,7 @@ fn set_abs_range(descriptor: &mut [u8; UINPUT_USER_DEV_SIZE], code: u16, min: i3
 
 impl Drop for UinputDevice {
     fn drop(&mut self) {
+        std::thread::sleep(Duration::from_millis(100));
         let _ = ioctl_no_arg(&self.file, UI_DEV_DESTROY);
     }
 }
