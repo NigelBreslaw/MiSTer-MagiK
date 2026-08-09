@@ -4261,6 +4261,10 @@ fn verify_installed_launcher_response(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    let isolated_profile = std::env::var("MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE")
+        .ok()
+        .as_deref()
+        == Some("1");
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
     let main: Value = serde_json::from_str(
@@ -4285,9 +4289,14 @@ fn verify_installed_launcher_response(
         .ok_or_else(|| format!("launcher response cannot restore unknown mode {original_id}"))?;
     drop(session);
 
+    let display_modes = if isolated_profile {
+        vec![("60-hz", "hdmi-1920x1200p60")]
+    } else {
+        vec![("60-hz", "hdmi-1280x720p60"), ("50-hz", "crt-288p50")]
+    };
     let mut scenario_values = Vec::new();
     let run_result = (|| -> Result<()> {
-        for (display_label, mode_id) in [("60-hz", "hdmi-1280x720p60"), ("50-hz", "crt-288p50")] {
+        for (display_label, mode_id) in display_modes {
             let mode = DISPLAY_MATRIX_MODES
                 .iter()
                 .find(|mode| mode.id == mode_id)
@@ -4300,12 +4309,14 @@ fn verify_installed_launcher_response(
                 display_label,
                 "idle",
                 "off",
+                isolated_profile,
             )?);
             scenario_values.push(run_launcher_response_scenario(
                 &session,
                 display_label,
                 "catalog",
                 "force",
+                isolated_profile,
             )?);
         }
         Ok(())
@@ -4377,8 +4388,13 @@ fn verify_installed_launcher_response(
         "schema": "mister-magik-launcher-response-v2",
         "status": if passed { "passed" } else { "failed" },
         "protocol": 2,
-        "routes": ["computers-acorn-to-other", "snes-system-hub", "settings", "arcade-press-to-motion"],
-        "display_rates_hz": [60, 50],
+        "routes": if isolated_profile {
+            json!(["computers-acorn-to-other"])
+        } else {
+            json!(["computers-acorn-to-other", "snes-system-hub", "settings", "arcade-press-to-motion"])
+        },
+        "display_rates_hz": if isolated_profile { json!([60]) } else { json!([60, 50]) },
+        "diagnostic_mode": isolated_profile.then_some("1920x1200-600ms-isolated-profile"),
         "input_response_status": if input_response_passed { "passed" } else { "failed" },
         "pulse_status": if pulse_passed { "passed" } else { "failed" },
         "integrity_status": if integrity_passed { "passed" } else { "failed" },
@@ -4423,11 +4439,22 @@ fn run_launcher_response_scenario(
     display_label: &str,
     label: &str,
     catalog_refresh: &str,
+    isolated_profile: bool,
 ) -> Result<Value> {
     let main_before: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
-    let schedules = [(100_u64, 0_u64), (50, 7), (57, 13), (64, 3), (71, 11)];
+    let schedules = if isolated_profile {
+        vec![
+            (600_u64, 0_u64),
+            (600, 113),
+            (600, 227),
+            (600, 341),
+            (600, 455),
+        ]
+    } else {
+        vec![(100_u64, 0_u64), (50, 7), (57, 13), (64, 3), (71, 11)]
+    };
     let mut computers_sweeps = Vec::new();
     for (interval_ms, start_delay_ms) in schedules {
         let trace = run_launcher_response_computers_sweep(
@@ -4435,6 +4462,7 @@ fn run_launcher_response_scenario(
             catalog_refresh,
             interval_ms,
             start_delay_ms,
+            isolated_profile,
         )?;
         computers_sweeps.push(summarize_computers_sweep(
             trace,
@@ -4442,30 +4470,40 @@ fn run_launcher_response_scenario(
             start_delay_ms,
         )?);
     }
-    let system_hub = run_launcher_response_focus_route(
-        session,
-        catalog_refresh,
-        "system-hub",
-        Some("snes"),
-        "launcher-response",
-        17,
-        "system-hub",
-    )?;
-    let settings = run_launcher_response_focus_route(
-        session,
-        catalog_refresh,
-        "settings",
-        None,
-        "down 10 4 50",
-        4,
-        "settings",
-    )?;
-    let arcade = run_launcher_response_arcade_route(session, catalog_refresh)?;
+    let (system_hub, settings, arcade) = if isolated_profile {
+        (
+            json!({"route_status": "not-run", "pulse_status": "not-run"}),
+            json!({"route_status": "not-run", "pulse_status": "not-run"}),
+            json!({"route_status": "not-run", "pulse_status": "not-run"}),
+        )
+    } else {
+        (
+            run_launcher_response_focus_route(
+                session,
+                catalog_refresh,
+                "system-hub",
+                Some("snes"),
+                "launcher-response",
+                17,
+                "system-hub",
+            )?,
+            run_launcher_response_focus_route(
+                session,
+                catalog_refresh,
+                "settings",
+                None,
+                "down 10 4 50",
+                4,
+                "settings",
+            )?,
+            run_launcher_response_arcade_route(session, catalog_refresh)?,
+        )
+    };
 
-    let routes = computers_sweeps
-        .iter()
-        .chain([&system_hub, &settings, &arcade])
-        .collect::<Vec<_>>();
+    let mut routes = computers_sweeps.iter().collect::<Vec<_>>();
+    if !isolated_profile {
+        routes.extend([&system_hub, &settings, &arcade]);
+    }
     let dispatch_latencies_us = launcher_response_values(&routes, "dispatch_latencies_us");
     let confirmed_latencies_us = launcher_response_values(&routes, "confirmed_latencies_us");
     let refresh_period_us = routes
@@ -4499,9 +4537,11 @@ fn run_launcher_response_scenario(
             .all(|route| route["route_status"].as_str() == Some("passed"));
     let pulse_passed = computers_sweeps
         .iter()
-        .chain([&system_hub, &settings])
         .all(|route| route["pulse_status"].as_str() == Some("passed"))
-        && arcade["pulse_status"].as_str() == Some("not-applicable");
+        && (isolated_profile
+            || (system_hub["pulse_status"].as_str() == Some("passed")
+                && settings["pulse_status"].as_str() == Some("passed")
+                && arcade["pulse_status"].as_str() == Some("not-applicable")));
     let main_after: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
     )?;
@@ -4569,16 +4609,28 @@ fn run_launcher_response_computers_sweep(
     catalog_refresh: &str,
     interval_ms: u64,
     start_delay_ms: u64,
+    isolated_profile: bool,
 ) -> Result<Value> {
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_HOME_SELECTED_INDEX".into(), "2".into()),
+        ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+    ];
+    if isolated_profile {
+        env_vars.extend([
+            ("MISTER_PROFILE".into(), "full".into()),
+            (
+                "MISTER_PREVIEW_SCROLL_TRACE".into(),
+                "/tmp/mister-magik/launcher-response-frames.tsv".into(),
+            ),
+            ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "8".into()),
+        ]);
+    }
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-                ("MISTER_HOME_SELECTED_INDEX".into(), "2".into()),
-                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
-            ],
+            env_vars,
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
             ..LauncherRestartOptions::default()
@@ -4600,7 +4652,14 @@ fn run_launcher_response_computers_sweep(
         &format!("computers-sweep {interval_ms} {start_delay_ms}"),
     )?;
     thread::sleep(Duration::from_millis(300));
-    wait_launcher_response_trace(session, Duration::from_secs(5), 9)
+    let mut trace = wait_launcher_response_trace(session, Duration::from_secs(5), 9)?;
+    if isolated_profile {
+        trace["frame_profile_tsv"] = Value::String(
+            remote_read(session, "/tmp/mister-magik/launcher-response-frames.tsv")
+                .unwrap_or_default(),
+        );
+    }
+    Ok(trace)
 }
 
 fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64) -> Result<Value> {

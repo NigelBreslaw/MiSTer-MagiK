@@ -86,6 +86,14 @@ The report exposes independent input-response, pulse, integrity, and background
 adoption statuses. Forced catalog adoption remains a separate below-8-ms gate,
 and the overall result passes only when every status passes.
 
+For attended diagnosis of intermittent single-press latency, set
+`MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE=1` when running `launcher-response`.
+This diagnostic mode is not the release qualification: it holds the physical
+display at 1920×1200p60, runs only the Computers Acorn→Other route five times
+at 600 ms start-to-start with rotated initial phases, and retains the full
+per-frame launcher trace with each sweep. The ordinary command remains the
+60/50 Hz multi-route qualification above.
+
 `settings-navigation` runs the real Home → Settings → About → Info → About →
 Settings → Home route first in the normal 1280×720 landscape layout, then in
 the monitor-counterclockwise 720×1280 portrait-left layout, at physical
