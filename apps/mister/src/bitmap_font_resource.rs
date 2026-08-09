@@ -1,13 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#![cfg_attr(
-    all(
-        feature = "asset-tools",
-        not(any(feature = "ui", feature = "ui-preview"))
-    ),
-    allow(dead_code)
-)]
+#![cfg_attr(not(any(feature = "ui", feature = "ui-preview")), allow(dead_code))]
 
 //! Deterministic monochrome bitmap fonts for the Slint software renderer.
 
@@ -163,7 +157,7 @@ fn decode_resource(bytes: &[u8]) -> Result<DecodedFont, String> {
         {
             return Err("bitmap font glyph dimensions are invalid".to_string());
         }
-        let expected_stride = (usize::try_from(width).unwrap_or_default() + 7) / 8;
+        let expected_stride = usize::try_from(width).unwrap_or_default().div_ceil(8);
         let expected_len = expected_stride
             .checked_mul(usize::try_from(height).unwrap_or_default())
             .ok_or_else(|| "bitmap font glyph size overflow".to_string())?;
