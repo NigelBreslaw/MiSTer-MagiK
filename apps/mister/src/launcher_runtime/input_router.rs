@@ -7,7 +7,7 @@ use crate::input_event::{
     HeldState, InputBatch, InputEvent, InputPhase, InputProtocolHealth, InputSourceId,
     LogicalAction, PressId, SourceEpoch,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 const MENU_REPEAT_DELAY: Duration = Duration::from_millis(300);
@@ -56,7 +56,6 @@ pub struct FocusRequest {
 pub enum DispatchKind {
     Initial,
     Repeat,
-    TransitionReplay,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,6 +66,7 @@ pub enum ConsumedReason {
     ExclusiveBatch,
     IntegrityFault,
     LaunchHandoff,
+    TransitionActive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,10 +110,6 @@ pub enum InputOutcome {
         context: ContextId,
     },
     TransitionControl {
-        event: InputEvent,
-        context: ContextId,
-    },
-    TransitionQueued {
         event: InputEvent,
         context: ContextId,
     },
@@ -164,7 +160,6 @@ pub struct InputRouter {
     policy: DirectionalPolicy,
     captures: HashMap<CaptureKey, Capture>,
     repeats: HashMap<LogicalAction, RepeatState>,
-    transition_queue: VecDeque<InputEvent>,
     horizontal_neutral_lock: bool,
     vertical_neutral_lock: bool,
     last_flush_reason: Option<ConsumedReason>,
@@ -186,7 +181,6 @@ impl InputRouter {
             policy: initial.directional_policy,
             captures: HashMap::new(),
             repeats: HashMap::new(),
-            transition_queue: VecDeque::new(),
             horizontal_neutral_lock: false,
             vertical_neutral_lock: false,
             last_flush_reason: None,
@@ -253,7 +247,6 @@ impl InputRouter {
     fn integrity_flush(&mut self) {
         self.captures.clear();
         self.repeats.clear();
-        self.transition_queue.clear();
         self.horizontal_neutral_lock = false;
         self.vertical_neutral_lock = false;
         self.validated_held = HeldState::default();
@@ -335,10 +328,10 @@ impl InputRouter {
             {
                 InputOutcome::TransitionControl { event, context }
             }
-            InputContextKind::Transition => {
-                self.transition_queue.push_back(event);
-                InputOutcome::TransitionQueued { event, context }
-            }
+            InputContextKind::Transition => InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::TransitionActive,
+            },
             _ => {
                 self.arm_repeat(event, context, now);
                 InputOutcome::Dispatch {
@@ -398,43 +391,6 @@ impl InputRouter {
             });
         }
         None
-    }
-
-    pub fn replay_next_transition(
-        &mut self,
-        request: FocusRequest,
-        now: Instant,
-    ) -> Option<InputOutcome> {
-        let event = self.transition_queue.pop_front()?;
-        let context = self.set_focus(request);
-        let capture_key = CaptureKey::from(event);
-        if self.captures.contains_key(&capture_key) {
-            self.captures.insert(
-                capture_key,
-                Capture {
-                    context,
-                    action: event.action,
-                },
-            );
-            self.arm_repeat(event, context, now);
-        }
-        Some(InputOutcome::Dispatch {
-            event,
-            context,
-            kind: DispatchKind::TransitionReplay,
-        })
-    }
-
-    pub fn flush_transition_queue(&mut self, reason: ConsumedReason) -> usize {
-        let count = self.transition_queue.len();
-        self.transition_queue.clear();
-        self.last_flush_reason = Some(reason);
-        count
-    }
-
-    #[must_use]
-    pub fn transition_queue_len(&self) -> usize {
-        self.transition_queue.len()
     }
 
     #[must_use]
@@ -666,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn transition_queues_commands_but_back_controls_immediately() {
+    fn transition_swallows_commands_but_back_controls_immediately() {
         let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
         let mut router = InputRouter::new(transition);
         let now = Instant::now();
@@ -676,7 +632,10 @@ mod tests {
                 transition,
                 now
             ),
-            InputOutcome::TransitionQueued { .. }
+            InputOutcome::Consumed {
+                reason: ConsumedReason::TransitionActive,
+                ..
+            }
         ));
         assert!(matches!(
             router.route_event(
@@ -686,11 +645,18 @@ mod tests {
             ),
             InputOutcome::TransitionControl { .. }
         ));
-        assert_eq!(router.transition_queue_len(), 1);
+        assert!(matches!(
+            router.route_event(
+                event(4, LogicalAction::Home, InputPhase::Pressed),
+                transition,
+                now
+            ),
+            InputOutcome::TransitionControl { .. }
+        ));
     }
 
     #[test]
-    fn released_transition_tap_replays_once_without_repeat() {
+    fn released_transition_tap_never_reaches_the_destination() {
         let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
         let screen = request(InputContextKind::Screen, 2, DirectionalPolicy::MenuRepeat);
         let mut router = InputRouter::new(transition);
@@ -700,20 +666,41 @@ mod tests {
             transition,
             now,
         );
+        assert!(matches!(
+            router.route_event(
+                event(2, LogicalAction::Down, InputPhase::Released),
+                transition,
+                now,
+            ),
+            InputOutcome::Released { .. }
+        ));
+        router.set_focus(screen);
+        assert!(!router.action_held(LogicalAction::Down));
+        assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn held_transition_input_does_not_leak_into_the_destination() {
+        let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
+        let screen = request(InputContextKind::Screen, 2, DirectionalPolicy::MenuRepeat);
+        let mut router = InputRouter::new(transition);
+        let now = Instant::now();
         router.route_event(
-            event(2, LogicalAction::Down, InputPhase::Released),
+            event(1, LogicalAction::Down, InputPhase::Pressed),
             transition,
             now,
         );
-        assert!(matches!(
-            router.replay_next_transition(screen, now),
-            Some(InputOutcome::Dispatch {
-                kind: DispatchKind::TransitionReplay,
-                ..
-            })
-        ));
+        router.set_focus(screen);
+        assert!(!router.action_held(LogicalAction::Down));
         assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
-        assert!(router.replay_next_transition(screen, now).is_none());
+        assert!(matches!(
+            router.route_event(
+                event(2, LogicalAction::Down, InputPhase::Released),
+                screen,
+                now
+            ),
+            InputOutcome::Released { context, .. } if context.target.kind == InputContextKind::Transition
+        ));
     }
 
     #[test]

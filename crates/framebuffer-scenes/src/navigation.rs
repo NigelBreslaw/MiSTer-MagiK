@@ -29,7 +29,7 @@ const SYSTEM_SELECTED_ROW_START_Q16: u16 = 6_000;
 const SUPER_SCALER_TEXTURE_FADE_START_Q16: u16 = 8_000;
 const SUPER_SCALER_TEXTURE_FADE_END_Q16: u16 = 16_000;
 const DEFAULT_PREPARATION_TIMEOUT_US: u64 = 5_000_000;
-const SETTINGS_PAGE_DURATION_US: u64 = 320_000;
+const NAVIGATION_TRANSITION_DURATION_US: u64 = 300_000;
 const SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR: isize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,11 +45,7 @@ impl NavigationTransitionEdge {
     }
 
     pub const fn duration_us(self) -> u64 {
-        if self.enters_system_browser() {
-            720_000
-        } else {
-            600_000
-        }
+        NAVIGATION_TRANSITION_DURATION_US
     }
 
     pub const fn label(self) -> &'static str {
@@ -568,7 +564,7 @@ impl NavigationTransitionRequest {
             edge: NavigationTransitionEdge::HomeToConsoles,
             direction,
             geometry: NavigationTransitionGeometry::default(),
-            duration_us: SETTINGS_PAGE_DURATION_US,
+            duration_us: NAVIGATION_TRANSITION_DURATION_US,
             preparation_timeout_us: DEFAULT_PREPARATION_TIMEOUT_US,
             renderer: NavigationTransitionRenderer::SettingsPage,
             settings_axis: SettingsPageTransitionAxis::Horizontal,

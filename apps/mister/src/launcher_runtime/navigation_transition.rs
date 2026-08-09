@@ -3,7 +3,6 @@
 
 //! Host-neutral navigation-transition state and RGB565 frame ownership.
 
-use crate::input_state::PadState;
 use mister_magik_framebuffer_scenes::Rgb565Pixel as SharedRgb565Pixel;
 pub use mister_magik_framebuffer_scenes::navigation::{
     CrtNavigationLayout, NavigationTransitionBuffers, NavigationTransitionCompletion,
@@ -19,7 +18,6 @@ use mister_magik_framebuffer_scenes::navigation::{
     scale_progress, warm_navigation_transition_rasterizer,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
-use std::collections::VecDeque;
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,77 +79,6 @@ impl NavigationTransitionRoute {
                 | Self::NestedToHome
         )
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct NavigationTransitionInput {
-    pub activate: bool,
-    pub back: bool,
-    pub home: bool,
-    pub up: bool,
-    pub down: bool,
-    pub left: bool,
-    pub right: bool,
-}
-
-impl NavigationTransitionInput {
-    pub fn rising_edges(now: &PadState, previous: &PadState) -> Option<Self> {
-        let input = Self {
-            activate: now.btn_a && !previous.btn_a,
-            back: now.btn_b && !previous.btn_b,
-            home: now.btn_home && !previous.btn_home,
-            up: now.dpad_up && !previous.dpad_up,
-            down: now.dpad_down && !previous.dpad_down,
-            left: now.dpad_left && !previous.dpad_left,
-            right: now.dpad_right && !previous.dpad_right,
-        };
-        (!input.is_empty()).then_some(input)
-    }
-
-    pub const fn is_empty(self) -> bool {
-        !self.activate
-            && !self.back
-            && !self.home
-            && !self.up
-            && !self.down
-            && !self.left
-            && !self.right
-    }
-
-    pub fn without_back_or_home(mut self) -> Option<Self> {
-        self.back = false;
-        self.home = false;
-        (!self.is_empty()).then_some(self)
-    }
-
-    pub fn replay(self, physical: &PadState) -> (PadState, PadState) {
-        let mut previous = physical.clone();
-        let mut now = physical.clone();
-        for (queued, previous_field, now_field) in [
-            (self.activate, &mut previous.btn_a, &mut now.btn_a),
-            (self.back, &mut previous.btn_b, &mut now.btn_b),
-            (self.home, &mut previous.btn_home, &mut now.btn_home),
-            (self.up, &mut previous.dpad_up, &mut now.dpad_up),
-            (self.down, &mut previous.dpad_down, &mut now.dpad_down),
-            (self.left, &mut previous.dpad_left, &mut now.dpad_left),
-            (self.right, &mut previous.dpad_right, &mut now.dpad_right),
-        ] {
-            if queued {
-                *previous_field = false;
-                *now_field = true;
-            }
-        }
-        previous.rebuild_pressed_now();
-        now.rebuild_pressed_now();
-        (previous, now)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct NavigationTransitionInputDelivery {
-    pub previous: PadState,
-    pub now: PadState,
-    pub replayed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -479,7 +406,6 @@ pub struct NavigationTransitionRuntime {
     pending_prepare_started: Option<Instant>,
     pending_status_quiesce_us: u64,
     pending_status_quiesce_timeout: bool,
-    queued_inputs: VecDeque<NavigationTransitionInput>,
     buffers: NavigationTransitionBuffers,
     logical_width: usize,
     logical_height: usize,
@@ -506,7 +432,6 @@ impl NavigationTransitionRuntime {
             pending_prepare_started: None,
             pending_status_quiesce_us: 0,
             pending_status_quiesce_timeout: false,
-            queued_inputs: VecDeque::new(),
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             logical_width: buffer_width,
             logical_height: buffer_height,
@@ -538,7 +463,6 @@ impl NavigationTransitionRuntime {
         self.enabled = enabled;
         self.pending_request = None;
         self.controller = NavigationTransitionController::default();
-        self.queued_inputs.clear();
         self.geometry_history.clear();
         self.route = None;
         self.settings_physical_space = false;
@@ -794,75 +718,7 @@ impl NavigationTransitionRuntime {
         self.controller.settle_at_destination()
     }
 
-    pub fn queue_input(&mut self, input: NavigationTransitionInput) {
-        if !input.is_empty() {
-            self.queued_inputs.push_back(input);
-        }
-    }
-
-    pub fn take_queued_input(&mut self) -> Option<NavigationTransitionInput> {
-        (!self.is_active())
-            .then(|| self.queued_inputs.pop_front())
-            .flatten()
-    }
-
-    pub fn clear_queued_inputs(&mut self) {
-        self.queued_inputs.clear();
-    }
-
-    pub fn route_input(
-        &mut self,
-        physical_now: &PadState,
-        physical_previous: &PadState,
-        consumed_back_or_home: bool,
-    ) -> Option<NavigationTransitionInputDelivery> {
-        let physical_input =
-            NavigationTransitionInput::rising_edges(physical_now, physical_previous).and_then(
-                |input| {
-                    if consumed_back_or_home {
-                        input.without_back_or_home()
-                    } else {
-                        Some(input)
-                    }
-                },
-            );
-        if self.is_active() {
-            if let Some(input) = physical_input {
-                self.queue_input(input);
-            }
-            return None;
-        }
-        if let Some(queued_input) = self.take_queued_input() {
-            if let Some(input) = physical_input {
-                self.queue_input(input);
-            }
-            let (previous, now) = queued_input.replay(physical_now);
-            return Some(NavigationTransitionInputDelivery {
-                previous,
-                now,
-                replayed: true,
-            });
-        }
-        if consumed_back_or_home {
-            let (previous, now) = physical_input.map_or_else(
-                || (physical_now.clone(), physical_now.clone()),
-                |input| input.replay(physical_now),
-            );
-            return Some(NavigationTransitionInputDelivery {
-                previous,
-                now,
-                replayed: true,
-            });
-        }
-        Some(NavigationTransitionInputDelivery {
-            previous: physical_previous.clone(),
-            now: physical_now.clone(),
-            replayed: false,
-        })
-    }
-
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
-        self.queued_inputs.clear();
         if self.pending_request.is_some() {
             self.activate_pending(self.pending_started_us);
         }
@@ -873,9 +729,6 @@ impl NavigationTransitionRuntime {
     pub fn complete(&mut self) -> Option<NavigationTransitionCompletion> {
         let request = self.request();
         let completion = self.controller.complete()?;
-        if completion.failure.is_some() {
-            self.queued_inputs.clear();
-        }
         if request.is_some_and(|request| {
             request.is_super_scaler()
                 && matches!(
@@ -1190,15 +1043,20 @@ mod tests {
     fn super_scaler_edges_keep_intended_durations() {
         assert_eq!(
             NavigationTransitionEdge::HomeToConsoles.duration_us(),
-            600_000
+            300_000
         );
         assert_eq!(
             NavigationTransitionEdge::HomeToArcade.duration_us(),
-            720_000
+            300_000
         );
         assert_eq!(
             NavigationTransitionEdge::ConsolesToSystem.duration_us(),
-            720_000
+            300_000
+        );
+        assert_eq!(
+            NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward)
+                .duration_us,
+            300_000
         );
     }
 
@@ -1397,37 +1255,9 @@ mod tests {
 
         assert!(controller.request_reverse(100_000));
         assert_eq!(controller.frame().progress_q16, forward.progress_q16);
-        let settled = controller.tick(600_000, false);
+        let settled = controller.tick(request().duration_us.saturating_mul(2), false);
         assert_eq!(settled.phase, NavigationTransitionPhase::Settled);
         assert_eq!(settled.endpoint, Some(NavigationTransitionEndpoint::Source));
-    }
-
-    #[test]
-    fn navigation_input_captures_and_replays_simultaneous_edges() {
-        let previous = PadState::default();
-        let mut physical = PadState {
-            btn_a: true,
-            btn_b: true,
-            dpad_down: true,
-            btn_x: true,
-            ..PadState::default()
-        };
-        physical.rebuild_pressed_now();
-        let input = NavigationTransitionInput::rising_edges(&physical, &previous).unwrap();
-
-        assert!(input.activate);
-        assert!(input.back);
-        assert!(input.down);
-        assert!(!input.home);
-        let (replay_previous, replay_now) = input.replay(&physical);
-        assert!(!replay_previous.btn_a);
-        assert!(!replay_previous.btn_b);
-        assert!(!replay_previous.dpad_down);
-        assert!(replay_previous.btn_x);
-        assert!(replay_now.btn_a);
-        assert!(replay_now.btn_b);
-        assert!(replay_now.dpad_down);
-        assert!(replay_now.btn_x);
     }
 
     #[test]
@@ -1750,67 +1580,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_queue_preserves_every_input_across_chained_transitions() {
-        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
-        let duration_us =
-            NavigationTransitionRequest::settings_page(NavigationTransitionDirection::Forward)
-                .duration_us;
-        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
-        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
-        let activate = NavigationTransitionInput {
-            activate: true,
-            ..NavigationTransitionInput::default()
-        };
-        let back = NavigationTransitionInput {
-            back: true,
-            ..NavigationTransitionInput::default()
-        };
-        let home = NavigationTransitionInput {
-            home: true,
-            ..NavigationTransitionInput::default()
-        };
-
-        runtime
-            .begin_settings_page(
-                NavigationTransitionRoute::HomeToSettings,
-                NavigationTransitionDirection::Forward,
-                &source,
-                0,
-            )
-            .unwrap();
-        runtime.queue_input(activate);
-        runtime.queue_input(back);
-        runtime.queue_input(home);
-        assert_eq!(runtime.take_queued_input(), None);
-        runtime.capture_destination(&destination, 1).unwrap();
-        runtime.tick(duration_us + 1);
-        assert_eq!(
-            runtime.complete().map(|completion| completion.endpoint),
-            Some(NavigationTransitionEndpoint::Destination)
-        );
-
-        assert_eq!(runtime.take_queued_input(), Some(activate));
-        runtime
-            .begin_settings_page(
-                NavigationTransitionRoute::HomeToSettings,
-                NavigationTransitionDirection::Reverse,
-                &destination,
-                duration_us + 2,
-            )
-            .unwrap();
-        assert_eq!(runtime.take_queued_input(), None);
-        runtime
-            .capture_destination(&source, duration_us + 3)
-            .unwrap();
-        runtime.tick(duration_us * 2 + 3);
-        assert!(runtime.complete().is_some());
-
-        assert_eq!(runtime.take_queued_input(), Some(back));
-        assert_eq!(runtime.take_queued_input(), Some(home));
-        assert_eq!(runtime.take_queued_input(), None);
-    }
-
-    #[test]
     fn physical_settings_transition_restores_logical_buffer_geometry() {
         let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
@@ -1868,104 +1637,6 @@ mod tests {
 
         assert!(output.iter().all(|pixel| *pixel != Rgb565Pixel(0xffff)));
         assert!(runtime.buffers.working().iter().all(|pixel| pixel.0 == 0));
-    }
-
-    #[test]
-    fn runtime_queue_clears_when_transition_is_disabled() {
-        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
-        runtime.queue_input(NavigationTransitionInput {
-            back: true,
-            ..NavigationTransitionInput::default()
-        });
-
-        runtime.set_enabled(16, 12, false);
-
-        assert_eq!(runtime.take_queued_input(), None);
-    }
-
-    #[test]
-    fn routed_input_replays_every_rapid_back_edge_in_order() {
-        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
-        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
-        runtime
-            .begin_settings_page(
-                NavigationTransitionRoute::HomeToSettings,
-                NavigationTransitionDirection::Reverse,
-                &source,
-                0,
-            )
-            .unwrap();
-        let released = PadState::default();
-        let pressed = PadState {
-            btn_b: true,
-            ..PadState::default()
-        };
-
-        assert!(runtime.route_input(&pressed, &released, false).is_none());
-        assert!(runtime.route_input(&released, &pressed, false).is_none());
-        assert!(runtime.route_input(&pressed, &released, false).is_none());
-        runtime.settle_at_destination();
-        assert!(runtime.complete().is_some());
-
-        let first = runtime.route_input(&released, &released, false).unwrap();
-        assert!(first.replayed);
-        assert!(!first.previous.btn_b);
-        assert!(first.now.btn_b);
-        let second = runtime.route_input(&released, &released, false).unwrap();
-        assert!(second.replayed);
-        assert!(!second.previous.btn_b);
-        assert!(second.now.btn_b);
-        let live = runtime.route_input(&released, &released, false).unwrap();
-        assert!(!live.replayed);
-    }
-
-    #[test]
-    fn routed_input_preserves_new_physical_edges_behind_the_backlog() {
-        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
-        runtime.queue_input(NavigationTransitionInput {
-            activate: true,
-            ..NavigationTransitionInput::default()
-        });
-        let released = PadState::default();
-        let physical_back = PadState {
-            btn_b: true,
-            ..PadState::default()
-        };
-
-        let activate = runtime
-            .route_input(&physical_back, &released, false)
-            .unwrap();
-        assert!(activate.replayed);
-        assert!(activate.now.btn_a);
-        assert!(activate.previous.btn_b);
-        assert!(activate.now.btn_b);
-        let back = runtime
-            .route_input(&released, &physical_back, false)
-            .unwrap();
-        assert!(back.replayed);
-        assert!(back.now.btn_b);
-    }
-
-    #[test]
-    fn routed_input_removes_consumed_cancel_edges_only() {
-        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
-        let released = PadState::default();
-        let physical = PadState {
-            btn_b: true,
-            btn_home: true,
-            dpad_down: true,
-            ..PadState::default()
-        };
-
-        let remaining = runtime.route_input(&physical, &released, true).unwrap();
-
-        assert!(remaining.replayed);
-        assert!(remaining.previous.btn_b);
-        assert!(remaining.previous.btn_home);
-        assert!(!remaining.previous.dpad_down);
-        assert!(remaining.now.btn_b);
-        assert!(remaining.now.btn_home);
-        assert!(remaining.now.dpad_down);
     }
 
     #[test]

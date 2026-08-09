@@ -4349,7 +4349,6 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
         || trace.get("initial_presses").and_then(Value::as_u64)
             != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
         || trace.get("releases").and_then(Value::as_u64) != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
-        || trace.get("transition_replays").and_then(Value::as_u64) != Some(0)
         || trace.get("final_down_held").and_then(Value::as_bool) != Some(false)
         || trace.get("repeats").and_then(Value::as_u64).unwrap_or(0) == 0
         || trace
@@ -4365,12 +4364,11 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
                 > 16_667)
     {
         return Err(format!(
-            "input integrity trace summary failed: schema={} presses={} releases={} repeats={} replays={} final_down_held={} queue_high_water={} dispatch_p99_us={} latency_gate={enforce_latency}",
+            "input integrity trace summary failed: schema={} presses={} releases={} repeats={} final_down_held={} queue_high_water={} dispatch_p99_us={} latency_gate={enforce_latency}",
             trace["schema"].as_str().unwrap_or("missing"),
             trace["initial_presses"].as_u64().unwrap_or(0),
             trace["releases"].as_u64().unwrap_or(0),
             trace["repeats"].as_u64().unwrap_or(0),
-            trace["transition_replays"].as_u64().unwrap_or(0),
             trace["final_down_held"].as_bool().unwrap_or(false),
             trace["queue_high_water"].as_u64().unwrap_or(0),
             trace["dispatch_p99_us"].as_u64().unwrap_or(0),

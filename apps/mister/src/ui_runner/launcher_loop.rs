@@ -1140,7 +1140,6 @@ struct InputIntegrityTrace {
     initial_presses: u64,
     releases: u64,
     repeats: u64,
-    transition_replays: u64,
     queue_high_water: usize,
     dispatch_latencies_us: Vec<u64>,
     dirty: bool,
@@ -1159,7 +1158,6 @@ impl InputIntegrityTrace {
             initial_presses: 0,
             releases: 0,
             repeats: 0,
-            transition_replays: 0,
             queue_high_water: 0,
             dispatch_latencies_us: Vec::new(),
             dirty: enabled,
@@ -1193,14 +1191,10 @@ impl InputIntegrityTrace {
         match kind {
             DispatchKind::Initial => self.initial_presses = self.initial_presses.saturating_add(1),
             DispatchKind::Repeat => self.repeats = self.repeats.saturating_add(1),
-            DispatchKind::TransitionReplay => {
-                self.transition_replays = self.transition_replays.saturating_add(1)
-            }
         }
         let kind = match kind {
             DispatchKind::Initial => "initial",
             DispatchKind::Repeat => "repeat",
-            DispatchKind::TransitionReplay => "transition-replay",
         };
         self.record_event(event, kind);
     }
@@ -1252,7 +1246,6 @@ impl InputIntegrityTrace {
             "initial_presses": self.initial_presses,
             "releases": self.releases,
             "repeats": self.repeats,
-            "transition_replays": self.transition_replays,
             "final_down_held": router.action_held(LogicalAction::Down),
             "queue_high_water": self.queue_high_water,
             "dispatch_p99_us": latencies.get(p99_index).copied().unwrap_or(0),
@@ -4845,58 +4838,51 @@ pub(super) fn run_launcher_loop(
                 input_router.set_focus(focus);
                 let mut final_input_tick = false;
                 let mut input_dispatch_now = frame_now;
-                let routed_event_this_loop = if let Some(event) = incoming_input_events.pop_front()
-                {
-                    if event.source.kind == InputSourceKind::MainProxy
-                        && let Some(latest) = proxy_latest_captured_at_us
-                    {
-                        input_dispatch_now = frame_now
-                            .checked_sub(Duration::from_micros(
-                                latest.saturating_sub(event.captured_at_us),
-                            ))
-                            .unwrap_or(frame_now);
-                    }
-                    let outcome = input_router.route_event(event, focus, frame_now);
-                    input_integrity_trace.record_outcome(outcome);
-                    match outcome {
-                        InputOutcome::Dispatch { event, .. } => Some(event),
-                        InputOutcome::Released { event, context, .. }
-                            if context == input_router.context() =>
+                let routed_event_this_loop =
+                    if let Some(event) = incoming_input_events.pop_front() {
+                        if event.source.kind == InputSourceKind::MainProxy
+                            && let Some(latest) = proxy_latest_captured_at_us
                         {
-                            Some(event)
+                            input_dispatch_now = frame_now
+                                .checked_sub(Duration::from_micros(
+                                    latest.saturating_sub(event.captured_at_us),
+                                ))
+                                .unwrap_or(frame_now);
                         }
-                        InputOutcome::Released { .. } => None,
-                        InputOutcome::TransitionControl { .. } => {
-                            if navigation_transition.is_active() {
-                                let now_us = frame_now
-                                    .saturating_duration_since(start)
-                                    .as_micros()
-                                    .min(u64::MAX as u128)
-                                    as u64;
-                                navigation_transition.request_reverse(now_us);
+                        let outcome = input_router.route_event(event, focus, frame_now);
+                        input_integrity_trace.record_outcome(outcome);
+                        match outcome {
+                            InputOutcome::Dispatch { event, .. } => Some(event),
+                            InputOutcome::Released { event, context, .. }
+                                if context == input_router.context() =>
+                            {
+                                Some(event)
                             }
-                            None
+                            InputOutcome::Released { .. } => None,
+                            InputOutcome::TransitionControl { .. } => {
+                                if navigation_transition.is_active() {
+                                    let now_us = frame_now
+                                        .saturating_duration_since(start)
+                                        .as_micros()
+                                        .min(u64::MAX as u128)
+                                        as u64;
+                                    navigation_transition.request_reverse(now_us);
+                                }
+                                None
+                            }
+                            InputOutcome::WakeScreensaver { .. }
+                            | InputOutcome::Consumed { .. } => None,
                         }
-                        InputOutcome::WakeScreensaver { .. }
-                        | InputOutcome::TransitionQueued { .. }
-                        | InputOutcome::Consumed { .. } => None,
-                    }
-                } else if focus.target.kind != InputContextKind::Transition
-                    && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
-                        input_router.replay_next_transition(focus, frame_now)
-                {
-                    input_integrity_trace.record_outcome(outcome);
-                    Some(event)
-                } else if focus.target.kind != InputContextKind::Transition
-                    && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
-                        input_router.tick_repeat(frame_now)
-                {
-                    input_integrity_trace.record_outcome(outcome);
-                    Some(event)
-                } else {
-                    final_input_tick = true;
-                    None
-                };
+                    } else if focus.target.kind != InputContextKind::Transition
+                        && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
+                            input_router.tick_repeat(frame_now)
+                    {
+                        input_integrity_trace.record_outcome(outcome);
+                        Some(event)
+                    } else {
+                        final_input_tick = true;
+                        None
+                    };
                 let mut launcher_state = PadState::default();
                 for action in crate::input_event::LogicalAction::ALL {
                     launcher_state.set_logical_action(action, input_router.action_held(action));

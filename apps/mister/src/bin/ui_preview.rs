@@ -1001,7 +1001,6 @@ mod macos {
                                 self.navigation_transition.request_reverse(now_us);
                             }
                             InputOutcome::Dispatch { .. }
-                            | InputOutcome::TransitionQueued { .. }
                             | InputOutcome::Released { .. }
                             | InputOutcome::WakeScreensaver { .. }
                             | InputOutcome::Consumed { .. } => {}
@@ -1042,14 +1041,9 @@ mod macos {
                             None
                         }
                         InputOutcome::Released { .. }
-                        | InputOutcome::TransitionQueued { .. }
                         | InputOutcome::WakeScreensaver { .. }
                         | InputOutcome::Consumed { .. } => None,
                     }
-                } else if let Some(InputOutcome::Dispatch { event, .. }) =
-                    self.input_router.replay_next_transition(request, frame_now)
-                {
-                    Some(event)
                 } else if let Some(InputOutcome::Dispatch { event, .. }) =
                     self.input_router.tick_repeat(frame_now)
                 {
@@ -3553,50 +3547,6 @@ mod macos {
 
             assert!(options.settings_page_transition_demo);
             assert!(options.navigation_transition_demo_reverse);
-        }
-
-        #[test]
-        fn preview_transition_input_uses_the_shared_fifo_route() {
-            let mut transition = NavigationTransitionRuntime::new(4, 3, true);
-            let pixels = vec![Rgb565Pixel(0); 4 * 3];
-            transition
-                .begin_settings_page(
-                    NavigationTransitionRoute::HomeToSettings,
-                    NavigationTransitionDirection::Forward,
-                    &pixels,
-                    0,
-                )
-                .unwrap();
-            let released = PadState::default();
-            let activate = PadState {
-                btn_a: true,
-                ..PadState::default()
-            };
-            let home = PadState {
-                btn_home: true,
-                ..PadState::default()
-            };
-
-            assert!(
-                transition
-                    .route_input(&activate, &released, false)
-                    .is_none()
-            );
-            assert!(
-                transition
-                    .route_input(&released, &activate, false)
-                    .is_none()
-            );
-            assert!(transition.route_input(&home, &released, false).is_none());
-            transition.settle_at_destination();
-            assert!(transition.complete().is_some());
-
-            let first = transition.route_input(&released, &home, false).unwrap();
-            assert!(first.replayed);
-            assert!(first.now.btn_a);
-            let second = transition.route_input(&released, &released, false).unwrap();
-            assert!(second.replayed);
-            assert!(second.now.btn_home);
         }
 
         #[test]
