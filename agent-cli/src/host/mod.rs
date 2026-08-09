@@ -4383,8 +4383,8 @@ fn run_launcher_response_scenario(
     wait_launcher_response_status(session, Duration::from_secs(45), |status| {
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
+            && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:consoles")
     })?;
-    select_launcher_response_item(session, "menu:consoles")?;
 
     run_launcher_response_driver(session, "transition-back")?;
     thread::sleep(Duration::from_millis(400));
@@ -4403,25 +4403,40 @@ fn run_launcher_response_scenario(
         status.get("menu_id").and_then(Value::as_str) == Some("menu:consoles")
     })?;
     thread::sleep(Duration::from_millis(350));
-    select_launcher_response_item(session, "menu:consoles:nintendo")?;
-    run_launcher_response_driver(session, "a 10 1 1")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
-        status.get("menu_id").and_then(Value::as_str) == Some("menu:consoles:nintendo")
+    let transition_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 4)?;
+
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "system-hub".into()),
+                ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
+                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("screen").and_then(Value::as_str) == Some("system-hub")
     })?;
-    thread::sleep(Duration::from_millis(350));
-    select_launcher_response_item(session, "snes")?;
-    run_launcher_response_driver(session, "a 10 1 1")?;
-    wait_launcher_response_status(session, Duration::from_secs(15), |status| {
-        status.get("return_screen").and_then(Value::as_str) == Some("system-hub")
-    })?;
-    thread::sleep(Duration::from_millis(350));
     run_launcher_response_driver(session, "launcher-response")?;
     thread::sleep(Duration::from_millis(250));
 
-    let trace = wait_launcher_response_trace(session, Duration::from_secs(5))?;
-    let records = trace["records"]
+    let response_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 20)?;
+    let records = transition_trace["records"]
         .as_array()
-        .ok_or("launcher response trace has no records")?;
+        .ok_or("launcher transition trace has no records")?
+        .iter()
+        .chain(
+            response_trace["records"]
+                .as_array()
+                .ok_or("launcher response trace has no records")?,
+        )
+        .collect::<Vec<_>>();
     let focus_records = records
         .iter()
         .filter(|record| {
@@ -4512,8 +4527,14 @@ fn run_launcher_response_scenario(
         "latch_drops": launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX),
         "dropped_frames": launcher.pointer("/frame_budget/physical_refresh/dropped_frames").and_then(Value::as_u64).unwrap_or(u64::MAX),
         "catalog_adoption_max_us": catalog_adoption_max_us,
-        "queue_high_water": trace["queue_high_water"],
-        "trace": trace,
+        "queue_high_water": transition_trace["queue_high_water"]
+            .as_u64()
+            .unwrap_or(0)
+            .max(response_trace["queue_high_water"].as_u64().unwrap_or(0)),
+        "trace": {
+            "transition": transition_trace,
+            "response": response_trace,
+        },
     }))
 }
 
@@ -4524,18 +4545,6 @@ fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()
         &format!("{INPUT_INTEGRITY_DRIVER} {arguments}"),
     )?;
     Ok(())
-}
-
-fn select_launcher_response_item(session: &Session, target: &str) -> Result<()> {
-    for _ in 0..32 {
-        let status = read_launcher_status(session)?;
-        if status.get("selected_item_id").and_then(Value::as_str) == Some(target) {
-            return Ok(());
-        }
-        run_launcher_response_driver(session, "right 100 1 1")?;
-        thread::sleep(Duration::from_millis(80));
-    }
-    Err(format!("launcher could not focus {target} within 32 moves").into())
 }
 
 fn wait_launcher_response_status<F>(
@@ -4559,14 +4568,18 @@ where
     }
 }
 
-fn wait_launcher_response_trace(session: &Session, timeout: Duration) -> Result<Value> {
+fn wait_launcher_response_trace(
+    session: &Session,
+    timeout: Duration,
+    minimum_records: usize,
+) -> Result<Value> {
     let started = Instant::now();
     loop {
         if let Some(raw) = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
             && let Ok(trace) = serde_json::from_str::<Value>(&raw)
             && trace["records"]
                 .as_array()
-                .is_some_and(|records| records.len() >= 20)
+                .is_some_and(|records| records.len() >= minimum_records)
         {
             return Ok(trace);
         }
