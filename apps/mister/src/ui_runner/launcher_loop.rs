@@ -3665,6 +3665,20 @@ pub(super) fn run_launcher_loop(
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
         let navigation_snapshot_locked_at_loop_start =
             full_screen_transition_policy_at_loop_start.snapshot_locked;
+        let directional_input_held = [
+            LogicalAction::Up,
+            LogicalAction::Down,
+            LogicalAction::Left,
+            LogicalAction::Right,
+        ]
+        .into_iter()
+        .any(|action| input_batch.held_after_last.is_held(action));
+        let background_work_allowed = !should_defer_launcher_background_work(
+            input_batch.events.len(),
+            navigation_transition.is_active(),
+            orientation_transition.is_active(),
+            directional_input_held,
+        ) && !navigation_snapshot_locked_at_loop_start;
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
@@ -4017,16 +4031,15 @@ pub(super) fn run_launcher_loop(
         // background role. Input, navigation, media, and preview activity must
         // never suspend it or catalog construction can starve indefinitely.
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
-        if !navigation_snapshot_locked_at_loop_start {
+        if background_work_allowed {
             scheduler.tick_catalog_progress(true, loop_start);
         }
-        if !navigation_snapshot_locked_at_loop_start
+        if background_work_allowed
             && let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version)
         {
             scheduler.request_arcade_search(request);
         }
-        if !navigation_snapshot_locked_at_loop_start && catalog_ready && nav.screen == Screen::Home
-        {
+        if background_work_allowed && catalog_ready && nav.screen == Screen::Home {
             for (index, system_id) in nav.collection_prefetch_order().into_iter().enumerate() {
                 if collection_has_resident_rows(&catalog, &system_id) {
                     continue;
@@ -4056,7 +4069,7 @@ pub(super) fn run_launcher_loop(
             startup_return_waiting_for_catalog,
             lifecycle.catalog_worker_start_delay(catalog_background_validation_delay()),
         );
-        if !navigation_snapshot_locked_at_loop_start
+        if background_work_allowed
             && let Some(worker) = catalog_session.maybe_start_deferred_worker(
                 scheduler.catalog_worker_running(),
                 frame_accounting.first_visible_copy_done() || startup_return_waiting_for_catalog,
@@ -4079,12 +4092,12 @@ pub(super) fn run_launcher_loop(
             );
         }
 
-        if !navigation_snapshot_locked_at_loop_start
+        if background_work_allowed
             && let Some(message) = catalog_publication_test.tick(loop_start, start)
         {
             deferred_catalog_events.push_back(message);
         }
-        if !navigation_snapshot_locked_at_loop_start
+        if background_work_allowed
             && catalog_messages_need_polling(
                 pending_catalog_ready.is_some(),
                 catalog_session.refresh_done(),
@@ -4266,7 +4279,7 @@ pub(super) fn run_launcher_loop(
         }
         let media_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut media_message_seen = false;
-        if preview_route.allows_preview_work() && !navigation_snapshot_locked_at_loop_start {
+        if preview_route.allows_preview_work() && background_work_allowed {
             scheduler.poll_media(&mut media_events);
             for message in media_events.drain() {
                 media_message_seen = true;
@@ -6045,7 +6058,7 @@ pub(super) fn run_launcher_loop(
         }
 
         let media_gate_trace_start = prepare_trace_enabled.then(Instant::now);
-        if !navigation_snapshot_locked_at_loop_start {
+        if background_work_allowed {
             let media_gate = media_session.current_gate(
                 frame_accounting.first_visible_copy_done(),
                 scheduler.has_pending_launch() || launching,
@@ -6175,7 +6188,7 @@ pub(super) fn run_launcher_loop(
         }
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt
-            && !navigation_snapshot_locked_at_loop_start
+            && background_work_allowed
             && !preview_scheduled_this_loop
             && !launching
             && preview_route.allows_preview_work()
@@ -6203,7 +6216,7 @@ pub(super) fn run_launcher_loop(
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
         let preview_apply_dirty = if !launching
-            && !navigation_snapshot_locked_at_loop_start
+            && background_work_allowed
             && !arcade_search_active
             && !memory_guard.active()
             && preview_route.allows_preview_work()
@@ -8651,6 +8664,18 @@ fn should_defer_catalog_message(
         })
 }
 
+fn should_defer_launcher_background_work(
+    input_event_count: usize,
+    navigation_transition_active: bool,
+    orientation_transition_active: bool,
+    directional_input_held: bool,
+) -> bool {
+    input_event_count > 0
+        || navigation_transition_active
+        || orientation_transition_active
+        || directional_input_held
+}
+
 fn catalog_messages_need_polling(
     pending_catalog_ready: bool,
     refresh_done: bool,
@@ -9913,6 +9938,19 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_frames_defer_launcher_background_work() {
+        assert!(!should_defer_launcher_background_work(
+            0, false, false, false
+        ));
+        assert!(should_defer_launcher_background_work(
+            1, false, false, false
+        ));
+        assert!(should_defer_launcher_background_work(0, true, false, false));
+        assert!(should_defer_launcher_background_work(0, false, true, false));
+        assert!(should_defer_launcher_background_work(0, false, false, true));
+    }
 
     #[test]
     fn arming_orientation_confirmation_sets_destination_dialog_state() {
