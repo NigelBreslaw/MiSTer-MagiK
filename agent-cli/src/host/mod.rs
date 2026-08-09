@@ -4293,18 +4293,36 @@ fn run_input_integrity_scenario(
 
 fn wait_input_integrity_trace(session: &Session, timeout: Duration) -> Result<Value> {
     let started = Instant::now();
+    let mut last_trace = None;
     loop {
         if let Some(raw) = remote_read(session, INPUT_INTEGRITY_TRACE_REMOTE)
             && let Ok(trace) = serde_json::from_str::<Value>(&raw)
-            && trace.get("initial_presses").and_then(Value::as_u64)
-                >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
-            && trace.get("releases").and_then(Value::as_u64)
-                >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
         {
-            return Ok(trace);
+            if trace.get("initial_presses").and_then(Value::as_u64)
+                >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+                && trace.get("releases").and_then(Value::as_u64)
+                    >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+            {
+                return Ok(trace);
+            }
+            last_trace = Some(trace);
         }
         if started.elapsed() >= timeout {
-            return Err("timed out waiting for the input integrity trace".into());
+            let detail = last_trace.as_ref().map_or_else(
+                || "trace file was absent or invalid".to_string(),
+                |trace| {
+                    format!(
+                        "presses={} releases={} repeats={} final_down_held={}",
+                        trace["initial_presses"].as_u64().unwrap_or(0),
+                        trace["releases"].as_u64().unwrap_or(0),
+                        trace["repeats"].as_u64().unwrap_or(0),
+                        trace["final_down_held"].as_bool().unwrap_or(false),
+                    )
+                },
+            );
+            return Err(
+                format!("timed out waiting for the input integrity trace: {detail}").into(),
+            );
         }
         thread::sleep(Duration::from_millis(20));
     }
