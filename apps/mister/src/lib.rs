@@ -17,6 +17,7 @@ mod arcade_list_renderer;
 #[allow(dead_code)]
 mod artifact_publish;
 pub use mister_magik_mister_runtime::boot_analytics;
+pub mod bitmap_font_resource;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 mod bitmap_text;

@@ -17,12 +17,14 @@ pub struct MisterSoftwareWindow {
 
 impl MisterSoftwareWindow {
     pub fn new(repaint_buffer_type: RepaintBufferType) -> Rc<Self> {
-        Rc::new_cyclic(|weak: &Weak<Self>| Self {
+        let window = Rc::new_cyclic(|weak: &Weak<Self>| Self {
             window: Window::new(weak.clone()),
             renderer: SoftwareRenderer::new_with_repaint_buffer_type(repaint_buffer_type),
             redraw_pending: Cell::new(false),
             size: Cell::new(PhysicalSize::default()),
-        })
+        });
+        crate::bitmap_font_resource::register_jersey_fonts(&window.renderer);
+        window
     }
 
     pub fn redraw_pending(&self) -> bool {

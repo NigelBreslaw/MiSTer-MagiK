@@ -2820,6 +2820,7 @@ dependencies = [
  "crc32fast",
  "ffmpeg-next",
  "flate2",
+ "i-slint-core",
  "libc",
  "lz4_flex",
  "mister-magik-agent-protocol",

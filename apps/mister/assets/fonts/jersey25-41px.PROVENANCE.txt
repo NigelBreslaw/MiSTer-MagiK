@@ -1,0 +1,16 @@
+MiSTer MagiK monochrome bitmap font resource
+
+Source: apps/mister/ui/fonts/Jersey25-Regular.ttf
+Source SHA-256: 4d4acdd89a748e9548041a3046d95536c500e1a7be9197c6aeef7d980f79d370
+Family: Jersey 25
+Slint pixel size: 41
+Observed uppercase cap height: 25 framebuffer pixels
+Swash hinting: enabled
+Alpha threshold: 128
+Coverage: space and uppercase A-Z
+Encoding: MMBF1, packed 1-bit rows
+Resource SHA-256: 8ab9a562608c440ddecf7ba11a6cc7430690173ab6c45742c23a890b5fd48efd
+
+Regenerate from the repository root with:
+
+    apps/mister/scripts/generate-jersey-bitmap-fonts.sh
