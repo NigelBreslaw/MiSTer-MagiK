@@ -39,6 +39,107 @@ const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
+
+fn discrete_selection_feedback_target(
+    nav: &LauncherNav,
+    lifecycle: &LauncherLifecycle,
+) -> Option<SelectionFeedbackTarget> {
+    let lifecycle_view = lifecycle.view();
+    if let Some(dialog) = lifecycle_view.catalog_recovery_dialog() {
+        return Some(SelectionFeedbackTarget::new(
+            format!("dialog:catalog-recovery:{}", dialog.title),
+            if dialog.selected.selected_index() == 0 {
+                "left"
+            } else {
+                "right"
+            },
+        ));
+    }
+    if lifecycle_view.launch_failure_dialog().is_some() {
+        return Some(SelectionFeedbackTarget::new(
+            "dialog:launch-failure",
+            "back",
+        ));
+    }
+    if let Some(action) = nav.confirm_action {
+        return Some(SelectionFeedbackTarget::new(
+            format!("dialog:{action:?}"),
+            if nav.confirm_selected == 0 {
+                "left"
+            } else {
+                "right"
+            },
+        ));
+    }
+
+    nav_selection_feedback_target(nav)
+}
+
+fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackTarget> {
+    match nav.screen {
+        Screen::Home => SelectionFeedbackTarget::home(nav),
+        Screen::SystemHub => Some(SelectionFeedbackTarget::new(
+            "system-hub",
+            ["games", "recent", "favorites", "info"]
+                .get(nav.system_hub_selected)
+                .copied()
+                .unwrap_or("unknown"),
+        )),
+        Screen::Settings if nav.display_combo_open => Some(SelectionFeedbackTarget::new(
+            "display-combo",
+            format!("option:{}", nav.display_highlighted),
+        )),
+        Screen::Settings if nav.orientation_combo_open => Some(SelectionFeedbackTarget::new(
+            "orientation-combo",
+            format!("option:{}", nav.orientation_highlighted),
+        )),
+        Screen::Settings => Some(SelectionFeedbackTarget::new(
+            "settings",
+            [
+                "display",
+                "orientation",
+                "screensaver",
+                "reduce-motion",
+                "exit",
+                "rebuild",
+                "about",
+            ]
+            .get(nav.settings_selected)
+            .copied()
+            .unwrap_or("unknown"),
+        )),
+        Screen::Screensaver => Some(SelectionFeedbackTarget::new(
+            "screensaver-settings",
+            ["enabled", "delay", "preview"]
+                .get(nav.screensaver_selected)
+                .copied()
+                .unwrap_or("unknown"),
+        )),
+        Screen::About => Some(SelectionFeedbackTarget::new(
+            "about",
+            ["info", "licenses"]
+                .get(nav.about_selected)
+                .copied()
+                .unwrap_or("unknown"),
+        )),
+        Screen::Licenses if !nav.licenses_expanded => Some(SelectionFeedbackTarget::new(
+            "licenses",
+            [
+                "mister-magik",
+                "ffmpeg",
+                "press-start-2p",
+                "jersey-10",
+                "jersey-25",
+                "arcade-cabinet",
+                "slint",
+            ]
+            .get(nav.licenses_selected)
+            .copied()
+            .unwrap_or("unknown"),
+        )),
+        Screen::Arcade | Screen::Controller | Screen::Info | Screen::Licenses => None,
+    }
+}
 const MODAL_INPUT_TEST_PATH_ENVS: &[&str] = &[
     "MISTER_SHARDED_CATALOG_DIR",
     "MISTER_LIBRARY_SQLITE",
@@ -3940,6 +4041,11 @@ pub(super) fn run_launcher_loop(
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
+        let current_feedback_target = discrete_selection_feedback_target(&nav, &lifecycle);
+        if bridge_models.sync_selection_feedback_surface(current_feedback_target.as_ref()) {
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
+        }
         if bridge_models.expire_selection_feedback(loop_start) {
             full_bridge_dirty = true;
             request_launcher_redraw!();
@@ -5162,6 +5268,11 @@ pub(super) fn run_launcher_loop(
                 for action in crate::input_event::LogicalAction::ALL {
                     launcher_state.set_logical_action(action, input_router.action_held(action));
                 }
+                let selection_feedback_before =
+                    discrete_selection_feedback_target(&nav, &lifecycle);
+                let selection_feedback_input = routed_event_this_loop
+                    .as_ref()
+                    .is_some_and(|event| event.phase == InputPhase::Pressed);
 
                 if launcher_bench_scenario.is_none()
                     && !settings_navigation_benchmark.enabled()
@@ -5225,11 +5336,6 @@ pub(super) fn run_launcher_loop(
                     }
                     if !setup.is_active() {
                         let nav_before = LauncherBridgeKey::from_nav(&nav);
-                        let selection_feedback_before = SelectionFeedbackTarget::home(&nav);
-                        let selection_feedback_input = routed_event_this_loop
-                            .as_ref()
-                            .is_some_and(|event| event.phase == InputPhase::Pressed)
-                            || final_input_tick;
                         let arcade_selected_before_input = nav.arcade.selected;
                         if transition_picker_enabled && nav.screen == Screen::Arcade {
                             let left = routed_event_this_loop.as_ref().is_some_and(|event| {
@@ -6116,18 +6222,6 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                         let nav_after = LauncherBridgeKey::from_nav(&nav);
-                        let selection_feedback_after = SelectionFeedbackTarget::home(&nav);
-                        let feedback_surface_changed = bridge_models
-                            .sync_selection_feedback_surface(selection_feedback_after.as_ref());
-                        let feedback_registered = selection_feedback_input
-                            && bridge_models.note_selection_feedback_change(
-                                selection_feedback_before.as_ref(),
-                                selection_feedback_after.as_ref(),
-                            );
-                        if feedback_surface_changed || feedback_registered {
-                            full_bridge_dirty = true;
-                            request_launcher_redraw!();
-                        }
                         if nav_before != nav_after {
                             if let Some(entry) = pending_collection_entry.take() {
                                 nav.catalog_system_hydration_finished(&entry.collection_id);
@@ -6181,6 +6275,18 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                     }
+                }
+                let selection_feedback_after = discrete_selection_feedback_target(&nav, &lifecycle);
+                let feedback_surface_changed = bridge_models
+                    .sync_selection_feedback_surface(selection_feedback_after.as_ref());
+                let feedback_registered = selection_feedback_input
+                    && bridge_models.note_selection_feedback_change(
+                        selection_feedback_before.as_ref(),
+                        selection_feedback_after.as_ref(),
+                    );
+                if feedback_surface_changed || feedback_registered {
+                    full_bridge_dirty = true;
+                    request_launcher_redraw!();
                 }
                 if final_input_tick {
                     break;
@@ -10306,6 +10412,67 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discrete_feedback_targets_cover_included_and_excluded_surfaces() {
+        let mut nav = LauncherNav::new();
+
+        nav.screen = Screen::SystemHub;
+        nav.system_hub_selected = 2;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("system-hub", "favorites"))
+        );
+
+        nav.screen = Screen::Settings;
+        nav.settings_selected = 3;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("settings", "reduce-motion"))
+        );
+        nav.display_combo_open = true;
+        nav.display_highlighted = 4;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("display-combo", "option:4"))
+        );
+        nav.display_combo_open = false;
+
+        nav.screen = Screen::Screensaver;
+        nav.screensaver_selected = 2;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new(
+                "screensaver-settings",
+                "preview"
+            ))
+        );
+
+        nav.screen = Screen::About;
+        nav.about_selected = 1;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("about", "licenses"))
+        );
+
+        nav.screen = Screen::Licenses;
+        nav.licenses_selected = 6;
+        assert_eq!(
+            nav_selection_feedback_target(&nav),
+            Some(SelectionFeedbackTarget::new("licenses", "slint"))
+        );
+        nav.licenses_expanded = true;
+        assert_eq!(nav_selection_feedback_target(&nav), None);
+
+        nav.screen = Screen::Arcade;
+        nav.licenses_expanded = false;
+        assert_eq!(nav_selection_feedback_target(&nav), None);
+
+        nav.screen = Screen::Controller;
+        assert_eq!(nav_selection_feedback_target(&nav), None);
+        nav.screen = Screen::Info;
+        assert_eq!(nav_selection_feedback_target(&nav), None);
+    }
 
     #[test]
     fn interactive_frames_defer_launcher_background_work() {

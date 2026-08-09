@@ -39,12 +39,14 @@ export component AboutScreen inherits Rectangle {
             label: "Info";
             detail: "Build and display";
             focused: MisterBridge.about-selected == 0;
+            acknowledged: MisterBridge.selection-feedback-query("about", "info", MisterBridge.selection-feedback-revision);
         }
         CrtMenuRow {
             vertical-stretch: 1;
             label: "Licenses";
             detail: "Open source";
             focused: MisterBridge.about-selected == 1;
+            acknowledged: MisterBridge.selection-feedback-query("about", "licenses", MisterBridge.selection-feedback-revision);
         }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }

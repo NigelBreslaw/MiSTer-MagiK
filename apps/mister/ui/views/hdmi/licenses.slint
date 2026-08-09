@@ -9,11 +9,12 @@ import { ListView } from "std-widgets.slint";
 component LicenseRow inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
+    in property <bool> acknowledged;
 
     height: 64px;
-    background: focused ? #2a2236 : #1e1828;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
+    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
 
     HorizontalLayout {
         padding: 12px;
@@ -49,13 +50,13 @@ export component LicensesScreen inherits Rectangle {
                 horizontal-alignment: left;
             }
         }
-        LicenseRow { label: "MiSTer MagiK"; focused: MisterBridge.licenses-selected == 0; }
-        LicenseRow { label: "FFmpeg"; focused: MisterBridge.licenses-selected == 1; }
-        LicenseRow { label: "Press Start 2P"; focused: MisterBridge.licenses-selected == 2; }
-        LicenseRow { label: "Jersey 10"; focused: MisterBridge.licenses-selected == 3; }
-        LicenseRow { label: "Jersey 25"; focused: MisterBridge.licenses-selected == 4; }
-        LicenseRow { label: "Arcade Cabinet"; focused: MisterBridge.licenses-selected == 5; }
-        LicenseRow { label: "Slint"; focused: MisterBridge.licenses-selected == 6; }
+        LicenseRow { label: "MiSTer MagiK"; focused: MisterBridge.licenses-selected == 0; acknowledged: MisterBridge.selection-feedback-query("licenses", "mister-magik", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "FFmpeg"; focused: MisterBridge.licenses-selected == 1; acknowledged: MisterBridge.selection-feedback-query("licenses", "ffmpeg", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "Press Start 2P"; focused: MisterBridge.licenses-selected == 2; acknowledged: MisterBridge.selection-feedback-query("licenses", "press-start-2p", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "Jersey 10"; focused: MisterBridge.licenses-selected == 3; acknowledged: MisterBridge.selection-feedback-query("licenses", "jersey-10", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "Jersey 25"; focused: MisterBridge.licenses-selected == 4; acknowledged: MisterBridge.selection-feedback-query("licenses", "jersey-25", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "Arcade Cabinet"; focused: MisterBridge.licenses-selected == 5; acknowledged: MisterBridge.selection-feedback-query("licenses", "arcade-cabinet", MisterBridge.selection-feedback-revision); }
+        LicenseRow { label: "Slint"; focused: MisterBridge.licenses-selected == 6; acknowledged: MisterBridge.selection-feedback-query("licenses", "slint", MisterBridge.selection-feedback-revision); }
         Rectangle { vertical-stretch: 1; background: transparent; }
         PixelText8 {
             text: "A: open    B: back";

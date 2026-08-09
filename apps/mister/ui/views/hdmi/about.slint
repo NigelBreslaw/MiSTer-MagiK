@@ -9,11 +9,12 @@ component AboutRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
 
     height: 52px;
-    background: focused ? #2a2236 : #1e1828;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
+    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
 
     VerticalLayout {
         padding: 10px;
@@ -60,11 +61,13 @@ export component AboutScreen inherits Rectangle {
             label: "Info";
             detail: "Build, display, database, and kernel details";
             focused: MisterBridge.about-selected == 0;
+            acknowledged: MisterBridge.selection-feedback-query("about", "info", MisterBridge.selection-feedback-revision);
         }
         AboutRow {
             label: "Licenses";
             detail: "Open source licenses and acknowledgements";
             focused: MisterBridge.about-selected == 1;
+            acknowledged: MisterBridge.selection-feedback-query("about", "licenses", MisterBridge.selection-feedback-revision);
         }
 
         PixelText8 { text: "B: back"; color: #6f8198; size: PixelTextSize.body12; horizontal-alignment: center; }

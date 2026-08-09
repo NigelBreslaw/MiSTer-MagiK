@@ -11,10 +11,13 @@ component CrtResolutionRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
 
-    background: root.focused ? CrtTheme.accent : CrtTheme.panel-alt;
+    background: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #123d35 : CrtTheme.panel-alt;
     border-width: MisterUi.border;
-    border-color: root.focused ? CrtTheme.accent : CrtTheme.border;
+    border-color: root.focused ? CrtTheme.accent
+        : root.acknowledged ? #4e8f80 : CrtTheme.border;
 
     if !MisterUi.portrait-layout : HorizontalLayout {
         padding-left: MisterUi.grid-x * 2;
@@ -91,6 +94,8 @@ export component CrtComboBoxOverlay inherits Rectangle {
                     label: option;
                     detail: index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "Selected" : "";
                     focused: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted);
+                    acknowledged: MisterBridge.selection-feedback-query(
+                        "", "option:" + index, MisterBridge.selection-feedback-revision);
                 }
             }
         }

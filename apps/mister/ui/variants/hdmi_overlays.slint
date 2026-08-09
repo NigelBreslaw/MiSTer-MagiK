@@ -177,11 +177,12 @@ export component BackgroundScanBadge inherits Rectangle {
 component CompactDialogButton inherits Rectangle {
     in property <string> label;
     in property <bool> focused;
+    in property <bool> acknowledged;
 
     height: 42px;
-    background: focused ? #2a2236 : #181829;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #181829;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5a4973;
+    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5a4973;
 
     PixelText8 {
         text: root.label;
@@ -236,12 +237,14 @@ export component ConfirmDialog inherits Rectangle {
                     label: MisterBridge.confirm-left-label;
                     subtitle: "";
                     focused: MisterBridge.confirm-selected == 0;
+                    acknowledged: MisterBridge.selection-feedback-query("", "left", MisterBridge.selection-feedback-revision);
                 }
 
                 if MisterBridge.confirm-right-label != "" : LauncherTile {
                     label: MisterBridge.confirm-right-label;
                     subtitle: "";
                     focused: MisterBridge.confirm-selected == 1;
+                    acknowledged: MisterBridge.selection-feedback-query("", "right", MisterBridge.selection-feedback-revision);
                 }
             }
         }
@@ -275,11 +278,13 @@ export component ConfirmDialog inherits Rectangle {
                 if MisterBridge.confirm-left-label != "" : CompactDialogButton {
                     label: MisterBridge.confirm-left-label;
                     focused: MisterBridge.confirm-selected == 0;
+                    acknowledged: MisterBridge.selection-feedback-query("", "left", MisterBridge.selection-feedback-revision);
                 }
 
                 if MisterBridge.confirm-right-label != "" : CompactDialogButton {
                     label: MisterBridge.confirm-right-label;
                     focused: MisterBridge.confirm-selected == 1;
+                    acknowledged: MisterBridge.selection-feedback-query("", "right", MisterBridge.selection-feedback-revision);
                 }
             }
         }

@@ -9,11 +9,12 @@ component SettingsRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
 
     height: 52px;
-    background: focused ? #2a2236 : #1e1828;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: focused ? #06d6a0 : #5c4a72;
+    border-color: focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
 
     VerticalLayout {
         padding: 10px;
@@ -52,42 +53,49 @@ export component SettingsScreen inherits Rectangle {
                 label: "Display resolution";
                 detail: MisterBridge.display-active-label;
                 focused: MisterBridge.settings-selected == 0;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "display", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "Screen orientation";
                 detail: MisterBridge.orientation-active-label;
                 focused: MisterBridge.settings-selected == 1;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "orientation", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "Screensaver";
                 detail: "Configure the idle display";
                 focused: MisterBridge.settings-selected == 2;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "screensaver", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "Reduce motion";
                 detail: MisterBridge.reduce-motion ? "On" : "Off";
                 focused: MisterBridge.settings-selected == 3;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "reduce-motion", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "Exit to MiSTer";
                 detail: "Use the stock MiSTer menu until reboot";
                 focused: MisterBridge.settings-selected == 4;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "exit", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "Rebuild Database";
                 detail: "Rebuild all library systems";
                 focused: MisterBridge.settings-selected == 5;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "rebuild", MisterBridge.selection-feedback-revision);
             }
 
             SettingsRow {
                 label: "About";
                 detail: "MiSTer MagiK and Slint";
                 focused: MisterBridge.settings-selected == 6;
+                acknowledged: MisterBridge.selection-feedback-query("settings", "about", MisterBridge.selection-feedback-revision);
             }
 
             Rectangle { vertical-stretch: 1; background: transparent; }

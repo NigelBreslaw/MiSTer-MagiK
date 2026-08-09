@@ -24,10 +24,12 @@ export component ComboBoxOverlay inherits Rectangle {
             spacing: 4px;
             PixelText8 { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: PixelTextSize.px16; horizontal-alignment: center; }
             for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : Rectangle {
+                property <bool> acknowledged: MisterBridge.selection-feedback-query(
+                    "", "option:" + index, MisterBridge.selection-feedback-revision);
                 height: 34px;
-                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : transparent;
-                border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : 0px;
-                border-color: #06d6a0;
+                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : acknowledged ? #203a36 : transparent;
+                border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : acknowledged ? 1px : 0px;
+                border-color: acknowledged ? #4e8f80 : #06d6a0;
                 PixelText8 {
                     text: (index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "✓ " : "  ") + option;
                     color: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #06d6a0 : #e8e0f0;

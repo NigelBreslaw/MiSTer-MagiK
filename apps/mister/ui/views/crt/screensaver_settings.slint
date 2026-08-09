@@ -21,6 +21,7 @@ export component ScreensaverSettingsScreen inherits Rectangle {
             label: "Enabled";
             detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
             focused: MisterBridge.screensaver-settings-selected == 0;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "enabled", MisterBridge.selection-feedback-revision);
         }
         CrtMenuRow {
             vertical-stretch: 1;
@@ -28,6 +29,7 @@ export component ScreensaverSettingsScreen inherits Rectangle {
             detail: MisterBridge.screensaver-delay-minutes == 1
                 ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
             focused: MisterBridge.screensaver-settings-selected == 1;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "delay", MisterBridge.selection-feedback-revision);
             enabled: MisterBridge.screensaver-enabled;
         }
         CrtMenuRow {
@@ -35,6 +37,7 @@ export component ScreensaverSettingsScreen inherits Rectangle {
             label: "Preview";
             detail: "Show now";
             focused: MisterBridge.screensaver-settings-selected == 2;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "preview", MisterBridge.selection-feedback-revision);
         }
         CrtFooter { left-hint: "A Change   B Back"; right-hint: "HOME Launcher"; }
     }

@@ -9,11 +9,12 @@ component SaverRow inherits Rectangle {
     in property <string> label;
     in property <string> detail;
     in property <bool> focused;
+    in property <bool> acknowledged;
     in property <bool> enabled: true;
     height: 70px;
-    background: focused ? #2a2236 : #1e1828;
+    background: focused ? #2a2236 : acknowledged ? #203a36 : #1e1828;
     border-width: focused ? 2px : 1px;
-    border-color: !enabled ? #3c3448 : (focused ? #06d6a0 : #5c4a72);
+    border-color: !enabled ? #3c3448 : (focused ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72);
     VerticalLayout {
         padding: 12px;
         spacing: 8px;
@@ -31,19 +32,21 @@ export component ScreensaverSettingsScreen inherits Rectangle {
             label: "Screensaver enabled";
             detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
             focused: MisterBridge.screensaver-settings-selected == 0;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "enabled", MisterBridge.selection-feedback-revision);
         }
         SaverRow {
             label: "Show screensaver after";
             detail: MisterBridge.screensaver-delay-minutes == 1 ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
             focused: MisterBridge.screensaver-settings-selected == 1;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "delay", MisterBridge.selection-feedback-revision);
             enabled: MisterBridge.screensaver-enabled;
         }
         SaverRow {
             label: "Preview screensaver";
             detail: "Show it now";
             focused: MisterBridge.screensaver-settings-selected == 2;
+            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "preview", MisterBridge.selection-feedback-revision);
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
     }
 }
-

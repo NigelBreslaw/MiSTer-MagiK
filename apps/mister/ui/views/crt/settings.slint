@@ -20,13 +20,13 @@ export component SettingsScreen inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 1;
             spacing: 0px;
-            CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; }
-            CrtMenuRow { vertical-stretch: 1; label: "Orientation"; detail: MisterBridge.orientation-active-label; focused: MisterBridge.settings-selected == 1; }
-            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 2; }
-            CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: MisterBridge.reduce-motion ? "On" : "Off"; focused: MisterBridge.settings-selected == 3; }
-            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 4; }
-            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: MisterBridge.settings-selected == 5; }
-            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 6; }
+            CrtMenuRow { vertical-stretch: 1; label: "Resolution"; detail: MisterBridge.display-active-label; focused: MisterBridge.settings-selected == 0; acknowledged: MisterBridge.selection-feedback-query("settings", "display", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Orientation"; detail: MisterBridge.orientation-active-label; focused: MisterBridge.settings-selected == 1; acknowledged: MisterBridge.selection-feedback-query("settings", "orientation", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Screensaver"; detail: "Configure"; focused: MisterBridge.settings-selected == 2; acknowledged: MisterBridge.selection-feedback-query("settings", "screensaver", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Reduce motion"; detail: MisterBridge.reduce-motion ? "On" : "Off"; focused: MisterBridge.settings-selected == 3; acknowledged: MisterBridge.selection-feedback-query("settings", "reduce-motion", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Exit to MiSTer"; detail: "Until reboot"; focused: MisterBridge.settings-selected == 4; acknowledged: MisterBridge.selection-feedback-query("settings", "exit", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "Rebuild DB"; detail: "Rebuild library only"; focused: MisterBridge.settings-selected == 5; acknowledged: MisterBridge.selection-feedback-query("settings", "rebuild", MisterBridge.selection-feedback-revision); }
+            CrtMenuRow { vertical-stretch: 1; label: "About"; detail: "MiSTer MagiK"; focused: MisterBridge.settings-selected == 6; acknowledged: MisterBridge.selection-feedback-query("settings", "about", MisterBridge.selection-feedback-revision); }
         }
 
         CrtFooter { left-hint: "A Change"; right-hint: "B Back"; }
