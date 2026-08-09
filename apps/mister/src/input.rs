@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use crate::input_hub::InputHub;
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
 
@@ -62,6 +63,8 @@ pub struct PadPool {
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
     prefer_main_proxy: bool,
+    shadow_hub: Option<InputHub>,
+    shadow_mismatch_reported: bool,
 }
 
 impl PadPool {
@@ -110,6 +113,8 @@ impl PadPool {
             db,
             last_rescan: Instant::now(),
             prefer_main_proxy,
+            shadow_hub: Some(InputHub::start()),
+            shadow_mismatch_reported: false,
         })
     }
 
@@ -312,11 +317,42 @@ impl PadPool {
         if changed {
             self.rebuild_merged_state();
         }
+        self.compare_shadow_input();
         changed
     }
 
     pub fn user_activity(&self) -> bool {
         self.user_activity
+    }
+
+    pub fn wait_for_input(&self, timeout: Duration) {
+        if let Some(hub) = &self.shadow_hub {
+            hub.wait_for_input(timeout);
+        } else {
+            std::thread::sleep(timeout);
+        }
+    }
+
+    fn compare_shadow_input(&mut self) {
+        let Some(hub) = &self.shadow_hub else {
+            return;
+        };
+        let batch = hub.drain();
+        if batch.events.is_empty() {
+            return;
+        }
+        let matches = shadow_held_matches_pad(batch.held_after_last, &self.merged);
+        if !matches && !self.shadow_mismatch_reported {
+            crate::ui_errln!(
+                "input shadow mismatch: epoch={} first={:?} last={:?}",
+                batch.source_epoch.0,
+                batch.first_sequence,
+                batch.last_sequence
+            );
+            self.shadow_mismatch_reported = true;
+        } else if matches {
+            self.shadow_mismatch_reported = false;
+        }
     }
 
     fn active_pad(&self) -> Option<&PadReader> {
@@ -424,6 +460,8 @@ impl PadPool {
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
             prefer_main_proxy: false,
+            shadow_hub: None,
+            shadow_mismatch_reported: false,
         };
         pool.rebuild_merged_state();
         pool
@@ -447,6 +485,23 @@ impl PadPool {
         }];
         self.rebuild_merged_state();
     }
+}
+
+fn shadow_held_matches_pad(held: crate::input_event::HeldState, pad: &PadState) -> bool {
+    use crate::input_event::LogicalAction;
+    held.is_held(LogicalAction::Up) == pad.dpad_up
+        && held.is_held(LogicalAction::Down) == pad.dpad_down
+        && held.is_held(LogicalAction::Left) == pad.dpad_left
+        && held.is_held(LogicalAction::Right) == pad.dpad_right
+        && held.is_held(LogicalAction::Activate) == pad.btn_a
+        && held.is_held(LogicalAction::Back) == pad.btn_b
+        && held.is_held(LogicalAction::Home) == pad.btn_home
+        && held.is_held(LogicalAction::X) == pad.btn_x
+        && held.is_held(LogicalAction::Y) == pad.btn_y
+        && held.is_held(LogicalAction::L) == pad.btn_l
+        && held.is_held(LogicalAction::R) == pad.btn_r
+        && held.is_held(LogicalAction::Select) == pad.btn_select
+        && held.is_held(LogicalAction::Start) == pad.btn_start
 }
 
 fn open_mouse_activity() -> Option<File> {

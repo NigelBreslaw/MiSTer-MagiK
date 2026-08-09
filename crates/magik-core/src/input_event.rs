@@ -141,7 +141,7 @@ impl HeldState {
         self.actions[action.index()]
     }
 
-    fn apply(&mut self, event: &InputEvent) -> Result<(), InputReductionError> {
+    pub fn apply_event(&mut self, event: &InputEvent) -> Result<(), InputReductionError> {
         let held = &mut self.actions[event.action.index()];
         match event.phase {
             InputPhase::Pressed if *held => Err(InputReductionError::DuplicatePress {
@@ -231,7 +231,7 @@ impl InputBatch {
                     actual: event.sequence,
                 });
             }
-            held.apply(event)?;
+            held.apply_event(event)?;
         }
         if held != self.held_after_last {
             return Err(InputReductionError::HeldStateMismatch);
@@ -501,7 +501,7 @@ mod tests {
         }
         .with_sequence(41);
         let mut held = HeldState::default();
-        held.apply(&pressed).unwrap();
+        held.apply_event(&pressed).unwrap();
         let batch = InputBatch {
             source_epoch: EPOCH,
             first_sequence: Some(41),

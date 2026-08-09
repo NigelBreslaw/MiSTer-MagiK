@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeThreadRole {
     LauncherUi,
+    InputReader,
     CatalogWorker,
     CatalogForeground,
     SearchIndex,
@@ -33,6 +34,7 @@ impl RuntimeThreadRole {
     pub fn label(self) -> &'static str {
         match self {
             Self::LauncherUi => "launcher-ui",
+            Self::InputReader => "input-reader",
             Self::CatalogWorker => "catalog-worker",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
@@ -58,6 +60,7 @@ impl RuntimeThreadRole {
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
             Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1),
+            Self::InputReader => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu0),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
@@ -440,6 +443,7 @@ mod tests {
     fn every_role_has_the_expected_production_policy() {
         let expected = [
             (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Cpu1),
+            (RuntimeThreadRole::InputReader, -10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::CatalogForeground,

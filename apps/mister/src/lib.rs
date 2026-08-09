@@ -28,7 +28,7 @@ pub mod controller_db;
 pub mod crash_report;
 pub mod diagnostic_identity;
 mod fallible_log;
-pub use mister_magik_core::{input_info, input_repeat, input_state};
+pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
 pub use mister_magik_mister_runtime::framebuffer;
 pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;

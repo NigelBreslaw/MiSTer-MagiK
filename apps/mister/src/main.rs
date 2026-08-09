@@ -110,6 +110,7 @@ use mister_magik_mister_runtime::fpga;
 #[cfg(feature = "ui")]
 mod frame_profile;
 mod input;
+mod input_hub;
 mod latch_failure_report;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
@@ -140,7 +141,7 @@ mod video_player;
 use mister_magik_mister_runtime::vt;
 
 pub use mister_magik_fb::{
-    arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer,
+    arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
     input_repeat, input_state, launch_preparation, launcher, launcher_taxonomy, library_db,
     licenses, media_update, particle_engine, preview_worker, return_catalog_capsule, setup_nav,
     spring_animation,

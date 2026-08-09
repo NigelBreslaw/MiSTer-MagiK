@@ -6098,7 +6098,7 @@ pub(super) fn run_launcher_loop(
                 startup_status,
                 &launch_return_session,
             );
-            std::thread::sleep(launcher_idle_sleep_duration(&pacer));
+            pad.wait_for_input(launcher_idle_sleep_duration(&pacer));
             continue;
         }
 
