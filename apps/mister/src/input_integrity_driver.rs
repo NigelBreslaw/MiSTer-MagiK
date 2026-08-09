@@ -122,7 +122,9 @@ impl UinputDevice {
             .write(true)
             .open("/dev/uinput")?;
         ioctl_int(&file, UI_SET_EVBIT, i32::from(EV_KEY))?;
-        ioctl_int(&file, UI_SET_KEYBIT, i32::from(key_code))?;
+        for code in [1_u16, 28, 30, 48, 103, 105, 106, 108, 139, key_code] {
+            ioctl_int(&file, UI_SET_KEYBIT, i32::from(code))?;
+        }
         let mut descriptor = [0_u8; UINPUT_USER_DEV_SIZE];
         let name = b"MiSTer MagiK input integrity\0";
         descriptor[..name.len()].copy_from_slice(name);
