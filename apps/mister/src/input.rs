@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::input_event::DeviceInstanceId;
 use crate::input_event::InputBatch;
-use crate::input_hub::InputHub;
+use crate::input_hub::{DrainedInput, InputHub, InputObservation, InputWaitOutcome};
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
 
@@ -373,20 +373,21 @@ impl PadPool {
         self.user_activity
     }
 
-    pub fn wait_for_input(&self, timeout: Duration) {
+    pub fn wait_for_input(&self, after: InputObservation, timeout: Duration) -> InputWaitOutcome {
         if let Some(hub) = &self.input_hub {
-            hub.wait_for_input(timeout);
+            hub.wait_for_change(after, timeout)
         } else {
             std::thread::sleep(timeout);
+            InputWaitOutcome::TimedOut
         }
     }
 
     /// Drain the sole production navigation source. Raw devices remain available
     /// through the other accessors for setup and diagnostics only.
-    pub fn drain_input_batch(&self) -> InputBatch {
+    pub fn drain_input_batch(&self) -> DrainedInput {
         self.input_hub
             .as_ref()
-            .map_or_else(InputBatch::default, InputHub::drain)
+            .map_or_else(DrainedInput::default, InputHub::drain)
     }
 
     fn active_pad(&self) -> Option<&PadReader> {

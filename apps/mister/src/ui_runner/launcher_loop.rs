@@ -3888,7 +3888,9 @@ pub(super) fn run_launcher_loop(
     {
         // Input is drained before catalog, media, Slint, and rendering work so a
         // busy frame can delay dispatch but cannot erase an edge.
-        let input_batch = pad.drain_input_batch();
+        let drained_input = pad.drain_input_batch();
+        let input_observation = drained_input.observation;
+        let input_batch = drained_input.batch;
         input_integrity_trace.observe_batch(&input_batch);
         launcher_response_trace.observe_batch(&input_batch);
         if !input_batch.events.is_empty()
@@ -6892,7 +6894,7 @@ pub(super) fn run_launcher_loop(
                 startup_status,
                 &launch_return_session,
             );
-            pad.wait_for_input(launcher_idle_sleep_duration(&pacer));
+            let _ = pad.wait_for_input(input_observation, launcher_idle_sleep_duration(&pacer));
             continue;
         }
 

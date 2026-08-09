@@ -208,7 +208,6 @@ pub struct InputBatch {
     pub raw_events: Vec<RawControlEvent>,
     pub held_after_last: HeldState,
     pub topology: InputTopology,
-    pub activity_generation: u64,
     pub health: InputHealth,
 }
 

@@ -19,7 +19,11 @@ and health at one sequence watermark. Its bounded critical journal has 1,024
 records. Raw controller, keyboard, mouse, and analog observations are separate
 setup, activity, or diagnostic data; they cannot navigate the application.
 
-The UI loop drains the hub before catalog, media, Slint, or rendering work. One
+The UI loop drains the hub before catalog, media, Slint, or rendering work. The
+drain returns an opaque mailbox observation that the idle wait must present
+again. The wait sleeps only if no input, topology, or fault change occurred
+since that exact drain, so input arriving during frame work cannot become a
+lost wakeup. One
 `InputRouter` owns focus priority, press-to-release capture, context generations,
 source epochs, transition consumption, opposing-direction neutral locks, and menu
 repeat. Menu repeat is immediate, then 300 ms, then every 80 ms. Home and Arcade

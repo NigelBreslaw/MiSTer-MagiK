@@ -60,12 +60,15 @@ struct MailboxState {
     events: VecDeque<InputEvent>,
     held: HeldState,
     topology: InputTopology,
-    activity_generation: u64,
     health: InputHealth,
     wake_generation: u64,
 }
 
 impl MailboxState {
+    fn note_change(&mut self) {
+        self.wake_generation = self.wake_generation.wrapping_add(1);
+    }
+
     fn publish(&mut self, pending: crate::input_event::PendingInputEvent) -> bool {
         if self.events.len() >= JOURNAL_CAPACITY {
             self.health.overflow_count = self.health.overflow_count.saturating_add(1);
@@ -75,7 +78,7 @@ impl MailboxState {
             self.health.queue_depth = 0;
             self.held = HeldState::default();
             self.source_epoch.0 = self.source_epoch.0.saturating_add(1);
-            self.wake_generation = self.wake_generation.saturating_add(1);
+            self.note_change();
             return false;
         }
         self.next_sequence = self.next_sequence.saturating_add(1).max(1);
@@ -83,13 +86,13 @@ impl MailboxState {
         if self.held.apply_event(&event).is_err() {
             self.health.desync_count = self.health.desync_count.saturating_add(1);
             self.health.protocol = InputProtocolHealth::Unhealthy;
+            self.note_change();
             return false;
         }
         self.events.push_back(event);
         self.health.queue_depth = self.events.len();
         self.health.queue_high_water = self.health.queue_high_water.max(self.events.len());
-        self.activity_generation = self.activity_generation.saturating_add(1);
-        self.wake_generation = self.wake_generation.saturating_add(1);
+        self.note_change();
         true
     }
 
@@ -102,7 +105,7 @@ impl MailboxState {
             generation,
         }];
         self.topology.revision = self.topology.revision.saturating_add(1);
-        self.wake_generation = self.wake_generation.saturating_add(1);
+        self.note_change();
         self.source_epoch
     }
 
@@ -115,8 +118,23 @@ impl MailboxState {
         self.topology.devices.clear();
         self.source_epoch.0 = self.source_epoch.0.saturating_add(1).max(1);
         self.topology.revision = self.topology.revision.saturating_add(1);
-        self.wake_generation = self.wake_generation.saturating_add(1);
+        self.note_change();
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InputObservation(u64);
+
+#[derive(Debug, Default)]
+pub struct DrainedInput {
+    pub batch: InputBatch,
+    pub observation: InputObservation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InputWaitOutcome {
+    Changed,
+    TimedOut,
 }
 
 pub struct InputHub {
@@ -137,17 +155,17 @@ impl InputHub {
             .spawn(move || capture_loop(thread_mailbox))
             .ok();
         if join.is_none() {
-            mailbox
+            let mut state = mailbox
                 .state
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .health
-                .protocol = InputProtocolHealth::Unhealthy;
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.health.protocol = InputProtocolHealth::Unhealthy;
+            state.note_change();
         }
         Self { mailbox, join }
     }
 
-    pub fn drain(&self) -> InputBatch {
+    pub fn drain(&self) -> DrainedInput {
         let mut state = self
             .mailbox
             .state
@@ -155,37 +173,57 @@ impl InputHub {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let events: Vec<_> = state.events.drain(..).collect();
         state.health.queue_depth = 0;
-        InputBatch {
-            source_epoch: state.source_epoch,
-            first_sequence: events.first().map(|event| event.sequence),
-            last_sequence: events.last().map(|event| event.sequence),
-            events,
-            held_after_last: state.held,
-            topology: state.topology.clone(),
-            activity_generation: state.activity_generation,
-            health: state.health.clone(),
-            ..InputBatch::default()
+        DrainedInput {
+            batch: InputBatch {
+                source_epoch: state.source_epoch,
+                first_sequence: events.first().map(|event| event.sequence),
+                last_sequence: events.last().map(|event| event.sequence),
+                events,
+                held_after_last: state.held,
+                topology: state.topology.clone(),
+                health: state.health.clone(),
+                ..InputBatch::default()
+            },
+            observation: InputObservation(state.wake_generation),
         }
     }
 
-    pub fn wait_for_input(&self, timeout: Duration) {
+    pub fn wait_for_change(&self, after: InputObservation, timeout: Duration) -> InputWaitOutcome {
         let state = self
             .mailbox
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let generation = state.wake_generation;
-        let _ = self
+        if state.wake_generation != after.0 {
+            return InputWaitOutcome::Changed;
+        }
+        let (state, wait) = self
             .mailbox
             .wake
-            .wait_timeout_while(state, timeout, |state| state.wake_generation == generation);
+            .wait_timeout_while(state, timeout, |state| state.wake_generation == after.0)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.wake_generation != after.0 {
+            InputWaitOutcome::Changed
+        } else {
+            debug_assert!(wait.timed_out());
+            InputWaitOutcome::TimedOut
+        }
+    }
+
+    fn signal_shutdown(&self) {
+        self.mailbox.shutdown.store(true, Ordering::Release);
+        self.mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .note_change();
+        self.mailbox.wake.notify_all();
     }
 }
 
 impl Drop for InputHub {
     fn drop(&mut self) {
-        self.mailbox.shutdown.store(true, Ordering::Release);
-        self.mailbox.wake.notify_all();
+        self.signal_shutdown();
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
@@ -304,15 +342,6 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
                 if event_type != EV_KEY {
                     continue;
                 }
-                {
-                    let mut state = mailbox
-                        .state
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    state.activity_generation = state.activity_generation.saturating_add(1);
-                    state.wake_generation = state.wake_generation.saturating_add(1);
-                }
-                mailbox.wake.notify_all();
                 if value == 2 {
                     continue;
                 }
@@ -443,6 +472,28 @@ pub(crate) fn monotonic_us() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Barrier;
+    use std::time::Instant;
+
+    fn test_hub() -> InputHub {
+        InputHub {
+            mailbox: Arc::new(InputMailbox {
+                state: Mutex::new(MailboxState::default()),
+                wake: Condvar::new(),
+                shutdown: AtomicBool::new(false),
+            }),
+            join: None,
+        }
+    }
+
+    fn change_mailbox(hub: &InputHub) {
+        hub.mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .note_change();
+        hub.mailbox.wake.notify_all();
+    }
 
     #[test]
     fn proxy_keys_map_to_logical_actions() {
@@ -516,5 +567,116 @@ mod tests {
         assert_eq!(state.health.protocol, InputProtocolHealth::Unhealthy);
         assert_eq!(state.health.overflow_count, 1);
         assert!(state.events.is_empty());
+    }
+
+    #[test]
+    fn change_between_drain_and_wait_is_observed() {
+        let hub = test_hub();
+        let drained = hub.drain();
+        change_mailbox(&hub);
+
+        assert_eq!(
+            hub.wait_for_change(drained.observation, Duration::from_secs(1)),
+            InputWaitOutcome::Changed
+        );
+    }
+
+    #[test]
+    fn change_during_wait_wakes_the_waiter() {
+        let hub = Arc::new(test_hub());
+        let observation = hub.drain().observation;
+        let ready = Arc::new(Barrier::new(2));
+        let waiter_hub = Arc::clone(&hub);
+        let waiter_ready = Arc::clone(&ready);
+        let waiter = thread::spawn(move || {
+            waiter_ready.wait();
+            waiter_hub.wait_for_change(observation, Duration::from_secs(1))
+        });
+        ready.wait();
+        change_mailbox(&hub);
+
+        assert_eq!(waiter.join().unwrap(), InputWaitOutcome::Changed);
+    }
+
+    #[test]
+    fn unchanged_mailbox_times_out_after_spurious_notification() {
+        let hub = Arc::new(test_hub());
+        let observation = hub.drain().observation;
+        let notifier_hub = Arc::clone(&hub);
+        let notifier = thread::spawn(move || {
+            thread::yield_now();
+            notifier_hub.mailbox.wake.notify_all();
+        });
+        let started = Instant::now();
+
+        assert_eq!(
+            hub.wait_for_change(observation, Duration::from_millis(10)),
+            InputWaitOutcome::TimedOut
+        );
+        assert!(started.elapsed() >= Duration::from_millis(5));
+        notifier.join().unwrap();
+    }
+
+    #[test]
+    fn topology_fault_overflow_and_shutdown_each_change_observation() {
+        let hub = test_hub();
+        let first = hub.drain().observation;
+        hub.mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_proxy_open(1, "/dev/input/event-test");
+        let second = hub.drain().observation;
+        assert_ne!(first, second);
+
+        hub.mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .mark_proxy_lost();
+        let third = hub.drain().observation;
+        assert_ne!(second, third);
+
+        {
+            let mut state = hub
+                .mailbox
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.events.resize(
+                JOURNAL_CAPACITY,
+                InputEvent {
+                    source: InputSourceId {
+                        kind: InputSourceKind::Preview,
+                        instance: 1,
+                    },
+                    source_epoch: SourceEpoch(1),
+                    sequence: 1,
+                    press_id: crate::input_event::PressId(1),
+                    captured_at_us: 1,
+                    action: LogicalAction::Activate,
+                    phase: InputPhase::Pressed,
+                },
+            );
+            state.publish(crate::input_event::PendingInputEvent {
+                source: InputSourceId {
+                    kind: InputSourceKind::Preview,
+                    instance: 1,
+                },
+                source_epoch: SourceEpoch(1),
+                press_id: crate::input_event::PressId(2),
+                captured_at_us: 2,
+                action: LogicalAction::Activate,
+                phase: InputPhase::Pressed,
+            });
+        }
+        let fourth = hub.drain().observation;
+        assert_ne!(third, fourth);
+
+        hub.signal_shutdown();
+        assert_eq!(
+            hub.wait_for_change(fourth, Duration::from_secs(1)),
+            InputWaitOutcome::Changed
+        );
     }
 }
