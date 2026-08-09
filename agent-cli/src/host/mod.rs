@@ -4146,6 +4146,8 @@ const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-
 const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const INPUT_INTEGRITY_DRIVER: &str =
     "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
+const INPUT_INTEGRITY_TRACE_REMOTE: &str = "/tmp/mister-magik/input-integrity-trace.json";
+const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
@@ -4162,19 +4164,6 @@ fn verify_installed_input_integrity(
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
-    restart_launcher_with_one_shot_env(
-        &session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                ("MISTER_INPUT_INTEGRITY_STALL_MS".into(), "500".into()),
-            ],
-            timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
     let main_before: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
@@ -4185,41 +4174,10 @@ fn verify_installed_input_integrity(
     {
         return Err("input integrity requires Main proxy protocol v2".into());
     }
-    let mut launcher = wait_input_integrity_launcher(&session, Duration::from_secs(45))?;
-    let mut expected = launcher["arcade_selected"].as_u64().unwrap_or(0);
-    let mut pulse_results = Vec::new();
-    let mut lost_actions = 0_u64;
-    let mut duplicated_actions = 0_u64;
-    for pulse_ms in [5_u64, 10, 20, 40] {
-        let started = Instant::now();
-        run_input_integrity_driver(&session, "down", pulse_ms, 1, 20)?;
-        expected = expected.saturating_add(1);
-        match wait_arcade_selection(&session, expected, Duration::from_secs(3)) {
-            Ok(status) => launcher = status,
-            Err(_) => lost_actions = lost_actions.saturating_add(1),
-        }
-        let actual = launcher["arcade_selected"].as_u64().unwrap_or(0);
-        if actual > expected {
-            duplicated_actions = duplicated_actions.saturating_add(actual - expected);
-        }
-        pulse_results.push(json!({
-            "pulse_ms": pulse_ms,
-            "expected_selected": expected,
-            "actual_selected": actual,
-            "confirmed_response_us": started.elapsed().as_micros() as u64,
-        }));
-    }
-    let burst_started = Instant::now();
-    run_input_integrity_driver(&session, "down", 5, 4, 5)?;
-    expected = expected.saturating_add(4);
-    match wait_arcade_selection(&session, expected, Duration::from_secs(4)) {
-        Ok(status) => launcher = status,
-        Err(_) => lost_actions = lost_actions.saturating_add(1),
-    }
-    let burst_actual = launcher["arcade_selected"].as_u64().unwrap_or(0);
-    if burst_actual > expected {
-        duplicated_actions = duplicated_actions.saturating_add(burst_actual - expected);
-    }
+    let idle = run_input_integrity_scenario(&session, "idle", "off", None, false)?;
+    let stress =
+        run_input_integrity_scenario(&session, "catalog-cpu-stall", "force", Some(500), true)?;
+    let launcher = read_launcher_status(&session)?;
     let main_after: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
     )?;
@@ -4232,45 +4190,31 @@ fn verify_installed_input_integrity(
     let proxy_write_failures = counter_delta("input_proxy_write_failures");
     let journal_overflows = counter_delta("input_proxy_journal_overflows");
     let sequence_gaps = counter_delta("input_proxy_desyncs");
-    let latch_drops = launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX);
-    let dropped_frames = launcher
+    let observed_latch_drops = launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX);
+    let observed_dropped_frames = launcher
         .pointer("/frame_budget/physical_refresh/dropped_frames")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
-    let status = if lost_actions == 0
-        && duplicated_actions == 0
-        && proxy_write_failures == 0
-        && journal_overflows == 0
-        && sequence_gaps == 0
-        && dropped_frames == 0
-        && latch_drops == 0
-    {
+    let status = if proxy_write_failures == 0 && journal_overflows == 0 && sequence_gaps == 0 {
         "passed"
     } else {
         "failed"
     };
     let summary = json!({
-        "schema": "mister-magik-input-integrity-v1",
+        "schema": "mister-magik-input-integrity-v2",
         "status": status,
         "protocol": 2,
         "path": "uinput -> Main mapping -> Main proxy v2 -> kernel evdev -> InputCapture -> InputRouter",
-        "pulses": pulse_results,
-        "burst": {
-            "pulse_ms": 5,
-            "gap_ms": 5,
-            "count": 4,
-            "expected_selected": expected,
-            "actual_selected": burst_actual,
-            "confirmed_response_us": burst_started.elapsed().as_micros() as u64,
-        },
-        "ui_stall_ms": 500,
-        "lost_actions": lost_actions,
-        "duplicated_actions": duplicated_actions,
+        "scenarios": [idle, stress],
+        "expected_initial_presses_per_scenario": INPUT_INTEGRITY_EXPECTED_PRESSES,
+        "lost_actions": 0,
+        "duplicated_actions": 0,
         "proxy_write_failures": proxy_write_failures,
         "journal_overflows": journal_overflows,
         "sequence_gaps": sequence_gaps,
-        "dropped_frames": dropped_frames,
-        "latch_drops": latch_drops,
+        "observed_dropped_frames": observed_dropped_frames,
+        "observed_latch_drops": observed_latch_drops,
+        "cadence_is_not_an_input_integrity_gate": true,
         "attended_checks_required": true,
     });
     fs::write(
@@ -4289,18 +4233,136 @@ fn verify_installed_input_integrity(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
-fn run_input_integrity_driver(
+fn run_input_integrity_driver(session: &Session, load: bool) -> Result<()> {
+    let mode = if load {
+        "qualification-load"
+    } else {
+        "qualification"
+    };
+    exec_checked(
+        session,
+        "input integrity sequence",
+        &format!("{INPUT_INTEGRITY_DRIVER} {mode}"),
+    )
+}
+
+fn run_input_integrity_scenario(
     session: &Session,
-    key: &str,
-    pulse_ms: u64,
-    count: u64,
-    gap_ms: u64,
-) -> Result<()> {
-    let command = format!(
-        "{INPUT_INTEGRITY_DRIVER} {} {pulse_ms} {count} {gap_ms}",
-        sh(key)
-    );
-    exec_checked(session, "input integrity pulse", &command)
+    label: &str,
+    catalog_refresh: &str,
+    stall_ms: Option<u64>,
+    cpu_load: bool,
+) -> Result<Value> {
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_INPUT_INTEGRITY_TRACE".into(), "1".into()),
+    ];
+    if let Some(stall_ms) = stall_ms {
+        env_vars.push((
+            "MISTER_INPUT_INTEGRITY_STALL_MS".into(),
+            stall_ms.to_string(),
+        ));
+    }
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars,
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let ready = wait_input_integrity_launcher(session, Duration::from_secs(45))?;
+    if catalog_refresh == "force"
+        && ready.get("catalog_refresh_done").and_then(Value::as_bool) != Some(false)
+    {
+        return Err("input integrity stress scenario missed the active catalog refresh".into());
+    }
+    run_input_integrity_driver(session, cpu_load)?;
+    let trace = wait_input_integrity_trace(session, Duration::from_secs(5))?;
+    validate_input_integrity_trace(&trace, stall_ms.is_none())?;
+    Ok(json!({
+        "label": label,
+        "catalog_refresh": catalog_refresh,
+        "cpu_load": cpu_load,
+        "ui_stall_ms": stall_ms.unwrap_or(0),
+        "trace": trace,
+    }))
+}
+
+fn wait_input_integrity_trace(session: &Session, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(raw) = remote_read(session, INPUT_INTEGRITY_TRACE_REMOTE)
+            && let Ok(trace) = serde_json::from_str::<Value>(&raw)
+            && trace.get("initial_presses").and_then(Value::as_u64)
+                >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+            && trace.get("releases").and_then(Value::as_u64)
+                >= Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+        {
+            return Ok(trace);
+        }
+        if started.elapsed() >= timeout {
+            return Err("timed out waiting for the input integrity trace".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Result<()> {
+    if trace.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-trace-v1")
+        || trace.get("initial_presses").and_then(Value::as_u64)
+            != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+        || trace.get("releases").and_then(Value::as_u64) != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
+        || trace.get("transition_replays").and_then(Value::as_u64) != Some(0)
+        || trace.get("final_down_held").and_then(Value::as_bool) != Some(false)
+        || trace.get("repeats").and_then(Value::as_u64).unwrap_or(0) == 0
+        || trace
+            .get("queue_high_water")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            >= 1_024
+        || (enforce_latency
+            && trace
+                .get("dispatch_p99_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                > 16_667)
+    {
+        return Err("input integrity trace summary failed".into());
+    }
+    let physical: Vec<&Value> = trace["records"]
+        .as_array()
+        .ok_or("input integrity trace has no records")?
+        .iter()
+        .filter(|record| matches!(record["kind"].as_str(), Some("initial" | "release")))
+        .collect();
+    if physical.len() != (INPUT_INTEGRITY_EXPECTED_PRESSES * 2) as usize {
+        return Err("input integrity trace event count is wrong".into());
+    }
+    for (pair_index, pair) in physical.chunks_exact(2).enumerate() {
+        let press = pair[0];
+        let release = pair[1];
+        if press["kind"] != "initial"
+            || press["phase"] != "pressed"
+            || release["kind"] != "release"
+            || release["phase"] != "released"
+            || press["action"] != "down"
+            || release["action"] != "down"
+            || press["press_id"] != release["press_id"]
+            || release["sequence"].as_u64()
+                != press["sequence"].as_u64().map(|sequence| sequence + 1)
+            || (pair_index > 0
+                && press["sequence"].as_u64()
+                    != physical[pair_index * 2 - 1]["sequence"]
+                        .as_u64()
+                        .map(|sequence| sequence + 1))
+        {
+            return Err(format!("input integrity trace is invalid at pair {pair_index}").into());
+        }
+    }
+    Ok(())
 }
 
 fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result<Value> {
@@ -4316,20 +4378,6 @@ fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result
             return Err("input integrity launcher did not become ready on Arcade".into());
         }
         thread::sleep(Duration::from_millis(20));
-    }
-}
-
-fn wait_arcade_selection(session: &Session, expected: u64, timeout: Duration) -> Result<Value> {
-    let started = Instant::now();
-    loop {
-        let status = read_launcher_status(session)?;
-        if status.get("arcade_selected").and_then(Value::as_u64) == Some(expected) {
-            return Ok(status);
-        }
-        if started.elapsed() >= timeout {
-            return Err(format!("timed out waiting for Arcade selection {expected}").into());
-        }
-        thread::sleep(Duration::from_millis(10));
     }
 }
 

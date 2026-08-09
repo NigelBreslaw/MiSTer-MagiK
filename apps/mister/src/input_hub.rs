@@ -15,7 +15,7 @@ use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -426,13 +426,18 @@ fn parse_input_event(bytes: &[u8; INPUT_EVENT_SIZE]) -> (u16, u16, i32) {
     )
 }
 
-fn monotonic_us() -> u64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_micros()
-        .min(u128::from(u64::MAX)) as u64
+pub(crate) fn monotonic_us() -> u64 {
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let result = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) };
+    if result != 0 {
+        return 0;
+    }
+    (value.tv_sec as u64)
+        .saturating_mul(1_000_000)
+        .saturating_add((value.tv_nsec as u64) / 1_000)
 }
 
 #[cfg(test)]

@@ -5,6 +5,8 @@
 //! forwards resolved actions through its production proxy v2 path.
 
 use std::io::{self, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const EV_SYN: u16 = 0;
@@ -22,10 +24,25 @@ struct DriverPlan {
     pulse_ms: u64,
     gap_ms: u64,
     count: u32,
+    qualification: bool,
+    cpu_load: bool,
 }
 
 impl DriverPlan {
     fn parse(args: &[String]) -> Result<Self, String> {
+        if matches!(
+            args.first().map(String::as_str),
+            Some("qualification" | "qualification-load")
+        ) {
+            return Ok(Self {
+                key_code: 108,
+                pulse_ms: 0,
+                gap_ms: 0,
+                count: 109,
+                qualification: true,
+                cpu_load: args.first().map(String::as_str) == Some("qualification-load"),
+            });
+        }
         let key_code = match args.first().map(String::as_str) {
             Some("up") => 103,
             Some("left") => 105,
@@ -44,6 +61,8 @@ impl DriverPlan {
             pulse_ms,
             gap_ms,
             count,
+            qualification: false,
+            cpu_load: false,
         })
     }
 }
@@ -81,6 +100,8 @@ pub(crate) fn run(args: &[String]) {
                 "pulse_ms": plan.pulse_ms,
                 "gap_ms": plan.gap_ms,
                 "count": plan.count,
+                "qualification": plan.qualification,
+                "cpu_load": plan.cpu_load,
             })
         ),
         Err(error) => {
@@ -116,17 +137,46 @@ impl UinputDevice {
     }
 
     fn run(&mut self, plan: DriverPlan) -> io::Result<()> {
+        if plan.qualification {
+            let stop = Arc::new(AtomicBool::new(false));
+            let load_thread = plan.cpu_load.then(|| {
+                let stop = Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::hint::spin_loop();
+                    }
+                })
+            });
+            for index in 0..100 {
+                self.pulse(plan.key_code, [5, 10, 20, 40][index % 4])?;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            for _ in 0..8 {
+                self.pulse(plan.key_code, 5)?;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            self.pulse(plan.key_code, 500)?;
+            stop.store(true, Ordering::Relaxed);
+            if let Some(thread) = load_thread {
+                let _ = thread.join();
+            }
+            return Ok(());
+        }
         for index in 0..plan.count {
-            self.emit(EV_KEY, plan.key_code, 1)?;
-            self.emit(EV_SYN, SYN_REPORT, 0)?;
-            std::thread::sleep(Duration::from_millis(plan.pulse_ms));
-            self.emit(EV_KEY, plan.key_code, 0)?;
-            self.emit(EV_SYN, SYN_REPORT, 0)?;
+            self.pulse(plan.key_code, plan.pulse_ms)?;
             if index + 1 < plan.count {
                 std::thread::sleep(Duration::from_millis(plan.gap_ms));
             }
         }
         Ok(())
+    }
+
+    fn pulse(&mut self, key_code: u16, duration_ms: u64) -> io::Result<()> {
+        self.emit(EV_KEY, key_code, 1)?;
+        self.emit(EV_SYN, SYN_REPORT, 0)?;
+        std::thread::sleep(Duration::from_millis(duration_ms));
+        self.emit(EV_KEY, key_code, 0)?;
+        self.emit(EV_SYN, SYN_REPORT, 0)
     }
 
     fn emit(&mut self, event_type: u16, code: u16, value: i32) -> io::Result<()> {
@@ -184,8 +234,20 @@ mod tests {
                 pulse_ms: 5,
                 gap_ms: 10,
                 count: 8,
+                qualification: false,
+                cpu_load: false,
             }
         );
         assert!(DriverPlan::parse(&["right", "0", "1", "1"].map(str::to_string)).is_err());
+        assert!(
+            DriverPlan::parse(&["qualification".to_string()])
+                .unwrap()
+                .qualification
+        );
+        assert!(
+            DriverPlan::parse(&["qualification-load".to_string()])
+                .unwrap()
+                .cpu_load
+        );
     }
 }

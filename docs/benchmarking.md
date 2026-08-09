@@ -4,6 +4,9 @@ Input loss and latency qualification uses the typed
 `scripts/agent benchmark input-integrity` workflow described in
 [Unified input](input.md). Do not substitute raw SSH input injection: the gate
 must traverse Main's real mapping, aggregation, proxy-v2, and kernel path.
+The fixed gate compares a bounded launcher event trace against the exact injected
+sequence in idle and catalog/CPU/stall scenarios. Intentional UI stalls are input
+correctness stress, not rendering-cadence qualification.
 
 `scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It

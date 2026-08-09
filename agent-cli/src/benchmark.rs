@@ -537,7 +537,7 @@ fn execute_input_integrity(
 }
 
 fn evaluate_input_integrity_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-v1")
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary.get("protocol").and_then(Value::as_u64) != Some(2)
         || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
@@ -545,8 +545,6 @@ fn evaluate_input_integrity_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("proxy_write_failures").and_then(Value::as_u64) != Some(0)
         || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
         || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
-        || summary.get("dropped_frames").and_then(Value::as_u64) != Some(0)
-        || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
     {
         return Err("input integrity qualification did not satisfy the zero-loss gates".into());
     }
@@ -1357,7 +1355,7 @@ mod tests {
     #[test]
     fn input_integrity_requires_every_zero_loss_gate() {
         let passing = json!({
-            "schema": "mister-magik-input-integrity-v1",
+            "schema": "mister-magik-input-integrity-v2",
             "status": "passed",
             "protocol": 2,
             "lost_actions": 0,
@@ -1365,8 +1363,6 @@ mod tests {
             "proxy_write_failures": 0,
             "journal_overflows": 0,
             "sequence_gaps": 0,
-            "dropped_frames": 0,
-            "latch_drops": 0,
         });
         evaluate_input_integrity_summary(&passing).unwrap();
         let mut failed = passing;

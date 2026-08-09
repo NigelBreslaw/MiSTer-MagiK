@@ -26,6 +26,11 @@ repeat. Menu repeat is immediate, then 300 ms, then every 80 ms. Home and Arcade
 retain their continuous motion policies. Integrity faults clear router state and
 require a neutral batch before recovery.
 
+Events are routed and applied one at a time. Focus is recomputed after each
+event, so a modal opened by one event can receive the next event from the same
+captured batch. Reducers receive ordered actions and held ticks; production
+navigation does not reconstruct edges from per-frame snapshots.
+
 Focus priority is: disabled input, screensaver, lifecycle dialog, controller
 setup, launcher modal, transition, diagnostic view, then the active screen.
 Every accepted press remains captured by the context that received it until its
@@ -34,6 +39,11 @@ matching release, even if focus changes in between.
 Automation and macOS preview input use the same logical event, phase, press ID,
 source epoch, and router contract. The external automation request and response
 schemas and its presented-frame acknowledgement remain unchanged.
+
+Controller setup continues to use raw diagnostic input, but all setup reads and
+writes target a stable physical-plug ID plus a connection generation. A
+disconnect invalidates that exact target and cancels setup; reconnecting requires
+a fresh press and cannot apply a stale write to a reordered `jsN` node.
 
 ## Qualification
 
@@ -44,13 +54,20 @@ Dev commit:
 scripts/agent benchmark input-integrity
 ```
 
-The gate creates a bounded qualification-only uinput device. Linux delivers its
-events to Main, Main applies the real mapping and contributor aggregation, and
-the resulting actions travel through proxy v2, kernel evdev, `InputCapture`, and
-`InputRouter`. The run exercises 5, 10, 20, and 40 ms pulses, a burst, and a
-deliberate 500 ms UI stall. Evidence is rejected for any lost or duplicated
-action, proxy write failure, journal overflow, sequence gap, dropped frame, or
-latch drop. The JSON report is stored under
+The gate keeps one bounded qualification-only uinput device alive for each
+scenario. Linux delivers 100 taps cycling through 5, 10, 20, and 40 ms, a rapid
+burst, and a 500 ms hold to Main. Main applies the real mapping and contributor
+aggregation, and the resulting actions travel through proxy v2, kernel evdev,
+`InputCapture`, and `InputRouter`. It runs once idle and once during a forced
+catalog refresh, CPU contention, and a deliberate 500 ms UI stall.
+
+The launcher records a bounded event trace. The gate requires the exact ordered
+press/release pairs, matching press IDs, final neutral state, working menu
+repeat, bounded queue use, healthy idle dispatch latency, and zero proxy write
+failures, journal overflows, or sequence gaps. The intentional stall may delay
+dispatch; it may not lose or duplicate input. Rendering cadence is reported but
+is not an input-correctness gate—cadence qualification belongs to the rendering
+benchmarks. The JSON report is stored under
 `build/agent-benchmarks/input-integrity/`.
 
 The automated gate does not replace the attended controller pass. Before

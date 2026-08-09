@@ -1131,6 +1131,144 @@ struct LibraryChangedDialogTestDriver {
     )>,
 }
 
+const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trace.json";
+const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
+
+struct InputIntegrityTrace {
+    enabled: bool,
+    records: VecDeque<serde_json::Value>,
+    initial_presses: u64,
+    releases: u64,
+    repeats: u64,
+    transition_replays: u64,
+    queue_high_water: usize,
+    dispatch_latencies_us: Vec<u64>,
+    dirty: bool,
+    last_write: Instant,
+}
+
+impl InputIntegrityTrace {
+    fn from_env(now: Instant) -> Self {
+        let enabled = launcher_env_flag("MISTER_INPUT_INTEGRITY_TRACE");
+        if enabled {
+            let _ = std::fs::remove_file(INPUT_INTEGRITY_TRACE_PATH);
+        }
+        Self {
+            enabled,
+            records: VecDeque::new(),
+            initial_presses: 0,
+            releases: 0,
+            repeats: 0,
+            transition_replays: 0,
+            queue_high_water: 0,
+            dispatch_latencies_us: Vec::new(),
+            dirty: enabled,
+            last_write: now,
+        }
+    }
+
+    fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
+        if !self.enabled {
+            return;
+        }
+        self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
+        self.dirty = true;
+    }
+
+    fn record_outcome(&mut self, outcome: InputOutcome) {
+        if !self.enabled {
+            return;
+        }
+        match outcome {
+            InputOutcome::Dispatch { event, kind, .. } => self.record_dispatch(event, kind),
+            InputOutcome::Released { event, .. } => self.record_event(event, "release"),
+            _ => {}
+        }
+    }
+
+    fn record_dispatch(&mut self, event: InputEvent, kind: DispatchKind) {
+        if event.source.kind != InputSourceKind::MainProxy {
+            return;
+        }
+        match kind {
+            DispatchKind::Initial => self.initial_presses = self.initial_presses.saturating_add(1),
+            DispatchKind::Repeat => self.repeats = self.repeats.saturating_add(1),
+            DispatchKind::TransitionReplay => {
+                self.transition_replays = self.transition_replays.saturating_add(1)
+            }
+        }
+        let kind = match kind {
+            DispatchKind::Initial => "initial",
+            DispatchKind::Repeat => "repeat",
+            DispatchKind::TransitionReplay => "transition-replay",
+        };
+        self.record_event(event, kind);
+    }
+
+    fn record_event(&mut self, event: InputEvent, kind: &'static str) {
+        if event.source.kind != InputSourceKind::MainProxy {
+            return;
+        }
+        if event.phase == InputPhase::Released {
+            self.releases = self.releases.saturating_add(1);
+        }
+        let dispatch_at_us = crate::input_hub::monotonic_us();
+        let dispatch_latency_us = dispatch_at_us.saturating_sub(event.captured_at_us);
+        if kind != "repeat" {
+            self.dispatch_latencies_us.push(dispatch_latency_us);
+        }
+        if self.records.len() == INPUT_INTEGRITY_TRACE_LIMIT {
+            self.records.pop_front();
+        }
+        self.records.push_back(serde_json::json!({
+            "sequence": event.sequence,
+            "press_id": event.press_id.0,
+            "source_epoch": event.source_epoch.0,
+            "action": format!("{:?}", event.action).to_ascii_lowercase(),
+            "phase": match event.phase {
+                InputPhase::Pressed => "pressed",
+                InputPhase::Released => "released",
+            },
+            "kind": kind,
+            "captured_at_us": event.captured_at_us,
+            "dispatch_at_us": dispatch_at_us,
+            "dispatch_latency_us": dispatch_latency_us,
+        }));
+        self.dirty = true;
+    }
+
+    fn flush_if_due(&mut self, now: Instant, router: &InputRouter) {
+        if !self.enabled
+            || !self.dirty
+            || now.saturating_duration_since(self.last_write) < Duration::from_millis(50)
+        {
+            return;
+        }
+        let mut latencies = self.dispatch_latencies_us.clone();
+        latencies.sort_unstable();
+        let p99_index = latencies.len().saturating_sub(1) * 99 / 100;
+        let payload = serde_json::json!({
+            "schema": "mister-magik-input-integrity-trace-v1",
+            "initial_presses": self.initial_presses,
+            "releases": self.releases,
+            "repeats": self.repeats,
+            "transition_replays": self.transition_replays,
+            "final_down_held": router.action_held(LogicalAction::Down),
+            "queue_high_water": self.queue_high_water,
+            "dispatch_p99_us": latencies.get(p99_index).copied().unwrap_or(0),
+            "dispatch_max_us": latencies.last().copied().unwrap_or(0),
+            "records": self.records,
+        });
+        if let Some(parent) = std::path::Path::new(INPUT_INTEGRITY_TRACE_PATH).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::write(INPUT_INTEGRITY_TRACE_PATH, format!("{}\n", payload)).is_ok() {
+            self.dirty = false;
+            self.last_write = now;
+        }
+    }
+}
+
 impl LibraryChangedDialogTestDriver {
     fn from_env(start: Instant) -> Self {
         let choice = library_changed_test_dialog_choice_from_env(start);
@@ -2835,6 +2973,7 @@ pub(super) fn run_launcher_loop(
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (1..=1_000).contains(value));
+    let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -3564,6 +3703,7 @@ pub(super) fn run_launcher_loop(
         // Input is drained before catalog, media, Slint, and rendering work so a
         // busy frame can delay dispatch but cannot erase an edge.
         let input_batch = pad.drain_input_batch();
+        input_integrity_trace.observe_batch(&input_batch);
         if !input_batch.events.is_empty()
             && let Some(stall_ms) = input_integrity_stall.take()
         {
@@ -4763,7 +4903,9 @@ pub(super) fn run_launcher_loop(
                             ))
                             .unwrap_or(frame_now);
                     }
-                    match input_router.route_event(event, focus, frame_now) {
+                    let outcome = input_router.route_event(event, focus, frame_now);
+                    input_integrity_trace.record_outcome(outcome);
+                    match outcome {
                         InputOutcome::Dispatch { event, .. } => Some(event),
                         InputOutcome::Released { event, context, .. }
                             if context == input_router.context() =>
@@ -4787,14 +4929,16 @@ pub(super) fn run_launcher_loop(
                         | InputOutcome::Consumed { .. } => None,
                     }
                 } else if focus.target.kind != InputContextKind::Transition
-                    && let Some(InputOutcome::Dispatch { event, .. }) =
+                    && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
                         input_router.replay_next_transition(focus, frame_now)
                 {
+                    input_integrity_trace.record_outcome(outcome);
                     Some(event)
                 } else if focus.target.kind != InputContextKind::Transition
-                    && let Some(InputOutcome::Dispatch { event, .. }) =
+                    && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
                         input_router.tick_repeat(frame_now)
                 {
+                    input_integrity_trace.record_outcome(outcome);
                     Some(event)
                 } else {
                     final_input_tick = true;
@@ -5810,6 +5954,7 @@ pub(super) fn run_launcher_loop(
                     break;
                 }
             }
+            input_integrity_trace.flush_if_due(Instant::now(), &input_router);
 
             if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
                 nav.screen = screen;
