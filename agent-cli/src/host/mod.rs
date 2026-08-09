@@ -4391,7 +4391,7 @@ fn run_launcher_response_scenario(
             env_vars: vec![
                 ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-                ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
+                ("MISTER_HOME_SELECTED_INDEX".into(), "2".into()),
                 ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
             ],
             timeout_secs: 45,
@@ -4402,41 +4402,65 @@ fn run_launcher_response_scenario(
     wait_launcher_response_status(session, Duration::from_secs(45), |status| {
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && status.get("menu_id").and_then(Value::as_str) == Some("menu:root")
-            && status.get("selected_index").and_then(Value::as_u64) == Some(0)
+            && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
     })?;
-    run_launcher_response_driver(session, "home-rapid")?;
+    run_launcher_response_driver(session, "transition-right")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
+            && status.get("selected_item_id").and_then(Value::as_str)
+                == Some("menu:computers:acorn")
+    })?;
     thread::sleep(Duration::from_millis(350));
-    let home_rapid_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 3)?;
-    let home_focus_records = home_rapid_trace["records"]
+    run_launcher_response_driver(session, "computers-sweep")?;
+    thread::sleep(Duration::from_millis(350));
+    let computers_sweep_trace = wait_launcher_response_trace(session, Duration::from_secs(5), 10)?;
+    let computers_focus_records = computers_sweep_trace["records"]
         .as_array()
-        .ok_or("Home rapid-navigation trace has no records")?
+        .ok_or("Computers sweep trace has no records")?
         .iter()
         .filter(|record| {
             record.pointer("/before/screen").and_then(Value::as_str) == Some("home")
+                && record.pointer("/before/menu_id").and_then(Value::as_str)
+                    == Some("menu:computers")
                 && record.get("trigger").and_then(Value::as_str) == Some("initial")
                 && record.get("action").and_then(Value::as_str) == Some("right")
                 && record.get("disposition").and_then(Value::as_str) == Some("confirmed")
         })
         .collect::<Vec<_>>();
-    if home_focus_records.len() != 3 {
+    if computers_focus_records.len() != 8 {
         return Err(format!(
-            "Home rapid navigation confirmed {} of 3 expected focus changes",
-            home_focus_records.len()
+            "Computers sweep confirmed {} of 8 expected focus changes",
+            computers_focus_records.len()
         )
         .into());
     }
-    let home_confirmed_frames = home_focus_records
+    let computers_confirmed_frames = computers_focus_records
         .iter()
         .filter_map(|record| record.get("confirmed_frame").and_then(Value::as_u64))
         .collect::<Vec<_>>();
-    let home_confirmed_at_us = home_focus_records
+    let computers_confirmed_at_us = computers_focus_records
         .iter()
         .filter_map(|record| record.get("confirmed_at_us").and_then(Value::as_u64))
         .collect::<Vec<_>>();
-    let home_visible_dwell_us = home_confirmed_at_us
+    let computers_visible_dwell_us = computers_confirmed_at_us
         .windows(2)
         .map(|pair| pair[1].saturating_sub(pair[0]))
         .collect::<Vec<_>>();
+    let computers_selected_ids = computers_focus_records
+        .iter()
+        .filter_map(|record| {
+            record
+                .pointer("/after/selected_item_id")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    if computers_selected_ids.last().copied() != Some("menu:computers:other") {
+        return Err(format!(
+            "Computers sweep ended at {:?}, expected Other",
+            computers_selected_ids.last()
+        )
+        .into());
+    }
 
     restart_launcher_with_one_shot_env(
         session,
@@ -4540,15 +4564,16 @@ fn run_launcher_response_scenario(
         "queue_high_water": transition_trace["queue_high_water"]
             .as_u64()
             .unwrap_or(0)
-            .max(home_rapid_trace["queue_high_water"].as_u64().unwrap_or(0))
+            .max(computers_sweep_trace["queue_high_water"].as_u64().unwrap_or(0))
             .max(response_trace["queue_high_water"].as_u64().unwrap_or(0)),
-        "home_rapid": {
+        "computers_sweep": {
             "press_duration_ms": 40,
             "press_interval_ms": 100,
-            "confirmed_frames": home_confirmed_frames,
-            "confirmed_at_us": home_confirmed_at_us,
-            "visible_dwell_us": home_visible_dwell_us,
-            "trace": home_rapid_trace,
+            "selected_item_ids": computers_selected_ids,
+            "confirmed_frames": computers_confirmed_frames,
+            "confirmed_at_us": computers_confirmed_at_us,
+            "visible_dwell_us": computers_visible_dwell_us,
+            "trace": computers_sweep_trace,
         },
         "trace": {
             "transition": transition_trace,
