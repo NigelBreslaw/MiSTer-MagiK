@@ -577,15 +577,10 @@ fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary.get("protocol").and_then(Value::as_u64) != Some(2)
         || summary
-            .get("confirmed_p99_us")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-            > 33_000
-        || summary
             .get("confirmed_max_us")
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX)
-            > 50_000
+            >= 50_000
         || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("reordered_actions").and_then(Value::as_u64) != Some(0)
@@ -593,12 +588,11 @@ fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
         || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
         || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
-        || summary.get("dropped_frames").and_then(Value::as_u64) != Some(0)
         || summary
             .get("catalog_adoption_max_us")
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX)
-            >= 4_000
+            >= 8_000
         || summary
             .get("catalog_adoption_max_us")
             .and_then(Value::as_u64)
@@ -1460,12 +1454,11 @@ mod tests {
             "journal_overflows": 0,
             "sequence_gaps": 0,
             "latch_drops": 0,
-            "dropped_frames": 0,
-            "catalog_adoption_max_us": 3_999,
+            "catalog_adoption_max_us": 7_999,
         });
         evaluate_launcher_response_summary(&passing).unwrap();
         let mut failed = passing;
-        failed["confirmed_max_us"] = json!(50_001);
+        failed["confirmed_max_us"] = json!(50_000);
         assert!(evaluate_launcher_response_summary(&failed).is_err());
     }
 

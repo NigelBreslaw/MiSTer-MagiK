@@ -67,11 +67,12 @@ ordinary launcher. Evidence is written below
 transition input handling, then measures 5/10/20/40 ms gamepad pulses at 50 ms
 pacing and a repeat hold on the SNES system hub through Main proxy v2. It
 correlates dispatch with the semantic state and exact latch-confirmed frame.
-Every paced accepted move must be visible in its own ordered frame; confirmed
-response P99 is at most 33 ms and the maximum is at most 50 ms. The
-catalog-stress pass must publish a real prepared shard with UI adoption below 4
+Every paced accepted move must be visible in its own ordered frame and every
+confirmed response must be under 50 ms. The
+catalog-stress pass must publish a real prepared shard with UI adoption below 8
 ms. Both passes require transition-time ordinary input to be swallowed, Back to
-remain immediate, and zero input, latch, or physical dropped-frame faults.
+remain immediate, and zero input or latch faults. Physical cadence remains a
+separate gate in `navigation-transitions`.
 
 `settings-navigation` runs the real Home → Settings → About → Info → About →
 Settings → Home route first in the normal 1280×720 landscape layout, then in

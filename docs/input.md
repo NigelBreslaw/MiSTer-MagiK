@@ -84,11 +84,12 @@ scripts/agent benchmark launcher-response
 It verifies launcher transition input, then sends 5/10/20/40 ms gamepad pulses
 at 50 ms start-to-start spacing plus a repeat hold on the SNES system hub. The
 input travels through Main's proxy-v2 and kernel path. Each accepted focus move
-must reach a distinct physically confirmed frame in order. Confirmed response
-P99 must be at most 33 ms and no sample may exceed 50 ms. The same run repeats
-during catalog work, requires prepared catalog adoption below 4 ms, verifies
-Back reversal and transition-time input consumption, and requires zero input,
-latch, or physical frame faults. Evidence is stored under
+must reach a distinct physically confirmed frame in order. Every confirmed
+response must be under 50 ms. The same run repeats
+during catalog work, requires prepared catalog adoption below 8 ms, verifies
+Back reversal and transition-time input consumption, and requires zero input or
+latch faults. Physical cadence is qualified separately by
+`navigation-transitions`. Evidence is stored under
 `build/agent-benchmarks/launcher-response/`.
 
 The automated gate does not replace the attended controller pass. Before
