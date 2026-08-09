@@ -3,7 +3,9 @@
 
 //! Fixed real-screen Settings navigation benchmark route.
 
-use crate::input_state::PadState;
+use crate::input_event::{
+    InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
+};
 use crate::launcher::Screen;
 use crate::launcher_runtime::navigation_transition::{
     NavigationTransitionDirection, NavigationTransitionRoute,
@@ -76,16 +78,14 @@ enum BenchmarkButton {
 }
 
 impl BenchmarkButton {
-    fn pad_state(self) -> PadState {
-        let mut state = PadState::default();
+    const fn action(self) -> LogicalAction {
         match self {
-            Self::Up => state.dpad_up = true,
-            Self::Down => state.dpad_down = true,
-            Self::A => state.btn_a = true,
-            Self::B => state.btn_b = true,
-            Self::Home => state.btn_home = true,
+            Self::Up => LogicalAction::Up,
+            Self::Down => LogicalAction::Down,
+            Self::A => LogicalAction::Activate,
+            Self::B => LogicalAction::Back,
+            Self::Home => LogicalAction::Home,
         }
-        state
     }
 }
 
@@ -116,6 +116,9 @@ pub struct SettingsNavigationBenchmark {
     orientation_ready: bool,
     started: Instant,
     release_pending: bool,
+    active_press: Option<(BenchmarkButton, PressId)>,
+    next_sequence: u64,
+    next_press_id: u64,
     active: Option<SettingsNavigationRecord>,
     records: Vec<SettingsNavigationRecord>,
     failure: Option<&'static str>,
@@ -129,6 +132,9 @@ impl SettingsNavigationBenchmark {
             orientation_ready: true,
             started: Instant::now(),
             release_pending: false,
+            active_press: None,
+            next_sequence: 0,
+            next_press_id: 0,
             active: None,
             records: Vec::new(),
             failure: None,
@@ -173,13 +179,14 @@ impl SettingsNavigationBenchmark {
         }
     }
 
-    pub fn input_for(
+    pub fn event_for(
         &mut self,
         screen: Screen,
         settings_focused: bool,
         settings_selected: usize,
         full_screen_live: bool,
-    ) -> Option<PadState> {
+        captured_at_us: u64,
+    ) -> Option<InputEvent> {
         if !self.enabled || self.complete() || self.failed() {
             return None;
         }
@@ -189,10 +196,11 @@ impl SettingsNavigationBenchmark {
         }
         if self.release_pending {
             self.release_pending = false;
-            return Some(PadState::default());
+            let (button, press_id) = self.active_press.take()?;
+            return Some(self.input_event(button, press_id, InputPhase::Released, captured_at_us));
         }
         if !full_screen_live || self.active.is_some() || !self.orientation_ready {
-            return Some(PadState::default());
+            return None;
         }
         let leg_index = self.records.len() % SETTINGS_NAVIGATION_ROUTE.len();
         let button = match (leg_index, screen) {
@@ -213,10 +221,35 @@ impl SettingsNavigationBenchmark {
             }
             (2, Screen::About) => BenchmarkButton::A,
             (3, Screen::Info) | (4, Screen::About) | (5, Screen::Settings) => BenchmarkButton::B,
-            _ => return Some(PadState::default()),
+            _ => return None,
         };
         self.release_pending = true;
-        Some(button.pad_state())
+        self.next_press_id = self.next_press_id.saturating_add(1).max(1);
+        let press_id = PressId((1_u64 << 61) | self.next_press_id);
+        self.active_press = Some((button, press_id));
+        Some(self.input_event(button, press_id, InputPhase::Pressed, captured_at_us))
+    }
+
+    fn input_event(
+        &mut self,
+        button: BenchmarkButton,
+        press_id: PressId,
+        phase: InputPhase,
+        captured_at_us: u64,
+    ) -> InputEvent {
+        self.next_sequence = self.next_sequence.saturating_add(1).max(1);
+        InputEvent {
+            source: InputSourceId {
+                kind: InputSourceKind::Automation,
+                instance: 3,
+            },
+            source_epoch: SourceEpoch(1),
+            sequence: self.next_sequence,
+            press_id,
+            captured_at_us,
+            action: button.action(),
+            phase,
+        }
     }
 
     pub fn note_started(
@@ -386,19 +419,17 @@ mod tests {
         }
     }
 
-    fn pressed(state: &PadState) -> &'static str {
-        if state.dpad_up {
-            "up"
-        } else if state.dpad_down {
-            "down"
-        } else if state.btn_a {
-            "a"
-        } else if state.btn_b {
-            "b"
-        } else if state.btn_home {
-            "home"
-        } else {
-            "released"
+    fn pressed(event: &InputEvent) -> &'static str {
+        if event.phase == InputPhase::Released {
+            return "released";
+        }
+        match event.action {
+            LogicalAction::Up => "up",
+            LogicalAction::Down => "down",
+            LogicalAction::Activate => "a",
+            LogicalAction::Back => "b",
+            LogicalAction::Home => "home",
+            _ => "other",
         }
     }
 
@@ -406,15 +437,19 @@ mod tests {
     fn landscape_enters_settings_through_focus_and_activate() {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, false, 0, true).unwrap()),
+            pressed(
+                &benchmark
+                    .event_for(Screen::Home, false, 0, true, 1)
+                    .unwrap()
+            ),
             "up"
         );
         assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, true, 0, true).unwrap()),
+            pressed(&benchmark.event_for(Screen::Home, true, 0, true, 2).unwrap()),
             "released"
         );
         assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, true, 0, true).unwrap()),
+            pressed(&benchmark.event_for(Screen::Home, true, 0, true, 3).unwrap()),
             "a"
         );
     }
@@ -424,7 +459,11 @@ mod tests {
         let mut benchmark = SettingsNavigationBenchmark::new(true);
         benchmark.orientation_index = 1;
         assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, false, 0, true).unwrap()),
+            pressed(
+                &benchmark
+                    .event_for(Screen::Home, false, 0, true, 1)
+                    .unwrap()
+            ),
             "home"
         );
     }
@@ -498,13 +537,18 @@ mod tests {
             benchmark.take_orientation_change(Screen::Home, true),
             Some(ScreenOrientation::MonitorCounterclockwise)
         );
-        assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, false, 60, true).unwrap()),
-            "released"
+        assert!(
+            benchmark
+                .event_for(Screen::Home, false, 60, true, 1)
+                .is_none()
         );
         benchmark.note_orientation_presented(ScreenOrientation::MonitorCounterclockwise);
         assert_eq!(
-            pressed(&benchmark.input_for(Screen::Home, false, 61, true).unwrap()),
+            pressed(
+                &benchmark
+                    .event_for(Screen::Home, false, 61, true, 2)
+                    .unwrap()
+            ),
             "home"
         );
         for (offset, leg) in SETTINGS_NAVIGATION_ROUTE.into_iter().enumerate() {

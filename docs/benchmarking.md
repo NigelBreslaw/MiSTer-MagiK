@@ -1,5 +1,10 @@
 # Benchmarking policy
 
+Input loss and latency qualification uses the typed
+`scripts/agent benchmark input-integrity` workflow described in
+[Unified input](input.md). Do not substitute raw SSH input injection: the gate
+must traverse Main's real mapping, aggregation, proxy-v2, and kernel path.
+
 `scripts/agent benchmark [SCENARIO]` is the only agent-facing performance
 workflow. Scenarios are a closed typed registry rather than a flag matrix. It
 never builds, deploys, or replaces platform files. The fixed `cold-boot`
@@ -14,6 +19,7 @@ Supported scenarios:
 
 - `screensaver` (the default)
 - `cold-boot`
+- `input-integrity`
 - `particles`
 - `particle-demo-40k`
 - `particle-capacity`

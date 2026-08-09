@@ -713,6 +713,7 @@ mod tests {
             "launch-return",
             "launch-return-fallback",
             "modal-input",
+            "input-integrity",
             "cold-boot",
             "search",
             "streamline",

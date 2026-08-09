@@ -35,6 +35,7 @@ enum BenchmarkProfile {
     LaunchReturn,
     LaunchReturnFallback,
     ModalInput,
+    InputIntegrity,
     ColdBoot,
     NavigationTransitions,
     SettingsNavigation,
@@ -79,6 +80,7 @@ impl BenchmarkDevice for DeviceClient {
                 device.profile_launch_return(&output_dir, true)
             }
             BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
+            BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
             BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
@@ -173,6 +175,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::ModalInput => {
             execute_modal_input(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::InputIntegrity => {
+            execute_input_integrity(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::ColdBoot => {
             execute_cold_boot(&mut device, manifest, output_dir, reporter)
@@ -353,6 +358,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LaunchReturn
         | BenchmarkScenario::LaunchReturnFallback
         | BenchmarkScenario::ModalInput
+        | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::NavigationTransitions
         | BenchmarkScenario::SettingsNavigation
         | BenchmarkScenario::SettingsNavigationPprof
@@ -498,6 +504,53 @@ fn execute_modal_input(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_input_integrity(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "input-integrity",
+        "driving bounded pulses through Main proxy v2 and the kernel input path",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::InputIntegrity, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_input_integrity_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_input_integrity_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("protocol").and_then(Value::as_u64) != Some(2)
+        || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
+        || summary.get("proxy_write_failures").and_then(Value::as_u64) != Some(0)
+        || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
+        || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
+        || summary.get("dropped_frames").and_then(Value::as_u64) != Some(0)
+        || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("input integrity qualification did not satisfy the zero-loss gates".into());
+    }
+    Ok(())
 }
 
 fn evaluate_modal_input_summary(summary: &Value) -> AgentResult<()> {
@@ -1299,6 +1352,26 @@ mod tests {
         let mut failed = passing;
         failed["workloads"][1]["status"] = json!("failed");
         assert!(evaluate_pmu_summary(&failed).is_err());
+    }
+
+    #[test]
+    fn input_integrity_requires_every_zero_loss_gate() {
+        let passing = json!({
+            "schema": "mister-magik-input-integrity-v1",
+            "status": "passed",
+            "protocol": 2,
+            "lost_actions": 0,
+            "duplicated_actions": 0,
+            "proxy_write_failures": 0,
+            "journal_overflows": 0,
+            "sequence_gaps": 0,
+            "dropped_frames": 0,
+            "latch_drops": 0,
+        });
+        evaluate_input_integrity_summary(&passing).unwrap();
+        let mut failed = passing;
+        failed["lost_actions"] = json!(1);
+        assert!(evaluate_input_integrity_summary(&failed).is_err());
     }
 
     #[test]

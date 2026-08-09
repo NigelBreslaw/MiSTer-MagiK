@@ -111,6 +111,7 @@ use mister_magik_mister_runtime::fpga;
 mod frame_profile;
 mod input;
 mod input_hub;
+mod input_integrity_driver;
 mod latch_failure_report;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
@@ -371,6 +372,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         "purge-library-data" => run_purge_library_data(args),
         "reset-delete-screenshot-packs" => run_reset_delete_screenshot_packs(args),
         "benchmark-capabilities" => print_benchmark_capabilities(),
+        "input-integrity-driver" => input_integrity_driver::run(args.get(2..).unwrap_or_default()),
         "pmu-probe" => pmu_probe::run(),
         "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
@@ -428,6 +430,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
+        "input-integrity-driver-v1": true,
     });
     capabilities
         .as_object_mut()

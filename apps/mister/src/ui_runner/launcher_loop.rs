@@ -620,12 +620,15 @@ const fn settings_page_depth(screen: Screen) -> Option<u8> {
 
 fn settings_navigation_input_candidate(
     screen: Screen,
-    now: &PadState,
-    previous: &PadState,
+    event: Option<&crate::input_event::InputEvent>,
 ) -> bool {
-    let activated = now.btn_a && !previous.btn_a;
-    let backed = now.btn_b && !previous.btn_b;
-    let went_home = now.btn_home && !previous.btn_home;
+    let Some(event) = event.filter(|event| event.phase == crate::input_event::InputPhase::Pressed)
+    else {
+        return false;
+    };
+    let activated = event.action == crate::input_event::LogicalAction::Activate;
+    let backed = event.action == crate::input_event::LogicalAction::Back;
+    let went_home = event.action == crate::input_event::LogicalAction::Home;
     match screen {
         Screen::Home => activated || went_home,
         Screen::Settings
@@ -637,40 +640,39 @@ fn settings_navigation_input_candidate(
     }
 }
 
-fn absorb_exclusive_input(nav: &mut LauncherNav, now: &PadState) {
-    nav.absorb_input(now);
-}
-
 fn route_lifecycle_dialog_input(
-    nav: &mut LauncherNav,
-    now: &PadState,
-    previous: &PadState,
+    event: Option<&crate::input_event::InputEvent>,
     launch_failure_visible: bool,
     recovery_dialog_visible: bool,
 ) -> Option<LauncherLifecycleInput> {
+    let event = event.filter(|event| event.phase == crate::input_event::InputPhase::Pressed)?;
     let input = if launch_failure_visible {
-        ((now.btn_a && !previous.btn_a)
-            || (now.btn_b && !previous.btn_b)
-            || (now.btn_home && !previous.btn_home))
-            .then_some(LauncherLifecycleInput::LaunchFailureAcknowledge)
+        matches!(
+            event.action,
+            crate::input_event::LogicalAction::Activate
+                | crate::input_event::LogicalAction::Back
+                | crate::input_event::LogicalAction::Home
+        )
+        .then_some(LauncherLifecycleInput::LaunchFailureAcknowledge)
     } else if recovery_dialog_visible {
-        if now.dpad_left && !previous.dpad_left {
-            Some(LauncherLifecycleInput::CatalogRecoveryLeft)
-        } else if now.dpad_right && !previous.dpad_right {
-            Some(LauncherLifecycleInput::CatalogRecoveryRight)
-        } else if now.btn_a && !previous.btn_a {
-            Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
-        } else if (now.btn_b && !previous.btn_b) || (now.btn_home && !previous.btn_home) {
-            Some(LauncherLifecycleInput::CatalogRecoveryCancel)
-        } else {
-            None
+        match event.action {
+            crate::input_event::LogicalAction::Left => {
+                Some(LauncherLifecycleInput::CatalogRecoveryLeft)
+            }
+            crate::input_event::LogicalAction::Right => {
+                Some(LauncherLifecycleInput::CatalogRecoveryRight)
+            }
+            crate::input_event::LogicalAction::Activate => {
+                Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
+            }
+            crate::input_event::LogicalAction::Back | crate::input_event::LogicalAction::Home => {
+                Some(LauncherLifecycleInput::CatalogRecoveryCancel)
+            }
+            _ => None,
         }
     } else {
         None
     };
-    if launch_failure_visible || recovery_dialog_visible {
-        absorb_exclusive_input(nav, now);
-    }
     input
 }
 
@@ -778,11 +780,16 @@ fn restore_failed_pending_collection_entry(
 fn cancel_pending_collection_entry_for_input(
     pending: &mut Option<PendingCollectionEntry>,
     nav: &mut LauncherNav,
-    now: &PadState,
-    previous: &PadState,
+    event: Option<&crate::input_event::InputEvent>,
     start: Instant,
 ) -> bool {
-    if !((now.btn_b && !previous.btn_b) || (now.btn_home && !previous.btn_home)) {
+    if !event.is_some_and(|event| {
+        event.phase == crate::input_event::InputPhase::Pressed
+            && matches!(
+                event.action,
+                crate::input_event::LogicalAction::Back | crate::input_event::LogicalAction::Home
+            )
+    }) {
         return false;
     }
     let Some(entry) = pending.take() else {
@@ -1103,8 +1110,10 @@ impl LauncherStatusTextSnapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LibraryChangedDialogTestPhase {
     Waiting,
+    ContinueReleaseA,
     RebuildReleaseRight,
     RebuildPressA,
+    RebuildReleaseA,
     Done,
 }
 
@@ -1112,6 +1121,12 @@ struct LibraryChangedDialogTestDriver {
     choice: Option<launcher::LibraryChangedTestDialogChoice>,
     dialog_seen_at: Option<Instant>,
     phase: LibraryChangedDialogTestPhase,
+    next_sequence: u64,
+    next_press_id: u64,
+    active_press: Option<(
+        crate::input_event::LogicalAction,
+        crate::input_event::PressId,
+    )>,
 }
 
 impl LibraryChangedDialogTestDriver {
@@ -1121,10 +1136,18 @@ impl LibraryChangedDialogTestDriver {
             choice,
             dialog_seen_at: None,
             phase: LibraryChangedDialogTestPhase::Waiting,
+            next_sequence: 0,
+            next_press_id: 0,
+            active_press: None,
         }
     }
 
-    fn input_for(&mut self, nav: &LauncherNav, now: Instant, start: Instant) -> Option<PadState> {
+    fn event_for(
+        &mut self,
+        nav: &LauncherNav,
+        now: Instant,
+        start: Instant,
+    ) -> Option<crate::input_event::InputEvent> {
         let choice = self.choice?;
         if nav.confirm_action != Some(launcher::ConfirmAction::LibraryChanged) {
             self.dialog_seen_at = None;
@@ -1136,18 +1159,22 @@ impl LibraryChangedDialogTestDriver {
         }
 
         match choice {
-            launcher::LibraryChangedTestDialogChoice::Continue => {
-                if self.phase != LibraryChangedDialogTestPhase::Waiting {
-                    return None;
+            launcher::LibraryChangedTestDialogChoice::Continue => match self.phase {
+                LibraryChangedDialogTestPhase::Waiting => {
+                    self.phase = LibraryChangedDialogTestPhase::ContinueReleaseA;
+                    print_startup_event(
+                        start,
+                        "library_changed_test_dialog_input",
+                        "choice=continue button=a",
+                    );
+                    Some(self.press(crate::input_event::LogicalAction::Activate, now, start))
                 }
-                self.phase = LibraryChangedDialogTestPhase::Done;
-                print_startup_event(
-                    start,
-                    "library_changed_test_dialog_input",
-                    "choice=continue button=a",
-                );
-                Some(pad_state_with(|state| state.btn_a = true))
-            }
+                LibraryChangedDialogTestPhase::ContinueReleaseA => {
+                    self.phase = LibraryChangedDialogTestPhase::Done;
+                    self.release(now, start)
+                }
+                _ => None,
+            },
             launcher::LibraryChangedTestDialogChoice::Rebuild => match self.phase {
                 LibraryChangedDialogTestPhase::Waiting => {
                     self.phase = LibraryChangedDialogTestPhase::RebuildReleaseRight;
@@ -1156,23 +1183,83 @@ impl LibraryChangedDialogTestDriver {
                         "library_changed_test_dialog_input",
                         "choice=rebuild button=right",
                     );
-                    Some(pad_state_with(|state| state.dpad_right = true))
+                    Some(self.press(crate::input_event::LogicalAction::Right, now, start))
                 }
                 LibraryChangedDialogTestPhase::RebuildReleaseRight => {
                     self.phase = LibraryChangedDialogTestPhase::RebuildPressA;
-                    Some(PadState::default())
+                    self.release(now, start)
                 }
                 LibraryChangedDialogTestPhase::RebuildPressA => {
-                    self.phase = LibraryChangedDialogTestPhase::Done;
+                    self.phase = LibraryChangedDialogTestPhase::RebuildReleaseA;
                     print_startup_event(
                         start,
                         "library_changed_test_dialog_input",
                         "choice=rebuild button=a",
                     );
-                    Some(pad_state_with(|state| state.btn_a = true))
+                    Some(self.press(crate::input_event::LogicalAction::Activate, now, start))
                 }
-                LibraryChangedDialogTestPhase::Done => None,
+                LibraryChangedDialogTestPhase::RebuildReleaseA => {
+                    self.phase = LibraryChangedDialogTestPhase::Done;
+                    self.release(now, start)
+                }
+                LibraryChangedDialogTestPhase::ContinueReleaseA
+                | LibraryChangedDialogTestPhase::Done => None,
             },
+        }
+    }
+
+    fn press(
+        &mut self,
+        action: crate::input_event::LogicalAction,
+        now: Instant,
+        start: Instant,
+    ) -> crate::input_event::InputEvent {
+        self.next_press_id = self.next_press_id.saturating_add(1).max(1);
+        let press_id = crate::input_event::PressId((1_u64 << 60) | self.next_press_id);
+        self.active_press = Some((action, press_id));
+        self.make_event(
+            action,
+            press_id,
+            crate::input_event::InputPhase::Pressed,
+            now,
+            start,
+        )
+    }
+
+    fn release(&mut self, now: Instant, start: Instant) -> Option<crate::input_event::InputEvent> {
+        let (action, press_id) = self.active_press.take()?;
+        Some(self.make_event(
+            action,
+            press_id,
+            crate::input_event::InputPhase::Released,
+            now,
+            start,
+        ))
+    }
+
+    fn make_event(
+        &mut self,
+        action: crate::input_event::LogicalAction,
+        press_id: crate::input_event::PressId,
+        phase: crate::input_event::InputPhase,
+        now: Instant,
+        start: Instant,
+    ) -> crate::input_event::InputEvent {
+        self.next_sequence = self.next_sequence.saturating_add(1).max(1);
+        crate::input_event::InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: crate::input_event::InputSourceKind::Automation,
+                instance: 4,
+            },
+            source_epoch: crate::input_event::SourceEpoch(1),
+            sequence: self.next_sequence,
+            press_id,
+            captured_at_us: now
+                .saturating_duration_since(start)
+                .as_micros()
+                .min(u64::MAX as u128) as u64,
+            action,
+            phase,
         }
     }
 }
@@ -1422,6 +1509,24 @@ fn pad_state_with(set: impl FnOnce(&mut PadState)) -> PadState {
     let mut state = PadState::default();
     set(&mut state);
     state
+}
+
+#[cfg(test)]
+fn normalized_test_press(
+    action: crate::input_event::LogicalAction,
+) -> crate::input_event::InputEvent {
+    crate::input_event::InputEvent {
+        source: crate::input_event::InputSourceId {
+            kind: crate::input_event::InputSourceKind::Preview,
+            instance: 1,
+        },
+        source_epoch: crate::input_event::SourceEpoch(1),
+        sequence: 1,
+        press_id: crate::input_event::PressId(1),
+        captured_at_us: 1,
+        action,
+        phase: crate::input_event::InputPhase::Pressed,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2725,6 +2830,10 @@ pub(super) fn run_launcher_loop(
     let mut pending_input_events = VecDeque::new();
     let mut proxy_navigation_state = PadState::default();
     let mut input_fault_notice: Option<&'static str> = None;
+    let mut input_integrity_stall = std::env::var("MISTER_INPUT_INTEGRITY_STALL_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| (1..=1_000).contains(value));
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -2930,7 +3039,6 @@ pub(super) fn run_launcher_loop(
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
     let mut launcher_automation = LauncherAutomation::new();
-    let mut catalog_recovery_prev = PadState::default();
     let sqlite_path = mister_magik_catalog::catalog_state::default_path();
     let capsule_seed_ready = catalog_ready;
     let sharded_seed = (!capsule_seed_ready)
@@ -3453,6 +3561,11 @@ pub(super) fn run_launcher_loop(
         // Input is drained before catalog, media, Slint, and rendering work so a
         // busy frame can delay dispatch but cannot erase an edge.
         let input_batch = pad.drain_input_batch();
+        if !input_batch.events.is_empty()
+            && let Some(stall_ms) = input_integrity_stall.take()
+        {
+            std::thread::sleep(Duration::from_millis(stall_ms));
+        }
         screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
@@ -4566,6 +4679,33 @@ pub(super) fn run_launcher_loop(
                 InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
             }
         }
+        if let Some(event) = settings_navigation_benchmark.event_for(
+            nav.screen,
+            nav.settings_focused,
+            nav.settings_selected,
+            full_screen_transition.state() == FullScreenTransitionState::Live,
+            frame_now
+                .saturating_duration_since(start)
+                .as_micros()
+                .min(u64::MAX as u128) as u64,
+        ) {
+            match input_router.route_event(event, focus, frame_now) {
+                InputOutcome::Dispatch { event, .. }
+                | InputOutcome::TransitionControl { event, .. }
+                | InputOutcome::Released { event, .. } => pending_input_events.push_back(event),
+                InputOutcome::WakeScreensaver { .. } => screensaver_wake = true,
+                InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
+            }
+        }
+        if let Some(event) = library_changed_dialog_test.event_for(&nav, frame_now, start) {
+            match input_router.route_event(event, focus, frame_now) {
+                InputOutcome::Dispatch { event, .. }
+                | InputOutcome::TransitionControl { event, .. }
+                | InputOutcome::Released { event, .. } => pending_input_events.push_back(event),
+                InputOutcome::WakeScreensaver { .. } => screensaver_wake = true,
+                InputOutcome::TransitionQueued { .. } | InputOutcome::Consumed { .. } => {}
+            }
+        }
         if let Some(event) = launcher_input_script.event_for(
             frame_now
                 .saturating_duration_since(start)
@@ -4619,7 +4759,6 @@ pub(super) fn run_launcher_loop(
                 screensaver_wake || pad_state_has_active_input(&launcher_state),
                 raw_screensaver_input_activity,
             ) {
-                nav.absorb_input(&launcher_state);
                 request_launcher_redraw!();
                 continue;
             }
@@ -4671,7 +4810,6 @@ pub(super) fn run_launcher_loop(
                         setup.advance_to_next_pad(&pad);
                     }
                 }
-                absorb_exclusive_input(&mut nav, &launcher_state);
                 let setup_after = SetupBridgeKey::from_setup(&setup);
                 full_bridge_dirty |= pad_changed || setup_before != setup_after;
             } else if launcher_bench_scenario.is_none()
@@ -4707,12 +4845,6 @@ pub(super) fn run_launcher_loop(
                     }
                     transition_picker_prev_left = launcher_state.dpad_left;
                     transition_picker_prev_right = launcher_state.dpad_right;
-                    let mut physical_nav_state = launcher_state.clone();
-                    if let Some(test_state) =
-                        library_changed_dialog_test.input_for(&nav, loop_start, start)
-                    {
-                        physical_nav_state = test_state;
-                    }
                     if let Some(orientation) = settings_navigation_benchmark
                         .take_orientation_change(
                             nav.screen,
@@ -4732,25 +4864,14 @@ pub(super) fn run_launcher_loop(
                         full_bridge_dirty = true;
                         request_launcher_redraw!();
                     }
-                    if let Some(benchmark_state) = settings_navigation_benchmark.input_for(
-                        nav.screen,
-                        nav.settings_focused,
-                        nav.settings_selected,
-                        full_screen_transition.state() == FullScreenTransitionState::Live,
-                    ) {
-                        physical_nav_state = benchmark_state;
-                    }
                     let lifecycle_view = lifecycle.view();
                     let launch_failure_visible = lifecycle_view.launch_failure_dialog().is_some();
                     let recovery_dialog_visible =
                         lifecycle_view.catalog_recovery_dialog().is_some();
-                    let physical_previous =
-                        std::mem::replace(&mut catalog_recovery_prev, physical_nav_state.clone());
                     let pending_collection_cancelled = cancel_pending_collection_entry_for_input(
                         &mut pending_collection_entry,
                         &mut nav,
-                        &physical_nav_state,
-                        &physical_previous,
+                        routed_event_this_loop.as_ref(),
                         start,
                     );
                     if pending_collection_cancelled {
@@ -4764,46 +4885,25 @@ pub(super) fn run_launcher_loop(
                             navigation_transition.request_reverse(now_us);
                         }
                     }
-                    let routed_input = navigation_transition.route_input(
-                        &physical_nav_state,
-                        &physical_previous,
-                        pending_collection_cancelled,
-                    );
-                    if routed_input.is_none() {
-                        nav.absorb_input(&physical_nav_state);
-                    }
-                    let input_previous = routed_input
-                        .as_ref()
-                        .map_or(&physical_previous, |input| &input.previous);
-                    let nav_state = routed_input
-                        .as_ref()
-                        .map_or(&physical_nav_state, |input| &input.now);
-                    if routed_input.as_ref().is_some_and(|input| input.replayed) {
-                        nav.absorb_input(input_previous);
-                    }
                     let settings_transition_source = (!launch_failure_visible
                         && !recovery_dialog_visible
                         && !navigation_transition.is_active()
                         && navigation_transition.enabled()
                         && settings_navigation_input_candidate(
                             nav.screen,
-                            nav_state,
-                            input_previous,
+                            routed_event_this_loop.as_ref(),
                         ))
                     .then(|| (nav.screen, nav.navigation_transition_state()));
                     let event = if orientation_transition.is_active()
                         || full_screen_transition.owner()
                             == Some(FullScreenTransitionOwner::Orientation)
                     {
-                        nav.absorb_input(&physical_nav_state);
                         None
                     } else if navigation_transition.is_active() {
                         None
                     } else if launch_failure_visible || recovery_dialog_visible {
                         if let Some(input) = route_lifecycle_dialog_input(
-                            &mut nav,
-                            nav_state,
-                            input_previous,
+                            routed_event_this_loop.as_ref(),
                             launch_failure_visible,
                             recovery_dialog_visible,
                         ) {
@@ -9851,18 +9951,15 @@ mod tests {
         let pressed = pad_state_with(|state| state.btn_a = true);
         let now = Instant::now();
 
-        let input = route_lifecycle_dialog_input(&mut nav, &pressed, &released, false, true);
+        let event = normalized_test_press(crate::input_event::LogicalAction::Activate);
+        let input = route_lifecycle_dialog_input(Some(&event), false, true);
         assert!(matches!(
             input,
             Some(LauncherLifecycleInput::CatalogRecoveryConfirm)
         ));
-        assert!(nav.handle_input(&pressed, now, &catalog).is_none());
         assert_eq!(nav.screen, Screen::Home);
 
-        assert!(
-            nav.handle_input(&released, now + Duration::from_millis(16), &catalog)
-                .is_none()
-        );
+        nav.absorb_input(&released);
         let event = nav
             .handle_input_with_navigation_intents(
                 &pressed,
@@ -9876,23 +9973,18 @@ mod tests {
 
     #[test]
     fn launch_failure_consumes_every_acknowledgement_button() {
-        for pressed in [
-            pad_state_with(|state| state.btn_a = true),
-            pad_state_with(|state| state.btn_b = true),
-            pad_state_with(|state| state.btn_home = true),
+        for action in [
+            crate::input_event::LogicalAction::Activate,
+            crate::input_event::LogicalAction::Back,
+            crate::input_event::LogicalAction::Home,
         ] {
-            let catalog = catalog_for_media_systems(&["arcade"]);
-            let mut nav = LauncherNav::new();
-            let input =
-                route_lifecycle_dialog_input(&mut nav, &pressed, &PadState::default(), true, false);
+            let nav = LauncherNav::new();
+            let event = normalized_test_press(action);
+            let input = route_lifecycle_dialog_input(Some(&event), true, false);
             assert!(matches!(
                 input,
                 Some(LauncherLifecycleInput::LaunchFailureAcknowledge)
             ));
-            assert!(
-                nav.handle_input(&pressed, Instant::now(), &catalog)
-                    .is_none()
-            );
             assert_eq!(nav.screen, Screen::Home);
         }
     }
@@ -9902,7 +9994,7 @@ mod tests {
         let mut nav = LauncherNav::new();
         let held = pad_state_with(|state| state.dpad_right = true);
         let now = Instant::now();
-        absorb_exclusive_input(&mut nav, &held);
+        nav.absorb_input(&held);
 
         let catalog = catalog_for_media_systems(&["arcade"]);
         assert!(nav.handle_input(&held, now, &catalog).is_none());
@@ -10930,14 +11022,12 @@ mod tests {
             requested_at: Instant::now(),
             source: nav.home_view_state(),
         });
-        let mut now = PadState::default();
-        now.btn_b = true;
+        let event = normalized_test_press(crate::input_event::LogicalAction::Back);
 
         assert!(cancel_pending_collection_entry_for_input(
             &mut pending,
             &mut nav,
-            &now,
-            &PadState::default(),
+            Some(&event),
             Instant::now()
         ));
         assert!(pending.is_none());

@@ -1,5 +1,9 @@
 # MiSTer MagiK Architecture
 
+The production controller and keyboard navigation contract is documented in
+[Unified input](input.md). Main proxy protocol v2 is the sole application input
+source; raw device snapshots are setup and diagnostic data only.
+
 This document describes the current architecture. Dated experiments and older
 attempts live in `history/`; treat those as evidence, not policy, unless this
 document or `AGENTS.md` links to them as the reason for a current rule.

@@ -26,6 +26,9 @@ mod macos {
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
     };
+    use mister_magik_fb::launcher_runtime::input_router::{
+        DirectionalPolicy, FocusRequest, FocusTarget, InputContextKind, InputOutcome, InputRouter,
+    };
     use mister_magik_fb::launcher_runtime::media::{
         MediaWorkerConfig, MediaWorkerHandle, MediaWorkerMessage,
         start_screenshot_media_worker_with_config,
@@ -164,11 +167,10 @@ mod macos {
                     .map(|item| item.id.clone());
                 demo_origin_frame = Some(application.frame_target.cached_565().to_vec());
                 if options.settings_page_transition_demo {
-                    application.launcher_pad.btn_home = true;
+                    application.enqueue_launcher_action(LogicalAction::Home, true);
                 } else {
-                    application.launcher_pad.btn_a = true;
+                    application.enqueue_launcher_action(LogicalAction::Activate, true);
                 }
-                application.launcher_pad.rebuild_pressed_now();
                 if options.navigation_transition_demo_reverse {
                     let settle_frames = options
                         .navigation_transition_duration_ms
@@ -179,17 +181,14 @@ mod macos {
                     for step in 0..settle_frames {
                         application.compose_frame();
                         if step == 0 {
-                            application.launcher_pad.btn_a = false;
-                            application.launcher_pad.btn_home = false;
-                            application.launcher_pad.rebuild_pressed_now();
+                            application.enqueue_launcher_action(LogicalAction::Activate, false);
+                            application.enqueue_launcher_action(LogicalAction::Home, false);
                         }
                     }
                     let reverse_origin = application.frame_target.cached_565().to_vec();
-                    application.launcher_pad.btn_b = true;
-                    application.launcher_pad.rebuild_pressed_now();
+                    application.enqueue_launcher_action(LogicalAction::Back, true);
                     application.compose_frame();
-                    application.launcher_pad.btn_b = false;
-                    application.launcher_pad.rebuild_pressed_now();
+                    application.enqueue_launcher_action(LogicalAction::Back, false);
                     if let Some((count, min_x, min_y, max_x, max_y)) = frame_difference(
                         &reverse_origin,
                         application.frame_target.cached_565(),
@@ -210,9 +209,8 @@ mod macos {
             };
             for _ in 0..capture_advance_count {
                 application.compose_frame();
-                application.launcher_pad.btn_a = false;
-                application.launcher_pad.btn_home = false;
-                application.launcher_pad.rebuild_pressed_now();
+                application.enqueue_launcher_action(LogicalAction::Activate, false);
+                application.enqueue_launcher_action(LogicalAction::Home, false);
             }
             if options.navigation_transition_demo_reverse
                 && !application.navigation_transition.is_active()
@@ -353,6 +351,7 @@ mod macos {
         settings_focused: bool,
         launcher_nav: LauncherNav,
         launcher_pad: PadState,
+        input_router: InputRouter,
         launcher_input_events: VecDeque<InputEvent>,
         launcher_active_presses: HashMap<LogicalAction, PressId>,
         launcher_input_sequence: u64,
@@ -404,7 +403,36 @@ mod macos {
         pending_navigation_event: Option<LauncherEvent>,
         pending_navigation_committed: bool,
         pending_navigation_source_state: Option<NavigationTransitionState>,
-        navigation_previous_pad: PadState,
+    }
+
+    fn preview_input_focus(screen: Screen, transition: bool) -> FocusRequest {
+        if transition {
+            return FocusRequest {
+                target: FocusTarget {
+                    kind: InputContextKind::Transition,
+                    owner: 1,
+                },
+                directional_policy: DirectionalPolicy::EdgeOnly,
+            };
+        }
+        let (owner, directional_policy) = match screen {
+            Screen::Home => (1, DirectionalPolicy::HomeContinuous),
+            Screen::SystemHub => (2, DirectionalPolicy::MenuRepeat),
+            Screen::Controller => (3, DirectionalPolicy::EdgeOnly),
+            Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
+            Screen::Settings => (5, DirectionalPolicy::MenuRepeat),
+            Screen::Screensaver => (6, DirectionalPolicy::EdgeOnly),
+            Screen::About => (7, DirectionalPolicy::MenuRepeat),
+            Screen::Licenses => (8, DirectionalPolicy::MenuRepeat),
+            Screen::Info => (9, DirectionalPolicy::MenuRepeat),
+        };
+        FocusRequest {
+            target: FocusTarget {
+                kind: InputContextKind::Screen,
+                owner,
+            },
+            directional_policy,
+        }
     }
 
     impl PreviewApplication {
@@ -500,6 +528,13 @@ mod macos {
                 settings_focused: false,
                 launcher_nav,
                 launcher_pad: PadState::default(),
+                input_router: InputRouter::new(FocusRequest {
+                    target: FocusTarget {
+                        kind: InputContextKind::Screen,
+                        owner: 1,
+                    },
+                    directional_policy: DirectionalPolicy::HomeContinuous,
+                }),
                 launcher_epoch: Instant::now(),
                 bridge_presenter: LauncherBridgePresenter::default(),
                 content,
@@ -554,7 +589,6 @@ mod macos {
                 pending_navigation_event: None,
                 pending_navigation_committed: false,
                 pending_navigation_source_state: None,
-                navigation_previous_pad: PadState::default(),
                 launcher_input_events: VecDeque::new(),
                 launcher_active_presses: HashMap::new(),
                 launcher_input_sequence: 0,
@@ -859,6 +893,8 @@ mod macos {
             self.launcher_pad = PadState::default();
             self.launcher_input_events.clear();
             self.launcher_active_presses.clear();
+            self.input_router =
+                InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
             self.launcher_nav.absorb_input(&self.launcher_pad);
         }
 
@@ -893,6 +929,8 @@ mod macos {
             self.launcher_pad = PadState::default();
             self.launcher_input_events.clear();
             self.launcher_active_presses.clear();
+            self.input_router =
+                InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
             self.launcher_nav.absorb_input(&self.launcher_pad);
             self.sync_launcher_navigation();
             Ok(())
@@ -915,23 +953,25 @@ mod macos {
             let Some(action) = action else {
                 return false;
             };
-            let (phase, press_id) = match state {
-                ElementState::Pressed => {
-                    if self.launcher_active_presses.contains_key(&action) {
-                        return true;
-                    }
-                    self.launcher_press_sequence =
-                        self.launcher_press_sequence.saturating_add(1).max(1);
-                    let press_id = PressId(self.launcher_press_sequence);
-                    self.launcher_active_presses.insert(action, press_id);
-                    (InputPhase::Pressed, press_id)
+            self.enqueue_launcher_action(action, state == ElementState::Pressed);
+            true
+        }
+
+        fn enqueue_launcher_action(&mut self, action: LogicalAction, pressed: bool) {
+            let (phase, press_id) = if pressed {
+                if self.launcher_active_presses.contains_key(&action) {
+                    return;
                 }
-                ElementState::Released => {
-                    let Some(press_id) = self.launcher_active_presses.remove(&action) else {
-                        return true;
-                    };
-                    (InputPhase::Released, press_id)
-                }
+                self.launcher_press_sequence =
+                    self.launcher_press_sequence.saturating_add(1).max(1);
+                let press_id = PressId(self.launcher_press_sequence);
+                self.launcher_active_presses.insert(action, press_id);
+                (InputPhase::Pressed, press_id)
+            } else {
+                let Some(press_id) = self.launcher_active_presses.remove(&action) else {
+                    return;
+                };
+                (InputPhase::Released, press_id)
             };
             self.launcher_input_sequence = self.launcher_input_sequence.saturating_add(1).max(1);
             self.launcher_input_events.push_back(InputEvent {
@@ -946,7 +986,6 @@ mod macos {
                 action,
                 phase,
             });
-            true
         }
 
         fn tick_launcher_navigation(&mut self) {
@@ -954,21 +993,27 @@ mod macos {
                 return;
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
-            if let Some(event) = self.launcher_input_events.pop_front() {
+            let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
+            let transition_active = self.navigation_transition.is_active();
+            let request = preview_input_focus(self.launcher_nav.screen, transition_active);
+            let mut routed_event = self.launcher_input_events.pop_front().and_then(|event| {
                 self.launcher_pad
                     .set_logical_action(event.action, event.phase == InputPhase::Pressed);
-            }
-            let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
-            let physical_previous = self.navigation_previous_pad.clone();
-            self.navigation_previous_pad = self.launcher_pad.clone();
-            let routed_input = self.navigation_transition.route_input(
-                &self.launcher_pad,
-                &physical_previous,
-                false,
-            );
+                match self.input_router.route_event(event, request, frame_now) {
+                    InputOutcome::Dispatch { event, .. } | InputOutcome::Released { event, .. } => {
+                        Some(event)
+                    }
+                    InputOutcome::TransitionControl { .. } => {
+                        self.navigation_transition.request_reverse(now_us);
+                        None
+                    }
+                    InputOutcome::TransitionQueued { .. }
+                    | InputOutcome::WakeScreensaver { .. }
+                    | InputOutcome::Consumed { .. } => None,
+                }
+            });
 
             if self.navigation_transition.is_active() {
-                self.launcher_nav.absorb_input(&self.launcher_pad);
                 let transition_frame = self.navigation_transition.tick(now_us);
                 if transition_frame.phase == NavigationTransitionPhase::Capture
                     && !self.pending_navigation_committed
@@ -986,34 +1031,48 @@ mod macos {
                 self.finish_navigation_tick();
                 return;
             }
-            let routed_input = routed_input.expect("idle navigation always delivers input");
-            if routed_input.replayed {
-                self.launcher_nav.absorb_input(&routed_input.previous);
+            if routed_event.is_none()
+                && let Some(InputOutcome::Dispatch { event, .. }) =
+                    self.input_router.replay_next_transition(
+                        preview_input_focus(self.launcher_nav.screen, false),
+                        frame_now,
+                    )
+            {
+                routed_event = Some(event);
             }
-            let previous_pad = &routed_input.previous;
-            let nav_state = &routed_input.now;
 
             let settings_transition_source = (self.navigation_transition.enabled()
-                && settings_navigation_input_candidate(
-                    self.launcher_nav.screen,
-                    nav_state,
-                    previous_pad,
-                ))
+                && routed_event.as_ref().is_some_and(|event| {
+                    event.phase == InputPhase::Pressed
+                        && matches!(
+                            event.action,
+                            LogicalAction::Activate | LogicalAction::Back | LogicalAction::Home
+                        )
+                        && matches!(
+                            self.launcher_nav.screen,
+                            Screen::Home
+                                | Screen::Settings
+                                | Screen::Screensaver
+                                | Screen::About
+                                | Screen::Info
+                                | Screen::Licenses
+                        )
+                }))
             .then(|| {
                 (
                     self.launcher_nav.screen,
                     self.launcher_nav.navigation_transition_state(),
                 )
             });
-            let event = if self.navigation_transition.enabled() {
-                self.launcher_nav.handle_input_with_navigation_intents(
-                    nav_state,
+            let event = if let Some(input_event) = routed_event.as_ref() {
+                self.launcher_nav.handle_action_with_navigation_intents(
+                    input_event,
                     frame_now,
                     &self.catalog,
                 )
             } else {
                 self.launcher_nav
-                    .handle_input(nav_state, frame_now, &self.catalog)
+                    .handle_held_tick_with_navigation_intents(frame_now, &self.catalog)
             };
             if let Some((source_screen, source_state)) = settings_transition_source
                 && let Some((route, direction)) =

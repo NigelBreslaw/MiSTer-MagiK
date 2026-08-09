@@ -71,6 +71,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("purge-library-data", CommandKind::PreFpga),
     CommandSpec::new("reset-delete-screenshot-packs", CommandKind::PreFpga),
     CommandSpec::new("benchmark-capabilities", CommandKind::PreFpga),
+    CommandSpec::new("input-integrity-driver", CommandKind::PreFpga),
     CommandSpec::new("pmu-probe", CommandKind::PreFpga),
     CommandSpec::new("pmu-profile", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),

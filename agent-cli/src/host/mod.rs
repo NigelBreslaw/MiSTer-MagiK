@@ -625,6 +625,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| verify_installed_modal_input(config, output_dir))
     }
 
+    pub(crate) fn verify_input_integrity(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| verify_installed_input_integrity(config, output_dir))
+    }
+
     pub(crate) fn profile_launch_return(
         &mut self,
         output_dir: &Path,
@@ -4137,6 +4144,8 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
 const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
+const INPUT_INTEGRITY_DRIVER: &str =
+    "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
@@ -4146,6 +4155,183 @@ const SCREENSAVER_PROFILE_DURATION_SECS: u64 = 90;
 const SCREENSAVER_PROFILE_TIMEOUT_SECS: u64 =
     SCREENSAVER_WARMUP_SECS + SCREENSAVER_PROFILE_DURATION_SECS + 20;
 const SCREENSAVER_POPULATED_WINDOW_SECS: u64 = 15;
+
+fn verify_installed_input_integrity(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+                ("MISTER_INPUT_INTEGRITY_STALL_MS".into(), "500".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let main_before: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    if main_before
+        .get("input_proxy_protocol")
+        .and_then(Value::as_u64)
+        != Some(2)
+    {
+        return Err("input integrity requires Main proxy protocol v2".into());
+    }
+    let mut launcher = wait_input_integrity_launcher(&session, Duration::from_secs(45))?;
+    let mut expected = launcher["arcade_selected"].as_u64().unwrap_or(0);
+    let mut pulse_results = Vec::new();
+    let mut lost_actions = 0_u64;
+    let mut duplicated_actions = 0_u64;
+    for pulse_ms in [5_u64, 10, 20, 40] {
+        let started = Instant::now();
+        run_input_integrity_driver(&session, "down", pulse_ms, 1, 20)?;
+        expected = expected.saturating_add(1);
+        match wait_arcade_selection(&session, expected, Duration::from_secs(3)) {
+            Ok(status) => launcher = status,
+            Err(_) => lost_actions = lost_actions.saturating_add(1),
+        }
+        let actual = launcher["arcade_selected"].as_u64().unwrap_or(0);
+        if actual > expected {
+            duplicated_actions = duplicated_actions.saturating_add(actual - expected);
+        }
+        pulse_results.push(json!({
+            "pulse_ms": pulse_ms,
+            "expected_selected": expected,
+            "actual_selected": actual,
+            "confirmed_response_us": started.elapsed().as_micros() as u64,
+        }));
+    }
+    let burst_started = Instant::now();
+    run_input_integrity_driver(&session, "down", 5, 4, 5)?;
+    expected = expected.saturating_add(4);
+    match wait_arcade_selection(&session, expected, Duration::from_secs(4)) {
+        Ok(status) => launcher = status,
+        Err(_) => lost_actions = lost_actions.saturating_add(1),
+    }
+    let burst_actual = launcher["arcade_selected"].as_u64().unwrap_or(0);
+    if burst_actual > expected {
+        duplicated_actions = duplicated_actions.saturating_add(burst_actual - expected);
+    }
+    let main_after: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
+    )?;
+    let counter_delta = |field: &str| {
+        main_after[field]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
+    };
+    let proxy_write_failures = counter_delta("input_proxy_write_failures");
+    let journal_overflows = counter_delta("input_proxy_journal_overflows");
+    let sequence_gaps = counter_delta("input_proxy_desyncs");
+    let latch_drops = launcher["latch_drop_count"].as_u64().unwrap_or(u64::MAX);
+    let dropped_frames = launcher
+        .pointer("/frame_budget/physical_refresh/dropped_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let status = if lost_actions == 0
+        && duplicated_actions == 0
+        && proxy_write_failures == 0
+        && journal_overflows == 0
+        && sequence_gaps == 0
+        && dropped_frames == 0
+        && latch_drops == 0
+    {
+        "passed"
+    } else {
+        "failed"
+    };
+    let summary = json!({
+        "schema": "mister-magik-input-integrity-v1",
+        "status": status,
+        "protocol": 2,
+        "path": "uinput -> Main mapping -> Main proxy v2 -> kernel evdev -> InputCapture -> InputRouter",
+        "pulses": pulse_results,
+        "burst": {
+            "pulse_ms": 5,
+            "gap_ms": 5,
+            "count": 4,
+            "expected_selected": expected,
+            "actual_selected": burst_actual,
+            "confirmed_response_us": burst_started.elapsed().as_micros() as u64,
+        },
+        "ui_stall_ms": 500,
+        "lost_actions": lost_actions,
+        "duplicated_actions": duplicated_actions,
+        "proxy_write_failures": proxy_write_failures,
+        "journal_overflows": journal_overflows,
+        "sequence_gaps": sequence_gaps,
+        "dropped_frames": dropped_frames,
+        "latch_drops": latch_drops,
+        "attended_checks_required": true,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn run_input_integrity_driver(
+    session: &Session,
+    key: &str,
+    pulse_ms: u64,
+    count: u64,
+    gap_ms: u64,
+) -> Result<()> {
+    let command = format!(
+        "{INPUT_INTEGRITY_DRIVER} {} {pulse_ms} {count} {gap_ms}",
+        sh(key)
+    );
+    exec_checked(session, "input integrity pulse", &command)
+}
+
+fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        let status = read_launcher_status(session)?;
+        if status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+            && status.get("return_screen").and_then(Value::as_str) == Some("arcade")
+        {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err("input integrity launcher did not become ready on Arcade".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_arcade_selection(session: &Session, expected: u64, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        let status = read_launcher_status(session)?;
+        if status.get("arcade_selected").and_then(Value::as_u64) == Some(expected) {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!("timed out waiting for Arcade selection {expected}").into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn modal_input_action(
     config: &NativeDeviceConfig,
