@@ -830,4 +830,17 @@ mod tests {
             path
         );
     }
+
+    #[test]
+    fn unchanged_boundaries_and_replaced_surfaces_do_not_register_feedback() {
+        let mut presenter = LauncherBridgePresenter::default();
+        let apple = target("apple-ii");
+        let consoles = SelectionFeedbackTarget::new("menu:consoles", "nintendo");
+
+        assert!(!presenter.note_selection_feedback_change(Some(&apple), Some(&apple)));
+        assert!(!presenter.note_selection_feedback_change(None, Some(&apple)));
+        assert!(!presenter.note_selection_feedback_change(Some(&apple), None));
+        assert!(!presenter.note_selection_feedback_change(Some(&apple), Some(&consoles)));
+        assert!(presenter.selection_feedback_stamp().entries.is_empty());
+    }
 }

@@ -40,6 +40,10 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
+fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
+    event.is_some_and(|event| event.phase == InputPhase::Pressed)
+}
+
 fn discrete_selection_feedback_target(
     nav: &LauncherNav,
     setup: &SetupNav,
@@ -5317,9 +5321,8 @@ pub(super) fn run_launcher_loop(
                 }
                 let selection_feedback_before =
                     discrete_selection_feedback_target(&nav, &setup, &lifecycle);
-                let selection_feedback_input = routed_event_this_loop
-                    .as_ref()
-                    .is_some_and(|event| event.phase == InputPhase::Pressed);
+                let selection_feedback_input =
+                    accepted_selection_feedback_input(routed_event_this_loop.as_ref());
 
                 if launcher_bench_scenario.is_none()
                     && !settings_navigation_benchmark.enabled()
@@ -10584,6 +10587,17 @@ mod tests {
         );
         setup.phase = SetupPhase::Configure;
         assert_eq!(setup_selection_feedback_target(&setup), None);
+    }
+
+    #[test]
+    fn feedback_registration_requires_an_accepted_pressed_dispatch() {
+        let pressed = normalized_test_press(LogicalAction::Right);
+        let mut released = pressed;
+        released.phase = InputPhase::Released;
+
+        assert!(accepted_selection_feedback_input(Some(&pressed)));
+        assert!(!accepted_selection_feedback_input(Some(&released)));
+        assert!(!accepted_selection_feedback_input(None));
     }
 
     #[test]
