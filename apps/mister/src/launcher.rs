@@ -1195,6 +1195,12 @@ impl LauncherNav {
             && self.home_scroll.active
     }
 
+    pub fn arcade_uses_menu_repeat(&self) -> bool {
+        self.screen == Screen::Arcade
+            && self.arcade_search.is_active(&self.arcade_filter.active)
+            && self.arcade_search.pane == ArcadeSearchPane::Keyboard
+    }
+
     pub fn new() -> Self {
         Self {
             crt_layout: false,

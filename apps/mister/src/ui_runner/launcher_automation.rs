@@ -166,6 +166,7 @@ pub(super) struct LauncherAutomation {
     presented_state_revision: u64,
     presented_action_sequence: u64,
     presented_latch_sequence: u16,
+    pending_releases: VecDeque<InputEvent>,
 }
 
 impl LauncherAutomation {
@@ -184,6 +185,7 @@ impl LauncherAutomation {
             presented_state_revision: 0,
             presented_action_sequence: 0,
             presented_latch_sequence: 0,
+            pending_releases: VecDeque::new(),
         }
     }
 
@@ -200,11 +202,10 @@ impl LauncherAutomation {
     ) -> Vec<InputEvent> {
         self.refresh_session(now);
         if self.session.is_none() {
-            return Vec::new();
+            return self.pending_releases.drain(..).collect();
         }
         if setup_active || pad_state_has_active_input(physical) {
-            self.abort("unsafe_input_context");
-            return Vec::new();
+            return self.abort_releasing("unsafe_input_context");
         }
         let expired = self.session.as_ref().is_some_and(|session| {
             session.last_request.elapsed() > REQUEST_LEASE
@@ -212,8 +213,7 @@ impl LauncherAutomation {
                 || current_main_generation() != Some(session.descriptor.main_generation)
         });
         if expired {
-            self.abort("session_expired");
-            return Vec::new();
+            return self.abort_releasing("session_expired");
         }
         self.advance_press_lifecycle(now);
         self.drain_requests(input_enabled, now);
@@ -471,8 +471,17 @@ impl LauncherAutomation {
         self.end_session();
     }
 
+    fn abort_releasing(&mut self, reason: &str) -> Vec<InputEvent> {
+        self.abort(reason);
+        self.pending_releases.drain(..).collect()
+    }
+
     fn end_session(&mut self) {
         if let Some(session) = self.session.as_mut() {
+            if let Some((button, press_id)) = active_press(session.press) {
+                push_automation_event(session, button, press_id, InputPhase::Released);
+            }
+            self.pending_releases.extend(session.events.drain(..));
             session.logical_state = PadState::default();
             session.press = None;
         }

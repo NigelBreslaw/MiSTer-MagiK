@@ -113,6 +113,7 @@ fn launcher_startup_orientation(
 mod arcade_drawer;
 mod catalog_worker;
 mod controller_loop;
+#[cfg(test)]
 mod controller_setup_input_session;
 mod crt_trial_loop;
 #[cfg(mister_experiments)]

@@ -405,7 +405,7 @@ mod macos {
         pending_navigation_source_state: Option<NavigationTransitionState>,
     }
 
-    fn preview_input_focus(screen: Screen, transition: bool) -> FocusRequest {
+    fn preview_input_focus(nav: &LauncherNav, transition: bool) -> FocusRequest {
         if transition {
             return FocusRequest {
                 target: FocusTarget {
@@ -415,10 +415,11 @@ mod macos {
                 directional_policy: DirectionalPolicy::EdgeOnly,
             };
         }
-        let (owner, directional_policy) = match screen {
+        let (owner, directional_policy) = match nav.screen {
             Screen::Home => (1, DirectionalPolicy::HomeContinuous),
             Screen::SystemHub => (2, DirectionalPolicy::MenuRepeat),
             Screen::Controller => (3, DirectionalPolicy::EdgeOnly),
+            Screen::Arcade if nav.arcade_uses_menu_repeat() => (4, DirectionalPolicy::MenuRepeat),
             Screen::Arcade => (4, DirectionalPolicy::ArcadeContinuous),
             Screen::Settings => (5, DirectionalPolicy::MenuRepeat),
             Screen::Screensaver => (6, DirectionalPolicy::EdgeOnly),
@@ -893,8 +894,7 @@ mod macos {
             self.launcher_pad = PadState::default();
             self.launcher_input_events.clear();
             self.launcher_active_presses.clear();
-            self.input_router =
-                InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
+            self.input_router = InputRouter::new(preview_input_focus(&self.launcher_nav, false));
         }
 
         fn configure_navigation_transition_demo(
@@ -928,8 +928,7 @@ mod macos {
             self.launcher_pad = PadState::default();
             self.launcher_input_events.clear();
             self.launcher_active_presses.clear();
-            self.input_router =
-                InputRouter::new(preview_input_focus(self.launcher_nav.screen, false));
+            self.input_router = InputRouter::new(preview_input_focus(&self.launcher_nav, false));
             self.sync_launcher_navigation();
             Ok(())
         }
@@ -992,139 +991,189 @@ mod macos {
             }
             let frame_now = self.launcher_epoch + self.fixed_time.get();
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
-            let transition_active = self.navigation_transition.is_active();
-            let request = preview_input_focus(self.launcher_nav.screen, transition_active);
-            let mut routed_event = self.launcher_input_events.pop_front().and_then(|event| {
-                self.launcher_pad
-                    .set_logical_action(event.action, event.phase == InputPhase::Pressed);
-                match self.input_router.route_event(event, request, frame_now) {
-                    InputOutcome::Dispatch { event, .. } | InputOutcome::Released { event, .. } => {
-                        Some(event)
-                    }
-                    InputOutcome::TransitionControl { .. } => {
-                        self.navigation_transition.request_reverse(now_us);
-                        None
-                    }
-                    InputOutcome::TransitionQueued { .. }
-                    | InputOutcome::WakeScreensaver { .. }
-                    | InputOutcome::Consumed { .. } => None,
-                }
-            });
-
-            if self.navigation_transition.is_active() {
-                let transition_frame = self.navigation_transition.tick(now_us);
-                if transition_frame.phase == NavigationTransitionPhase::Capture
-                    && !self.pending_navigation_committed
-                {
-                    let committed = self.pending_navigation_event.as_ref().is_some_and(|event| {
-                        self.launcher_nav
-                            .commit_navigation_intent(event, &self.catalog)
-                    });
-                    if committed {
-                        self.pending_navigation_committed = true;
-                    } else {
-                        self.navigation_transition.request_reverse(now_us);
-                    }
-                }
-                self.finish_navigation_tick();
-                return;
-            }
-            if routed_event.is_none()
-                && let Some(InputOutcome::Dispatch { event, .. }) =
-                    self.input_router.replay_next_transition(
-                        preview_input_focus(self.launcher_nav.screen, false),
-                        frame_now,
-                    )
-            {
-                routed_event = Some(event);
-            }
-
-            let settings_transition_source = (self.navigation_transition.enabled()
-                && routed_event.as_ref().is_some_and(|event| {
-                    event.phase == InputPhase::Pressed
-                        && matches!(
-                            event.action,
-                            LogicalAction::Activate | LogicalAction::Back | LogicalAction::Home
-                        )
-                        && matches!(
-                            self.launcher_nav.screen,
-                            Screen::Home
-                                | Screen::Settings
-                                | Screen::Screensaver
-                                | Screen::About
-                                | Screen::Info
-                                | Screen::Licenses
-                        )
-                }))
-            .then(|| {
-                (
-                    self.launcher_nav.screen,
-                    self.launcher_nav.navigation_transition_state(),
-                )
-            });
-            let event = if let Some(input_event) = routed_event.as_ref() {
-                self.launcher_nav.handle_action_with_navigation_intents(
-                    input_event,
-                    frame_now,
-                    &self.catalog,
-                )
-            } else {
-                self.launcher_nav.handle_held_tick_with_navigation_intents(
-                    &self.launcher_pad,
-                    frame_now,
-                    &self.catalog,
-                )
-            };
-            if let Some((source_screen, source_state)) = settings_transition_source
-                && let Some((route, direction)) =
-                    settings_page_transition(source_screen, self.launcher_nav.screen)
-                && self
-                    .navigation_transition
-                    .begin_settings_page(route, direction, self.frame_target.cached_565(), now_us)
-                    .unwrap_or(false)
-            {
-                self.pending_navigation_event = Some(LauncherEvent {
-                    action: LauncherAction::NavigateBack,
-                    path: None,
-                    settings: None,
-                });
-                self.pending_navigation_committed = true;
-                self.pending_navigation_source_state = Some(source_state);
-            }
-            if let Some(event) = event {
-                match event.action {
-                    LauncherAction::OpenMenu
-                    | LauncherAction::OpenCollection
-                    | LauncherAction::NavigateBack
-                    | LauncherAction::NavigateHome => {
-                        if self.begin_navigation_transition(event.clone(), now_us) {
-                            self.pending_navigation_source_state =
-                                Some(self.launcher_nav.navigation_transition_state());
-                            self.pending_navigation_event = Some(event);
-                            self.pending_navigation_committed = false;
-                        } else {
-                            self.launcher_nav
-                                .commit_navigation_intent(&event, &self.catalog);
+            loop {
+                if self.navigation_transition.is_active() {
+                    let request = preview_input_focus(&self.launcher_nav, true);
+                    self.input_router.set_focus(request);
+                    while let Some(event) = self.launcher_input_events.pop_front() {
+                        match self.input_router.route_event(event, request, frame_now) {
+                            InputOutcome::TransitionControl { .. } => {
+                                self.navigation_transition.request_reverse(now_us);
+                            }
+                            InputOutcome::Dispatch { .. }
+                            | InputOutcome::TransitionQueued { .. }
+                            | InputOutcome::Released { .. }
+                            | InputOutcome::WakeScreensaver { .. }
+                            | InputOutcome::Consumed { .. } => {}
                         }
                     }
-                    LauncherAction::PreviewScreensaver => {
-                        self.select_scenario(Scenario::ScreenshotTiles);
-                        return;
+                    let transition_frame = self.navigation_transition.tick(now_us);
+                    if transition_frame.phase == NavigationTransitionPhase::Capture
+                        && !self.pending_navigation_committed
+                    {
+                        let committed =
+                            self.pending_navigation_event.as_ref().is_some_and(|event| {
+                                self.launcher_nav
+                                    .commit_navigation_intent(event, &self.catalog)
+                            });
+                        if committed {
+                            self.pending_navigation_committed = true;
+                        } else {
+                            self.navigation_transition.request_reverse(now_us);
+                        }
                     }
-                    LauncherAction::LaunchGame => {}
-                    LauncherAction::PersistSettings => {
-                        if let Some(settings) = event.settings.as_ref() {
-                            self.navigation_transition.set_enabled(
-                                self.frame_width,
-                                self.frame_height,
-                                !settings.reduce_motion,
-                            );
-                            if let Err(error) = self.settings_store.save(settings) {
-                                eprintln!("settings: failed to save Mac preview settings: {error}");
+                    self.finish_navigation_tick();
+                    return;
+                }
+
+                let request = preview_input_focus(&self.launcher_nav, false);
+                self.input_router.set_focus(request);
+                let mut final_tick = false;
+                let routed_event = if let Some(event) = self.launcher_input_events.pop_front() {
+                    match self.input_router.route_event(event, request, frame_now) {
+                        InputOutcome::Dispatch { event, .. } => Some(event),
+                        InputOutcome::Released { event, context, .. }
+                            if context == self.input_router.context() =>
+                        {
+                            Some(event)
+                        }
+                        InputOutcome::TransitionControl { .. } => {
+                            self.navigation_transition.request_reverse(now_us);
+                            None
+                        }
+                        InputOutcome::Released { .. }
+                        | InputOutcome::TransitionQueued { .. }
+                        | InputOutcome::WakeScreensaver { .. }
+                        | InputOutcome::Consumed { .. } => None,
+                    }
+                } else if let Some(InputOutcome::Dispatch { event, .. }) =
+                    self.input_router.replay_next_transition(request, frame_now)
+                {
+                    Some(event)
+                } else if let Some(InputOutcome::Dispatch { event, .. }) =
+                    self.input_router.tick_repeat(frame_now)
+                {
+                    Some(event)
+                } else {
+                    final_tick = true;
+                    None
+                };
+                self.launcher_pad = PadState::default();
+                for action in LogicalAction::ALL {
+                    self.launcher_pad
+                        .set_logical_action(action, self.input_router.action_held(action));
+                }
+
+                let settings_transition_source = (self.navigation_transition.enabled()
+                    && routed_event.as_ref().is_some_and(|event| {
+                        event.phase == InputPhase::Pressed
+                            && matches!(
+                                event.action,
+                                LogicalAction::Activate | LogicalAction::Back | LogicalAction::Home
+                            )
+                            && matches!(
+                                self.launcher_nav.screen,
+                                Screen::Home
+                                    | Screen::Settings
+                                    | Screen::Screensaver
+                                    | Screen::About
+                                    | Screen::Info
+                                    | Screen::Licenses
+                            )
+                    }))
+                .then(|| {
+                    (
+                        self.launcher_nav.screen,
+                        self.launcher_nav.navigation_transition_state(),
+                    )
+                });
+                let event = if let Some(input_event) = routed_event.as_ref() {
+                    self.launcher_nav.handle_action_with_navigation_intents(
+                        input_event,
+                        frame_now,
+                        &self.catalog,
+                    )
+                } else if final_tick {
+                    self.launcher_nav.handle_held_tick_with_navigation_intents(
+                        &self.launcher_pad,
+                        frame_now,
+                        &self.catalog,
+                    )
+                } else {
+                    None
+                };
+                let event = if !final_tick {
+                    event.or_else(|| {
+                        self.launcher_nav.handle_held_tick_with_navigation_intents(
+                            &self.launcher_pad,
+                            frame_now,
+                            &self.catalog,
+                        )
+                    })
+                } else {
+                    event
+                };
+                if let Some((source_screen, source_state)) = settings_transition_source
+                    && let Some((route, direction)) =
+                        settings_page_transition(source_screen, self.launcher_nav.screen)
+                    && self
+                        .navigation_transition
+                        .begin_settings_page(
+                            route,
+                            direction,
+                            self.frame_target.cached_565(),
+                            now_us,
+                        )
+                        .unwrap_or(false)
+                {
+                    self.pending_navigation_event = Some(LauncherEvent {
+                        action: LauncherAction::NavigateBack,
+                        path: None,
+                        settings: None,
+                    });
+                    self.pending_navigation_committed = true;
+                    self.pending_navigation_source_state = Some(source_state);
+                }
+                if let Some(event) = event {
+                    match event.action {
+                        LauncherAction::OpenMenu
+                        | LauncherAction::OpenCollection
+                        | LauncherAction::NavigateBack
+                        | LauncherAction::NavigateHome => {
+                            if self.begin_navigation_transition(event.clone(), now_us) {
+                                self.pending_navigation_source_state =
+                                    Some(self.launcher_nav.navigation_transition_state());
+                                self.pending_navigation_event = Some(event);
+                                self.pending_navigation_committed = false;
+                            } else {
+                                self.launcher_nav
+                                    .commit_navigation_intent(&event, &self.catalog);
                             }
                         }
+                        LauncherAction::PreviewScreensaver => {
+                            self.select_scenario(Scenario::ScreenshotTiles);
+                            return;
+                        }
+                        LauncherAction::LaunchGame => {}
+                        LauncherAction::PersistSettings => {
+                            if let Some(settings) = event.settings.as_ref() {
+                                self.navigation_transition.set_enabled(
+                                    self.frame_width,
+                                    self.frame_height,
+                                    !settings.reduce_motion,
+                                );
+                                if let Err(error) = self.settings_store.save(settings) {
+                                    eprintln!(
+                                        "settings: failed to save Mac preview settings: {error}"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                }
+                if final_tick {
+                    break;
                 }
             }
             self.finish_navigation_tick();
@@ -2133,7 +2182,7 @@ mod macos {
                     self.launcher_input_events.clear();
                     self.launcher_active_presses.clear();
                     self.input_router = InputRouter::new(preview_input_focus(
-                        self.launcher_nav.screen,
+                        &self.launcher_nav,
                         self.navigation_transition.is_active(),
                     ));
                     self.reset_focus_clock();
