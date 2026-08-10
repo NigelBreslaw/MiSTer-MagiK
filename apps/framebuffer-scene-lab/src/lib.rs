@@ -1037,38 +1037,36 @@ mod tests {
 
     #[test]
     fn navigation_fixtures_render_deterministic_forward_and_reverse_frames() {
-        for (fixture, forward_ms, reverse_ms, forward_hash, reverse_hash) in [
+        for (fixture, forward_hash, reverse_hash) in [
             (
                 NavigationFixture::HomeArcade,
-                360,
-                1_080,
                 0x8794_49ba_b598_ce37,
                 0xfcb5_2e21_9a05_abc8,
             ),
             (
                 NavigationFixture::HomeConsoles,
-                300,
-                900,
                 0xda67_dc7e_5bf8_f369,
                 0xbaa6_b828_b360_780d,
             ),
             (
                 NavigationFixture::ConsolesSystem,
-                360,
-                1_080,
                 0x8794_49ba_b598_ce37,
                 0x8b55_e6f6_dbc4_2464,
             ),
         ] {
             let mut scene = NavigationFixtureScene::new(fixture);
             let mut pixels = vec![Rgb565Pixel(0); DEFAULT_WIDTH * DEFAULT_HEIGHT];
+            let duration_us = fixture.edge().duration_us();
             let forward = scene
-                .render(&mut pixels, Duration::from_millis(forward_ms))
+                .render(&mut pixels, Duration::from_micros(duration_us / 2))
                 .unwrap();
             assert_eq!(forward.simulation_backend, "forward");
             assert_eq!(rgb565_hash(&pixels), forward_hash);
             let reverse = scene
-                .render(&mut pixels, Duration::from_millis(reverse_ms))
+                .render(
+                    &mut pixels,
+                    Duration::from_micros(duration_us + duration_us / 2),
+                )
                 .unwrap();
             assert_eq!(reverse.simulation_backend, "reverse");
             assert_eq!(rgb565_hash(&pixels), reverse_hash);
@@ -1088,8 +1086,9 @@ mod tests {
         let mut scene =
             NavigationFixtureScene::new_with_geometry(NavigationFixture::HomeArcade, width, height);
         let mut pixels = vec![Rgb565Pixel(0); width * height];
+        let duration_us = NavigationFixture::HomeArcade.edge().duration_us();
         let frame = scene
-            .render(&mut pixels, Duration::from_millis(360))
+            .render(&mut pixels, Duration::from_micros(duration_us / 2))
             .unwrap();
         assert_eq!(frame.simulation_backend, "forward");
         assert!(pixels.iter().any(|pixel| pixel.0 != 0));
