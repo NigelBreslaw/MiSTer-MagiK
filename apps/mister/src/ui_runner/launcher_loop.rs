@@ -37,12 +37,17 @@ const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200)
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
+const SYSTEM_ENTRY_BENCHMARK_DIRECT_SETTLE_MS: u64 = 2_000;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
 fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
+}
+
+fn system_entry_benchmark_direct_settled(elapsed_ms: u64, input_enabled_ms: u64) -> bool {
+    elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_DIRECT_SETTLE_MS
 }
 
 fn discrete_selection_feedback_target(
@@ -5531,8 +5536,16 @@ pub(super) fn run_launcher_loop(
             EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
+        let loop_elapsed_ms = loop_start
+            .saturating_duration_since(start)
+            .as_millis()
+            .min(u64::MAX as u128) as u64;
         if catalog_ready
             && lifecycle.startup_input_enabled()
+            && system_entry_benchmark_direct_settled(
+                loop_elapsed_ms,
+                lifecycle.startup_status().input_enabled_ms,
+            )
             && effective_view.accepts_application_input()
             && nav.screen == Screen::Home
             && pending_collection_entry.is_none()
@@ -12016,6 +12029,12 @@ mod tests {
             240,
             true,
         ));
+    }
+
+    #[test]
+    fn direct_system_entry_measurement_starts_after_home_settles() {
+        assert!(!system_entry_benchmark_direct_settled(2_245, 246));
+        assert!(system_entry_benchmark_direct_settled(2_246, 246));
     }
 
     #[test]
