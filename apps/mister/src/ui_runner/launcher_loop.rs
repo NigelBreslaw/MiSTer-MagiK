@@ -4664,23 +4664,14 @@ pub(super) fn run_launcher_loop(
     let mut home_pan_present_until = None;
     let mut navigation_source_bridge_sync_pending = false;
     let mut latency_critical_input_pending = false;
+    let mut input_observation = input_observation_probe
+        .as_ref()
+        .map(crate::input_hub::InputObservationProbe::observe)
+        .unwrap_or_default();
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
-        // Input is drained before catalog, media, Slint, and rendering work so a
-        // busy frame can delay dispatch but cannot erase an edge.
-        let drained_input = pad.drain_input_batch();
-        let input_observation = drained_input.observation;
-        let input_batch = drained_input.batch;
-        input_integrity_trace.observe_batch(&input_batch);
-        launcher_response_trace.observe_batch(&input_batch);
-        launcher_response_trace.record_lab(input_latency_lab.before_input_route());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
-        if !input_batch.events.is_empty()
-            && let Some(stall_ms) = input_integrity_stall.take()
-        {
-            std::thread::sleep(Duration::from_millis(stall_ms));
-        }
         screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
@@ -4691,46 +4682,39 @@ pub(super) fn run_launcher_loop(
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
         let navigation_snapshot_locked_at_loop_start =
             full_screen_transition_policy_at_loop_start.snapshot_locked;
-        let directional_input_held = [
-            LogicalAction::Up,
-            LogicalAction::Down,
-            LogicalAction::Left,
-            LogicalAction::Right,
-        ]
-        .into_iter()
-        .any(|action| input_batch.held_after_last.is_held(action));
-        let background_work_allowed = !should_defer_launcher_background_work(
-            input_batch.events.len(),
-            navigation_transition.is_active(),
-            orientation_transition.is_active(),
-            directional_input_held,
-        ) && !navigation_snapshot_locked_at_loop_start;
+        let current_pad_state = pad.state();
+        let directional_input_held = current_pad_state.dpad_up
+            || current_pad_state.dpad_down
+            || current_pad_state.dpad_left
+            || current_pad_state.dpad_right;
+        let input_pending_before_route = input_observation_probe
+            .as_ref()
+            .is_some_and(|probe| probe.changed_since(input_observation));
+        let mut background_work_allowed = !input_pending_before_route
+            && !should_defer_launcher_background_work(
+                0,
+                navigation_transition.is_active(),
+                orientation_transition.is_active(),
+                directional_input_held,
+            )
+            && !navigation_snapshot_locked_at_loop_start;
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
             startup_intro_launcher_frame_ready,
         ) == StartupIntroLauncherUiPlan::PrepareLiveFrame;
-        if full_screen_transition_policy_at_loop_start.advance_slint_timers
+        if !input_pending_before_route
+            && full_screen_transition_policy_at_loop_start.advance_slint_timers
             && (startup_intro.is_none() || startup_intro_needs_live_launcher)
         {
             slint::platform::update_timers_and_animations();
         }
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
-        if should_restart_for_urgent_input(
-            input_batch.events.is_empty(),
-            latency_critical_input_pending,
-            input_observation_probe
-                .as_ref()
-                .is_some_and(|probe| probe.changed_since(input_observation)),
-        ) {
-            launcher_response_trace.record_lab(Some(serde_json::json!({
-                "phase": "input-priority-restart",
-                "checkpoint": "after-slint-timers",
-                "at_us": crate::input_hub::monotonic_us(),
-            })));
-            let _ = launcher_response_trace
-                .record_scheduler_interval("input-priority-restart", scheduler_phase);
-            continue;
+        if input_observation_probe
+            .as_ref()
+            .is_some_and(|probe| probe.changed_since(input_observation))
+        {
+            background_work_allowed = false;
         }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
@@ -4896,7 +4880,10 @@ pub(super) fn run_launcher_loop(
             frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
         let mut prepare_trace = LauncherPrepareTrace::default();
         prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
-        if catalog_ready && user_state_catalog_version != Some(catalog_version) {
+        if background_work_allowed
+            && catalog_ready
+            && user_state_catalog_version != Some(catalog_version)
+        {
             let games = catalog
                 .games
                 .iter()
@@ -4911,7 +4898,7 @@ pub(super) fn run_launcher_loop(
             user_state_session.refresh(games, now);
             user_state_catalog_version = Some(catalog_version);
         }
-        while let Some(event) = user_state_session.poll() {
+        while background_work_allowed && let Some(event) = user_state_session.poll() {
             match event {
                 UserStateEvent::Snapshot(snapshot) => {
                     nav.set_user_game_refs(
@@ -4996,7 +4983,7 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             };
-        if let Some(sample) = memory_guard.tick(loop_start) {
+        if background_work_allowed && let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
                     "memory_pressure",
@@ -5023,15 +5010,17 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
-        apply_screenshot_media_update_effects(
-            media_session.clear_progress_if_due(loop_start),
-            &app,
-            &mut catalog,
-            &mut scheduler,
-            Some(&mut preview),
-            &mut full_bridge_dirty,
-            start,
-        );
+        if background_work_allowed {
+            apply_screenshot_media_update_effects(
+                media_session.clear_progress_if_due(loop_start),
+                &app,
+                &mut catalog,
+                &mut scheduler,
+                Some(&mut preview),
+                &mut full_bridge_dirty,
+                start,
+            );
+        }
         launcher_readiness.poll();
         let mut route_action = display_session.begin_frame(frames, launching, f);
         route_action.force_full_present |= launcher_readiness.needs_full_present();
@@ -5041,7 +5030,8 @@ pub(super) fn run_launcher_loop(
         let defer_selected_preview =
             catalog_contention_quiet_previews && preview.trace_cache_state() == "exact";
         let mut preview_scheduled_this_loop = false;
-        let clock_update_due = last_clock_update.elapsed() >= Duration::from_secs(1);
+        let clock_update_due =
+            background_work_allowed && last_clock_update.elapsed() >= Duration::from_secs(1);
         let clock_update_start = clock_update_due.then(Instant::now);
         if clock_update_due {
             if startup_intro.is_some() {
@@ -5075,21 +5065,11 @@ pub(super) fn run_launcher_loop(
             }
         }
 
-        if should_restart_for_urgent_input(
-            input_batch.events.is_empty(),
-            latency_critical_input_pending,
-            input_observation_probe
-                .as_ref()
-                .is_some_and(|probe| probe.changed_since(input_observation)),
-        ) {
-            launcher_response_trace.record_lab(Some(serde_json::json!({
-                "phase": "input-priority-restart",
-                "checkpoint": "before-catalog-work",
-                "at_us": crate::input_hub::monotonic_us(),
-            })));
-            let _ = launcher_response_trace
-                .record_scheduler_interval("input-priority-restart", scheduler_phase);
-            continue;
+        if input_observation_probe
+            .as_ref()
+            .is_some_and(|probe| probe.changed_since(input_observation))
+        {
+            background_work_allowed = false;
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
@@ -5793,21 +5773,18 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-route", scheduler_phase);
-        if should_restart_for_urgent_input(
-            input_batch.events.is_empty(),
-            latency_critical_input_pending,
-            input_observation_probe
-                .as_ref()
-                .is_some_and(|probe| probe.changed_since(input_observation)),
-        ) {
-            launcher_response_trace.record_lab(Some(serde_json::json!({
-                "phase": "input-priority-restart",
-                "checkpoint": "before-input-route",
-                "at_us": crate::input_hub::monotonic_us(),
-            })));
-            let _ = launcher_response_trace
-                .record_scheduler_interval("input-priority-restart", scheduler_phase);
-            continue;
+        // Drain immediately before routing so catalog, timer, lifecycle, and
+        // bridge housekeeping cannot sit between capture and dispatch.
+        let drained_input = pad.drain_input_batch();
+        input_observation = drained_input.observation;
+        let input_batch = drained_input.batch;
+        input_integrity_trace.observe_batch(&input_batch);
+        launcher_response_trace.observe_batch(&input_batch);
+        launcher_response_trace.record_lab(input_latency_lab.before_input_route());
+        if !input_batch.events.is_empty()
+            && let Some(stall_ms) = input_integrity_stall.take()
+        {
+            std::thread::sleep(Duration::from_millis(stall_ms));
         }
         let pad_changed = pad_changed_for_input
             .take()
@@ -7848,16 +7825,37 @@ pub(super) fn run_launcher_loop(
         let prepare_us = (frame_t0 - loop_start).as_micros();
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("render-setup", scheduler_phase);
-        let pre_render_pace = wait_before_render.then(|| {
+        let pre_render_pace = if wait_before_render {
             let wait_start = Instant::now();
-            let pace = pacer.wait();
-            let wait_done = Instant::now();
-            (
-                pace,
-                wait_done,
-                wait_done.saturating_duration_since(wait_start).as_micros(),
-            )
-        });
+            match pacer.wait_interruptible(|| {
+                input_observation_probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.changed_since(input_observation))
+            }) {
+                VsyncWaitOutcome::Pace(pace) => {
+                    let wait_done = Instant::now();
+                    Some((
+                        pace,
+                        wait_done,
+                        wait_done.saturating_duration_since(wait_start).as_micros(),
+                    ))
+                }
+                VsyncWaitOutcome::Interrupted => {
+                    launcher_response_trace.record_lab(Some(serde_json::json!({
+                        "phase": "pre-render-wait-interrupted-input",
+                        "interrupted_at_us": crate::input_hub::monotonic_us(),
+                    })));
+                    let _ = launcher_response_trace.record_scheduler_interval(
+                        "pre-render-wait-interrupted-input",
+                        scheduler_phase,
+                    );
+                    request_launcher_redraw!();
+                    continue 'launcher;
+                }
+            }
+        } else {
+            None
+        };
         let pre_render_wait_us = pre_render_pace
             .as_ref()
             .map(|(_, _, wait_us)| *wait_us)
