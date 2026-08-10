@@ -7268,8 +7268,13 @@ fn system_entry_sample_ready_time(sample: &Value) -> Option<u64> {
 }
 
 fn system_entry_status_matches_list(status: &Value, system: &str) -> bool {
+    let expected_collection = if system == "arcade" {
+        "menu:arcade"
+    } else {
+        system
+    };
     status.get("screen").and_then(Value::as_str) == Some("arcade")
-        && status.get("active_collection_id").and_then(Value::as_str) == Some(system)
+        && status.get("active_collection_id").and_then(Value::as_str) == Some(expected_collection)
 }
 
 fn system_entry_artifact_prefix(
@@ -17484,10 +17489,12 @@ mod tests {
         let stale = json!({ "screen": "home", "active_collection_id": "" });
         let wrong_system = json!({ "screen": "arcade", "active_collection_id": "snes" });
         let ready = json!({ "screen": "arcade", "active_collection_id": "c64" });
+        let arcade = json!({ "screen": "arcade", "active_collection_id": "menu:arcade" });
 
         assert!(!system_entry_status_matches_list(&stale, "c64"));
         assert!(!system_entry_status_matches_list(&wrong_system, "c64"));
         assert!(system_entry_status_matches_list(&ready, "c64"));
+        assert!(system_entry_status_matches_list(&arcade, "arcade"));
     }
 
     #[test]
