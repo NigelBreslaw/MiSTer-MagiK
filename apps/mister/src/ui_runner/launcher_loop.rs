@@ -2175,6 +2175,56 @@ impl LauncherResponseTraceSnapshot {
             .records
             .iter()
             .map(|record| {
+                let frame_evidence = record.frame.as_ref().map(|frame| {
+                    let slint_damage_rects = frame
+                        .slint_damage_rects
+                        .iter()
+                        .map(|(x0, y0, x1, y1)| {
+                            serde_json::json!({
+                                "x0": x0,
+                                "y0": y0,
+                                "x1": x1,
+                                "y1": y1,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    let present_cost = serde_json::json!({
+                        "present_bytes": frame.present_bytes,
+                        "wasted_present_bytes": frame.wasted_present_bytes,
+                        "cached_present_us": frame.cached_present_us,
+                        "hidden_compose_us": frame.hidden_compose_us,
+                        "hidden_copy_us": frame.hidden_copy_us,
+                        "hidden_publish_us": frame.hidden_publish_us,
+                        "hidden_invalid_bytes": frame.hidden_invalid_bytes,
+                        "hidden_rect_count": frame.hidden_rect_count,
+                        "hidden_catchup_bytes": frame.hidden_catchup_bytes,
+                        "hidden_full_copy": frame.hidden_full_copy,
+                        "hidden_copy_path": frame.hidden_copy_path,
+                        "present_request_us": frame.present_request_us,
+                        "set_vga_fb_us": frame.set_vga_fb_us,
+                        "present_wait_us": frame.present_wait_us,
+                    });
+                    serde_json::json!({
+                        "selected": frame.selected.json(),
+                        "projected_at_us": frame.projected_at_us,
+                        "raster_started_at_us": frame.raster_started_at_us,
+                        "raster_completed_at_us": frame.raster_completed_at_us,
+                        "slint_damage_rects": slint_damage_rects,
+                        "post_accepted_at_us": frame.post_accepted_at_us,
+                        "dirty_rect": frame.dirty_rect.map(|(x0, y0, x1, y1)| serde_json::json!({
+                            "x0": x0,
+                            "y0": y0,
+                            "x1": x1,
+                            "y1": y1,
+                        })),
+                        "present_cost": present_cost,
+                        "posted_sequence": frame.posted_sequence,
+                        "post_active_sequence": frame.post_active_sequence,
+                        "post_pending_sequence": frame.post_pending_sequence,
+                        "post_pending": frame.post_pending,
+                        "first_eligible_vblank": frame.first_eligible_vblank,
+                    })
+                });
                 serde_json::json!({
                     "action": format!("{:?}", record.action).to_ascii_lowercase(),
                     "trigger": match record.trigger {
@@ -2206,44 +2256,7 @@ impl LauncherResponseTraceSnapshot {
                     "before": record.before.json(),
                     "after": record.after.as_ref().map(LauncherResponseState::json),
                     "disposition": record.disposition,
-                    "frame": record.frame.as_ref().map(|frame| serde_json::json!({
-                        "selected": frame.selected.json(),
-                        "projected_at_us": frame.projected_at_us,
-                        "raster_started_at_us": frame.raster_started_at_us,
-                        "raster_completed_at_us": frame.raster_completed_at_us,
-                        "slint_damage_rects": frame.slint_damage_rects.iter().map(|(x0, y0, x1, y1)| serde_json::json!({
-                            "x0": x0,
-                            "y0": y0,
-                            "x1": x1,
-                            "y1": y1,
-                        })).collect::<Vec<_>>(),
-                        "post_accepted_at_us": frame.post_accepted_at_us,
-                        "dirty_rect": frame.dirty_rect.map(|(x0, y0, x1, y1)| serde_json::json!({
-                            "x0": x0,
-                            "y0": y0,
-                            "x1": x1,
-                            "y1": y1,
-                        })),
-                        "present_bytes": frame.present_bytes,
-                        "wasted_present_bytes": frame.wasted_present_bytes,
-                        "cached_present_us": frame.cached_present_us,
-                        "hidden_compose_us": frame.hidden_compose_us,
-                        "hidden_copy_us": frame.hidden_copy_us,
-                        "hidden_publish_us": frame.hidden_publish_us,
-                        "hidden_invalid_bytes": frame.hidden_invalid_bytes,
-                        "hidden_rect_count": frame.hidden_rect_count,
-                        "hidden_catchup_bytes": frame.hidden_catchup_bytes,
-                        "hidden_full_copy": frame.hidden_full_copy,
-                        "hidden_copy_path": frame.hidden_copy_path,
-                        "present_request_us": frame.present_request_us,
-                        "set_vga_fb_us": frame.set_vga_fb_us,
-                        "present_wait_us": frame.present_wait_us,
-                        "posted_sequence": frame.posted_sequence,
-                        "post_active_sequence": frame.post_active_sequence,
-                        "post_pending_sequence": frame.post_pending_sequence,
-                        "post_pending": frame.post_pending,
-                        "first_eligible_vblank": frame.first_eligible_vblank,
-                    })),
+                    "frame": frame_evidence,
                     "confirmed_at_us": record.confirmed_at_us,
                     "confirmed_latency_us": record.confirmed_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
                     "confirmed_frame": record.confirmed_frame,
