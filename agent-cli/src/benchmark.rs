@@ -1550,12 +1550,12 @@ mod tests {
             "status": "completed",
             "artifact_validity_status": "passed",
             "current_product_quality_status": "failed",
-            "arms": [{}, {}, {}, {}, {}, {}],
+            "arms": [{}, {}, {}, {}, {}, {}, {}, {}, {}],
         });
         evaluate_input_latency_lab_summary(&summary).unwrap();
-        summary["arms"] = json!([{}, {}, {}, {}, {}]);
+        summary["arms"] = json!([{}, {}, {}, {}, {}, {}, {}, {}]);
         assert!(evaluate_input_latency_lab_summary(&summary).is_err());
-        summary["arms"] = json!([{}, {}, {}, {}, {}, {}]);
+        summary["arms"] = json!([{}, {}, {}, {}, {}, {}, {}, {}, {}]);
         summary["artifact_validity_status"] = json!("failed");
         assert!(evaluate_input_latency_lab_summary(&summary).is_err());
     }
