@@ -634,6 +634,32 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_system_entry_critical(config, output_dir))
     }
 
+    pub(crate) fn profile_system_entry_critical_confirm(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_system_entry_repeated(
+                config,
+                output_dir,
+                SystemEntryRepeatedMode::CriticalConfirm,
+            )
+        })
+    }
+
+    pub(crate) fn profile_system_entry_qualification(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_system_entry_repeated(
+                config,
+                output_dir,
+                SystemEntryRepeatedMode::Qualification,
+            )
+        })
+    }
+
     pub(crate) fn verify_modal_input(
         &mut self,
         output_dir: &Path,
@@ -7542,6 +7568,28 @@ fn profile_installed_system_entry(
 const CRITICAL_SYSTEM_ENTRY_SYSTEMS: [&str; 6] =
     ["c64", "snes", "pc88", "nes", "bbcmicro", "arcade"];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SystemEntryRepeatedMode {
+    CriticalConfirm,
+    Qualification,
+}
+
+impl SystemEntryRepeatedMode {
+    const fn schema(self) -> &'static str {
+        match self {
+            Self::CriticalConfirm => "mister-magik-system-entry-critical-confirm-benchmark-v1",
+            Self::Qualification => "mister-magik-system-entry-qualification-benchmark-v1",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CriticalConfirm => "critical-confirm",
+            Self::Qualification => "qualification",
+        }
+    }
+}
+
 fn profile_installed_system_entry_critical(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -7648,7 +7696,9 @@ fn profile_installed_system_entry_critical(
                     "expected": sample["selected_has_preview"],
                     "outcome": sample["preview_outcome"],
                     "state": sample["preview_state"],
+                    "provenance": sample["preview_provenance"],
                 },
+                "cache_provenance": sample["cache_provenance"],
                 "retained_frame": {
                     "screenshot": sample["screenshot"],
                     "capture_metadata": sample["capture_metadata"],
@@ -7660,12 +7710,15 @@ fn profile_installed_system_entry_critical(
         })
         .collect::<Vec<_>>();
     let summary = json!({
-        "schema": "mister-magik-system-entry-critical-benchmark-v1",
+        "schema": "mister-magik-system-entry-critical-benchmark-v2",
         "status": if passed { "passed" } else { "failed" },
         "measurement": "direct collection-entry request to first Main-confirmed frame with full list and terminal selected screenshot",
         "cache_policy": "fresh launcher process per system; operating-system filesystem cache is not flushed",
         "invocation": "direct shared production collection-entry path; no tile focus, menu traversal, or synthetic input",
         "targets": CRITICAL_SYSTEM_ENTRY_SYSTEMS,
+        "sampling": {
+            "fresh_processes_per_system": 1,
+        },
         "worst_system": worst_system,
         "systems": systems,
     });
@@ -7674,6 +7727,219 @@ fn profile_installed_system_entry_critical(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_system_entry_repeated(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    mode: SystemEntryRepeatedMode,
+) -> Result<String> {
+    const SAMPLES_PER_SYSTEM: usize = 20;
+
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed system-entry benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability.get("system-entry-v1").and_then(Value::as_bool) != Some(true) {
+        return Err("installed app does not support system-entry-v1".into());
+    }
+    let registry = exec_checked_output(
+        &session,
+        "system-entry registry report",
+        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let populated = registry["systems"]
+        .as_array()
+        .ok_or("system-entry registry has no systems")?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("system")?.as_str()?.to_string(),
+                row.get("games")?.as_u64()?,
+            ))
+        })
+        .filter(|(_, games)| *games > 0)
+        .collect::<Vec<_>>();
+    let targets = select_system_entry_targets(mode, &populated)?;
+    if targets.is_empty() {
+        return Err("system-entry repeated benchmark has no populated targets".into());
+    }
+
+    let run_result = (|| -> Result<Vec<(String, u64, Vec<Value>)>> {
+        let mut results = Vec::with_capacity(targets.len());
+        for (ordinal, (system, games)) in targets.iter().enumerate() {
+            let mut samples = Vec::with_capacity(SAMPLES_PER_SYSTEM);
+            for sample_index in 1..=SAMPLES_PER_SYSTEM {
+                samples.push(run_system_entry_sample(
+                    config,
+                    &session,
+                    output_dir,
+                    system,
+                    *games,
+                    ordinal + 1,
+                    sample_index,
+                    SystemEntryInvocation::Direct,
+                )?);
+            }
+            results.push((system.clone(), *games, samples));
+        }
+        Ok(results)
+    })();
+    let restore_result = exec_checked(
+        &session,
+        "system-entry benchmark cleanup",
+        &format!("rm -f {}", sh(SYSTEM_ENTRY_TRACE_REMOTE)),
+    )
+    .and_then(|()| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    });
+    let results = match (run_result, restore_result) {
+        (Ok(results), Ok(())) => results,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; launcher restoration failed: {restore}").into());
+        }
+    };
+
+    let systems = results
+        .iter()
+        .map(|(system, games, samples)| summarize_repeated_system_entry(system, *games, samples))
+        .collect::<Vec<_>>();
+    let passed = systems.iter().all(|system| {
+        system["successful_sample_count"].as_u64() == Some(SAMPLES_PER_SYSTEM as u64)
+    });
+    let worst_system = systems
+        .iter()
+        .filter_map(|system| {
+            Some((
+                system["system"].as_str()?,
+                system["timings_ms"]["complete_ready"]["p95"].as_u64()?,
+            ))
+        })
+        .max_by_key(|(_, p95)| *p95)
+        .map(|(system, _)| system);
+    let summary = json!({
+        "schema": mode.schema(),
+        "status": if passed { "passed" } else { "failed" },
+        "mode": mode.label(),
+        "measurement": "direct collection-entry request to first Main-confirmed frame with full list and terminal selected screenshot",
+        "cache_policy": "fresh launcher process per sample; operating-system filesystem cache is not flushed",
+        "invocation": "direct shared production collection-entry path; no tile focus, menu traversal, or synthetic input",
+        "sampling": {
+            "fresh_processes_per_system": SAMPLES_PER_SYSTEM,
+            "percentile_method": "nearest-rank",
+        },
+        "registry": registry,
+        "targets": targets.iter().map(|(system, _)| system).collect::<Vec<_>>(),
+        "worst_system_by_p95": worst_system,
+        "systems": systems,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn select_system_entry_targets(
+    mode: SystemEntryRepeatedMode,
+    populated: &[(String, u64)],
+) -> Result<Vec<(String, u64)>> {
+    if mode == SystemEntryRepeatedMode::Qualification {
+        return Ok(populated.to_vec());
+    }
+    let games_by_system = populated.iter().cloned().collect::<BTreeMap<_, _>>();
+    CRITICAL_SYSTEM_ENTRY_SYSTEMS
+        .iter()
+        .map(|system| {
+            games_by_system
+                .get(*system)
+                .copied()
+                .map(|games| ((*system).to_string(), games))
+                .ok_or_else(|| {
+                    format!("critical system-entry target {system} is not populated").into()
+                })
+        })
+        .collect()
+}
+
+fn summarize_repeated_system_entry(system: &str, games: u64, samples: &[Value]) -> Value {
+    let successful = samples
+        .iter()
+        .filter(|sample| system_entry_sample_ready_time(sample).is_some())
+        .count();
+    let failed_samples = samples
+        .iter()
+        .filter(|sample| system_entry_sample_ready_time(sample).is_none())
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut catalog_provenance = BTreeMap::<String, u64>::new();
+    let mut preview_provenance = BTreeMap::<String, u64>::new();
+    for sample in samples {
+        if let Some(value) = sample["catalog_residency"].as_str() {
+            *catalog_provenance.entry(value.to_string()).or_default() += 1;
+        }
+        if let Some(value) = sample["preview_provenance"].as_str() {
+            *preview_provenance.entry(value.to_string()).or_default() += 1;
+        }
+    }
+    json!({
+        "system": system,
+        "games": games,
+        "sample_count": samples.len(),
+        "successful_sample_count": successful,
+        "failed_sample_count": failed_samples.len(),
+        "cache_provenance": {
+            "catalog": catalog_provenance,
+            "preview": preview_provenance,
+        },
+        "timings_ms": {
+            "rows_loaded": summarize_system_entry_timing(samples, "rows_ready_ms"),
+            "first_list_frame": summarize_system_entry_timing(samples, "first_list_presented_ms"),
+            "selected_screenshot_terminal": summarize_system_entry_timing(samples, "preview_ready_ms"),
+            "complete_ready": summarize_system_entry_timing(samples, "ready_presented_ms"),
+        },
+        "failed_samples": failed_samples,
+        "samples": samples,
+    })
+}
+
+fn summarize_system_entry_timing(samples: &[Value], field: &str) -> Value {
+    let mut values = samples
+        .iter()
+        .filter(|sample| sample["status"].as_str() == Some("passed"))
+        .filter_map(|sample| sample[field].as_u64())
+        .collect::<Vec<_>>();
+    values.sort_unstable();
+    if values.is_empty() {
+        return json!({
+            "samples": 0,
+            "p50": Value::Null,
+            "p95": Value::Null,
+            "max": Value::Null,
+        });
+    }
+    json!({
+        "samples": values.len(),
+        "p50": median_u64(&values),
+        "p95": percentile_nearest_rank(&values, 95),
+        "max": values.last(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7746,7 +8012,9 @@ fn run_system_entry_sample(
                 .ok_or("system-entry trace disappeared before retention")?,
         )?;
         let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
+        let enter_input = system_entry_trace_row(&trace, "arcade_enter_input")?;
         let rows_ready = system_entry_trace_row(&trace, "arcade_rows_ready")?;
+        let preview_ready = system_entry_trace_row(&trace, "arcade_preview_exact")?;
         let loaded_games = system_entry_detail_u64(rows_ready, "games")?;
         if loaded_games != games {
             return Err(format!(
@@ -7755,6 +8023,9 @@ fn run_system_entry_sample(
             .into());
         }
         let selected_has_preview = system_entry_detail_flag(ready, "selected_has_preview")?;
+        let catalog_resident_at_input = system_entry_detail_flag(enter_input, "catalog_resident")?;
+        let preview_provenance = system_entry_detail_value(preview_ready, "provenance")
+            .ok_or("system-entry preview trace has no provenance")?;
         let preview_state = ready
             .get(10)
             .ok_or("system-entry ready trace has no preview state")?;
@@ -7805,6 +8076,13 @@ fn run_system_entry_sample(
             "selected_has_preview": selected_has_preview,
             "preview_state": preview_state,
             "preview_outcome": preview_outcome,
+            "catalog_resident_at_input": catalog_resident_at_input,
+            "catalog_residency": if catalog_resident_at_input { "resident" } else { "cold" },
+            "preview_provenance": preview_provenance,
+            "cache_provenance": {
+                "catalog": if catalog_resident_at_input { "resident" } else { "cold" },
+                "preview": preview_provenance,
+            },
             "ready_frame": ready_frame,
             "capture_active_sequence": capture_active_sequence,
             "capture_after_ready": true,
@@ -7906,6 +8184,10 @@ fn retain_failed_system_entry_sample(
         "selected_has_preview": Value::Null,
         "preview_state": Value::Null,
         "preview_outcome": Value::Null,
+        "catalog_resident_at_input": Value::Null,
+        "catalog_residency": Value::Null,
+        "preview_provenance": Value::Null,
+        "cache_provenance": Value::Null,
         "ready_frame": Value::Null,
         "capture_active_sequence": Value::Null,
         "capture_after_ready": false,
@@ -17522,6 +17804,74 @@ mod tests {
             CRITICAL_SYSTEM_ENTRY_SYSTEMS,
             ["c64", "snes", "pc88", "nes", "bbcmicro", "arcade"]
         );
+    }
+
+    #[test]
+    fn repeated_system_entry_targets_preserve_contract_ordering() {
+        let populated = vec![
+            ("arcade".to_string(), 942),
+            ("bbcmicro".to_string(), 1_200),
+            ("nes".to_string(), 2_000),
+            ("pc88".to_string(), 1_500),
+            ("snes".to_string(), 3_000),
+            ("c64".to_string(), 15_000),
+        ];
+        let critical =
+            select_system_entry_targets(SystemEntryRepeatedMode::CriticalConfirm, &populated)
+                .unwrap();
+        assert_eq!(
+            critical
+                .iter()
+                .map(|(system, _)| system.as_str())
+                .collect::<Vec<_>>(),
+            CRITICAL_SYSTEM_ENTRY_SYSTEMS
+        );
+        assert_eq!(
+            select_system_entry_targets(SystemEntryRepeatedMode::Qualification, &populated)
+                .unwrap(),
+            populated
+        );
+    }
+
+    #[test]
+    fn repeated_system_entry_percentiles_sort_and_use_nearest_rank() {
+        let samples = (1..=20)
+            .rev()
+            .map(|value| json!({"status": "passed", "ready_presented_ms": value}))
+            .collect::<Vec<_>>();
+        let summary = summarize_system_entry_timing(&samples, "ready_presented_ms");
+        assert_eq!(summary["samples"], 20);
+        assert_eq!(summary["p50"], 10);
+        assert_eq!(summary["p95"], 19);
+        assert_eq!(summary["max"], 20);
+    }
+
+    #[test]
+    fn repeated_system_entry_retains_failures_and_cache_provenance() {
+        let samples = vec![
+            json!({
+                "status": "passed",
+                "ready_presented_ms": 42,
+                "rows_ready_ms": 1,
+                "first_list_presented_ms": 30,
+                "preview_ready_ms": 2,
+                "catalog_residency": "resident",
+                "preview_provenance": "decoded_cache",
+            }),
+            json!({
+                "status": "failed",
+                "sample": 2,
+                "error": "timeout",
+                "catalog_residency": null,
+                "preview_provenance": null,
+            }),
+        ];
+        let summary = summarize_repeated_system_entry("arcade", 942, &samples);
+        assert_eq!(summary["successful_sample_count"], 1);
+        assert_eq!(summary["failed_sample_count"], 1);
+        assert_eq!(summary["failed_samples"][0]["error"], "timeout");
+        assert_eq!(summary["cache_provenance"]["catalog"]["resident"], 1);
+        assert_eq!(summary["cache_provenance"]["preview"]["decoded_cache"], 1);
     }
 
     #[test]

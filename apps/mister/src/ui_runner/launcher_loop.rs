@@ -624,6 +624,7 @@ struct ArcadeEntryLatencyTracker {
     ready_presented: bool,
     first_nav_input_at: Option<Instant>,
     first_nav_presented: bool,
+    catalog_resident_at_input: Option<bool>,
 }
 
 struct PendingCollectionEntry {
@@ -999,6 +1000,7 @@ impl ArcadeEntryLatencyTracker {
             ready_presented: false,
             first_nav_input_at: None,
             first_nav_presented: false,
+            catalog_resident_at_input: None,
         }
     }
 
@@ -1014,6 +1016,7 @@ impl ArcadeEntryLatencyTracker {
         self.ready_presented = false;
         self.first_nav_input_at = None;
         self.first_nav_presented = false;
+        self.catalog_resident_at_input = None;
     }
 
     fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
@@ -1041,6 +1044,7 @@ impl ArcadeEntryLatencyTracker {
             return;
         }
         self.enter_input_at = Some(at);
+        self.catalog_resident_at_input = Some(true);
         let system = Self::active_system_id(catalog, nav);
         let asset_key = Self::selected_asset_key(catalog, nav);
         self.trace.record(
@@ -1067,11 +1071,13 @@ impl ArcadeEntryLatencyTracker {
         lifecycle: &LauncherLifecycle,
         collection_id: &str,
         source: &'static str,
+        catalog_resident: bool,
     ) {
         if self.enter_input_at.is_some() {
             return;
         }
         self.enter_input_at = Some(at);
+        self.catalog_resident_at_input = Some(catalog_resident);
         self.trace.record(
             start,
             "arcade_enter_input",
@@ -1085,7 +1091,10 @@ impl ArcadeEntryLatencyTracker {
             None,
             "",
             "",
-            format!("source={source}"),
+            format!(
+                "source={source} catalog_resident={}",
+                u8::from(catalog_resident)
+            ),
         );
     }
 
@@ -1147,7 +1156,11 @@ impl ArcadeEntryLatencyTracker {
             None,
             "",
             &asset_key,
-            format!("games={}", catalog.system_game_count(&system)),
+            format!(
+                "games={} catalog_resident_at_input={}",
+                catalog.system_game_count(&system),
+                u8::from(self.catalog_resident_at_input.unwrap_or(false))
+            ),
         );
     }
 
@@ -1189,8 +1202,13 @@ impl ArcadeEntryLatencyTracker {
             preview_state,
             &asset_key,
             format!(
-                "source=preview_state selected_has_preview={}",
-                u8::from(selected_has_preview)
+                "source=preview_state selected_has_preview={} provenance={}",
+                u8::from(selected_has_preview),
+                if selected_has_preview {
+                    preview.visible_preview_load_source()
+                } else {
+                    "terminal-empty"
+                }
             ),
         );
     }
@@ -3669,6 +3687,7 @@ fn begin_cold_collection_entry(
                 lifecycle,
                 collection_id,
                 trace_source,
+                false,
             );
             print_startup_event(
                 start,
@@ -5559,6 +5578,7 @@ pub(super) fn run_launcher_loop(
                     &lifecycle,
                     &collection_id,
                     "benchmark-direct",
+                    true,
                 );
                 if nav.open_system(&catalog, &collection_id) {
                     arcade_entry_latency.record_rows_ready(

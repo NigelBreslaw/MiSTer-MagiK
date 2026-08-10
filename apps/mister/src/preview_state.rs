@@ -657,6 +657,10 @@ impl PreviewState {
             .unwrap_or("empty")
     }
 
+    pub(crate) const fn visible_preview_load_source(&self) -> &'static str {
+        self.visible_preview_load_source
+    }
+
     pub(crate) fn take_raw_dirty(&mut self) -> bool {
         let dirty = self.raw_dirty;
         self.raw_dirty = false;

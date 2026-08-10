@@ -699,6 +699,8 @@ mod tests {
             "catalog-lifecycle",
             "system-entry",
             "system-entry-critical",
+            "system-entry-critical-confirm",
+            "system-entry-qualification",
             "particles",
             "particle-profile",
             "particle-capacity",

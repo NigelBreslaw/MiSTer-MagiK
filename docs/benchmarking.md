@@ -237,6 +237,14 @@ boundary, trace, status, and screenshot artifacts as the full sweep. Run the
 full `system-entry` benchmark only when the critical set needs to be
 rediscovered.
 
+`scripts/agent benchmark system-entry-critical-confirm` repeats that same
+direct measurement 20 times per critical system and reports nearest-rank P95,
+median, and maximum latency for every stage. `scripts/agent benchmark
+system-entry-qualification` applies the 20-process contract to every populated
+registry system in registry order. Both modes retain partial failed samples
+instead of dropping them from the artifact set or treating them as slow
+successful samples.
+
 Each critical-system summary row exposes four cumulative timings: all
 registered game rows loaded, first visible list frame, selected-game screenshot
 terminal state, and complete Main-confirmed readiness. The run fails if the
@@ -245,6 +253,10 @@ screenshot, readiness requires the exact screenshot; otherwise it requires a
 confirmed empty preview. The retained authoritative framebuffer capture is
 taken only after that ready frame, and its image, capture sequence, and metadata
 are linked directly from the system row.
+Every sample also records whether the catalog was already resident when entry
+began and the provenance of the terminal preview (for example decoded cache,
+archive, or authoritative empty). This makes startup-only advantages such as
+Arcade residency visible in both screening and confirmation reports.
 
 ## Cold boot
 
