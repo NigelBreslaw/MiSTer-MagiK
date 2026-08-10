@@ -34,16 +34,16 @@ component HomeFooter inherits Rectangle {
 
 export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
-    property <length> tile-gap: 16px;
+    property <float> nested-rail-scale: (root.width - 36px) / 924px;
+    property <length> tile-gap: root-menu ? 16px : 16px * nested-rail-scale;
     // Nested Home always exposes four full cards and half of the next card.
-    // Rust keeps scroll state in the canonical 960-wide rail coordinate, so
-    // translate it by the responsive pitch instead of changing navigation state.
-    property <length> narrow-tile-width: (root.width - 36px - 4 * tile-gap) / 4.5;
+    // Scale the complete canonical rail so its first and final edges remain exact.
+    property <length> narrow-tile-width: 191px * nested-rail-scale;
     property <length> tile-width: root-menu
         ? (root.width - 36px - 3 * tile-gap) / 4
         : narrow-tile-width;
     property <length> tile-pitch: tile-width + tile-gap;
-    property <float> canonical-scroll-scale: tile-pitch / 207px;
+    property <float> canonical-scroll-scale: root-menu ? 1 : nested-rail-scale;
     property <int> layout-item-count: root-menu ? Math.max(4, MisterBridge.menu-items.length)
         : MisterBridge.menu-items.length;
     property <length> content-width: layout-item-count * tile-width

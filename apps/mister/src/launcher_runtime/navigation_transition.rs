@@ -1408,7 +1408,7 @@ mod tests {
             NavigationTransitionRect {
                 x: 18,
                 y: 74,
-                width: 262,
+                width: 257,
                 height: 584,
             }
         );

@@ -137,19 +137,23 @@ pub fn hdmi_navigation_geometry(
     const HEADER_GAP: f32 = 14.0;
     const FOOTER_HEIGHT: f32 = 30.0;
     const FOOTER_GAP: f32 = 14.0;
-    const TILE_GAP: f32 = 16.0;
-    const CANONICAL_NARROW_TILE_PITCH: f32 = 207.0;
+    const ROOT_TILE_GAP: f32 = 16.0;
+    const CANONICAL_VIEWPORT_WIDTH: f32 = 924.0;
+    const CANONICAL_NARROW_TILE_WIDTH: f32 = 191.0;
+    const CANONICAL_NARROW_TILE_GAP: f32 = 16.0;
     let viewport_width = frame_width.saturating_sub(36) as f32;
-    let tile_width = if root_menu {
-        (viewport_width - 3.0 * TILE_GAP) / 4.0
+    let (tile_width, tile_pitch, displayed_scroll_x) = if root_menu {
+        let tile_width = (viewport_width - 3.0 * ROOT_TILE_GAP) / 4.0;
+        (tile_width, tile_width + ROOT_TILE_GAP, 0.0)
     } else {
-        (viewport_width - 4.0 * TILE_GAP) / 4.5
-    };
-    let tile_pitch = tile_width + TILE_GAP;
-    let displayed_scroll_x = if root_menu {
-        0.0
-    } else {
-        scroll_x.max(0) as f32 * tile_pitch / CANONICAL_NARROW_TILE_PITCH
+        let scale = viewport_width / CANONICAL_VIEWPORT_WIDTH;
+        let tile_width = CANONICAL_NARROW_TILE_WIDTH * scale;
+        let tile_gap = CANONICAL_NARROW_TILE_GAP * scale;
+        (
+            tile_width,
+            tile_width + tile_gap,
+            scroll_x.max(0) as f32 * scale,
+        )
     };
     let card_height = (frame_height as f32
         - OUTER_PADDING * 2.0
