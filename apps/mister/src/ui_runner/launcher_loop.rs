@@ -9469,6 +9469,7 @@ pub(super) fn run_launcher_loop(
             }
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         }
+        let presented_copied_rows = presentation.copied_rows;
         arcade_entry_latency.record_presented_frame(
             start,
             frame_t4,
@@ -9478,7 +9479,7 @@ pub(super) fn run_launcher_loop(
             &preview,
             frames,
             prepare_us,
-            presentation.copied_rows,
+            presented_copied_rows,
         );
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
@@ -9757,7 +9758,7 @@ pub(super) fn run_launcher_loop(
                     &preview,
                     frames,
                     prepare_us,
-                    presentation.copied_rows,
+                    presented_copied_rows,
                     true,
                 );
                 settings_navigation_benchmark
