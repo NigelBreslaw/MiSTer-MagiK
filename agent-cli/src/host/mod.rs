@@ -4998,14 +4998,16 @@ fn summarize_input_latency_lab_arm(
             journaled,
             first_write,
             proxy_kernel,
-            completed_write,
             captured,
             published,
             drained,
             dispatched,
             confirmed,
         ];
-        if ordered.windows(2).any(|pair| pair[0] > pair[1]) {
+        if ordered.windows(2).any(|pair| pair[0] > pair[1])
+            || completed_write < first_write
+            || completed_write < proxy_kernel
+        {
             return Err(format!(
                 "input pipeline stage order is invalid at ordinal {ordinal}: {ordered:?}"
             )
