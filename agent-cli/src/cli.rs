@@ -697,6 +697,7 @@ mod tests {
         let accepted = [
             "screensaver",
             "catalog-lifecycle",
+            "system-entry",
             "particles",
             "particle-profile",
             "particle-capacity",

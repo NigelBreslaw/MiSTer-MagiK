@@ -620,6 +620,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_catalog_lifecycle(config, output_dir))
     }
 
+    pub(crate) fn profile_system_entry(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_system_entry(config, output_dir))
+    }
+
     pub(crate) fn verify_modal_input(
         &mut self,
         output_dir: &Path,
@@ -4173,6 +4180,7 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
+const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
 const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const INPUT_INTEGRITY_DRIVER: &str =
     "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
@@ -7244,6 +7252,428 @@ fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {
         || contains("no valid manifest slot")
         || contains("search system arcade is absent")
         || contains("unsupported persisted search schema version")
+}
+
+fn profile_installed_system_entry(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed system-entry benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability.get("system-entry-v1").and_then(Value::as_bool) != Some(true) {
+        return Err("installed app does not support system-entry-v1".into());
+    }
+    let registry = exec_checked_output(
+        &session,
+        "system-entry registry report",
+        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let registry_systems = registry["systems"]
+        .as_array()
+        .ok_or("system-entry registry has no systems")?;
+    let mut systems = registry_systems
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("system")?.as_str()?.to_string(),
+                row.get("games")?.as_u64()?,
+            ))
+        })
+        .filter(|(_, games)| *games > 0)
+        .collect::<Vec<_>>();
+    systems.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    if systems.is_empty() {
+        return Err("system-entry registry contains no populated systems".into());
+    }
+
+    let run_result = (|| -> Result<BTreeMap<String, Vec<Value>>> {
+        let mut samples_by_system = BTreeMap::<String, Vec<Value>>::new();
+        for (ordinal, (system, games)) in systems.iter().enumerate() {
+            let sample = run_system_entry_sample(
+                config,
+                &session,
+                output_dir,
+                system,
+                *games,
+                ordinal + 1,
+                1,
+            )?;
+            samples_by_system
+                .entry(system.clone())
+                .or_default()
+                .push(sample);
+        }
+
+        let mut discovery = samples_by_system
+            .iter()
+            .map(|(system, samples)| {
+                Ok((
+                    system.clone(),
+                    samples
+                        .first()
+                        .and_then(|sample| sample["ready_presented_ms"].as_u64())
+                        .ok_or("system-entry discovery sample has no ready time")?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        discovery.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let candidates = discovery
+            .iter()
+            .take(3)
+            .map(|(system, _)| system.clone())
+            .collect::<Vec<_>>();
+        let registry_ordinals = systems
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (system, _))| (system.clone(), ordinal + 1))
+            .collect::<BTreeMap<_, _>>();
+        let games_by_system = systems.iter().cloned().collect::<BTreeMap<_, _>>();
+
+        for system in candidates {
+            for sample_index in 2..=3 {
+                let sample = run_system_entry_sample(
+                    config,
+                    &session,
+                    output_dir,
+                    &system,
+                    *games_by_system
+                        .get(&system)
+                        .ok_or("system-entry candidate has no registry count")?,
+                    *registry_ordinals
+                        .get(&system)
+                        .ok_or("system-entry candidate has no registry ordinal")?,
+                    sample_index,
+                )?;
+                samples_by_system
+                    .get_mut(&system)
+                    .ok_or("system-entry candidate has no discovery sample")?
+                    .push(sample);
+            }
+        }
+        Ok(samples_by_system)
+    })();
+    let restore_result = exec_checked(
+        &session,
+        "system-entry benchmark cleanup",
+        &format!("rm -f {}", sh(SYSTEM_ENTRY_TRACE_REMOTE)),
+    )
+    .and_then(|()| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    });
+    let samples_by_system = match (run_result, restore_result) {
+        (Ok(results), Ok(())) => results,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; launcher restoration failed: {restore}").into());
+        }
+    };
+
+    let mut discovery = samples_by_system
+        .iter()
+        .map(|(system, samples)| {
+            Ok((
+                system.clone(),
+                samples
+                    .first()
+                    .and_then(|sample| sample["ready_presented_ms"].as_u64())
+                    .ok_or("system-entry discovery sample has no ready time")?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    discovery.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let discovery_ranks = discovery
+        .iter()
+        .enumerate()
+        .map(|(rank, (system, _))| (system.clone(), rank + 1))
+        .collect::<BTreeMap<_, _>>();
+    let mut results = systems
+        .iter()
+        .map(|(system, games)| {
+            let samples = samples_by_system
+                .get(system)
+                .ok_or("system-entry summary has no samples")?;
+            let discovery_ready_presented_ms = samples
+                .first()
+                .and_then(|sample| sample["ready_presented_ms"].as_u64())
+                .ok_or("system-entry discovery sample has no ready time")?;
+            let mut ready_times = samples
+                .iter()
+                .map(|sample| -> Result<u64> {
+                    sample["ready_presented_ms"]
+                        .as_u64()
+                        .ok_or_else(|| "system-entry sample has no ready time".into())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            ready_times.sort_unstable();
+            let confirmed_median = (samples.len() == 3)
+                .then(|| median_u64(&ready_times))
+                .flatten();
+            Ok(json!({
+                "system": system,
+                "games": games,
+                "discovery_rank": discovery_ranks.get(system),
+                "discovery_ready_presented_ms": discovery_ready_presented_ms,
+                "sample_count": samples.len(),
+                "confirmed": confirmed_median.is_some(),
+                "confirmed_median_ready_presented_ms": confirmed_median,
+                "samples": samples,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    results.sort_by_key(|row| row["discovery_rank"].as_u64().unwrap_or(u64::MAX));
+    let mut confirmed = results
+        .iter()
+        .filter(|row| row["confirmed"].as_bool() == Some(true))
+        .collect::<Vec<_>>();
+    confirmed.sort_by(|a, b| {
+        b["confirmed_median_ready_presented_ms"]
+            .as_u64()
+            .cmp(&a["confirmed_median_ready_presented_ms"].as_u64())
+            .then_with(|| a["system"].as_str().cmp(&b["system"].as_str()))
+    });
+    let worst_system = confirmed
+        .first()
+        .and_then(|row| row["system"].as_str())
+        .ok_or("system-entry results have no confirmed worst system")?;
+    let summary = json!({
+        "schema": "mister-magik-system-entry-benchmark-v1",
+        "status": "passed",
+        "measurement": "activation input to first authoritative frame with full list and terminal selected screenshot",
+        "cache_policy": "fresh launcher process per sample; operating-system filesystem cache is not flushed",
+        "sampling": {
+            "discovery_runs_per_system": 1,
+            "confirmed_candidates": confirmed.len(),
+            "runs_per_confirmed_candidate": 3,
+        },
+        "registry": registry,
+        "worst_system": worst_system,
+        "systems": results,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_system_entry_sample(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    system: &str,
+    games: u64,
+    registry_ordinal: usize,
+    sample_index: usize,
+) -> Result<Value> {
+    let run_id = format!(
+        "system-entry-{system}-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    );
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                (
+                    "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+                    system.to_string(),
+                ),
+                (
+                    "MISTER_SYSTEM_ENTRY_TRACE".into(),
+                    SYSTEM_ENTRY_TRACE_REMOTE.into(),
+                ),
+                ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("screen").and_then(Value::as_str) == Some("home")
+            && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
+    })?;
+    run_launcher_response_driver(session, "a 10 1 1")?;
+    let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
+    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
+    validate_visible_launcher_capture(&capture)?;
+    let status = read_launcher_status(session)?;
+    if status.get("screen").and_then(Value::as_str) != Some("arcade") {
+        return Err(format!(
+            "system-entry {system} reached its ready marker off the game list: {status}"
+        )
+        .into());
+    }
+    let artifact_system = system
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let artifact_prefix = format!("{registry_ordinal:03}-{artifact_system}-run-{sample_index}");
+    let capture_file = format!("{artifact_prefix}.png");
+    let capture_metadata_file = format!("{artifact_prefix}-capture.json");
+    let trace_file = format!("{artifact_prefix}.tsv");
+    fs::write(output_dir.join(&capture_file), &capture.png)?;
+    fs::write(
+        output_dir.join(&capture_metadata_file),
+        format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+    )?;
+    fs::write(
+        output_dir.join(&trace_file),
+        remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
+            .ok_or("system-entry trace disappeared before retention")?,
+    )?;
+    let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
+    let selected_has_preview = system_entry_detail_flag(ready, "selected_has_preview")?;
+    let preview_state = ready
+        .get(10)
+        .ok_or("system-entry ready trace has no preview state")?;
+    Ok(json!({
+        "sample": sample_index,
+        "system": system,
+        "games": games,
+        "rows_ready_ms": system_entry_delta_ms(&trace, "arcade_rows_ready")?,
+        "first_list_presented_ms": system_entry_delta_ms(&trace, "arcade_enter_presented")?,
+        "preview_ready_ms": system_entry_delta_ms(&trace, "arcade_preview_exact")?,
+        "ready_presented_ms": system_entry_delta_ms(&trace, "system_entry_ready_presented")?,
+        "selected_has_preview": selected_has_preview,
+        "preview_state": preview_state,
+        "preview_outcome": if selected_has_preview { "exact" } else { "confirmed-empty" },
+        "screenshot": capture_file,
+        "capture_metadata": capture_metadata_file,
+        "trace": trace_file,
+    }))
+}
+
+fn parse_system_entry_registry(output: &str) -> Result<Value> {
+    let mut valid = false;
+    let mut total_games = None;
+    let mut systems = Vec::new();
+    for line in output.lines() {
+        let Some(marker) = line.find("catalog_v3_registry_") else {
+            continue;
+        };
+        let mut fields = line[marker..].split('\t');
+        let kind = fields.next();
+        let values = fields
+            .filter_map(|field| field.split_once('='))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        match kind {
+            Some("catalog_v3_registry_system_tsv") => {
+                let system = values
+                    .get("system")
+                    .ok_or("registry system row has no system")?;
+                let games = values
+                    .get("games")
+                    .ok_or("registry system row has no game count")?
+                    .parse::<u64>()?;
+                systems.push(json!({"system": system, "games": games}));
+            }
+            Some("catalog_v3_registry_summary_tsv") => {
+                valid = values.get("valid").copied() == Some("1");
+                total_games = values
+                    .get("total_games")
+                    .and_then(|value| value.parse::<u64>().ok());
+            }
+            _ => {}
+        }
+    }
+    if !valid || systems.is_empty() {
+        return Err("catalog registry report is missing or invalid".into());
+    }
+    Ok(json!({
+        "valid": true,
+        "total_games": total_games.ok_or("catalog registry report has no total")?,
+        "systems": systems,
+    }))
+}
+
+fn wait_system_entry_trace(
+    session: &Session,
+    run_id: &str,
+    system: &str,
+    timeout: Duration,
+) -> Result<Vec<Vec<String>>> {
+    let started = Instant::now();
+    loop {
+        if let Some(raw) = remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE) {
+            let rows = raw
+                .lines()
+                .skip(1)
+                .map(|line| line.split('\t').map(str::to_string).collect::<Vec<_>>())
+                .filter(|row| row.len() >= 13 && row[1] == run_id)
+                .collect::<Vec<_>>();
+            if rows
+                .iter()
+                .any(|row| row[0] == "system_entry_ready_presented" && row[6] == system)
+            {
+                return Ok(rows);
+            }
+        }
+        if started.elapsed() >= timeout {
+            let trace = remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
+                .unwrap_or_else(|| "missing".to_string());
+            return Err(format!(
+                "system-entry {system} timed out waiting for a ready frame; trace={trace}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn system_entry_delta_ms(rows: &[Vec<String>], event: &str) -> Result<u64> {
+    system_entry_trace_row(rows, event)?
+        .get(3)
+        .ok_or_else(|| format!("system-entry trace has no {event}"))?
+        .parse::<u64>()
+        .map_err(Into::into)
+}
+
+fn system_entry_trace_row<'a>(rows: &'a [Vec<String>], event: &str) -> Result<&'a Vec<String>> {
+    rows.iter()
+        .find(|row| row.first().map(String::as_str) == Some(event))
+        .ok_or_else(|| format!("system-entry trace has no {event}").into())
+}
+
+fn system_entry_detail_flag(row: &[String], name: &str) -> Result<bool> {
+    let detail = row
+        .get(12)
+        .ok_or("system-entry trace row has no detail field")?;
+    match detail
+        .split_whitespace()
+        .filter_map(|field| field.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value)
+    {
+        Some("1") => Ok(true),
+        Some("0") => Ok(false),
+        _ => Err(format!("system-entry trace detail has no {name} flag").into()),
+    }
 }
 
 fn profile_installed_catalog_lifecycle(
@@ -16643,6 +17073,44 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_entry_registry_parser_reads_summary_rows_without_opening_shards() {
+        let report = parse_system_entry_registry(
+            "launcher log prefix\n\
+             catalog_v3_registry_system_tsv\tsystem=c64\tgeneration=7\tgames=5000\n\
+             catalog_v3_registry_system_tsv\tsystem=snes\tgeneration=7\tgames=3200\n\
+             catalog_v3_registry_summary_tsv\tvalid=1\tsystems=2\ttotal_games=8200\n",
+        )
+        .unwrap();
+        assert_eq!(report["valid"], true);
+        assert_eq!(report["total_games"], 8_200);
+        assert_eq!(report["systems"][0]["system"], "c64");
+        assert_eq!(report["systems"][1]["games"], 3_200);
+    }
+
+    #[test]
+    fn system_entry_trace_uses_input_relative_ready_boundary() {
+        let rows = vec![vec![
+            "system_entry_ready_presented".to_string(),
+            "run".to_string(),
+            "900".to_string(),
+            "275".to_string(),
+        ]];
+        assert_eq!(
+            system_entry_delta_ms(&rows, "system_entry_ready_presented").unwrap(),
+            275
+        );
+    }
+
+    #[test]
+    fn system_entry_trace_preserves_terminal_preview_outcome() {
+        let mut row = vec![String::new(); 13];
+        row[12] = "copied_rows=240 confirmation=main-active-sequence selected_has_preview=0".into();
+        assert!(!system_entry_detail_flag(&row, "selected_has_preview").unwrap());
+        row[12] = "selected_has_preview=1".into();
+        assert!(system_entry_detail_flag(&row, "selected_has_preview").unwrap());
+    }
 
     #[test]
     fn catalog_adoption_parser_uses_the_largest_prepared_swap() {

@@ -197,6 +197,26 @@ or generic environment overrides. Benchmark requests pass through a restricted
 client that rejects delivery and platform-mutation operations before transport.
 The device agent exposes no binary-only runtime replacement endpoint.
 
+## System entry
+
+`scripts/agent benchmark system-entry` measures every populated Catalog V3
+system. Each system gets a fresh launcher process containing registry summaries
+and the eager Arcade rows only; merely focusing the destination tile performs
+no shard load. The benchmark sends one production-path activation press, then
+records row readiness, the first presented list frame, selected-preview
+readiness, and the first Main-confirmed active frame containing both the full
+list and the terminal selected screenshot state. It retains that frame as a
+PNG together with capture metadata and the event trace.
+
+The discovery sweep samples every populated system once. The three slowest
+systems then receive two additional samples, and `summary.json` identifies the
+worst confirmed system by median complete-ready latency. Samples are process
+cold: the launcher is restarted for every sample, but the operating-system
+filesystem cache is deliberately not flushed. Screenshot capture starts only
+after the ready marker and is excluded from the latency. SNES opens its game
+list directly, like every other system, rather than routing through the
+optional hub screen.
+
 ## Cold boot
 
 `cold-boot` profiles exactly one supervised reboot of the coherently installed
