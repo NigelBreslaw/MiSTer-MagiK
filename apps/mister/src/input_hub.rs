@@ -29,7 +29,10 @@ const INPUT_EVENT_SIZE: usize = if cfg!(target_pointer_width = "64") {
 };
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
+const EV_MSC: u16 = 4;
 const SYN_DROPPED: u16 = 3;
+const MSC_SERIAL: u16 = 0;
+const EVIOCSCLOCKID: libc::c_ulong = 0x4004_45a0;
 const JOURNAL_CAPACITY: usize = 1024;
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -57,6 +60,14 @@ struct InputMailbox {
 struct MailboxEvent {
     event: InputEvent,
     published_at_us: u64,
+    proxy_sequence: Option<u32>,
+    proxy_kernel_at_us: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ProxyEventMetadata {
+    sequence: Option<u32>,
+    kernel_at_us: Option<u64>,
 }
 
 #[derive(Default)]
@@ -76,6 +87,14 @@ impl MailboxState {
     }
 
     fn publish(&mut self, pending: crate::input_event::PendingInputEvent) -> bool {
+        self.publish_proxy(pending, ProxyEventMetadata::default())
+    }
+
+    fn publish_proxy(
+        &mut self,
+        pending: crate::input_event::PendingInputEvent,
+        proxy: ProxyEventMetadata,
+    ) -> bool {
         if self.events.len() >= JOURNAL_CAPACITY {
             self.health.overflow_count = self.health.overflow_count.saturating_add(1);
             self.health.desync_count = self.health.desync_count.saturating_add(1);
@@ -98,6 +117,8 @@ impl MailboxState {
         self.events.push_back(MailboxEvent {
             event,
             published_at_us: monotonic_us(),
+            proxy_sequence: proxy.sequence,
+            proxy_kernel_at_us: proxy.kernel_at_us,
         });
         self.health.queue_depth = self.events.len();
         self.health.queue_high_water = self.health.queue_high_water.max(self.events.len());
@@ -174,6 +195,8 @@ pub struct DrainedInput {
 pub struct InputPublication {
     pub sequence: u64,
     pub published_at_us: u64,
+    pub proxy_sequence: Option<u32>,
+    pub proxy_kernel_at_us: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,6 +245,8 @@ impl InputHub {
             .map(|published| InputPublication {
                 sequence: published.event.sequence,
                 published_at_us: published.published_at_us,
+                proxy_sequence: published.proxy_sequence,
+                proxy_kernel_at_us: published.proxy_kernel_at_us,
             })
             .collect();
         let events: Vec<_> = published_events
@@ -300,12 +325,16 @@ struct ProxyReader {
     source: InputSourceId,
     epoch: SourceEpoch,
     reducer: LogicalEventReducer,
+    protocol_v3: bool,
+    pending_proxy_sequence: Option<u32>,
 }
 
 fn capture_loop(mailbox: Arc<InputMailbox>) {
     apply_runtime_thread_policy(RuntimeThreadRole::InputReader);
+    let proxy_protocol = std::env::var(INPUT_PROXY_PROTOCOL_ENV).ok();
     let protocol_enabled = std::env::var(INPUT_PROXY_CAPABILITY_ENV).as_deref() == Ok("1")
-        && std::env::var(INPUT_PROXY_PROTOCOL_ENV).as_deref() == Ok("2");
+        && matches!(proxy_protocol.as_deref(), Some("2" | "3"));
+    let protocol_v3 = proxy_protocol.as_deref() == Some("3");
     if !protocol_enabled {
         mailbox.wake.notify_all();
         while !mailbox.shutdown.load(Ordering::Acquire) {
@@ -340,6 +369,8 @@ fn capture_loop(mailbox: Arc<InputMailbox>) {
                         },
                         epoch,
                         reducer: LogicalEventReducer::default(),
+                        protocol_v3,
+                        pending_proxy_sequence: None,
                     });
                 }
                 Err(_) => thread::sleep(DISCOVERY_INTERVAL),
@@ -399,9 +430,14 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
     loop {
         match reader.file.read_exact(&mut bytes) {
             Ok(()) => {
-                let (event_type, code, value) = parse_input_event(&bytes);
+                let (kernel_at_us, event_type, code, value) = parse_input_event(&bytes);
                 if event_type == EV_SYN && code == SYN_DROPPED {
                     return Err(io::Error::new(io::ErrorKind::InvalidData, "input desync"));
+                }
+                if reader.protocol_v3 && event_type == EV_MSC && code == MSC_SERIAL {
+                    reader.pending_proxy_sequence =
+                        u32::try_from(value).ok().filter(|value| *value > 0);
+                    continue;
                 }
                 if event_type != EV_KEY {
                     continue;
@@ -419,6 +455,10 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
                 } else {
                     continue;
                 };
+                let proxy = ProxyEventMetadata {
+                    sequence: reader.pending_proxy_sequence.take(),
+                    kernel_at_us: Some(kernel_at_us),
+                };
                 match reader.reducer.transition(
                     reader.source,
                     reader.epoch,
@@ -431,7 +471,7 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
                             .state
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .publish(pending);
+                            .publish_proxy(pending, proxy);
                         mailbox.wake.notify_all();
                         if !published {
                             return Err(io::Error::new(
@@ -483,6 +523,8 @@ fn open_proxy(path: &str) -> io::Result<File> {
     {
         return Err(io::Error::last_os_error());
     }
+    let clock_id = libc::CLOCK_MONOTONIC;
+    let _ = unsafe { libc::ioctl(file.as_raw_fd(), EVIOCSCLOCKID, &clock_id) };
     Ok(file)
 }
 
@@ -505,9 +547,25 @@ fn discover_main_proxy() -> Option<String> {
     paths.into_iter().next()
 }
 
-fn parse_input_event(bytes: &[u8; INPUT_EVENT_SIZE]) -> (u16, u16, i32) {
+fn parse_input_event(bytes: &[u8; INPUT_EVENT_SIZE]) -> (u64, u16, u16, i32) {
     let offset = INPUT_EVENT_SIZE - 8;
+    let kernel_at_us = if cfg!(target_pointer_width = "64") {
+        let seconds = i64::from_ne_bytes(bytes[0..8].try_into().expect("input seconds"));
+        let micros = i64::from_ne_bytes(bytes[8..16].try_into().expect("input micros"));
+        u64::try_from(seconds)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000)
+            .saturating_add(u64::try_from(micros).unwrap_or(0))
+    } else {
+        let seconds = i32::from_ne_bytes(bytes[0..4].try_into().expect("input seconds"));
+        let micros = i32::from_ne_bytes(bytes[4..8].try_into().expect("input micros"));
+        u64::try_from(seconds)
+            .unwrap_or(0)
+            .saturating_mul(1_000_000)
+            .saturating_add(u64::try_from(micros).unwrap_or(0))
+    };
     (
+        kernel_at_us,
         u16::from_ne_bytes([bytes[offset], bytes[offset + 1]]),
         u16::from_ne_bytes([bytes[offset + 2], bytes[offset + 3]]),
         i32::from_ne_bytes([
@@ -654,6 +712,8 @@ mod tests {
                     phase: InputPhase::Pressed,
                 },
                 published_at_us: sequence as u64,
+                proxy_sequence: None,
+                proxy_kernel_at_us: None,
             });
         }
         state.publish(crate::input_event::PendingInputEvent {
@@ -782,6 +842,8 @@ mod tests {
                         phase: InputPhase::Pressed,
                     },
                     published_at_us: 1,
+                    proxy_sequence: None,
+                    proxy_kernel_at_us: None,
                 },
             );
             state.publish(crate::input_event::PendingInputEvent {

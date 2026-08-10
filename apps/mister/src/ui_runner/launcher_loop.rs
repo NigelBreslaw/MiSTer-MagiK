@@ -1392,6 +1392,8 @@ struct LauncherResponseRecord {
     action: LogicalAction,
     trigger: DispatchKind,
     press_id: u64,
+    proxy_sequence: Option<u32>,
+    proxy_kernel_at_us: Option<u64>,
     captured_at_us: u64,
     published_at_us: Option<u64>,
     drained_at_us: Option<u64>,
@@ -1448,6 +1450,8 @@ struct LauncherResponseTrace {
     pending_dispatches: VecDeque<usize>,
     pending_confirmations: VecDeque<usize>,
     published_at_us: HashMap<u64, u64>,
+    proxy_sequences: HashMap<u64, u32>,
+    proxy_kernel_at_us: HashMap<u64, u64>,
     drained_at_us: HashMap<u64, u64>,
     state: LauncherResponseState,
     queue_high_water: usize,
@@ -1532,6 +1536,8 @@ impl LauncherResponseTrace {
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
             published_at_us: HashMap::new(),
+            proxy_sequences: HashMap::new(),
+            proxy_kernel_at_us: HashMap::new(),
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1566,6 +1572,8 @@ impl LauncherResponseTrace {
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
             published_at_us: HashMap::new(),
+            proxy_sequences: HashMap::new(),
+            proxy_kernel_at_us: HashMap::new(),
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1613,6 +1621,14 @@ impl LauncherResponseTrace {
             for publication in &drained.publications {
                 self.published_at_us
                     .insert(publication.sequence, publication.published_at_us);
+                if let Some(proxy_sequence) = publication.proxy_sequence {
+                    self.proxy_sequences
+                        .insert(publication.sequence, proxy_sequence);
+                }
+                if let Some(proxy_kernel_at_us) = publication.proxy_kernel_at_us {
+                    self.proxy_kernel_at_us
+                        .insert(publication.sequence, proxy_kernel_at_us);
+                }
             }
             for event in &batch.events {
                 self.drained_at_us.insert(event.sequence, drained_at_us);
@@ -1643,6 +1659,8 @@ impl LauncherResponseTrace {
             action: event.action,
             trigger,
             press_id: event.press_id.0,
+            proxy_sequence: self.proxy_sequences.remove(&event.sequence),
+            proxy_kernel_at_us: self.proxy_kernel_at_us.remove(&event.sequence),
             captured_at_us: event.captured_at_us,
             published_at_us: self.published_at_us.remove(&event.sequence),
             drained_at_us: self.drained_at_us.remove(&event.sequence),
@@ -2092,6 +2110,8 @@ impl LauncherResponseTraceSnapshot {
                         DispatchKind::Repeat => "repeat",
                     },
                     "press_id": record.press_id,
+                    "proxy_sequence": record.proxy_sequence,
+                    "proxy_kernel_at_us": record.proxy_kernel_at_us,
                     "captured_at_us": record.captured_at_us,
                     "published_at_us": record.published_at_us,
                     "drained_at_us": record.drained_at_us,
@@ -2176,7 +2196,7 @@ impl LauncherResponseTraceSnapshot {
         format!(
             "{}\n",
             serde_json::json!({
-                "schema": "mister-magik-launcher-response-trace-v3",
+                "schema": "mister-magik-launcher-response-trace-v4",
                 "run_id": self.run_id,
                 "completion": {
                     "state": if self.complete { "complete" } else { "running" },
