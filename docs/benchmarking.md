@@ -104,12 +104,18 @@ Acorn→Other→Acorn cycles: 64 presses, 40 ms held, 600 ms start-to-start. The
 driver and launcher share a device-monotonic epoch, so UI-thread obstruction
 starts 8 ms before each scheduled press.
 
-The six arms are baseline with catalog refresh off, real forced catalog
+The first six arms are baseline with catalog refresh off, real forced catalog
 refresh, monolithic 16 ms, monolithic 64 ms, cooperative 2 ms quanta totalling
-64 ms, and cooperative 1 ms quanta totalling 64 ms. The experiment reports
+64 ms, and cooperative 1 ms quanta totalling 64 ms. Three additional
+forced-catalog arms compare the current CPU0/nice -10 input reader against
+CPU1/nice -15 and low-priority round-robin scheduling on CPU0 and CPU1. These
+reader policies require the same consumed volatile lab token and do not alter
+ordinary runtime scheduling. The experiment reports
 artifact validity, input integrity, obstruction reproduction, cooperative
 recovery, catalog attribution, first-eligible-vblank behavior, and the current
-product-quality result independently. A failed latency status is retained as a
+product-quality result independently. Reader-policy candidates separately
+require an applied policy, capture P95 at or below 250 us, maximum at or below
+1 ms, and clean input integrity. A failed latency status is retained as a
 successful experimental observation; missing, stale, truncated, or incomplete
 evidence is an execution failure. Detailed traces, driver timestamps, and the
 independently flushed Main proxy trace are stored under

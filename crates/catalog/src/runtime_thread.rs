@@ -101,6 +101,7 @@ impl RuntimeThreadRole {
 pub struct RuntimeThreadPolicy {
     pub nice: i32,
     pub affinity: ThreadAffinity,
+    pub scheduler: ThreadScheduler,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,11 +117,37 @@ pub struct RuntimeThreadPolicyReport {
     pub thread_id: Option<i32>,
     pub nice_status: &'static str,
     pub affinity_status: &'static str,
+    pub intended_scheduler: &'static str,
+    pub scheduler_status: &'static str,
 }
 
 impl RuntimeThreadPolicy {
-    const fn new(nice: i32, affinity: ThreadAffinity) -> Self {
-        Self { nice, affinity }
+    pub const fn new(nice: i32, affinity: ThreadAffinity) -> Self {
+        Self {
+            nice,
+            affinity,
+            scheduler: ThreadScheduler::Other,
+        }
+    }
+
+    pub const fn with_scheduler(mut self, scheduler: ThreadScheduler) -> Self {
+        self.scheduler = scheduler;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadScheduler {
+    Other,
+    RoundRobin { priority: i32 },
+}
+
+impl ThreadScheduler {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Other => "other",
+            Self::RoundRobin { .. } => "round-robin",
+        }
     }
 }
 
@@ -163,6 +190,8 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) -> RuntimeThreadPoli
             thread_id: current_thread_id(),
             nice_status: "skipped",
             affinity_status: "skipped",
+            intended_scheduler: "inherit",
+            scheduler_status: "skipped",
         };
         crate::catalog_logln!(
             "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice=inherit\tactual_nice={}\taffinity=inherit\tallowed_cpus={}\tprocessor={}\tnice_status=skipped\taffinity_status=skipped",
@@ -173,9 +202,28 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) -> RuntimeThreadPoli
         );
         return report;
     }
-    let policy = resolved_policy(role);
+    apply_runtime_thread_policy_with(role, resolved_policy(role), &thread_name)
+}
+
+pub fn apply_runtime_thread_policy_override(
+    role: RuntimeThreadRole,
+    policy: RuntimeThreadPolicy,
+) -> RuntimeThreadPolicyReport {
+    let thread_name = std::thread::current()
+        .name()
+        .unwrap_or("unnamed")
+        .to_string();
+    apply_runtime_thread_policy_with(role, policy, &thread_name)
+}
+
+fn apply_runtime_thread_policy_with(
+    role: RuntimeThreadRole,
+    policy: RuntimeThreadPolicy,
+    thread_name: &str,
+) -> RuntimeThreadPolicyReport {
     let nice_status = apply_nice(policy.nice);
     let affinity_status = apply_affinity(policy.affinity);
+    let scheduler_status = apply_scheduler(policy.scheduler);
     let actual_nice = current_nice();
     let processor = current_processor();
     let report = RuntimeThreadPolicyReport {
@@ -190,17 +238,48 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) -> RuntimeThreadPoli
         thread_id: current_thread_id(),
         nice_status,
         affinity_status,
+        intended_scheduler: policy.scheduler.label(),
+        scheduler_status,
     };
     crate::catalog_logln!(
-        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
+        "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tscheduler={}\tscheduler_priority={}\tnice_status={nice_status}\taffinity_status={affinity_status}\tscheduler_status={scheduler_status}",
         role.label(),
         policy.nice,
         actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
         policy.affinity.label(),
         report.allowed_cpus,
-        processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string())
+        processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string()),
+        policy.scheduler.label(),
+        report
+            .scheduler_priority
+            .map_or_else(|| "unknown".to_string(), |priority| priority.to_string())
     );
     report
+}
+
+#[cfg(target_os = "linux")]
+fn apply_scheduler(scheduler: ThreadScheduler) -> &'static str {
+    match scheduler {
+        ThreadScheduler::Other => "skipped",
+        ThreadScheduler::RoundRobin { priority } => {
+            // SAFETY: sched_setscheduler updates only the current thread using
+            // the fully initialized sched_param. Failure remains explicit in
+            // the benchmark policy report.
+            let parameter = libc::sched_param {
+                sched_priority: priority,
+            };
+            if unsafe { libc::sched_setscheduler(0, libc::SCHED_RR, &parameter) } == 0 {
+                "ok"
+            } else {
+                "failed"
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn apply_scheduler(_scheduler: ThreadScheduler) -> &'static str {
+    "unsupported"
 }
 
 fn resolved_policy(role: RuntimeThreadRole) -> RuntimeThreadPolicy {

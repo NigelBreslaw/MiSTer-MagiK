@@ -4462,38 +4462,63 @@ struct InputLatencyLabArmSpec {
     label: &'static str,
     runtime_arm: &'static str,
     catalog_refresh: &'static str,
+    reader_policy: &'static str,
 }
 
-const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 6] = [
+const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
     InputLatencyLabArmSpec {
         label: "baseline",
         runtime_arm: "baseline",
         catalog_refresh: "off",
+        reader_policy: "current",
     },
     InputLatencyLabArmSpec {
         label: "real-forced-catalog",
         runtime_arm: "baseline",
         catalog_refresh: "force",
+        reader_policy: "current",
     },
     InputLatencyLabArmSpec {
         label: "monolithic-16ms",
         runtime_arm: "monolithic-16ms",
         catalog_refresh: "off",
+        reader_policy: "current",
     },
     InputLatencyLabArmSpec {
         label: "monolithic-64ms",
         runtime_arm: "monolithic-64ms",
         catalog_refresh: "off",
+        reader_policy: "current",
     },
     InputLatencyLabArmSpec {
         label: "cooperative-2ms",
         runtime_arm: "cooperative-2ms",
         catalog_refresh: "off",
+        reader_policy: "current",
     },
     InputLatencyLabArmSpec {
         label: "cooperative-1ms",
         runtime_arm: "cooperative-1ms",
         catalog_refresh: "off",
+        reader_policy: "current",
+    },
+    InputLatencyLabArmSpec {
+        label: "forced-catalog-reader-cpu1-nice",
+        runtime_arm: "baseline",
+        catalog_refresh: "force",
+        reader_policy: "cpu1-nice",
+    },
+    InputLatencyLabArmSpec {
+        label: "forced-catalog-reader-cpu0-rr",
+        runtime_arm: "baseline",
+        catalog_refresh: "force",
+        reader_policy: "cpu0-rr",
+    },
+    InputLatencyLabArmSpec {
+        label: "forced-catalog-reader-cpu1-rr",
+        runtime_arm: "baseline",
+        catalog_refresh: "force",
+        reader_policy: "cpu1-rr",
     },
 ];
 
@@ -4607,6 +4632,16 @@ fn verify_installed_input_latency_lab(
                 .find(|arm| arm["label"] == label)
                 .is_some_and(|arm| arm["product_quality_status"] == "passed")
         });
+    let reader_policy_winners = arms
+        .iter()
+        .filter(|arm| arm["catalog_refresh"] == "force")
+        .filter(|arm| {
+            arm["input_reader_policy_status"] == "passed"
+                && arm["input_reader_capture_status"] == "passed"
+                && arm["input_integrity_status"] == "passed"
+        })
+        .filter_map(|arm| arm["label"].as_str())
+        .collect::<Vec<_>>();
     let summary = json!({
         "schema": "mister-magik-input-latency-lab-v1",
         "status": "completed",
@@ -4624,6 +4659,8 @@ fn verify_installed_input_latency_lab(
         "real_catalog_attribution_status": pass_fail(catalog_attributed),
         "first_eligible_vblank_status": pass_fail(first_eligible),
         "current_product_quality_status": pass_fail(current_product_quality),
+        "reader_policy_comparison_status": pass_fail(!reader_policy_winners.is_empty()),
+        "reader_policy_winners": reader_policy_winners,
         "arms": arms,
     });
     fs::write(
@@ -4683,6 +4720,10 @@ fn run_input_latency_lab_arm(
                 (
                     "MISTER_INPUT_LATENCY_LAB_ARM".into(),
                     spec.runtime_arm.into(),
+                ),
+                (
+                    "MISTER_INPUT_LATENCY_LAB_READER_POLICY".into(),
+                    spec.reader_policy.into(),
                 ),
             ],
             timeout_secs: 45,
@@ -5052,6 +5093,24 @@ fn summarize_input_latency_lab_arm(
         for (label, value) in stages {
             stage_values.entry(label).or_default().push(value);
         }
+        for (label, value) in [
+            (
+                "reader_poll_runtime_delta_us",
+                reader["poll_runtime_delta_us"].as_u64(),
+            ),
+            (
+                "reader_poll_run_delay_delta_us",
+                reader["poll_run_delay_delta_us"].as_u64(),
+            ),
+            (
+                "reader_poll_timeslice_delta",
+                reader["poll_timeslice_delta"].as_u64(),
+            ),
+        ] {
+            if let Some(value) = value {
+                stage_values.entry(label).or_default().push(value);
+            }
+        }
         let eagain_count = main["eagain_count"].as_u64().unwrap_or(u64::MAX);
         eagain_total = eagain_total.saturating_add(eagain_count);
         pipeline_records.push(json!({
@@ -5104,6 +5163,34 @@ fn summarize_input_latency_lab_arm(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let reader_capture_p95_us = pipeline_stage_summary["proxy_kernel_to_capture_us"]["p95_us"]
+        .as_u64()
+        .unwrap_or(u64::MAX);
+    let reader_capture_max_us = pipeline_stage_summary["proxy_kernel_to_capture_us"]["max_us"]
+        .as_u64()
+        .unwrap_or(u64::MAX);
+    let reader_policy = trace["input_reader_policy"]
+        .as_object()
+        .ok_or("input latency trace omitted reader policy")?;
+    let (expected_nice, expected_cpus, expected_scheduler, expected_scheduler_policy) =
+        match spec.reader_policy {
+            "current" => (-10, "0", "other", 0),
+            "cpu1-nice" => (-15, "1", "other", 0),
+            "cpu0-rr" => (-10, "0", "round-robin", libc::SCHED_RR),
+            "cpu1-rr" => (-15, "1", "round-robin", libc::SCHED_RR),
+            _ => (i32::MIN, "invalid", "invalid", i32::MIN),
+        };
+    let reader_policy_applied = reader_policy["intended_nice"].as_i64()
+        == Some(i64::from(expected_nice))
+        && reader_policy["actual_nice"].as_i64() == Some(i64::from(expected_nice))
+        && reader_policy["allowed_cpus"].as_str() == Some(expected_cpus)
+        && reader_policy["intended_scheduler"].as_str() == Some(expected_scheduler)
+        && reader_policy["scheduler_policy"].as_i64() == Some(i64::from(expected_scheduler_policy))
+        && reader_policy["nice_status"].as_str() == Some("ok")
+        && reader_policy["affinity_status"].as_str() == Some("ok")
+        && (expected_scheduler == "other"
+            || reader_policy["scheduler_status"].as_str() == Some("ok"));
+    let reader_capture_passed = reader_capture_p95_us <= 250 && reader_capture_max_us <= 1_000;
     let inputs_inside_work = input_pulses
         .iter()
         .filter(|pulse| {
@@ -5215,6 +5302,7 @@ fn summarize_input_latency_lab_arm(
         "label": spec.label,
         "runtime_arm": spec.runtime_arm,
         "catalog_refresh": spec.catalog_refresh,
+        "reader_policy_arm": spec.reader_policy,
         "trace_file": format!("{}-trace.json", spec.label),
         "driver_file": format!("{}-driver.json", spec.label),
         "main_trace_file": format!("{}-main-trace.json", spec.label),
@@ -5243,6 +5331,10 @@ fn summarize_input_latency_lab_arm(
         "driver_emission_lateness_us": driver_lateness_us,
         "pipeline_status": "passed",
         "input_reader_policy": trace["input_reader_policy"],
+        "input_reader_policy_status": pass_fail(reader_policy_applied),
+        "input_reader_capture_status": pass_fail(reader_capture_passed),
+        "input_reader_capture_p95_us": reader_capture_p95_us,
+        "input_reader_capture_max_us": reader_capture_max_us,
         "pipeline_eagain_count": eagain_total,
         "pipeline_stages": pipeline_stage_summary,
         "pipeline_records": pipeline_records,

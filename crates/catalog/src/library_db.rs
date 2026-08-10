@@ -3133,10 +3133,7 @@ mod tests {
         );
         assert_eq!(
             CATALOG_PREPARE_WORKER_ROLE.default_policy(),
-            RuntimeThreadPolicy {
-                nice: 0,
-                affinity: ThreadAffinity::AllOnline,
-            }
+            RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
         );
     }
 

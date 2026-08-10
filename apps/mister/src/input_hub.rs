@@ -9,7 +9,8 @@ use crate::input_event::{
     LogicalEventReducer, SourceEpoch,
 };
 use mister_magik_catalog::runtime_thread::{
-    RuntimeThreadPolicyReport, RuntimeThreadRole, apply_runtime_thread_policy,
+    RuntimeThreadPolicy, RuntimeThreadPolicyReport, RuntimeThreadRole, ThreadAffinity,
+    ThreadScheduler, apply_runtime_thread_policy, apply_runtime_thread_policy_override,
 };
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
@@ -24,6 +25,8 @@ use std::time::Duration;
 const INPUT_PROXY_CAPABILITY_ENV: &str = "MISTER_MAGIK_INPUT_PROXY";
 const INPUT_PROXY_PROTOCOL_ENV: &str = "MISTER_MAGIK_INPUT_PROXY_PROTOCOL";
 const INPUT_PROXY_NAME: &str = "MiSTer virtual input";
+const INPUT_LATENCY_LAB_SESSION_ENV: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
+const INPUT_LATENCY_LAB_READER_POLICY_ENV: &str = "MISTER_INPUT_LATENCY_LAB_READER_POLICY";
 const INPUT_EVENT_SIZE: usize = if cfg!(target_pointer_width = "64") {
     24
 } else {
@@ -369,8 +372,48 @@ struct PollEvidence {
     timeslice_delta: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputReaderLabPolicy {
+    Current,
+    Cpu1Nice,
+    Cpu0RoundRobin,
+    Cpu1RoundRobin,
+}
+
+impl InputReaderLabPolicy {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "current" => Some(Self::Current),
+            "cpu1-nice" => Some(Self::Cpu1Nice),
+            "cpu0-rr" => Some(Self::Cpu0RoundRobin),
+            "cpu1-rr" => Some(Self::Cpu1RoundRobin),
+            _ => None,
+        }
+    }
+
+    const fn policy(self) -> Option<RuntimeThreadPolicy> {
+        match self {
+            Self::Current => None,
+            Self::Cpu1Nice => Some(RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1)),
+            Self::Cpu0RoundRobin => Some(
+                RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu0)
+                    .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 }),
+            ),
+            Self::Cpu1RoundRobin => Some(
+                RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1)
+                    .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 }),
+            ),
+        }
+    }
+}
+
 fn capture_loop(mailbox: Arc<InputMailbox>) {
-    let policy = apply_runtime_thread_policy(RuntimeThreadRole::InputReader);
+    let default_policy = apply_runtime_thread_policy(RuntimeThreadRole::InputReader);
+    let policy = armed_input_reader_lab_policy()
+        .and_then(InputReaderLabPolicy::policy)
+        .map_or(default_policy, |policy| {
+            apply_runtime_thread_policy_override(RuntimeThreadRole::InputReader, policy)
+        });
     mailbox
         .state
         .lock()
@@ -479,6 +522,19 @@ fn capture_loop(mailbox: Arc<InputMailbox>) {
             reader = None;
         }
     }
+}
+
+fn armed_input_reader_lab_policy() -> Option<InputReaderLabPolicy> {
+    let session = std::env::var(INPUT_LATENCY_LAB_SESSION_ENV).ok()?;
+    if !session.starts_with("/tmp/")
+        || session.len() == "/tmp/".len()
+        || !Path::new(&session).is_file()
+    {
+        return None;
+    }
+    std::env::var(INPUT_LATENCY_LAB_READER_POLICY_ENV)
+        .ok()
+        .and_then(|value| InputReaderLabPolicy::parse(&value))
 }
 
 fn lose_proxy(mailbox: &InputMailbox) {
@@ -997,5 +1053,25 @@ mod tests {
             })
         );
         assert_eq!(parse_thread_schedstat("invalid"), None);
+    }
+
+    #[test]
+    fn reader_lab_policies_are_fixed_and_keep_current_as_no_override() {
+        assert_eq!(
+            InputReaderLabPolicy::parse("current").and_then(InputReaderLabPolicy::policy),
+            None
+        );
+        assert_eq!(
+            InputReaderLabPolicy::parse("cpu1-nice").and_then(InputReaderLabPolicy::policy),
+            Some(RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1))
+        );
+        assert_eq!(
+            InputReaderLabPolicy::parse("cpu0-rr").and_then(InputReaderLabPolicy::policy),
+            Some(
+                RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu0)
+                    .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 })
+            )
+        );
+        assert_eq!(InputReaderLabPolicy::parse("cpu1-fifo"), None);
     }
 }

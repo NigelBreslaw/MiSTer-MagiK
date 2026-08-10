@@ -2250,6 +2250,8 @@ impl LauncherResponseTraceSnapshot {
                     "thread_id": policy.thread_id,
                     "nice_status": policy.nice_status,
                     "affinity_status": policy.affinity_status,
+                    "intended_scheduler": policy.intended_scheduler,
+                    "scheduler_status": policy.scheduler_status,
                 })),
                 "records": records,
                 "feedback_records": feedback_records,
