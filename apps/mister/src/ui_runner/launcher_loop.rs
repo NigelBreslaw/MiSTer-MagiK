@@ -1469,9 +1469,26 @@ struct LauncherResponseTrace {
 }
 
 struct LauncherResponseTraceWrite {
-    payload: String,
-    complete: bool,
+    snapshot: LauncherResponseTraceSnapshot,
     completion_path: Option<String>,
+}
+
+struct LauncherResponseTraceSnapshot {
+    records: Vec<LauncherResponseRecord>,
+    feedback_records: Vec<LauncherResponseFeedbackRecord>,
+    refresh_period_us: u64,
+    presentation_start: Option<LauncherResponsePresentationSnapshot>,
+    presentation_end: Option<LauncherResponsePresentationSnapshot>,
+    run_id: String,
+    expected_confirmed: usize,
+    expected_feedback_hidden: usize,
+    hidden_feedback_count: usize,
+    outstanding_feedback_count: usize,
+    complete: bool,
+    queue_high_water: usize,
+    catalog_phases: Vec<serde_json::Value>,
+    scheduler_phases: Vec<serde_json::Value>,
+    lab_records: Vec<serde_json::Value>,
 }
 
 struct LauncherResponseCatalogPhaseStart {
@@ -1930,6 +1947,35 @@ impl LauncherResponseTrace {
         self.dirty = true;
     }
 
+    fn snapshot(&self) -> LauncherResponseTraceSnapshot {
+        LauncherResponseTraceSnapshot {
+            records: self.records.clone(),
+            feedback_records: self.feedback_records.clone(),
+            refresh_period_us: self.refresh_period_us,
+            presentation_start: self.presentation_start,
+            presentation_end: self.presentation_end,
+            run_id: self.run_id.clone(),
+            expected_confirmed: self.expected_confirmed,
+            expected_feedback_hidden: self.expected_feedback_hidden,
+            hidden_feedback_count: self.hidden_feedback_count,
+            outstanding_feedback_count: self.outstanding_feedback.len(),
+            complete: self.complete,
+            queue_high_water: self.queue_high_water,
+            catalog_phases: self
+                .complete
+                .then(|| self.catalog_phases.clone())
+                .unwrap_or_default(),
+            scheduler_phases: self
+                .complete
+                .then(|| self.scheduler_phases.clone())
+                .unwrap_or_default(),
+            lab_records: self
+                .complete
+                .then(|| self.lab_records.clone())
+                .unwrap_or_default(),
+        }
+    }
+
     fn flush(&mut self) {
         if !self.enabled || !self.dirty {
             return;
@@ -1939,6 +1985,24 @@ impl LauncherResponseTrace {
         {
             return;
         }
+        let snapshot = self.snapshot();
+        if self.writer.as_ref().is_some_and(|writer| {
+            writer
+                .send(LauncherResponseTraceWrite {
+                    snapshot,
+                    completion_path: response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV),
+                })
+                .is_ok()
+        }) || self.writer.is_none()
+        {
+            self.dirty = false;
+            self.last_partial_flush_at = Instant::now();
+        }
+    }
+}
+
+impl LauncherResponseTraceSnapshot {
+    fn payload(&self) -> String {
         let records = self
             .records
             .iter()
@@ -2028,40 +2092,30 @@ impl LauncherResponseTrace {
                 })
             });
         let build_identity = crate::build_identity::BuildIdentity::current();
-        let payload = serde_json::json!({
-            "schema": "mister-magik-launcher-response-trace-v3",
-            "run_id": self.run_id,
-            "completion": {
-                "state": if self.complete { "complete" } else { "running" },
-                "expected_confirmed": self.expected_confirmed,
-                "expected_feedback_hidden": self.expected_feedback_hidden,
-                "confirmed": self.records.iter().filter(|record| record.disposition == "confirmed").count(),
-                "feedback_hidden": self.hidden_feedback_count,
-                "outstanding_feedback": self.outstanding_feedback.len(),
-            },
-            "runtime": build_identity,
-            "latch_protocol": 5,
-            "queue_high_water": self.queue_high_water,
-            "records": records,
-            "feedback_records": feedback_records,
-            "catalog_phases": &self.catalog_phases,
-            "scheduler_phases": &self.scheduler_phases,
-            "lab_records": &self.lab_records,
-            "presentation": presentation,
-        });
-        if self.writer.as_ref().is_some_and(|writer| {
-            writer
-                .send(LauncherResponseTraceWrite {
-                    payload: format!("{}\n", payload),
-                    complete: self.complete,
-                    completion_path: response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV),
-                })
-                .is_ok()
-        }) || self.writer.is_none()
-        {
-            self.dirty = false;
-            self.last_partial_flush_at = Instant::now();
-        }
+        format!(
+            "{}\n",
+            serde_json::json!({
+                "schema": "mister-magik-launcher-response-trace-v3",
+                "run_id": self.run_id,
+                "completion": {
+                    "state": if self.complete { "complete" } else { "running" },
+                    "expected_confirmed": self.expected_confirmed,
+                    "expected_feedback_hidden": self.expected_feedback_hidden,
+                    "confirmed": self.records.iter().filter(|record| record.disposition == "confirmed").count(),
+                    "feedback_hidden": self.hidden_feedback_count,
+                    "outstanding_feedback": self.outstanding_feedback_count,
+                },
+                "runtime": build_identity,
+                "latch_protocol": 5,
+                "queue_high_water": self.queue_high_water,
+                "records": records,
+                "feedback_records": feedback_records,
+                "catalog_phases": &self.catalog_phases,
+                "scheduler_phases": &self.scheduler_phases,
+                "lab_records": &self.lab_records,
+                "presentation": presentation,
+            })
+        )
     }
 }
 
@@ -2095,10 +2149,11 @@ fn spawn_launcher_response_trace_writer(
                 let _ = std::fs::create_dir_all(parent);
             }
             while let Ok(write) = receiver.recv() {
-                let wrote = std::fs::write(&temporary_path, write.payload)
+                let complete = write.snapshot.complete;
+                let wrote = std::fs::write(&temporary_path, write.snapshot.payload())
                     .and_then(|()| std::fs::rename(&temporary_path, trace_path))
                     .is_ok();
-                if wrote && write.complete {
+                if wrote && complete {
                     if let Some(path) = write.completion_path.or_else(|| completion_path.clone()) {
                         let _ = std::fs::write(path, b"complete\n");
                     }
@@ -11693,6 +11748,40 @@ mod tests {
         assert_eq!(trace.feedback_records[1].phase, "hidden");
         assert_eq!(trace.feedback_records[1].dwell_us, Some(84_000));
         assert_eq!(trace.feedback_records[1].confirmed_sequence, 11);
+    }
+
+    #[test]
+    fn launcher_response_partial_snapshot_omits_large_diagnostic_vectors() {
+        let nav = LauncherNav::new();
+        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        trace
+            .catalog_phases
+            .push(serde_json::json!({"phase": "catalog"}));
+        trace
+            .scheduler_phases
+            .push(serde_json::json!({"phase": "scheduler"}));
+        trace.lab_records.push(serde_json::json!({"phase": "lab"}));
+
+        let partial = trace.snapshot();
+        assert!(partial.catalog_phases.is_empty());
+        assert!(partial.scheduler_phases.is_empty());
+        assert!(partial.lab_records.is_empty());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&partial.payload())
+                .expect("partial response trace payload")["completion"]["state"],
+            "running"
+        );
+
+        trace.complete = true;
+        let complete = trace.snapshot();
+        assert_eq!(complete.catalog_phases.len(), 1);
+        assert_eq!(complete.scheduler_phases.len(), 1);
+        assert_eq!(complete.lab_records.len(), 1);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&complete.payload())
+                .expect("complete response trace payload")["completion"]["state"],
+            "complete"
+        );
     }
 
     #[test]
