@@ -22,7 +22,6 @@ export component HomeGrid inherits Rectangle {
     property <length> content-width: layout-item-count * tile-width
         + Math.max(0, layout-item-count - 1) * tile-gap;
     property <length> scroll-x: MisterBridge.home-scroll-x * 1px;
-    property <int> first-visible-index: floor(scroll-x / tile-pitch);
 
     background: transparent;
 
@@ -110,26 +109,18 @@ export component HomeGrid inherits Rectangle {
                     height: parent.height;
                     background: transparent;
 
-                    // Root tiles always retain their final four-column width while catalog
-                    // destinations publish progressively. Nested menus retain four 191px tiles,
-                    // four 16px gaps, and half of the fifth tile
-                    // in the 924px viewport. A sixth, fully off-screen delegate ensures the
-                    // incoming tile is already present while a slot is recycled across a pitch
-                    // boundary. At the end, clamping aligns the final tile's right edge.
-                    for slot in 6: LauncherTile {
-                        property <int> menu-index: root.first-visible-index
-                            + Math.mod(Math.mod(slot - root.first-visible-index, 6) + 6, 6);
-
-                        visible: menu-index < MisterBridge.menu-items.length;
-                        x: menu-index * root.tile-pitch;
+                    // Menus are bounded and retained by Rust. Direct delegates preserve Slint's
+                    // row identity, so changing selection or acknowledgement repaints only the
+                    // rows whose derived presentation state changed.
+                    for item[index] in MisterBridge.menu-items : LauncherTile {
+                        x: index * root.tile-pitch;
                         width: root.tile-width;
                         height: parent.height;
-                        label: MisterBridge.menu-items[menu-index].label;
-                        subtitle: MisterBridge.menu-items[menu-index].subtitle;
-                        status: MisterBridge.menu-items[menu-index].status;
-                        focused: !MisterBridge.settings-focused
-                            && MisterBridge.menu-items[menu-index].selected;
-                        acknowledged: MisterBridge.menu-items[menu-index].acknowledged;
+                        label: item.label;
+                        subtitle: item.subtitle;
+                        status: item.status;
+                        focused: !MisterBridge.settings-focused && item.selected;
+                        acknowledged: item.acknowledged;
                         flat-focus-style: true;
                     }
                 }
