@@ -1394,6 +1394,7 @@ struct LauncherResponseRecord {
     press_id: u64,
     proxy_sequence: Option<u32>,
     proxy_kernel_at_us: Option<u64>,
+    input_reader: Option<crate::input_hub::InputReaderEventEvidence>,
     captured_at_us: u64,
     published_at_us: Option<u64>,
     drained_at_us: Option<u64>,
@@ -1452,6 +1453,8 @@ struct LauncherResponseTrace {
     published_at_us: HashMap<u64, u64>,
     proxy_sequences: HashMap<u64, u32>,
     proxy_kernel_at_us: HashMap<u64, u64>,
+    input_reader: HashMap<u64, crate::input_hub::InputReaderEventEvidence>,
+    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
     drained_at_us: HashMap<u64, u64>,
     state: LauncherResponseState,
     queue_high_water: usize,
@@ -1470,6 +1473,7 @@ struct LauncherResponseTrace {
     catalog_phases: Vec<serde_json::Value>,
     scheduler_phases: Vec<serde_json::Value>,
     lab_records: Vec<serde_json::Value>,
+    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
     last_partial_flush_at: Instant,
     partial_confirmed_sent: usize,
     partial_feedback_sent: usize,
@@ -1538,6 +1542,8 @@ impl LauncherResponseTrace {
             published_at_us: HashMap::new(),
             proxy_sequences: HashMap::new(),
             proxy_kernel_at_us: HashMap::new(),
+            input_reader: HashMap::new(),
+            input_reader_policy: None,
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1574,6 +1580,8 @@ impl LauncherResponseTrace {
             published_at_us: HashMap::new(),
             proxy_sequences: HashMap::new(),
             proxy_kernel_at_us: HashMap::new(),
+            input_reader: HashMap::new(),
+            input_reader_policy: None,
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1629,7 +1637,11 @@ impl LauncherResponseTrace {
                     self.proxy_kernel_at_us
                         .insert(publication.sequence, proxy_kernel_at_us);
                 }
+                if let Some(reader) = publication.reader {
+                    self.input_reader.insert(publication.sequence, reader);
+                }
             }
+            self.input_reader_policy.clone_from(&drained.reader_policy);
             for event in &batch.events {
                 self.drained_at_us.insert(event.sequence, drained_at_us);
             }
@@ -1661,6 +1673,7 @@ impl LauncherResponseTrace {
             press_id: event.press_id.0,
             proxy_sequence: self.proxy_sequences.remove(&event.sequence),
             proxy_kernel_at_us: self.proxy_kernel_at_us.remove(&event.sequence),
+            input_reader: self.input_reader.remove(&event.sequence),
             captured_at_us: event.captured_at_us,
             published_at_us: self.published_at_us.remove(&event.sequence),
             drained_at_us: self.drained_at_us.remove(&event.sequence),
@@ -2007,6 +2020,7 @@ impl LauncherResponseTrace {
                 .complete
                 .then(|| self.lab_records.clone())
                 .unwrap_or_default(),
+            input_reader_policy: self.input_reader_policy.clone(),
         }
     }
 
@@ -2042,6 +2056,7 @@ impl LauncherResponseTrace {
                 catalog_phases: Vec::new(),
                 scheduler_phases: Vec::new(),
                 lab_records: Vec::new(),
+                input_reader_policy: self.input_reader_policy.clone(),
             },
             confirmed_count,
             feedback_count,
@@ -2096,6 +2111,9 @@ impl LauncherResponseTraceSnapshot {
         self.hidden_feedback_count = next.hidden_feedback_count;
         self.outstanding_feedback_count = next.outstanding_feedback_count;
         self.queue_high_water = next.queue_high_water;
+        if next.input_reader_policy.is_some() {
+            self.input_reader_policy = next.input_reader_policy;
+        }
     }
 
     fn payload(&self) -> String {
@@ -2112,6 +2130,17 @@ impl LauncherResponseTraceSnapshot {
                     "press_id": record.press_id,
                     "proxy_sequence": record.proxy_sequence,
                     "proxy_kernel_at_us": record.proxy_kernel_at_us,
+                    "input_reader": record.input_reader.map(|reader| serde_json::json!({
+                        "poll_returned_at_us": reader.poll_returned_at_us,
+                        "poll_thread_cpu_us": reader.poll_thread_cpu_us,
+                        "poll_cpu": reader.poll_cpu,
+                        "read_started_at_us": reader.read_started_at_us,
+                        "captured_thread_cpu_us": reader.captured_thread_cpu_us,
+                        "captured_cpu": reader.captured_cpu,
+                        "poll_runtime_delta_us": reader.poll_runtime_delta_us,
+                        "poll_run_delay_delta_us": reader.poll_run_delay_delta_us,
+                        "poll_timeslice_delta": reader.poll_timeslice_delta,
+                    })),
                     "captured_at_us": record.captured_at_us,
                     "published_at_us": record.published_at_us,
                     "drained_at_us": record.drained_at_us,
@@ -2196,7 +2225,7 @@ impl LauncherResponseTraceSnapshot {
         format!(
             "{}\n",
             serde_json::json!({
-                "schema": "mister-magik-launcher-response-trace-v4",
+                "schema": "mister-magik-launcher-response-trace-v5",
                 "run_id": self.run_id,
                 "completion": {
                     "state": if self.complete { "complete" } else { "running" },
@@ -2209,6 +2238,19 @@ impl LauncherResponseTraceSnapshot {
                 "runtime": build_identity,
                 "latch_protocol": 5,
                 "queue_high_water": self.queue_high_water,
+                "input_reader_policy": self.input_reader_policy.as_ref().map(|policy| serde_json::json!({
+                    "role": policy.role,
+                    "intended_nice": policy.intended_nice,
+                    "actual_nice": policy.actual_nice,
+                    "intended_affinity": policy.intended_affinity,
+                    "allowed_cpus": policy.allowed_cpus,
+                    "processor": policy.processor,
+                    "scheduler_policy": policy.scheduler_policy,
+                    "scheduler_priority": policy.scheduler_priority,
+                    "thread_id": policy.thread_id,
+                    "nice_status": policy.nice_status,
+                    "affinity_status": policy.affinity_status,
+                })),
                 "records": records,
                 "feedback_records": feedback_records,
                 "catalog_phases": &self.catalog_phases,

@@ -103,6 +103,21 @@ pub struct RuntimeThreadPolicy {
     pub affinity: ThreadAffinity,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeThreadPolicyReport {
+    pub role: &'static str,
+    pub intended_nice: Option<i32>,
+    pub actual_nice: Option<i32>,
+    pub intended_affinity: &'static str,
+    pub allowed_cpus: String,
+    pub processor: Option<i32>,
+    pub scheduler_policy: Option<i32>,
+    pub scheduler_priority: Option<i32>,
+    pub thread_id: Option<i32>,
+    pub nice_status: &'static str,
+    pub affinity_status: &'static str,
+}
+
 impl RuntimeThreadPolicy {
     const fn new(nice: i32, affinity: ThreadAffinity) -> Self {
         Self { nice, affinity }
@@ -128,7 +143,7 @@ impl ThreadAffinity {
     }
 }
 
-pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
+pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) -> RuntimeThreadPolicyReport {
     let thread_name = std::thread::current()
         .name()
         .unwrap_or("unnamed")
@@ -136,29 +151,56 @@ pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) {
     if policy_disabled() {
         let actual_nice = current_nice();
         let processor = current_processor();
+        let report = RuntimeThreadPolicyReport {
+            role: role.label(),
+            intended_nice: None,
+            actual_nice,
+            intended_affinity: "inherit",
+            allowed_cpus: current_allowed_cpu_list(),
+            processor,
+            scheduler_policy: current_scheduler_policy(),
+            scheduler_priority: current_scheduler_priority(),
+            thread_id: current_thread_id(),
+            nice_status: "skipped",
+            affinity_status: "skipped",
+        };
         crate::catalog_logln!(
             "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice=inherit\tactual_nice={}\taffinity=inherit\tallowed_cpus={}\tprocessor={}\tnice_status=skipped\taffinity_status=skipped",
             role.label(),
             actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
-            current_allowed_cpu_list(),
+            report.allowed_cpus,
             processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string())
         );
-        return;
+        return report;
     }
     let policy = resolved_policy(role);
     let nice_status = apply_nice(policy.nice);
     let affinity_status = apply_affinity(policy.affinity);
     let actual_nice = current_nice();
     let processor = current_processor();
+    let report = RuntimeThreadPolicyReport {
+        role: role.label(),
+        intended_nice: Some(policy.nice),
+        actual_nice,
+        intended_affinity: policy.affinity.label(),
+        allowed_cpus: current_allowed_cpu_list(),
+        processor,
+        scheduler_policy: current_scheduler_policy(),
+        scheduler_priority: current_scheduler_priority(),
+        thread_id: current_thread_id(),
+        nice_status,
+        affinity_status,
+    };
     crate::catalog_logln!(
         "thread_policy_tsv\tthread={thread_name}\trole={}\tintended_nice={}\tactual_nice={}\taffinity={}\tallowed_cpus={}\tprocessor={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
         role.label(),
         policy.nice,
         actual_nice.map_or_else(|| "unknown".to_string(), |nice| nice.to_string()),
         policy.affinity.label(),
-        current_allowed_cpu_list(),
+        report.allowed_cpus,
         processor.map_or_else(|| "unknown".to_string(), |cpu| cpu.to_string())
     );
+    report
 }
 
 fn resolved_policy(role: RuntimeThreadRole) -> RuntimeThreadPolicy {
@@ -353,6 +395,43 @@ fn current_processor() -> Option<i32> {
     // SAFETY: sched_getcpu reads the current CPU number.
     let cpu = unsafe { libc::sched_getcpu() };
     (cpu >= 0).then_some(cpu)
+}
+
+#[cfg(target_os = "linux")]
+fn current_scheduler_policy() -> Option<i32> {
+    // SAFETY: sched_getscheduler only reads the current thread's scheduler class.
+    let policy = unsafe { libc::sched_getscheduler(0) };
+    (policy >= 0).then_some(policy)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_scheduler_policy() -> Option<i32> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn current_scheduler_priority() -> Option<i32> {
+    // SAFETY: sched_getparam initializes the provided sched_param for the current thread.
+    unsafe {
+        let mut parameter: libc::sched_param = std::mem::zeroed();
+        (libc::sched_getparam(0, &mut parameter) == 0).then_some(parameter.sched_priority)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_scheduler_priority() -> Option<i32> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn current_thread_id() -> Option<i32> {
+    // SAFETY: SYS_gettid has no arguments and returns the calling Linux thread ID.
+    i32::try_from(unsafe { libc::syscall(libc::SYS_gettid) }).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_thread_id() -> Option<i32> {
+    None
 }
 
 #[cfg(not(target_os = "linux"))]

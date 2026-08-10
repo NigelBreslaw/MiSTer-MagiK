@@ -8,7 +8,9 @@ use crate::input_event::{
     InputProtocolHealth, InputSourceId, InputSourceKind, InputTopology, LogicalAction,
     LogicalEventReducer, SourceEpoch,
 };
-use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
+use mister_magik_catalog::runtime_thread::{
+    RuntimeThreadPolicyReport, RuntimeThreadRole, apply_runtime_thread_policy,
+};
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -62,12 +64,27 @@ struct MailboxEvent {
     published_at_us: u64,
     proxy_sequence: Option<u32>,
     proxy_kernel_at_us: Option<u64>,
+    reader: Option<InputReaderEventEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct ProxyEventMetadata {
     sequence: Option<u32>,
     kernel_at_us: Option<u64>,
+    reader: Option<InputReaderEventEvidence>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InputReaderEventEvidence {
+    pub poll_returned_at_us: u64,
+    pub poll_thread_cpu_us: u64,
+    pub poll_cpu: Option<i32>,
+    pub read_started_at_us: u64,
+    pub captured_thread_cpu_us: u64,
+    pub captured_cpu: Option<i32>,
+    pub poll_runtime_delta_us: Option<u64>,
+    pub poll_run_delay_delta_us: Option<u64>,
+    pub poll_timeslice_delta: Option<u64>,
 }
 
 #[derive(Default)]
@@ -79,6 +96,7 @@ struct MailboxState {
     topology: InputTopology,
     health: InputHealth,
     wake_generation: u64,
+    reader_policy: Option<RuntimeThreadPolicyReport>,
 }
 
 impl MailboxState {
@@ -119,6 +137,7 @@ impl MailboxState {
             published_at_us: monotonic_us(),
             proxy_sequence: proxy.sequence,
             proxy_kernel_at_us: proxy.kernel_at_us,
+            reader: proxy.reader,
         });
         self.health.queue_depth = self.events.len();
         self.health.queue_high_water = self.health.queue_high_water.max(self.events.len());
@@ -189,6 +208,7 @@ pub struct DrainedInput {
     pub batch: InputBatch,
     pub publications: Vec<InputPublication>,
     pub observation: InputObservation,
+    pub reader_policy: Option<RuntimeThreadPolicyReport>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,6 +217,7 @@ pub struct InputPublication {
     pub published_at_us: u64,
     pub proxy_sequence: Option<u32>,
     pub proxy_kernel_at_us: Option<u64>,
+    pub reader: Option<InputReaderEventEvidence>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -247,6 +268,7 @@ impl InputHub {
                 published_at_us: published.published_at_us,
                 proxy_sequence: published.proxy_sequence,
                 proxy_kernel_at_us: published.proxy_kernel_at_us,
+                reader: published.reader,
             })
             .collect();
         let events: Vec<_> = published_events
@@ -267,6 +289,7 @@ impl InputHub {
             },
             publications,
             observation: InputObservation(state.wake_generation),
+            reader_policy: state.reader_policy.clone(),
         }
     }
 
@@ -329,8 +352,31 @@ struct ProxyReader {
     pending_proxy_sequence: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ThreadSchedstat {
+    runtime_us: u64,
+    run_delay_us: u64,
+    timeslices: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PollEvidence {
+    returned_at_us: u64,
+    thread_cpu_us: u64,
+    cpu: Option<i32>,
+    runtime_delta_us: Option<u64>,
+    run_delay_delta_us: Option<u64>,
+    timeslice_delta: Option<u64>,
+}
+
 fn capture_loop(mailbox: Arc<InputMailbox>) {
-    apply_runtime_thread_policy(RuntimeThreadRole::InputReader);
+    let policy = apply_runtime_thread_policy(RuntimeThreadRole::InputReader);
+    mailbox
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .reader_policy = Some(policy);
+    let trace_scheduling = std::env::var("MISTER_LAUNCHER_RESPONSE_TRACE").as_deref() == Ok("1");
     let proxy_protocol = std::env::var(INPUT_PROXY_PROTOCOL_ENV).ok();
     let protocol_enabled = std::env::var(INPUT_PROXY_CAPABILITY_ENV).as_deref() == Ok("1")
         && matches!(proxy_protocol.as_deref(), Some("2" | "3"));
@@ -386,12 +432,31 @@ fn capture_loop(mailbox: Arc<InputMailbox>) {
             events: libc::POLLIN,
             revents: 0,
         };
+        let schedstat_before = trace_scheduling.then(read_thread_schedstat).flatten();
         let ready = unsafe {
             libc::poll(
                 &mut pollfd,
                 1,
                 DISCOVERY_INTERVAL.as_millis().min(i32::MAX as u128) as i32,
             )
+        };
+        let poll_returned_at_us = monotonic_us();
+        let poll_thread_cpu_us = thread_cpu_us();
+        let poll_cpu = current_cpu();
+        let schedstat_after = trace_scheduling.then(read_thread_schedstat).flatten();
+        let poll_evidence = PollEvidence {
+            returned_at_us: poll_returned_at_us,
+            thread_cpu_us: poll_thread_cpu_us,
+            cpu: poll_cpu,
+            runtime_delta_us: schedstat_before
+                .zip(schedstat_after)
+                .map(|(before, after)| after.runtime_us.saturating_sub(before.runtime_us)),
+            run_delay_delta_us: schedstat_before
+                .zip(schedstat_after)
+                .map(|(before, after)| after.run_delay_us.saturating_sub(before.run_delay_us)),
+            timeslice_delta: schedstat_before
+                .zip(schedstat_after)
+                .map(|(before, after)| after.timeslices.saturating_sub(before.timeslices)),
         };
         if ready < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
             continue;
@@ -402,7 +467,7 @@ fn capture_loop(mailbox: Arc<InputMailbox>) {
             continue;
         }
         if ready > 0 && pollfd.revents & libc::POLLIN != 0 {
-            match drain_proxy(active, &mailbox) {
+            match drain_proxy(active, &mailbox, poll_evidence) {
                 Ok(()) => {}
                 Err(_) => {
                     lose_proxy(&mailbox);
@@ -425,9 +490,14 @@ fn lose_proxy(mailbox: &InputMailbox) {
     mailbox.wake.notify_all();
 }
 
-fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<()> {
+fn drain_proxy(
+    reader: &mut ProxyReader,
+    mailbox: &InputMailbox,
+    poll: PollEvidence,
+) -> io::Result<()> {
     let mut bytes = [0_u8; INPUT_EVENT_SIZE];
     loop {
+        let read_started_at_us = monotonic_us();
         match reader.file.read_exact(&mut bytes) {
             Ok(()) => {
                 let (kernel_at_us, event_type, code, value) = parse_input_event(&bytes);
@@ -458,6 +528,17 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
                 let proxy = ProxyEventMetadata {
                     sequence: reader.pending_proxy_sequence.take(),
                     kernel_at_us: Some(kernel_at_us),
+                    reader: Some(InputReaderEventEvidence {
+                        poll_returned_at_us: poll.returned_at_us,
+                        poll_thread_cpu_us: poll.thread_cpu_us,
+                        poll_cpu: poll.cpu,
+                        read_started_at_us,
+                        captured_thread_cpu_us: thread_cpu_us(),
+                        captured_cpu: current_cpu(),
+                        poll_runtime_delta_us: poll.runtime_delta_us,
+                        poll_run_delay_delta_us: poll.run_delay_delta_us,
+                        poll_timeslice_delta: poll.timeslice_delta,
+                    }),
                 };
                 match reader.reducer.transition(
                     reader.source,
@@ -494,6 +575,41 @@ fn drain_proxy(reader: &mut ProxyReader, mailbox: &InputMailbox) -> io::Result<(
             Err(error) => return Err(error),
         }
     }
+}
+
+fn read_thread_schedstat() -> Option<ThreadSchedstat> {
+    let value = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+    parse_thread_schedstat(&value)
+}
+
+fn parse_thread_schedstat(value: &str) -> Option<ThreadSchedstat> {
+    let mut fields = value.split_whitespace();
+    Some(ThreadSchedstat {
+        runtime_us: fields.next()?.parse::<u64>().ok()? / 1_000,
+        run_delay_us: fields.next()?.parse::<u64>().ok()? / 1_000,
+        timeslices: fields.next()?.parse().ok()?,
+    })
+}
+
+fn thread_cpu_us() -> u64 {
+    let mut value = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime initializes the provided timespec without retaining it.
+    if unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut value) } != 0 {
+        return 0;
+    }
+    u64::try_from(value.tv_sec)
+        .unwrap_or(0)
+        .saturating_mul(1_000_000)
+        .saturating_add(u64::try_from(value.tv_nsec).unwrap_or(0) / 1_000)
+}
+
+fn current_cpu() -> Option<i32> {
+    // SAFETY: sched_getcpu only reads the current processor number.
+    let cpu = unsafe { libc::sched_getcpu() };
+    (cpu >= 0).then_some(cpu)
 }
 
 fn logical_action_for_key(code: u16) -> Option<LogicalAction> {
@@ -714,6 +830,7 @@ mod tests {
                 published_at_us: sequence as u64,
                 proxy_sequence: None,
                 proxy_kernel_at_us: None,
+                reader: None,
             });
         }
         state.publish(crate::input_event::PendingInputEvent {
@@ -844,6 +961,7 @@ mod tests {
                     published_at_us: 1,
                     proxy_sequence: None,
                     proxy_kernel_at_us: None,
+                    reader: None,
                 },
             );
             state.publish(crate::input_event::PendingInputEvent {
@@ -866,5 +984,18 @@ mod tests {
             hub.wait_for_change(fourth, Duration::from_secs(1)),
             InputWaitOutcome::Changed
         );
+    }
+
+    #[test]
+    fn schedstat_parser_converts_nanoseconds_without_losing_switch_count() {
+        assert_eq!(
+            parse_thread_schedstat("1234567 8910111 42\n"),
+            Some(ThreadSchedstat {
+                runtime_us: 1_234,
+                run_delay_us: 8_910,
+                timeslices: 42,
+            })
+        );
+        assert_eq!(parse_thread_schedstat("invalid"), None);
     }
 }

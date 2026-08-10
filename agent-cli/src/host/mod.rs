@@ -4984,6 +4984,15 @@ fn summarize_input_latency_lab_arm(
         let proxy_kernel = response["proxy_kernel_at_us"]
             .as_u64()
             .ok_or("response omitted proxy kernel timestamp")?;
+        let reader = response["input_reader"]
+            .as_object()
+            .ok_or("response omitted input reader evidence")?;
+        let reader_poll_returned = reader["poll_returned_at_us"]
+            .as_u64()
+            .ok_or("response omitted input reader poll timestamp")?;
+        let reader_read_started = reader["read_started_at_us"]
+            .as_u64()
+            .ok_or("response omitted input reader read timestamp")?;
         let captured = response["captured_at_us"].as_u64().unwrap_or(0);
         let published = response["published_at_us"].as_u64().unwrap_or(0);
         let drained = response["drained_at_us"].as_u64().unwrap_or(0);
@@ -4998,6 +5007,8 @@ fn summarize_input_latency_lab_arm(
             journaled,
             first_write,
             proxy_kernel,
+            reader_poll_returned,
+            reader_read_started,
             captured,
             published,
             drained,
@@ -5022,6 +5033,15 @@ fn summarize_input_latency_lab_arm(
             ("main_journal_to_write_us", first_write - journaled),
             ("main_write_syscall_us", completed_write - first_write),
             ("main_write_to_proxy_kernel_us", proxy_kernel - first_write),
+            (
+                "proxy_kernel_to_reader_poll_us",
+                reader_poll_returned - proxy_kernel,
+            ),
+            (
+                "reader_poll_to_read_us",
+                reader_read_started - reader_poll_returned,
+            ),
+            ("reader_read_to_capture_us", captured - reader_read_started),
             ("proxy_kernel_to_capture_us", captured - proxy_kernel),
             ("capture_to_publish_us", published - captured),
             ("publish_to_drain_us", drained - published),
@@ -5053,6 +5073,15 @@ fn summarize_input_latency_lab_arm(
             "write_cpu": main["write_cpu"],
             "eagain_count": eagain_count,
             "proxy_kernel_at_us": proxy_kernel,
+            "reader_poll_returned_at_us": reader_poll_returned,
+            "reader_poll_thread_cpu_us": reader["poll_thread_cpu_us"],
+            "reader_poll_cpu": reader["poll_cpu"],
+            "reader_read_started_at_us": reader_read_started,
+            "reader_captured_thread_cpu_us": reader["captured_thread_cpu_us"],
+            "reader_captured_cpu": reader["captured_cpu"],
+            "reader_poll_runtime_delta_us": reader["poll_runtime_delta_us"],
+            "reader_poll_run_delay_delta_us": reader["poll_run_delay_delta_us"],
+            "reader_poll_timeslice_delta": reader["poll_timeslice_delta"],
             "captured_at_us": captured,
             "published_at_us": published,
             "drained_at_us": drained,
@@ -5213,6 +5242,7 @@ fn summarize_input_latency_lab_arm(
         "skipped_background_units": skipped_work,
         "driver_emission_lateness_us": driver_lateness_us,
         "pipeline_status": "passed",
+        "input_reader_policy": trace["input_reader_policy"],
         "pipeline_eagain_count": eagain_total,
         "pipeline_stages": pipeline_stage_summary,
         "pipeline_records": pipeline_records,
@@ -5756,8 +5786,8 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
 }
 
 fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v4") {
-        return Err("launcher response trace is not schema v4".into());
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v5") {
+        return Err("launcher response trace is not schema v5".into());
     }
     if trace["records"].as_array().is_none()
         || trace["feedback_records"].as_array().is_none()
@@ -5767,8 +5797,9 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
         || trace["run_id"].as_str().is_none_or(str::is_empty)
         || trace["catalog_phases"].as_array().is_none()
         || trace["scheduler_phases"].as_array().is_none()
+        || trace["input_reader_policy"].as_object().is_none()
     {
-        return Err("launcher response trace omitted required v4 evidence".into());
+        return Err("launcher response trace omitted required v5 evidence".into());
     }
     for record in launcher_response_confirmed_records(trace, None) {
         let ordered = [
@@ -6015,7 +6046,7 @@ fn read_completed_launcher_response_trace(session: &Session, run_id: &str) -> Re
         return Err("completed launcher response trace is empty".into());
     }
     let trace: Value = serde_json::from_str(&raw)?;
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v4")
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v5")
         || trace["run_id"].as_str() != Some(run_id)
         || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
     {

@@ -116,7 +116,9 @@ independently flushed Main proxy trace are stored under
 `build/agent-benchmarks/input-latency-lab/<timestamp>/`. Protocol v3 assigns
 each forwarded proxy event an exact sequence and attributes kernel enqueue,
 Main poll/read/mapping, proxy journal/write and `EAGAIN`, MagiK proxy capture,
-mailbox publication/drain, dispatch, and active-latch confirmation. Main keeps
+MagiK reader poll return/read start, reader CPU/thread time, applied scheduling
+policy, affinity, and poll-interval runqueue delay, mailbox publication/drain,
+dispatch, and active-latch confirmation. Main keeps
 the bounded trace in memory during the route and performs no hot-path file
 output.
 
