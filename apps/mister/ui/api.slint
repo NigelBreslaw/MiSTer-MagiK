@@ -123,7 +123,8 @@ export global MisterBridge {
     in-out property <bool> dev-mode;
     in-out property <[MenuItem]> menu-items;
     in-out property <[MenuItemPresentation]> menu-item-presentation;
-    // Scroll offset in logical pixels (0 = left); translates the retained Home tile rail.
+    // Scroll offset in canonical 960-wide rail pixels (0 = left). The Home view
+    // scales this stable navigation coordinate to its responsive card pitch.
     in-out property <bool> home-scroll-held;
     in-out property <bool> home-scroll-repeat-active;
     in-out property <int> home-scroll-x;

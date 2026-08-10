@@ -1371,7 +1371,7 @@ mod tests {
                 x: 253,
                 y: 74,
                 width: 219,
-                height: 448,
+                height: 404,
             }
         );
 
@@ -1390,7 +1390,26 @@ mod tests {
                 x: 18,
                 y: 74,
                 width: 191,
-                height: 448,
+                height: 404,
+            }
+        );
+
+        let wide_nested = hdmi_navigation_geometry(
+            1280,
+            720,
+            4,
+            4 * 207,
+            false,
+            NavigationTransitionEdge::ConsolesToSystem,
+            "Sinclair",
+        );
+        assert_eq!(
+            wide_nested.source_card,
+            NavigationTransitionRect {
+                x: 18,
+                y: 74,
+                width: 262,
+                height: 584,
             }
         );
         assert_eq!(nested.destination_title.x, 16);

@@ -135,18 +135,30 @@ pub fn hdmi_navigation_geometry(
     const OUTER_PADDING: f32 = 18.0;
     const HEADER_HEIGHT: f32 = 42.0;
     const HEADER_GAP: f32 = 14.0;
+    const FOOTER_HEIGHT: f32 = 30.0;
+    const FOOTER_GAP: f32 = 14.0;
     const TILE_GAP: f32 = 16.0;
-    const NARROW_TILE_WIDTH: f32 = 191.0;
+    const CANONICAL_NARROW_TILE_PITCH: f32 = 207.0;
     let viewport_width = frame_width.saturating_sub(36) as f32;
     let tile_width = if root_menu {
         (viewport_width - 3.0 * TILE_GAP) / 4.0
     } else {
-        NARROW_TILE_WIDTH
+        (viewport_width - 4.0 * TILE_GAP) / 4.5
     };
     let tile_pitch = tile_width + TILE_GAP;
-    let card_height =
-        (frame_height as f32 - OUTER_PADDING * 2.0 - HEADER_HEIGHT - HEADER_GAP).max(1.0);
-    let unclamped_x = OUTER_PADDING + selected_index as f32 * tile_pitch - scroll_x.max(0) as f32;
+    let displayed_scroll_x = if root_menu {
+        0.0
+    } else {
+        scroll_x.max(0) as f32 * tile_pitch / CANONICAL_NARROW_TILE_PITCH
+    };
+    let card_height = (frame_height as f32
+        - OUTER_PADDING * 2.0
+        - HEADER_HEIGHT
+        - HEADER_GAP
+        - FOOTER_GAP
+        - FOOTER_HEIGHT)
+        .max(1.0);
+    let unclamped_x = OUTER_PADDING + selected_index as f32 * tile_pitch - displayed_scroll_x;
     let max_x = (frame_width as f32 - tile_width).max(0.0);
     let card_x = unclamped_x.round().clamp(0.0, max_x);
     let card_y = OUTER_PADDING + HEADER_HEIGHT + HEADER_GAP;
