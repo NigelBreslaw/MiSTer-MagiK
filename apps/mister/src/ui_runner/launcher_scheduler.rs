@@ -5,6 +5,62 @@ use super::*;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SystemEntryThreadSnapshot {
+    cpu: i32,
+    thread_cpu_us: u64,
+    minor_page_faults: u64,
+    major_page_faults: u64,
+}
+
+#[cfg(target_os = "linux")]
+fn system_entry_thread_snapshot() -> SystemEntryThreadSnapshot {
+    let mut cpu_time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: cpu_time points to writable timespec storage.
+    let cpu_time_available =
+        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut cpu_time) } == 0;
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: usage points to writable rusage storage.
+    let usage_available = unsafe { libc::getrusage(libc::RUSAGE_THREAD, usage.as_mut_ptr()) } == 0;
+    // SAFETY: successful getrusage initialized usage; zero is valid for every integer field on
+    // the failure path.
+    let usage = unsafe { usage.assume_init() };
+    // SAFETY: sched_getcpu has no pointer arguments or retained state.
+    let cpu = unsafe { libc::sched_getcpu() };
+    SystemEntryThreadSnapshot {
+        cpu,
+        thread_cpu_us: cpu_time_available
+            .then(|| {
+                u64::try_from(cpu_time.tv_sec)
+                    .unwrap_or(0)
+                    .saturating_mul(1_000_000)
+                    .saturating_add(u64::try_from(cpu_time.tv_nsec).unwrap_or(0) / 1_000)
+            })
+            .unwrap_or(0),
+        minor_page_faults: usage_available
+            .then(|| u64::try_from(usage.ru_minflt).unwrap_or(0))
+            .unwrap_or(0),
+        major_page_faults: usage_available
+            .then(|| u64::try_from(usage.ru_majflt).unwrap_or(0))
+            .unwrap_or(0),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_entry_thread_snapshot() -> SystemEntryThreadSnapshot {
+    SystemEntryThreadSnapshot {
+        cpu: -1,
+        ..SystemEntryThreadSnapshot::default()
+    }
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+}
+
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
 pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
 
@@ -253,18 +309,23 @@ impl LauncherScheduler {
         if std::thread::Builder::new()
             .name("catalog-shard-load".to_string())
             .spawn(move || {
-                use mister_magik_catalog::sharded_catalog::CatalogReader;
                 let load_started = Instant::now();
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
                 );
+                let execution_started = system_entry_thread_snapshot();
+                crate::allocation_metrics::begin();
                 let storage =
                     mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-                let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-                    &storage,
-                    mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-                )
-                .and_then(|reader| {
+                let descriptor_pmu =
+                    mister_magik_perf_events::sampled_span("system-entry-registry-open");
+                let result =
+                    mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                        &storage,
+                        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+                    );
+                drop(descriptor_pmu);
+                let result = result.and_then(|reader| {
                     let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(
                         &worker_system_id,
                     )
@@ -274,21 +335,39 @@ impl LauncherScheduler {
                             error.to_string(),
                         )
                     })?;
-                    reader.open_system(&parsed)
+                    let open_pmu =
+                        mister_magik_perf_events::sampled_span("system-entry-shard-open");
+                    let result = reader.open_system_with_timing(&parsed);
+                    drop(open_pmu);
+                    result
                 });
                 let navigation_decode_us = load_started.elapsed().as_micros();
                 let message = match result {
-                    Ok(system) => {
+                    Ok((system, open_timing)) => {
                         let prepare_started = Instant::now();
                         let games = system.games();
                         let game_count = games.len();
+                        let projection_started = Instant::now();
+                        let projection_pmu =
+                            mister_magik_perf_events::sampled_span("system-entry-row-projection");
                         let (replacement, launch_plans) =
                             arcade_rows_from_shard(&worker_system_id, games);
+                        drop(projection_pmu);
+                        let row_projection_us = elapsed_us(projection_started);
+                        let replacement_started = Instant::now();
+                        let replacement_pmu = mister_magik_perf_events::sampled_span(
+                            "system-entry-catalog-replacement",
+                        );
                         let catalog = base_catalog.replacing_system_games(
                             &worker_system_id,
                             replacement,
                             launch_plans,
                         );
+                        drop(replacement_pmu);
+                        let catalog_replacement_us = elapsed_us(replacement_started);
+                        let allocations = crate::allocation_metrics::finish();
+                        let execution_finished = system_entry_thread_snapshot();
+                        mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
                         CatalogWorkerMessage::SystemShardReady {
                             system_id: worker_system_id.clone(),
                             catalog,
@@ -298,12 +377,35 @@ impl LauncherScheduler {
                                 .elapsed()
                                 .as_micros()
                                 .min(u64::MAX as u128) as u64,
+                            profile: SystemEntryCatalogProfile {
+                                open: open_timing,
+                                row_projection_us,
+                                catalog_replacement_us,
+                                total_wall_us: elapsed_us(load_started),
+                                thread_cpu_us: execution_finished
+                                    .thread_cpu_us
+                                    .saturating_sub(execution_started.thread_cpu_us),
+                                cpu_start: execution_started.cpu,
+                                cpu_end: execution_finished.cpu,
+                                minor_page_faults: execution_finished
+                                    .minor_page_faults
+                                    .saturating_sub(execution_started.minor_page_faults),
+                                major_page_faults: execution_finished
+                                    .major_page_faults
+                                    .saturating_sub(execution_started.major_page_faults),
+                                allocations: allocations.allocations,
+                                allocated_bytes: allocations.bytes,
+                            },
                         }
                     }
-                    Err(error) => CatalogWorkerMessage::SystemShardFailed {
-                        system_id: worker_system_id.clone(),
-                        error: error.to_string(),
-                    },
+                    Err(error) => {
+                        let _ = crate::allocation_metrics::finish();
+                        mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
+                        CatalogWorkerMessage::SystemShardFailed {
+                            system_id: worker_system_id.clone(),
+                            error: error.to_string(),
+                        }
+                    }
                 };
                 crate::ui_logln!(
                     "catalog_system_shard_load_finish system={} status={} load_us={}",

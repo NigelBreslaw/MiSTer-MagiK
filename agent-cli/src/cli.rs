@@ -700,6 +700,7 @@ mod tests {
             "system-entry",
             "system-entry-critical",
             "system-entry-critical-confirm",
+            "system-entry-critical-profile",
             "system-entry-qualification",
             "particles",
             "particle-profile",

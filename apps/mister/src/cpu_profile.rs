@@ -16,6 +16,7 @@ const SETTINGS_NAVIGATION_TRANSITIONS_TRIGGER: &str = "settings-navigation-trans
 const ORIENTATION_TRANSITION_FADE_TRIGGER: &str = "orientation-transition-fade";
 const ORIENTATION_TRANSITION_ZOOM_TRIGGER: &str = "orientation-transition-zoom";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
+const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,6 +122,20 @@ pub fn launch_return_profile_requested() -> bool {
     bounded_profile_trigger() == Some(BoundedProfileTrigger::LaunchReturn)
 }
 
+pub fn system_entry_profile_requested() -> bool {
+    system_entry_profile_requested_from_values(
+        std::env::var("MISTER_PPROF").ok().as_deref(),
+        std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref(),
+    )
+}
+
+fn system_entry_profile_requested_from_values(
+    enabled: Option<&str>,
+    trigger: Option<&str>,
+) -> bool {
+    enabled == Some("1") && trigger == Some(SYSTEM_ENTRY_TRIGGER)
+}
+
 fn bounded_profile_trigger_from_values(
     enabled: Option<&str>,
     trigger: Option<&str>,
@@ -192,7 +207,7 @@ mod imp {
     use super::{
         BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
         screensaver_profile_duration, screensaver_profile_frame_bounds, screensaver_profile_warmup,
-        set_screensaver_profile_state,
+        set_screensaver_profile_state, system_entry_profile_requested,
     };
     use serde_json::json;
     use std::fs;
@@ -212,7 +227,16 @@ mod imp {
         if bounded_profile_trigger().is_some() {
             return None;
         }
+        if system_entry_profile_requested() {
+            return None;
+        }
         start_enabled()
+    }
+
+    pub fn start_system_entry() -> Option<CpuProfiler> {
+        system_entry_profile_requested()
+            .then(start_enabled)
+            .flatten()
     }
 
     pub fn start_launch_return() -> Option<CpuProfiler> {
@@ -359,6 +383,50 @@ mod imp {
             })
             .map(|_| ())
             .map_err(|error| format!("launch-return cpu profile worker spawn failed: {error}"))
+    }
+
+    pub fn finish_system_entry_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+        let Some(profiler) = profiler else {
+            return Ok(());
+        };
+        std::thread::Builder::new()
+            .name("system-entry-profile".into())
+            .spawn(move || {
+                let result = finish(Some(profiler));
+                let metadata = match &result {
+                    Ok(Some(summary)) => json!({
+                        "schema": "mister-magik-system-entry-pprof-v1",
+                        "state": "complete",
+                        "duration_secs": summary.duration_secs,
+                        "hz": summary.hz,
+                        "sample_stacks": summary.sample_stacks,
+                        "sample_hits": summary.sample_hits,
+                        "out_path": summary.out_path,
+                        "bytes": summary.bytes,
+                    }),
+                    Ok(None) => json!({
+                        "schema": "mister-magik-system-entry-pprof-v1",
+                        "state": "failed",
+                        "error": "profiler-produced-no-summary",
+                    }),
+                    Err(error) => json!({
+                        "schema": "mister-magik-system-entry-pprof-v1",
+                        "state": "failed",
+                        "error": error,
+                    }),
+                };
+                if let Ok(path) = std::env::var("MISTER_PPROF_COMPLETE") {
+                    if let Some(parent) = std::path::Path::new(&path).parent() {
+                        let _ = fs::create_dir_all(parent);
+                    }
+                    let _ = fs::write(path, format!("{metadata}\n"));
+                }
+                if let Err(error) = result {
+                    crate::ui_errln!("system-entry cpu profile failed: {error}");
+                }
+            })
+            .map(|_| ())
+            .map_err(|error| format!("system-entry profile worker spawn failed: {error}"))
     }
 
     fn write_folded_report(report: &pprof::Report, path: &str) -> Result<u64, String> {
@@ -634,8 +702,8 @@ mod imp {
 
 #[cfg(feature = "profile")]
 pub use imp::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async, start,
-    start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async,
+    finish_system_entry_async, start, start_launch_return, start_system_entry,
 };
 
 #[cfg(not(feature = "profile"))]
@@ -664,6 +732,10 @@ mod stub {
         None
     }
 
+    pub fn start_system_entry() -> Option<CpuProfiler> {
+        None
+    }
+
     pub fn finish(_: Option<CpuProfiler>) -> Result<Option<CpuProfileSummary>, String> {
         Ok(None)
     }
@@ -679,6 +751,13 @@ mod stub {
             return Ok(());
         };
         finish_launch_return(Some(profiler)).map(|_| ())
+    }
+
+    pub fn finish_system_entry_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+        let Some(profiler) = profiler else {
+            return Ok(());
+        };
+        finish(Some(profiler)).map(|_| ())
     }
 
     pub struct ScreensaverProfiler;
@@ -711,8 +790,8 @@ mod stub {
 
 #[cfg(not(feature = "profile"))]
 pub use stub::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async, start,
-    start_launch_return,
+    CpuProfiler, ScreensaverProfiler, finish, finish_launch_return_async,
+    finish_system_entry_async, start, start_launch_return, start_system_entry,
 };
 
 #[cfg(test)]
@@ -788,5 +867,21 @@ mod tests {
             bounded_profile_trigger_from_values(Some("1"), Some("unowned")),
             None
         );
+    }
+
+    #[test]
+    fn system_entry_profile_requires_its_exact_trigger() {
+        assert!(system_entry_profile_requested_from_values(
+            Some("1"),
+            Some("system-entry")
+        ));
+        assert!(!system_entry_profile_requested_from_values(
+            Some("0"),
+            Some("system-entry")
+        ));
+        assert!(!system_entry_profile_requested_from_values(
+            Some("1"),
+            Some("screensaver")
+        ));
     }
 }

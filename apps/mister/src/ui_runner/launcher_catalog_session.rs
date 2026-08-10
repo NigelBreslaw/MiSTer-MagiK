@@ -100,6 +100,7 @@ pub(super) enum CatalogSessionEffect {
         base_catalog_version: usize,
         game_count: usize,
         prepare_us: u64,
+        profile: SystemEntryCatalogProfile,
     },
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
@@ -374,12 +375,14 @@ impl LauncherCatalogSession {
                 base_catalog_version,
                 game_count,
                 prepare_us,
+                profile,
             } => effects.push(CatalogSessionEffect::ApplySystemShard {
                 system_id,
                 catalog,
                 base_catalog_version,
                 game_count,
                 prepare_us,
+                profile,
             }),
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
                 effects.push(CatalogSessionEffect::CatalogSystemHydrationFailed {
@@ -1181,6 +1184,7 @@ mod tests {
                 base_catalog_version: 7,
                 game_count: 0,
                 prepare_us: 42,
+                profile: SystemEntryCatalogProfile::default(),
             },
             now,
         );

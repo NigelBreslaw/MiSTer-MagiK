@@ -72,6 +72,10 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+#[global_allocator]
+static GLOBAL_ALLOCATOR: allocation_metrics::TrackingAllocator =
+    allocation_metrics::TrackingAllocator;
+
 static PROCESS_START_MONOTONIC_US: OnceLock<u64> = OnceLock::new();
 
 fn device_monotonic_us() -> u64 {
@@ -94,6 +98,7 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
     *PROCESS_START_MONOTONIC_US.get_or_init(device_monotonic_us)
 }
 
+mod allocation_metrics;
 mod arcade_list_renderer;
 mod artifact_publish;
 mod bitmap_text;
@@ -434,6 +439,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "persisted-search-v1": true,
         "input-integrity-driver-v1": true,
         "system-entry-v1": true,
+        "system-entry-profile-v1": cfg!(feature = "profile"),
     });
     capabilities
         .as_object_mut()

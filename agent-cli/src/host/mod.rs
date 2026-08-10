@@ -647,6 +647,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_system_entry_critical_profile(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_system_entry_critical_profile(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_system_entry_qualification(
         &mut self,
         output_dir: &Path,
@@ -4214,6 +4223,11 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
 const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
+const SYSTEM_ENTRY_PROFILE_REMOTE: &str = "/tmp/mister-magik/system-entry-profile.json";
+const SYSTEM_ENTRY_PPROF_SVG_REMOTE: &str = "/tmp/mister-magik/system-entry-pprof.svg";
+const SYSTEM_ENTRY_PPROF_FOLDED_REMOTE: &str = "/tmp/mister-magik/system-entry-pprof.folded";
+const SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE: &str =
+    "/tmp/mister-magik/system-entry-pprof-complete.json";
 const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
 const INPUT_INTEGRITY_DRIVER: &str =
     "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
@@ -7338,6 +7352,12 @@ enum SystemEntryInvocation {
     Direct,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SystemEntryInstrumentation {
+    Normal,
+    Profile,
+}
+
 fn profile_installed_system_entry(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -7390,6 +7410,7 @@ fn profile_installed_system_entry(
                 ordinal + 1,
                 1,
                 SystemEntryInvocation::TileActivation,
+                SystemEntryInstrumentation::Normal,
             )?;
             samples_by_system
                 .entry(system.clone())
@@ -7434,6 +7455,7 @@ fn profile_installed_system_entry(
                         .ok_or("system-entry candidate has no registry ordinal")?,
                     sample_index,
                     SystemEntryInvocation::TileActivation,
+                    SystemEntryInstrumentation::Normal,
                 )?;
                 samples_by_system
                     .get_mut(&system)
@@ -7641,6 +7663,7 @@ fn profile_installed_system_entry_critical(
                 ordinal + 1,
                 1,
                 SystemEntryInvocation::Direct,
+                SystemEntryInstrumentation::Normal,
             )
         })
         .collect::<Result<Vec<_>>>();
@@ -7785,6 +7808,7 @@ fn profile_installed_system_entry_repeated(
                     ordinal + 1,
                     sample_index,
                     SystemEntryInvocation::Direct,
+                    SystemEntryInstrumentation::Normal,
                 )?);
             }
             results.push((system.clone(), *games, samples));
@@ -7854,6 +7878,130 @@ fn profile_installed_system_entry_repeated(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_system_entry_critical_profile(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed system-entry profile capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("system-entry-profile-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support system-entry-profile-v1".into());
+    }
+    let registry = exec_checked_output(
+        &session,
+        "system-entry registry report",
+        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let games_by_system = registry["systems"]
+        .as_array()
+        .ok_or("system-entry registry has no systems")?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("system")?.as_str()?.to_string(),
+                row.get("games")?.as_u64()?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let run_result = ["c64", "snes"]
+        .iter()
+        .enumerate()
+        .map(|(ordinal, system)| {
+            run_system_entry_sample(
+                config,
+                &session,
+                output_dir,
+                system,
+                *games_by_system
+                    .get(*system)
+                    .ok_or_else(|| format!("profile target {system} is not populated"))?,
+                ordinal + 1,
+                1,
+                SystemEntryInvocation::Direct,
+                SystemEntryInstrumentation::Profile,
+            )
+        })
+        .collect::<Result<Vec<_>>>();
+    let restore_result = exec_checked(
+        &session,
+        "system-entry profile cleanup",
+        &format!(
+            "rm -f {} {} {} {} {}",
+            sh(SYSTEM_ENTRY_TRACE_REMOTE),
+            sh(SYSTEM_ENTRY_PROFILE_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_SVG_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_FOLDED_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE),
+        ),
+    )
+    .and_then(|()| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    });
+    let samples = match (run_result, restore_result) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; launcher restoration failed: {restore}").into());
+        }
+    };
+    let passed = samples.iter().all(|sample| {
+        system_entry_sample_ready_time(sample).is_some()
+            && sample["pprof"]["metadata"]["sample_hits"]
+                .as_i64()
+                .is_some_and(|hits| hits > 0)
+            && system_entry_pmu_profile_usable(&sample["catalog_profile"]["pmu"])
+    });
+    let summary = json!({
+        "schema": "mister-magik-system-entry-critical-profile-v1",
+        "status": if passed { "passed" } else { "failed" },
+        "measurement": "instrumented attribution only; unprofiled runs determine performance",
+        "targets": ["c64", "snes"],
+        "samples": samples,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn system_entry_pmu_profile_usable(pmu: &Value) -> bool {
+    pmu.get("dropped_profiles").and_then(Value::as_u64) == Some(0)
+        && pmu
+            .get("profiles")
+            .and_then(Value::as_array)
+            .is_some_and(|profiles| {
+                !profiles.is_empty()
+                    && profiles.iter().all(|submitted| {
+                        submitted["profile"]["failure"].is_null()
+                            && submitted["profile"]["records"]
+                                .as_array()
+                                .is_some_and(|records| !records.is_empty())
+                    })
+            })
 }
 
 fn select_system_entry_targets(
@@ -7952,6 +8100,7 @@ fn run_system_entry_sample(
     registry_ordinal: usize,
     sample_index: usize,
     invocation: SystemEntryInvocation,
+    instrumentation: SystemEntryInstrumentation,
 ) -> Result<Value> {
     let run_id = format!(
         "system-entry-{system}-{}",
@@ -7961,7 +8110,23 @@ fn run_system_entry_sample(
     let capture_file = format!("{artifact_prefix}.png");
     let capture_metadata_file = format!("{artifact_prefix}-capture.json");
     let trace_file = format!("{artifact_prefix}.tsv");
+    let profile_file = format!("{artifact_prefix}-profile.json");
+    let pprof_svg_file = format!("{artifact_prefix}-pprof.svg");
+    let pprof_folded_file = format!("{artifact_prefix}-pprof.folded");
+    let pprof_metadata_file = format!("{artifact_prefix}-pprof.json");
     let run_result = (|| -> Result<Value> {
+        exec_checked(
+            session,
+            "clear system-entry sample evidence",
+            &format!(
+                "rm -f {} {} {} {} {}",
+                sh(SYSTEM_ENTRY_TRACE_REMOTE),
+                sh(SYSTEM_ENTRY_PROFILE_REMOTE),
+                sh(SYSTEM_ENTRY_PPROF_SVG_REMOTE),
+                sh(SYSTEM_ENTRY_PPROF_FOLDED_REMOTE),
+                sh(SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE),
+            ),
+        )?;
         let mut env_vars = vec![
             ("MISTER_CATALOG_REFRESH".into(), "off".into()),
             (
@@ -7973,9 +8138,35 @@ fn run_system_entry_sample(
                 SYSTEM_ENTRY_TRACE_REMOTE.into(),
             ),
             ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
+            (
+                "MISTER_SYSTEM_ENTRY_PROFILE_OUT".into(),
+                SYSTEM_ENTRY_PROFILE_REMOTE.into(),
+            ),
         ];
         if invocation == SystemEntryInvocation::Direct {
             env_vars.push(("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT".into(), "1".into()));
+        }
+        if instrumentation == SystemEntryInstrumentation::Profile {
+            env_vars.extend([
+                ("MISTER_PMU_PROFILE".into(), "1".into()),
+                ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+                ("MISTER_PMU_RECORD_LIMIT".into(), "256".into()),
+                ("MISTER_PPROF".into(), "1".into()),
+                ("MISTER_PPROF_TRIGGER".into(), "system-entry".into()),
+                ("MISTER_PPROF_HZ".into(), "999".into()),
+                (
+                    "MISTER_PPROF_OUT".into(),
+                    SYSTEM_ENTRY_PPROF_SVG_REMOTE.into(),
+                ),
+                (
+                    "MISTER_PPROF_FOLDED_OUT".into(),
+                    SYSTEM_ENTRY_PPROF_FOLDED_REMOTE.into(),
+                ),
+                (
+                    "MISTER_PPROF_COMPLETE".into(),
+                    SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE.into(),
+                ),
+            ]);
         }
         restart_launcher_with_one_shot_env(
             session,
@@ -8011,6 +8202,38 @@ fn run_system_entry_sample(
             remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
                 .ok_or("system-entry trace disappeared before retention")?,
         )?;
+        let catalog_profile = remote_read(session, SYSTEM_ENTRY_PROFILE_REMOTE)
+            .map(|raw| serde_json::from_str::<Value>(&raw))
+            .transpose()?;
+        if let Some(profile) = catalog_profile.as_ref() {
+            fs::write(
+                output_dir.join(&profile_file),
+                format!("{}\n", serde_json::to_string_pretty(profile)?),
+            )?;
+        }
+        let pprof = if instrumentation == SystemEntryInstrumentation::Profile {
+            let metadata = wait_system_entry_pprof(session, Duration::from_secs(20))?;
+            let svg = remote_read(session, SYSTEM_ENTRY_PPROF_SVG_REMOTE)
+                .filter(|text| !text.is_empty())
+                .ok_or("system-entry pprof SVG is missing")?;
+            let folded = remote_read(session, SYSTEM_ENTRY_PPROF_FOLDED_REMOTE)
+                .filter(|text| !text.is_empty())
+                .ok_or("system-entry pprof folded stacks are missing")?;
+            fs::write(output_dir.join(&pprof_svg_file), svg)?;
+            fs::write(output_dir.join(&pprof_folded_file), folded)?;
+            fs::write(
+                output_dir.join(&pprof_metadata_file),
+                format!("{}\n", serde_json::to_string_pretty(&metadata)?),
+            )?;
+            Some(json!({
+                "metadata": metadata,
+                "svg": pprof_svg_file,
+                "folded": pprof_folded_file,
+                "metadata_artifact": pprof_metadata_file,
+            }))
+        } else {
+            None
+        };
         let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
         let enter_input = system_entry_trace_row(&trace, "arcade_enter_input")?;
         let rows_ready = system_entry_trace_row(&trace, "arcade_rows_ready")?;
@@ -8026,6 +8249,16 @@ fn run_system_entry_sample(
         let catalog_resident_at_input = system_entry_detail_flag(enter_input, "catalog_resident")?;
         let preview_provenance = system_entry_detail_value(preview_ready, "provenance")
             .ok_or("system-entry preview trace has no provenance")?;
+        let preview_timing = json!({
+            "request_age_us": system_entry_detail_u64(preview_ready, "request_age_us")?,
+            "read_us": system_entry_detail_u64(preview_ready, "read_us")?,
+            "decode_us": system_entry_detail_u64(preview_ready, "decode_us")?,
+            "raw565_parse_us": system_entry_detail_u64(preview_ready, "raw565_parse_us")?,
+            "resize_us": system_entry_detail_u64(preview_ready, "resize_us")?,
+            "total_us": system_entry_detail_u64(preview_ready, "total_us")?,
+            "encoded_bytes": system_entry_detail_u64(preview_ready, "encoded_bytes")?,
+            "decoded_bytes": system_entry_detail_u64(preview_ready, "decoded_bytes")?,
+        });
         let preview_state = ready
             .get(10)
             .ok_or("system-entry ready trace has no preview state")?;
@@ -8041,6 +8274,9 @@ fn run_system_entry_sample(
             }
         };
         let ready_frame = system_entry_trace_frame(ready)?;
+        let ready_main_sequence = system_entry_detail_u64(ready, "main_sequence")?;
+        let catalog_generation = system_entry_detail_u64(ready, "catalog_generation")?;
+        let preview_generation = system_entry_detail_u64(ready, "preview_generation")?;
         let capture_active_sequence = capture
             .result
             .get("capture_source")
@@ -8051,6 +8287,13 @@ fn run_system_entry_sample(
         let first_list_presented_ms = system_entry_delta_ms(&trace, "arcade_enter_presented")?;
         let preview_ready_ms = system_entry_delta_ms(&trace, "arcade_preview_exact")?;
         let ready_presented_ms = system_entry_delta_ms(&trace, "system_entry_ready_presented")?;
+        let first_list_prepare_us = system_entry_trace_prepare_us(system_entry_trace_row(
+            &trace,
+            "arcade_enter_presented",
+        )?)?;
+        let prerequisites_ready_ms = rows_ready_ms
+            .max(first_list_presented_ms)
+            .max(preview_ready_ms);
         Ok(json!({
             "status": "passed",
             "sample": sample_index,
@@ -8073,17 +8316,30 @@ fn run_system_entry_sample(
                 "selected_screenshot_terminal": preview_ready_ms,
                 "complete_ready": ready_presented_ms,
             },
+            "stage_breakdown": {
+                "catalog": catalog_profile,
+                "preview": preview_timing,
+                "first_list_frame_prepare_us": first_list_prepare_us,
+                "destination_publication_ms": ready_presented_ms.saturating_sub(prerequisites_ready_ms),
+            },
             "selected_has_preview": selected_has_preview,
             "preview_state": preview_state,
             "preview_outcome": preview_outcome,
             "catalog_resident_at_input": catalog_resident_at_input,
             "catalog_residency": if catalog_resident_at_input { "resident" } else { "cold" },
             "preview_provenance": preview_provenance,
+            "preview_timing": preview_timing,
+            "catalog_profile": catalog_profile,
+            "profile_artifact": catalog_profile.as_ref().map(|_| profile_file),
+            "pprof": pprof,
             "cache_provenance": {
                 "catalog": if catalog_resident_at_input { "resident" } else { "cold" },
                 "preview": preview_provenance,
             },
             "ready_frame": ready_frame,
+            "ready_main_sequence": ready_main_sequence,
+            "catalog_generation": catalog_generation,
+            "preview_generation": preview_generation,
             "capture_active_sequence": capture_active_sequence,
             "capture_after_ready": true,
             "screenshot": capture_file,
@@ -8187,8 +8443,16 @@ fn retain_failed_system_entry_sample(
         "catalog_resident_at_input": Value::Null,
         "catalog_residency": Value::Null,
         "preview_provenance": Value::Null,
+        "preview_timing": Value::Null,
+        "catalog_profile": Value::Null,
+        "profile_artifact": Value::Null,
+        "pprof": Value::Null,
         "cache_provenance": Value::Null,
         "ready_frame": Value::Null,
+        "ready_main_sequence": Value::Null,
+        "catalog_generation": Value::Null,
+        "preview_generation": Value::Null,
+        "stage_breakdown": Value::Null,
         "capture_active_sequence": Value::Null,
         "capture_after_ready": false,
         "screenshot": screenshot,
@@ -8278,6 +8542,31 @@ fn wait_system_entry_trace(
     }
 }
 
+fn wait_system_entry_pprof(session: &Session, timeout: Duration) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(raw) = remote_read(session, SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE) {
+            let metadata: Value = serde_json::from_str(raw.trim())?;
+            if metadata.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-system-entry-pprof-v1")
+                || metadata.get("state").and_then(Value::as_str) != Some("complete")
+                || metadata
+                    .get("sample_hits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    <= 0
+            {
+                return Err("system-entry pprof produced no CPU samples".into());
+            }
+            return Ok(metadata);
+        }
+        if started.elapsed() >= timeout {
+            return Err("system-entry pprof completion timed out".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn system_entry_delta_ms(rows: &[Vec<String>], event: &str) -> Result<u64> {
     system_entry_trace_row(rows, event)?
         .get(3)
@@ -8289,6 +8578,13 @@ fn system_entry_delta_ms(rows: &[Vec<String>], event: &str) -> Result<u64> {
 fn system_entry_trace_frame(row: &[String]) -> Result<u64> {
     row.get(8)
         .ok_or("system-entry trace row has no frame")?
+        .parse::<u64>()
+        .map_err(Into::into)
+}
+
+fn system_entry_trace_prepare_us(row: &[String]) -> Result<u64> {
+    row.get(9)
+        .ok_or("system-entry trace row has no prepare time")?
         .parse::<u64>()
         .map_err(Into::into)
 }
@@ -17769,6 +18065,21 @@ mod tests {
     }
 
     #[test]
+    fn system_entry_trace_binds_catalog_preview_and_main_generations() {
+        let mut row = vec![String::new(); 13];
+        row[12] = "catalog_generation=9 preview_generation=12 main_sequence=41".into();
+        assert_eq!(
+            system_entry_detail_u64(&row, "catalog_generation").unwrap(),
+            9
+        );
+        assert_eq!(
+            system_entry_detail_u64(&row, "preview_generation").unwrap(),
+            12
+        );
+        assert_eq!(system_entry_detail_u64(&row, "main_sequence").unwrap(), 41);
+    }
+
+    #[test]
     fn system_entry_discovery_ignores_failed_samples() {
         let passed = json!({ "status": "passed", "ready_presented_ms": 5012 });
         let failed = json!({ "status": "failed", "ready_presented_ms": 9999 });
@@ -17872,6 +18183,23 @@ mod tests {
         assert_eq!(summary["failed_samples"][0]["error"], "timeout");
         assert_eq!(summary["cache_provenance"]["catalog"]["resident"], 1);
         assert_eq!(summary["cache_provenance"]["preview"]["decoded_cache"], 1);
+    }
+
+    #[test]
+    fn system_entry_pmu_requires_complete_nonempty_thread_profiles() {
+        let passing = json!({
+            "dropped_profiles": 0,
+            "profiles": [{
+                "profile": {
+                    "failure": null,
+                    "records": [{"name": "system-entry-shard-open"}],
+                },
+            }],
+        });
+        assert!(system_entry_pmu_profile_usable(&passing));
+        let mut failed = passing;
+        failed["profiles"][0]["profile"]["records"] = json!([]);
+        assert!(!system_entry_pmu_profile_usable(&failed));
     }
 
     #[test]

@@ -339,6 +339,7 @@ pub(crate) struct PreviewState {
     last_prefetch_window: Option<PreviewPrefetchWindow>,
     prefetch_throttle_until: Option<Instant>,
     last_apply_trace: PreviewApplyTrace,
+    last_selected_timing: SelectedPreviewTiming,
     frame_cache_evictions: u32,
 }
 
@@ -438,6 +439,18 @@ pub(crate) struct PreviewApplyTrace {
     pub(crate) cache_evictions: u32,
     pub(crate) failed_results: u32,
     pub(crate) backlog_len: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SelectedPreviewTiming {
+    pub(crate) request_age_us: u64,
+    pub(crate) read_us: u64,
+    pub(crate) decode_us: u64,
+    pub(crate) raw565_parse_us: u64,
+    pub(crate) resize_us: u64,
+    pub(crate) total_us: u64,
+    pub(crate) encoded_bytes: u64,
+    pub(crate) decoded_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -607,6 +620,7 @@ impl PreviewState {
             last_prefetch_window: None,
             prefetch_throttle_until: None,
             last_apply_trace: PreviewApplyTrace::default(),
+            last_selected_timing: SelectedPreviewTiming::default(),
             frame_cache_evictions: 0,
         }
     }
@@ -659,6 +673,10 @@ impl PreviewState {
 
     pub(crate) const fn visible_preview_load_source(&self) -> &'static str {
         self.visible_preview_load_source
+    }
+
+    pub(crate) const fn selected_preview_timing(&self) -> SelectedPreviewTiming {
+        self.last_selected_timing
     }
 
     pub(crate) fn take_raw_dirty(&mut self) -> bool {
@@ -2205,6 +2223,16 @@ pub(crate) fn apply_ready_preview(
             preview.last_apply_trace.cache_evictions += cache_evictions;
             preview.frame_cache_evictions += cache_evictions;
             if is_selected_result {
+                preview.last_selected_timing = SelectedPreviewTiming {
+                    request_age_us: result.request_age_us,
+                    read_us: result.read_us,
+                    decode_us: result.decode_us,
+                    raw565_parse_us: result.raw565_parse_us,
+                    resize_us: result.resize_us,
+                    total_us: result.total_us,
+                    encoded_bytes: result.encoded_bytes.try_into().unwrap_or(u64::MAX),
+                    decoded_bytes: result.decoded_bytes.try_into().unwrap_or(u64::MAX),
+                };
                 preview.current_generation = 0;
                 bridge.set_arcade_preview_title(result_title.clone().into());
                 preview.has_visible_preview = true;

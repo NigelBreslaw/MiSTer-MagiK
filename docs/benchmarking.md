@@ -258,6 +258,21 @@ began and the provenance of the terminal preview (for example decoded cache,
 archive, or authoritative empty). This makes startup-only advantages such as
 Arcade residency visible in both screening and confirmation reports.
 
+`scripts/agent benchmark system-entry-critical-profile` is attribution-only.
+It runs isolated C64 and SNES direct entries with the dormant installed-runtime
+pprof sampler and per-thread Cortex-A9 PMU spans enabled. The retained evidence
+splits registry/descriptor lookup, navigation read and hash, LZ4 decompression,
+envelope and typed JSON parsing, validation, row projection, catalog
+replacement and CPU1 adoption. It also records worker wall/thread CPU time,
+CPU identity, page faults, compressed/decoded bytes and measured allocations,
+plus selected-preview I/O/decode timing and destination-frame preparation.
+Profiled samples never determine a performance pass; the unprofiled screening
+and confirmation commands remain authoritative.
+
+The ready trace binds the active catalog version, preview presentation
+generation and Main sequence to the confirmed list frame. Capture remains
+outside the latency interval and follows that generation-bound confirmation.
+
 ## Cold boot
 
 `cold-boot` profiles exactly one supervised reboot of the coherently installed

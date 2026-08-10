@@ -10,7 +10,10 @@ use crate::sharded_catalog::{
     CatalogError, CatalogGame, CatalogLaunchPlan, CatalogReader, CatalogRegistry, SystemCatalog,
     SystemSummary,
 };
-use crate::system_shard::{NavigationCompatibility, open_system_navigation_with_compatibility};
+use crate::system_shard::{
+    NavigationCompatibility, SystemNavigationOpenTiming,
+    open_system_navigation_with_compatibility_and_timing,
+};
 use std::path::{Path, PathBuf};
 
 pub struct LazyShardedCatalogReader {
@@ -18,6 +21,13 @@ pub struct LazyShardedCatalogReader {
     limits: RegistryLimits,
     manifest: CatalogManifest,
     navigation_compatibility: NavigationCompatibility,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct LazySystemOpenTiming {
+    pub descriptor_lookup_us: u64,
+    pub navigation: SystemNavigationOpenTiming,
+    pub projection_us: u64,
 }
 
 impl LazyShardedCatalogReader {
@@ -66,37 +76,21 @@ impl LazyShardedCatalogReader {
             navigation_compatibility,
         })
     }
-}
 
-impl CatalogReader for LazyShardedCatalogReader {
-    fn open_registry(&self) -> Result<CatalogRegistry, CatalogError> {
-        Ok(CatalogRegistry::new(
-            self.manifest.generation,
-            self.manifest
-                .systems
-                .iter()
-                .map(|system| SystemSummary {
-                    system_id: system.system_id.clone(),
-                    display_title: system.display_title.clone(),
-                    section: system.section.clone(),
-                    family: system.family.clone(),
-                    order: system.order,
-                    generation: system.active.generation,
-                    games: system.active.games,
-                })
-                .collect(),
-        ))
-    }
-
-    fn open_system(&self, system_id: &SystemId) -> Result<SystemCatalog, CatalogError> {
+    pub fn open_system_with_timing(
+        &self,
+        system_id: &SystemId,
+    ) -> Result<(SystemCatalog, LazySystemOpenTiming), CatalogError> {
+        let descriptor_started = std::time::Instant::now();
         let system = self
             .manifest
             .systems
             .iter()
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
+        let descriptor_lookup_us = elapsed_us(descriptor_started);
         let open = |generation: &crate::shard_registry::PublishedGeneration| {
-            let loaded = open_system_navigation_with_compatibility(
+            let (loaded, timing) = open_system_navigation_with_compatibility_and_timing(
                 &self.storage_root.join(&generation.navigation_path),
                 system_id,
                 generation.generation,
@@ -110,9 +104,9 @@ impl CatalogReader for LazyShardedCatalogReader {
                     "navigation checksum does not match manifest",
                 ));
             }
-            Ok(loaded)
+            Ok((loaded, timing))
         };
-        let loaded = match open(&system.active) {
+        let (loaded, navigation) = match open(&system.active) {
             Ok(loaded) => loaded,
             Err(active_error) => match system.previous.as_ref() {
                 Some(previous) => open(previous).map_err(|previous_error| {
@@ -128,7 +122,8 @@ impl CatalogReader for LazyShardedCatalogReader {
                 }
             },
         };
-        Ok(SystemCatalog::new(
+        let projection_started = std::time::Instant::now();
+        let catalog = SystemCatalog::new(
             SystemSummary {
                 system_id: loaded.system_id,
                 display_title: system.display_title.clone(),
@@ -166,7 +161,45 @@ impl CatalogReader for LazyShardedCatalogReader {
                     }),
                 })
                 .collect(),
+        );
+        Ok((
+            catalog,
+            LazySystemOpenTiming {
+                descriptor_lookup_us,
+                navigation,
+                projection_us: elapsed_us(projection_started),
+            },
         ))
+    }
+}
+
+fn elapsed_us(started: std::time::Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
+}
+
+impl CatalogReader for LazyShardedCatalogReader {
+    fn open_registry(&self) -> Result<CatalogRegistry, CatalogError> {
+        Ok(CatalogRegistry::new(
+            self.manifest.generation,
+            self.manifest
+                .systems
+                .iter()
+                .map(|system| SystemSummary {
+                    system_id: system.system_id.clone(),
+                    display_title: system.display_title.clone(),
+                    section: system.section.clone(),
+                    family: system.family.clone(),
+                    order: system.order,
+                    generation: system.active.generation,
+                    games: system.active.games,
+                })
+                .collect(),
+        ))
+    }
+
+    fn open_system(&self, system_id: &SystemId) -> Result<SystemCatalog, CatalogError> {
+        self.open_system_with_timing(system_id)
+            .map(|(catalog, _)| catalog)
     }
 }
 

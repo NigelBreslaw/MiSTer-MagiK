@@ -35,6 +35,7 @@ enum BenchmarkProfile {
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
+    SystemEntryCriticalProfile,
     SystemEntryQualification,
     LaunchReturn,
     LaunchReturnFallback,
@@ -87,6 +88,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::SystemEntryCriticalConfirm => {
                 device.profile_system_entry_critical_confirm(&output_dir)
+            }
+            BenchmarkProfile::SystemEntryCriticalProfile => {
+                device.profile_system_entry_critical_profile(&output_dir)
             }
             BenchmarkProfile::SystemEntryQualification => {
                 device.profile_system_entry_qualification(&output_dir)
@@ -199,6 +203,15 @@ fn require_clean_installed_commit(
             BenchmarkProfile::SystemEntryCriticalConfirm,
             "mister-magik-system-entry-critical-confirm-benchmark-v1",
             "confirming direct collection entry for the fixed critical systems with 20 fresh processes each",
+        ),
+        BenchmarkScenario::SystemEntryCriticalProfile => execute_system_entry_repeated(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::SystemEntryCriticalProfile,
+            "mister-magik-system-entry-critical-profile-v1",
+            "profiling isolated C64 and SNES destination preparation with pprof and per-thread PMU counters",
         ),
         BenchmarkScenario::SystemEntryQualification => execute_system_entry_repeated(
             &mut device,
@@ -506,6 +519,7 @@ impl BenchmarkProfile {
     const fn label(self) -> &'static str {
         match self {
             Self::SystemEntryCriticalConfirm => "system-entry-critical-confirm",
+            Self::SystemEntryCriticalProfile => "system-entry-critical-profile",
             Self::SystemEntryQualification => "system-entry-qualification",
             _ => "system-entry benchmark",
         }
@@ -561,6 +575,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
+        | BenchmarkScenario::SystemEntryCriticalProfile
         | BenchmarkScenario::SystemEntryQualification
         | BenchmarkScenario::LaunchReturn
         | BenchmarkScenario::LaunchReturnFallback

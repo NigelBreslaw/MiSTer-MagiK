@@ -76,6 +76,18 @@ pub struct LoadedSystemShard {
     pub games: Vec<SystemGame>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct SystemNavigationOpenTiming {
+    pub read_us: u64,
+    pub hash_us: u64,
+    pub decompress_us: u64,
+    pub envelope_parse_us: u64,
+    pub typed_parse_us: u64,
+    pub validation_us: u64,
+    pub compressed_bytes: u64,
+    pub decoded_bytes: u64,
+}
+
 #[cfg(feature = "builder")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShardDurability {
@@ -598,9 +610,30 @@ pub fn open_system_navigation_with_compatibility(
     limits: SystemShardLimits,
     compatibility: NavigationCompatibility,
 ) -> Result<LoadedSystemShard, SystemShardError> {
+    open_system_navigation_with_compatibility_and_timing(
+        navigation_path,
+        expected_system_id,
+        expected_generation,
+        limits,
+        compatibility,
+    )
+    .map(|(loaded, _)| loaded)
+}
+
+pub fn open_system_navigation_with_compatibility_and_timing(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
+    let read_started = std::time::Instant::now();
     let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
+    let read_us = elapsed_us(read_started);
+    let hash_started = std::time::Instant::now();
     let navigation_hash = checksum_hex(&navigation);
-    let stored = decode_navigation(&navigation, limits, compatibility)?;
+    let hash_us = elapsed_us(hash_started);
+    let (stored, mut timing) = decode_navigation_with_timing(&navigation, limits, compatibility)?;
     if stored.system_id != expected_system_id.as_str() || stored.generation != expected_generation {
         return Err(SystemShardError::new(
             "read",
@@ -608,14 +641,22 @@ pub fn open_system_navigation_with_compatibility(
         ));
     }
     let games = stored.games;
+    let validation_started = std::time::Instant::now();
     validate_loaded_games(&games, limits.max_games)?;
-    Ok(LoadedSystemShard {
-        system_id: expected_system_id.clone(),
-        generation: expected_generation,
-        navigation_hash,
-        projection_stats: None,
-        games,
-    })
+    timing.read_us = read_us;
+    timing.hash_us = hash_us;
+    timing.validation_us = elapsed_us(validation_started);
+    timing.compressed_bytes = navigation.len().try_into().unwrap_or(u64::MAX);
+    Ok((
+        LoadedSystemShard {
+            system_id: expected_system_id.clone(),
+            generation: expected_generation,
+            navigation_hash,
+            projection_stats: None,
+            games,
+        },
+        timing,
+    ))
 }
 
 #[cfg(feature = "builder")]
@@ -708,6 +749,14 @@ fn decode_navigation(
     limits: SystemShardLimits,
     compatibility: NavigationCompatibility,
 ) -> Result<StoredNavigation, SystemShardError> {
+    decode_navigation_with_timing(encoded, limits, compatibility).map(|(stored, _)| stored)
+}
+
+fn decode_navigation_with_timing(
+    encoded: &[u8],
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+) -> Result<(StoredNavigation, SystemNavigationOpenTiming), SystemShardError> {
     let prefix = encoded
         .get(..4)
         .ok_or_else(|| SystemShardError::new("read", "navigation header is truncated"))?;
@@ -718,21 +767,26 @@ fn decode_navigation(
             "decoded navigation length exceeds configured limit",
         ));
     }
+    let decompress_started = std::time::Instant::now();
     let decoded = lz4_flex::decompress_size_prepended(encoded)
         .map_err(|error| SystemShardError::with("decode navigation", error))?;
+    let decompress_us = elapsed_us(decompress_started);
     if decoded.len() != decoded_len {
         return Err(SystemShardError::new(
             "read",
             "decoded navigation length mismatch",
         ));
     }
+    let envelope_started = std::time::Instant::now();
     let schema = serde_json::from_slice::<serde_json::Value>(&decoded)
         .map_err(|error| SystemShardError::with("parse navigation envelope", error))?
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
         .and_then(|value| u32::try_from(value).ok())
         .ok_or_else(|| SystemShardError::new("read", "navigation schema is missing"))?;
-    match (schema, compatibility) {
+    let envelope_parse_us = elapsed_us(envelope_started);
+    let typed_parse_started = std::time::Instant::now();
+    let stored = match (schema, compatibility) {
         (NAVIGATION_SCHEMA_VERSION, _) => serde_json::from_slice(&decoded)
             .map_err(|error| SystemShardError::with("parse navigation", error)),
         (1, NavigationCompatibility::CurrentOrAlphaV1) => {
@@ -749,7 +803,21 @@ fn decode_navigation(
             "read",
             format!("navigation schema {schema} is unsupported"),
         )),
-    }
+    }?;
+    Ok((
+        stored,
+        SystemNavigationOpenTiming {
+            decompress_us,
+            envelope_parse_us,
+            typed_parse_us: elapsed_us(typed_parse_started),
+            decoded_bytes: decoded.len().try_into().unwrap_or(u64::MAX),
+            ..SystemNavigationOpenTiming::default()
+        },
+    ))
+}
+
+fn elapsed_us(started: std::time::Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, SystemShardError> {
@@ -969,6 +1037,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(defaults, 1);
+        let (_, timing) = open_system_navigation_with_compatibility_and_timing(
+            &navigation,
+            &data.system_id,
+            data.generation,
+            limits(),
+            NavigationCompatibility::CurrentOnly,
+        )
+        .unwrap();
+        assert!(timing.compressed_bytes > 0);
+        assert!(timing.decoded_bytes > 0);
         fs::remove_dir_all(root).unwrap();
     }
 

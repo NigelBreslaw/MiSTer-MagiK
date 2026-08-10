@@ -1436,6 +1436,7 @@ pub(super) enum CatalogWorkerMessage {
         base_catalog_version: usize,
         game_count: usize,
         prepare_us: u64,
+        profile: SystemEntryCatalogProfile,
     },
     SystemShardFailed {
         system_id: String,
@@ -1477,6 +1478,21 @@ pub(super) enum CatalogWorkerMessage {
         reason: CatalogChangeReason,
     },
     Done,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub(super) struct SystemEntryCatalogProfile {
+    pub(super) open: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
+    pub(super) row_projection_us: u64,
+    pub(super) catalog_replacement_us: u64,
+    pub(super) total_wall_us: u64,
+    pub(super) thread_cpu_us: u64,
+    pub(super) cpu_start: i32,
+    pub(super) cpu_end: i32,
+    pub(super) minor_page_faults: u64,
+    pub(super) major_page_faults: u64,
+    pub(super) allocations: u64,
+    pub(super) allocated_bytes: u64,
 }
 
 #[derive(Default)]

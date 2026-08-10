@@ -1188,6 +1188,7 @@ impl ArcadeEntryLatencyTracker {
         self.preview_exact = true;
         let system = Self::active_system_id(catalog, nav);
         let asset_key = Self::selected_asset_key(catalog, nav);
+        let timing = preview.selected_preview_timing();
         self.trace.record(
             start,
             "arcade_preview_exact",
@@ -1202,13 +1203,21 @@ impl ArcadeEntryLatencyTracker {
             preview_state,
             &asset_key,
             format!(
-                "source=preview_state selected_has_preview={} provenance={}",
+                "source=preview_state selected_has_preview={} provenance={} request_age_us={} read_us={} decode_us={} raw565_parse_us={} resize_us={} total_us={} encoded_bytes={} decoded_bytes={}",
                 u8::from(selected_has_preview),
                 if selected_has_preview {
                     preview.visible_preview_load_source()
                 } else {
                     "terminal-empty"
-                }
+                },
+                timing.request_age_us,
+                timing.read_us,
+                timing.decode_us,
+                timing.raw565_parse_us,
+                timing.resize_us,
+                timing.total_us,
+                timing.encoded_bytes,
+                timing.decoded_bytes,
             ),
         );
     }
@@ -1282,7 +1291,9 @@ impl ArcadeEntryLatencyTracker {
         prepare_us: u128,
         copied_rows: u32,
         main_active_confirmed: bool,
-    ) {
+        catalog_generation: usize,
+        main_sequence: u16,
+    ) -> bool {
         if !system_entry_ready_frame_eligible(
             self.enter_input_at.is_some(),
             self.rows_ready,
@@ -1292,7 +1303,7 @@ impl ArcadeEntryLatencyTracker {
             copied_rows,
             main_active_confirmed,
         ) {
-            return;
+            return false;
         }
         self.ready_presented = true;
         let system = Self::active_system_id(catalog, nav);
@@ -1312,10 +1323,14 @@ impl ArcadeEntryLatencyTracker {
             preview.trace_cache_state(),
             &asset_key,
             format!(
-                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={}",
-                u8::from(selected_has_preview)
+                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={}",
+                u8::from(selected_has_preview),
+                catalog_generation,
+                preview.presentation_generation(),
+                main_sequence,
             ),
         );
+        true
     }
 }
 
@@ -4613,6 +4628,7 @@ pub(super) fn run_launcher_loop(
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
     let mut cpu = launch_return_cpu_profile.or_else(cpu_profile::start);
+    let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
@@ -5571,6 +5587,8 @@ pub(super) fn run_launcher_loop(
             && let Some(collection_id) = pending_direct_system_entry.take()
         {
             let requested_at = Instant::now();
+            mister_magik_perf_events::clear_process_profiles();
+            system_entry_cpu_profile = cpu_profile::start_system_entry();
             if collection_has_resident_rows(&catalog, &collection_id) {
                 arcade_entry_latency.record_collection_enter_input(
                     start,
@@ -9889,7 +9907,7 @@ pub(super) fn run_launcher_loop(
                 confirmed_present_sequence = presented_frame.main_present_sequence;
                 let confirmed_at = pace.hit_at.unwrap_or(wait_done);
                 selection_feedback_confirmed_at = Some(confirmed_at);
-                arcade_entry_latency.record_ready_presented_frame(
+                if arcade_entry_latency.record_ready_presented_frame(
                     start,
                     confirmed_at,
                     &lifecycle,
@@ -9900,7 +9918,13 @@ pub(super) fn run_launcher_loop(
                     prepare_us,
                     presented_copied_rows,
                     true,
-                );
+                    catalog_version,
+                    confirmed_present_sequence,
+                ) && let Err(error) =
+                    cpu_profile::finish_system_entry_async(system_entry_cpu_profile.take())
+                {
+                    crate::ui_errln!("system-entry cpu profile finish failed: {error}");
+                }
                 settings_navigation_benchmark
                     .note_orientation_presented(nav.settings.screen_orientation);
             }
@@ -11481,6 +11505,7 @@ fn apply_catalog_session_effects(
                 base_catalog_version,
                 game_count,
                 prepare_us,
+                profile,
             } => {
                 if base_catalog_version != *catalog_version {
                     let _ = retry_system_shard_hydration(
@@ -11552,12 +11577,37 @@ fn apply_catalog_session_effects(
                 let phase = launcher_response_trace.begin_catalog_phase("bridge-invalidation");
                 *full_bridge_dirty = true;
                 launcher_response_trace.end_catalog_phase(phase);
+                let adoption_us = adoption_started.elapsed().as_micros();
+                if let Ok(path) = std::env::var("MISTER_SYSTEM_ENTRY_PROFILE_OUT")
+                    && !path.is_empty()
+                {
+                    let path = std::path::Path::new(&path);
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let evidence = serde_json::json!({
+                        "schema": "mister-magik-system-entry-profile-v1",
+                        "system": system_id,
+                        "catalog": profile,
+                        "adoption_us": adoption_us,
+                        "pmu": mister_magik_perf_events::take_process_profiles(),
+                    });
+                    if let Err(error) = std::fs::write(
+                        path,
+                        format!(
+                            "{}\n",
+                            serde_json::to_string_pretty(&evidence).unwrap_or_default()
+                        ),
+                    ) {
+                        crate::ui_errln!("system-entry profile write failed: {error}");
+                    }
+                }
                 print_startup_event(
                     start,
                     "catalog_system_shard_ready",
                     format!(
                         "system={system_id} games={game_count} prepare_us={prepare_us} adoption_us={}",
-                        adoption_started.elapsed().as_micros()
+                        adoption_us
                     ),
                 );
             }
