@@ -188,9 +188,6 @@ pub const ARCADE_SEARCH_KEYS: [ArcadeSearchKey; 43] = [
 
 const LAUNCH_IDLE: u8 = 0;
 const LAUNCH_SENT: u8 = 1;
-const HOME_PREFETCH_MAX_COLLECTIONS: usize = 4;
-const HOME_PREFETCH_MAX_NEIGHBOR_GAMES: usize = 4_000;
-
 static LAUNCH_STATE: AtomicU8 = AtomicU8::new(LAUNCH_IDLE);
 
 fn arcade_scroll_speed_div() -> i32 {
@@ -1466,51 +1463,6 @@ impl LauncherNav {
 
     pub fn current_menu_count(&self) -> usize {
         self.current_menu_items().len()
-    }
-
-    pub fn collection_prefetch_order(&self) -> Vec<String> {
-        if self.screen != Screen::Home || self.settings_focused {
-            return Vec::new();
-        }
-        let items = self.current_menu_items();
-        let Some(selected) = items.get(self.selected) else {
-            return Vec::new();
-        };
-        let mut ordered = match selected.kind {
-            LauncherMenuItemKind::Collection => vec![selected.id.clone()],
-            LauncherMenuItemKind::Menu => self
-                .taxonomy
-                .first_collection_id_below_menu(&selected.id)
-                .into_iter()
-                .collect(),
-        };
-        for distance in 1..items.len() {
-            if ordered.len() >= HOME_PREFETCH_MAX_COLLECTIONS {
-                break;
-            }
-            for index in [
-                self.selected.checked_sub(distance),
-                self.selected.checked_add(distance),
-            ] {
-                let Some(item) = index.and_then(|index| items.get(index)) else {
-                    continue;
-                };
-                match item.kind {
-                    LauncherMenuItemKind::Collection
-                        if item.count <= HOME_PREFETCH_MAX_NEIGHBOR_GAMES =>
-                    {
-                        ordered.push(item.id.clone());
-                    }
-                    LauncherMenuItemKind::Menu => {}
-                    LauncherMenuItemKind::Collection => {}
-                }
-                if ordered.len() >= HOME_PREFETCH_MAX_COLLECTIONS {
-                    break;
-                }
-            }
-        }
-        ordered.dedup();
-        ordered
     }
 
     pub fn current_menu_selected_item_id(&self) -> &str {

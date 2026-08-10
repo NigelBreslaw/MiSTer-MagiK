@@ -700,15 +700,14 @@ manifest registry names immutable schema-four SQLite/schema-two mini-nav pairs
 for each playable system. A small checksummed Arcade bootstrap mini-nav may be
 retained beside Catalog V3 as a disposable startup accelerator; it is never a
 complete catalog or publication authority.
-Warm startup reads the registry and Arcade mini-nav only. While Home remains
-interactive, its highlighted destination and a bounded set of nearby systems
-are predictively hydrated from their V3 mini-navs. Collection activation is an
-atomic state transition: an already resident destination commits in the input
-frame; a cold destination leaves the originating Home view presented until the
-worker result has been applied, then commits before bridge synchronization and
-drawing. A registered, populated collection may never be presented with zero
-resident rows. The registry's summed counts are the full catalog total, while
-resident rows describe only hydrated memory.
+Warm startup reads the registry and Arcade mini-nav only. Non-Arcade systems
+remain as registry summaries until their collection is activated. Collection
+activation is an atomic state transition: an already resident destination
+commits in the input frame; a cold destination leaves the originating Home view
+presented until the worker result has been applied, then commits before bridge
+synchronization and drawing. A registered, populated collection may never be
+presented with zero resident rows. The registry's summed counts are the full
+catalog total, while resident rows describe only hydrated memory.
 
 A build without a valid registry first probes the retained Arcade mini-nav. A
 matching index restores the exact local Arcade projection; a missing, corrupt,

@@ -120,25 +120,22 @@ current build recreates them.
 Warm startup reads the registry first. This supplies system titles, placement,
 ordering, counts, and immutable artifact references without opening every
 system database. Arcade's mini-nav is opened eagerly because it is the first
-visible game collection. Other system shards stay closed until predictive Home
-hydration requests them.
+visible game collection. Other system shards stay closed until the user
+activates their collection.
 
 When a valid published catalog already exists, normal startup does not scan the
 library or reconcile changed inputs. Users explicitly request catalog updates
 with Settings → **Rebuild Database**; first-run construction still starts
 automatically when no valid catalog exists.
 
-Home navigation predictively schedules bounded background mini-nav loads for
-the highlighted destination (or the default leaf below a highlighted submenu)
-and a small number of nearby, bounded-size siblings. The sibling count and game
-count limits protect Home frame time and memory on the MiSTer. Loaded rows and
-structured launch plans are merged into a complete replacement catalog on the
-existing shard worker. The launcher validates the catalog version and adopts
-that prepared value with a cheap swap; it never projects rows or rebuilds
-catalog indexes on the UI thread. Immutable indexes are shared between catalog
-snapshots, so worker handoff and empty taxonomy placeholders are cheap. A stale
-prepared result is discarded and requested again against the current version.
-Loaded rows remain resident.
+Activating a non-resident collection schedules its mini-nav load. Loaded rows
+and structured launch plans are merged into a complete
+replacement catalog on the existing shard worker. The launcher validates the
+catalog version and adopts that prepared value with a cheap swap; it never
+projects rows or rebuilds catalog indexes on the UI thread. Immutable indexes
+are shared between catalog snapshots, so worker handoff and empty taxonomy
+placeholders are cheap. A stale prepared result is discarded and requested
+again against the current version. Loaded rows remain resident.
 Active lazy hydration is visually silent: destination tiles keep their normal
 ready and focus presentation unless the shard load actually fails. Activating
 a collection is atomic: the launcher stays on the populated source view until

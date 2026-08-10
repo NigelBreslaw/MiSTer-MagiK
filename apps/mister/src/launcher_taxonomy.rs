@@ -171,21 +171,6 @@ impl LauncherTaxonomy {
             .is_some_and(|menu| menu.items.iter().any(|item| item.id == item_id))
     }
 
-    pub fn first_collection_id_below_menu(&self, menu_id: &str) -> Option<String> {
-        let menu = self.menu(menu_id)?;
-        for item in &menu.items {
-            match item.kind {
-                LauncherMenuItemKind::Menu => {
-                    if let Some(collection) = self.first_collection_id_below_menu(&item.id) {
-                        return Some(collection);
-                    }
-                }
-                LauncherMenuItemKind::Collection => return Some(item.id.clone()),
-            }
-        }
-        None
-    }
-
     pub fn collection_path_is_valid(&self, menu_path: &[String], collection_id: &str) -> bool {
         if menu_path.first().map(String::as_str) != Some(ROOT_MENU_ID) {
             return false;

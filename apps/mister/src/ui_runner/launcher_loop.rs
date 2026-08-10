@@ -3480,13 +3480,11 @@ fn request_system_shard_hydration(
     catalog: &ArcadeCatalog,
     catalog_version: usize,
     system_id: &str,
-    priority: SystemShardPriority,
     reason: &'static str,
     now: Instant,
 ) -> bool {
     if !scheduler.request_system_shard(
         system_id.to_string(),
-        priority,
         reason,
         catalog.clone(),
         catalog_version,
@@ -3550,7 +3548,6 @@ fn request_pending_launch_return_shard(
         catalog,
         catalog_version,
         system_id,
-        SystemShardPriority::Urgent,
         "launch-return",
         now,
     ) {
@@ -3559,7 +3556,7 @@ fn request_pending_launch_return_shard(
     print_startup_event(
         start,
         "launch_return_system_shard_requested",
-        format!("system={system_id} priority=urgent"),
+        format!("system={system_id}"),
     );
     true
 }
@@ -5464,32 +5461,6 @@ pub(super) fn run_launcher_loop(
         {
             scheduler.request_arcade_search(request);
         }
-        if background_work_allowed && catalog_ready && nav.screen == Screen::Home {
-            for (index, system_id) in nav.collection_prefetch_order().into_iter().enumerate() {
-                if collection_has_resident_rows(&catalog, &system_id) {
-                    continue;
-                }
-                let priority = if index == 0 {
-                    SystemShardPriority::Selected
-                } else {
-                    SystemShardPriority::Prefetch
-                };
-                let _ = request_system_shard_hydration(
-                    &mut scheduler,
-                    &mut nav,
-                    &catalog,
-                    catalog_version,
-                    &system_id,
-                    priority,
-                    if index == 0 {
-                        "home-highlight"
-                    } else {
-                        "home-neighbor"
-                    },
-                    loop_start,
-                );
-            }
-        }
         let deferred_worker_policy = deferred_catalog_worker_start_policy(
             catalog_ready,
             frame_accounting.first_visible_copy_done(),
@@ -6710,7 +6681,6 @@ pub(super) fn run_launcher_loop(
                                                 &catalog,
                                                 catalog_version,
                                                 collection_id,
-                                                SystemShardPriority::Urgent,
                                                 "open-collection",
                                                 requested_at,
                                             )
@@ -13005,7 +12975,6 @@ mod tests {
         assert_eq!(generation.durable.as_deref(), Some("generation-a"));
         assert!(scheduler.request_system_shard(
             "c64".to_string(),
-            SystemShardPriority::Urgent,
             "startup-regression-test",
             empty_arcade_catalog("/tmp"),
             1,
@@ -13025,7 +12994,6 @@ mod tests {
             &catalog,
             0,
             "c64",
-            SystemShardPriority::Urgent,
             "rejected-without-generation",
             Instant::now()
         ));
@@ -13057,7 +13025,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_launch_return_requests_its_registry_shard_before_home_prefetch() {
+    fn pending_launch_return_deduplicates_a_second_registry_shard_request() {
         let full_catalog = catalog_for_media_systems(&["c64"]);
         let mut launched_nav = LauncherNav::new();
         assert!(launched_nav.open_system(&full_catalog, "c64"));
@@ -13086,8 +13054,7 @@ mod tests {
         assert!(scheduler.system_shard_attempted("c64"));
         assert!(!scheduler.request_system_shard(
             "c64".to_string(),
-            SystemShardPriority::Selected,
-            "home-highlight",
+            "duplicate-request",
             registry.clone(),
             0,
             now,
