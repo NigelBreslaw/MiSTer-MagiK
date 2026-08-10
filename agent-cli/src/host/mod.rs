@@ -7622,7 +7622,23 @@ fn profile_installed_system_entry_critical(
             json!({
                 "system": sample["system"],
                 "games": sample["games"],
-                "ready_presented_ms": system_entry_sample_ready_time(sample),
+                "timings_ms": sample["timings_ms"],
+                "full_list": {
+                    "loaded": sample["full_list_loaded"],
+                    "loaded_games": sample["loaded_games"],
+                    "ready_frame": sample["ready_frame"],
+                },
+                "selected_game_screenshot": {
+                    "expected": sample["selected_has_preview"],
+                    "outcome": sample["preview_outcome"],
+                    "state": sample["preview_state"],
+                },
+                "retained_frame": {
+                    "screenshot": sample["screenshot"],
+                    "capture_metadata": sample["capture_metadata"],
+                    "active_sequence": sample["capture_active_sequence"],
+                    "captured_after_ready": sample["capture_after_ready"],
+                },
                 "sample": sample,
             })
         })
@@ -7714,10 +7730,40 @@ fn run_system_entry_sample(
                 .ok_or("system-entry trace disappeared before retention")?,
         )?;
         let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
+        let rows_ready = system_entry_trace_row(&trace, "arcade_rows_ready")?;
+        let loaded_games = system_entry_detail_u64(rows_ready, "games")?;
+        if loaded_games != games {
+            return Err(format!(
+                "system-entry {system} loaded {loaded_games} rows, expected the full {games}"
+            )
+            .into());
+        }
         let selected_has_preview = system_entry_detail_flag(ready, "selected_has_preview")?;
         let preview_state = ready
             .get(10)
             .ok_or("system-entry ready trace has no preview state")?;
+        let preview_outcome = match (selected_has_preview, preview_state.as_str()) {
+            (true, "exact") => "exact",
+            (false, "empty") => "confirmed-empty",
+            _ => {
+                return Err(format!(
+                    "system-entry {system} reached ready with inconsistent selected screenshot state expected={} state={preview_state}",
+                    u8::from(selected_has_preview)
+                )
+                .into());
+            }
+        };
+        let ready_frame = system_entry_trace_frame(ready)?;
+        let capture_active_sequence = capture
+            .result
+            .get("capture_source")
+            .and_then(|source| source.get("active_sequence"))
+            .and_then(Value::as_u64)
+            .ok_or("system-entry capture has no active sequence")?;
+        let rows_ready_ms = system_entry_delta_ms(&trace, "arcade_rows_ready")?;
+        let first_list_presented_ms = system_entry_delta_ms(&trace, "arcade_enter_presented")?;
+        let preview_ready_ms = system_entry_delta_ms(&trace, "arcade_preview_exact")?;
+        let ready_presented_ms = system_entry_delta_ms(&trace, "system_entry_ready_presented")?;
         Ok(json!({
             "status": "passed",
             "sample": sample_index,
@@ -7728,13 +7774,24 @@ fn run_system_entry_sample(
             },
             "system": system,
             "games": games,
-            "rows_ready_ms": system_entry_delta_ms(&trace, "arcade_rows_ready")?,
-            "first_list_presented_ms": system_entry_delta_ms(&trace, "arcade_enter_presented")?,
-            "preview_ready_ms": system_entry_delta_ms(&trace, "arcade_preview_exact")?,
-            "ready_presented_ms": system_entry_delta_ms(&trace, "system_entry_ready_presented")?,
+            "loaded_games": loaded_games,
+            "full_list_loaded": true,
+            "rows_ready_ms": rows_ready_ms,
+            "first_list_presented_ms": first_list_presented_ms,
+            "preview_ready_ms": preview_ready_ms,
+            "ready_presented_ms": ready_presented_ms,
+            "timings_ms": {
+                "rows_loaded": rows_ready_ms,
+                "first_list_frame": first_list_presented_ms,
+                "selected_screenshot_terminal": preview_ready_ms,
+                "complete_ready": ready_presented_ms,
+            },
             "selected_has_preview": selected_has_preview,
             "preview_state": preview_state,
-            "preview_outcome": if selected_has_preview { "exact" } else { "confirmed-empty" },
+            "preview_outcome": preview_outcome,
+            "ready_frame": ready_frame,
+            "capture_active_sequence": capture_active_sequence,
+            "capture_after_ready": true,
             "screenshot": capture_file,
             "capture_metadata": capture_metadata_file,
             "trace": trace_file,
@@ -7818,13 +7875,24 @@ fn retain_failed_system_entry_sample(
         "games": games,
         "error": error,
         "capture_error": capture_error,
+        "loaded_games": Value::Null,
+        "full_list_loaded": false,
         "rows_ready_ms": Value::Null,
         "first_list_presented_ms": Value::Null,
         "preview_ready_ms": Value::Null,
         "ready_presented_ms": Value::Null,
+        "timings_ms": {
+            "rows_loaded": Value::Null,
+            "first_list_frame": Value::Null,
+            "selected_screenshot_terminal": Value::Null,
+            "complete_ready": Value::Null,
+        },
         "selected_has_preview": Value::Null,
         "preview_state": Value::Null,
         "preview_outcome": Value::Null,
+        "ready_frame": Value::Null,
+        "capture_active_sequence": Value::Null,
+        "capture_after_ready": false,
         "screenshot": screenshot,
         "capture_metadata": capture_metadata,
         "status_artifact": status_file,
@@ -7920,6 +7988,13 @@ fn system_entry_delta_ms(rows: &[Vec<String>], event: &str) -> Result<u64> {
         .map_err(Into::into)
 }
 
+fn system_entry_trace_frame(row: &[String]) -> Result<u64> {
+    row.get(8)
+        .ok_or("system-entry trace row has no frame")?
+        .parse::<u64>()
+        .map_err(Into::into)
+}
+
 fn system_entry_trace_row<'a>(rows: &'a [Vec<String>], event: &str) -> Result<&'a Vec<String>> {
     rows.iter()
         .find(|row| row.first().map(String::as_str) == Some(event))
@@ -7927,19 +8002,26 @@ fn system_entry_trace_row<'a>(rows: &'a [Vec<String>], event: &str) -> Result<&'
 }
 
 fn system_entry_detail_flag(row: &[String], name: &str) -> Result<bool> {
-    let detail = row
-        .get(12)
-        .ok_or("system-entry trace row has no detail field")?;
-    match detail
-        .split_whitespace()
-        .filter_map(|field| field.split_once('='))
-        .find(|(key, _)| *key == name)
-        .map(|(_, value)| value)
-    {
+    match system_entry_detail_value(row, name) {
         Some("1") => Ok(true),
         Some("0") => Ok(false),
         _ => Err(format!("system-entry trace detail has no {name} flag").into()),
     }
+}
+
+fn system_entry_detail_u64(row: &[String], name: &str) -> Result<u64> {
+    system_entry_detail_value(row, name)
+        .ok_or_else(|| format!("system-entry trace detail has no {name}"))?
+        .parse::<u64>()
+        .map_err(Into::into)
+}
+
+fn system_entry_detail_value<'a>(row: &'a [String], name: &str) -> Option<&'a str> {
+    row.get(12)?
+        .split_whitespace()
+        .filter_map(|field| field.split_once('='))
+        .find(|(key, _)| *key == name)
+        .map(|(_, value)| value)
 }
 
 fn profile_installed_catalog_lifecycle(
@@ -17376,6 +17458,16 @@ mod tests {
         assert!(!system_entry_detail_flag(&row, "selected_has_preview").unwrap());
         row[12] = "selected_has_preview=1".into();
         assert!(system_entry_detail_flag(&row, "selected_has_preview").unwrap());
+    }
+
+    #[test]
+    fn system_entry_trace_reports_full_rows_and_ready_frame() {
+        let mut row = vec![String::new(); 13];
+        row[8] = "42".into();
+        row[12] = "games=15089 confirmation=main-active-sequence".into();
+
+        assert_eq!(system_entry_detail_u64(&row, "games").unwrap(), 15_089);
+        assert_eq!(system_entry_trace_frame(&row).unwrap(), 42);
     }
 
     #[test]

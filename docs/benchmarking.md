@@ -237,6 +237,15 @@ boundary, trace, status, and screenshot artifacts as the full sweep. Run the
 full `system-entry` benchmark only when the critical set needs to be
 rediscovered.
 
+Each critical-system summary row exposes four cumulative timings: all
+registered game rows loaded, first visible list frame, selected-game screenshot
+terminal state, and complete Main-confirmed readiness. The run fails if the
+loaded row count differs from the registry count. When the selected game has a
+screenshot, readiness requires the exact screenshot; otherwise it requires a
+confirmed empty preview. The retained authoritative framebuffer capture is
+taken only after that ready frame, and its image, capture sequence, and metadata
+are linked directly from the system row.
+
 ## Cold boot
 
 `cold-boot` profiles exactly one supervised reboot of the coherently installed
