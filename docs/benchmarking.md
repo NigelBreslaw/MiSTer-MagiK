@@ -226,8 +226,8 @@ selection, listed in `unready_systems`, and make the summary fail without
 naming a misleading worst system.
 
 `scripts/agent benchmark system-entry-critical` is the short regression loop
-for C64, SNES, PC-88, NES, and BBC Micro. It runs each system once in a fresh
-launcher process. The runtime directly invokes the same collection-entry
+for C64, SNES, PC-88, NES, BBC Micro, and Arcade. It runs each system once in a
+fresh launcher process. The runtime directly invokes the same collection-entry
 helper used by production activation after startup input readiness; it does not
 focus a tile, traverse menus, or synthesize controller input. A fixed two-second
 Home settle after input readiness prevents startup work from contaminating the

@@ -7523,7 +7523,8 @@ fn profile_installed_system_entry(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
-const CRITICAL_SYSTEM_ENTRY_SYSTEMS: [&str; 5] = ["c64", "snes", "pc88", "nes", "bbcmicro"];
+const CRITICAL_SYSTEM_ENTRY_SYSTEMS: [&str; 6] =
+    ["c64", "snes", "pc88", "nes", "bbcmicro", "arcade"];
 
 fn profile_installed_system_entry_critical(
     config: &NativeDeviceConfig,
@@ -17409,7 +17410,7 @@ mod tests {
     fn critical_system_entry_targets_are_fixed_and_ordered() {
         assert_eq!(
             CRITICAL_SYSTEM_ENTRY_SYSTEMS,
-            ["c64", "snes", "pc88", "nes", "bbcmicro"]
+            ["c64", "snes", "pc88", "nes", "bbcmicro", "arcade"]
         );
     }
 
