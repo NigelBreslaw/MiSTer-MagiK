@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../components/start2p.slint";
 import "../fonts/PressStart2P-Regular.ttf";
 
 component LauncherRow inherits Rectangle {
@@ -19,18 +19,18 @@ component LauncherRow inherits Rectangle {
         spacing: 16px;
         cross-axis-alignment: center;
 
-        PixelText8 {
+        Start2P {
             width: 32px;
             text: selected ? ">" : "";
             color: #40e5e7;
-            size: PixelTextSize.px32;
+            size: Start2PSize.px32;
             vertical-alignment: center;
         }
 
-        PixelText8 {
+        Start2P {
             text: label;
             color: selected ? #40e5e7 : #aab0ff;
-            size: PixelTextSize.px32;
+            size: Start2PSize.px32;
             vertical-alignment: center;
         }
     }
@@ -61,23 +61,23 @@ export component CrtLauncherMockup inherits Window {
             border-width: 2px;
             border-color: #8b94f8;
 
-            PixelText8 {
+            Start2P {
                 x: 16px;
                 width: parent.width - 32px;
                 height: parent.height;
                 text: "MiSTer MagiK";
                 color: #aab0ff;
-                size: PixelTextSize.px32;
+                size: Start2PSize.px32;
                 vertical-alignment: center;
             }
 
-            PixelText8 {
+            Start2P {
                 x: parent.width - 112px;
                 width: 96px;
                 height: parent.height;
                 text: "21:14";
                 color: #aab0ff;
-                size: PixelTextSize.px24;
+                size: Start2PSize.px24;
                 horizontal-alignment: right;
                 vertical-alignment: center;
             }

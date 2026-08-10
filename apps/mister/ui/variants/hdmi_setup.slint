@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../components/start2p.slint";
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
 
@@ -12,18 +12,18 @@ component ConfigRow inherits HorizontalLayout {
     spacing: 12px;
     padding: 3px;
 
-    PixelText8 {
+    Start2P {
         text: label;
         color: #9080a8;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         min-width: 130px;
         horizontal-alignment: left;
     }
 
-    PixelText8 {
+    Start2P {
         text: value;
         color: #e8e0f0;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         horizontal-alignment: left;
         wrap: word-wrap;
     }
@@ -48,19 +48,19 @@ export component SetupOverlay inherits Rectangle {
         spacing: 12px;
         alignment: center;
 
-        PixelText8 {
+        Start2P {
             text: title;
             color: #e8e0f0;
-            size: MisterUi.portrait-layout ? PixelTextSize.px16 : PixelTextSize.px24;
+            size: MisterUi.portrait-layout ? Start2PSize.px16 : Start2PSize.px24;
             horizontal-alignment: center;
             horizontal-stretch: 1;
             wrap: word-wrap;
         }
 
-        if phase != 4 && phase != 5 : PixelText8 {
+        if phase != 4 && phase != 5 : Start2P {
             text: subtitle;
             color: #9080a8;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -79,10 +79,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 0 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == 0 ? #2a2236 : #1e1828;
 
-                PixelText8 {
+                Start2P {
                     text: "New controller";
                     color: list-selected == 0 ? #06d6a0 : #e8e0f0;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -98,10 +98,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 1 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == 1 ? #2a2236 : #1e1828;
 
-                PixelText8 {
+                Start2P {
                     text: "Existing controller";
                     color: list-selected == 1 ? #06d6a0 : #e8e0f0;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -122,10 +122,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == i ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == i ? #2a2236 : #1e1828;
 
-                PixelText8 {
+                Start2P {
                     text: item;
                     color: list-selected == i ? #06d6a0 : #e8e0f0;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -136,10 +136,10 @@ export component SetupOverlay inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
-            PixelText8 {
+            Start2P {
                 text: subtitle;
                 color: #06d6a0;
-                size: PixelTextSize.px16;
+                size: Start2PSize.px16;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -173,10 +173,10 @@ export component SetupOverlay inherits Rectangle {
             spacing: 12px;
             alignment: center;
 
-            PixelText8 {
+            Start2P {
                 text: subtitle;
                 color: #9080a8;
-                size: PixelTextSize.px16;
+                size: Start2PSize.px16;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -185,10 +185,10 @@ export component SetupOverlay inherits Rectangle {
                 spacing: 4px;
                 alignment: center;
 
-                PixelText8 {
+                Start2P {
                     text: "Name";
                     color: #9080a8;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                     horizontal-alignment: left;
                 }
 
@@ -200,10 +200,10 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #5c4a72;
                     background: #1e1828;
 
-                    PixelText8 {
+                    Start2P {
                         text: setup-name;
                         color: #e8e0f0;
-                        size: PixelTextSize.px16;
+                        size: Start2PSize.px16;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: elide;
@@ -215,10 +215,10 @@ export component SetupOverlay inherits Rectangle {
                 spacing: 4px;
                 alignment: center;
 
-                PixelText8 {
+                Start2P {
                     text: "Type";
                     color: #9080a8;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                     horizontal-alignment: left;
                 }
 
@@ -230,10 +230,10 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #06d6a0;
                     background: #2a2236;
 
-                    PixelText8 {
+                    Start2P {
                         text: setup-kind-label;
                         color: #06d6a0;
-                        size: PixelTextSize.px16;
+                        size: Start2PSize.px16;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -241,7 +241,7 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        PixelText8 {
+        Start2P {
             text: phase == 1 ? "Press any button to continue"
                 : phase == 2 ? "D-pad: choose  ·  A: confirm"
                 : phase == 3 ? "D-pad: choose  ·  A: confirm"
@@ -249,7 +249,7 @@ export component SetupOverlay inherits Rectangle {
                 : phase == 5 ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }

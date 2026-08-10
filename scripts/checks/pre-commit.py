@@ -133,10 +133,10 @@ APP_FORMAT_FILES = {
     "apps/mister/build.rs",
     "apps/mister/rust-toolchain.toml",
 }
-PIXEL_TEXT_CONTRACT_PATHS = {
-    "scripts/checks/check-pixel-text-contract.py",
+FONT_TEXT_CONTRACT_PATHS = {
+    "scripts/checks/check-font-text-contract.py",
     "scripts/checks/pre-commit.py",
-    "scripts/tests/test-pixel-text-contract.py",
+    "scripts/tests/test-font-text-contract.py",
 }
 TEXT_SUFFIXES = {
     ".json",
@@ -461,9 +461,9 @@ def shell_paths(repository: Path, paths: Sequence[str]) -> list[str]:
     return selected
 
 
-def needs_pixel_text_contract(paths: Sequence[str]) -> bool:
+def needs_font_text_contract(paths: Sequence[str]) -> bool:
     return any(
-        path in PIXEL_TEXT_CONTRACT_PATHS
+        path in FONT_TEXT_CONTRACT_PATHS
         or (
             path.startswith("apps/mister/ui/")
             and PurePosixPath(path).suffix == ".slint"
@@ -477,8 +477,8 @@ def execute(repository: Path) -> None:
     check_classification(paths)
     shells = shell_paths(repository, paths)
     cargo_formatters = formatters(paths)
-    pixel_text_contract = needs_pixel_text_contract(paths)
-    planned = 5 + len(shells) + len(cargo_formatters) + int(pixel_text_contract)
+    font_text_contract = needs_font_text_contract(paths)
+    planned = 5 + len(shells) + len(cargo_formatters) + int(font_text_contract)
     print(f"pre-commit: {planned} fast checks planned (0%)")
 
     check_identity(repository)
@@ -492,12 +492,12 @@ def execute(repository: Path) -> None:
     )
     for path in shells:
         run(repository, ["bash", "-n", path])
-    if pixel_text_contract:
+    if font_text_contract:
         run(
             repository,
             [
                 sys.executable,
-                "scripts/checks/check-pixel-text-contract.py",
+                "scripts/checks/check-font-text-contract.py",
                 "--repository",
                 str(repository),
                 "--staged",

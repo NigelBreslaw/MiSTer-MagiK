@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
@@ -18,7 +18,7 @@ component SearchKey inherits Rectangle {
     border-width: MisterUi.border;
     border-color: selected ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 
-    PixelText8 {
+    Start2P {
         text: root.label;
         color: root.selected && root.keyboard-focused ? CrtTheme.accent-text : CrtTheme.text;
         size: MisterUi.crt-body-font;
@@ -60,7 +60,7 @@ component SearchKeyboard inherits Rectangle {
             border-width: MisterUi.border;
             border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
 
-            PixelText8 {
+            Start2P {
                 x: MisterUi.grid-x;
                 width: parent.width - 16px;
                 height: parent.height;
@@ -127,7 +127,7 @@ export component ArcadeListScreen inherits Rectangle {
         border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
         clip: true;
 
-        PixelText8 {
+        Start2P {
             width: parent.width;
             height: parent.height;
             visible: MisterBridge.arcade-search-active
@@ -168,7 +168,7 @@ export component ArcadeListScreen inherits Rectangle {
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
 
-        PixelText8 {
+        Start2P {
             text: "Loading list...";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;

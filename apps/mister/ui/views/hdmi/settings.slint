@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterBridge } from "../../api.slint";
 
@@ -20,16 +20,16 @@ component SettingsRow inherits Rectangle {
         padding: 10px;
         spacing: 4px;
 
-        PixelText8 {
+        Start2P {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
         }
 
-        PixelText8 {
+        Start2P {
             text: detail;
             color: #9080a8;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
         }
     }
 }
@@ -42,10 +42,10 @@ export component SettingsScreen inherits Rectangle {
             padding: 20px;
             spacing: 8px;
 
-            PixelText8 {
+            Start2P {
                 text: "MiSTer MagiK";
                 color: #e8e0f0;
-                size: PixelTextSize.px24;
+                size: Start2PSize.px24;
                 horizontal-alignment: center;
             }
 

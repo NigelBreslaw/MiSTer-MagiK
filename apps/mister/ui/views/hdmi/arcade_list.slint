@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
@@ -18,10 +18,10 @@ component SearchKey inherits Rectangle {
     border-color: selected ? (keyboard-focused ? #ffffff : #5c4a72)
         : acknowledged ? #4e8f80 : #352848;
 
-    PixelText8 {
+    Start2P {
         text: root.label;
         color: root.selected && root.keyboard-focused ? #101420 : #e8e0f0;
-        size: PixelTextSize.body12;
+        size: Start2PSize.px8;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -58,10 +58,10 @@ component SearchKeyboard inherits Rectangle {
         padding: 16px;
         spacing: 10px;
 
-        PixelText8 {
+        Start2P {
             text: "Search";
             color: #e8e0f0;
-            size: PixelTextSize.px24;
+            size: Start2PSize.px24;
         }
 
         Rectangle {
@@ -70,14 +70,14 @@ component SearchKeyboard inherits Rectangle {
             border-width: MisterBridge.arcade-search-pane == 0 ? 2px : 1px;
             border-color: MisterBridge.arcade-search-pane == 0 ? #06d6a0 : #352848;
 
-            PixelText8 {
+            Start2P {
                 x: 10px;
                 y: 0px;
                 width: parent.width - 20px;
                 height: parent.height;
                 text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
                 color: MisterBridge.arcade-search-query == "" ? #706080 : #d7eef8;
-                size: PixelTextSize.body12;
+                size: Start2PSize.px8;
                 vertical-alignment: center;
                 overflow: elide;
             }
@@ -101,21 +101,21 @@ component SearchKeyboard inherits Rectangle {
                     border-width: 1px;
                     border-color: MisterBridge.arcade-search-suggestion == "" ? #352848 : #ffffff;
 
-                    PixelText8 {
+                    Start2P {
                         text: "Y";
                         color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #101420;
-                        size: PixelTextSize.body12;
+                        size: Start2PSize.px8;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
 
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
                         (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                         (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion));
                     color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
@@ -202,7 +202,7 @@ export component ArcadeListScreen inherits Rectangle {
                 height: parent.height;
                 background: #131018;
 
-                PixelText8 {
+                Start2P {
                     x: 16px;
                     y: 16px;
                     text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
@@ -210,7 +210,7 @@ export component ArcadeListScreen inherits Rectangle {
                         (count == 0 && MisterBridge.arcade-search-status == 2 ? "No matches" :
                         count + " matches"));
                     color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #706080;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                 }
 
                 Rectangle {
@@ -223,7 +223,7 @@ export component ArcadeListScreen inherits Rectangle {
                     border-color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
                     clip: true;
 
-                    PixelText8 {
+                    Start2P {
                         width: parent.width;
                         height: parent.height;
                         visible: MisterBridge.arcade-search-status != 2 || count == 0;
@@ -231,7 +231,7 @@ export component ArcadeListScreen inherits Rectangle {
                             (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
                             (count == 0 ? "No matches" : ""));
                         color: #706080;
-                        size: PixelTextSize.body12;
+                        size: Start2PSize.px8;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
@@ -285,22 +285,22 @@ export component ArcadeListScreen inherits Rectangle {
         height: MisterBridge.arcade-list-y * 1px;
         background: #1a1424;
 
-        PixelText8 {
+        Start2P {
             x: 16px;
             y: 16px;
             width: parent.width - 32px;
             text: MisterBridge.active-system-title;
             color: #e8e0f0;
-            size: PixelTextSize.px24;
+            size: Start2PSize.px24;
             overflow: elide;
         }
 
-        PixelText8 {
+        Start2P {
             x: 16px;
             y: 44px;
             text: root.count + " games";
             color: #706080;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
         }
     }
 

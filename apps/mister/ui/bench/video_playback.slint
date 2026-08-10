@@ -1,10 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../components/start2p.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
-export { PixelTextSize }
+export { Start2PSize }
 import "../fonts/PressStart2P-Regular.ttf";
 
 export component VideoPlayback inherits MisterWindow {
@@ -40,30 +40,30 @@ export component VideoPlayback inherits MisterWindow {
         border-radius: 6px;
     }
 
-    PixelText8 {
+    Start2P {
         x: 724px;
         y: 104px;
         text: "bench:";
-        size: PixelTextSize.px8;
+        size: Start2PSize.px8;
         color: #8fb6ff;
     }
 
-    PixelText8 {
+    Start2P {
         x: 724px;
         y: 136px;
         width: 176px;
         text: "video_playback";
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         color: #f2f6ff;
         wrap: word-wrap;
     }
 
-    PixelText8 {
+    Start2P {
         x: 724px;
         y: 210px;
         width: 172px;
         text: "H.264/AAC MP4 snaps";
-        size: PixelTextSize.px8;
+        size: Start2PSize.px8;
         color: #b7c1d6;
         wrap: word-wrap;
     }

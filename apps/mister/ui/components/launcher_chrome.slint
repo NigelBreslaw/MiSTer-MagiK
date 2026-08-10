@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+import { Start2P, Start2PSize } from "start2p.slint";
+import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
 
 import { MisterBridge } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
@@ -15,17 +16,17 @@ component ScanningSubtitle inherits VerticalLayout {
     HorizontalLayout {
         alignment: center;
 
-        PixelText8 {
+        Start2P {
             text: "Scanning";
             color: #8ca4b5;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
 
-        PixelText8 {
+        Start2P {
             text: ".";
             color: root.detail == "" && MisterBridge.catalog-scan-dot-visible ? #8ca4b5 : transparent;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }
@@ -33,23 +34,39 @@ component ScanningSubtitle inherits VerticalLayout {
     if detail != "" : HorizontalLayout {
         alignment: center;
 
-        PixelText8 {
+        Start2P {
             text: root.detail;
             color: #8ca4b5;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
 
-        PixelText8 {
+        Start2P {
             text: ".";
             color: MisterBridge.catalog-scan-dot-visible ? #8ca4b5 : transparent;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }
 }
 
-component LauncherTileText inherits PixelText8 {
+component LauncherTileText inherits Start2P {
+    in property <bool> focused;
+    in property <color> selected-color;
+    in property <color> unselected-color;
+
+    states [
+        selected when root.focused: {
+            color: root.selected-color;
+        }
+
+        unselected when !root.focused: {
+            color: root.unselected-color;
+        }
+    ]
+}
+
+component LauncherTileDetail inherits Xerxes10 {
     in property <bool> focused;
     in property <color> selected-color;
     in property <color> unselected-color;
@@ -103,7 +120,7 @@ export component LauncherTile inherits Rectangle {
                 : root.status == MenuItemStatus.update-failed ? #f0c36e
                 : root.status == MenuItemStatus.partial ? #f0c36e
                 : root.status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             width: 100%;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -114,7 +131,7 @@ export component LauncherTile inherits Rectangle {
             detail: subtitle;
         }
 
-        if subtitle != "" && status != MenuItemStatus.scanning : LauncherTileText {
+        if subtitle != "" && status != MenuItemStatus.scanning : LauncherTileDetail {
             text: root.subtitle;
             focused: root.focused;
             selected-color: #d8d4dd;
@@ -122,7 +139,7 @@ export component LauncherTile inherits Rectangle {
                 ? #ef8da2
                 : root.status == MenuItemStatus.update-failed ? #f0c36e
                 : root.status == MenuItemStatus.partial ? #f0c36e : #9080a800;
-            size: PixelTextSize.body12;
+            size: Xerxes10Size.px10;
             horizontal-alignment: center;
         }
     }
@@ -167,11 +184,11 @@ export component OsdSideLabel inherits Rectangle {
         spacing: 10px;
         alignment: center;
 
-        PixelText8 { text: "M"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
-        PixelText8 { text: "I"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
-        PixelText8 { text: "S"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
-        PixelText8 { text: "T"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
-        PixelText8 { text: "E"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
-        PixelText8 { text: "R"; color: #d7eef8; size: PixelTextSize.px16; horizontal-alignment: center; }
+        Start2P { text: "M"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Start2P { text: "I"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Start2P { text: "S"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Start2P { text: "T"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Start2P { text: "E"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Start2P { text: "R"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
     }
 }

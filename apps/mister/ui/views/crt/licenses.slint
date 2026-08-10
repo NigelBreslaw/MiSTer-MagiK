@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
@@ -34,7 +34,7 @@ export component LicensesScreen inherits Rectangle {
         padding-top: MisterUi.grid-y * 2;
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
-        PixelText8 {
+        Start2P {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
@@ -56,7 +56,7 @@ export component LicensesScreen inherits Rectangle {
                 width: parent.width - 24px;
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
-                for line in MisterBridge.license-lines : PixelText8 {
+                for line in MisterBridge.license-lines : Start2P {
                     text: line;
                     color: CrtTheme.text;
                     size: MisterUi.crt-body-font;

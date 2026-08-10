@@ -1,0 +1,24 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+export enum Yesterday10Size {
+    px10,
+}
+
+export global Yesterday10Metrics {
+    // The 16px Slint resource size produces exact 10px physical capitals.
+    pure public function resolve(size: Yesterday10Size) -> length {
+        return 16px;
+    }
+}
+
+export component Yesterday10 inherits Text {
+    in property <Yesterday10Size> size: Yesterday10Size.px10;
+    color: white;
+    font-family: "Yesterday 10";
+    font-size: Yesterday10Metrics.resolve(root.size);
+    horizontal-alignment: start;
+    vertical-alignment: top;
+    overflow: clip;
+    wrap: no-wrap;
+}

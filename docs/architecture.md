@@ -195,10 +195,10 @@ conversion:
   and 576p use identity presentation and damage mapping. Both hidden latch
   slots and diagnostic `/dev/fb0` use the same route plan. Native scanout
   geometry is the authoritative framebuffer capture geometry.
-- CRT and HDMI routes use the checked-in Press Start 2P font for Slint text and
-  the custom Rust games renderer. Every output route uses the same font asset.
-- First-party MiSTer Slint uses `PixelText8` as its sole raw text primitive.
-  `PixelTextSize` limits font sizes to 8, 16, 24, or 32 pixels, and wrapped
+- CRT and HDMI routes use registered bitmap fonts through font-specific Slint components and
+  the custom Rust games renderer retains Press Start 2P.
+- First-party MiSTer Slint uses separate font-specific text components; raw `Text` is confined to those primitives.
+  `Start2PSize` limits Press Start 2P to 8, 16, 24, or 32 pixels, and wrapped
   content declares a bounded line capacity so it clips instead of painting
   into adjacent layout.
 - The macOS headless UI preview exposes `hdmi`, `crt-240p`, `crt-288p`,

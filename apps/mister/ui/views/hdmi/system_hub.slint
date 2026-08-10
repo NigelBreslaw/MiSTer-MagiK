@@ -3,8 +3,9 @@
 
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
-import { JerseyTitleText } from "../../components/jersey_text.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Jersey25 } from "../../components/jersey_25.slint";
+import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 
 component HubIcon inherits Rectangle {
     in property <int> kind;
@@ -35,11 +36,11 @@ component HubIcon inherits Rectangle {
         Rectangle { x: -1px; y: 31px; width: 9px; height: 2px; background: root.ink; }
     }
 
-    if root.kind == 2 : PixelText8 {
+    if root.kind == 2 : Start2P {
         x: 0px; y: 0px; width: parent.width; height: parent.height;
         text: "*";
         color: root.ink;
-        size: PixelTextSize.px32;
+        size: Start2PSize.px32;
         horizontal-alignment: center;
     }
 
@@ -49,11 +50,11 @@ component HubIcon inherits Rectangle {
         border-width: 2px;
         border-color: root.ink;
         border-radius: 20px;
-        PixelText8 {
+        Start2P {
             x: 0px; y: 5px; width: parent.width; height: 30px;
             text: "i";
             color: root.ink;
-            size: PixelTextSize.px24;
+            size: Start2PSize.px24;
             horizontal-alignment: center;
         }
     }
@@ -82,25 +83,25 @@ component HubCard inherits Rectangle {
         kind: root.kind;
         ink: root.ink;
     }
-    PixelText8 {
+    Start2P {
         x: 14px; y: 62px; width: parent.width - 28px; height: 26px;
         text: root.label;
         color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
-        size: root.label == "FAVORITES" ? PixelTextSize.px16 : PixelTextSize.px24;
+        size: root.label == "FAVORITES" ? Start2PSize.px16 : Start2PSize.px24;
         horizontal-alignment: center;
     }
     Rectangle {
         x: 18px; y: 101px; width: parent.width - 36px; height: 1px;
         background: root.focused ? #477a70 : #493b59;
     }
-    PixelText8 {
+    Xerxes10 {
         x: 18px;
         y: MisterUi.portrait-layout ? 104px : 116px;
         width: parent.width - 36px;
         height: 22px;
         text: root.detail;
         color: root.ink;
-        size: PixelTextSize.body12;
+        size: Xerxes10Size.px10;
         horizontal-alignment: center;
     }
 }
@@ -118,29 +119,29 @@ export component SystemHubScreen inherits Rectangle {
     Rectangle { x: 8px; y: 20px; width: 2px; height: parent.height - 40px; background: #3c2d4b; }
     Rectangle { x: 18px; y: 24px; width: 48px; height: 2px; background: #6f5287; }
 
-    JerseyTitleText {
+    Jersey25 {
         x: 28px; y: 28px; width: 300px; height: 41px;
         text: "SUPER NINTENDO";
         color: #f8f5fa;
     }
-    PixelText8 {
+    Xerxes10 {
         x: 30px; y: 78px; width: 360px; height: 22px;
         text: "1990  /  16-BIT CONSOLE";
         color: #a56dd1;
-        size: PixelTextSize.body12;
+        size: Xerxes10Size.px10;
     }
-    PixelText8 {
+    Start2P {
         x: 30px; y: 104px; width: 300px; height: 18px;
         text: MisterBridge.system-hub-games-count + " GAMES";
         color: #ddd4e4;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
     }
-    PixelText8 {
+    Xerxes10 {
         visible: !MisterUi.portrait-layout;
         x: 740px; y: 46px; width: 190px; height: 22px;
         text: "SYSTEM  /  SNES";
         color: #766486;
-        size: PixelTextSize.body12;
+        size: Xerxes10Size.px10;
         horizontal-alignment: right;
     }
 
@@ -161,11 +162,11 @@ export component SystemHubScreen inherits Rectangle {
             image-fit: fill;
             image-rendering: pixelated;
         }
-        PixelText8 {
+        Xerxes10 {
             x: 0px; y: 194px; width: parent.width; height: 22px;
             text: "SUPER FAMICOM  /  SUPER NINTENDO";
             color: #8d779d;
-            size: PixelTextSize.body12;
+            size: Xerxes10Size.px10;
             horizontal-alignment: center;
         }
     }
@@ -175,19 +176,19 @@ export component SystemHubScreen inherits Rectangle {
         background: #100d18;
         border-width: 1px;
         border-color: #493b59;
-        PixelText8 {
+        Start2P {
             x: 18px; y: 18px; width: parent.width - 36px; height: 18px;
             text: "16-BIT";
             color: #a58bb5;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             horizontal-alignment: center;
         }
         Rectangle { x: 18px; y: 45px; width: parent.width - 36px; height: 1px; background: #493b59; }
-        PixelText8 {
+        Xerxes10 {
             x: 18px; y: 48px; width: parent.width - 36px; height: 22px;
             text: "CARTRIDGE     /     2 CONTROLLER PORTS";
             color: #766486;
-            size: PixelTextSize.body12;
+            size: Xerxes10Size.px10;
             horizontal-alignment: center;
         }
     }
@@ -201,11 +202,11 @@ export component SystemHubScreen inherits Rectangle {
         x: 28px; y: parent.height - 50px; width: parent.width - 56px; height: 1px;
         background: #33283e;
     }
-    PixelText8 {
+    Xerxes10 {
         x: 28px; y: parent.height - 31px; width: parent.width - 56px; height: 22px;
         text: "A OPEN          B BACK          HOME LAUNCHER";
         color: #8f819e;
-        size: PixelTextSize.body12;
+        size: Xerxes10Size.px10;
         horizontal-alignment: center;
     }
 }

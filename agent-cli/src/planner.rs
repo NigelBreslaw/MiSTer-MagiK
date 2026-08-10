@@ -840,19 +840,19 @@ fn add_path_operations(
         || matches!(
             path.to_str(),
             Some(
-                "scripts/checks/check-pixel-text-contract.py"
+                "scripts/checks/check-font-text-contract.py"
                     | "scripts/checks/pre-commit.py"
-                    | "scripts/tests/test-pixel-text-contract.py"
+                    | "scripts/tests/test-font-text-contract.py"
             )
         )
     {
         add(with_inputs(
             op(
-                "scripts.pixel-text-contract",
-                "Check PixelText8 contract",
+                "scripts.font-text-contract",
+                "Check font text contract",
                 "python3",
                 &[
-                    "scripts/checks/check-pixel-text-contract.py",
+                    "scripts/checks/check-font-text-contract.py",
                     "--repository",
                     ".",
                     "--all",
@@ -861,29 +861,29 @@ fn add_path_operations(
             ),
             &[
                 "apps/mister/ui",
-                "scripts/checks/check-pixel-text-contract.py",
-                "scripts/tests/test-pixel-text-contract.py",
+                "scripts/checks/check-font-text-contract.py",
+                "scripts/tests/test-font-text-contract.py",
             ],
         ));
     }
     if matches!(
         path.to_str(),
         Some(
-            "scripts/checks/check-pixel-text-contract.py"
-                | "scripts/tests/test-pixel-text-contract.py"
+            "scripts/checks/check-font-text-contract.py"
+                | "scripts/tests/test-font-text-contract.py"
         )
     ) {
         add(with_inputs(
             op(
-                "scripts.pixel-text-contract-tests",
-                "Test PixelText8 contract",
+                "scripts.font-text-contract-tests",
+                "Test font text contract",
                 "python3",
-                &["scripts/tests/test-pixel-text-contract.py"],
-                "PixelText8 contract tooling changed",
+                &["scripts/tests/test-font-text-contract.py"],
+                "font text contract tooling changed",
             ),
             &[
-                "scripts/checks/check-pixel-text-contract.py",
-                "scripts/tests/test-pixel-text-contract.py",
+                "scripts/checks/check-font-text-contract.py",
+                "scripts/tests/test-font-text-contract.py",
             ],
         ));
     }
@@ -1530,28 +1530,28 @@ mod tests {
     }
 
     #[test]
-    fn slint_changes_select_the_full_pixel_text_contract_once() {
+    fn slint_changes_select_the_full_font_text_contract_once() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
             },
             vec![
                 "apps/mister/ui/launcher.slint".into(),
-                "apps/mister/ui/components/pixel_text_8.slint".into(),
-                "scripts/checks/check-pixel-text-contract.py".into(),
+                "apps/mister/ui/components/start2p.slint".into(),
+                "scripts/checks/check-font-text-contract.py".into(),
             ],
         )
         .unwrap();
         let operations: Vec<_> = plan
             .operations
             .iter()
-            .filter(|operation| operation.id == "scripts.pixel-text-contract")
+            .filter(|operation| operation.id == "scripts.font-text-contract")
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(
             operations[0].args,
             [
-                "scripts/checks/check-pixel-text-contract.py",
+                "scripts/checks/check-font-text-contract.py",
                 "--repository",
                 ".",
                 "--all"
@@ -1560,12 +1560,12 @@ mod tests {
         let test_operations: Vec<_> = plan
             .operations
             .iter()
-            .filter(|operation| operation.id == "scripts.pixel-text-contract-tests")
+            .filter(|operation| operation.id == "scripts.font-text-contract-tests")
             .collect();
         assert_eq!(test_operations.len(), 1);
         assert_eq!(
             test_operations[0].args,
-            ["scripts/tests/test-pixel-text-contract.py"]
+            ["scripts/tests/test-font-text-contract.py"]
         );
     }
 

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+import { Start2P, Start2PSize } from "start2p.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
@@ -24,20 +24,20 @@ component CrtResolutionRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        PixelText8 {
+        Start2P {
             width: MisterUi.body-font;
             text: root.focused ? ">" : "";
             color: CrtTheme.accent-text;
             size: MisterUi.crt-body-font;
         }
-        PixelText8 {
+        Start2P {
             text: root.label;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
-        PixelText8 {
+        Start2P {
             text: root.detail;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -53,17 +53,17 @@ component CrtResolutionRow inherits Rectangle {
         spacing: MisterUi.grid-y;
         alignment: center;
 
-        PixelText8 {
+        Start2P {
             text: root.label;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
-        if root.detail != "" : PixelText8 {
+        if root.detail != "" : Start2P {
             text: root.detail;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }

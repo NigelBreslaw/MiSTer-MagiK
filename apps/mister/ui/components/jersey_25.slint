@@ -1,0 +1,24 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+export enum Jersey25Size {
+    px25,
+}
+
+export global Jersey25Metrics {
+    // The 41px Slint resource size produces exact 25px physical capitals.
+    pure public function resolve(size: Jersey25Size) -> length {
+        return 41px;
+    }
+}
+
+export component Jersey25 inherits Text {
+    in property <Jersey25Size> size: Jersey25Size.px25;
+    color: white;
+    font-family: "Jersey 25";
+    font-size: Jersey25Metrics.resolve(root.size);
+    horizontal-alignment: start;
+    vertical-alignment: top;
+    overflow: clip;
+    wrap: no-wrap;
+}

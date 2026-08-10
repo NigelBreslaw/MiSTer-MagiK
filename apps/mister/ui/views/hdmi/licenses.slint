@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterBridge } from "../../api.slint";
 import { ListView } from "std-widgets.slint";
@@ -18,17 +18,17 @@ component LicenseRow inherits Rectangle {
 
     HorizontalLayout {
         padding: 12px;
-        PixelText8 {
+        Start2P {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             vertical-alignment: center;
         }
         Rectangle { horizontal-stretch: 1; background: transparent; }
-        PixelText8 {
+        Start2P {
             text: ">";
             color: focused ? #06d6a0 : #9080a8;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             vertical-alignment: center;
         }
     }
@@ -43,10 +43,10 @@ export component LicensesScreen inherits Rectangle {
         HorizontalLayout {
             height: license-title.preferred-height;
             padding-left: 12px;
-            license-title := PixelText8 {
+            license-title := Start2P {
                 text: "Licenses";
                 color: #e8e0f0;
-                size: PixelTextSize.px24;
+                size: Start2PSize.px24;
                 horizontal-alignment: left;
             }
         }
@@ -58,10 +58,10 @@ export component LicensesScreen inherits Rectangle {
         LicenseRow { label: "Arcade Cabinet"; focused: MisterBridge.licenses-selected == 5; acknowledged: MisterBridge.selection-feedback-query("licenses", "arcade-cabinet", MisterBridge.selection-feedback-revision); }
         LicenseRow { label: "Slint"; focused: MisterBridge.licenses-selected == 6; acknowledged: MisterBridge.selection-feedback-query("licenses", "slint", MisterBridge.selection-feedback-revision); }
         Rectangle { vertical-stretch: 1; background: transparent; }
-        PixelText8 {
+        Start2P {
             text: "A: open    B: back";
             color: #6f8198;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }
@@ -69,7 +69,7 @@ export component LicensesScreen inherits Rectangle {
     if MisterBridge.licenses-expanded : VerticalLayout {
         padding: 24px;
         spacing: 12px;
-        PixelText8 {
+        Start2P {
             text: MisterBridge.licenses-selected == 0 ? "MiSTer MagiK  v" :
                   MisterBridge.licenses-selected == 1 ? "FFmpeg  v" :
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
@@ -77,7 +77,7 @@ export component LicensesScreen inherits Rectangle {
                   MisterBridge.licenses-selected == 4 ? "Jersey 25  v" :
                   MisterBridge.licenses-selected == 5 ? "Arcade Cabinet  v" : "Slint  v";
             color: #06d6a0;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             horizontal-alignment: center;
         }
         Rectangle {
@@ -91,20 +91,20 @@ export component LicensesScreen inherits Rectangle {
                 width: parent.width - 24px;
                 height: parent.height - 24px;
                 viewport-y: -MisterBridge.licenses-scroll-y * 1px;
-                for line in MisterBridge.license-lines : PixelText8 {
+                for line in MisterBridge.license-lines : Start2P {
                     text: line;
                     color: #d8d0e0;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                     height: 22px;
                     overflow: clip;
                     vertical-alignment: top;
                 }
             }
         }
-        PixelText8 {
+        Start2P {
             text: "Up/Down: scroll    A/B: close";
             color: #6f8198;
-            size: PixelTextSize.body12;
+            size: Start2PSize.px8;
             horizontal-alignment: center;
         }
     }

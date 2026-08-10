@@ -1,0 +1,24 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+export enum Xerxes10Size {
+    px10,
+}
+
+export global Xerxes10Metrics {
+    // The 16px Slint resource size produces exact 10px physical capitals.
+    pure public function resolve(size: Xerxes10Size) -> length {
+        return 16px;
+    }
+}
+
+export component Xerxes10 inherits Text {
+    in property <Xerxes10Size> size: Xerxes10Size.px10;
+    color: white;
+    font-family: "Xerxes 10";
+    font-size: Xerxes10Metrics.resolve(root.size);
+    horizontal-alignment: start;
+    vertical-alignment: top;
+    overflow: clip;
+    wrap: no-wrap;
+}

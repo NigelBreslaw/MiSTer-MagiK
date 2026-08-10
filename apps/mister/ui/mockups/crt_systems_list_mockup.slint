@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../components/start2p.slint";
 import "../fonts/PressStart2P-Regular.ttf";
 
 component NavHint inherits HorizontalLayout {
@@ -16,21 +16,21 @@ component NavHint inherits HorizontalLayout {
         height: 24px;
         background: #aaa5ff;
 
-        PixelText8 {
+        Start2P {
             width: parent.width;
             height: parent.height;
             text: root.button;
             color: #03132d;
-            size: PixelTextSize.px16;
+            size: Start2PSize.px16;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
-    PixelText8 {
+    Start2P {
         text: root.label;
         color: #aaa5ff;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         vertical-alignment: center;
     }
 }
@@ -106,19 +106,19 @@ export component CrtSystemsListMockup inherits Window {
 
                         Rectangle { width: 136px; background: transparent; }
 
-                        PixelText8 {
+                        Start2P {
                             text: "Consoles";
                             color: #aaa5ff;
-                            size: PixelTextSize.px32;
+                            size: Start2PSize.px32;
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }
 
-                        PixelText8 {
+                        Start2P {
                             width: 136px;
                             text: "9 systems";
                             color: #aaa5ff;
-                            size: PixelTextSize.px16;
+                            size: Start2PSize.px16;
                             horizontal-alignment: right;
                             vertical-alignment: center;
                         }
@@ -155,11 +155,11 @@ export component CrtSystemsListMockup inherits Window {
                                     spacing: 16px;
                                     cross-axis-alignment: center;
 
-                                    PixelText8 {
+                                    Start2P {
                                         width: 24px;
                                         text: index == root.highlighted-index ? ">" : "";
                                         color: #03132d;
-                                        size: PixelTextSize.px24;
+                                        size: Start2PSize.px24;
                                         vertical-alignment: center;
                                     }
 
@@ -168,20 +168,20 @@ export component CrtSystemsListMockup inherits Window {
                                         alignment: center;
                                         horizontal-stretch: 1;
 
-                                        PixelText8 {
+                                        Start2P {
                                             text: system.name;
                                             color: index == root.highlighted-index
                                                 ? #03132d : #aaa5ff;
-                                            size: PixelTextSize.px24;
+                                            size: Start2PSize.px24;
                                             overflow: elide;
                                             vertical-alignment: center;
                                         }
 
-                                        PixelText8 {
+                                        Start2P {
                                             text: system.detail;
                                             color: index == root.highlighted-index
                                                 ? #17304a : #8b94f8;
-                                            size: PixelTextSize.px16;
+                                            size: Start2PSize.px16;
                                             overflow: elide;
                                             vertical-alignment: center;
                                         }

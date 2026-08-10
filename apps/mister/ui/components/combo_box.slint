@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "pixel_text_8.slint";
+import { Start2P, Start2PSize } from "start2p.slint";
 
 import { MisterBridge } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
@@ -22,7 +22,7 @@ export component ComboBoxOverlay inherits Rectangle {
         VerticalLayout {
             padding: 16px;
             spacing: 4px;
-            PixelText8 { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: PixelTextSize.px16; horizontal-alignment: center; }
+            Start2P { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: Start2PSize.px16; horizontal-alignment: center; }
             for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : Rectangle {
                 property <bool> acknowledged: MisterBridge.selection-feedback-query(
                     "", "option:" + index, MisterBridge.selection-feedback-revision);
@@ -30,10 +30,10 @@ export component ComboBoxOverlay inherits Rectangle {
                 background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : transparent;
                 border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : acknowledged ? 1px : 0px;
                 border-color: acknowledged ? #4e8f80 : #06d6a0;
-                PixelText8 {
+                Start2P {
                     text: (index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "✓ " : "  ") + option;
                     color: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #06d6a0 : #e8e0f0;
-                    size: PixelTextSize.body12;
+                    size: Start2PSize.px8;
                     vertical-alignment: center;
                 }
             }

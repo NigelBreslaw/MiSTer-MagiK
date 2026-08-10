@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "../../components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
@@ -49,40 +50,40 @@ export component HomeGrid inherits Rectangle {
                             spacing: 2px;
                             alignment: center;
 
-                            PixelText8 {
+                            Start2P {
                                 width: 100%;
                                 text: MisterBridge.menu-title;
                                 color: #d7eef8;
-                                size: PixelTextSize.px16;
+                                size: Start2PSize.px16;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
                             if (MisterBridge.dev-mode || MisterBridge.update-available)
-                                && MisterBridge.menu-breadcrumb == "" : PixelText8 {
+                                && MisterBridge.menu-breadcrumb == "" : Xerxes10 {
                                 width: 100%;
                                 text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
                                 color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
-                                size: PixelTextSize.body12;
+                                size: Xerxes10Size.px10;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
-                            if MisterBridge.menu-breadcrumb != "" : PixelText8 {
+                            if MisterBridge.menu-breadcrumb != "" : Xerxes10 {
                                 width: 100%;
                                 text: MisterBridge.menu-breadcrumb;
                                 color: #8ca4b5;
-                                size: PixelTextSize.body12;
+                                size: Xerxes10Size.px10;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
                         }
                     }
 
-                    PixelText8 {
+                    Start2P {
                         text: MisterBridge.clock-text;
                         color: #d7eef8;
-                        size: PixelTextSize.px16;
+                        size: Start2PSize.px16;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
@@ -154,25 +155,25 @@ export component HomeGrid inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 3px;
-                    PixelText8 {
+                    Start2P {
                         text: MisterBridge.menu-title;
                         color: #d7eef8;
-                        size: PixelTextSize.px16;
+                        size: Start2PSize.px16;
                         overflow: elide;
                     }
-                    PixelText8 {
+                    Xerxes10 {
                         text: MisterBridge.menu-breadcrumb != "" ? MisterBridge.menu-breadcrumb
                             : MisterBridge.dev-mode ? "DEV MODE"
                             : MisterBridge.update-available ? "Update Available" : "";
                         color: MisterBridge.dev-mode ? #ffb347 : #8ca4b5;
-                        size: PixelTextSize.body12;
+                        size: Xerxes10Size.px10;
                         overflow: elide;
                     }
                 }
-                PixelText8 {
+                Xerxes10 {
                     text: MisterBridge.clock-text;
                     color: #d7eef8;
-                    size: PixelTextSize.body12;
+                    size: Xerxes10Size.px10;
                     horizontal-alignment: right;
                 }
                 SettingsButton {
@@ -214,11 +215,11 @@ export component HomeGrid inherits Rectangle {
             background: #172131;
             border-width: 1px;
             border-color: #52647d;
-            PixelText8 {
+            Xerxes10 {
                 text: root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
                     : "UP/DOWN Move    A Open    B Back    HOME Launcher";
                 color: #8ca4b5;
-                size: PixelTextSize.body12;
+                size: Xerxes10Size.px10;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;

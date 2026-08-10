@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { PixelText8, PixelTextSize } from "components/pixel_text_8.slint";
+import { Start2P, Start2PSize } from "components/start2p.slint";
 
 import { MisterBridge } from "api.slint";
 import { MisterUi } from "mister_window.slint";
@@ -32,13 +32,13 @@ component CircleBtn inherits Rectangle {
     border-width: 3px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    PixelText8 {
+    Start2P {
         y: parent.height + 6px;
         width: parent.width + 40px;
         x: -20px;
         text: caption;
         color: ControllerColors.label-light;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         horizontal-alignment: center;
     }
 }
@@ -153,10 +153,10 @@ component ShoulderBtn inherits Rectangle {
     border-width: 2px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    PixelText8 {
+    Start2P {
         text: caption;
         color: ControllerColors.label;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -172,12 +172,12 @@ component PillBtn inherits Rectangle {
     border-width: 2px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    PixelText8 {
+    Start2P {
         y: parent.height + 8px;
         width: parent.width;
         text: caption;
         color: ControllerColors.label-light;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         horizontal-alignment: center;
     }
 }
@@ -194,13 +194,13 @@ component SysBtn inherits Rectangle {
     border-color: !available ? #4a4058 : (pressed ? #048a68 : ControllerColors.btn-border);
     opacity: available ? 1.0 : 0.55;
 
-    PixelText8 {
+    Start2P {
         y: parent.height + 6px;
         width: parent.width + 40px;
         x: -20px;
         text: available ? caption : caption + " (n/a)";
         color: ControllerColors.label-light;
-        size: PixelTextSize.px16;
+        size: Start2PSize.px16;
         horizontal-alignment: center;
     }
 }
@@ -443,15 +443,15 @@ export component ControllerPanel inherits Rectangle {
 
             VerticalLayout {
                 spacing: 4px;
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.device-name;
                     color: #e8e0f0;
-                    size: PixelTextSize.px32;
+                    size: Start2PSize.px32;
                 }
-                PixelText8 {
+                Start2P {
                     text: "input test";
                     color: #9080a8;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                 }
             }
 
@@ -460,22 +460,22 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 spacing: 6px;
                 alignment: end;
-                PixelText8 {
+                Start2P {
                     text: "USB " + MisterBridge.usb-port;
                     color: #06d6a0;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: right;
                 }
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.usb-id + "  ·  " + MisterBridge.serial-id;
                     color: #9080a8;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: right;
                 }
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.js-counts;
                     color: #706080;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-alignment: right;
                 }
             }
@@ -515,38 +515,38 @@ export component ControllerPanel inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 12px;
-                PixelText8 {
+                Start2P {
                     text: "Pressed now:";
                     color: #9080a8;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                 }
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.pressed-now;
                     color: #06d6a0;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-stretch: 1;
                 }
             }
 
             HorizontalLayout {
                 spacing: 12px;
-                PixelText8 {
+                Start2P {
                     text: "Last event:";
                     color: #9080a8;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                 }
-                PixelText8 {
+                Start2P {
                     text: MisterBridge.last-event-label;
                     color: #c8b8d8;
-                    size: PixelTextSize.px16;
+                    size: Start2PSize.px16;
                     horizontal-stretch: 1;
                 }
             }
 
-            PixelText8 {
+            Start2P {
                 text: MisterBridge.last-raw-event;
                 color: #605068;
-                size: PixelTextSize.px16;
+                size: Start2PSize.px16;
             }
         }
     }
@@ -557,16 +557,16 @@ export component ControllerPanel inherits Rectangle {
 
         VerticalLayout {
             spacing: 4px;
-            PixelText8 {
+            Start2P {
                 text: MisterBridge.device-name;
                 color: #e8e0f0;
-                size: PixelTextSize.px24;
+                size: Start2PSize.px24;
                 overflow: elide;
             }
-            PixelText8 {
+            Start2P {
                 text: "INPUT TEST  ·  USB " + MisterBridge.usb-port;
                 color: #06d6a0;
-                size: PixelTextSize.px8;
+                size: Start2PSize.px8;
                 overflow: elide;
             }
         }
@@ -642,9 +642,9 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
-                PixelText8 { text: "Pressed  " + MisterBridge.pressed-now; color: #06d6a0; size: PixelTextSize.px8; overflow: elide; }
-                PixelText8 { text: "Last  " + MisterBridge.last-event-label; color: #c8b8d8; size: PixelTextSize.px8; overflow: elide; }
-                PixelText8 { text: MisterBridge.last-raw-event; color: #706080; size: PixelTextSize.px8; overflow: elide; }
+                Start2P { text: "Pressed  " + MisterBridge.pressed-now; color: #06d6a0; size: Start2PSize.px8; overflow: elide; }
+                Start2P { text: "Last  " + MisterBridge.last-event-label; color: #c8b8d8; size: Start2PSize.px8; overflow: elide; }
+                Start2P { text: MisterBridge.last-raw-event; color: #706080; size: Start2PSize.px8; overflow: elide; }
             }
         }
     }
