@@ -86,6 +86,9 @@ impl DeviceDiscovery {
         thread::Builder::new()
             .name("mister-magik-input-discovery".into())
             .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::InputDiscovery,
+                );
                 while request_rx.recv().is_ok() {
                     if result_tx.send(DeviceScan::discover()).is_err() {
                         break;

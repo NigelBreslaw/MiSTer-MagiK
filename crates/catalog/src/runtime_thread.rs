@@ -9,6 +9,7 @@ use std::sync::OnceLock;
 pub enum RuntimeThreadRole {
     LauncherUi,
     InputReader,
+    InputDiscovery,
     CatalogWorker,
     CatalogForeground,
     SearchIndex,
@@ -35,6 +36,7 @@ impl RuntimeThreadRole {
         match self {
             Self::LauncherUi => "launcher-ui",
             Self::InputReader => "input-reader",
+            Self::InputDiscovery => "input-discovery",
             Self::CatalogWorker => "catalog-worker",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
@@ -65,6 +67,9 @@ impl RuntimeThreadRole {
             // reader with the latency-critical launcher work on CPU1; the
             // forced-catalog device laboratory bounds this wake at <1 ms.
             Self::InputReader => RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1),
+            // Raw hotplug discovery walks /dev and sysfs. It is never part of
+            // navigation capture, so keep it away from the launcher/input CPU.
+            Self::InputDiscovery => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
@@ -550,6 +555,7 @@ mod tests {
     fn heavy_background_roles_default_to_cpu0_affinity() {
         for role in [
             RuntimeThreadRole::CatalogWorker,
+            RuntimeThreadRole::InputDiscovery,
             RuntimeThreadRole::LibraryWalker,
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
@@ -606,6 +612,7 @@ mod tests {
         let expected = [
             (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
+            (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::CatalogForeground,
