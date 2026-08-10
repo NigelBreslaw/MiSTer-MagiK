@@ -10653,6 +10653,31 @@ fn apply_pending_launch_return_state(
     pending.apply(nav, catalog, source)
 }
 
+fn apply_or_request_pending_launch_return_state(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    catalog_version: usize,
+    pending: &mut LaunchReturnSession,
+    scheduler: &mut LauncherScheduler,
+    source: CatalogSource,
+    now: Instant,
+    start: Instant,
+) -> bool {
+    let restored = apply_pending_launch_return_state(nav, catalog, pending, source);
+    if !restored {
+        let _ = request_pending_launch_return_shard(
+            pending.state(),
+            catalog,
+            catalog_version,
+            nav,
+            scheduler,
+            now,
+            start,
+        );
+    }
+    restored
+}
+
 fn reapply_pending_launch_return_state(
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
@@ -10935,8 +10960,16 @@ fn apply_catalog_session_effects(
                     nav.sync_launcher_taxonomy(catalog);
                 }
                 apply_forced_arcade_selected(nav, catalog);
-                let return_restored =
-                    apply_pending_launch_return_state(nav, catalog, launch_return_session, source);
+                let return_restored = apply_or_request_pending_launch_return_state(
+                    nav,
+                    catalog,
+                    *catalog_version,
+                    launch_return_session,
+                    scheduler,
+                    source,
+                    now,
+                    start,
+                );
                 if return_restored {
                     emit_return_context_restored(
                         lifecycle,
@@ -13153,6 +13186,45 @@ mod tests {
         session.release_if_complete();
         assert!(!session.requested());
         assert_eq!(session.phase, "complete");
+    }
+
+    #[test]
+    fn registry_replacement_requests_return_shard_after_capsule_restore() {
+        let full_catalog = catalog_for_media_systems(&["snes"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&full_catalog, "snes"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &full_catalog,
+            "/media/fat/_Arcade/snes.mra",
+        )
+        .expect("return state");
+        let mut session = LaunchReturnSession::new(Some(state));
+        let mut restored_nav = LauncherNav::new();
+        assert!(session.apply(
+            &mut restored_nav,
+            &full_catalog,
+            CatalogSource::ReturnCapsule
+        ));
+
+        let registry = arcade_catalog(Vec::new(), vec![arcade_system("snes", 1)]);
+        restored_nav.sync_launcher_taxonomy(&registry);
+        let mut scheduler = LauncherScheduler::new(false);
+        let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
+        let now = Instant::now();
+
+        assert!(!apply_or_request_pending_launch_return_state(
+            &mut restored_nav,
+            &registry,
+            2,
+            &mut session,
+            &mut scheduler,
+            CatalogSource::ShardedRegistry,
+            now,
+            now,
+        ));
+        assert!(scheduler.system_shard_attempted("snes"));
+        assert!(restored_nav.catalog_system_hydration_is_loading("snes"));
     }
 
     #[test]
