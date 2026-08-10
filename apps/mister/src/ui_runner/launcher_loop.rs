@@ -1654,9 +1654,12 @@ impl LauncherResponseTrace {
         let Some(position) = self.pending_confirmations.iter().rposition(|index| {
             let record = &self.records[*index];
             record
-                .after
-                .as_ref()
-                .is_some_and(|after| after.matches_presented(&record.before, &state))
+                .state_applied_at_us
+                .is_some_and(|applied_at_us| applied_at_us <= projected_at_us)
+                && record
+                    .after
+                    .as_ref()
+                    .is_some_and(|after| after.matches_presented(&record.before, &state))
         }) else {
             return None;
         };
@@ -11270,7 +11273,18 @@ mod tests {
         );
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
-        let stamp = trace.frame_stamp(&nav, 1, 2, 3);
+        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
+        assert!(
+            trace
+                .frame_stamp(
+                    &nav,
+                    applied_at_us.saturating_sub(1),
+                    applied_at_us
+                    applied_at_us,
+                )
+                .is_none()
+        );
+        let stamp = trace.frame_stamp(&nav, applied_at_us, applied_at_us + 1, applied_at_us + 2);
         trace.confirm(
             stamp.as_ref(),
             LauncherResponsePresentReceipt::default(),
@@ -11315,7 +11329,8 @@ mod tests {
         );
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
-        let stamp = trace.frame_stamp(&nav, 10, 11, 12);
+        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
+        let stamp = trace.frame_stamp(&nav, applied_at_us, applied_at_us + 1, applied_at_us + 2);
         nav.system_hub_selected = 2;
         trace.confirm(
             stamp.as_ref(),
@@ -11392,7 +11407,8 @@ mod tests {
         );
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
-        let stamp = trace.frame_stamp(&nav, 1, 2, 3);
+        let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
+        let stamp = trace.frame_stamp(&nav, applied_at_us, applied_at_us + 1, applied_at_us + 2);
         trace.confirm(
             stamp.as_ref(),
             LauncherResponsePresentReceipt::default(),
