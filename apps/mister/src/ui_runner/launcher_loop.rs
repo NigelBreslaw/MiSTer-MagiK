@@ -5560,7 +5560,7 @@ pub(super) fn run_launcher_loop(
                     &collection_id,
                     "benchmark-direct",
                 );
-                if nav.activate_collection(&catalog, &collection_id) {
+                if nav.open_system(&catalog, &collection_id) {
                     arcade_entry_latency.record_rows_ready(
                         start,
                         requested_at,
