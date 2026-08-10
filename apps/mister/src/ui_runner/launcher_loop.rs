@@ -1868,7 +1868,11 @@ impl LauncherResponseTrace {
     }
 
     fn scheduler_boundary(&self) -> (u64, Option<u64>) {
-        self.catalog_boundary()
+        if self.enabled {
+            self.catalog_boundary()
+        } else {
+            (0, None)
+        }
     }
 
     fn record_scheduler_interval(
@@ -5142,6 +5146,8 @@ pub(super) fn run_launcher_loop(
             full_bridge_dirty = true;
             request_launcher_redraw!();
         }
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-timers-feedback", scheduler_phase);
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
@@ -5341,6 +5347,9 @@ pub(super) fn run_launcher_loop(
         {
             background_work_allowed = false;
         }
+
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-lifecycle-maintenance", scheduler_phase);
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let slint_animation_active = app.window().has_active_animations();
@@ -5589,6 +5598,8 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = catalog_worker_trace_start {
             prepare_trace.catalog_worker_us = trace_start.elapsed().as_micros();
         }
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("pre-input-catalog", scheduler_phase);
         if maybe_present_modal_input_test_dialog(
             &mut modal_input_test_dialog_pending,
             catalog_ready,
@@ -5624,6 +5635,8 @@ pub(super) fn run_launcher_loop(
         if let Some(trace_start) = media_worker_trace_start {
             prepare_trace.media_worker_us = trace_start.elapsed().as_micros();
         }
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("pre-input-media", scheduler_phase);
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
@@ -5692,6 +5705,8 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-launch-lifecycle", scheduler_phase);
 
         if arcade_screen_pending && arcade_navigation_ready(catalog_ready, &catalog) {
             let before = LauncherBridgeKey::from_nav(&nav);
@@ -5847,6 +5862,9 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-navigation", scheduler_phase);
+
         latch_v5_qualification.poll_control(loop_start);
         latch_v5_qualification.observe_catalog_worker(
             scheduler.catalog_worker_running(),
@@ -5900,6 +5918,9 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
             }
         }
+
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-qualification", scheduler_phase);
 
         if let Some(scenario) = launcher_bench_scenario {
             let latch_failure_active = launcher_presenter.latch_failure().is_some();
@@ -5991,6 +6012,9 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-benchmark", scheduler_phase);
+
         if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
             nav.screen = screen;
         }
@@ -6041,8 +6065,8 @@ pub(super) fn run_launcher_loop(
             bridge.set_effective_view(effective_view.label().into());
         }
 
-        scheduler_phase =
-            launcher_response_trace.record_scheduler_interval("pre-input-route", scheduler_phase);
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
         // Drain immediately before routing so catalog, timer, lifecycle, and
         // bridge housekeeping cannot sit between capture and dispatch.
         let drained_input = pad.drain_input_batch();
