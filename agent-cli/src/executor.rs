@@ -717,6 +717,7 @@ fn is_offline_cache_miss(output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     lower.contains("--offline was specified")
         || lower.contains("no matching package named") && lower.contains("offline mode")
+        || lower.contains("failed to select a version") && lower.contains("offline mode")
         || lower.contains("failed to download") && lower.contains("offline")
 }
 
@@ -1081,6 +1082,15 @@ mod tests {
         assert!(!detail.commands[1].args.to_string().contains("--offline"));
         assert!(detail.commands[1].args.to_string().contains("--locked"));
         assert!(log.contains("=== agent-cli attempt: offline ==="));
+        assert!(log.contains("=== agent-cli attempt: network-fallback ==="));
+    }
+
+    #[test]
+    fn offline_version_selection_miss_retries_online() {
+        let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo 'error: failed to select a version for cc; candidate versions found which did not match; note: offline mode can sometimes cause surprising resolution failures' >&2; exit 101;;\n  *) exit 0;;\nesac\n";
+        let (result, detail, log) = execute_fake_cargo(script);
+        assert_eq!(result.unwrap(), Outcome::Passed);
+        assert_eq!(detail.commands.len(), 2);
         assert!(log.contains("=== agent-cli attempt: network-fallback ==="));
     }
 
