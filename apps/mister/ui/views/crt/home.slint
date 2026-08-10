@@ -54,7 +54,7 @@ export component HomeGrid inherits Rectangle {
                 label: item.label;
                 detail: root.root-menu && item.status == MenuItemStatus.ready ? "" : item.subtitle;
                 focused: item.selected;
-                acknowledged: item.acknowledged;
+                acknowledged: item.acknowledged && !item.selected;
                 status: item.status;
             }
         }

@@ -83,6 +83,44 @@ component LauncherTileDetail inherits Xerxes10 {
     ]
 }
 
+component LauncherTileFocusOutline inherits Rectangle {
+    in property <bool> active;
+
+    background: transparent;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 100%;
+        height: 3px;
+        background: root.active ? #06d6a0 : transparent;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: parent.height - 3px;
+        width: 100%;
+        height: 3px;
+        background: root.active ? #06d6a0 : transparent;
+    }
+
+    Rectangle {
+        x: 0px;
+        y: 3px;
+        width: 3px;
+        height: parent.height - 6px;
+        background: root.active ? #06d6a0 : transparent;
+    }
+
+    Rectangle {
+        x: parent.width - 3px;
+        y: 3px;
+        width: 3px;
+        height: parent.height - 6px;
+        background: root.active ? #06d6a0 : transparent;
+    }
+}
+
 export component LauncherTile inherits Rectangle {
     in property <string> label;
     in property <string> subtitle;
@@ -91,9 +129,8 @@ export component LauncherTile inherits Rectangle {
     in property <bool> flat-focus-style: false;
     in property <MenuItemStatus> status: MenuItemStatus.ready;
 
-    border-width: focused ? 3px : 2px;
-    border-color: focused ? #06d6a0
-        : acknowledged ? #4e8f80
+    border-width: 2px;
+    border-color: acknowledged ? #4e8f80
         : status == MenuItemStatus.failed
         ? #a9445b
         : status == MenuItemStatus.update-failed ? #c58b3a
@@ -143,6 +180,10 @@ export component LauncherTile inherits Rectangle {
             size: Xerxes10Size.px10;
             horizontal-alignment: center;
         }
+    }
+
+    LauncherTileFocusOutline {
+        active: root.focused;
     }
 }
 

@@ -120,7 +120,7 @@ export component HomeGrid inherits Rectangle {
                         subtitle: item.subtitle;
                         status: item.status;
                         focused: !MisterBridge.settings-focused && item.selected;
-                        acknowledged: item.acknowledged;
+                        acknowledged: item.acknowledged && !item.selected;
                         flat-focus-style: true;
                     }
                 }
@@ -197,7 +197,7 @@ export component HomeGrid inherits Rectangle {
                 subtitle: item.subtitle;
                 status: item.status;
                 focused: item.selected;
-                acknowledged: item.acknowledged;
+                acknowledged: item.acknowledged && !item.selected;
                 flat-focus-style: true;
             }
         }
