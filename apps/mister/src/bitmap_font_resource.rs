@@ -14,7 +14,10 @@ const MAX_FAMILY_LEN: usize = 128;
 const MAX_GLYPHS: usize = 2048;
 const MAX_GLYPH_DIMENSION: usize = 256;
 
-const JERSEY_10_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey10-22px.mmbf");
+const YESTERDAY_10_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-16px.mmbf");
+const XERXES_10_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 
 #[derive(Clone, Debug, PartialEq)]
@@ -267,19 +270,22 @@ fn leak_font(decoded: DecodedFont) -> &'static i_slint_core::graphics::BitmapFon
 }
 
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
-pub fn register_jersey_fonts(renderer: &slint::platform::software_renderer::SoftwareRenderer) {
+pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::SoftwareRenderer) {
     use i_slint_core::renderer::RendererSealed;
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 2]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 3]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
 
     let fonts = FONTS.get_or_init(|| {
         [
-            leak_font(decode_resource(JERSEY_10_RESOURCE).expect("valid Jersey 10 bitmap font")),
+            leak_font(
+                decode_resource(YESTERDAY_10_RESOURCE).expect("valid Yesterday 10 bitmap font"),
+            ),
+            leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
             leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
         ]
     });
@@ -311,9 +317,19 @@ struct GeneratorSpec {
 }
 
 #[cfg(any(test, feature = "asset-tools"))]
-const JERSEY_10_SPEC: GeneratorSpec = GeneratorSpec {
-    family: "Jersey 10",
-    pixel_size: 22,
+const YESTERDAY_10_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Yesterday 10",
+    pixel_size: 16,
+    weight: 400,
+    hint: false,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const XERXES_10_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Xerxes 10",
+    pixel_size: 16,
     weight: 400,
     hint: false,
     threshold: 128,
@@ -432,7 +448,9 @@ fn generate_resource(font_bytes: &[u8], spec: GeneratorSpec) -> Result<Vec<u8>, 
             italic: false,
             units_per_em: f32::from(metrics.units_per_em),
             ascent: metrics.ascent,
-            descent: metrics.descent,
+            // Swash reports descent as a positive distance below the baseline,
+            // while Slint's BitmapFont contract requires a negative value.
+            descent: -metrics.descent,
             x_height: metrics.x_height,
             cap_height: metrics.cap_height,
             glyphs,
@@ -497,8 +515,13 @@ fn encode_resource(font: &DecodedFont, hint: bool, threshold: u8) -> Result<Vec<
 }
 
 #[cfg(feature = "asset-tools")]
-pub fn generate_jersey_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
-    generate_resource(font_bytes, JERSEY_10_SPEC)
+pub fn generate_yesterday_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, YESTERDAY_10_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_xerxes_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, XERXES_10_SPEC)
 }
 
 #[cfg(feature = "asset-tools")]
@@ -510,7 +533,10 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 mod tests {
     use super::*;
 
-    const JERSEY_10_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey10-Regular.ttf");
+    const YESTERDAY_10_TTF: &[u8] =
+        include_bytes!("../../../private/magik-assets/fonts/yesterday-10/Yesterday 10.ttf");
+    const XERXES_10_TTF: &[u8] =
+        include_bytes!("../../../private/magik-assets/fonts/xerxes-10/Xerxes 10.ttf");
     const JERSEY_25_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey25-Regular.ttf");
 
     fn glyph<'a>(font: &'a DecodedFont, code_point: char) -> &'a DecodedGlyph {
@@ -528,8 +554,12 @@ mod tests {
     #[test]
     fn checked_in_resources_are_deterministic() {
         assert_eq!(
-            generate_resource(JERSEY_10_TTF, JERSEY_10_SPEC).unwrap(),
-            JERSEY_10_RESOURCE
+            generate_resource(YESTERDAY_10_TTF, YESTERDAY_10_SPEC).unwrap(),
+            YESTERDAY_10_RESOURCE
+        );
+        assert_eq!(
+            generate_resource(XERXES_10_TTF, XERXES_10_SPEC).unwrap(),
+            XERXES_10_RESOURCE
         );
         assert_eq!(
             generate_resource(JERSEY_25_TTF, JERSEY_25_SPEC).unwrap(),
@@ -538,18 +568,35 @@ mod tests {
     }
 
     #[test]
-    fn jersey_cap_heights_are_exact() {
-        let jersey_10 = decode_resource(JERSEY_10_RESOURCE).unwrap();
+    fn bitmap_font_cap_heights_are_exact() {
+        let yesterday_10 = decode_resource(YESTERDAY_10_RESOURCE).unwrap();
+        let xerxes_10 = decode_resource(XERXES_10_RESOURCE).unwrap();
         let jersey_25 = decode_resource(JERSEY_25_RESOURCE).unwrap();
         for code_point in ['A', 'H', 'M', 'S'] {
-            assert_eq!(glyph(&jersey_10, code_point).height, 12);
+            assert_eq!(glyph(&yesterday_10, code_point).height, 10);
+            assert_eq!(glyph(&xerxes_10, code_point).height, 10);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
         }
     }
 
     #[test]
+    fn descents_follow_slints_negative_metric_contract() {
+        for resource in [
+            YESTERDAY_10_RESOURCE,
+            XERXES_10_RESOURCE,
+            JERSEY_25_RESOURCE,
+        ] {
+            assert!(decode_resource(resource).unwrap().descent < 0.0);
+        }
+    }
+
+    #[test]
     fn unpacked_coverage_is_binary() {
-        for resource in [JERSEY_10_RESOURCE, JERSEY_25_RESOURCE] {
+        for resource in [
+            YESTERDAY_10_RESOURCE,
+            XERXES_10_RESOURCE,
+            JERSEY_25_RESOURCE,
+        ] {
             let font = decode_resource(resource).unwrap();
             for glyph in &font.glyphs {
                 assert!(
@@ -563,16 +610,16 @@ mod tests {
 
     #[test]
     fn decoder_rejects_corrupt_resources() {
-        let mut bad_magic = JERSEY_10_RESOURCE.to_vec();
+        let mut bad_magic = YESTERDAY_10_RESOURCE.to_vec();
         bad_magic[0] ^= 1;
         assert!(decode_resource(&bad_magic).unwrap_err().contains("magic"));
         assert!(
-            decode_resource(&JERSEY_10_RESOURCE[..20])
+            decode_resource(&YESTERDAY_10_RESOURCE[..20])
                 .unwrap_err()
                 .contains("length")
         );
 
-        let mut bad_checksum = JERSEY_10_RESOURCE.to_vec();
+        let mut bad_checksum = YESTERDAY_10_RESOURCE.to_vec();
         *bad_checksum.last_mut().unwrap() ^= 1;
         assert!(
             decode_resource(&bad_checksum)

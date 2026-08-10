@@ -32,8 +32,8 @@ export enum PixelTextSize {
 }
 export component PixelText8 inherits Text {
     in property <PixelTextSize> size: PixelTextSize.px8;
-    font-family: root.size == PixelTextSize.body12 ? "Jersey 10" : "Press Start 2P";
-    font-size: size == PixelTextSize.body12 ? 22px : 8px;
+    font-family: root.size == PixelTextSize.body12 ? "Xerxes 10" : "Press Start 2P";
+    font-size: size == PixelTextSize.body12 ? 16px : 8px;
 }
 """
 
@@ -74,8 +74,8 @@ class ContractTests(unittest.TestCase):
 
     def test_body12_size_and_family_are_fixed(self) -> None:
         for invalid, message in (
-            (PRIMITIVE_TEXT.replace("? 22px : 8px", "? 21px : 8px"), "22px"),
-            (PRIMITIVE_TEXT.replace('"Jersey 10"', '"Press Start 2P"'), "Jersey 10"),
+            (PRIMITIVE_TEXT.replace("? 16px : 8px", "? 15px : 8px"), "16px"),
+            (PRIMITIVE_TEXT.replace('"Xerxes 10"', '"Press Start 2P"'), "Xerxes 10"),
         ):
             with self.assertRaisesRegex(CONTRACT.ContractError, message):
                 CONTRACT.check_sources(

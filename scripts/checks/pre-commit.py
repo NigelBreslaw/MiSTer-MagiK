@@ -381,7 +381,9 @@ def staged_submodules(repository: Path, paths: Sequence[str]) -> list[str]:
 
 def check_submodules(repository: Path, paths: Sequence[str]) -> None:
     submodule_environment = os.environ.copy()
-    submodule_environment.pop("GIT_INDEX_FILE", None)
+    local_variables = git(repository, ["rev-parse", "--local-env-vars"]).stdout.splitlines()
+    for variable in local_variables:
+        submodule_environment.pop(os.fsdecode(variable), None)
     for path in staged_submodules(repository, paths):
         submodule = repository / path
         status = git(

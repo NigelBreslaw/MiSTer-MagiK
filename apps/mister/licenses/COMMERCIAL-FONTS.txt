@@ -1,0 +1,9 @@
+Yesterday 10 and Xerxes 10
+
+MiSTer MagiK uses monochrome glyph subsets generated from the commercially
+licensed Yesterday 10 and Xerxes 10 font software. The source fonts and
+standalone generated font resources are private licensed assets and are not
+distributed as part of the public source repository.
+
+The commercial licences are held by the MiSTer MagiK distributor. All rights
+in the original font software remain with their respective owner.

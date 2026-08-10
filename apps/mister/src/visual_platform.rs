@@ -23,7 +23,7 @@ impl MisterSoftwareWindow {
             redraw_pending: Cell::new(false),
             size: Cell::new(PhysicalSize::default()),
         });
-        crate::bitmap_font_resource::register_jersey_fonts(&window.renderer);
+        crate::bitmap_font_resource::register_bitmap_fonts(&window.renderer);
         window
     }
 

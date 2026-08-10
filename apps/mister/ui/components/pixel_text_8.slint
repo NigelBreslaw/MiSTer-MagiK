@@ -11,8 +11,8 @@ export enum PixelTextSize {
 
 export global PixelText8Metrics {
     pure public function resolve(size: PixelTextSize) -> length {
-        // The unhinted Jersey 10 resource has 12px physical capitals at this size.
-        return size == PixelTextSize.body12 ? 22px
+        // Xerxes 10 is compiled on its native grid: 16 Slint px produce 10px capitals.
+        return size == PixelTextSize.body12 ? 16px
             : size == PixelTextSize.px8 ? 8px
             : size == PixelTextSize.px16 ? 16px
             : size == PixelTextSize.px24 ? 24px
@@ -23,7 +23,7 @@ export global PixelText8Metrics {
 export component PixelText8 inherits Text {
     in property <PixelTextSize> size: PixelTextSize.px8;
     color: white;
-    font-family: root.size == PixelTextSize.body12 ? "Jersey 10" : "Press Start 2P";
+    font-family: root.size == PixelTextSize.body12 ? "Xerxes 10" : "Press Start 2P";
     font-size: PixelText8Metrics.resolve(root.size);
     horizontal-alignment: start;
     vertical-alignment: top;
