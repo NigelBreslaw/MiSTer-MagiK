@@ -6,6 +6,7 @@ import { MisterUi } from "../../mister_window.slint";
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Jersey25 } from "../../components/jersey_25.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
+import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 component HubIcon inherits Rectangle {
     in property <int> kind;
@@ -83,12 +84,20 @@ component HubCard inherits Rectangle {
         kind: root.kind;
         ink: root.ink;
     }
-    Start2P {
+    Rectangle {
         x: 14px; y: 62px; width: parent.width - 28px; height: 26px;
-        text: root.label;
-        color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
-        size: root.label == "FAVORITES" ? Start2PSize.px16 : Start2PSize.px24;
-        horizontal-alignment: center;
+        if root.label == "FAVORITES" : Nocive15 {
+            text: root.label;
+            color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
+            size: Nocive15Size.px15;
+            horizontal-alignment: center;
+        }
+        if root.label != "FAVORITES" : Start2P {
+            text: root.label;
+            color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
+            size: Start2PSize.px24;
+            horizontal-alignment: center;
+        }
     }
     Rectangle {
         x: 18px; y: 101px; width: parent.width - 36px; height: 1px;
@@ -130,11 +139,11 @@ export component SystemHubScreen inherits Rectangle {
         color: #a56dd1;
         size: Xerxes10Size.px10;
     }
-    Start2P {
+    Nocive15 {
         x: 30px; y: 104px; width: 300px; height: 18px;
         text: MisterBridge.system-hub-games-count + " GAMES";
         color: #ddd4e4;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
     }
     Xerxes10 {
         visible: !MisterUi.portrait-layout;
@@ -176,11 +185,11 @@ export component SystemHubScreen inherits Rectangle {
         background: #100d18;
         border-width: 1px;
         border-color: #493b59;
-        Start2P {
+        Nocive15 {
             x: 18px; y: 18px; width: parent.width - 36px; height: 18px;
             text: "16-BIT";
             color: #a58bb5;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
             horizontal-alignment: center;
         }
         Rectangle { x: 18px; y: 45px; width: parent.width - 36px; height: 1px; background: #493b59; }

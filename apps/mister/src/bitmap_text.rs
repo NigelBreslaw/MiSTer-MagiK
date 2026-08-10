@@ -64,17 +64,20 @@ impl TextGradient {
 }
 
 pub(crate) struct ConsoleFont {
-    font: swash::FontRef<'static>,
+    font: Option<swash::FontRef<'static>>,
     scale_context: swash::scale::ScaleContext,
     glyphs: HashMap<char, ConsoleGlyph>,
     gradient_glyphs: HashMap<(char, TextGradient), ConsoleGradientGlyph>,
     pixel_size: f32,
     units_per_em: f32,
+    ascent: f32,
+    descent: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsoleTypeface {
     PressStart2P,
+    Nocive15,
 }
 
 impl ConsoleFont {
@@ -83,21 +86,59 @@ impl ConsoleFont {
     }
 
     pub(crate) fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
+        if typeface == ConsoleTypeface::Nocive15 {
+            assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
+            let bitmap = mister_magik_fb::bitmap_font_resource::nocive_15_console_bitmap_font()
+                .expect("valid Nocive 15 bitmap font resource");
+            let glyphs = bitmap
+                .glyphs
+                .into_iter()
+                .map(|glyph| {
+                    (
+                        glyph.code_point,
+                        ConsoleGlyph {
+                            left: glyph.left,
+                            top: glyph.top,
+                            width: glyph.width,
+                            height: glyph.height,
+                            advance: glyph.advance,
+                            data: glyph.data,
+                        },
+                    )
+                })
+                .collect();
+            return Self {
+                font: None,
+                scale_context: swash::scale::ScaleContext::new(),
+                glyphs,
+                gradient_glyphs: HashMap::new(),
+                pixel_size,
+                units_per_em: 1.0,
+                ascent: bitmap.ascent,
+                descent: bitmap.descent,
+            };
+        }
+
         let (data, name): (&'static [u8], &str) = match typeface {
             ConsoleTypeface::PressStart2P => (
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
             ),
+            ConsoleTypeface::Nocive15 => unreachable!(),
         };
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
-        let units_per_em = font.metrics(&[]).units_per_em as f32;
+        let metrics = font.metrics(&[]);
+        let units_per_em = metrics.units_per_em as f32;
+        let scale = pixel_size / units_per_em;
         Self {
-            font,
+            font: Some(font),
             scale_context: swash::scale::ScaleContext::new(),
             glyphs: HashMap::new(),
             gradient_glyphs: HashMap::new(),
             pixel_size,
             units_per_em,
+            ascent: metrics.ascent * scale,
+            descent: metrics.descent * scale,
         }
     }
 
@@ -166,13 +207,10 @@ impl ConsoleFont {
             return centered_top - ink_top;
         }
 
-        let metrics = self.font.metrics(&[]);
-        let scale = self.pixel_size / self.units_per_em;
-        let ascent = metrics.ascent * scale;
-        let descent = metrics.descent * scale;
-        let line_height = (ascent - descent).max(1.0);
-        let baseline =
-            container_y as f32 + ((container_height as f32 - line_height) * 0.5).max(0.0) + ascent;
+        let line_height = (self.ascent - self.descent).max(1.0);
+        let baseline = container_y as f32
+            + ((container_height as f32 - line_height) * 0.5).max(0.0)
+            + self.ascent;
         baseline.round() as isize
     }
 
@@ -241,12 +279,13 @@ impl ConsoleFont {
 
     fn glyph(&mut self, ch: char) -> Option<&ConsoleGlyph> {
         if !self.glyphs.contains_key(&ch) {
-            let glyph_id = self.font.charmap().map(ch);
+            let font = self.font?;
+            let glyph_id = font.charmap().map(ch);
             let advance = if glyph_id == 0 {
                 (self.pixel_size * 0.75) as i32
             } else {
                 let scale = self.pixel_size / self.units_per_em;
-                (self.font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
+                (font.glyph_metrics(&[]).advance_width(glyph_id) * scale) as i32
             };
             let glyph = if glyph_id == 0 || ch == ' ' {
                 ConsoleGlyph {
@@ -260,7 +299,7 @@ impl ConsoleFont {
             } else {
                 let mut scaler = self
                     .scale_context
-                    .builder(self.font)
+                    .builder(font)
                     .size(self.pixel_size)
                     .build();
                 let image = swash::scale::Render::new(&[swash::scale::Source::Outline])
@@ -494,7 +533,7 @@ mod tests {
         let cases = [(ConsoleTypeface::PressStart2P, 8.0, 1000, 0, 8)];
         for (typeface, pixel_size, expected_ascent, expected_descent, expected_pitch) in cases {
             let mut font = ConsoleFont::new_with_typeface(pixel_size, typeface);
-            let metrics = font.font.metrics(&[]);
+            let metrics = font.font.expect("outline font").metrics(&[]);
             assert_eq!(metrics.ascent.round() as i32, expected_ascent);
             assert_eq!(metrics.descent.round() as i32, expected_descent);
             assert_eq!(metrics.leading, 0.0);
@@ -509,9 +548,9 @@ mod tests {
     #[test]
     fn centered_text_baseline_balances_crt_title_and_metadata_ink() {
         for (typeface, pixel_size, row_height, text) in [
-            (ConsoleTypeface::PressStart2P, 16.0, 32, "MagiK 1984"),
-            (ConsoleTypeface::PressStart2P, 16.0, 19, "MagiK 1984"),
-            (ConsoleTypeface::PressStart2P, 16.0, 39, "MagiK 1984"),
+            (ConsoleTypeface::Nocive15, 16.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Nocive15, 16.0, 19, "MagiK 1984"),
+            (ConsoleTypeface::Nocive15, 16.0, 39, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -545,6 +584,15 @@ mod tests {
             let bottom_padding = row_height - bottom - 1;
             assert!(top_padding.abs_diff(bottom_padding) <= 1);
         }
+    }
+
+    #[test]
+    fn nocive_15_uses_only_the_precompiled_exact_size_resource() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Nocive15);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 15);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
     }
 
     #[test]

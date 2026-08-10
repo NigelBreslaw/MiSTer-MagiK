@@ -3,6 +3,7 @@
 
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
+import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
@@ -50,11 +51,11 @@ export component HomeGrid inherits Rectangle {
                             spacing: 2px;
                             alignment: center;
 
-                            Start2P {
+                            Nocive15 {
                                 width: 100%;
                                 text: MisterBridge.menu-title;
                                 color: #d7eef8;
-                                size: Start2PSize.px16;
+                                size: Nocive15Size.px15;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
@@ -80,10 +81,10 @@ export component HomeGrid inherits Rectangle {
                         }
                     }
 
-                    Start2P {
+                    Nocive15 {
                         text: MisterBridge.clock-text;
                         color: #d7eef8;
-                        size: Start2PSize.px16;
+                        size: Nocive15Size.px15;
                         horizontal-alignment: right;
                         vertical-alignment: center;
                     }
@@ -155,10 +156,10 @@ export component HomeGrid inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 3px;
-                    Start2P {
+                    Nocive15 {
                         text: MisterBridge.menu-title;
                         color: #d7eef8;
-                        size: Start2PSize.px16;
+                        size: Nocive15Size.px15;
                         overflow: elide;
                     }
                     Xerxes10 {

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
 export { Start2PSize }
@@ -48,12 +49,12 @@ export component VideoPlayback inherits MisterWindow {
         color: #8fb6ff;
     }
 
-    Start2P {
+    Nocive15 {
         x: 724px;
         y: 136px;
         width: 176px;
         text: "video_playback";
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         color: #f2f6ff;
         wrap: word-wrap;
     }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
@@ -46,11 +47,11 @@ export component CatalogScanPopup inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            Start2P {
+            Nocive15 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: #e8e0f0;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -212,10 +213,10 @@ export component ConfirmDialog inherits Rectangle {
             padding: 24px;
             spacing: 18px;
 
-            Start2P {
+            Nocive15 {
                 text: MisterBridge.confirm-title;
                 color: #06d6a0;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
                 horizontal-alignment: center;
             }
 
@@ -297,10 +298,10 @@ export component LoadingOverlay inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Start2P {
+        Nocive15 {
             text: MisterBridge.loading-message;
             color: #e8e0f0;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
             horizontal-alignment: center;
         }
 

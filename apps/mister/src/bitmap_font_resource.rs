@@ -18,6 +18,8 @@ const YESTERDAY_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-16px.mmbf");
 const XERXES_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf");
+const NOCIVE_15_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/nocive-15/nocive15-16px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,6 +218,50 @@ fn unpack_glyph(glyph: &DecodedGlyph) -> Vec<u8> {
     alpha
 }
 
+#[derive(Debug)]
+pub struct ConsoleBitmapGlyph {
+    pub code_point: char,
+    pub left: i32,
+    pub top: i32,
+    pub width: usize,
+    pub height: usize,
+    pub advance: i32,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug)]
+pub struct ConsoleBitmapFont {
+    pub ascent: f32,
+    pub descent: f32,
+    pub glyphs: Vec<ConsoleBitmapGlyph>,
+}
+
+pub fn nocive_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    let decoded = decode_resource(NOCIVE_15_RESOURCE)?;
+    let scale = f32::from(decoded.pixel_size) / decoded.units_per_em;
+    let glyphs = decoded
+        .glyphs
+        .iter()
+        .map(|glyph| {
+            let height = i32::from(glyph.height);
+            ConsoleBitmapGlyph {
+                code_point: glyph.code_point,
+                left: i32::from(glyph.x) / 64,
+                top: i32::from(glyph.y) / 64 + height,
+                width: usize::try_from(glyph.width).unwrap_or_default(),
+                height: usize::try_from(glyph.height).unwrap_or_default(),
+                advance: i32::from(glyph.x_advance) / 64,
+                data: unpack_glyph(glyph),
+            }
+        })
+        .collect();
+    Ok(ConsoleBitmapFont {
+        ascent: decoded.ascent * scale,
+        descent: decoded.descent * scale,
+        glyphs,
+    })
+}
+
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 fn leak_font(decoded: DecodedFont) -> &'static i_slint_core::graphics::BitmapFont {
     use i_slint_core::graphics::{BitmapFont, BitmapGlyph, BitmapGlyphs, CharacterMapEntry};
@@ -275,7 +321,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 3]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 4]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -286,6 +332,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
                 decode_resource(YESTERDAY_10_RESOURCE).expect("valid Yesterday 10 bitmap font"),
             ),
             leak_font(decode_resource(XERXES_10_RESOURCE).expect("valid Xerxes 10 bitmap font")),
+            leak_font(decode_resource(NOCIVE_15_RESOURCE).expect("valid Nocive 15 bitmap font")),
             leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
         ]
     });
@@ -329,6 +376,16 @@ const YESTERDAY_10_SPEC: GeneratorSpec = GeneratorSpec {
 #[cfg(any(test, feature = "asset-tools"))]
 const XERXES_10_SPEC: GeneratorSpec = GeneratorSpec {
     family: "Xerxes 10",
+    pixel_size: 16,
+    weight: 400,
+    hint: false,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const NOCIVE_15_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Nocive 15",
     pixel_size: 16,
     weight: 400,
     hint: false,
@@ -525,6 +582,11 @@ pub fn generate_xerxes_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_nocive_15(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, NOCIVE_15_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, JERSEY_25_SPEC)
 }
@@ -537,6 +599,8 @@ mod tests {
         include_bytes!("../../../private/magik-assets/fonts/yesterday-10/Yesterday 10.ttf");
     const XERXES_10_TTF: &[u8] =
         include_bytes!("../../../private/magik-assets/fonts/xerxes-10/Xerxes 10.ttf");
+    const NOCIVE_15_TTF: &[u8] =
+        include_bytes!("../../../private/magik-assets/fonts/nocive-15/Nocive 15.ttf");
     const JERSEY_25_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey25-Regular.ttf");
 
     fn glyph<'a>(font: &'a DecodedFont, code_point: char) -> &'a DecodedGlyph {
@@ -562,6 +626,10 @@ mod tests {
             XERXES_10_RESOURCE
         );
         assert_eq!(
+            generate_resource(NOCIVE_15_TTF, NOCIVE_15_SPEC).unwrap(),
+            NOCIVE_15_RESOURCE
+        );
+        assert_eq!(
             generate_resource(JERSEY_25_TTF, JERSEY_25_SPEC).unwrap(),
             JERSEY_25_RESOURCE
         );
@@ -571,10 +639,12 @@ mod tests {
     fn bitmap_font_cap_heights_are_exact() {
         let yesterday_10 = decode_resource(YESTERDAY_10_RESOURCE).unwrap();
         let xerxes_10 = decode_resource(XERXES_10_RESOURCE).unwrap();
+        let nocive_15 = decode_resource(NOCIVE_15_RESOURCE).unwrap();
         let jersey_25 = decode_resource(JERSEY_25_RESOURCE).unwrap();
         for code_point in ['A', 'H', 'M', 'S'] {
             assert_eq!(glyph(&yesterday_10, code_point).height, 10);
             assert_eq!(glyph(&xerxes_10, code_point).height, 10);
+            assert_eq!(glyph(&nocive_15, code_point).height, 15);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
         }
     }
@@ -584,6 +654,7 @@ mod tests {
         for resource in [
             YESTERDAY_10_RESOURCE,
             XERXES_10_RESOURCE,
+            NOCIVE_15_RESOURCE,
             JERSEY_25_RESOURCE,
         ] {
             assert!(decode_resource(resource).unwrap().descent < 0.0);
@@ -595,6 +666,7 @@ mod tests {
         for resource in [
             YESTERDAY_10_RESOURCE,
             XERXES_10_RESOURCE,
+            NOCIVE_15_RESOURCE,
             JERSEY_25_RESOURCE,
         ] {
             let font = decode_resource(resource).unwrap();

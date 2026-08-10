@@ -73,7 +73,8 @@ struct ArcadeListStyle {
     badge_fill: Pixel,
     badge_fill_565: Rgb565Pixel,
     badge_text: Pixel,
-    typeface: ConsoleTypeface,
+    title_typeface: ConsoleTypeface,
+    meta_typeface: ConsoleTypeface,
     crt_palette: bool,
 }
 
@@ -132,7 +133,8 @@ impl ArcadeListStyle {
             badge_fill: ARCADE_NEW_BADGE_FILL,
             badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
             badge_text: ARCADE_NEW_BADGE_TEXT,
-            typeface: ConsoleTypeface::PressStart2P,
+            title_typeface: ConsoleTypeface::Nocive15,
+            meta_typeface: ConsoleTypeface::PressStart2P,
             crt_palette: false,
         }
     }
@@ -167,7 +169,8 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
-            typeface: match metrics.font_family {
+            title_typeface: ConsoleTypeface::Nocive15,
+            meta_typeface: match metrics.font_family {
                 CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
             },
             crt_palette: true,
@@ -373,8 +376,11 @@ impl ArcadeListRenderer {
 
     fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
         Self {
-            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.typeface),
-            meta_font: ConsoleFont::new_with_typeface(ARCADE_LIST_META_FONT_PX, style.typeface),
+            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.title_typeface),
+            meta_font: ConsoleFont::new_with_typeface(
+                ARCADE_LIST_META_FONT_PX,
+                style.meta_typeface,
+            ),
             row_cache: HashMap::new(),
             favourite_launch_refs: HashSet::new(),
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
@@ -2772,7 +2778,8 @@ mod tests {
         let hdmi = ArcadeListRenderer::new();
 
         assert_eq!(crt.style.row_height, 24);
-        assert_eq!(crt.style.typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(crt.style.title_typeface, ConsoleTypeface::Nocive15);
+        assert_eq!(crt.style.meta_typeface, ConsoleTypeface::PressStart2P);
         assert!(crt.style.crt_palette);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
@@ -2782,7 +2789,8 @@ mod tests {
         assert_eq!(crt.style.badge_fill.0, 0x0040e5e7);
         assert_eq!(crt.style.badge_text.0, 0x0003132d);
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
-        assert_eq!(hdmi.style.typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
+        assert_eq!(hdmi.style.meta_typeface, ConsoleTypeface::PressStart2P);
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "components/start2p.slint";
+import { Nocive15, Nocive15Size } from "components/nocive_15.slint";
 
 import { MisterBridge } from "api.slint";
 import { MisterUi } from "mister_window.slint";
@@ -32,13 +33,13 @@ component CircleBtn inherits Rectangle {
     border-width: 3px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    Start2P {
+    Nocive15 {
         y: parent.height + 6px;
         width: parent.width + 40px;
         x: -20px;
         text: caption;
         color: ControllerColors.label-light;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         horizontal-alignment: center;
     }
 }
@@ -153,10 +154,10 @@ component ShoulderBtn inherits Rectangle {
     border-width: 2px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    Start2P {
+    Nocive15 {
         text: caption;
         color: ControllerColors.label;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -172,12 +173,12 @@ component PillBtn inherits Rectangle {
     border-width: 2px;
     border-color: pressed ? #048a68 : ControllerColors.btn-border;
 
-    Start2P {
+    Nocive15 {
         y: parent.height + 8px;
         width: parent.width;
         text: caption;
         color: ControllerColors.label-light;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         horizontal-alignment: center;
     }
 }
@@ -194,13 +195,13 @@ component SysBtn inherits Rectangle {
     border-color: !available ? #4a4058 : (pressed ? #048a68 : ControllerColors.btn-border);
     opacity: available ? 1.0 : 0.55;
 
-    Start2P {
+    Nocive15 {
         y: parent.height + 6px;
         width: parent.width + 40px;
         x: -20px;
         text: available ? caption : caption + " (n/a)";
         color: ControllerColors.label-light;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         horizontal-alignment: center;
     }
 }
@@ -448,10 +449,10 @@ export component ControllerPanel inherits Rectangle {
                     color: #e8e0f0;
                     size: Start2PSize.px32;
                 }
-                Start2P {
+                Nocive15 {
                     text: "input test";
                     color: #9080a8;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                 }
             }
 
@@ -460,22 +461,22 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 spacing: 6px;
                 alignment: end;
-                Start2P {
+                Nocive15 {
                     text: "USB " + MisterBridge.usb-port;
                     color: #06d6a0;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: right;
                 }
-                Start2P {
+                Nocive15 {
                     text: MisterBridge.usb-id + "  ·  " + MisterBridge.serial-id;
                     color: #9080a8;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: right;
                 }
-                Start2P {
+                Nocive15 {
                     text: MisterBridge.js-counts;
                     color: #706080;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: right;
                 }
             }
@@ -515,38 +516,38 @@ export component ControllerPanel inherits Rectangle {
 
             HorizontalLayout {
                 spacing: 12px;
-                Start2P {
+                Nocive15 {
                     text: "Pressed now:";
                     color: #9080a8;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                 }
-                Start2P {
+                Nocive15 {
                     text: MisterBridge.pressed-now;
                     color: #06d6a0;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-stretch: 1;
                 }
             }
 
             HorizontalLayout {
                 spacing: 12px;
-                Start2P {
+                Nocive15 {
                     text: "Last event:";
                     color: #9080a8;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                 }
-                Start2P {
+                Nocive15 {
                     text: MisterBridge.last-event-label;
                     color: #c8b8d8;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-stretch: 1;
                 }
             }
 
-            Start2P {
+            Nocive15 {
                 text: MisterBridge.last-raw-event;
                 color: #605068;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
             }
         }
     }

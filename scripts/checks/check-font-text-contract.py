@@ -67,6 +67,14 @@ CONTRACTS = (
         "Jersey 25",
         "41px",
     ),
+    PrimitiveContract(
+        UI_ROOT / "components/nocive_15.slint",
+        "Nocive15",
+        "Nocive15Size",
+        ("px15",),
+        "Nocive 15",
+        "16px",
+    ),
 )
 CONTRACT_BY_PATH = {contract.path: contract for contract in CONTRACTS}
 

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import "../fonts/PressStart2P-Regular.ttf";
 
 component NavHint inherits HorizontalLayout {
@@ -16,21 +17,21 @@ component NavHint inherits HorizontalLayout {
         height: 24px;
         background: #aaa5ff;
 
-        Start2P {
+        Nocive15 {
             width: parent.width;
             height: parent.height;
             text: root.button;
             color: #03132d;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
-    Start2P {
+    Nocive15 {
         text: root.label;
         color: #aaa5ff;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         vertical-alignment: center;
     }
 }
@@ -114,11 +115,11 @@ export component CrtSystemsListMockup inherits Window {
                             vertical-alignment: center;
                         }
 
-                        Start2P {
+                        Nocive15 {
                             width: 136px;
                             text: "9 systems";
                             color: #aaa5ff;
-                            size: Start2PSize.px16;
+                            size: Nocive15Size.px15;
                             horizontal-alignment: right;
                             vertical-alignment: center;
                         }
@@ -177,11 +178,11 @@ export component CrtSystemsListMockup inherits Window {
                                             vertical-alignment: center;
                                         }
 
-                                        Start2P {
+                                        Nocive15 {
                                             text: system.detail;
                                             color: index == root.highlighted-index
                                                 ? #17304a : #8b94f8;
-                                            size: Start2PSize.px16;
+                                            size: Nocive15Size.px15;
                                             overflow: elide;
                                             vertical-alignment: center;
                                         }

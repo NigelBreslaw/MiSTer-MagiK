@@ -8,7 +8,7 @@ pub const LICENSE_TITLES: [&str; 7] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Press Start 2P",
-    "Yesterday 10 + Xerxes 10",
+    "Commercial Fonts",
     "Jersey 25",
     "Arcade Cabinet",
     "Slint",
@@ -103,6 +103,7 @@ mod tests {
         }
         assert!(COMMERCIAL_FONTS.contains("Yesterday 10"));
         assert!(COMMERCIAL_FONTS.contains("Xerxes 10"));
+        assert!(COMMERCIAL_FONTS.contains("Nocive 15"));
     }
 
     #[test]
@@ -113,7 +114,7 @@ mod tests {
                 "MiSTer MagiK",
                 "FFmpeg",
                 "Press Start 2P",
-                "Yesterday 10 + Xerxes 10",
+                "Commercial Fonts",
                 "Jersey 25",
                 "Arcade Cabinet",
                 "Slint"

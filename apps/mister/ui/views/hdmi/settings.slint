@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
 import { MisterBridge } from "../../api.slint";
 
@@ -20,10 +21,10 @@ component SettingsRow inherits Rectangle {
         padding: 10px;
         spacing: 4px;
 
-        Start2P {
+        Nocive15 {
             text: label;
             color: focused ? #06d6a0 : #e8e0f0;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
         }
 
         Start2P {

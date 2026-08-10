@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterWindow, MisterUi } from "../mister_window.slint";
 export { MisterUi }
 export { Start2PSize }
@@ -35,19 +36,19 @@ export component EffectHud inherits MisterWindow {
         color: #fff2a8;
     }
 
-    Start2P {
+    Nocive15 {
         x: 44px;
         y: 76px;
         text: root.effect-name + " / " + root.mode-label;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         color: #e8ecff;
     }
 
-    Start2P {
+    Nocive15 {
         x: 44px;
         y: 104px;
         text: root.fps-label + "  " + root.timing-label;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         color: #8fffd2;
     }
 

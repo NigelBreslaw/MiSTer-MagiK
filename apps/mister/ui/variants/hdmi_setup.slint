@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
 
@@ -12,18 +13,18 @@ component ConfigRow inherits HorizontalLayout {
     spacing: 12px;
     padding: 3px;
 
-    Start2P {
+    Nocive15 {
         text: label;
         color: #9080a8;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         min-width: 130px;
         horizontal-alignment: left;
     }
 
-    Start2P {
+    Nocive15 {
         text: value;
         color: #e8e0f0;
-        size: Start2PSize.px16;
+        size: Nocive15Size.px15;
         horizontal-alignment: left;
         wrap: word-wrap;
     }
@@ -48,19 +49,28 @@ export component SetupOverlay inherits Rectangle {
         spacing: 12px;
         alignment: center;
 
-        Start2P {
+        if MisterUi.portrait-layout : Nocive15 {
             text: title;
             color: #e8e0f0;
-            size: MisterUi.portrait-layout ? Start2PSize.px16 : Start2PSize.px24;
+            size: Nocive15Size.px15;
             horizontal-alignment: center;
             horizontal-stretch: 1;
             wrap: word-wrap;
         }
 
-        if phase != 4 && phase != 5 : Start2P {
+        if !MisterUi.portrait-layout : Start2P {
+            text: title;
+            color: #e8e0f0;
+            size: Start2PSize.px24;
+            horizontal-alignment: center;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+
+        if phase != 4 && phase != 5 : Nocive15 {
             text: subtitle;
             color: #9080a8;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -79,10 +89,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 0 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == 0 ? #2a2236 : #1e1828;
 
-                Start2P {
+                Nocive15 {
                     text: "New controller";
                     color: list-selected == 0 ? #06d6a0 : #e8e0f0;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -98,10 +108,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == 1 ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == 1 ? #2a2236 : #1e1828;
 
-                Start2P {
+                Nocive15 {
                     text: "Existing controller";
                     color: list-selected == 1 ? #06d6a0 : #e8e0f0;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -122,10 +132,10 @@ export component SetupOverlay inherits Rectangle {
                 border-color: list-selected == i ? #06d6a0 : acknowledged ? #4e8f80 : #5c4a72;
                 background: list-selected == i ? #2a2236 : #1e1828;
 
-                Start2P {
+                Nocive15 {
                     text: item;
                     color: list-selected == i ? #06d6a0 : #e8e0f0;
-                    size: Start2PSize.px16;
+                    size: Nocive15Size.px15;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -136,10 +146,10 @@ export component SetupOverlay inherits Rectangle {
             spacing: 8px;
             vertical-stretch: 1;
 
-            Start2P {
+            Nocive15 {
                 text: subtitle;
                 color: #06d6a0;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -173,10 +183,10 @@ export component SetupOverlay inherits Rectangle {
             spacing: 12px;
             alignment: center;
 
-            Start2P {
+            Nocive15 {
                 text: subtitle;
                 color: #9080a8;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -200,10 +210,10 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #5c4a72;
                     background: #1e1828;
 
-                    Start2P {
+                    Nocive15 {
                         text: setup-name;
                         color: #e8e0f0;
-                        size: Start2PSize.px16;
+                        size: Nocive15Size.px15;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         overflow: elide;
@@ -230,10 +240,10 @@ export component SetupOverlay inherits Rectangle {
                     border-color: #06d6a0;
                     background: #2a2236;
 
-                    Start2P {
+                    Nocive15 {
                         text: setup-kind-label;
                         color: #06d6a0;
-                        size: Start2PSize.px16;
+                        size: Nocive15Size.px15;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

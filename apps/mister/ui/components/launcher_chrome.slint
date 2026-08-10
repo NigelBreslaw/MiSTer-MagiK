@@ -3,6 +3,7 @@
 
 import { Start2P, Start2PSize } from "start2p.slint";
 import { Xerxes10, Xerxes10Size } from "xerxes_10.slint";
+import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
 import { MisterBridge } from "../api.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
@@ -50,7 +51,7 @@ component ScanningSubtitle inherits VerticalLayout {
     }
 }
 
-component LauncherTileText inherits Start2P {
+component LauncherTileText inherits Nocive15 {
     in property <bool> focused;
     in property <color> selected-color;
     in property <color> unselected-color;
@@ -120,7 +121,7 @@ export component LauncherTile inherits Rectangle {
                 : root.status == MenuItemStatus.update-failed ? #f0c36e
                 : root.status == MenuItemStatus.partial ? #f0c36e
                 : root.status == MenuItemStatus.scanning ? #d7eef8 : #9080a8;
-            size: Start2PSize.px16;
+            size: Nocive15Size.px15;
             width: 100%;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -184,11 +185,11 @@ export component OsdSideLabel inherits Rectangle {
         spacing: 10px;
         alignment: center;
 
-        Start2P { text: "M"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
-        Start2P { text: "I"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
-        Start2P { text: "S"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
-        Start2P { text: "T"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
-        Start2P { text: "E"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
-        Start2P { text: "R"; color: #d7eef8; size: Start2PSize.px16; horizontal-alignment: center; }
+        Nocive15 { text: "M"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
+        Nocive15 { text: "I"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
+        Nocive15 { text: "S"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
+        Nocive15 { text: "T"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
+        Nocive15 { text: "E"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
+        Nocive15 { text: "R"; color: #d7eef8; size: Nocive15Size.px15; horizontal-alignment: center; }
     }
 }

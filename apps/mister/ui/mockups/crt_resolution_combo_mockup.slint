@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import "../fonts/PressStart2P-Regular.ttf";
 
 export component CrtResolutionComboMockup inherits Window {
@@ -101,13 +102,13 @@ export component CrtResolutionComboMockup inherits Window {
                         vertical-alignment: center;
                     }
 
-                    Start2P {
+                    Nocive15 {
                         x: 40px;
                         width: parent.width - 80px;
                         height: parent.height;
                         text: resolution;
                         color: index == root.highlighted-index ? #03132d : #aaa5ff;
-                        size: Start2PSize.px16;
+                        size: Nocive15Size.px15;
                         overflow: elide;
                         vertical-alignment: center;
                     }
@@ -133,14 +134,14 @@ export component CrtResolutionComboMockup inherits Window {
                 background: #756bd4;
             }
 
-            Start2P {
+            Nocive15 {
                 x: 24px;
                 y: 416px;
                 width: parent.width - 48px;
                 height: 24px;
                 text: "UP/DOWN Move     A Select     B Cancel     * Current";
                 color: #aaa5ff;
-                size: Start2PSize.px16;
+                size: Nocive15Size.px15;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Start2P, Start2PSize } from "start2p.slint";
+import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
 import { MisterBridge } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
@@ -22,7 +23,7 @@ export component ComboBoxOverlay inherits Rectangle {
         VerticalLayout {
             padding: 16px;
             spacing: 4px;
-            Start2P { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: Start2PSize.px16; horizontal-alignment: center; }
+            Nocive15 { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: Nocive15Size.px15; horizontal-alignment: center; }
             for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : Rectangle {
                 property <bool> acknowledged: MisterBridge.selection-feedback-query(
                     "", "option:" + index, MisterBridge.selection-feedback-revision);
