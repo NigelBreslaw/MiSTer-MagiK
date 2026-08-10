@@ -7637,8 +7637,11 @@ fn wait_system_entry_trace(
         if started.elapsed() >= timeout {
             let trace = remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
                 .unwrap_or_else(|| "missing".to_string());
+            let status = read_launcher_status(session)
+                .map(|status| status.to_string())
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
             return Err(format!(
-                "system-entry {system} timed out waiting for a ready frame; trace={trace}"
+                "system-entry {system} timed out waiting for a ready frame; status={status}; trace={trace}"
             )
             .into());
         }

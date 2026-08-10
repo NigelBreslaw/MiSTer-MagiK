@@ -5930,9 +5930,9 @@ pub(super) fn run_launcher_loop(
                     .map(|pending| pending.event.clone())
                     .expect("checked pending transition");
                 let before = LauncherBridgeKey::from_nav(&nav);
-                let committed = if event.action == LauncherAction::OpenCollection
-                    && pending_collection_entry.is_some()
-                {
+                let committing_cold_collection = event.action == LauncherAction::OpenCollection
+                    && pending_collection_entry.is_some();
+                let committed = if committing_cold_collection {
                     commit_pending_collection_entry(
                         &mut pending_collection_entry,
                         &mut nav,
@@ -5943,6 +5943,10 @@ pub(super) fn run_launcher_loop(
                     nav.commit_navigation_intent(&event, &catalog)
                 };
                 if committed {
+                    if committing_cold_collection {
+                        arcade_entry_latency
+                            .record_rows_ready(start, loop_start, &lifecycle, &catalog, &nav);
+                    }
                     if let Some(pending) = pending_navigation_transition.as_mut() {
                         pending.committed = true;
                     }
