@@ -112,17 +112,15 @@ export component HomeGrid inherits Rectangle {
                     // Menus are bounded and retained by Rust. Direct delegates preserve Slint's
                     // row identity, so changing selection or acknowledgement repaints only the
                     // rows whose derived presentation state changed.
-                    for item[index] in MisterBridge.menu-items : LauncherTile {
+                    for state[index] in MisterBridge.menu-item-presentation : LauncherTile {
                         x: index * root.tile-pitch;
                         width: root.tile-width;
                         height: parent.height;
-                        label: item.label;
-                        subtitle: item.subtitle;
-                        status: item.status;
-                        focused: !MisterBridge.settings-focused
-                            && MisterBridge.menu-item-presentation[index].selected;
-                        acknowledged: MisterBridge.menu-item-presentation[index].acknowledged
-                            && !MisterBridge.menu-item-presentation[index].selected;
+                        label: MisterBridge.menu-items[index].label;
+                        subtitle: MisterBridge.menu-items[index].subtitle;
+                        status: MisterBridge.menu-items[index].status;
+                        focused: !MisterBridge.settings-focused && state.selected;
+                        acknowledged: state.acknowledged && !state.selected;
                         flat-focus-style: true;
                     }
                 }
@@ -190,17 +188,16 @@ export component HomeGrid inherits Rectangle {
             property <int> first-row: (MisterBridge.selected-index - 2).clamp(
                 0, (MisterBridge.menu-items.length - 5).max(0));
 
-            for item[index] in MisterBridge.menu-items : LauncherTile {
+            for state[index] in MisterBridge.menu-item-presentation : LauncherTile {
                 x: 0px;
                 y: (index - portrait-viewport.first-row) * portrait-viewport.pitch;
                 width: parent.width;
                 height: portrait-viewport.card-height;
-                label: item.label;
-                subtitle: item.subtitle;
-                status: item.status;
-                focused: MisterBridge.menu-item-presentation[index].selected;
-                acknowledged: MisterBridge.menu-item-presentation[index].acknowledged
-                    && !MisterBridge.menu-item-presentation[index].selected;
+                label: MisterBridge.menu-items[index].label;
+                subtitle: MisterBridge.menu-items[index].subtitle;
+                status: MisterBridge.menu-items[index].status;
+                focused: state.selected;
+                acknowledged: state.acknowledged && !state.selected;
                 flat-focus-style: true;
             }
         }

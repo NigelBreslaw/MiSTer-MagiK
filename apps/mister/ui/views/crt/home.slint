@@ -47,16 +47,17 @@ export component HomeGrid inherits Rectangle {
             background: CrtTheme.background;
             clip: true;
 
-            for item[index] in MisterBridge.menu-items : CrtCard {
+            for state[index] in MisterBridge.menu-item-presentation : CrtCard {
                 y: (index - root.first-visible-row) * root.card-pitch - root.leading-clip;
                 width: parent.width;
                 height: root.card-height;
-                label: item.label;
-                detail: root.root-menu && item.status == MenuItemStatus.ready ? "" : item.subtitle;
-                focused: MisterBridge.menu-item-presentation[index].selected;
-                acknowledged: MisterBridge.menu-item-presentation[index].acknowledged
-                    && !MisterBridge.menu-item-presentation[index].selected;
-                status: item.status;
+                label: MisterBridge.menu-items[index].label;
+                detail: root.root-menu
+                    && MisterBridge.menu-items[index].status == MenuItemStatus.ready
+                    ? "" : MisterBridge.menu-items[index].subtitle;
+                focused: state.selected;
+                acknowledged: state.acknowledged && !state.selected;
+                status: MisterBridge.menu-items[index].status;
             }
         }
 
