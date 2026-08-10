@@ -111,11 +111,17 @@ artifact validity, input integrity, obstruction reproduction, cooperative
 recovery, catalog attribution, first-eligible-vblank behavior, and the current
 product-quality result independently. A failed latency status is retained as a
 successful experimental observation; missing, stale, truncated, or incomplete
-evidence is an execution failure. Detailed traces and driver timestamps are
-stored under `build/agent-benchmarks/input-latency-lab/<timestamp>/`.
+evidence is an execution failure. Detailed traces, driver timestamps, and the
+independently flushed Main proxy trace are stored under
+`build/agent-benchmarks/input-latency-lab/<timestamp>/`. Protocol v3 assigns
+each forwarded proxy event an exact sequence and attributes kernel enqueue,
+Main poll/read/mapping, proxy journal/write and `EAGAIN`, MagiK proxy capture,
+mailbox publication/drain, dispatch, and active-latch confirmation. Main keeps
+the bounded trace in memory during the route and performs no hot-path file
+output.
 
 The automated uinput route is the causal software-timing authority because it
-traverses Main proxy v2 and the production latch path. Protocol-v5 active
+traverses Main proxy v3 and the production latch path. Protocol-v5 active
 sequence confirmation is the presentation authority. Repeated physical
 vblanks while the UI is intentionally static during the 600 ms gaps are
 reported but are not classified as dropped animation frames.

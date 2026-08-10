@@ -4183,6 +4183,7 @@ const LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE: &str =
     "/tmp/mister-magik/launcher-response-frames-complete";
 const INPUT_LATENCY_LAB_READY_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-ready.json";
 const INPUT_LATENCY_LAB_SESSION_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-session";
+const MAIN_INPUT_LATENCY_TRACE_REMOTE: &str = "/tmp/mister-magik/main-input-latency-trace.json";
 const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
@@ -4505,8 +4506,8 @@ fn verify_installed_input_latency_lab(
     let main: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
-    if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(2) {
-        return Err("input latency laboratory requires Main proxy protocol v2".into());
+    if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(3) {
+        return Err("input latency laboratory requires traced Main proxy protocol v3".into());
     }
     let original_reply = exec_checked_output(
         &session,
@@ -4645,6 +4646,7 @@ fn run_input_latency_lab_arm(
             INPUT_LATENCY_LAB_SESSION_REMOTE,
             LAUNCHER_RESPONSE_TRACE_REMOTE,
             LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+            MAIN_INPUT_LATENCY_TRACE_REMOTE,
         ]),
     )?;
     put_bytes(session, INPUT_LATENCY_LAB_SESSION_REMOTE, b"armed\n")?;
@@ -4705,6 +4707,11 @@ fn run_input_latency_lab_arm(
     let main_before: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing before arm")?,
     )?;
+    exec_checked(
+        session,
+        "arm Main input latency trace",
+        &acknowledged_main_command(&format!("mister_magik_input_trace_arm_v1 run_id={run_id}")),
+    )?;
     let driver = run_launcher_response_driver_evidence(
         session,
         &format!("computers-round-trip-at {epoch_us} 600 4"),
@@ -4715,6 +4722,16 @@ fn run_input_latency_lab_arm(
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(15),
     )?;
+    exec_checked(
+        session,
+        "flush Main input latency trace",
+        &acknowledged_main_command("mister_magik_input_trace_flush_v1"),
+    )?;
+    let main_trace: Value = serde_json::from_str(
+        &remote_read(session, MAIN_INPUT_LATENCY_TRACE_REMOTE)
+            .ok_or("Main input latency trace is missing")?,
+    )?;
+    validate_main_input_latency_trace(&main_trace, &run_id)?;
     let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
     validate_launcher_response_trace(&trace)?;
     let main_after: Value = serde_json::from_str(
@@ -4725,6 +4742,7 @@ fn run_input_latency_lab_arm(
             .ok_or("input latency laboratory installed manifest is missing")?,
     );
     trace["input_proxy_protocol"] = main_after["input_proxy_protocol"].clone();
+    trace["main_input_trace"] = main_trace.clone();
     trace["display"] = read_launcher_status(session)?["display"].clone();
     fs::write(
         output_dir.join(format!("{}-trace.json", spec.label)),
@@ -4734,7 +4752,50 @@ fn run_input_latency_lab_arm(
         output_dir.join(format!("{}-driver.json", spec.label)),
         format!("{}\n", serde_json::to_string_pretty(&driver)?),
     )?;
-    summarize_input_latency_lab_arm(spec, &trace, &driver, &main_before, &main_after)
+    fs::write(
+        output_dir.join(format!("{}-main-trace.json", spec.label)),
+        format!("{}\n", serde_json::to_string_pretty(&main_trace)?),
+    )?;
+    summarize_input_latency_lab_arm(
+        spec,
+        &trace,
+        &driver,
+        &main_trace,
+        &main_before,
+        &main_after,
+    )
+}
+
+fn validate_main_input_latency_trace(trace: &Value, run_id: &str) -> Result<()> {
+    let records = trace["records"]
+        .as_array()
+        .ok_or("Main input latency trace omitted records")?;
+    let valid = trace["schema"] == "mister-magik-main-input-trace-v1"
+        && trace["run_id"] == run_id
+        && trace["protocol"].as_u64() == Some(3)
+        && trace["dropped"].as_u64() == Some(0)
+        && records.iter().all(|record| {
+            let ordered = [
+                record["kernel_event_at_us"].as_u64(),
+                record["poll_woke_at_us"].as_u64(),
+                record["main_read_at_us"].as_u64(),
+                record["mapped_at_us"].as_u64(),
+                record["journaled_at_us"].as_u64(),
+                record["first_write_at_us"].as_u64(),
+                record["completed_write_at_us"].as_u64(),
+            ];
+            record["sequence"].as_u64().is_some_and(|value| value > 0)
+                && ordered.iter().all(Option::is_some)
+                && ordered.windows(2).all(|pair| {
+                    pair[0]
+                        .zip(pair[1])
+                        .is_some_and(|(before, after)| before <= after)
+                })
+        });
+    if !valid {
+        return Err(format!("Main input latency trace is invalid: {trace}").into());
+    }
+    Ok(())
 }
 
 fn wait_input_latency_lab_ready(
@@ -4790,6 +4851,10 @@ fn validate_input_latency_lab_driver(driver: &Value, epoch_us: u64) -> Result<()
                 && pulse["emitted_at_us"]
                     .as_u64()
                     .is_some_and(|at| at >= scheduled)
+                && pulse["write_started_at_us"]
+                    .as_u64()
+                    .zip(pulse["emitted_at_us"].as_u64())
+                    .is_some_and(|(started, emitted)| started <= emitted)
                 && pulse["released_at_us"]
                     .as_u64()
                     .zip(pulse["emitted_at_us"].as_u64())
@@ -4813,6 +4878,7 @@ fn summarize_input_latency_lab_arm(
     spec: InputLatencyLabArmSpec,
     trace: &Value,
     driver: &Value,
+    main_trace: &Value,
     main_before: &Value,
     main_after: &Value,
 ) -> Result<Value> {
@@ -4871,6 +4937,142 @@ fn summarize_input_latency_lab_arm(
     };
     let background_work_passed = skipped_work == 0 && requested_work_us == expected_work_us;
     let input_pulses = driver["pulses"].as_array().ok_or("driver pulses missing")?;
+    let main_press_records = main_trace["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|record| {
+            record["press"].as_i64() == Some(1) && matches!(record["key"].as_u64(), Some(105 | 106))
+        })
+        .collect::<Vec<_>>();
+    let main_by_sequence = main_press_records
+        .iter()
+        .filter_map(|record| Some((record["sequence"].as_u64()?, *record)))
+        .collect::<BTreeMap<_, _>>();
+    if records.len() != 64 || input_pulses.len() != 64 || main_press_records.len() != 64 {
+        return Err(format!(
+            "input pipeline evidence count mismatch: responses={} driver={} Main={}",
+            records.len(),
+            input_pulses.len(),
+            main_press_records.len()
+        )
+        .into());
+    }
+    let mut pipeline_records = Vec::with_capacity(64);
+    let mut stage_values = BTreeMap::<&'static str, Vec<u64>>::new();
+    let mut eagain_total = 0_u64;
+    for (ordinal, (pulse, response)) in input_pulses.iter().zip(&records).enumerate() {
+        let proxy_sequence = response["proxy_sequence"]
+            .as_u64()
+            .ok_or("response omitted Main proxy sequence")?;
+        let main = main_by_sequence
+            .get(&proxy_sequence)
+            .copied()
+            .ok_or_else(|| {
+                format!("response proxy sequence {proxy_sequence} is absent from Main trace")
+            })?;
+        let write_started = pulse["write_started_at_us"]
+            .as_u64()
+            .ok_or("driver pulse omitted write start")?;
+        let kernel_event = main["kernel_event_at_us"].as_u64().unwrap_or(0);
+        let poll_woke = main["poll_woke_at_us"].as_u64().unwrap_or(0);
+        let main_read = main["main_read_at_us"].as_u64().unwrap_or(0);
+        let mapped = main["mapped_at_us"].as_u64().unwrap_or(0);
+        let journaled = main["journaled_at_us"].as_u64().unwrap_or(0);
+        let first_write = main["first_write_at_us"].as_u64().unwrap_or(0);
+        let completed_write = main["completed_write_at_us"].as_u64().unwrap_or(0);
+        let proxy_kernel = response["proxy_kernel_at_us"]
+            .as_u64()
+            .ok_or("response omitted proxy kernel timestamp")?;
+        let captured = response["captured_at_us"].as_u64().unwrap_or(0);
+        let published = response["published_at_us"].as_u64().unwrap_or(0);
+        let drained = response["drained_at_us"].as_u64().unwrap_or(0);
+        let dispatched = response["dispatch_at_us"].as_u64().unwrap_or(0);
+        let confirmed = response["confirmed_at_us"].as_u64().unwrap_or(0);
+        let ordered = [
+            write_started,
+            kernel_event,
+            poll_woke,
+            main_read,
+            mapped,
+            journaled,
+            first_write,
+            proxy_kernel,
+            completed_write,
+            captured,
+            published,
+            drained,
+            dispatched,
+            confirmed,
+        ];
+        if ordered.windows(2).any(|pair| pair[0] > pair[1]) {
+            return Err(format!(
+                "input pipeline stage order is invalid at ordinal {ordinal}: {ordered:?}"
+            )
+            .into());
+        }
+        let stages = [
+            ("driver_to_main_kernel_us", kernel_event - write_started),
+            ("main_kernel_to_poll_us", poll_woke - kernel_event),
+            ("main_poll_to_read_us", main_read - poll_woke),
+            ("main_read_to_map_us", mapped - main_read),
+            ("main_map_to_journal_us", journaled - mapped),
+            ("main_journal_to_write_us", first_write - journaled),
+            ("main_write_syscall_us", completed_write - first_write),
+            ("main_write_to_proxy_kernel_us", proxy_kernel - first_write),
+            ("proxy_kernel_to_capture_us", captured - proxy_kernel),
+            ("capture_to_publish_us", published - captured),
+            ("publish_to_drain_us", drained - published),
+            ("drain_to_dispatch_us", dispatched - drained),
+            ("dispatch_to_active_us", confirmed - dispatched),
+            ("driver_to_active_us", confirmed - write_started),
+        ];
+        for (label, value) in stages {
+            stage_values.entry(label).or_default().push(value);
+        }
+        let eagain_count = main["eagain_count"].as_u64().unwrap_or(u64::MAX);
+        eagain_total = eagain_total.saturating_add(eagain_count);
+        pipeline_records.push(json!({
+            "ordinal": ordinal,
+            "proxy_sequence": proxy_sequence,
+            "item": response.pointer("/after/selected_item_id"),
+            "driver_write_started_at_us": write_started,
+            "driver_write_completed_at_us": pulse["emitted_at_us"],
+            "kernel_event_at_us": kernel_event,
+            "main_poll_woke_at_us": poll_woke,
+            "main_read_at_us": main_read,
+            "main_read_thread_cpu_us": main["main_read_thread_cpu_us"],
+            "main_read_cpu": main["main_read_cpu"],
+            "mapped_at_us": mapped,
+            "journaled_at_us": journaled,
+            "first_write_at_us": first_write,
+            "completed_write_at_us": completed_write,
+            "write_thread_cpu_us": main["write_thread_cpu_us"],
+            "write_cpu": main["write_cpu"],
+            "eagain_count": eagain_count,
+            "proxy_kernel_at_us": proxy_kernel,
+            "captured_at_us": captured,
+            "published_at_us": published,
+            "drained_at_us": drained,
+            "dispatch_at_us": dispatched,
+            "confirmed_at_us": confirmed,
+            "stages": stages.into_iter().collect::<BTreeMap<_, _>>(),
+        }));
+    }
+    let pipeline_stage_summary = stage_values
+        .into_iter()
+        .map(|(label, mut values)| {
+            values.sort_unstable();
+            (
+                label,
+                json!({
+                    "median_us": median_u64(&values),
+                    "p95_us": percentile_nearest_rank(&values, 95),
+                    "max_us": values.last().copied(),
+                }),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let inputs_inside_work = input_pulses
         .iter()
         .filter(|pulse| {
@@ -4984,6 +5186,7 @@ fn summarize_input_latency_lab_arm(
         "catalog_refresh": spec.catalog_refresh,
         "trace_file": format!("{}-trace.json", spec.label),
         "driver_file": format!("{}-driver.json", spec.label),
+        "main_trace_file": format!("{}-main-trace.json", spec.label),
         "input_integrity_status": pass_fail(input_integrity),
         "pulse_status": pass_fail(pulse_passed),
         "background_work_status": pass_fail(background_work_passed),
@@ -5007,6 +5210,10 @@ fn summarize_input_latency_lab_arm(
         "expected_background_work_us": expected_work_us,
         "skipped_background_units": skipped_work,
         "driver_emission_lateness_us": driver_lateness_us,
+        "pipeline_status": "passed",
+        "pipeline_eagain_count": eagain_total,
+        "pipeline_stages": pipeline_stage_summary,
+        "pipeline_records": pipeline_records,
         "catalog_phase_count": catalog_phases.len(),
         "longest_catalog_phase": longest_catalog_phase,
         "input_changed_during_catalog": catalog_phases.iter().any(|phase| phase["input_changed_during"] == true),
@@ -5037,6 +5244,7 @@ fn cleanup_input_latency_lab(config: &NativeDeviceConfig) -> Result<()> {
             INPUT_LATENCY_LAB_SESSION_REMOTE,
             LAUNCHER_RESPONSE_TRACE_REMOTE,
             LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+            MAIN_INPUT_LATENCY_TRACE_REMOTE,
             DEVELOPMENT_LAUNCHER_ENV_REMOTE,
         ]),
     )?;
@@ -5546,8 +5754,8 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
 }
 
 fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v3") {
-        return Err("launcher response trace is not schema v3".into());
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v4") {
+        return Err("launcher response trace is not schema v4".into());
     }
     if trace["records"].as_array().is_none()
         || trace["feedback_records"].as_array().is_none()
@@ -5558,7 +5766,7 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
         || trace["catalog_phases"].as_array().is_none()
         || trace["scheduler_phases"].as_array().is_none()
     {
-        return Err("launcher response trace omitted required v3 evidence".into());
+        return Err("launcher response trace omitted required v4 evidence".into());
     }
     for record in launcher_response_confirmed_records(trace, None) {
         let ordered = [
@@ -5805,7 +6013,7 @@ fn read_completed_launcher_response_trace(session: &Session, run_id: &str) -> Re
         return Err("completed launcher response trace is empty".into());
     }
     let trace: Value = serde_json::from_str(&raw)?;
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v3")
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v4")
         || trace["run_id"].as_str() != Some(run_id)
         || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
     {
@@ -16377,6 +16585,7 @@ mod tests {
                     "ordinal": ordinal,
                     "key_code": if (ordinal / 8).is_multiple_of(2) { 106 } else { 105 },
                     "scheduled_at_us": scheduled_at_us,
+                    "write_started_at_us": scheduled_at_us + 50,
                     "emitted_at_us": scheduled_at_us + 100,
                     "released_at_us": scheduled_at_us + 40_100,
                 })

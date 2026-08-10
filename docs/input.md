@@ -118,9 +118,12 @@ This fixed diagnostic uses 1920×1200p60 and the production
 uinput→Main proxy→InputHub→LauncherNav→Slint→RGB565→protocol-v5 path. It runs
 the 64-press Acorn→Other→Acorn route independently under baseline, forced real
 catalog work, monolithic 16/64 ms UI-thread work, and equivalent 64 ms work
-split into 2/1 ms cooperative quanta. Every press has driver emission,
-capture, drain, dispatch, projection, raster, post, and active-sequence
-timestamps. Complete per-arm JSON is retained under
+split into 2/1 ms cooperative quanta. Every press has an exact Main proxy
+sequence plus driver write, physical evdev/kernel enqueue, Main
+poll/read/mapping/journal/write, proxy kernel, MagiK capture, mailbox
+publication/drain, dispatch, projection, raster, post, and active-sequence
+timestamps. Main records in a bounded memory ring and flushes only after the
+route. Complete per-arm JSON is retained under
 `build/agent-benchmarks/input-latency-lab/`.
 
 The laboratory is armed only by a consumed `/tmp` session token and one-shot

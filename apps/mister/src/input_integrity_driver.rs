@@ -233,6 +233,7 @@ struct DriverPulseTrace {
     ordinal: usize,
     key_code: u16,
     scheduled_at_us: Option<u64>,
+    write_started_at_us: u64,
     emitted_at_us: u64,
     released_at_us: u64,
 }
@@ -386,6 +387,7 @@ impl UinputDevice {
                 ));
             }
         };
+        let write_started_at_us = crate::input_hub::monotonic_us();
         self.emit(event_type, code, pressed)?;
         self.emit(EV_SYN, SYN_REPORT, 0)?;
         let emitted_at_us = crate::input_hub::monotonic_us();
@@ -397,6 +399,7 @@ impl UinputDevice {
             ordinal: self.pulses.len(),
             key_code,
             scheduled_at_us,
+            write_started_at_us,
             emitted_at_us,
             released_at_us,
         });
