@@ -715,6 +715,7 @@ mod tests {
             "modal-input",
             "input-integrity",
             "launcher-response",
+            "input-latency-lab",
             "cold-boot",
             "search",
             "streamline",

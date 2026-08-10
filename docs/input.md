@@ -107,6 +107,28 @@ pulse, integrity, and background-adoption results and requires zero logical,
 mailbox, latch, or protocol-v5 physical faults. Evidence is stored under
 `build/agent-benchmarks/launcher-response/`.
 
+For causal diagnosis of intermittent single-press delay, run the dormant
+on-device laboratory after delivering the exact clean commit:
+
+```bash
+scripts/agent benchmark input-latency-lab
+```
+
+This fixed diagnostic uses 1920×1200p60 and the production
+uinput→Main proxy→InputHub→LauncherNav→Slint→RGB565→protocol-v5 path. It runs
+the 64-press Acorn→Other→Acorn route independently under baseline, forced real
+catalog work, monolithic 16/64 ms UI-thread work, and equivalent 64 ms work
+split into 2/1 ms cooperative quanta. Every press has driver emission,
+capture, drain, dispatch, projection, raster, post, and active-sequence
+timestamps. Complete per-arm JSON is retained under
+`build/agent-benchmarks/input-latency-lab/`.
+
+The laboratory is armed only by a consumed `/tmp` session token and one-shot
+launcher configuration. It restores the previous display mode and clears its
+volatile state on success, failure, or timeout. It diagnoses scheduling and
+presentation mechanisms; it does not replace `launcher-response` release
+qualification or the attended human button-to-photon pass.
+
 The automated gate does not replace the attended controller pass. Before
 release, verify custom Main mappings, overlapping inputs from two controllers,
 keyboard input, hotplug, setup, rapid taps, held scrolling, lifecycle dialogs,

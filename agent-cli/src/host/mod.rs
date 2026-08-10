@@ -641,6 +641,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| verify_installed_launcher_response(config, output_dir))
     }
 
+    pub(crate) fn verify_input_latency_lab(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| verify_installed_input_latency_lab(config, output_dir))
+    }
+
     pub(crate) fn profile_launch_return(
         &mut self,
         output_dir: &Path,
@@ -4174,6 +4181,8 @@ const LAUNCHER_RESPONSE_TRACE_REMOTE: &str = "/tmp/mister-magik/launcher-respons
 const LAUNCHER_RESPONSE_COMPLETE_REMOTE: &str = "/tmp/mister-magik/launcher-response-complete";
 const LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE: &str =
     "/tmp/mister-magik/launcher-response-frames-complete";
+const INPUT_LATENCY_LAB_READY_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-ready.json";
+const INPUT_LATENCY_LAB_SESSION_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-session";
 const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
@@ -4445,6 +4454,548 @@ fn verify_installed_launcher_response(
         },
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+#[derive(Clone, Copy)]
+struct InputLatencyLabArmSpec {
+    label: &'static str,
+    runtime_arm: &'static str,
+    catalog_refresh: &'static str,
+}
+
+const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 6] = [
+    InputLatencyLabArmSpec {
+        label: "baseline",
+        runtime_arm: "baseline",
+        catalog_refresh: "off",
+    },
+    InputLatencyLabArmSpec {
+        label: "real-forced-catalog",
+        runtime_arm: "baseline",
+        catalog_refresh: "force",
+    },
+    InputLatencyLabArmSpec {
+        label: "monolithic-16ms",
+        runtime_arm: "monolithic-16ms",
+        catalog_refresh: "off",
+    },
+    InputLatencyLabArmSpec {
+        label: "monolithic-64ms",
+        runtime_arm: "monolithic-64ms",
+        catalog_refresh: "off",
+    },
+    InputLatencyLabArmSpec {
+        label: "cooperative-2ms",
+        runtime_arm: "cooperative-2ms",
+        catalog_refresh: "off",
+    },
+    InputLatencyLabArmSpec {
+        label: "cooperative-1ms",
+        runtime_arm: "cooperative-1ms",
+        catalog_refresh: "off",
+    },
+];
+
+fn verify_installed_input_latency_lab(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let main: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(2) {
+        return Err("input latency laboratory requires Main proxy protocol v2".into());
+    }
+    let original_reply = exec_checked_output(
+        &session,
+        "query input latency laboratory display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("input latency laboratory cannot start during a display transaction".into());
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| {
+            format!("input latency laboratory cannot restore unknown mode {original_id}")
+        })?;
+    let lab_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1920x1200p60")
+        .copied()
+        .ok_or("input latency laboratory display mode is unavailable")?;
+    drop(session);
+
+    let mut arms = Vec::new();
+    let run_result = (|| -> Result<()> {
+        apply_confirmed_display_mode(config, lab_mode, "input latency laboratory")?;
+        let session = connect_with(&config.connection, 10)?;
+        for spec in INPUT_LATENCY_LAB_ARMS {
+            let evidence = run_input_latency_lab_arm(&session, output_dir, spec)?;
+            arms.push(evidence);
+        }
+        Ok(())
+    })();
+    let cleanup_result = cleanup_input_latency_lab(config);
+    let restore_result = apply_confirmed_display_mode(
+        config,
+        original_mode,
+        "input latency laboratory display restoration",
+    );
+    if let Err(error) = run_result {
+        return match (cleanup_result, restore_result) {
+            (Ok(()), Ok(())) => Err(error),
+            (cleanup, restore) => Err(format!(
+                "{error}; cleanup={}; display_restore={}",
+                cleanup
+                    .err()
+                    .map_or_else(|| "ok".into(), |error| error.to_string()),
+                restore
+                    .err()
+                    .map_or_else(|| "ok".into(), |error| error.to_string()),
+            )
+            .into()),
+        };
+    }
+    cleanup_result?;
+    restore_result?;
+
+    let obstruction_reproduced = arms
+        .iter()
+        .find(|arm| arm["label"] == "monolithic-64ms")
+        .is_some_and(|arm| {
+            arm["inputs_inside_work"].as_u64() == Some(64)
+                && arm["dispatch_max_us"]
+                    .as_u64()
+                    .is_some_and(|value| value >= 40_000)
+        });
+    let cooperative_recovered = ["cooperative-2ms", "cooperative-1ms"]
+        .into_iter()
+        .all(|label| {
+            arms.iter()
+                .find(|arm| arm["label"] == label)
+                .is_some_and(|arm| {
+                    arm["background_work_status"] == "passed"
+                        && arm["dispatch_p95_us"]
+                            .as_u64()
+                            .is_some_and(|value| value <= 3_000)
+                        && arm["dispatch_max_us"]
+                            .as_u64()
+                            .is_some_and(|value| value <= 5_000)
+                })
+        });
+    let input_integrity = arms
+        .iter()
+        .all(|arm| arm["input_integrity_status"] == "passed");
+    let first_eligible = arms
+        .iter()
+        .all(|arm| arm["first_eligible_vblank_status"] == "passed");
+    let catalog_attributed = arms
+        .iter()
+        .find(|arm| arm["label"] == "real-forced-catalog")
+        .is_some_and(|arm| arm["catalog_attribution_status"] == "passed");
+    let current_product_quality = ["baseline", "real-forced-catalog"]
+        .into_iter()
+        .all(|label| {
+            arms.iter()
+                .find(|arm| arm["label"] == label)
+                .is_some_and(|arm| arm["product_quality_status"] == "passed")
+        });
+    let summary = json!({
+        "schema": "mister-magik-input-latency-lab-v1",
+        "status": "completed",
+        "diagnostic_not_release_qualification": true,
+        "display_mode": "hdmi-1920x1200p60",
+        "refresh_hz": 60,
+        "route": "computers-acorn-other-acorn-four-cycles",
+        "press_count_per_arm": 64,
+        "press_duration_ms": 40,
+        "press_interval_ms": 600,
+        "artifact_validity_status": "passed",
+        "input_integrity_status": pass_fail(input_integrity),
+        "obstruction_reproduction_status": pass_fail(obstruction_reproduced),
+        "cooperative_recovery_status": pass_fail(cooperative_recovered),
+        "real_catalog_attribution_status": pass_fail(catalog_attributed),
+        "first_eligible_vblank_status": pass_fail(first_eligible),
+        "current_product_quality_status": pass_fail(current_product_quality),
+        "arms": arms,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn run_input_latency_lab_arm(
+    session: &Session,
+    output_dir: &Path,
+    spec: InputLatencyLabArmSpec,
+) -> Result<Value> {
+    exec_checked(
+        session,
+        "clear input latency laboratory volatile state",
+        &remove_files_command(&[
+            INPUT_LATENCY_LAB_READY_REMOTE,
+            INPUT_LATENCY_LAB_SESSION_REMOTE,
+            LAUNCHER_RESPONSE_TRACE_REMOTE,
+            LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+        ]),
+    )?;
+    put_bytes(session, INPUT_LATENCY_LAB_SESSION_REMOTE, b"armed\n")?;
+    let run_id = format!(
+        "input-latency-{}-{}",
+        spec.label,
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    );
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), spec.catalog_refresh.into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+                ("MISTER_HOME_SELECTED_INDEX".into(), "2".into()),
+                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+                ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
+                    "65".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
+                    "64".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
+                    LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
+                ),
+                (
+                    "MISTER_INPUT_LATENCY_LAB_SESSION".into(),
+                    INPUT_LATENCY_LAB_SESSION_REMOTE.into(),
+                ),
+                (
+                    "MISTER_INPUT_LATENCY_LAB_ARM".into(),
+                    spec.runtime_arm.into(),
+                ),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
+    })?;
+    run_launcher_response_driver(session, "transition-right")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
+            && status.get("selected_item_id").and_then(Value::as_str)
+                == Some("menu:computers:acorn")
+    })?;
+    let ready = wait_input_latency_lab_ready(session, spec.runtime_arm, Duration::from_secs(5))?;
+    let epoch_us = ready["epoch_us"]
+        .as_u64()
+        .ok_or("input latency laboratory ready marker omitted epoch")?;
+    let main_before: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing before arm")?,
+    )?;
+    let driver = run_launcher_response_driver_evidence(
+        session,
+        &format!("computers-round-trip-at {epoch_us} 600 4"),
+    )?;
+    validate_input_latency_lab_driver(&driver, epoch_us)?;
+    wait_launcher_response_completion(
+        session,
+        LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+        Duration::from_secs(15),
+    )?;
+    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    validate_launcher_response_trace(&trace)?;
+    let main_after: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after arm")?,
+    )?;
+    trace["installed_manifest"] = Value::String(
+        remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+            .ok_or("input latency laboratory installed manifest is missing")?,
+    );
+    trace["input_proxy_protocol"] = main_after["input_proxy_protocol"].clone();
+    trace["display"] = read_launcher_status(session)?["display"].clone();
+    fs::write(
+        output_dir.join(format!("{}-trace.json", spec.label)),
+        format!("{}\n", serde_json::to_string_pretty(&trace)?),
+    )?;
+    fs::write(
+        output_dir.join(format!("{}-driver.json", spec.label)),
+        format!("{}\n", serde_json::to_string_pretty(&driver)?),
+    )?;
+    summarize_input_latency_lab_arm(spec, &trace, &driver, &main_before, &main_after)
+}
+
+fn wait_input_latency_lab_ready(
+    session: &Session,
+    expected_arm: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let started = Instant::now();
+    loop {
+        if let Some(raw) = remote_read(session, INPUT_LATENCY_LAB_READY_REMOTE)
+            && let Ok(ready) = serde_json::from_str::<Value>(&raw)
+            && ready["schema"] == "mister-magik-input-latency-lab-ready-v1"
+            && ready["arm"] == expected_arm
+            && ready["move_count"].as_u64() == Some(64)
+            && ready["move_interval_us"].as_u64() == Some(600_000)
+        {
+            return Ok(ready);
+        }
+        if started.elapsed() >= timeout {
+            return Err("input latency laboratory ready marker timed out or was stale".into());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_launcher_response_driver_evidence(session: &Session, arguments: &str) -> Result<Value> {
+    let output = exec_checked_output(
+        session,
+        "input latency laboratory driver",
+        &format!("{INPUT_INTEGRITY_DRIVER} {arguments}"),
+    )?;
+    output
+        .stdout
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<Value>(line).ok())
+        .ok_or_else(|| "input latency laboratory driver evidence is missing".into())
+}
+
+fn validate_input_latency_lab_driver(driver: &Value, epoch_us: u64) -> Result<()> {
+    let pulses = driver["pulses"]
+        .as_array()
+        .ok_or("input latency laboratory driver omitted pulses")?;
+    let valid = driver["schema"] == "mister-magik-input-integrity-driver-v1"
+        && driver["status"] == "passed"
+        && driver["count"].as_u64() == Some(64)
+        && driver["start_at_us"].as_u64() == Some(epoch_us)
+        && pulses.len() == 64
+        && pulses.iter().enumerate().all(|(ordinal, pulse)| {
+            let scheduled = epoch_us.saturating_add((ordinal as u64).saturating_mul(600_000));
+            pulse["ordinal"].as_u64() == Some(ordinal as u64)
+                && pulse["scheduled_at_us"].as_u64() == Some(scheduled)
+                && pulse["emitted_at_us"]
+                    .as_u64()
+                    .is_some_and(|at| at >= scheduled)
+                && pulse["released_at_us"]
+                    .as_u64()
+                    .zip(pulse["emitted_at_us"].as_u64())
+                    .is_some_and(|(released, emitted)| released >= emitted.saturating_add(40_000))
+                && pulse["key_code"].as_u64()
+                    == Some(if (ordinal / 8).is_multiple_of(2) {
+                        106
+                    } else {
+                        105
+                    })
+        });
+    if !valid {
+        return Err(
+            format!("input latency laboratory driver evidence is invalid: {driver}").into(),
+        );
+    }
+    Ok(())
+}
+
+fn summarize_input_latency_lab_arm(
+    spec: InputLatencyLabArmSpec,
+    trace: &Value,
+    driver: &Value,
+    main_before: &Value,
+    main_after: &Value,
+) -> Result<Value> {
+    let route = summarize_computers_round_trip(trace.clone(), 600, 4)?;
+    let mut dispatch = route["dispatch_latencies_us"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .collect::<Vec<_>>();
+    let mut confirmed = route["confirmed_latencies_us"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .collect::<Vec<_>>();
+    dispatch.sort_unstable();
+    confirmed.sort_unstable();
+    let records = launcher_response_confirmed_records(trace, Some("menu:computers"));
+    let first_eligible_count = records
+        .iter()
+        .filter(|record| {
+            record
+                .pointer("/frame/first_eligible_vblank")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .count();
+    let lab_records = trace["lab_records"].as_array().cloned().unwrap_or_default();
+    let completed_work = lab_records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record["phase"].as_str(),
+                Some("work-complete" | "cooperative-quantum-complete")
+            )
+        })
+        .collect::<Vec<_>>();
+    let requested_work_us = completed_work
+        .iter()
+        .filter_map(|record| record["requested_work_us"].as_u64())
+        .fold(0_u64, u64::saturating_add);
+    let skipped_work = lab_records
+        .iter()
+        .filter(|record| {
+            record["phase"]
+                .as_str()
+                .is_some_and(|phase| phase.contains("skipped-late"))
+        })
+        .count();
+    let expected_work_us = match spec.runtime_arm {
+        "baseline" => 0,
+        "monolithic-16ms" => 64 * 16_000,
+        "monolithic-64ms" | "cooperative-2ms" | "cooperative-1ms" => 64 * 64_000,
+        _ => u64::MAX,
+    };
+    let background_work_passed = skipped_work == 0 && requested_work_us == expected_work_us;
+    let input_pulses = driver["pulses"].as_array().ok_or("driver pulses missing")?;
+    let inputs_inside_work = input_pulses
+        .iter()
+        .filter(|pulse| {
+            let emitted = pulse["emitted_at_us"].as_u64().unwrap_or(u64::MAX);
+            lab_records.iter().any(|work| {
+                work["started_at_us"]
+                    .as_u64()
+                    .zip(work["completed_at_us"].as_u64())
+                    .is_some_and(|(start, end)| start <= emitted && emitted <= end)
+            })
+        })
+        .count();
+    let catalog_phases = trace["catalog_phases"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let longest_catalog_phase = catalog_phases
+        .iter()
+        .max_by_key(|phase| phase["duration_us"].as_u64().unwrap_or(0))
+        .cloned();
+    let catalog_attributed = spec.catalog_refresh != "force" || longest_catalog_phase.is_some();
+    let counter_delta = |field: &str| {
+        main_after[field]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
+    };
+    let input_integrity = route["route_status"] == "passed"
+        && route["lost_actions"].as_u64() == Some(0)
+        && route["duplicated_actions"].as_u64() == Some(0)
+        && route["coalesced_actions"].as_u64() == Some(0)
+        && route["reordered_actions"].as_u64() == Some(0)
+        && route["latch_drops"].as_u64() == Some(0)
+        && route["ownership_losses"].as_u64() == Some(0)
+        && counter_delta("input_proxy_write_failures") == 0
+        && counter_delta("input_proxy_journal_overflows") == 0
+        && counter_delta("input_proxy_desyncs") == 0;
+    let refresh_period_us = route["refresh_period_us"].as_u64().unwrap_or(u64::MAX);
+    let dispatch_p95_us = percentile_nearest_rank(&dispatch, 95);
+    let dispatch_max_us = dispatch.last().copied().unwrap_or(u64::MAX);
+    let confirmed_median_us = median_u64(&confirmed).unwrap_or(u64::MAX);
+    let confirmed_p95_us = percentile_nearest_rank(&confirmed, 95);
+    let confirmed_max_us = confirmed.last().copied().unwrap_or(u64::MAX);
+    let pulse_passed = route["pulse_status"] == "passed";
+    let product_quality = input_integrity
+        && pulse_passed
+        && first_eligible_count == 64
+        && dispatch_p95_us <= 3_000
+        && dispatch_max_us <= 5_000
+        && confirmed_median_us <= 12_000
+        && confirmed_p95_us <= refresh_period_us.saturating_add(3_000)
+        && confirmed_max_us <= refresh_period_us.saturating_add(8_000);
+    let driver_lateness_us = input_pulses
+        .iter()
+        .filter_map(|pulse| {
+            pulse["emitted_at_us"]
+                .as_u64()
+                .zip(pulse["scheduled_at_us"].as_u64())
+                .map(|(emitted, scheduled)| emitted.saturating_sub(scheduled))
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "label": spec.label,
+        "runtime_arm": spec.runtime_arm,
+        "catalog_refresh": spec.catalog_refresh,
+        "trace_file": format!("{}-trace.json", spec.label),
+        "driver_file": format!("{}-driver.json", spec.label),
+        "input_integrity_status": pass_fail(input_integrity),
+        "pulse_status": pass_fail(pulse_passed),
+        "background_work_status": pass_fail(background_work_passed),
+        "first_eligible_vblank_status": pass_fail(first_eligible_count == 64),
+        "catalog_attribution_status": pass_fail(catalog_attributed),
+        "product_quality_status": pass_fail(product_quality),
+        "dispatch_p95_us": dispatch_p95_us,
+        "dispatch_max_us": dispatch_max_us,
+        "confirmed_median_us": confirmed_median_us,
+        "confirmed_p95_us": confirmed_p95_us,
+        "confirmed_max_us": confirmed_max_us,
+        "refresh_period_us": refresh_period_us,
+        "first_eligible_vblank_count": first_eligible_count,
+        "inputs_inside_work": inputs_inside_work,
+        "completed_background_units": completed_work.len(),
+        "requested_background_work_us": requested_work_us,
+        "expected_background_work_us": expected_work_us,
+        "skipped_background_units": skipped_work,
+        "driver_emission_lateness_us": driver_lateness_us,
+        "catalog_phase_count": catalog_phases.len(),
+        "longest_catalog_phase": longest_catalog_phase,
+        "input_changed_during_catalog": catalog_phases.iter().any(|phase| phase["input_changed_during"] == true),
+        "proxy_write_failures": counter_delta("input_proxy_write_failures"),
+        "journal_overflows": counter_delta("input_proxy_journal_overflows"),
+        "sequence_gaps": counter_delta("input_proxy_desyncs"),
+        "latch_drops": route["latch_drops"],
+        "repeated_vblanks_observed": route["repeated_vblanks"],
+        "static_repeated_vblanks_are_not_drop_failures": true,
+        "ownership_losses": route["ownership_losses"],
+    }))
+}
+
+const fn pass_fail(passed: bool) -> &'static str {
+    if passed { "passed" } else { "failed" }
+}
+
+fn cleanup_input_latency_lab(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "clear input latency laboratory state",
+        &remove_files_command(&[
+            INPUT_LATENCY_LAB_READY_REMOTE,
+            INPUT_LATENCY_LAB_SESSION_REMOTE,
+            LAUNCHER_RESPONSE_TRACE_REMOTE,
+            LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+        ]),
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )
 }
 
 fn run_launcher_response_scenario(
@@ -15760,6 +16311,33 @@ mod tests {
         ];
         assert_eq!(percentile_nearest_rank(&values, 95), 19);
         assert_eq!(percentile_nearest_rank(&[], 95), u64::MAX);
+    }
+
+    #[test]
+    fn input_latency_lab_driver_requires_the_exact_absolute_schedule() {
+        let epoch_us = 10_000_000;
+        let pulses = (0..64)
+            .map(|ordinal| {
+                let scheduled_at_us = epoch_us + ordinal * 600_000;
+                json!({
+                    "ordinal": ordinal,
+                    "key_code": if (ordinal / 8).is_multiple_of(2) { 106 } else { 105 },
+                    "scheduled_at_us": scheduled_at_us,
+                    "emitted_at_us": scheduled_at_us + 100,
+                    "released_at_us": scheduled_at_us + 40_100,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut driver = json!({
+            "schema": "mister-magik-input-integrity-driver-v1",
+            "status": "passed",
+            "count": 64,
+            "start_at_us": epoch_us,
+            "pulses": pulses,
+        });
+        validate_input_latency_lab_driver(&driver, epoch_us).unwrap();
+        driver["pulses"][17]["scheduled_at_us"] = json!(epoch_us);
+        assert!(validate_input_latency_lab_driver(&driver, epoch_us).is_err());
     }
 
     fn passing_catalog_pmu_summary() -> Value {

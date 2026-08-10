@@ -24,6 +24,7 @@ Supported scenarios:
 - `cold-boot`
 - `input-integrity`
 - `launcher-response`
+- `input-latency-lab`
 - `particles`
 - `particle-demo-40k`
 - `particle-capacity`
@@ -94,6 +95,30 @@ Computers once, and runs Acorn→Other→Acorn four times at 600 ms start-to-sta
 without restarting the launcher. It retains every capture, dispatch, and exact
 active-latch confirmation. The ordinary command remains the 60/50 Hz
 multi-route qualification above.
+
+`input-latency-lab` is the fixed diagnostic experiment for attributing
+intermittent launcher response, not a release qualification. It switches the
+physical display to 1920×1200p60 for the bounded run, then restores the prior
+mode. Each arm enters the real Computers menu at Acorn and drives exactly four
+Acorn→Other→Acorn cycles: 64 presses, 40 ms held, 600 ms start-to-start. The
+driver and launcher share a device-monotonic epoch, so UI-thread obstruction
+starts 8 ms before each scheduled press.
+
+The six arms are baseline with catalog refresh off, real forced catalog
+refresh, monolithic 16 ms, monolithic 64 ms, cooperative 2 ms quanta totalling
+64 ms, and cooperative 1 ms quanta totalling 64 ms. The experiment reports
+artifact validity, input integrity, obstruction reproduction, cooperative
+recovery, catalog attribution, first-eligible-vblank behavior, and the current
+product-quality result independently. A failed latency status is retained as a
+successful experimental observation; missing, stale, truncated, or incomplete
+evidence is an execution failure. Detailed traces and driver timestamps are
+stored under `build/agent-benchmarks/input-latency-lab/<timestamp>/`.
+
+The automated uinput route is the causal software-timing authority because it
+traverses Main proxy v2 and the production latch path. Protocol-v5 active
+sequence confirmation is the presentation authority. Repeated physical
+vblanks while the UI is intentionally static during the 600 ms gaps are
+reported but are not classified as dropped animation frames.
 
 `settings-navigation` runs the real Home → Settings → About → Info → About →
 Settings → Home route first in the normal 1280×720 landscape layout, then in
