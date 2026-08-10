@@ -1288,6 +1288,7 @@ struct LibraryChangedDialogTestDriver {
 const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trace.json";
 const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
 const LAUNCHER_RESPONSE_TRACE_PATH: &str = "/tmp/mister-magik/launcher-response-trace.json";
+const LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCHER_RESPONSE_TRACE_LIMIT: usize = 256;
 const LAUNCHER_RESPONSE_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_COMPLETE";
 const LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE";
@@ -1461,7 +1462,9 @@ struct LauncherResponseTrace {
     writer: Option<Sender<LauncherResponseTraceWrite>>,
     input_probe: Option<crate::input_hub::InputObservationProbe>,
     catalog_phases: Vec<serde_json::Value>,
+    scheduler_phases: Vec<serde_json::Value>,
     lab_records: Vec<serde_json::Value>,
+    last_partial_flush_at: Instant,
     dirty: bool,
 }
 
@@ -1523,7 +1526,9 @@ impl LauncherResponseTrace {
             writer,
             input_probe,
             catalog_phases: Vec::new(),
+            scheduler_phases: Vec::new(),
             lab_records: Vec::new(),
+            last_partial_flush_at: Instant::now(),
             dirty: enabled,
         }
     }
@@ -1552,7 +1557,11 @@ impl LauncherResponseTrace {
             writer: None,
             input_probe: None,
             catalog_phases: Vec::new(),
+            scheduler_phases: Vec::new(),
             lab_records: Vec::new(),
+            last_partial_flush_at: Instant::now()
+                .checked_sub(LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL)
+                .unwrap_or_else(Instant::now),
             dirty: false,
         }
     }
@@ -1794,6 +1803,36 @@ impl LauncherResponseTrace {
         )
     }
 
+    fn scheduler_boundary(&self) -> (u64, Option<u64>) {
+        self.catalog_boundary()
+    }
+
+    fn record_scheduler_interval(
+        &mut self,
+        label: &'static str,
+        start: (u64, Option<u64>),
+    ) -> (u64, Option<u64>) {
+        let end = self.scheduler_boundary();
+        let duration_us = end.0.saturating_sub(start.0);
+        let input_changed_during = start
+            .1
+            .zip(end.1)
+            .is_some_and(|(before, after)| before != after);
+        if self.enabled && (input_changed_during || duration_us >= 20_000) {
+            self.scheduler_phases.push(serde_json::json!({
+                "label": label,
+                "started_at_us": start.0,
+                "completed_at_us": end.0,
+                "duration_us": duration_us,
+                "input_generation_before": start.1,
+                "input_generation_after": end.1,
+                "input_changed_during": input_changed_during,
+            }));
+            self.dirty = true;
+        }
+        end
+    }
+
     fn record_catalog_interval(
         &mut self,
         label: &'static str,
@@ -1893,6 +1932,11 @@ impl LauncherResponseTrace {
 
     fn flush(&mut self) {
         if !self.enabled || !self.dirty {
+            return;
+        }
+        if !self.complete
+            && self.last_partial_flush_at.elapsed() < LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL
+        {
             return;
         }
         let records = self
@@ -2001,6 +2045,7 @@ impl LauncherResponseTrace {
             "records": records,
             "feedback_records": feedback_records,
             "catalog_phases": &self.catalog_phases,
+            "scheduler_phases": &self.scheduler_phases,
             "lab_records": &self.lab_records,
             "presentation": presentation,
         });
@@ -2015,6 +2060,7 @@ impl LauncherResponseTrace {
         }) || self.writer.is_none()
         {
             self.dirty = false;
+            self.last_partial_flush_at = Instant::now();
         }
     }
 }
@@ -4598,6 +4644,7 @@ pub(super) fn run_launcher_loop(
         input_integrity_trace.observe_batch(&input_batch);
         launcher_response_trace.observe_batch(&input_batch);
         launcher_response_trace.record_lab(input_latency_lab.before_input_route());
+        let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
         if !input_batch.events.is_empty()
             && let Some(stall_ms) = input_integrity_stall.take()
         {
@@ -5680,6 +5727,8 @@ pub(super) fn run_launcher_loop(
             bridge.set_effective_view(effective_view.label().into());
         }
 
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("pre-input-route", scheduler_phase);
         let pad_changed = pad_changed_for_input
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
@@ -6933,6 +6982,8 @@ pub(super) fn run_launcher_loop(
         }
 
         launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
 
         if empty_collection_invariant_violated(&catalog, &nav) {
             if let Some(system) = active_system(&catalog, &nav) {
@@ -7049,6 +7100,8 @@ pub(super) fn run_launcher_loop(
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
         let response_projected_at_us = crate::input_hub::monotonic_us();
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("interaction-projection", scheduler_phase);
         if !startup_intro_suppress_launcher_ui {
             sync_startup_visibility(&app, &lifecycle);
         }
@@ -7584,6 +7637,8 @@ pub(super) fn run_launcher_loop(
             startup_input_enabled: startup_status.input_enabled,
             wake_reasons,
         };
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("post-projection-background", scheduler_phase);
         if render_intent.can_sleep() {
             if let Some(record) = input_latency_lab.cooperative_quantum(input_observation) {
                 launcher_response_trace.record_lab(Some(record));
@@ -7649,11 +7704,15 @@ pub(super) fn run_launcher_loop(
                 startup_status,
                 &launch_return_session,
             );
+            scheduler_phase = launcher_response_trace
+                .record_scheduler_interval("idle-accounting", scheduler_phase);
             let idle_sleep = input_latency_lab.time_until_next_work().map_or_else(
                 || launcher_idle_sleep_duration(&pacer),
                 |lab| launcher_idle_sleep_duration(&pacer).min(lab),
             );
             let _ = pad.wait_for_input(input_observation, idle_sleep);
+            let _ = launcher_response_trace
+                .record_scheduler_interval("idle-input-wait", scheduler_phase);
             continue;
         }
 
@@ -7691,6 +7750,8 @@ pub(super) fn run_launcher_loop(
         let cpu_t0 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t0 = Instant::now();
         let prepare_us = (frame_t0 - loop_start).as_micros();
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("render-setup", scheduler_phase);
         let pre_render_pace = wait_before_render.then(|| {
             let wait_start = Instant::now();
             let pace = pacer.wait();
@@ -7705,6 +7766,8 @@ pub(super) fn run_launcher_loop(
             .as_ref()
             .map(|(_, _, wait_us)| *wait_us)
             .unwrap_or(0);
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("pre-render-pacing", scheduler_phase);
         let full_screen_transition_policy_before_render = full_screen_transition.policy();
         let navigation_snapshot_locked_before_render =
             full_screen_transition_policy_before_render.snapshot_locked;
@@ -8685,6 +8748,8 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("raster-and-post", scheduler_phase);
         if let Some(completed_at) = frame_production_completed_at {
             frame_production_trace.ready_age_us = frame_t3
                 .saturating_duration_since(completed_at)
@@ -8984,6 +9049,8 @@ pub(super) fn run_launcher_loop(
             // vblank on normal per-frame accounting. The final wait is only the
             // pacing boundary for the next frame.
             let wait_start = Instant::now();
+            scheduler_phase = launcher_response_trace
+                .record_scheduler_interval("post-submit-accounting", scheduler_phase);
             let pace = pacer.wait();
             let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
             let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
@@ -8993,6 +9060,8 @@ pub(super) fn run_launcher_loop(
                 completion_remaining,
             );
             let wait_done = Instant::now();
+            scheduler_phase = launcher_response_trace
+                .record_scheduler_interval("latch-confirmation-wait", scheduler_phase);
             let post_wait_us = wait_done.saturating_duration_since(wait_start).as_micros();
             let wait_trace = LauncherPacingTrace::from_pace_with_present_phase(
                 Some(&pace),
@@ -9311,6 +9380,8 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        scheduler_phase =
+            launcher_response_trace.record_scheduler_interval("post-confirmation", scheduler_phase);
         launcher_response_trace.flush();
         if launcher_response_trace.take_frame_trace_finalize_pending() {
             frame_accounting.finish_preview_scroll_trace();
@@ -9513,6 +9584,7 @@ pub(super) fn run_launcher_loop(
         }
         launcher_response_trace
             .record_lab(input_latency_lab.cooperative_quantum(input_observation));
+        let _ = launcher_response_trace.record_scheduler_interval("frame-tail", scheduler_phase);
     }
     if let Some(mut intro) = startup_intro.take() {
         let returned = intro.take_buffers();

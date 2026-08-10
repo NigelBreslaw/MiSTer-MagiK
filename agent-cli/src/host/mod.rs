@@ -4887,6 +4887,38 @@ fn summarize_input_latency_lab_arm(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let scheduler_phases = trace["scheduler_phases"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let scheduler_attribution = records
+        .iter()
+        .filter_map(|record| {
+            let captured_at_us = record["captured_at_us"].as_u64()?;
+            let drained_at_us = record["drained_at_us"].as_u64()?;
+            let phase = scheduler_phases.iter().find(|phase| {
+                phase["started_at_us"]
+                    .as_u64()
+                    .zip(phase["completed_at_us"].as_u64())
+                    .is_some_and(|(started, completed)| {
+                        started <= captured_at_us && captured_at_us <= completed
+                    })
+            });
+            Some(json!({
+                "press_id": record["press_id"],
+                "captured_at_us": captured_at_us,
+                "drained_at_us": drained_at_us,
+                "capture_to_drain_us": drained_at_us.saturating_sub(captured_at_us),
+                "phase": phase.and_then(|phase| phase["label"].as_str()),
+                "phase_duration_us": phase.and_then(|phase| phase["duration_us"].as_u64()),
+            }))
+        })
+        .collect::<Vec<_>>();
+    let mut scheduler_phase_counts = BTreeMap::<String, u64>::new();
+    for attribution in &scheduler_attribution {
+        let label = attribution["phase"].as_str().unwrap_or("unattributed");
+        *scheduler_phase_counts.entry(label.to_string()).or_default() += 1;
+    }
     let longest_catalog_phase = catalog_phases
         .iter()
         .max_by_key(|phase| phase["duration_us"].as_u64().unwrap_or(0))
@@ -4960,6 +4992,9 @@ fn summarize_input_latency_lab_arm(
         "catalog_phase_count": catalog_phases.len(),
         "longest_catalog_phase": longest_catalog_phase,
         "input_changed_during_catalog": catalog_phases.iter().any(|phase| phase["input_changed_during"] == true),
+        "scheduler_phase_count": scheduler_phases.len(),
+        "scheduler_phase_counts": scheduler_phase_counts,
+        "scheduler_attribution": scheduler_attribution,
         "proxy_write_failures": counter_delta("input_proxy_write_failures"),
         "journal_overflows": counter_delta("input_proxy_journal_overflows"),
         "sequence_gaps": counter_delta("input_proxy_desyncs"),
@@ -5503,6 +5538,7 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
         || trace["runtime"].as_object().is_none()
         || trace["run_id"].as_str().is_none_or(str::is_empty)
         || trace["catalog_phases"].as_array().is_none()
+        || trace["scheduler_phases"].as_array().is_none()
     {
         return Err("launcher response trace omitted required v3 evidence".into());
     }
