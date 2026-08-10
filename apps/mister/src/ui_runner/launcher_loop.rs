@@ -3857,7 +3857,7 @@ pub(super) fn run_launcher_loop(
     let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
     let mut launcher_response_trace =
         LauncherResponseTrace::from_env(&nav, pad.input_observation_probe());
-    let mut input_latency_lab = InputLatencyLab::from_env();
+    let mut input_latency_lab = InputLatencyLab::from_env(pad.input_observation_probe());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -7581,6 +7581,10 @@ pub(super) fn run_launcher_loop(
             wake_reasons,
         };
         if render_intent.can_sleep() {
+            if let Some(record) = input_latency_lab.cooperative_quantum(input_observation) {
+                launcher_response_trace.record_lab(Some(record));
+                continue;
+            }
             frame_accounting.finish_idle_loop(
                 frames,
                 run_start,
@@ -9503,6 +9507,8 @@ pub(super) fn run_launcher_loop(
             );
             break;
         }
+        launcher_response_trace
+            .record_lab(input_latency_lab.cooperative_quantum(input_observation));
     }
     if let Some(mut intro) = startup_intro.take() {
         let returned = intro.take_buffers();

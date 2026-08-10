@@ -3,7 +3,7 @@
 
 //! Dormant, volatile on-device input latency experiment.
 
-use crate::input_hub::monotonic_us;
+use crate::input_hub::{InputObservation, InputObservationProbe, monotonic_us};
 use crate::launcher::{LauncherNav, Screen};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -24,6 +24,8 @@ enum InputLatencyLabArm {
     Baseline,
     Monolithic16Ms,
     Monolithic64Ms,
+    Cooperative2Ms,
+    Cooperative1Ms,
 }
 
 impl InputLatencyLabArm {
@@ -32,6 +34,8 @@ impl InputLatencyLabArm {
             "baseline" => Some(Self::Baseline),
             "monolithic-16ms" => Some(Self::Monolithic16Ms),
             "monolithic-64ms" => Some(Self::Monolithic64Ms),
+            "cooperative-2ms" => Some(Self::Cooperative2Ms),
+            "cooperative-1ms" => Some(Self::Cooperative1Ms),
             _ => None,
         }
     }
@@ -41,6 +45,8 @@ impl InputLatencyLabArm {
             Self::Baseline => "baseline",
             Self::Monolithic16Ms => "monolithic-16ms",
             Self::Monolithic64Ms => "monolithic-64ms",
+            Self::Cooperative2Ms => "cooperative-2ms",
+            Self::Cooperative1Ms => "cooperative-1ms",
         }
     }
 
@@ -49,6 +55,23 @@ impl InputLatencyLabArm {
             Self::Baseline => 0,
             Self::Monolithic16Ms => 16_000,
             Self::Monolithic64Ms => 64_000,
+            Self::Cooperative2Ms | Self::Cooperative1Ms => 64_000,
+        }
+    }
+
+    const fn monolithic_work_us(self) -> u64 {
+        match self {
+            Self::Monolithic16Ms => 16_000,
+            Self::Monolithic64Ms => 64_000,
+            Self::Baseline | Self::Cooperative2Ms | Self::Cooperative1Ms => 0,
+        }
+    }
+
+    const fn cooperative_quantum_us(self) -> u64 {
+        match self {
+            Self::Cooperative2Ms => 2_000,
+            Self::Cooperative1Ms => 1_000,
+            Self::Baseline | Self::Monolithic16Ms | Self::Monolithic64Ms => 0,
         }
     }
 }
@@ -57,6 +80,9 @@ pub(super) struct InputLatencyLab {
     arm: Option<InputLatencyLabArm>,
     epoch_us: Option<u64>,
     next_work: usize,
+    cooperative_remaining_us: u64,
+    cooperative_quantum_ordinal: usize,
+    input_probe: Option<InputObservationProbe>,
     disarmed: bool,
 }
 
@@ -76,7 +102,7 @@ enum DueWork {
 }
 
 impl InputLatencyLab {
-    pub(super) fn from_env() -> Self {
+    pub(super) fn from_env(input_probe: Option<InputObservationProbe>) -> Self {
         let arm = std::env::var(ARM_ENV)
             .ok()
             .and_then(|value| InputLatencyLabArm::parse(&value));
@@ -95,6 +121,9 @@ impl InputLatencyLab {
             arm: armed.then_some(arm).flatten(),
             epoch_us: None,
             next_work: 0,
+            cooperative_remaining_us: 0,
+            cooperative_quantum_ordinal: 0,
+            input_probe,
             disarmed: false,
         }
     }
@@ -114,6 +143,7 @@ impl InputLatencyLab {
             "move_interval_us": MOVE_INTERVAL_US,
             "press_duration_us": 40_000,
             "work_us": arm.work_us(),
+            "quantum_us": arm.cooperative_quantum_us(),
             "work_lead_us": OBSTRUCTION_LEAD_US,
         });
         if std::fs::write(INPUT_LATENCY_LAB_READY_PATH, format!("{ready}\n")).is_err() {
@@ -135,7 +165,7 @@ impl InputLatencyLab {
     pub(super) fn before_input_route(&mut self) -> Option<Value> {
         let arm = self.arm?;
         let epoch_us = self.epoch_us?;
-        if self.disarmed || arm.work_us() == 0 || self.next_work >= MOVE_COUNT {
+        if self.disarmed || arm.monolithic_work_us() == 0 || self.next_work >= MOVE_COUNT {
             return None;
         }
         match self.claim_due_work(epoch_us, monotonic_us()) {
@@ -157,7 +187,8 @@ impl InputLatencyLab {
                 scheduled_at_us,
                 started_at_us,
             } => {
-                let completed_at_us = run_bounded_cpu_work(arm.work_us());
+                let requested_work_us = arm.monolithic_work_us();
+                let completed_at_us = run_bounded_cpu_work(requested_work_us);
                 Some(json!({
                     "phase": "work-complete",
                     "arm": arm.label(),
@@ -166,11 +197,96 @@ impl InputLatencyLab {
                     "started_at_us": started_at_us,
                     "completed_at_us": completed_at_us,
                     "lateness_us": started_at_us.saturating_sub(scheduled_at_us),
-                    "requested_work_us": arm.work_us(),
+                    "requested_work_us": requested_work_us,
                     "work_us": completed_at_us.saturating_sub(started_at_us),
                 }))
             }
         }
+    }
+
+    pub(super) fn cooperative_quantum(
+        &mut self,
+        drained_observation: InputObservation,
+    ) -> Option<Value> {
+        let arm = self.arm?;
+        let epoch_us = self.epoch_us?;
+        let quantum_us = arm.cooperative_quantum_us();
+        if self.disarmed || quantum_us == 0 || self.next_work >= MOVE_COUNT {
+            return None;
+        }
+        let now_us = monotonic_us();
+        let scheduled_at_us = scheduled_work_start(epoch_us, self.next_work);
+        if self.cooperative_remaining_us == 0 {
+            if now_us < scheduled_at_us {
+                return None;
+            }
+            if now_us.saturating_sub(scheduled_at_us) > MAX_START_LATENESS_US {
+                let ordinal = self.next_work;
+                self.next_work += 1;
+                self.disarmed = self.next_work == MOVE_COUNT;
+                return Some(json!({
+                    "phase": "cooperative-work-skipped-late",
+                    "arm": arm.label(),
+                    "ordinal": ordinal,
+                    "scheduled_at_us": scheduled_at_us,
+                    "started_at_us": now_us,
+                    "lateness_us": now_us.saturating_sub(scheduled_at_us),
+                }));
+            }
+            self.cooperative_remaining_us = arm.work_us();
+            self.cooperative_quantum_ordinal = 0;
+        }
+        let probe = self.input_probe.as_ref()?;
+        let generation_before = probe.observe();
+        if probe.changed_since(drained_observation) {
+            return Some(json!({
+                "phase": "cooperative-quantum-deferred-input",
+                "arm": arm.label(),
+                "ordinal": self.next_work,
+                "quantum_ordinal": self.cooperative_quantum_ordinal,
+                "at_us": now_us,
+                "remaining_work_us": self.cooperative_remaining_us,
+                "drained_generation": drained_observation.generation(),
+                "generation_before": generation_before.generation(),
+            }));
+        }
+        let requested_work_us = quantum_us.min(self.cooperative_remaining_us);
+        let started_at_us = monotonic_us();
+        let completed_at_us = run_bounded_cpu_work(requested_work_us);
+        let generation_after = probe.observe();
+        let ordinal = self.next_work;
+        let quantum_ordinal = self.cooperative_quantum_ordinal;
+        let period_complete = self.complete_cooperative_quantum(requested_work_us);
+        Some(json!({
+            "phase": "cooperative-quantum-complete",
+            "arm": arm.label(),
+            "ordinal": ordinal,
+            "quantum_ordinal": quantum_ordinal,
+            "scheduled_at_us": scheduled_at_us,
+            "started_at_us": started_at_us,
+            "completed_at_us": completed_at_us,
+            "requested_work_us": requested_work_us,
+            "work_us": completed_at_us.saturating_sub(started_at_us),
+            "remaining_work_us": self.cooperative_remaining_us,
+            "drained_generation": drained_observation.generation(),
+            "generation_before": generation_before.generation(),
+            "generation_after": generation_after.generation(),
+            "input_changed_during": generation_after != generation_before,
+            "period_complete": period_complete,
+        }))
+    }
+
+    fn complete_cooperative_quantum(&mut self, requested_work_us: u64) -> bool {
+        self.cooperative_remaining_us = self
+            .cooperative_remaining_us
+            .saturating_sub(requested_work_us);
+        self.cooperative_quantum_ordinal += 1;
+        let period_complete = self.cooperative_remaining_us == 0;
+        if period_complete {
+            self.next_work += 1;
+            self.disarmed = self.next_work == MOVE_COUNT;
+        }
+        period_complete
     }
 
     fn claim_due_work(&mut self, epoch_us: u64, observed_at_us: u64) -> DueWork {
@@ -199,7 +315,13 @@ impl InputLatencyLab {
     pub(super) fn time_until_next_work(&self) -> Option<Duration> {
         let arm = self.arm?;
         let epoch_us = self.epoch_us?;
-        if self.disarmed || arm.work_us() == 0 || self.next_work >= MOVE_COUNT {
+        if self.disarmed || self.next_work >= MOVE_COUNT {
+            return None;
+        }
+        if arm.cooperative_quantum_us() > 0 && self.cooperative_remaining_us > 0 {
+            return Some(Duration::ZERO);
+        }
+        if arm.monolithic_work_us() == 0 && arm.cooperative_quantum_us() == 0 {
             return None;
         }
         Some(Duration::from_micros(
@@ -262,6 +384,18 @@ mod tests {
             64_000
         );
         assert_eq!(InputLatencyLabArm::parse("monolithic-65ms"), None);
+        assert_eq!(
+            InputLatencyLabArm::parse("cooperative-2ms")
+                .unwrap()
+                .cooperative_quantum_us(),
+            2_000
+        );
+        assert_eq!(
+            InputLatencyLabArm::parse("cooperative-1ms")
+                .unwrap()
+                .cooperative_quantum_us(),
+            1_000
+        );
     }
 
     #[test]
@@ -288,6 +422,9 @@ mod tests {
             arm: Some(InputLatencyLabArm::Monolithic16Ms),
             epoch_us: Some(epoch_us),
             next_work: 0,
+            cooperative_remaining_us: 0,
+            cooperative_quantum_ordinal: 0,
+            input_probe: None,
             disarmed: false,
         };
         assert_eq!(
@@ -315,5 +452,43 @@ mod tests {
         assert_eq!(bounded_work_us(16_000), 16_000);
         assert_eq!(bounded_work_us(64_000), 64_000);
         assert_eq!(bounded_work_us(u64::MAX), 64_000);
+    }
+
+    #[test]
+    fn cooperative_work_uses_exact_quantum_counts() {
+        assert_eq!(
+            64_000 / InputLatencyLabArm::Cooperative2Ms.cooperative_quantum_us(),
+            32
+        );
+        assert_eq!(
+            64_000 / InputLatencyLabArm::Cooperative1Ms.cooperative_quantum_us(),
+            64
+        );
+        assert_eq!(InputLatencyLabArm::Cooperative2Ms.monolithic_work_us(), 0);
+        assert_eq!(InputLatencyLabArm::Cooperative1Ms.work_us(), 64_000);
+
+        for (arm, expected_quanta) in [
+            (InputLatencyLabArm::Cooperative2Ms, 32),
+            (InputLatencyLabArm::Cooperative1Ms, 64),
+        ] {
+            let mut lab = InputLatencyLab {
+                arm: Some(arm),
+                epoch_us: Some(10_000_000),
+                next_work: MOVE_COUNT - 1,
+                cooperative_remaining_us: 64_000,
+                cooperative_quantum_ordinal: 0,
+                input_probe: None,
+                disarmed: false,
+            };
+            for quantum in 0..expected_quanta {
+                assert_eq!(
+                    lab.complete_cooperative_quantum(arm.cooperative_quantum_us()),
+                    quantum + 1 == expected_quanta
+                );
+            }
+            assert_eq!(lab.cooperative_remaining_us, 0);
+            assert_eq!(lab.cooperative_quantum_ordinal, expected_quanta);
+            assert!(lab.disarmed);
+        }
     }
 }

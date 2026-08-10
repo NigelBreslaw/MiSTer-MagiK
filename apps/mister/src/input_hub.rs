@@ -147,6 +147,11 @@ impl InputObservationProbe {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         InputObservation(state.wake_generation)
     }
+
+    #[must_use]
+    pub fn changed_since(&self, observation: InputObservation) -> bool {
+        self.observe() != observation
+    }
 }
 
 #[derive(Debug, Default)]
@@ -604,12 +609,35 @@ mod tests {
     fn change_between_drain_and_wait_is_observed() {
         let hub = test_hub();
         let drained = hub.drain();
+        let probe = hub.observation_probe();
+        assert!(!probe.changed_since(drained.observation));
         change_mailbox(&hub);
+
+        assert!(probe.changed_since(drained.observation));
 
         assert_eq!(
             hub.wait_for_change(drained.observation, Duration::from_secs(1)),
             InputWaitOutcome::Changed
         );
+    }
+
+    #[test]
+    fn probe_distinguishes_input_before_during_and_after_a_quantum() {
+        let hub = test_hub();
+        let probe = hub.observation_probe();
+        let drained_before = hub.drain().observation;
+
+        change_mailbox(&hub);
+        assert!(probe.changed_since(drained_before));
+
+        let drained_during = hub.drain().observation;
+        let quantum_start = probe.observe();
+        assert!(!probe.changed_since(drained_during));
+        change_mailbox(&hub);
+        assert!(probe.changed_since(quantum_start));
+
+        let drained_after = hub.drain().observation;
+        assert!(!probe.changed_since(drained_after));
     }
 
     #[test]
