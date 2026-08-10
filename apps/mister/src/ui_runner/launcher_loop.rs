@@ -1061,6 +1061,7 @@ impl ArcadeEntryLatencyTracker {
         at: Instant,
         lifecycle: &LauncherLifecycle,
         collection_id: &str,
+        source: &'static str,
     ) {
         if self.enter_input_at.is_some() {
             return;
@@ -1079,7 +1080,7 @@ impl ArcadeEntryLatencyTracker {
             None,
             "",
             "",
-            "source=open_collection_intent",
+            format!("source={source}"),
         );
     }
 
@@ -3615,6 +3616,72 @@ fn retry_system_shard_hydration(
     true
 }
 
+struct ColdCollectionEntryStart {
+    pending: Option<PendingCollectionEntry>,
+    bridge_dirty: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn begin_cold_collection_entry(
+    scheduler: &mut LauncherScheduler,
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    catalog_version: usize,
+    collection_id: &str,
+    requested_at: Instant,
+    trace_source: &'static str,
+    arcade_entry_latency: &mut ArcadeEntryLatencyTracker,
+    lifecycle: &LauncherLifecycle,
+    start: Instant,
+) -> ColdCollectionEntryStart {
+    let hydration_failed = nav.catalog_system_hydration_has_failed(collection_id);
+    let hydration_requested = if hydration_failed {
+        retry_system_shard_hydration(
+            scheduler,
+            nav,
+            catalog,
+            catalog_version,
+            collection_id,
+            "explicit-retry",
+            requested_at,
+        )
+    } else {
+        request_system_shard_hydration(
+            scheduler,
+            nav,
+            catalog,
+            catalog_version,
+            collection_id,
+            "open-collection",
+            requested_at,
+        )
+    };
+    let pending = (hydration_requested || nav.catalog_system_hydration_is_loading(collection_id))
+        .then(|| {
+            arcade_entry_latency.record_collection_enter_input(
+                start,
+                requested_at,
+                lifecycle,
+                collection_id,
+                trace_source,
+            );
+            print_startup_event(
+                start,
+                "catalog_system_entry_pending",
+                format!("system={collection_id} source={trace_source}"),
+            );
+            PendingCollectionEntry {
+                collection_id: collection_id.to_string(),
+                requested_at,
+                source: nav.home_view_state(),
+            }
+        });
+    ColdCollectionEntryStart {
+        pending,
+        bridge_dirty: hydration_failed && hydration_requested,
+    }
+}
+
 fn request_pending_launch_return_shard(
     pending: Option<&launcher::LaunchReturnState>,
     catalog: &ArcadeCatalog,
@@ -4252,6 +4319,10 @@ pub(super) fn run_launcher_loop(
     let env_start_screen = launcher_start_screen_from_env();
     let env_start_system = launcher_start_system_from_env();
     let system_entry_benchmark_system = launcher_system_entry_benchmark_system_from_env();
+    let system_entry_benchmark_direct = launcher_system_entry_benchmark_direct_from_env();
+    let mut pending_direct_system_entry = system_entry_benchmark_direct
+        .then(|| system_entry_benchmark_system.clone())
+        .flatten();
     let env_start_menu = launcher_bench_scenario
         .is_some()
         .then(launcher_start_menu_from_env)
@@ -4862,7 +4933,9 @@ pub(super) fn run_launcher_loop(
     nav.set_arcade_exit_locked(return_capsule_active);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     apply_home_selected_from_env(&mut nav, &catalog, start);
-    if let Some(system_id) = system_entry_benchmark_system.as_deref() {
+    if !system_entry_benchmark_direct
+        && let Some(system_id) = system_entry_benchmark_system.as_deref()
+    {
         if nav.focus_system(&catalog, system_id) {
             print_startup_event(
                 start,
@@ -5458,6 +5531,50 @@ pub(super) fn run_launcher_loop(
             EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
+        if catalog_ready
+            && lifecycle.startup_input_enabled()
+            && effective_view.accepts_application_input()
+            && nav.screen == Screen::Home
+            && pending_collection_entry.is_none()
+            && let Some(collection_id) = pending_direct_system_entry.take()
+        {
+            let requested_at = Instant::now();
+            if collection_has_resident_rows(&catalog, &collection_id) {
+                arcade_entry_latency.record_collection_enter_input(
+                    start,
+                    requested_at,
+                    &lifecycle,
+                    &collection_id,
+                    "benchmark-direct",
+                );
+                if nav.activate_collection(&catalog, &collection_id) {
+                    arcade_entry_latency.record_rows_ready(
+                        start,
+                        requested_at,
+                        &lifecycle,
+                        &catalog,
+                        &nav,
+                    );
+                    full_bridge_dirty = true;
+                    request_launcher_redraw!();
+                }
+            } else {
+                let entry = begin_cold_collection_entry(
+                    &mut scheduler,
+                    &mut nav,
+                    &catalog,
+                    catalog_version,
+                    &collection_id,
+                    requested_at,
+                    "benchmark-direct",
+                    &mut arcade_entry_latency,
+                    &lifecycle,
+                    start,
+                );
+                full_bridge_dirty |= entry.bridge_dirty;
+                pending_collection_entry = entry.pending;
+            }
+        }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-lifecycle-state", scheduler_phase);
         let mut light_bridge_dirty = false;
@@ -6779,52 +6896,21 @@ pub(super) fn run_launcher_loop(
                                         && !collection_has_resident_rows(&catalog, collection_id)
                                     {
                                         let requested_at = Instant::now();
-                                        let hydration_failed =
-                                            nav.catalog_system_hydration_has_failed(collection_id);
-                                        let hydration_requested = if hydration_failed {
-                                            let accepted = retry_system_shard_hydration(
-                                                &mut scheduler,
-                                                &mut nav,
-                                                &catalog,
-                                                catalog_version,
-                                                collection_id,
-                                                "explicit-retry",
-                                                requested_at,
-                                            );
-                                            full_bridge_dirty |= accepted;
-                                            accepted
-                                        } else {
-                                            request_system_shard_hydration(
-                                                &mut scheduler,
-                                                &mut nav,
-                                                &catalog,
-                                                catalog_version,
-                                                collection_id,
-                                                "open-collection",
-                                                requested_at,
-                                            )
-                                        };
-                                        if hydration_requested
-                                            || nav
-                                                .catalog_system_hydration_is_loading(collection_id)
-                                        {
-                                            arcade_entry_latency.record_collection_enter_input(
-                                                start,
-                                                requested_at,
-                                                &lifecycle,
-                                                collection_id,
-                                            );
-                                            pending_collection_entry =
-                                                Some(PendingCollectionEntry {
-                                                    collection_id: collection_id.to_string(),
-                                                    requested_at,
-                                                    source: nav.home_view_state(),
-                                                });
-                                            print_startup_event(
-                                                start,
-                                                "catalog_system_entry_pending",
-                                                format!("system={collection_id}"),
-                                            );
+                                        let entry = begin_cold_collection_entry(
+                                            &mut scheduler,
+                                            &mut nav,
+                                            &catalog,
+                                            catalog_version,
+                                            collection_id,
+                                            requested_at,
+                                            "open-collection-intent",
+                                            &mut arcade_entry_latency,
+                                            &lifecycle,
+                                            start,
+                                        );
+                                        full_bridge_dirty |= entry.bridge_dirty;
+                                        if entry.pending.is_some() {
+                                            pending_collection_entry = entry.pending;
                                         }
                                     }
 

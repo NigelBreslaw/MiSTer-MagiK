@@ -126,6 +126,10 @@ pub(super) fn launcher_system_entry_benchmark_system_from_env() -> Option<String
         .filter(|value| !value.is_empty())
 }
 
+pub(super) fn launcher_system_entry_benchmark_direct_from_env() -> bool {
+    launcher_env_flag("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT")
+}
+
 pub(super) fn launcher_start_menu_from_env() -> Option<String> {
     std::env::var("MISTER_LAUNCHER_START_MENU")
         .ok()
