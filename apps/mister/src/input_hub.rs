@@ -664,10 +664,16 @@ fn thread_cpu_us() -> u64 {
         .saturating_add(u64::try_from(value.tv_nsec).unwrap_or(0) / 1_000)
 }
 
+#[cfg(target_os = "linux")]
 fn current_cpu() -> Option<i32> {
     // SAFETY: sched_getcpu only reads the current processor number.
     let cpu = unsafe { libc::sched_getcpu() };
     (cpu >= 0).then_some(cpu)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_cpu() -> Option<i32> {
+    None
 }
 
 fn logical_action_for_key(code: u16) -> Option<LogicalAction> {
