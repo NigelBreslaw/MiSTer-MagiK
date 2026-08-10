@@ -1188,7 +1188,11 @@ impl ArcadeEntryLatencyTracker {
         self.preview_exact = true;
         let system = Self::active_system_id(catalog, nav);
         let asset_key = Self::selected_asset_key(catalog, nav);
-        let timing = preview.selected_preview_timing();
+        let timing = if selected_has_preview {
+            preview.selected_preview_timing()
+        } else {
+            crate::preview_state::SelectedPreviewTiming::default()
+        };
         self.trace.record(
             start,
             "arcade_preview_exact",

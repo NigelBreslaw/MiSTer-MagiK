@@ -7979,6 +7979,12 @@ fn profile_installed_system_entry_critical_profile(
         "status": if passed { "passed" } else { "failed" },
         "measurement": "instrumented attribution only; unprofiled runs determine performance",
         "targets": ["c64", "snes"],
+        "systems": samples.iter().map(|sample| json!({
+            "system": sample["system"],
+            "status": sample["status"],
+            "pprof": sample["pprof"],
+            "pmu": sample["catalog_profile"]["pmu"],
+        })).collect::<Vec<_>>(),
         "samples": samples,
     });
     fs::write(
