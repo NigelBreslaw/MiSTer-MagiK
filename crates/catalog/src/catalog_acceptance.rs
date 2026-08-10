@@ -7,6 +7,37 @@ use crate::catalog_classify::{PlatformKind, platform_kind_for_system};
 use crate::catalog_config;
 use crate::sharded_catalog::CatalogReader;
 
+pub fn inspect_production_registry() -> Result<String, String> {
+    inspect_registry(&catalog_config::default_sharded_catalog_path())
+}
+
+pub fn inspect_registry(storage: &std::path::Path) -> Result<String, String> {
+    let limits = crate::production_sharded_projection::production_registry_limits();
+    let reader = crate::lazy_sharded_reader::LazyShardedCatalogReader::open(storage, limits)
+        .map_err(|error| error.to_string())?;
+    let registry = reader.open_registry().map_err(|error| error.to_string())?;
+    let mut systems = registry.systems().iter().collect::<Vec<_>>();
+    systems.sort_by(|a, b| a.system_id.as_str().cmp(b.system_id.as_str()));
+    let total_games = systems.iter().try_fold(0_u64, |total, system| {
+        total
+            .checked_add(system.games)
+            .ok_or_else(|| "V3 registry total game count overflow".to_string())
+    })?;
+    let mut output = String::new();
+    for system in &systems {
+        output.push_str(&format!(
+            "catalog_v3_registry_system_tsv\tsystem={}\tgeneration={}\tgames={}\n",
+            system.system_id, system.generation, system.games
+        ));
+    }
+    output.push_str(&format!(
+        "catalog_v3_registry_summary_tsv\tvalid=1\tsystems={}\ttotal_games={}\n",
+        systems.len(),
+        total_games
+    ));
+    Ok(output)
+}
+
 pub fn inspect_production_catalog() -> Result<String, String> {
     inspect_catalog(&catalog_config::default_sharded_catalog_path())
 }
@@ -301,6 +332,16 @@ mod tests {
             "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tpreview_keys=2\tavailable_previews=1\tsource_games=5\tvisible_families=3\tcollapsed_variants=2",
             outcome.generation
         )));
+        std::fs::remove_dir_all(root.join("systems")).expect("remove system artifacts");
+        let registry_report = inspect_registry(&root).expect("inspect registry without shards");
+        assert!(registry_report.contains(&format!(
+            "catalog_v3_registry_system_tsv\tsystem=atarilynx\tgeneration={}\tgames=3",
+            outcome.generation
+        )));
+        assert!(
+            registry_report
+                .contains("catalog_v3_registry_summary_tsv\tvalid=1\tsystems=1\ttotal_games=3")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

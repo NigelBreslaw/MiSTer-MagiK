@@ -29,6 +29,7 @@
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
 //!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-v3-registry-report list system counts without opening system shards
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
@@ -385,6 +386,7 @@ fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
         command_args::CATALOG_INSPECT_COMMAND => run_catalog_v3_inspect(),
+        command_args::CATALOG_REGISTRY_REPORT_COMMAND => run_catalog_v3_registry_report(),
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
@@ -431,6 +433,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
         "input-integrity-driver-v1": true,
+        "system-entry-v1": true,
     });
     capabilities
         .as_object_mut()
@@ -447,6 +450,16 @@ fn run_catalog_v3_inspect() {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_catalog_v3_registry_report() {
+    match mister_magik_catalog::catalog_acceptance::inspect_production_registry() {
+        Ok(report) => crate::ui_log!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("catalog_v3_registry_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }

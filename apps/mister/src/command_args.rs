@@ -21,6 +21,7 @@ impl CommandSpec {
 }
 
 pub const CATALOG_INSPECT_COMMAND: &str = "catalog-v3-inspect";
+pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-v3-registry-report";
 
 pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("read", CommandKind::Fpga),
@@ -84,6 +85,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
@@ -227,6 +229,7 @@ mod tests {
         assert!(requires_display_owner("effect-bench"));
         assert!(!requires_display_owner("library-refresh"));
         assert!(!requires_display_owner("catalog-v3-inspect"));
+        assert!(!requires_display_owner("catalog-v3-registry-report"));
         assert!(!requires_display_owner("read"));
     }
 
@@ -237,6 +240,7 @@ mod tests {
         assert!(requires_process_exclusive("library-refresh"));
         assert!(requires_process_exclusive("purge-library-data"));
         assert!(!requires_process_exclusive("catalog-v3-inspect"));
+        assert!(!requires_process_exclusive("catalog-v3-registry-report"));
         assert!(!requires_process_exclusive("read"));
         assert!(!requires_process_exclusive("vsync-probe"));
         assert!(!requires_process_exclusive("cpu-profile-smoke"));
@@ -246,6 +250,7 @@ mod tests {
     #[cfg(all(not(feature = "diagnostics"), not(feature = "bench-tools")))]
     fn production_command_list_hides_diagnostics() {
         assert!(is_known_command("catalog-v3-inspect"));
+        assert!(is_known_command("catalog-v3-registry-report"));
         assert!(is_known_command("benchmark-capabilities"));
         assert!(is_known_command("pmu-probe"));
         assert!(is_known_command("pmu-profile"));
