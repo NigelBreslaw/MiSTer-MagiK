@@ -172,6 +172,8 @@ export global MisterBridge {
     in-out property <string> media-pack-summary;
     // Small global badge for background catalog validation while cached UI is usable.
     in-out property <bool> catalog-background-scan-visible;
+    // Rust-owned 500 ms blink phase shared by catalog scan indicators.
+    in-out property <bool> catalog-scan-dot-visible: true;
     // Non-empty while launching a game - full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;

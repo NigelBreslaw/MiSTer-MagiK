@@ -2702,6 +2702,7 @@ fn launcher_bridge_sync_plan(
 }
 
 const HOME_PAN_PRESENT_DURATION: Duration = Duration::from_millis(190);
+const CATALOG_SCAN_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 const HOME_LAYOUT_PADDING: usize = 18;
 const HOME_HEADER_H: usize = 42;
 const HOME_LAYOUT_SPACING: usize = 14;
@@ -2760,6 +2761,56 @@ fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
     let frame_period = Duration::from_micros(pacer.period_us().max(1));
     slint::platform::duration_until_next_timer_update()
         .map_or(frame_period, |timer| frame_period.min(timer))
+}
+
+#[derive(Debug)]
+struct CatalogScanBlink {
+    dot_visible: bool,
+    next_toggle_at: Option<Instant>,
+}
+
+impl Default for CatalogScanBlink {
+    fn default() -> Self {
+        Self {
+            dot_visible: true,
+            next_toggle_at: None,
+        }
+    }
+}
+
+impl CatalogScanBlink {
+    fn update(&mut self, catalog_building: bool, now: Instant) -> Option<bool> {
+        if !catalog_building {
+            self.next_toggle_at = None;
+            if !self.dot_visible {
+                self.dot_visible = true;
+                return Some(true);
+            }
+            return None;
+        }
+
+        if self.next_toggle_at.is_none() {
+            self.next_toggle_at = Some(now + CATALOG_SCAN_BLINK_HALF_PERIOD);
+            if !self.dot_visible {
+                self.dot_visible = true;
+                return Some(true);
+            }
+            return None;
+        }
+
+        if self.next_toggle_at.is_some_and(|deadline| now >= deadline) {
+            self.dot_visible = !self.dot_visible;
+            self.next_toggle_at = Some(now + CATALOG_SCAN_BLINK_HALF_PERIOD);
+            return Some(self.dot_visible);
+        }
+
+        None
+    }
+
+    fn time_until_toggle(&self, now: Instant) -> Option<Duration> {
+        self.next_toggle_at
+            .map(|deadline| deadline.saturating_duration_since(now))
+    }
 }
 
 fn can_preempt_home_latch_wait(
@@ -4662,6 +4713,7 @@ pub(super) fn run_launcher_loop(
     );
     let mut last_home_pan_scroll_x = nav.scroll_x;
     let mut home_pan_present_until = None;
+    let mut catalog_scan_blink = CatalogScanBlink::default();
     let mut navigation_source_bridge_sync_pending = false;
     let mut latency_critical_input_pending = false;
     let mut input_observation = input_observation_probe
@@ -7222,6 +7274,13 @@ pub(super) fn run_launcher_loop(
         let catalog_scan_visible = bridge.get_catalog_scan_visible();
         let catalog_scan_percent = bridge.get_catalog_scan_percent();
         let catalog_background_scan_visible = bridge.get_catalog_background_scan_visible();
+        if let Some(dot_visible) = catalog_scan_blink.update(
+            catalog_scan_visible || catalog_background_scan_visible,
+            loop_start,
+        ) {
+            bridge.set_catalog_scan_dot_visible(dot_visible);
+            request_launcher_redraw!();
+        }
         let confirm_visible = bridge.get_confirm_visible();
         let confirm_selected = bridge.get_confirm_selected();
         let status_write_due = frame_accounting.status_write_due();
@@ -7783,6 +7842,9 @@ pub(super) fn run_launcher_loop(
                 || launcher_idle_sleep_duration(&pacer),
                 |lab| launcher_idle_sleep_duration(&pacer).min(lab),
             );
+            let idle_sleep = catalog_scan_blink
+                .time_until_toggle(loop_start)
+                .map_or(idle_sleep, |blink| idle_sleep.min(blink));
             let _ = pad.wait_for_input(input_observation, idle_sleep);
             let _ = launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", scheduler_phase);
@@ -14140,6 +14202,60 @@ mod tests {
             now,
         ));
         assert!(present_until.is_none());
+    }
+
+    #[test]
+    fn catalog_scan_blink_only_toggles_while_building() {
+        let now = Instant::now();
+        let mut blink = CatalogScanBlink::default();
+
+        assert_eq!(blink.update(false, now), None);
+        assert_eq!(blink.time_until_toggle(now), None);
+
+        assert_eq!(blink.update(true, now), None);
+        assert_eq!(
+            blink.time_until_toggle(now),
+            Some(CATALOG_SCAN_BLINK_HALF_PERIOD)
+        );
+        assert_eq!(
+            blink.update(
+                true,
+                now + CATALOG_SCAN_BLINK_HALF_PERIOD - Duration::from_millis(1)
+            ),
+            None
+        );
+        assert_eq!(
+            blink.update(true, now + CATALOG_SCAN_BLINK_HALF_PERIOD),
+            Some(false)
+        );
+        assert_eq!(
+            blink.update(true, now + CATALOG_SCAN_BLINK_HALF_PERIOD * 2),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn catalog_scan_blink_disarms_and_resets_visible() {
+        let now = Instant::now();
+        let mut blink = CatalogScanBlink::default();
+
+        assert_eq!(blink.update(true, now), None);
+        assert_eq!(
+            blink.update(true, now + CATALOG_SCAN_BLINK_HALF_PERIOD),
+            Some(false)
+        );
+        assert_eq!(
+            blink.update(false, now + CATALOG_SCAN_BLINK_HALF_PERIOD),
+            Some(true)
+        );
+        assert_eq!(blink.time_until_toggle(now), None);
+        assert_eq!(blink.update(false, now), None);
+
+        assert_eq!(blink.update(true, now), None);
+        assert_eq!(
+            blink.time_until_toggle(now),
+            Some(CATALOG_SCAN_BLINK_HALF_PERIOD)
+        );
     }
 
     #[test]

@@ -164,7 +164,7 @@ export component BackgroundScanBadge inherits Rectangle {
         }
         PixelText8 {
             text: ".";
-            color: #d7eef8;
+            color: MisterBridge.catalog-scan-dot-visible ? #d7eef8 : transparent;
             size: PixelTextSize.body12;
             horizontal-alignment: center;
             vertical-alignment: center;
