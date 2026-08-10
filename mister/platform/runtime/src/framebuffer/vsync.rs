@@ -7,7 +7,7 @@ use crate::boot_analytics;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::unix::io::AsRawFd;
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ const DIRECT_WAIT_ARM_MARGIN_US: u64 = 4_000;
 const PERIOD_ALPHA_NUM: u64 = 1;
 const PERIOD_ALPHA_DEN: u64 = 8;
 const VSYNC_WORKER_QUEUE_DEPTH: usize = 1;
+const INTERRUPTIBLE_WAIT_SLICE: Duration = Duration::from_micros(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VsyncPaceSource {
@@ -131,6 +132,12 @@ pub struct VsyncPace {
     pub accepted_hit_age_us: u64,
     pub stale_hits: u32,
     pub message: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub enum VsyncWaitOutcome {
+    Pace(VsyncPace),
+    Interrupted,
 }
 
 pub struct VsyncPacer {
@@ -265,15 +272,32 @@ impl VsyncPacer {
     }
 
     pub fn wait(&mut self) -> VsyncPace {
+        match self.wait_interruptible(|| false) {
+            VsyncWaitOutcome::Pace(pace) => pace,
+            VsyncWaitOutcome::Interrupted => unreachable!("non-interruptible vsync wait"),
+        }
+    }
+
+    pub fn wait_interruptible(
+        &mut self,
+        mut should_interrupt: impl FnMut() -> bool,
+    ) -> VsyncWaitOutcome {
         let wait_started_at = Instant::now();
         let wait_start_age_us = self.age_since_last_hit_us(wait_started_at);
         if let Some(fd) = self.direct_fb.as_ref().map(AsRawFd::as_raw_fd) {
-            return self.wait_direct(fd, wait_started_at, wait_start_age_us);
+            return VsyncWaitOutcome::Pace(self.wait_direct(
+                fd,
+                wait_started_at,
+                wait_start_age_us,
+            ));
         }
         let deadline = Duration::from_micros(self.period_us + VSYNC_GRACE_US);
         let deadline_at = wait_started_at + deadline;
         let mut stale_hits = 0u32;
         let status = loop {
+            if should_interrupt() {
+                return VsyncWaitOutcome::Interrupted;
+            }
             if let Some(status) = self.drain_ready() {
                 if self.is_stale_hit(&status, wait_started_at) {
                     stale_hits += 1;
@@ -286,8 +310,11 @@ impl VsyncPacer {
             if now >= deadline_at {
                 break None;
             }
-            let Ok(status) = self.rx.recv_timeout(deadline_at - now) else {
-                break None;
+            let wait_for = (deadline_at - now).min(INTERRUPTIBLE_WAIT_SLICE);
+            let status = match self.rx.recv_timeout(wait_for) {
+                Ok(status) => status,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break None,
             };
             if self.is_stale_hit(&status, wait_started_at) {
                 stale_hits += 1;
@@ -296,7 +323,7 @@ impl VsyncPacer {
             break Some(status);
         };
 
-        match status {
+        VsyncWaitOutcome::Pace(match status {
             Some(VsyncWaitStatus::Hit { wait_us, at }) => {
                 let accepted_hit_age_us =
                     wait_started_at.saturating_duration_since(at).as_micros() as u64;
@@ -348,7 +375,7 @@ impl VsyncPacer {
                 pace.stale_hits = stale_hits;
                 pace
             }
-        }
+        })
     }
 
     fn drain_ready(&mut self) -> Option<VsyncWaitStatus> {
@@ -604,6 +631,41 @@ mod tests {
     use super::*;
 
     const FALLBACK_60_US: u64 = 16_667;
+
+    fn worker_pacer_for_test() -> (VsyncPacer, SyncSender<VsyncWaitStatus>) {
+        let (tx, rx) = mpsc::sync_channel(1);
+        (
+            VsyncPacer {
+                rx,
+                direct_fb: None,
+                default_period_us: FALLBACK_60_US,
+                period_us: FALLBACK_60_US,
+                last_hit_at: None,
+                last_frame_at: Instant::now(),
+                miss_streak: 0,
+                degraded_threshold: 3,
+                observed_max_miss_streak: 0,
+                hits: 0,
+                timeouts: 0,
+                errors: 0,
+                fallback_frames: 0,
+                fresh_hit_max_age_us: DEFAULT_FRESH_HIT_MAX_AGE_US,
+            },
+            tx,
+        )
+    }
+
+    #[test]
+    fn worker_wait_can_be_interrupted_without_waiting_for_vblank() {
+        let (mut pacer, _tx) = worker_pacer_for_test();
+        let started = Instant::now();
+
+        assert!(matches!(
+            pacer.wait_interruptible(|| true),
+            VsyncWaitOutcome::Interrupted
+        ));
+        assert!(started.elapsed() < Duration::from_millis(5));
+    }
 
     #[test]
     fn vsync_configuration_parsers_bound_and_default_invalid_values() {

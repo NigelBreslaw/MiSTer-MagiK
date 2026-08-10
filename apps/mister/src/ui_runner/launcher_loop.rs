@@ -2762,6 +2762,28 @@ fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
         .map_or(frame_period, |timer| frame_period.min(timer))
 }
 
+fn can_preempt_home_latch_wait(
+    screen: Screen,
+    response_frame_stamped: bool,
+    feedback_frame_stamped: bool,
+    transition_active: bool,
+    screensaver_active: bool,
+    direct_layer_state_active: bool,
+    preview_commit_pending: bool,
+    startup_intro_frame_posted: bool,
+    automation_active: bool,
+) -> bool {
+    screen == Screen::Home
+        && !response_frame_stamped
+        && !feedback_frame_stamped
+        && !transition_active
+        && !screensaver_active
+        && !direct_layer_state_active
+        && !preview_commit_pending
+        && !startup_intro_frame_posted
+        && !automation_active
+}
+
 fn pad_state_has_active_input(state: &PadState) -> bool {
     state.dpad_up
         || state.dpad_down
@@ -9051,7 +9073,42 @@ pub(super) fn run_launcher_loop(
             let wait_start = Instant::now();
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("post-submit-accounting", scheduler_phase);
-            let pace = pacer.wait();
+            let interruptible_home_wait = can_preempt_home_latch_wait(
+                nav.screen,
+                launcher_response_frame_stamp.is_some(),
+                !selection_feedback_stamp.entries.is_empty(),
+                navigation_transition.is_active()
+                    || orientation_transition.is_active()
+                    || full_screen_transition.state() != FullScreenTransitionState::Live,
+                screensaver.active,
+                composition_decision.state != UiCompositionState::FullSlint
+                    || composition_decision.retirement_generation.is_some(),
+                preview_presentation_commit.is_some(),
+                startup_intro_frame_posted,
+                launcher_automation.active(),
+            );
+            let pace = match pacer.wait_interruptible(|| {
+                interruptible_home_wait
+                    && matches!(
+                        pad.wait_for_input(input_observation, Duration::ZERO),
+                        crate::input_hub::InputWaitOutcome::Changed
+                    )
+            }) {
+                VsyncWaitOutcome::Pace(pace) => pace,
+                VsyncWaitOutcome::Interrupted => {
+                    launcher_response_trace.record_lab(Some(serde_json::json!({
+                        "phase": "latch-wait-interrupted-input",
+                        "interrupted_at_us": crate::input_hub::monotonic_us(),
+                        "posted_sequence": presented_frame.main_present_sequence,
+                    })));
+                    let _ = launcher_response_trace.record_scheduler_interval(
+                        "latch-confirmation-wait-interrupted",
+                        scheduler_phase,
+                    );
+                    request_launcher_redraw!();
+                    continue 'launcher;
+                }
+            };
             let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
             let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
             let completion = wait_for_latch_completion(
@@ -11319,6 +11376,47 @@ mod tests {
         assert!(should_defer_launcher_background_work(0, true, false, false));
         assert!(should_defer_launcher_background_work(0, false, true, false));
         assert!(should_defer_launcher_background_work(0, false, false, true));
+    }
+
+    #[test]
+    fn only_disposable_home_frames_yield_the_latch_wait_to_input() {
+        assert!(can_preempt_home_latch_wait(
+            Screen::Home,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
+        for blocked in 0..8 {
+            let mut conditions = [false; 8];
+            conditions[blocked] = true;
+            assert!(!can_preempt_home_latch_wait(
+                Screen::Home,
+                conditions[0],
+                conditions[1],
+                conditions[2],
+                conditions[3],
+                conditions[4],
+                conditions[5],
+                conditions[6],
+                conditions[7],
+            ));
+        }
+        assert!(!can_preempt_home_latch_wait(
+            Screen::Settings,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
     }
 
     #[test]
