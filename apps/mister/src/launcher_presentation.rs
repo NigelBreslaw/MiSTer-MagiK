@@ -11,7 +11,9 @@ use crate::launcher::{
     ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, LauncherNav, Screen,
 };
 use crate::launcher_taxonomy::LauncherMenuItemKind;
-use mister_magik_ui::launcher::{Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge};
+use mister_magik_ui::launcher::{
+    Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge,
+};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -245,6 +247,7 @@ macro_rules! set_string_if_changed {
 pub struct LauncherBridgePresenter {
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
+    menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
     projected_selected_index: Option<usize>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
@@ -398,7 +401,9 @@ impl LauncherBridgePresenter {
         if let Some(catalog_version) = catalog_version {
             let key = (catalog_version, nav.current_menu_id().to_string());
             if self.menu_items_key.as_ref() != Some(&key) {
-                bridge.set_menu_items(self.menu_items(nav, catalog_version));
+                let menu_items = self.menu_items(nav, catalog_version);
+                bridge.set_menu_item_presentation(self.menu_item_presentation());
+                bridge.set_menu_items(menu_items);
             }
         }
         self.sync_menu_item_state(nav);
@@ -444,15 +449,26 @@ impl LauncherBridgePresenter {
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {
         let key = (catalog_version, nav.current_menu_id().to_string());
         if self.menu_items_key.as_ref() != Some(&key) {
-            self.menu_items = Some(build_menu_items(nav, &self.selection_feedback.stamp()));
+            let feedback = self.selection_feedback.stamp();
+            self.menu_items = Some(build_menu_items(nav));
+            self.menu_item_presentation = Some(build_menu_item_presentation(nav, &feedback));
             self.menu_items_key = Some(key);
             self.projected_selected_index = Some(nav.selected);
-            self.projected_selection_feedback = self.selection_feedback.stamp();
+            self.projected_selection_feedback = feedback;
         }
         ModelRc::from(
             self.menu_items
                 .as_ref()
                 .expect("launcher menu model initialized")
+                .clone(),
+        )
+    }
+
+    pub fn menu_item_presentation(&self) -> ModelRc<MenuItemPresentation> {
+        ModelRc::from(
+            self.menu_item_presentation
+                .as_ref()
+                .expect("launcher menu presentation initialized")
                 .clone(),
         )
     }
@@ -520,13 +536,18 @@ impl LauncherBridgePresenter {
         {
             return;
         }
-        if let Some(model) = self.menu_items.as_ref() {
+        if let Some(model) = self.menu_item_presentation.as_ref() {
             for index in 0..model.row_count() {
                 if let Some(mut row) = model.row_data(index) {
                     let selected = index == nav.selected;
+                    let item_id = nav
+                        .current_menu_items()
+                        .get(index)
+                        .map(|item| item.id.as_str())
+                        .unwrap_or_default();
                     let acknowledged = stamp.entries.iter().any(|entry| {
                         entry.target.surface == nav.current_menu_id()
-                            && entry.target.item == row.id.as_str()
+                            && entry.target.item == item_id
                     });
                     if row.selected != selected || row.acknowledged != acknowledged {
                         row.selected = selected;
@@ -574,15 +595,11 @@ pub fn screen_mode(screen: Screen) -> i32 {
     }
 }
 
-fn build_menu_items(
-    nav: &LauncherNav,
-    feedback: &SelectionFeedbackStamp,
-) -> Rc<VecModel<MenuItem>> {
+fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
     let rows = nav
         .current_menu_items()
         .iter()
-        .enumerate()
-        .map(|(index, item)| {
+        .map(|item| {
             let presentation = nav.menu_item_catalog_presentation(item);
             MenuItem {
                 id: item.id.clone().into(),
@@ -613,10 +630,6 @@ fn build_menu_items(
                     CatalogMenuItemStatus::LoadFailed => "Load failed — A to retry".into(),
                     CatalogMenuItemStatus::Ready => format!("{} games", item.count).into(),
                 },
-                selected: index == nav.selected,
-                acknowledged: feedback.entries.iter().any(|entry| {
-                    entry.target.surface == nav.current_menu_id() && entry.target.item == item.id
-                }),
                 available: presentation.available,
                 node_kind: match item.kind {
                     LauncherMenuItemKind::Menu => MenuItemKind::Group,
@@ -634,6 +647,24 @@ fn build_menu_items(
                     }
                 },
             }
+        })
+        .collect::<Vec<_>>();
+    Rc::new(VecModel::from(rows))
+}
+
+fn build_menu_item_presentation(
+    nav: &LauncherNav,
+    feedback: &SelectionFeedbackStamp,
+) -> Rc<VecModel<MenuItemPresentation>> {
+    let rows = nav
+        .current_menu_items()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| MenuItemPresentation {
+            selected: index == nav.selected,
+            acknowledged: feedback.entries.iter().any(|entry| {
+                entry.target.surface == nav.current_menu_id() && entry.target.item == item.id
+            }),
         })
         .collect::<Vec<_>>();
     Rc::new(VecModel::from(rows))

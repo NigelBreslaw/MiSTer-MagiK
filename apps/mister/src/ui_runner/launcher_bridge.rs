@@ -113,6 +113,9 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_menu_items(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::MenuItem,
     >::new())));
+    bridge.set_menu_item_presentation(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::MenuItemPresentation,
+    >::new())));
     bridge.set_home_scroll_repeat_active(false);
     bridge.set_home_scroll_held(false);
     bridge.set_home_scroll_x(0);
@@ -1321,10 +1324,18 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         let mut models = LauncherBridgeModels::default();
         let rows = models.menu_items(&nav, 1);
+        let presentation = models.menu_item_presentation();
 
         assert_eq!(rows.row_count(), 3);
         let before = (0..rows.row_count())
             .map(|index| rows.row_data(index).expect("initial launcher row"))
+            .collect::<Vec<_>>();
+        let presentation_before = (0..presentation.row_count())
+            .map(|index| {
+                presentation
+                    .row_data(index)
+                    .expect("initial launcher presentation row")
+            })
             .collect::<Vec<_>>();
 
         let feedback_before = SelectionFeedbackTarget::home(&nav);
@@ -1336,16 +1347,25 @@ mod tests {
         );
         models.sync(&app, &nav, &catalog, Some(1), false);
         let updated_rows = models.menu_items(&nav, 1);
+        let updated_presentation = models.menu_item_presentation();
 
         let after = (0..updated_rows.row_count())
             .map(|index| updated_rows.row_data(index).expect("retained launcher row"))
             .collect::<Vec<_>>();
-        assert!(before[0].selected);
-        assert!(!after[0].selected);
-        assert!(!after[0].acknowledged);
-        assert!(after[1].selected);
-        assert!(after[1].acknowledged);
-        assert_eq!(before[2], after[2]);
+        let presentation_after = (0..updated_presentation.row_count())
+            .map(|index| {
+                updated_presentation
+                    .row_data(index)
+                    .expect("retained launcher presentation row")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(before, after);
+        assert!(presentation_before[0].selected);
+        assert!(!presentation_after[0].selected);
+        assert!(!presentation_after[0].acknowledged);
+        assert!(presentation_after[1].selected);
+        assert!(presentation_after[1].acknowledged);
+        assert_eq!(presentation_before[2], presentation_after[2]);
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         assert!(bridge.invoke_selection_feedback_query(
             "".into(),

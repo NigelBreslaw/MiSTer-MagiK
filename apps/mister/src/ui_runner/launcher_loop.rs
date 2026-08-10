@@ -4784,7 +4784,9 @@ pub(super) fn run_launcher_loop(
     bridge.set_menu_title(nav.current_menu_title().into());
     bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
     bridge.set_update_available(false);
-    bridge.set_menu_items(bridge_models.menu_items(&nav, catalog_version));
+    let menu_items = bridge_models.menu_items(&nav, catalog_version);
+    bridge.set_menu_item_presentation(bridge_models.menu_item_presentation());
+    bridge.set_menu_items(menu_items);
     let mut update_check = UpdateCheck::start(should_check_for_updates(
         launcher_bench_scenario.is_some(),
         bridge.get_dev_mode(),

@@ -3,7 +3,7 @@
 
 // Rust <-> Slint bridge for MiSTer input and app state.
 import { ArcadeGame } from "arcade_game.slint";
-import { MenuItem } from "launcher_menu.slint";
+import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 
 export enum PreviewStatus {
     empty,
@@ -122,7 +122,8 @@ export global MisterBridge {
     // Derived from the executable's fixed public/development installation layout.
     in-out property <bool> dev-mode;
     in-out property <[MenuItem]> menu-items;
-    // Scroll offset in logical pixels (0 = left); translates the Home six-tile ring.
+    in-out property <[MenuItemPresentation]> menu-item-presentation;
+    // Scroll offset in logical pixels (0 = left); translates the retained Home tile rail.
     in-out property <bool> home-scroll-held;
     in-out property <bool> home-scroll-repeat-active;
     in-out property <int> home-scroll-x;

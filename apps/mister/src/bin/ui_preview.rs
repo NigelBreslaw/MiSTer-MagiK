@@ -61,11 +61,11 @@ mod macos {
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_ui::launcher::{
-        ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemStatus, MisterBridge, MisterUi,
-        ScreenshotPackProgress,
+        ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
+        MisterBridge, MisterUi, ScreenshotPackProgress,
     };
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
-    use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
+    use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
     use std::cell::Cell;
     use std::collections::{HashMap, VecDeque};
@@ -3047,7 +3047,9 @@ mod macos {
         bridge.set_menu_breadcrumb("Systems".into());
         bridge.set_dev_mode(true);
         if !scenario.uses_launcher_navigation() {
-            bridge.set_menu_items(home_menu_items());
+            let menu_items = home_menu_items();
+            bridge.set_menu_item_presentation(home_menu_presentation(menu_items.row_count()));
+            bridge.set_menu_items(menu_items);
         }
         bridge.set_selected_index(0);
         bridge.set_settings_focused(false);
@@ -3191,10 +3193,20 @@ mod macos {
                     id: id.into(),
                     label: label.into(),
                     subtitle: subtitle.into(),
-                    acknowledged: false,
                     available,
                     node_kind: MenuItemKind::Collection,
                     status,
+                })
+                .collect::<Vec<_>>(),
+        ))
+    }
+
+    fn home_menu_presentation(count: usize) -> ModelRc<MenuItemPresentation> {
+        ModelRc::new(VecModel::from(
+            (0..count)
+                .map(|index| MenuItemPresentation {
+                    selected: index == 0,
+                    acknowledged: false,
                 })
                 .collect::<Vec<_>>(),
         ))

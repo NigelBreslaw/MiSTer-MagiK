@@ -18,9 +18,12 @@ export struct MenuItem {
     id: string,
     label: string,
     subtitle: string,
-    selected: bool,
-    acknowledged: bool,
     available: bool,
     node-kind: MenuItemKind,
     status: MenuItemStatus,
+}
+
+export struct MenuItemPresentation {
+    selected: bool,
+    acknowledged: bool,
 }

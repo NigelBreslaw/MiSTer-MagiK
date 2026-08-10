@@ -119,8 +119,10 @@ export component HomeGrid inherits Rectangle {
                         label: item.label;
                         subtitle: item.subtitle;
                         status: item.status;
-                        focused: !MisterBridge.settings-focused && item.selected;
-                        acknowledged: item.acknowledged && !item.selected;
+                        focused: !MisterBridge.settings-focused
+                            && MisterBridge.menu-item-presentation[index].selected;
+                        acknowledged: MisterBridge.menu-item-presentation[index].acknowledged
+                            && !MisterBridge.menu-item-presentation[index].selected;
                         flat-focus-style: true;
                     }
                 }
@@ -196,8 +198,9 @@ export component HomeGrid inherits Rectangle {
                 label: item.label;
                 subtitle: item.subtitle;
                 status: item.status;
-                focused: item.selected;
-                acknowledged: item.acknowledged && !item.selected;
+                focused: MisterBridge.menu-item-presentation[index].selected;
+                acknowledged: MisterBridge.menu-item-presentation[index].acknowledged
+                    && !MisterBridge.menu-item-presentation[index].selected;
                 flat-focus-style: true;
             }
         }
