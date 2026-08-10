@@ -4417,7 +4417,8 @@ fn verify_installed_launcher_response(
             json!(["computers-acorn-to-other", "snes-system-hub", "settings", "arcade-press-to-motion"])
         },
         "display_rates_hz": if isolated_profile { json!([60]) } else { json!([60, 50]) },
-        "diagnostic_mode": isolated_profile.then_some("1920x1200-600ms-four-round-trips"),
+        "diagnostic_mode": isolated_profile
+            .then_some("1920x1200-200-300-400-600ms-two-round-trips"),
         "input_response_status": if input_response_passed { "passed" } else { "failed" },
         "pulse_status": if pulse_passed { "passed" } else { "failed" },
         "integrity_status": if integrity_passed { "passed" } else { "failed" },
@@ -5408,7 +5409,7 @@ fn run_launcher_response_scenario(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
     let schedules = if isolated_profile {
-        vec![(600_u64, 0_u64)]
+        vec![(200_u64, 0_u64), (300, 0), (400, 0), (600, 0)]
     } else {
         vec![(100_u64, 0_u64), (50, 7), (57, 13), (64, 3), (71, 11)]
     };
@@ -5422,7 +5423,7 @@ fn run_launcher_response_scenario(
             isolated_profile,
         )?;
         computers_sweeps.push(if isolated_profile {
-            summarize_computers_round_trip(trace, interval_ms, 4)?
+            summarize_computers_round_trip(trace, interval_ms, 2)?
         } else {
             summarize_computers_sweep(trace, interval_ms, start_delay_ms)?
         });
@@ -5572,8 +5573,8 @@ fn run_launcher_response_computers_sweep(
         "computers-{interval_ms}-{start_delay_ms}-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
-    let expected_confirmations = if isolated_profile { 65 } else { 9 };
-    let expected_feedback_hidden = if isolated_profile { 64 } else { 8 };
+    let expected_confirmations = if isolated_profile { 33 } else { 9 };
+    let expected_feedback_hidden = if isolated_profile { 32 } else { 8 };
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
@@ -5632,7 +5633,7 @@ fn run_launcher_response_computers_sweep(
     })?;
     thread::sleep(Duration::from_millis(200));
     let driver = if isolated_profile {
-        format!("computers-round-trip {interval_ms} 4")
+        format!("computers-round-trip {interval_ms} 2")
     } else {
         format!("computers-sweep {interval_ms} {start_delay_ms}")
     };
