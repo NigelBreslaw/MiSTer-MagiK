@@ -950,10 +950,10 @@ fn discover_keyboard_devices() -> Vec<String> {
         let capabilities = std::fs::read_to_string(entry.path().join("device/capabilities/key"))
             .unwrap_or_default();
         // Letter keys distinguish keyboards from controllers that expose
-        // Enter as a Home button on their companion evdev node. Main's named
-        // proxy is authoritative even if its synthetic capability bitmap does
-        // not resemble an ordinary keyboard on this kernel.
-        if is_navigation_keyboard(input_device_name(&path).as_deref(), &capabilities) {
+        // Enter as a Home button on their companion evdev node. Main's proxy
+        // is owned by InputHub and must never be reopened by the UI-thread raw
+        // device pool.
+        if is_raw_navigation_keyboard(input_device_name(&path).as_deref(), &capabilities) {
             paths.push(path);
         }
     }
@@ -961,9 +961,10 @@ fn discover_keyboard_devices() -> Vec<String> {
     paths
 }
 
-fn is_navigation_keyboard(name: Option<&str>, capabilities: &str) -> bool {
-    name == Some(MAIN_INPUT_PROXY_NAME)
-        || (capability_has_key(capabilities, KEY_A) && capability_has_key(capabilities, KEY_B))
+fn is_raw_navigation_keyboard(name: Option<&str>, capabilities: &str) -> bool {
+    name != Some(MAIN_INPUT_PROXY_NAME)
+        && capability_has_key(capabilities, KEY_A)
+        && capability_has_key(capabilities, KEY_B)
 }
 
 fn input_device_name(path: &str) -> Option<String> {
@@ -1767,9 +1768,25 @@ mod tests {
     }
 
     #[test]
-    fn main_proxy_is_discovered_without_keyboard_capabilities() {
-        assert!(is_navigation_keyboard(Some(MAIN_INPUT_PROXY_NAME), ""));
-        assert!(!is_navigation_keyboard(Some("Gamepad"), ""));
+    fn raw_keyboard_discovery_excludes_main_proxy() {
+        let mut words = vec![0usize; KEY_B as usize / usize::BITS as usize + 1];
+        for code in [KEY_A, KEY_B] {
+            words[code as usize / usize::BITS as usize] |=
+                1usize << (code as usize % usize::BITS as usize);
+        }
+        let capabilities = words
+            .iter()
+            .rev()
+            .map(|word| format!("{word:x}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(!is_raw_navigation_keyboard(Some(MAIN_INPUT_PROXY_NAME), ""));
+        assert!(!is_raw_navigation_keyboard(Some("Gamepad"), ""));
+        assert!(is_raw_navigation_keyboard(
+            Some("USB Keyboard"),
+            &capabilities
+        ));
     }
 
     #[test]

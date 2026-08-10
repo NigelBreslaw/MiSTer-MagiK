@@ -5252,6 +5252,8 @@ pub(super) fn run_launcher_loop(
             EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         let mut launching = effective_view.launch_active();
         let setup_active = setup.is_active();
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-lifecycle-state", scheduler_phase);
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input =
             if effective_view.accepts_application_input() && lifecycle.startup_input_enabled() {
@@ -5259,6 +5261,8 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             };
+        scheduler_phase = launcher_response_trace
+            .record_scheduler_interval("pre-input-raw-device-poll", scheduler_phase);
         if background_work_allowed && let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -5349,7 +5353,7 @@ pub(super) fn run_launcher_loop(
         }
 
         scheduler_phase = launcher_response_trace
-            .record_scheduler_interval("pre-input-lifecycle-maintenance", scheduler_phase);
+            .record_scheduler_interval("pre-input-readiness-maintenance", scheduler_phase);
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let slint_animation_active = app.window().has_active_animations();
