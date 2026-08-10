@@ -400,12 +400,7 @@ pub struct NavigationTransitionRuntime {
     enabled: bool,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
-    pending_request: Option<NavigationTransitionRequest>,
-    pending_capture_us: u64,
-    pending_started_us: u64,
     pending_prepare_started: Option<Instant>,
-    pending_status_quiesce_us: u64,
-    pending_status_quiesce_timeout: bool,
     buffers: NavigationTransitionBuffers,
     logical_width: usize,
     logical_height: usize,
@@ -426,12 +421,7 @@ impl NavigationTransitionRuntime {
             enabled,
             duration_override_us: None,
             controller: NavigationTransitionController::default(),
-            pending_request: None,
-            pending_capture_us: 0,
-            pending_started_us: 0,
             pending_prepare_started: None,
-            pending_status_quiesce_us: 0,
-            pending_status_quiesce_timeout: false,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             logical_width: buffer_width,
             logical_height: buffer_height,
@@ -461,7 +451,6 @@ impl NavigationTransitionRuntime {
             return;
         }
         self.enabled = enabled;
-        self.pending_request = None;
         self.controller = NavigationTransitionController::default();
         self.geometry_history.clear();
         self.route = None;
@@ -579,12 +568,11 @@ impl NavigationTransitionRuntime {
         self.buffers
             .capture_source(slint_rgb565_as_shared(source))?;
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        self.pending_request = Some(request);
-        self.pending_capture_us = capture_us;
-        self.pending_started_us = now_us;
+        if !self.controller.begin(request, now_us) || !self.controller.captured(now_us, capture_us)
+        {
+            return Ok(false);
+        }
         self.pending_prepare_started = Some(Instant::now());
-        self.pending_status_quiesce_us = 0;
-        self.pending_status_quiesce_timeout = false;
         Ok(true)
     }
 
@@ -601,7 +589,7 @@ impl NavigationTransitionRuntime {
     pub fn capture_destination(
         &mut self,
         destination: &[Rgb565Pixel],
-        now_us: u64,
+        _now_us: u64,
     ) -> Result<(), NavigationTransitionFailure> {
         self.buffers
             .capture_destination(slint_rgb565_as_shared(destination))?;
@@ -610,22 +598,11 @@ impl NavigationTransitionRuntime {
             .take()
             .map(|started| started.elapsed().as_micros().min(u64::MAX as u128) as u64)
             .unwrap_or(0);
-        if self.activate_pending(now_us) {
-            self.controller.note_destination_prepared(prepare_us);
-        }
+        self.controller.note_destination_prepared(prepare_us);
         Ok(())
     }
 
     pub fn tick(&mut self, now_us: u64) -> NavigationTransitionFrame {
-        if let Some(request) = self.pending_request {
-            if now_us.saturating_sub(self.pending_started_us) >= request.preparation_timeout_us {
-                self.activate_pending(now_us);
-                self.controller
-                    .fail(NavigationTransitionFailure::DestinationTimeout, now_us);
-                return self.controller.frame();
-            }
-            return self.frame();
-        }
         self.controller
             .tick(now_us, self.buffers.destination_ready())
     }
@@ -636,19 +613,7 @@ impl NavigationTransitionRuntime {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
         };
         let frame = self.frame();
-        let pending = self.pending_request.is_some();
-        let mut stats = if pending {
-            let copied_pixels = self.buffers.copy_source_to_working()?;
-            NavigationTransitionRenderStats {
-                copied_pixels: copied_pixels as u64,
-                ..NavigationTransitionRenderStats::default()
-            }
-        } else {
-            render_navigation_transition(&mut self.buffers, request, frame)?
-        };
-        if pending {
-            stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        }
+        let stats = render_navigation_transition(&mut self.buffers, request, frame)?;
         self.controller.telemetry.overlay_us = self
             .controller
             .telemetry
@@ -681,21 +646,8 @@ impl NavigationTransitionRuntime {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
         };
         let frame = self.frame();
-        let pending = self.pending_request.is_some();
-        let mut stats = if pending {
-            let source = self
-                .buffers
-                .source()
-                .filter(|source| source.len() == output.len())
-                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
-            output.copy_from_slice(source);
-            NavigationTransitionRenderStats {
-                copied_pixels: source.len() as u64,
-                ..NavigationTransitionRenderStats::default()
-            }
-        } else {
-            render_settings_page_transition_into(&self.buffers, request, frame, output)?
-        };
+        let mut stats =
+            render_settings_page_transition_into(&self.buffers, request, frame, output)?;
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller
             .telemetry_mut()
@@ -705,23 +657,14 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn request_reverse(&mut self, now_us: u64) -> bool {
-        if self.pending_request.is_some() {
-            self.activate_pending(now_us);
-        }
         self.controller.request_reverse(now_us)
     }
 
     pub fn settle_at_destination(&mut self) -> bool {
-        if self.pending_request.is_some() {
-            self.activate_pending(self.pending_started_us);
-        }
         self.controller.settle_at_destination()
     }
 
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
-        if self.pending_request.is_some() {
-            self.activate_pending(self.pending_started_us);
-        }
         self.controller
             .cancel_for_exclusive_view(self.buffers.destination_ready())
     }
@@ -756,18 +699,11 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
-        if self.pending_request.is_some() {
-            return NavigationTransitionFrame {
-                phase: NavigationTransitionPhase::Capture,
-                owns_full_frame: true,
-                ..NavigationTransitionFrame::default()
-            };
-        }
         self.controller.frame()
     }
 
     pub fn request(&self) -> Option<NavigationTransitionRequest> {
-        self.pending_request.or_else(|| self.controller.request())
+        self.controller.request()
     }
 
     pub const fn route(&self) -> Option<NavigationTransitionRoute> {
@@ -775,7 +711,7 @@ impl NavigationTransitionRuntime {
     }
 
     pub const fn is_active(&self) -> bool {
-        self.pending_request.is_some() || self.controller.is_active()
+        self.controller.is_active()
     }
 
     pub const fn destination_ready(&self) -> bool {
@@ -786,7 +722,7 @@ impl NavigationTransitionRuntime {
     /// Slint must retain its pending redraw without advancing or rasterizing until
     /// this playback settles.
     pub const fn snapshot_locked(&self) -> bool {
-        self.is_active() && self.pending_request.is_none() && self.buffers.destination_ready()
+        self.is_active() && self.buffers.destination_ready()
     }
 
     pub const fn settings_physical_space(&self) -> bool {
@@ -806,29 +742,13 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn note_pending_status_quiesce(&mut self, wait_us: u64, timed_out: bool) {
-        self.pending_status_quiesce_us = wait_us;
-        self.pending_status_quiesce_timeout = timed_out;
+        let telemetry = self.controller.telemetry_mut();
+        telemetry.status_quiesce_wait_us = wait_us;
+        telemetry.status_quiesce_timeout = timed_out;
     }
 
     pub const fn telemetry(&self) -> NavigationTransitionTelemetry {
         self.controller.telemetry()
-    }
-
-    fn activate_pending(&mut self, now_us: u64) -> bool {
-        let Some(request) = self.pending_request.take() else {
-            return false;
-        };
-        self.pending_prepare_started = None;
-        if !self.controller.begin(request, now_us) {
-            return false;
-        }
-        let captured = self.controller.captured(now_us, self.pending_capture_us);
-        if captured {
-            let telemetry = self.controller.telemetry_mut();
-            telemetry.status_quiesce_wait_us = self.pending_status_quiesce_us;
-            telemetry.status_quiesce_timeout = self.pending_status_quiesce_timeout;
-        }
-        captured
     }
 }
 
@@ -1555,7 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn destination_preparation_does_not_advance_the_animation_clock() {
+    fn runtime_animates_source_before_destination_is_ready() {
         let mut poc = NavigationTransitionRuntime::new(16, 12, true);
         let source = vec![Rgb565Pixel(0x1111); 16 * 12];
         let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
@@ -1577,25 +1497,54 @@ mod tests {
         )
         .unwrap();
 
-        let preparing = poc.tick(900_000);
-        assert_eq!(preparing.phase, NavigationTransitionPhase::Capture);
-        assert_eq!(preparing.progress_q16, 0);
+        let expanding = poc.tick(100_000);
+        assert_eq!(expanding.phase, NavigationTransitionPhase::Expand);
+        assert!(expanding.progress_q16 > 0);
         assert!(!poc.snapshot_locked());
-        assert_eq!(poc.render().unwrap(), source);
+        assert_ne!(poc.render().unwrap(), source);
 
-        poc.capture_destination(&destination, 900_000).unwrap();
+        poc.capture_destination(&destination, 100_000).unwrap();
         assert!(poc.snapshot_locked());
-        let first_animation_frame = poc.tick(900_000);
-        assert_eq!(
-            first_animation_frame.phase,
-            NavigationTransitionPhase::Expand
-        );
-        assert_eq!(first_animation_frame.progress_q16, 0);
-        assert_eq!(poc.render().unwrap(), source);
-        poc.tick(900_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
+        poc.tick(10_000 + NavigationTransitionEdge::HomeToConsoles.duration_us());
         assert!(poc.snapshot_locked());
         assert!(poc.complete().is_some());
         assert!(!poc.snapshot_locked());
+    }
+
+    #[test]
+    fn runtime_holds_at_cover_then_attaches_destination() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
+        runtime
+            .begin(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                NavigationTransitionGeometry::default(),
+                &source,
+                0,
+            )
+            .unwrap();
+        let request = runtime.request().expect("active request");
+        let cover_us =
+            request.duration_us * SUPER_SCALER_COVER_PROGRESS as u64 / PROGRESS_MAX as u64;
+
+        assert_eq!(
+            runtime.tick(cover_us).phase,
+            NavigationTransitionPhase::Covered
+        );
+        assert_eq!(
+            runtime.tick(cover_us + 50_000).phase,
+            NavigationTransitionPhase::Covered
+        );
+        runtime
+            .capture_destination(&destination, cover_us + 50_000)
+            .unwrap();
+        assert_eq!(
+            runtime.tick(cover_us + 50_001).phase,
+            NavigationTransitionPhase::Reveal
+        );
+        assert!(runtime.telemetry().covered_hold_us >= 50_000);
     }
 
     #[test]

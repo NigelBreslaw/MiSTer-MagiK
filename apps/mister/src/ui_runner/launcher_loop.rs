@@ -896,13 +896,6 @@ fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) ->
     catalog.system_game_count(collection_id) > 0
 }
 
-fn collection_navigation_transition_ready(
-    catalog: &ArcadeCatalog,
-    collection_id: Option<&str>,
-) -> bool {
-    collection_id.is_none_or(|collection_id| collection_has_resident_rows(catalog, collection_id))
-}
-
 fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.screen == Screen::Arcade
         && active_system(catalog, nav).is_some_and(|system| {
@@ -5782,7 +5775,9 @@ pub(super) fn run_launcher_loop(
         {
             deferred_catalog_events.push_back(message);
         }
-        if background_work_allowed
+        let system_entry_catalog_poll_allowed =
+            background_work_allowed || pending_collection_entry.is_some();
+        if system_entry_catalog_poll_allowed
             && catalog_messages_need_polling(
                 pending_catalog_ready.is_some(),
                 catalog_session.refresh_done(),
@@ -6111,11 +6106,18 @@ pub(super) fn run_launcher_loop(
                 .saturating_duration_since(start)
                 .as_micros()
                 .min(u64::MAX as u128) as u64;
-            let transition_frame = navigation_transition.tick(now_us);
-            let should_commit = transition_frame.phase == NavigationTransitionPhase::Capture
-                && pending_navigation_transition
-                    .as_ref()
-                    .is_some_and(|pending| !pending.committed);
+            navigation_transition.tick(now_us);
+            let should_commit = pending_navigation_transition
+                .as_ref()
+                .is_some_and(|pending| {
+                    if pending.committed {
+                        return false;
+                    }
+                    pending.event.action != LauncherAction::OpenCollection
+                        || pending_collection_entry.as_ref().is_none_or(|entry| {
+                            collection_has_resident_rows(&catalog, &entry.collection_id)
+                        })
+                });
             if should_commit {
                 let navigation_commit_started = Instant::now();
                 let event = pending_navigation_transition
@@ -6969,12 +6971,8 @@ pub(super) fn run_launcher_loop(
                                         }
                                     }
 
-                                    let transition_spec = collection_navigation_transition_ready(
-                                        &catalog,
-                                        collection_id.as_deref(),
-                                    )
-                                    .then(|| navigation_transition_for_intent(&nav, &event))
-                                    .flatten();
+                                    let transition_spec =
+                                        navigation_transition_for_intent(&nav, &event);
                                     if transition_spec.is_some()
                                         && nav.screen == Screen::Arcade
                                         && !crt_layout
@@ -13845,7 +13843,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_collection_sequence_skips_transition_until_populated_commit() {
+    fn cold_collection_sequence_keeps_home_until_populated_commit() {
         let empty = ArcadeCatalog::new(
             std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
             Vec::new(),
@@ -13868,7 +13866,6 @@ mod tests {
         });
         let source_bridge = LauncherBridgeKey::from_nav(&nav);
 
-        assert!(!collection_navigation_transition_ready(&empty, Some("c64")));
         assert!(!commit_pending_collection_entry(
             &mut pending,
             &mut nav,
@@ -13892,23 +13889,8 @@ mod tests {
         assert_eq!(nav.screen, Screen::Arcade);
         assert!(pending.is_none());
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
-        assert!(collection_navigation_transition_ready(
-            &hydrated,
-            Some("c64")
-        ));
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
         assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Arcade);
-    }
-
-    #[test]
-    fn non_collection_navigation_does_not_wait_for_catalog_rows() {
-        let catalog = ArcadeCatalog::new(
-            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
-            Vec::new(),
-            vec![crate::test_support::arcade_system("c64", 1)],
-        );
-
-        assert!(collection_navigation_transition_ready(&catalog, None));
     }
 
     #[test]
