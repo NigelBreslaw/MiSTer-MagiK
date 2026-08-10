@@ -608,7 +608,6 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn render(&mut self) -> Result<&[Rgb565Pixel], NavigationTransitionFailure> {
-        let started = Instant::now();
         let Some(request) = self.request() else {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
         };
