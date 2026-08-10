@@ -2784,6 +2784,14 @@ fn can_preempt_home_latch_wait(
         && !automation_active
 }
 
+fn should_restart_for_urgent_input(
+    current_batch_empty: bool,
+    latency_critical_frame_pending: bool,
+    input_changed_since_drain: bool,
+) -> bool {
+    current_batch_empty && !latency_critical_frame_pending && input_changed_since_drain
+}
+
 fn pad_state_has_active_input(state: &PadState) -> bool {
     state.dpad_up
         || state.dpad_down
@@ -3927,9 +3935,10 @@ pub(super) fn run_launcher_loop(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (1..=1_000).contains(value));
     let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
+    let input_observation_probe = pad.input_observation_probe();
     let mut launcher_response_trace =
-        LauncherResponseTrace::from_env(&nav, pad.input_observation_probe());
-    let mut input_latency_lab = InputLatencyLab::from_env(pad.input_observation_probe());
+        LauncherResponseTrace::from_env(&nav, input_observation_probe.clone());
+    let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -4707,6 +4716,22 @@ pub(super) fn run_launcher_loop(
             slint::platform::update_timers_and_animations();
         }
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
+        if should_restart_for_urgent_input(
+            input_batch.events.is_empty(),
+            latency_critical_input_pending,
+            input_observation_probe
+                .as_ref()
+                .is_some_and(|probe| probe.changed_since(input_observation)),
+        ) {
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "input-priority-restart",
+                "checkpoint": "after-slint-timers",
+                "at_us": crate::input_hub::monotonic_us(),
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            continue;
+        }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
         let current_feedback_target = discrete_selection_feedback_target(&nav, &setup, &lifecycle);
@@ -5048,6 +5073,23 @@ pub(super) fn run_launcher_loop(
                 light_bridge_dirty = true;
                 runtime_status::event("update_available", "source=downloader_mister_magik");
             }
+        }
+
+        if should_restart_for_urgent_input(
+            input_batch.events.is_empty(),
+            latency_critical_input_pending,
+            input_observation_probe
+                .as_ref()
+                .is_some_and(|probe| probe.changed_since(input_observation)),
+        ) {
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "input-priority-restart",
+                "checkpoint": "before-catalog-work",
+                "at_us": crate::input_hub::monotonic_us(),
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            continue;
         }
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
@@ -5751,6 +5793,22 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-route", scheduler_phase);
+        if should_restart_for_urgent_input(
+            input_batch.events.is_empty(),
+            latency_critical_input_pending,
+            input_observation_probe
+                .as_ref()
+                .is_some_and(|probe| probe.changed_since(input_observation)),
+        ) {
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "input-priority-restart",
+                "checkpoint": "before-input-route",
+                "at_us": crate::input_hub::monotonic_us(),
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            continue;
+        }
         let pad_changed = pad_changed_for_input
             .take()
             .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
@@ -7661,6 +7719,22 @@ pub(super) fn run_launcher_loop(
         };
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("post-projection-background", scheduler_phase);
+        if should_restart_for_urgent_input(
+            input_batch.events.is_empty(),
+            latency_critical_input_pending,
+            input_observation_probe
+                .as_ref()
+                .is_some_and(|probe| probe.changed_since(input_observation)),
+        ) {
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "input-priority-restart",
+                "checkpoint": "before-render",
+                "at_us": crate::input_hub::monotonic_us(),
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            continue;
+        }
         if render_intent.can_sleep() {
             if let Some(record) = input_latency_lab.cooperative_quantum(input_observation) {
                 launcher_response_trace.record_lab(Some(record));
@@ -11417,6 +11491,14 @@ mod tests {
             false,
             false,
         ));
+    }
+
+    #[test]
+    fn urgent_input_restarts_only_an_empty_noninteractive_loop() {
+        assert!(should_restart_for_urgent_input(true, false, true));
+        assert!(!should_restart_for_urgent_input(false, false, true));
+        assert!(!should_restart_for_urgent_input(true, true, true));
+        assert!(!should_restart_for_urgent_input(true, false, false));
     }
 
     #[test]
