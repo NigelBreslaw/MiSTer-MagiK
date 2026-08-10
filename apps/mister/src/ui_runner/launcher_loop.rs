@@ -1415,8 +1415,23 @@ struct LauncherResponseFrameEvidence {
     projected_at_us: u64,
     raster_started_at_us: u64,
     raster_completed_at_us: u64,
+    slint_damage_rects: Vec<(usize, usize, usize, usize)>,
     post_accepted_at_us: u64,
     dirty_rect: Option<(usize, usize, usize, usize)>,
+    present_bytes: usize,
+    wasted_present_bytes: usize,
+    cached_present_us: u64,
+    hidden_compose_us: u64,
+    hidden_copy_us: u64,
+    hidden_publish_us: u64,
+    hidden_invalid_bytes: usize,
+    hidden_rect_count: u32,
+    hidden_catchup_bytes: usize,
+    hidden_full_copy: bool,
+    hidden_copy_path: &'static str,
+    present_request_us: u64,
+    set_vga_fb_us: u64,
+    present_wait_us: u64,
     posted_sequence: u16,
     post_active_sequence: u16,
     post_pending_sequence: u16,
@@ -1431,12 +1446,27 @@ struct LauncherResponseFrameStamp {
     projected_at_us: u64,
     raster_started_at_us: u64,
     raster_completed_at_us: u64,
+    slint_damage_rects: Vec<(usize, usize, usize, usize)>,
 }
 
 #[derive(Clone, Copy, Default)]
 struct LauncherResponsePresentReceipt {
     post_accepted_at_us: u64,
     dirty_rect: Option<(usize, usize, usize, usize)>,
+    present_bytes: usize,
+    wasted_present_bytes: usize,
+    cached_present_us: u64,
+    hidden_compose_us: u64,
+    hidden_copy_us: u64,
+    hidden_publish_us: u64,
+    hidden_invalid_bytes: usize,
+    hidden_rect_count: u32,
+    hidden_catchup_bytes: usize,
+    hidden_full_copy: bool,
+    hidden_copy_path: &'static str,
+    present_request_us: u64,
+    set_vga_fb_us: u64,
+    present_wait_us: u64,
     posted_sequence: u16,
     post_active_sequence: u16,
     post_pending_sequence: u16,
@@ -1477,6 +1507,10 @@ struct LauncherResponseTrace {
     partial_confirmed_sent: usize,
     partial_feedback_sent: usize,
     dirty: bool,
+}
+
+fn launcher_response_u64(value: u128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 struct LauncherResponseTraceWrite {
@@ -1742,6 +1776,7 @@ impl LauncherResponseTrace {
             projected_at_us,
             raster_started_at_us,
             raster_completed_at_us,
+            slint_damage_rects: Vec::new(),
         })
     }
 
@@ -1781,8 +1816,23 @@ impl LauncherResponseTrace {
             projected_at_us: stamp.projected_at_us,
             raster_started_at_us: stamp.raster_started_at_us,
             raster_completed_at_us: stamp.raster_completed_at_us,
+            slint_damage_rects: stamp.slint_damage_rects.clone(),
             post_accepted_at_us: receipt.post_accepted_at_us,
             dirty_rect: receipt.dirty_rect,
+            present_bytes: receipt.present_bytes,
+            wasted_present_bytes: receipt.wasted_present_bytes,
+            cached_present_us: receipt.cached_present_us,
+            hidden_compose_us: receipt.hidden_compose_us,
+            hidden_copy_us: receipt.hidden_copy_us,
+            hidden_publish_us: receipt.hidden_publish_us,
+            hidden_invalid_bytes: receipt.hidden_invalid_bytes,
+            hidden_rect_count: receipt.hidden_rect_count,
+            hidden_catchup_bytes: receipt.hidden_catchup_bytes,
+            hidden_full_copy: receipt.hidden_full_copy,
+            hidden_copy_path: receipt.hidden_copy_path,
+            present_request_us: receipt.present_request_us,
+            set_vga_fb_us: receipt.set_vga_fb_us,
+            present_wait_us: receipt.present_wait_us,
             posted_sequence: receipt.posted_sequence,
             post_active_sequence: receipt.post_active_sequence,
             post_pending_sequence: receipt.post_pending_sequence,
@@ -2161,6 +2211,12 @@ impl LauncherResponseTraceSnapshot {
                         "projected_at_us": frame.projected_at_us,
                         "raster_started_at_us": frame.raster_started_at_us,
                         "raster_completed_at_us": frame.raster_completed_at_us,
+                        "slint_damage_rects": frame.slint_damage_rects.iter().map(|(x0, y0, x1, y1)| serde_json::json!({
+                            "x0": x0,
+                            "y0": y0,
+                            "x1": x1,
+                            "y1": y1,
+                        })).collect::<Vec<_>>(),
                         "post_accepted_at_us": frame.post_accepted_at_us,
                         "dirty_rect": frame.dirty_rect.map(|(x0, y0, x1, y1)| serde_json::json!({
                             "x0": x0,
@@ -2168,6 +2224,20 @@ impl LauncherResponseTraceSnapshot {
                             "x1": x1,
                             "y1": y1,
                         })),
+                        "present_bytes": frame.present_bytes,
+                        "wasted_present_bytes": frame.wasted_present_bytes,
+                        "cached_present_us": frame.cached_present_us,
+                        "hidden_compose_us": frame.hidden_compose_us,
+                        "hidden_copy_us": frame.hidden_copy_us,
+                        "hidden_publish_us": frame.hidden_publish_us,
+                        "hidden_invalid_bytes": frame.hidden_invalid_bytes,
+                        "hidden_rect_count": frame.hidden_rect_count,
+                        "hidden_catchup_bytes": frame.hidden_catchup_bytes,
+                        "hidden_full_copy": frame.hidden_full_copy,
+                        "hidden_copy_path": frame.hidden_copy_path,
+                        "present_request_us": frame.present_request_us,
+                        "set_vga_fb_us": frame.set_vga_fb_us,
+                        "present_wait_us": frame.present_wait_us,
                         "posted_sequence": frame.posted_sequence,
                         "post_active_sequence": frame.post_active_sequence,
                         "post_pending_sequence": frame.post_pending_sequence,
@@ -8528,12 +8598,19 @@ pub(super) fn run_launcher_loop(
             expanded
         };
         let response_raster_completed_at_us = crate::input_hub::monotonic_us();
-        let launcher_response_frame_stamp = launcher_response_trace.frame_stamp(
+        let mut launcher_response_frame_stamp = launcher_response_trace.frame_stamp(
             &nav,
             response_projected_at_us,
             response_raster_started_at_us,
             response_raster_completed_at_us,
         );
+        if let Some(stamp) = launcher_response_frame_stamp.as_mut() {
+            stamp.slint_damage_rects.extend(
+                slint_damage
+                    .iter()
+                    .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1)),
+            );
+        }
         if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation)
             && full_screen_transition.state() == FullScreenTransitionState::CapturePending
             && !full_screen_transition.policy().controlled_capture
@@ -9382,6 +9459,22 @@ pub(super) fn run_launcher_loop(
             dirty_rect: presented_frame
                 .dirty_rect
                 .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1)),
+            present_bytes: presented_frame.present_bytes,
+            wasted_present_bytes: presented_frame.wasted_present_bytes,
+            cached_present_us: launcher_response_u64(presented_frame.cached_present_us),
+            hidden_compose_us: launcher_response_u64(presented_frame.hidden_compose_us),
+            hidden_copy_us: launcher_response_u64(presented_frame.main_present_hidden_copy_us),
+            hidden_publish_us: launcher_response_u64(
+                presented_frame.main_present_hidden_publish_us,
+            ),
+            hidden_invalid_bytes: presented_frame.main_present_hidden_invalid_bytes,
+            hidden_rect_count: presented_frame.main_present_hidden_rect_count,
+            hidden_catchup_bytes: presented_frame.main_present_hidden_catchup_bytes,
+            hidden_full_copy: presented_frame.main_present_hidden_full_copy,
+            hidden_copy_path: presented_frame.main_present_copy_path,
+            present_request_us: launcher_response_u64(presented_frame.main_present_request_us),
+            set_vga_fb_us: launcher_response_u64(presented_frame.main_present_set_vga_fb_us),
+            present_wait_us: presented_frame.main_present_wait_us,
             posted_sequence: presented_frame.main_present_sequence,
             post_active_sequence: presented_frame.main_present_post_active_sequence,
             post_pending_sequence: presented_frame.main_present_post_pending_sequence,
@@ -11902,11 +11995,22 @@ mod tests {
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
         let applied_at_us = trace.records[0].state_applied_at_us.unwrap();
-        let stamp = trace.frame_stamp(&nav, applied_at_us, applied_at_us + 1, applied_at_us + 2);
+        let mut stamp =
+            trace.frame_stamp(&nav, applied_at_us, applied_at_us + 1, applied_at_us + 2);
+        stamp
+            .as_mut()
+            .expect("response frame stamp")
+            .slint_damage_rects
+            .push((10, 20, 30, 40));
         nav.system_hub_selected = 2;
         trace.confirm(
             stamp.as_ref(),
-            LauncherResponsePresentReceipt::default(),
+            LauncherResponsePresentReceipt {
+                present_bytes: 1_234,
+                hidden_copy_us: 321,
+                hidden_rect_count: 2,
+                ..LauncherResponsePresentReceipt::default()
+            },
             5,
             9,
         );
@@ -11919,6 +12023,11 @@ mod tests {
                 .map(|frame| frame.selected.selected_index),
             Some(1)
         );
+        let frame = trace.records[0].frame.as_ref().expect("frame evidence");
+        assert_eq!(frame.slint_damage_rects, vec![(10, 20, 30, 40)]);
+        assert_eq!(frame.present_bytes, 1_234);
+        assert_eq!(frame.hidden_copy_us, 321);
+        assert_eq!(frame.hidden_rect_count, 2);
     }
 
     #[test]
