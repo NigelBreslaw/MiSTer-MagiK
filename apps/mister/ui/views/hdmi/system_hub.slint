@@ -79,7 +79,6 @@ component HubCard inherits Rectangle {
     Rectangle { x: parent.width - 26px; y: parent.height - 10px; width: 18px; height: 2px; background: root.ink; }
     Rectangle { x: parent.width - 10px; y: parent.height - 26px; width: 2px; height: 18px; background: root.ink; }
 
-
     Rectangle {
         x: 14px; y: 62px; width: parent.width - 28px; height: 26px;
         Nocive15 {
@@ -195,7 +194,7 @@ export component SystemHubScreen inherits Rectangle {
     HubCard { x: cards-x; y: cards-y; width: card-width; height: card-height; kind: 0; label: "GAMES"; detail: MisterBridge.system-hub-games-count + " TITLES"; focused: MisterBridge.system-hub-selected == 0; acknowledged: MisterBridge.selection-feedback-query("system-hub", "games", MisterBridge.selection-feedback-revision); }
     HubCard { x: cards-x + card-width + 14px; y: cards-y; width: card-width; height: card-height; kind: 1; label: "RECENT"; detail: MisterBridge.system-hub-recent-count + " PLAYED"; focused: MisterBridge.system-hub-selected == 1; acknowledged: MisterBridge.selection-feedback-query("system-hub", "recent", MisterBridge.selection-feedback-revision); }
     HubCard { x: cards-x; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 2; label: "FAVORITES"; detail: MisterBridge.system-hub-favourites-count + " SAVED"; focused: MisterBridge.system-hub-selected == 2; acknowledged: MisterBridge.selection-feedback-query("system-hub", "favorites", MisterBridge.selection-feedback-revision); }
-    HubCard { x: cards-x + card-width + 14px; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 3; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: MisterBridge.system-hub-selected == 3; acknowledged: MisterBridge.selection-feedback-query("system-hub", "info", MisterBridge.selection-feedback-revision); }
+    // HubCard { x: cards-x + card-width + 14px; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 3; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: MisterBridge.system-hub-selected == 3; acknowledged: MisterBridge.selection-feedback-query("system-hub", "info", MisterBridge.selection-feedback-revision); }
 
     Rectangle {
         x: 28px; y: parent.height - 50px; width: parent.width - 56px; height: 1px;
