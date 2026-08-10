@@ -4891,10 +4891,21 @@ fn summarize_input_latency_lab_arm(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let mut capture_to_publish = records
+        .iter()
+        .filter_map(|record| record["capture_to_publish_us"].as_u64())
+        .collect::<Vec<_>>();
+    let mut publish_to_drain = records
+        .iter()
+        .filter_map(|record| record["publish_to_drain_us"].as_u64())
+        .collect::<Vec<_>>();
+    capture_to_publish.sort_unstable();
+    publish_to_drain.sort_unstable();
     let scheduler_attribution = records
         .iter()
         .filter_map(|record| {
             let captured_at_us = record["captured_at_us"].as_u64()?;
+            let published_at_us = record["published_at_us"].as_u64()?;
             let drained_at_us = record["drained_at_us"].as_u64()?;
             let phase = scheduler_phases.iter().find(|phase| {
                 phase["started_at_us"]
@@ -4907,7 +4918,10 @@ fn summarize_input_latency_lab_arm(
             Some(json!({
                 "press_id": record["press_id"],
                 "captured_at_us": captured_at_us,
+                "published_at_us": published_at_us,
                 "drained_at_us": drained_at_us,
+                "capture_to_publish_us": published_at_us.saturating_sub(captured_at_us),
+                "publish_to_drain_us": drained_at_us.saturating_sub(published_at_us),
                 "capture_to_drain_us": drained_at_us.saturating_sub(captured_at_us),
                 "phase": phase.and_then(|phase| phase["label"].as_str()),
                 "phase_duration_us": phase.and_then(|phase| phase["duration_us"].as_u64()),
@@ -4978,6 +4992,10 @@ fn summarize_input_latency_lab_arm(
         "product_quality_status": pass_fail(product_quality),
         "dispatch_p95_us": dispatch_p95_us,
         "dispatch_max_us": dispatch_max_us,
+        "capture_to_publish_p95_us": percentile_nearest_rank(&capture_to_publish, 95),
+        "capture_to_publish_max_us": capture_to_publish.last().copied(),
+        "publish_to_drain_p95_us": percentile_nearest_rank(&publish_to_drain, 95),
+        "publish_to_drain_max_us": publish_to_drain.last().copied(),
         "confirmed_median_us": confirmed_median_us,
         "confirmed_p95_us": confirmed_p95_us,
         "confirmed_max_us": confirmed_max_us,

@@ -53,11 +53,17 @@ struct InputMailbox {
     shutdown: AtomicBool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MailboxEvent {
+    event: InputEvent,
+    published_at_us: u64,
+}
+
 #[derive(Default)]
 struct MailboxState {
     source_epoch: SourceEpoch,
     next_sequence: u64,
-    events: VecDeque<InputEvent>,
+    events: VecDeque<MailboxEvent>,
     held: HeldState,
     topology: InputTopology,
     health: InputHealth,
@@ -89,7 +95,10 @@ impl MailboxState {
             self.note_change();
             return false;
         }
-        self.events.push_back(event);
+        self.events.push_back(MailboxEvent {
+            event,
+            published_at_us: monotonic_us(),
+        });
         self.health.queue_depth = self.events.len();
         self.health.queue_high_water = self.health.queue_high_water.max(self.events.len());
         self.note_change();
@@ -157,7 +166,14 @@ impl InputObservationProbe {
 #[derive(Debug, Default)]
 pub struct DrainedInput {
     pub batch: InputBatch,
+    pub publications: Vec<InputPublication>,
     pub observation: InputObservation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InputPublication {
+    pub sequence: u64,
+    pub published_at_us: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -200,7 +216,18 @@ impl InputHub {
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let events: Vec<_> = state.events.drain(..).collect();
+        let published_events: Vec<_> = state.events.drain(..).collect();
+        let publications = published_events
+            .iter()
+            .map(|published| InputPublication {
+                sequence: published.event.sequence,
+                published_at_us: published.published_at_us,
+            })
+            .collect();
+        let events: Vec<_> = published_events
+            .into_iter()
+            .map(|published| published.event)
+            .collect();
         state.health.queue_depth = 0;
         DrainedInput {
             batch: InputBatch {
@@ -213,6 +240,7 @@ impl InputHub {
                 health: state.health.clone(),
                 ..InputBatch::default()
             },
+            publications,
             observation: InputObservation(state.wake_generation),
         }
     }
@@ -566,6 +594,39 @@ mod tests {
     }
 
     #[test]
+    fn drained_input_preserves_exact_mailbox_publication_time() {
+        let hub = test_hub();
+        let captured_at_us = monotonic_us();
+        {
+            let mut state = hub
+                .mailbox
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            assert!(state.publish(crate::input_event::PendingInputEvent {
+                source: InputSourceId {
+                    kind: InputSourceKind::MainProxy,
+                    instance: 1,
+                },
+                source_epoch: SourceEpoch(1),
+                press_id: crate::input_event::PressId(7),
+                captured_at_us,
+                action: LogicalAction::Right,
+                phase: InputPhase::Pressed,
+            }));
+        }
+
+        let drained = hub.drain();
+        assert_eq!(drained.batch.events.len(), 1);
+        assert_eq!(drained.publications.len(), 1);
+        assert_eq!(
+            drained.publications[0].sequence,
+            drained.batch.events[0].sequence
+        );
+        assert!(drained.publications[0].published_at_us >= captured_at_us);
+    }
+
+    #[test]
     fn critical_journal_overflow_becomes_unhealthy() {
         let source = InputSourceId {
             kind: InputSourceKind::Preview,
@@ -582,14 +643,17 @@ mod tests {
             } else {
                 LogicalAction::Up
             };
-            state.events.push_back(InputEvent {
-                source,
-                source_epoch: epoch,
-                sequence: sequence as u64 + 1,
-                press_id: crate::input_event::PressId(sequence as u64 + 1),
-                captured_at_us: sequence as u64,
-                action,
-                phase: InputPhase::Pressed,
+            state.events.push_back(MailboxEvent {
+                event: InputEvent {
+                    source,
+                    source_epoch: epoch,
+                    sequence: sequence as u64 + 1,
+                    press_id: crate::input_event::PressId(sequence as u64 + 1),
+                    captured_at_us: sequence as u64,
+                    action,
+                    phase: InputPhase::Pressed,
+                },
+                published_at_us: sequence as u64,
             });
         }
         state.publish(crate::input_event::PendingInputEvent {
@@ -704,17 +768,20 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.events.resize(
                 JOURNAL_CAPACITY,
-                InputEvent {
-                    source: InputSourceId {
-                        kind: InputSourceKind::Preview,
-                        instance: 1,
+                MailboxEvent {
+                    event: InputEvent {
+                        source: InputSourceId {
+                            kind: InputSourceKind::Preview,
+                            instance: 1,
+                        },
+                        source_epoch: SourceEpoch(1),
+                        sequence: 1,
+                        press_id: crate::input_event::PressId(1),
+                        captured_at_us: 1,
+                        action: LogicalAction::Activate,
+                        phase: InputPhase::Pressed,
                     },
-                    source_epoch: SourceEpoch(1),
-                    sequence: 1,
-                    press_id: crate::input_event::PressId(1),
-                    captured_at_us: 1,
-                    action: LogicalAction::Activate,
-                    phase: InputPhase::Pressed,
+                    published_at_us: 1,
                 },
             );
             state.publish(crate::input_event::PendingInputEvent {

@@ -1393,6 +1393,7 @@ struct LauncherResponseRecord {
     trigger: DispatchKind,
     press_id: u64,
     captured_at_us: u64,
+    published_at_us: Option<u64>,
     drained_at_us: Option<u64>,
     dispatch_at_us: u64,
     state_applied_at_us: Option<u64>,
@@ -1446,6 +1447,7 @@ struct LauncherResponseTrace {
     feedback_records: Vec<LauncherResponseFeedbackRecord>,
     pending_dispatches: VecDeque<usize>,
     pending_confirmations: VecDeque<usize>,
+    published_at_us: HashMap<u64, u64>,
     drained_at_us: HashMap<u64, u64>,
     state: LauncherResponseState,
     queue_high_water: usize,
@@ -1529,6 +1531,7 @@ impl LauncherResponseTrace {
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
+            published_at_us: HashMap::new(),
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1562,6 +1565,7 @@ impl LauncherResponseTrace {
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
+            published_at_us: HashMap::new(),
             drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
@@ -1601,12 +1605,17 @@ impl LauncherResponseTrace {
         trace
     }
 
-    fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
+    fn observe_drained_input(&mut self, drained: &crate::input_hub::DrainedInput) {
         if self.enabled {
+            let batch = &drained.batch;
             self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
             let drained_at_us = crate::input_hub::monotonic_us();
+            for publication in &drained.publications {
+                self.published_at_us
+                    .insert(publication.sequence, publication.published_at_us);
+            }
             for event in &batch.events {
-                self.drained_at_us.insert(event.press_id.0, drained_at_us);
+                self.drained_at_us.insert(event.sequence, drained_at_us);
             }
         }
     }
@@ -1635,7 +1644,8 @@ impl LauncherResponseTrace {
             trigger,
             press_id: event.press_id.0,
             captured_at_us: event.captured_at_us,
-            drained_at_us: self.drained_at_us.remove(&event.press_id.0),
+            published_at_us: self.published_at_us.remove(&event.sequence),
+            drained_at_us: self.drained_at_us.remove(&event.sequence),
             dispatch_at_us,
             state_applied_at_us: None,
             before: self.state.clone(),
@@ -2083,8 +2093,11 @@ impl LauncherResponseTraceSnapshot {
                     },
                     "press_id": record.press_id,
                     "captured_at_us": record.captured_at_us,
+                    "published_at_us": record.published_at_us,
                     "drained_at_us": record.drained_at_us,
                     "dispatch_at_us": record.dispatch_at_us,
+                    "capture_to_publish_us": record.published_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
+                    "publish_to_drain_us": record.published_at_us.zip(record.drained_at_us).map(|(published, drained)| drained.saturating_sub(published)),
                     "dispatch_latency_us": record.dispatch_at_us.saturating_sub(record.captured_at_us),
                     "state_applied_at_us": record.state_applied_at_us,
                     "before": record.before.json(),
@@ -5970,9 +5983,9 @@ pub(super) fn run_launcher_loop(
         // bridge housekeeping cannot sit between capture and dispatch.
         let drained_input = pad.drain_input_batch();
         input_observation = drained_input.observation;
+        launcher_response_trace.observe_drained_input(&drained_input);
         let input_batch = drained_input.batch;
         input_integrity_trace.observe_batch(&input_batch);
-        launcher_response_trace.observe_batch(&input_batch);
         launcher_response_trace.record_lab(input_latency_lab.before_input_route());
         if !input_batch.events.is_empty()
             && let Some(stall_ms) = input_integrity_stall.take()
@@ -11709,6 +11722,12 @@ mod tests {
         let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
         let mut event = normalized_test_press(LogicalAction::Right);
         event.source.kind = InputSourceKind::MainProxy;
+        trace
+            .published_at_us
+            .insert(event.sequence, event.captured_at_us + 10);
+        trace
+            .drained_at_us
+            .insert(event.sequence, event.captured_at_us + 20);
         let context = ContextId {
             target: FocusTarget {
                 kind: InputContextKind::Screen,
@@ -11749,6 +11768,14 @@ mod tests {
         assert_eq!(trace.records[0].disposition, "confirmed");
         assert_eq!(trace.records[0].confirmed_frame, Some(42));
         assert_eq!(trace.records[0].confirmed_sequence, Some(7));
+        assert_eq!(
+            trace.records[0].published_at_us,
+            Some(event.captured_at_us + 10)
+        );
+        assert_eq!(
+            trace.records[0].drained_at_us,
+            Some(event.captured_at_us + 20)
+        );
         assert_eq!(
             trace.records[0]
                 .frame
