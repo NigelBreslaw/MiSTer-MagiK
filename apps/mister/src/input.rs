@@ -7,7 +7,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{
+    OnceLock,
+    mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel},
+};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::input_event::DeviceInstanceId;
@@ -55,6 +59,62 @@ pub struct PadReader {
     device: Option<DeviceInstanceId>,
 }
 
+#[derive(Debug)]
+struct DeviceScan {
+    joysticks: Vec<String>,
+    keyboards: Vec<String>,
+}
+
+impl DeviceScan {
+    fn discover() -> Self {
+        Self {
+            joysticks: discover_js_devices(),
+            keyboards: discover_keyboard_devices(),
+        }
+    }
+}
+
+struct DeviceDiscovery {
+    request_tx: SyncSender<()>,
+    result_rx: Receiver<DeviceScan>,
+}
+
+impl DeviceDiscovery {
+    fn start() -> io::Result<Self> {
+        let (request_tx, request_rx) = sync_channel(1);
+        let (result_tx, result_rx) = sync_channel(1);
+        thread::Builder::new()
+            .name("mister-magik-input-discovery".into())
+            .spawn(move || {
+                while request_rx.recv().is_ok() {
+                    if result_tx.send(DeviceScan::discover()).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            request_tx,
+            result_rx,
+        })
+    }
+
+    fn request(&self) {
+        match self.request_tx.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => {}
+            Err(TrySendError::Disconnected(())) => {
+                crate::ui_errln!("pad: device discovery worker disconnected");
+            }
+        }
+    }
+
+    fn completed(&self) -> impl Iterator<Item = DeviceScan> + '_ {
+        std::iter::from_fn(|| match self.result_rx.try_recv() {
+            Ok(scan) => Some(scan),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+        })
+    }
+}
+
 /// Poll connected joysticks, keyboards, and mouse activity and merge navigation into [`PadState`].
 pub struct PadPool {
     pads: Vec<PadReader>,
@@ -65,6 +125,7 @@ pub struct PadPool {
     active_idx: usize,
     db: crate::controller_db::ControllerDb,
     last_rescan: Instant,
+    device_discovery: Option<DeviceDiscovery>,
     input_hub: Option<InputHub>,
     next_device_generation: u64,
 }
@@ -114,6 +175,7 @@ impl PadPool {
             active_idx: 0,
             db,
             last_rescan: Instant::now(),
+            device_discovery: Some(DeviceDiscovery::start()?),
             input_hub: Some(InputHub::start()),
             next_device_generation,
         })
@@ -300,10 +362,8 @@ impl PadPool {
         let mut changed = false;
         self.user_activity = false;
 
-        if self.last_rescan.elapsed() >= PAD_RESCAN_INTERVAL {
-            changed |= self.rescan();
-            self.last_rescan = Instant::now();
-        }
+        self.request_device_discovery_if_due();
+        changed |= self.apply_completed_device_discovery();
 
         let mut i = 0;
         while i < self.pads.len() {
@@ -429,9 +489,30 @@ impl PadPool {
         }
     }
 
-    fn rescan(&mut self) -> bool {
+    fn request_device_discovery_if_due(&mut self) {
+        if self.last_rescan.elapsed() < PAD_RESCAN_INTERVAL {
+            return;
+        }
+        if let Some(discovery) = self.device_discovery.as_ref() {
+            discovery.request();
+        }
+        self.last_rescan = Instant::now();
+    }
+
+    fn apply_completed_device_discovery(&mut self) -> bool {
+        let scans = self
+            .device_discovery
+            .as_ref()
+            .map(|discovery| discovery.completed().collect::<Vec<_>>())
+            .unwrap_or_default();
+        scans.into_iter().fold(false, |changed, scan| {
+            self.apply_device_scan(scan) || changed
+        })
+    }
+
+    fn apply_device_scan(&mut self, scan: DeviceScan) -> bool {
         let mut changed = false;
-        for path in discover_js_devices() {
+        for path in scan.joysticks {
             if self.pads.iter().any(|pad| pad.path == path) {
                 continue;
             }
@@ -447,7 +528,7 @@ impl PadPool {
                 Err(e) => crate::ui_errln!("pad: hotplug skip {path}: {e}"),
             }
         }
-        for path in discover_keyboard_devices() {
+        for path in scan.keyboards {
             if self.keyboards.iter().any(|keyboard| keyboard.path == path) {
                 continue;
             }
@@ -524,6 +605,7 @@ impl PadPool {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
+            device_discovery: None,
             input_hub: None,
             next_device_generation: 2,
         };
@@ -1517,6 +1599,7 @@ mod tests {
             active_idx: 0,
             db: crate::controller_db::ControllerDb::load(),
             last_rescan: Instant::now(),
+            device_discovery: None,
             input_hub: None,
             next_device_generation: 1,
         }
@@ -1533,6 +1616,22 @@ mod tests {
         assert_eq!(pool.info().name, "No controller");
         assert_eq!(pool.info_at(3).name, "No controller");
         assert!(!pool.state_at(3).btn_a);
+    }
+
+    #[test]
+    fn device_discovery_request_is_bounded_to_one_pending_scan() {
+        let (request_tx, request_rx) = sync_channel(1);
+        let (_result_tx, result_rx) = sync_channel(1);
+        let discovery = DeviceDiscovery {
+            request_tx,
+            result_rx,
+        };
+
+        discovery.request();
+        discovery.request();
+
+        assert_eq!(request_rx.try_recv(), Ok(()));
+        assert_eq!(request_rx.try_recv(), Err(TryRecvError::Empty));
     }
 
     #[test]
