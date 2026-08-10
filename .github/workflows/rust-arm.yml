@@ -85,6 +85,14 @@ jobs:
 
   arm-build:
     name: arm-ci-fast
+    # Documentation Dependabot PRs cannot access the private build-assets key
+    # and cannot affect the ARM runtime.
+    if: >-
+      ${{
+        github.event_name != 'pull_request' ||
+        github.event.pull_request.user.login != 'dependabot[bot]' ||
+        !startsWith(github.head_ref, 'dependabot/npm_and_yarn/documentation/')
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
