@@ -213,6 +213,11 @@ fn check_ci_cache(repository: &Path) -> Result<(), String> {
             "target-arm-v2-",
             "packages: read",
             "GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+            "git rev-parse HEAD:private/magik-assets",
+            "repository: NigelBreslaw/mister-magik-private-assets",
+            "ref: ${{ steps.magik-assets-ref.outputs.sha }}",
+            "path: private/magik-assets",
+            "ssh-key: ${{ secrets.MAGIK_ASSETS_SSH_KEY }}",
         ],
         &[],
     )
