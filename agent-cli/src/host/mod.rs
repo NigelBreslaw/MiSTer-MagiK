@@ -7260,6 +7260,11 @@ fn system_entry_sample_ready_time(sample: &Value) -> Option<u64> {
         .flatten()
 }
 
+fn system_entry_status_matches_list(status: &Value, system: &str) -> bool {
+    status.get("screen").and_then(Value::as_str) == Some("arcade")
+        && status.get("active_collection_id").and_then(Value::as_str) == Some(system)
+}
+
 fn system_entry_artifact_prefix(
     registry_ordinal: usize,
     system: &str,
@@ -7549,16 +7554,12 @@ fn run_system_entry_sample(
         })?;
         run_launcher_response_driver(session, "a 10 1 1")?;
         let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
+        wait_launcher_response_status(session, Duration::from_secs(10), |status| {
+            system_entry_status_matches_list(status, system)
+        })?;
         let capture =
             request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
         validate_visible_launcher_capture(&capture)?;
-        let status = read_launcher_status(session)?;
-        if status.get("screen").and_then(Value::as_str) != Some("arcade") {
-            return Err(format!(
-                "system-entry {system} reached its ready marker off the game list: {status}"
-            )
-            .into());
-        }
         fs::write(output_dir.join(&capture_file), &capture.png)?;
         fs::write(
             output_dir.join(&capture_metadata_file),
@@ -17231,6 +17232,17 @@ mod tests {
 
         assert_eq!(system_entry_sample_ready_time(&passed), Some(5_012));
         assert_eq!(system_entry_sample_ready_time(&failed), None);
+    }
+
+    #[test]
+    fn system_entry_status_wait_rejects_stale_home_snapshot() {
+        let stale = json!({ "screen": "home", "active_collection_id": "" });
+        let wrong_system = json!({ "screen": "arcade", "active_collection_id": "snes" });
+        let ready = json!({ "screen": "arcade", "active_collection_id": "c64" });
+
+        assert!(!system_entry_status_matches_list(&stale, "c64"));
+        assert!(!system_entry_status_matches_list(&wrong_system, "c64"));
+        assert!(system_entry_status_matches_list(&ready, "c64"));
     }
 
     #[test]

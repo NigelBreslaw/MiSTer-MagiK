@@ -213,9 +213,10 @@ systems then receive two additional samples, and `summary.json` identifies the
 worst confirmed system by median complete-ready latency. Samples are process
 cold: the launcher is restarted for every sample, but the operating-system
 filesystem cache is deliberately not flushed. Screenshot capture starts only
-after the ready marker and is excluded from the latency. SNES opens its game
-list directly, like every other system, rather than routing through the
-optional hub screen.
+after the ready marker and after the asynchronous launcher status confirms the
+same active system list; both the status wait and capture are excluded from the
+latency. SNES opens its game list directly, like every other system, rather
+than routing through the optional hub screen.
 
 A system that does not reach the authoritative ready marker is retained as a
 failed sample with its partial trace, final launcher status, and any available
