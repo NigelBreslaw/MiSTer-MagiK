@@ -648,6 +648,18 @@ fn navigation_preview_snapshot_ready(
         || (cache_state == "exact" && frame_status == PreviewRawFrameStatus::Ready)
 }
 
+fn system_entry_preview_terminal(
+    selected_has_preview: bool,
+    preview_state: &str,
+    terminal_empty: bool,
+) -> bool {
+    if selected_has_preview {
+        preview_state == "exact"
+    } else {
+        terminal_empty
+    }
+}
+
 fn should_defer_or_preserve_selected_preview(
     defer_selected_preview: bool,
     navigation_transition_active: bool,
@@ -1147,9 +1159,11 @@ impl ArcadeEntryLatencyTracker {
         }
         let preview_state = preview.trace_cache_state();
         let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
-        if (selected_has_preview && preview_state != "exact")
-            || (!selected_has_preview && !matches!(preview_state, "exact" | "empty"))
-        {
+        if !system_entry_preview_terminal(
+            selected_has_preview,
+            preview_state,
+            preview.terminal_empty(),
+        ) {
             return;
         }
         self.preview_exact = true;
@@ -11916,6 +11930,14 @@ mod tests {
             240,
             true,
         ));
+    }
+
+    #[test]
+    fn system_entry_no_preview_requires_confirmed_terminal_empty_state() {
+        assert!(!system_entry_preview_terminal(false, "empty", false));
+        assert!(system_entry_preview_terminal(false, "empty", true));
+        assert!(!system_entry_preview_terminal(true, "empty", true));
+        assert!(system_entry_preview_terminal(true, "exact", false));
     }
 
     #[test]
