@@ -5,19 +5,7 @@ version: 2
 updates:
   - package-ecosystem: "cargo"
     directories:
-      - "/agent-cli"
-      - "/apps/desktop"
-      - "/apps/mister"
-      - "/apps/mister/ui-generated"
-      - "/crates/agent-protocol"
-      - "/crates/catalog"
-      - "/crates/framebuffer-stream"
-      - "/crates/magik-core"
-      - "/crates/media-contract"
-      - "/mister/platform/contracts/latch"
-      - "/mister/platform/contracts/scanout"
-      - "/mister/platform/runtime"
-      - "/mister/tools/agent"
+      - "**/*"
     schedule:
       interval: "weekly"
       day: "friday"
