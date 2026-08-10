@@ -595,7 +595,18 @@ fn base_profiles_for_installed_cores(
                     return None;
                 }
                 if let Some(core) = compatible_core {
-                    profile.core_path = relative_core_path_for_installed_core(&core.path);
+                    // Canonical manifest profiles deliberately retain their logical core
+                    // selector (for example `_Console/SNES`). Main resolves that selector
+                    // to the newest installed dated RBF at handoff. Persisting the exact
+                    // file observed during a catalog build would pin every game to an old
+                    // core after Update All installs a replacement.
+                    //
+                    // A descriptor-backed compatible system is different: its logical
+                    // identity can intentionally target another physical core, so retain
+                    // that target while still allowing the launcher to remove its date.
+                    if !installed_core_is_exact_physical(core) {
+                        profile.core_path = relative_core_path_for_installed_core(&core.path);
+                    }
                 }
                 profile.game_dirs.retain(|dir| {
                     !descriptor_dirs.contains(&catalog_discovery::compact_system_name(dir))
@@ -2192,6 +2203,24 @@ mod tests {
                 .classify_archive_entry(Path::new("Smurf Rescue.col"))
                 .is_some()
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn canonical_profile_keeps_logical_core_path_with_multiple_dated_versions() {
+        let root = unique_temp_dir("canonical-profile-logical-core");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
+        std::fs::create_dir_all(root.join("games/SNES")).expect("create games dir");
+        // Create the newer file first so the assertion cannot depend on read_dir order.
+        std::fs::write(root.join("_Console/SNES_20260603.rbf"), b"new").expect("write new core");
+        std::fs::write(root.join("_Console/SNES_20240408.rbf"), b"old").expect("write old core");
+        std::fs::write(root.join("games/SNES/ActRaiser.sfc"), b"rom").expect("write game");
+
+        let profiles = active_profiles_for_roots(&[root.display().to_string()]);
+        let snes = profile_for_game_dir(&profiles, "SNES").expect("SNES profile");
+
+        assert_eq!(snes.core_path.as_deref(), Some("_Console/SNES"));
+        assert_eq!(snes.payload_rules[0].mount, MountSpec::load_file(1));
         let _ = std::fs::remove_dir_all(root);
     }
 

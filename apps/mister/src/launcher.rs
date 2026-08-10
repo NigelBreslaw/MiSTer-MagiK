@@ -5220,12 +5220,13 @@ fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String>
 fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
     let mount_index = plan.mount_index.to_string();
     let delay_secs = plan.delay_secs.to_string();
+    let core_path = logical_core_path(plan.core_path.as_ref());
     let fields = [
         ("schema", "1"),
         ("launch_ref", plan.launch_ref.as_ref()),
         ("title", plan.title.as_ref()),
         ("system_id", plan.system_id.as_ref()),
-        ("core_path", plan.core_path.as_ref()),
+        ("core_path", core_path),
         ("payload_path", plan.payload_path.as_ref()),
         ("mount_kind", plan.mount_kind.as_ref()),
         ("mount_index", mount_index.as_str()),
@@ -5236,6 +5237,23 @@ fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
         .map(|(key, value)| format!("{key}={}", percent_encode_plan_value(value)))
         .collect::<Vec<_>>()
         .join("&")
+}
+
+/// Converts a catalog-era physical RBF selector back to Main's logical selector.
+///
+/// Older catalogs persist paths such as `_Console/SNES_20240408`. Passing that
+/// exact selector prevents Main's existing RBF resolver from selecting a newer
+/// `SNES_YYYYMMDD.rbf` installed by Update All. Normalizing at handoff keeps
+/// those catalogs compatible without rebuilding them.
+fn logical_core_path(path: &str) -> &str {
+    let Some((logical, suffix)) = path.rsplit_once('_') else {
+        return path;
+    };
+    if suffix.len() == 8 && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        logical
+    } else {
+        path
+    }
 }
 
 fn percent_encode_plan_value(value: &str) -> String {
@@ -9205,6 +9223,41 @@ mod tests {
             ]
         );
         reset_launch();
+    }
+
+    #[test]
+    fn structured_launch_plan_normalizes_legacy_dated_core_path() {
+        let mut target = structured_target();
+        let LaunchTarget::Structured(plan) = &mut target else {
+            unreachable!("structured target")
+        };
+        plan.system_id = "snes".into();
+        plan.core_path = "_Console/SNES_20240408".into();
+        plan.payload_path = "/media/fat/games/SNES/ActRaiser.sfc".into();
+        plan.mount_kind = "load-file".into();
+        plan.mount_index = 1;
+
+        let LaunchTarget::Structured(plan) = target else {
+            unreachable!("structured target")
+        };
+        let encoded = encode_launch_plan(&plan);
+
+        assert!(encoded.contains("core_path=_Console/SNES&"));
+        assert!(!encoded.contains("SNES_20240408"));
+    }
+
+    #[test]
+    fn logical_core_path_preserves_non_version_suffixes() {
+        assert_eq!(logical_core_path("_Console/SNES_20260603"), "_Console/SNES");
+        assert_eq!(
+            logical_core_path("_LLAPI/SNES_LLAPI_20251204"),
+            "_LLAPI/SNES_LLAPI"
+        );
+        assert_eq!(
+            logical_core_path("_Console/SNES_accuracy"),
+            "_Console/SNES_accuracy"
+        );
+        assert_eq!(logical_core_path("NeoGeo"), "NeoGeo");
     }
 
     #[test]
