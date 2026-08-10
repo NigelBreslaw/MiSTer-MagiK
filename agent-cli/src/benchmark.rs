@@ -340,13 +340,35 @@ fn execute_system_entry(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     if summary.get("schema").and_then(Value::as_str)
         != Some("mister-magik-system-entry-benchmark-v1")
-        || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary
             .get("systems")
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty)
     {
         return Err("system-entry benchmark did not produce a passing v1 report".into());
+    }
+    if summary.get("status").and_then(Value::as_str) != Some("passed") {
+        let unready = summary
+            .get("unready_systems")
+            .and_then(Value::as_array)
+            .map(|systems| {
+                systems
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        return Err(format!(
+            "system-entry benchmark retained a failed summary at {}; unready systems: {}",
+            output_dir.join("summary.json").display(),
+            if unready.is_empty() {
+                "unknown"
+            } else {
+                &unready
+            }
+        )
+        .into());
     }
     device.verify_health()?;
     reporter.emit(

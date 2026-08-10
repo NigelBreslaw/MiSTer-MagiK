@@ -7254,6 +7254,30 @@ fn search_benchmark_waits_for_catalog(output: &ExecOutput) -> bool {
         || contains("unsupported persisted search schema version")
 }
 
+fn system_entry_sample_ready_time(sample: &Value) -> Option<u64> {
+    (sample.get("status").and_then(Value::as_str) == Some("passed"))
+        .then(|| sample.get("ready_presented_ms").and_then(Value::as_u64))
+        .flatten()
+}
+
+fn system_entry_artifact_prefix(
+    registry_ordinal: usize,
+    system: &str,
+    sample_index: usize,
+) -> String {
+    let artifact_system = system
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("{registry_ordinal:03}-{artifact_system}-run-{sample_index}")
+}
+
 fn profile_installed_system_entry(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -7314,16 +7338,13 @@ fn profile_installed_system_entry(
 
         let mut discovery = samples_by_system
             .iter()
-            .map(|(system, samples)| {
-                Ok((
-                    system.clone(),
-                    samples
-                        .first()
-                        .and_then(|sample| sample["ready_presented_ms"].as_u64())
-                        .ok_or("system-entry discovery sample has no ready time")?,
-                ))
+            .filter_map(|(system, samples)| {
+                samples
+                    .first()
+                    .and_then(system_entry_sample_ready_time)
+                    .map(|ready_ms| (system.clone(), ready_ms))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         discovery.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let candidates = discovery
             .iter()
@@ -7387,16 +7408,13 @@ fn profile_installed_system_entry(
 
     let mut discovery = samples_by_system
         .iter()
-        .map(|(system, samples)| {
-            Ok((
-                system.clone(),
-                samples
-                    .first()
-                    .and_then(|sample| sample["ready_presented_ms"].as_u64())
-                    .ok_or("system-entry discovery sample has no ready time")?,
-            ))
+        .filter_map(|(system, samples)| {
+            samples
+                .first()
+                .and_then(system_entry_sample_ready_time)
+                .map(|ready_ms| (system.clone(), ready_ms))
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     discovery.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let discovery_ranks = discovery
         .iter()
@@ -7409,20 +7427,14 @@ fn profile_installed_system_entry(
             let samples = samples_by_system
                 .get(system)
                 .ok_or("system-entry summary has no samples")?;
-            let discovery_ready_presented_ms = samples
-                .first()
-                .and_then(|sample| sample["ready_presented_ms"].as_u64())
-                .ok_or("system-entry discovery sample has no ready time")?;
+            let discovery_ready_presented_ms =
+                samples.first().and_then(system_entry_sample_ready_time);
             let mut ready_times = samples
                 .iter()
-                .map(|sample| -> Result<u64> {
-                    sample["ready_presented_ms"]
-                        .as_u64()
-                        .ok_or_else(|| "system-entry sample has no ready time".into())
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .filter_map(system_entry_sample_ready_time)
+                .collect::<Vec<_>>();
             ready_times.sort_unstable();
-            let confirmed_median = (samples.len() == 3)
+            let confirmed_median = (samples.len() == 3 && ready_times.len() == 3)
                 .then(|| median_u64(&ready_times))
                 .flatten();
             Ok(json!({
@@ -7431,6 +7443,7 @@ fn profile_installed_system_entry(
                 "discovery_rank": discovery_ranks.get(system),
                 "discovery_ready_presented_ms": discovery_ready_presented_ms,
                 "sample_count": samples.len(),
+                "successful_sample_count": ready_times.len(),
                 "confirmed": confirmed_median.is_some(),
                 "confirmed_median_ready_presented_ms": confirmed_median,
                 "samples": samples,
@@ -7448,21 +7461,38 @@ fn profile_installed_system_entry(
             .cmp(&a["confirmed_median_ready_presented_ms"].as_u64())
             .then_with(|| a["system"].as_str().cmp(&b["system"].as_str()))
     });
-    let worst_system = confirmed
-        .first()
-        .and_then(|row| row["system"].as_str())
-        .ok_or("system-entry results have no confirmed worst system")?;
+    let expected_confirmed_candidates = discovery.len().min(3);
+    let unready_systems = results
+        .iter()
+        .filter(|row| {
+            row["samples"].as_array().is_some_and(|samples| {
+                samples
+                    .iter()
+                    .any(|sample| sample["status"].as_str() != Some("passed"))
+            })
+        })
+        .filter_map(|row| row["system"].as_str())
+        .collect::<Vec<_>>();
+    let passed = unready_systems.is_empty()
+        && discovery.len() == systems.len()
+        && !confirmed.is_empty()
+        && confirmed.len() == expected_confirmed_candidates;
+    let worst_system = passed
+        .then(|| confirmed.first().and_then(|row| row["system"].as_str()))
+        .flatten();
     let summary = json!({
         "schema": "mister-magik-system-entry-benchmark-v1",
-        "status": "passed",
+        "status": if passed { "passed" } else { "failed" },
         "measurement": "activation input to first authoritative frame with full list and terminal selected screenshot",
         "cache_policy": "fresh launcher process per sample; operating-system filesystem cache is not flushed",
         "sampling": {
             "discovery_runs_per_system": 1,
             "confirmed_candidates": confirmed.len(),
+            "expected_confirmed_candidates": expected_confirmed_candidates,
             "runs_per_confirmed_candidate": 3,
         },
         "registry": registry,
+        "unready_systems": unready_systems,
         "worst_system": worst_system,
         "systems": results,
     });
@@ -7487,84 +7517,163 @@ fn run_system_entry_sample(
         "system-entry-{system}-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
-    restart_launcher_with_one_shot_env(
-        session,
-        LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                (
-                    "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
-                    system.to_string(),
-                ),
-                (
-                    "MISTER_SYSTEM_ENTRY_TRACE".into(),
-                    SYSTEM_ENTRY_TRACE_REMOTE.into(),
-                ),
-                ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
-            ],
-            timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
-            ..LauncherRestartOptions::default()
-        },
-    )?;
-    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("screen").and_then(Value::as_str) == Some("home")
-            && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
-    })?;
-    run_launcher_response_driver(session, "a 10 1 1")?;
-    let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
-    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
-    validate_visible_launcher_capture(&capture)?;
-    let status = read_launcher_status(session)?;
-    if status.get("screen").and_then(Value::as_str) != Some("arcade") {
-        return Err(format!(
-            "system-entry {system} reached its ready marker off the game list: {status}"
-        )
-        .into());
-    }
-    let artifact_system = system
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    let artifact_prefix = format!("{registry_ordinal:03}-{artifact_system}-run-{sample_index}");
+    let artifact_prefix = system_entry_artifact_prefix(registry_ordinal, system, sample_index);
     let capture_file = format!("{artifact_prefix}.png");
     let capture_metadata_file = format!("{artifact_prefix}-capture.json");
     let trace_file = format!("{artifact_prefix}.tsv");
-    fs::write(output_dir.join(&capture_file), &capture.png)?;
+    let run_result = (|| -> Result<Value> {
+        restart_launcher_with_one_shot_env(
+            session,
+            LauncherRestartOptions {
+                env_vars: vec![
+                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                    (
+                        "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+                        system.to_string(),
+                    ),
+                    (
+                        "MISTER_SYSTEM_ENTRY_TRACE".into(),
+                        SYSTEM_ENTRY_TRACE_REMOTE.into(),
+                    ),
+                    ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
+                ],
+                timeout_secs: 45,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                ..LauncherRestartOptions::default()
+            },
+        )?;
+        wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+            status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+                && status.get("screen").and_then(Value::as_str) == Some("home")
+                && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
+        })?;
+        run_launcher_response_driver(session, "a 10 1 1")?;
+        let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
+        let capture =
+            request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
+        validate_visible_launcher_capture(&capture)?;
+        let status = read_launcher_status(session)?;
+        if status.get("screen").and_then(Value::as_str) != Some("arcade") {
+            return Err(format!(
+                "system-entry {system} reached its ready marker off the game list: {status}"
+            )
+            .into());
+        }
+        fs::write(output_dir.join(&capture_file), &capture.png)?;
+        fs::write(
+            output_dir.join(&capture_metadata_file),
+            format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+        )?;
+        fs::write(
+            output_dir.join(&trace_file),
+            remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
+                .ok_or("system-entry trace disappeared before retention")?,
+        )?;
+        let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
+        let selected_has_preview = system_entry_detail_flag(ready, "selected_has_preview")?;
+        let preview_state = ready
+            .get(10)
+            .ok_or("system-entry ready trace has no preview state")?;
+        Ok(json!({
+            "status": "passed",
+            "sample": sample_index,
+            "run_id": run_id,
+            "system": system,
+            "games": games,
+            "rows_ready_ms": system_entry_delta_ms(&trace, "arcade_rows_ready")?,
+            "first_list_presented_ms": system_entry_delta_ms(&trace, "arcade_enter_presented")?,
+            "preview_ready_ms": system_entry_delta_ms(&trace, "arcade_preview_exact")?,
+            "ready_presented_ms": system_entry_delta_ms(&trace, "system_entry_ready_presented")?,
+            "selected_has_preview": selected_has_preview,
+            "preview_state": preview_state,
+            "preview_outcome": if selected_has_preview { "exact" } else { "confirmed-empty" },
+            "screenshot": capture_file,
+            "capture_metadata": capture_metadata_file,
+            "trace": trace_file,
+        }))
+    })();
+
+    match run_result {
+        Ok(sample) => Ok(sample),
+        Err(error) => retain_failed_system_entry_sample(
+            config,
+            session,
+            output_dir,
+            system,
+            games,
+            sample_index,
+            &run_id,
+            &artifact_prefix,
+            &error.to_string(),
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn retain_failed_system_entry_sample(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    system: &str,
+    games: u64,
+    sample_index: usize,
+    run_id: &str,
+    artifact_prefix: &str,
+    error: &str,
+) -> Result<Value> {
+    let trace_file = format!("{artifact_prefix}.tsv");
+    let status_file = format!("{artifact_prefix}-status.json");
+    let trace = remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE).unwrap_or_default();
+    fs::write(output_dir.join(&trace_file), trace)?;
+    let status = read_launcher_status(session)
+        .unwrap_or_else(|status_error| json!({ "error": status_error.to_string() }));
     fs::write(
-        output_dir.join(&capture_metadata_file),
-        format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+        output_dir.join(&status_file),
+        format!("{}\n", serde_json::to_string_pretty(&status)?),
     )?;
-    fs::write(
-        output_dir.join(&trace_file),
-        remote_read(session, SYSTEM_ENTRY_TRACE_REMOTE)
-            .ok_or("system-entry trace disappeared before retention")?,
-    )?;
-    let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
-    let selected_has_preview = system_entry_detail_flag(ready, "selected_has_preview")?;
-    let preview_state = ready
-        .get(10)
-        .ok_or("system-entry ready trace has no preview state")?;
+
+    let mut screenshot = None;
+    let mut capture_metadata = None;
+    let capture_error = match config
+        .agent()
+        .and_then(|agent| request_framebuffer_png_at_when_latched(agent, Duration::from_secs(3)))
+    {
+        Ok(capture) => {
+            let capture_file = format!("{artifact_prefix}.png");
+            let capture_metadata_file = format!("{artifact_prefix}-capture.json");
+            fs::write(output_dir.join(&capture_file), &capture.png)?;
+            fs::write(
+                output_dir.join(&capture_metadata_file),
+                format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
+            )?;
+            let capture_error = validate_visible_launcher_capture(&capture)
+                .err()
+                .map(|capture_error| capture_error.to_string());
+            screenshot = Some(capture_file);
+            capture_metadata = Some(capture_metadata_file);
+            capture_error
+        }
+        Err(error) => Some(error.to_string()),
+    };
+
     Ok(json!({
+        "status": "failed",
         "sample": sample_index,
+        "run_id": run_id,
         "system": system,
         "games": games,
-        "rows_ready_ms": system_entry_delta_ms(&trace, "arcade_rows_ready")?,
-        "first_list_presented_ms": system_entry_delta_ms(&trace, "arcade_enter_presented")?,
-        "preview_ready_ms": system_entry_delta_ms(&trace, "arcade_preview_exact")?,
-        "ready_presented_ms": system_entry_delta_ms(&trace, "system_entry_ready_presented")?,
-        "selected_has_preview": selected_has_preview,
-        "preview_state": preview_state,
-        "preview_outcome": if selected_has_preview { "exact" } else { "confirmed-empty" },
-        "screenshot": capture_file,
-        "capture_metadata": capture_metadata_file,
+        "error": error,
+        "capture_error": capture_error,
+        "rows_ready_ms": Value::Null,
+        "first_list_presented_ms": Value::Null,
+        "preview_ready_ms": Value::Null,
+        "ready_presented_ms": Value::Null,
+        "selected_has_preview": Value::Null,
+        "preview_state": Value::Null,
+        "preview_outcome": Value::Null,
+        "screenshot": screenshot,
+        "capture_metadata": capture_metadata,
+        "status_artifact": status_file,
         "trace": trace_file,
     }))
 }
@@ -17113,6 +17222,23 @@ mod tests {
         assert!(!system_entry_detail_flag(&row, "selected_has_preview").unwrap());
         row[12] = "selected_has_preview=1".into();
         assert!(system_entry_detail_flag(&row, "selected_has_preview").unwrap());
+    }
+
+    #[test]
+    fn system_entry_discovery_ignores_failed_samples() {
+        let passed = json!({ "status": "passed", "ready_presented_ms": 5012 });
+        let failed = json!({ "status": "failed", "ready_presented_ms": 9999 });
+
+        assert_eq!(system_entry_sample_ready_time(&passed), Some(5_012));
+        assert_eq!(system_entry_sample_ready_time(&failed), None);
+    }
+
+    #[test]
+    fn system_entry_artifact_prefix_sanitizes_system_names() {
+        assert_eq!(
+            system_entry_artifact_prefix(7, "Commodore 64/NTSC", 2),
+            "007-Commodore_64_NTSC-run-2"
+        );
     }
 
     #[test]

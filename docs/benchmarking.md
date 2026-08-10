@@ -217,6 +217,13 @@ after the ready marker and is excluded from the latency. SNES opens its game
 list directly, like every other system, rather than routing through the
 optional hub screen.
 
+A system that does not reach the authoritative ready marker is retained as a
+failed sample with its partial trace, final launcher status, and any available
+framebuffer capture. Discovery continues so every populated registry system
+has an initial result. Failed samples are excluded from slowest-candidate
+selection, listed in `unready_systems`, and make the summary fail without
+naming a misleading worst system.
+
 ## Cold boot
 
 `cold-boot` profiles exactly one supervised reboot of the coherently installed
