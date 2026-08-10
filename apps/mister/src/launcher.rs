@@ -2578,11 +2578,14 @@ impl LauncherNav {
             self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
             let mut target = self.home_scroll_animation.target().round() as i32;
             keep_home_visible(self.selected, &mut target, count);
-            // A discrete focus move is authoritative immediately. Carrying a
-            // viewport spring for up to multiple input periods leaves the UI
-            // rasterizing obsolete motion when the next press arrives.
-            self.scroll_x = target;
-            self.home_scroll_animation.snap_to(target as f64);
+            // Selection is authoritative immediately. Keep ordinary moves
+            // animation-free, but smoothly move the retained rail when the
+            // focus crosses a viewport edge and every visible card must shift.
+            if target == self.scroll_x {
+                self.home_scroll_animation.snap_to(target as f64);
+            } else {
+                retarget_home_spring_monotonically(&mut self.home_scroll_animation, target as f64);
+            }
             return;
         }
 
@@ -6182,7 +6185,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_home_discrete_moves_snap_viewport_without_background_settling() {
+    fn launcher_home_discrete_moves_animate_only_when_the_viewport_pages() {
         let catalog = arcade_catalog(
             Vec::new(),
             (0..10)
@@ -6195,7 +6198,7 @@ mod tests {
         let held_right = pad_with(|pad| pad.dpad_right = true);
         let start = Instant::now();
 
-        for step in 0..4 {
+        for step in 0..3 {
             let pressed_at = start + Duration::from_millis(step * 100);
             nav.handle_input(&held_right, pressed_at, &catalog);
             nav.handle_input(
@@ -6205,14 +6208,30 @@ mod tests {
             );
         }
 
-        assert_eq!(nav.selected, 4);
-        assert_eq!(nav.scroll_x, 4 * home_tile_pitch());
+        assert_eq!(nav.selected, 3);
+        assert_eq!(nav.scroll_x, 0);
         assert!(nav.home_scroll_animation.is_settled());
-        nav.handle_input(
-            &PadState::default(),
-            start + Duration::from_millis(1_000),
-            &catalog,
+
+        let page_press_at = start + Duration::from_millis(300);
+        nav.handle_input(&held_right, page_press_at, &catalog);
+        assert_eq!(nav.selected, 4);
+        assert_eq!(nav.scroll_x, 0);
+        assert_eq!(
+            nav.home_scroll_animation.target(),
+            (4 * home_tile_pitch()) as f64
         );
+        assert!(!nav.home_scroll_animation.is_settled());
+
+        let mut previous_scroll = nav.scroll_x;
+        for frame in 1..=120 {
+            nav.handle_input(
+                &PadState::default(),
+                page_press_at + Duration::from_millis(frame * 16),
+                &catalog,
+            );
+            assert!(nav.scroll_x >= previous_scroll);
+            previous_scroll = nav.scroll_x;
+        }
         assert_eq!(nav.scroll_x, 4 * home_tile_pitch());
         assert!(nav.home_scroll_animation.is_settled());
     }

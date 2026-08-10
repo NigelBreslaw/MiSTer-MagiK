@@ -3011,6 +3011,7 @@ const CATALOG_SCAN_BLINK_HALF_PERIOD: Duration = Duration::from_millis(500);
 const HOME_LAYOUT_PADDING: usize = 18;
 const HOME_HEADER_H: usize = 42;
 const HOME_LAYOUT_SPACING: usize = 14;
+const HOME_FOOTER_H: usize = 30;
 
 fn update_home_pan_present_window(
     screen: Screen,
@@ -3041,7 +3042,9 @@ fn home_pan_present_rect(ui: &UiDisplay) -> DirtyRect {
     let x0 = HOME_LAYOUT_PADDING;
     let y0 = HOME_LAYOUT_PADDING + HOME_HEADER_H + HOME_LAYOUT_SPACING;
     let x1 = ui.render_w().saturating_sub(HOME_LAYOUT_PADDING);
-    let y1 = ui.render_h().saturating_sub(HOME_LAYOUT_PADDING);
+    let y1 = ui
+        .render_h()
+        .saturating_sub(HOME_LAYOUT_PADDING + HOME_LAYOUT_SPACING + HOME_FOOTER_H);
     DirtyRect {
         x0: x0.min(ui.render_w()),
         y0: y0.min(ui.render_h()),
@@ -14726,7 +14729,7 @@ mod tests {
                 x0: 18,
                 y0: 74,
                 x1: 942,
-                y1: 522,
+                y1: 466,
             }
         );
     }
@@ -14751,7 +14754,7 @@ mod tests {
                 x0: 18,
                 y0: 74,
                 x1: 942,
-                y1: 522,
+                y1: 466,
             })
         );
         assert_eq!(
@@ -14760,7 +14763,7 @@ mod tests {
                 x0: 18,
                 y0: 74,
                 x1: 942,
-                y1: 522,
+                y1: 466,
             })
         );
     }

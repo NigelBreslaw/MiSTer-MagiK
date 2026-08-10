@@ -9,6 +9,29 @@ import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
+component HomeFooter inherits Rectangle {
+    in property <bool> portrait-layout;
+    in property <bool> root-menu;
+
+    height: 30px;
+    background: #172131;
+    border-width: 1px;
+    border-color: #52647d;
+
+    Xerxes10 {
+        text: root.portrait-layout
+            ? root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
+                : "UP/DOWN Move    A Open    B Back    HOME Launcher"
+            : root.root-menu ? "LEFT/RIGHT Move    A Select    UP Settings"
+                : "LEFT/RIGHT Move    A Open    B Back    HOME Launcher";
+        color: #8ca4b5;
+        size: Xerxes10Size.px10;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
 export component HomeGrid inherits Rectangle {
     property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
     property <length> narrow-tile-width: 191px;
@@ -125,6 +148,11 @@ export component HomeGrid inherits Rectangle {
                     }
                 }
             }
+
+            HomeFooter {
+                portrait-layout: false;
+                root-menu: root.root-menu;
+            }
         }
     }
 
@@ -202,20 +230,9 @@ export component HomeGrid inherits Rectangle {
             }
         }
 
-        Rectangle {
-            height: 30px;
-            background: #172131;
-            border-width: 1px;
-            border-color: #52647d;
-            Xerxes10 {
-                text: root.root-menu ? "UP/DOWN Move    A Select    HOME Settings"
-                    : "UP/DOWN Move    A Open    B Back    HOME Launcher";
-                color: #8ca4b5;
-                size: Xerxes10Size.px10;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+        HomeFooter {
+            portrait-layout: true;
+            root-menu: root.root-menu;
         }
     }
 }
