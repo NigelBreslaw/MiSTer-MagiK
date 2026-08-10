@@ -625,7 +625,7 @@ fn evaluate_input_latency_lab_summary(summary: &Value) -> AgentResult<()> {
 fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launcher-response-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
-        || summary.get("protocol").and_then(Value::as_u64) != Some(2)
+        || !matches!(summary.get("protocol").and_then(Value::as_u64), Some(2 | 3))
         || summary.get("input_response_status").and_then(Value::as_str) != Some("passed")
         || summary.get("pulse_status").and_then(Value::as_str) != Some("passed")
         || summary.get("integrity_status").and_then(Value::as_str) != Some("passed")
@@ -1514,7 +1514,7 @@ mod tests {
         let passing = json!({
             "schema": "mister-magik-launcher-response-v2",
             "status": "passed",
-            "protocol": 2,
+            "protocol": 3,
             "input_response_status": "passed",
             "pulse_status": "passed",
             "integrity_status": "passed",
@@ -1535,6 +1535,9 @@ mod tests {
             "catalog_adoption_max_us": 7_999,
         });
         evaluate_launcher_response_summary(&passing).unwrap();
+        let mut unsupported_protocol = passing.clone();
+        unsupported_protocol["protocol"] = json!(1);
+        assert!(evaluate_launcher_response_summary(&unsupported_protocol).is_err());
         let mut failed = passing;
         failed["pulse_status"] = json!("failed");
         assert!(evaluate_launcher_response_summary(&failed).is_err());

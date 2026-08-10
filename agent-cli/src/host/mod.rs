@@ -4283,8 +4283,15 @@ fn verify_installed_launcher_response(
     let main: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
-    if main.get("input_proxy_protocol").and_then(Value::as_u64) != Some(2) {
-        return Err("launcher response requires Main proxy protocol v2".into());
+    let input_proxy_protocol = main
+        .get("input_proxy_protocol")
+        .and_then(Value::as_u64)
+        .ok_or("launcher response Main status omitted the input proxy protocol")?;
+    if !matches!(input_proxy_protocol, 2 | 3) {
+        return Err(format!(
+            "launcher response requires Main proxy protocol v2 or v3, got {input_proxy_protocol}"
+        )
+        .into());
     }
     let original_reply = exec_checked_output(
         &session,
@@ -4410,7 +4417,7 @@ fn verify_installed_launcher_response(
     let summary = json!({
         "schema": "mister-magik-launcher-response-v2",
         "status": if passed { "passed" } else { "failed" },
-        "protocol": 2,
+        "protocol": input_proxy_protocol,
         "routes": if isolated_profile {
             json!(["computers-acorn-to-other"])
         } else {
