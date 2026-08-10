@@ -4171,6 +4171,9 @@ const INPUT_INTEGRITY_DRIVER: &str =
     "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
 const INPUT_INTEGRITY_TRACE_REMOTE: &str = "/tmp/mister-magik/input-integrity-trace.json";
 const LAUNCHER_RESPONSE_TRACE_REMOTE: &str = "/tmp/mister-magik/launcher-response-trace.json";
+const LAUNCHER_RESPONSE_COMPLETE_REMOTE: &str = "/tmp/mister-magik/launcher-response-complete";
+const LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE: &str =
+    "/tmp/mister-magik/launcher-response-frames-complete";
 const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
@@ -4615,11 +4618,30 @@ fn run_launcher_response_computers_sweep(
     start_delay_ms: u64,
     isolated_profile: bool,
 ) -> Result<Value> {
+    let run_id = format!(
+        "computers-{interval_ms}-{start_delay_ms}-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    );
+    let expected_confirmations = if isolated_profile { 65 } else { 9 };
+    let expected_feedback_hidden = if isolated_profile { 64 } else { 8 };
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_HOME_SELECTED_INDEX".into(), "2".into()),
         ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+        ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
+            expected_confirmations.to_string(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
+            expected_feedback_hidden.to_string(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
+            LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
+        ),
     ];
     if isolated_profile {
         env_vars.extend([
@@ -4629,6 +4651,14 @@ fn run_launcher_response_computers_sweep(
                 "/tmp/mister-magik/launcher-response-frames.tsv".into(),
             ),
             ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "45".into()),
+            (
+                "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE".into(),
+                LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE.into(),
+            ),
+            (
+                "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE".into(),
+                LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE.into(),
+            ),
         ]);
     }
     restart_launcher_with_one_shot_env(
@@ -4651,20 +4681,41 @@ fn run_launcher_response_computers_sweep(
                 == Some("menu:computers:acorn")
     })?;
     thread::sleep(Duration::from_millis(200));
-    let (driver, expected_records) = if isolated_profile {
-        (format!("computers-round-trip {interval_ms} 4"), 65)
+    let driver = if isolated_profile {
+        format!("computers-round-trip {interval_ms} 4")
     } else {
-        (format!("computers-sweep {interval_ms} {start_delay_ms}"), 9)
+        format!("computers-sweep {interval_ms} {start_delay_ms}")
     };
     run_launcher_response_driver(session, &driver)?;
-    thread::sleep(Duration::from_millis(300));
-    let mut trace =
-        wait_launcher_response_trace(session, Duration::from_secs(5), expected_records)?;
+    wait_launcher_response_completion(
+        session,
+        LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+        Duration::from_secs(10),
+    )?;
     if isolated_profile {
-        trace["frame_profile_tsv"] = Value::String(
-            remote_read(session, "/tmp/mister-magik/launcher-response-frames.tsv")
-                .unwrap_or_default(),
-        );
+        wait_launcher_response_completion(
+            session,
+            LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE,
+            Duration::from_secs(10),
+        )?;
+    }
+    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    trace["installed_manifest"] = Value::String(
+        remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+            .ok_or("launcher response installed manifest is missing")?,
+    );
+    trace["input_proxy_protocol"] = serde_json::from_str::<Value>(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?["input_proxy_protocol"]
+        .clone();
+    trace["display"] = read_launcher_status(session)?["display"].clone();
+    if isolated_profile {
+        let frame_profile = remote_read(session, "/tmp/mister-magik/launcher-response-frames.tsv")
+            .unwrap_or_default();
+        if frame_profile.trim().is_empty() {
+            return Err("launcher response frame profile is empty after completion".into());
+        }
+        trace["frame_profile_tsv"] = Value::String(frame_profile);
     }
     Ok(trace)
 }
@@ -4766,10 +4817,27 @@ fn run_launcher_response_focus_route(
     expected_records: usize,
     pulse_surface: &str,
 ) -> Result<Value> {
+    let run_id = format!(
+        "focus-{start_screen}-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    );
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), start_screen.into()),
         ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+        ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
+            expected_records.to_string(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
+            expected_records.to_string(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
+            LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
+        ),
     ];
     if let Some(system) = start_system {
         env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), system.into()));
@@ -4788,8 +4856,12 @@ fn run_launcher_response_focus_route(
             && status.get("screen").and_then(Value::as_str) == Some(start_screen)
     })?;
     run_launcher_response_driver(session, driver)?;
-    thread::sleep(Duration::from_millis(300));
-    let trace = wait_launcher_response_trace(session, Duration::from_secs(5), expected_records)?;
+    wait_launcher_response_completion(
+        session,
+        LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+        Duration::from_secs(10),
+    )?;
+    let trace = read_completed_launcher_response_trace(session, &run_id)?;
     validate_launcher_response_trace(&trace)?;
     let records = launcher_response_confirmed_records(&trace, Some(pulse_surface));
     let expected_items = records
@@ -4811,6 +4883,10 @@ fn run_launcher_response_focus_route(
 }
 
 fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) -> Result<Value> {
+    let run_id = format!(
+        "arcade-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+    );
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
@@ -4818,6 +4894,19 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
                 ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
                 ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+                ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
+                    "1".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
+                    "0".into(),
+                ),
+                (
+                    "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
+                    LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
+                ),
             ],
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
@@ -4829,8 +4918,12 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
             && status.get("screen").and_then(Value::as_str) == Some("arcade")
     })?;
     run_launcher_response_driver(session, "down 10 1 1")?;
-    thread::sleep(Duration::from_millis(150));
-    let trace = wait_launcher_response_trace(session, Duration::from_secs(5), 1)?;
+    wait_launcher_response_completion(
+        session,
+        LAUNCHER_RESPONSE_COMPLETE_REMOTE,
+        Duration::from_secs(10),
+    )?;
+    let trace = read_completed_launcher_response_trace(session, &run_id)?;
     validate_launcher_response_trace(&trace)?;
     let records = launcher_response_confirmed_records(&trace, None);
     let excluded_pulses = trace["feedback_records"]
@@ -4849,14 +4942,17 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
 }
 
 fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v2") {
-        return Err("launcher response trace is not schema v2".into());
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v3") {
+        return Err("launcher response trace is not schema v3".into());
     }
     if trace["records"].as_array().is_none()
         || trace["feedback_records"].as_array().is_none()
         || trace["presentation"].as_object().is_none()
+        || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
+        || trace["runtime"].as_object().is_none()
+        || trace["run_id"].as_str().is_none_or(str::is_empty)
     {
-        return Err("launcher response trace omitted required v2 evidence".into());
+        return Err("launcher response trace omitted required v3 evidence".into());
     }
     Ok(())
 }
@@ -5041,26 +5137,42 @@ where
     }
 }
 
-fn wait_launcher_response_trace(
+fn wait_launcher_response_completion(
     session: &Session,
+    path: &str,
     timeout: Duration,
-    minimum_records: usize,
-) -> Result<Value> {
+) -> Result<()> {
     let started = Instant::now();
     loop {
-        if let Some(raw) = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
-            && let Ok(trace) = serde_json::from_str::<Value>(&raw)
-            && trace["records"]
-                .as_array()
-                .is_some_and(|records| records.len() >= minimum_records)
-        {
-            return Ok(trace);
+        if remote_read(session, path).as_deref() == Some("complete\n") {
+            return Ok(());
         }
         if started.elapsed() >= timeout {
-            return Err("timed out waiting for launcher response trace".into());
+            let partial = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+                .unwrap_or_else(|| "missing".to_string());
+            return Err(format!(
+                "timed out waiting for launcher response completion {path}; partial={partial}"
+            )
+            .into());
         }
         thread::sleep(Duration::from_millis(20));
     }
+}
+
+fn read_completed_launcher_response_trace(session: &Session, run_id: &str) -> Result<Value> {
+    let raw = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+        .ok_or("completed launcher response trace is missing")?;
+    if raw.trim().is_empty() {
+        return Err("completed launcher response trace is empty".into());
+    }
+    let trace: Value = serde_json::from_str(&raw)?;
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v3")
+        || trace["run_id"].as_str() != Some(run_id)
+        || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
+    {
+        return Err(format!("launcher response trace is stale or incomplete: {trace}").into());
+    }
+    Ok(trace)
 }
 
 fn parse_catalog_adoption_max_us(events: &str) -> Option<u64> {

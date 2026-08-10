@@ -26,9 +26,10 @@ use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::mpsc::{Sender, channel};
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
@@ -1288,6 +1289,13 @@ const INPUT_INTEGRITY_TRACE_PATH: &str = "/tmp/mister-magik/input-integrity-trac
 const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
 const LAUNCHER_RESPONSE_TRACE_PATH: &str = "/tmp/mister-magik/launcher-response-trace.json";
 const LAUNCHER_RESPONSE_TRACE_LIMIT: usize = 256;
+const LAUNCHER_RESPONSE_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_COMPLETE";
+const LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE";
+const LAUNCHER_RESPONSE_RUN_ID_ENV: &str = "MISTER_LAUNCHER_RESPONSE_RUN_ID";
+const LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV: &str =
+    "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED";
+const LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN_ENV: &str =
+    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN";
 
 struct InputIntegrityTrace {
     enabled: bool,
@@ -1356,6 +1364,7 @@ impl LauncherResponseState {
     }
 }
 
+#[derive(Clone)]
 struct LauncherResponseFeedbackRecord {
     phase: &'static str,
     event_id: u64,
@@ -1377,6 +1386,7 @@ struct LauncherResponsePresentationSnapshot {
     magik_ownership: bool,
 }
 
+#[derive(Clone)]
 struct LauncherResponseRecord {
     action: LogicalAction,
     trigger: DispatchKind,
@@ -1402,15 +1412,44 @@ struct LauncherResponseTrace {
     refresh_period_us: u64,
     presentation_start: Option<LauncherResponsePresentationSnapshot>,
     presentation_end: Option<LauncherResponsePresentationSnapshot>,
+    run_id: String,
+    expected_confirmed: usize,
+    expected_feedback_hidden: usize,
+    hidden_feedback_count: usize,
+    outstanding_feedback: HashSet<u64>,
+    complete: bool,
+    frame_trace_finalize_pending: bool,
+    writer: Option<Sender<LauncherResponseTraceWrite>>,
     dirty: bool,
+}
+
+struct LauncherResponseTraceWrite {
+    payload: String,
+    complete: bool,
+    completion_path: Option<String>,
 }
 
 impl LauncherResponseTrace {
     fn from_env(nav: &LauncherNav) -> Self {
         let enabled = launcher_env_flag("MISTER_LAUNCHER_RESPONSE_TRACE");
+        let run_id = std::env::var(LAUNCHER_RESPONSE_RUN_ID_ENV).unwrap_or_default();
+        let expected_confirmed =
+            response_trace_expected_count(LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV, enabled);
+        let expected_feedback_hidden =
+            response_trace_expected_count(LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN_ENV, enabled);
+        let completion_path = response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV);
         if enabled {
             let _ = std::fs::remove_file(LAUNCHER_RESPONSE_TRACE_PATH);
+            for name in [
+                LAUNCHER_RESPONSE_COMPLETE_ENV,
+                LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV,
+            ] {
+                if let Some(path) = response_trace_volatile_path(name) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
         }
+        let writer = enabled.then(|| spawn_launcher_response_trace_writer(completion_path));
         Self {
             enabled,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
@@ -1422,6 +1461,14 @@ impl LauncherResponseTrace {
             refresh_period_us: 0,
             presentation_start: None,
             presentation_end: None,
+            run_id,
+            expected_confirmed,
+            expected_feedback_hidden,
+            hidden_feedback_count: 0,
+            outstanding_feedback: HashSet::new(),
+            complete: false,
+            frame_trace_finalize_pending: false,
+            writer,
             dirty: enabled,
         }
     }
@@ -1439,8 +1486,27 @@ impl LauncherResponseTrace {
             refresh_period_us: 0,
             presentation_start: None,
             presentation_end: None,
+            run_id: "test-run".to_string(),
+            expected_confirmed: 0,
+            expected_feedback_hidden: 0,
+            hidden_feedback_count: 0,
+            outstanding_feedback: HashSet::new(),
+            complete: false,
+            frame_trace_finalize_pending: false,
+            writer: None,
             dirty: false,
         }
+    }
+
+    fn configured_for_test(
+        nav: &LauncherNav,
+        expected_confirmed: usize,
+        expected_feedback_hidden: usize,
+    ) -> Self {
+        let mut trace = Self::enabled_for_test(nav);
+        trace.expected_confirmed = expected_confirmed;
+        trace.expected_feedback_hidden = expected_feedback_hidden;
+        trace
     }
 
     fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
@@ -1530,6 +1596,7 @@ impl LauncherResponseTrace {
         record.confirmed_at_us = Some(confirmed_at_us);
         record.confirmed_frame = Some(frame);
         record.confirmed_sequence = Some(sequence);
+        self.update_completion();
         self.dirty = true;
     }
 
@@ -1547,18 +1614,25 @@ impl LauncherResponseTrace {
                 event_id,
                 target,
                 ..
-            } => ("visible", *event_id, target, None),
+            } => {
+                self.outstanding_feedback.insert(*event_id);
+                ("visible", *event_id, target, None)
+            }
             crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
                 event_id,
                 target,
                 visible_for,
                 ..
-            } => (
-                "hidden",
-                *event_id,
-                target,
-                Some(u64::try_from(visible_for.as_micros()).unwrap_or(u64::MAX)),
-            ),
+            } => {
+                self.outstanding_feedback.remove(event_id);
+                self.hidden_feedback_count = self.hidden_feedback_count.saturating_add(1);
+                (
+                    "hidden",
+                    *event_id,
+                    target,
+                    Some(u64::try_from(visible_for.as_micros()).unwrap_or(u64::MAX)),
+                )
+            }
         };
         self.feedback_records.push(LauncherResponseFeedbackRecord {
             phase,
@@ -1570,7 +1644,30 @@ impl LauncherResponseTrace {
             confirmed_sequence: sequence,
             dwell_us,
         });
+        self.update_completion();
         self.dirty = true;
+    }
+
+    fn update_completion(&mut self) {
+        if self.complete || self.expected_confirmed == 0 {
+            return;
+        }
+        let confirmed = self
+            .records
+            .iter()
+            .filter(|record| record.disposition == "confirmed")
+            .count();
+        if confirmed >= self.expected_confirmed
+            && self.hidden_feedback_count >= self.expected_feedback_hidden
+            && self.outstanding_feedback.is_empty()
+        {
+            self.complete = true;
+            self.frame_trace_finalize_pending = true;
+        }
+    }
+
+    fn take_frame_trace_finalize_pending(&mut self) -> bool {
+        std::mem::take(&mut self.frame_trace_finalize_pending)
     }
 
     fn observe_presentation(
@@ -1668,20 +1765,81 @@ impl LauncherResponseTrace {
                     "latch_drop_delta": end.latch_drop_count.wrapping_sub(start.latch_drop_count),
                 })
             });
+        let build_identity = crate::build_identity::BuildIdentity::current();
         let payload = serde_json::json!({
-            "schema": "mister-magik-launcher-response-trace-v2",
+            "schema": "mister-magik-launcher-response-trace-v3",
+            "run_id": self.run_id,
+            "completion": {
+                "state": if self.complete { "complete" } else { "running" },
+                "expected_confirmed": self.expected_confirmed,
+                "expected_feedback_hidden": self.expected_feedback_hidden,
+                "confirmed": self.records.iter().filter(|record| record.disposition == "confirmed").count(),
+                "feedback_hidden": self.hidden_feedback_count,
+                "outstanding_feedback": self.outstanding_feedback.len(),
+            },
+            "runtime": build_identity,
+            "latch_protocol": 5,
             "queue_high_water": self.queue_high_water,
             "records": records,
             "feedback_records": feedback_records,
             "presentation": presentation,
         });
-        if let Some(parent) = std::path::Path::new(LAUNCHER_RESPONSE_TRACE_PATH).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if std::fs::write(LAUNCHER_RESPONSE_TRACE_PATH, format!("{}\n", payload)).is_ok() {
+        if self.writer.as_ref().is_some_and(|writer| {
+            writer
+                .send(LauncherResponseTraceWrite {
+                    payload: format!("{}\n", payload),
+                    complete: self.complete,
+                    completion_path: response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV),
+                })
+                .is_ok()
+        }) || self.writer.is_none()
+        {
             self.dirty = false;
         }
     }
+}
+
+fn response_trace_expected_count(name: &str, enabled: bool) -> usize {
+    if !enabled {
+        return 0;
+    }
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count <= LAUNCHER_RESPONSE_TRACE_LIMIT)
+        .unwrap_or(0)
+}
+
+fn response_trace_volatile_path(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .filter(|path| path.starts_with("/tmp/") && path.len() > "/tmp/".len())
+}
+
+fn spawn_launcher_response_trace_writer(
+    completion_path: Option<String>,
+) -> Sender<LauncherResponseTraceWrite> {
+    let (sender, receiver) = channel::<LauncherResponseTraceWrite>();
+    let _ = std::thread::Builder::new()
+        .name("launcher-response-trace".to_string())
+        .spawn(move || {
+            let trace_path = Path::new(LAUNCHER_RESPONSE_TRACE_PATH);
+            let temporary_path = trace_path.with_extension("json.pending");
+            if let Some(parent) = trace_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            while let Ok(write) = receiver.recv() {
+                let wrote = std::fs::write(&temporary_path, write.payload)
+                    .and_then(|()| std::fs::rename(&temporary_path, trace_path))
+                    .is_ok();
+                if wrote && write.complete {
+                    if let Some(path) = write.completion_path.or_else(|| completion_path.clone()) {
+                        let _ = std::fs::write(path, b"complete\n");
+                    }
+                }
+            }
+        });
+    sender
 }
 
 impl InputIntegrityTrace {
@@ -8893,6 +9051,9 @@ pub(super) fn run_launcher_loop(
             }
         }
         launcher_response_trace.flush();
+        if launcher_response_trace.take_frame_trace_finalize_pending() {
+            frame_accounting.finish_preview_scroll_trace();
+        }
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
@@ -10857,6 +11018,61 @@ mod tests {
         assert_eq!(trace.feedback_records[1].phase, "hidden");
         assert_eq!(trace.feedback_records[1].dwell_us, Some(84_000));
         assert_eq!(trace.feedback_records[1].confirmed_sequence, 11);
+    }
+
+    #[test]
+    fn launcher_response_trace_completes_after_focus_and_feedback_removal() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::SystemHub;
+        let mut trace = LauncherResponseTrace::configured_for_test(&nav, 1, 1);
+        let mut event = normalized_test_press(LogicalAction::Right);
+        event.source.kind = InputSourceKind::MainProxy;
+        let context = ContextId {
+            target: FocusTarget {
+                kind: InputContextKind::Screen,
+                owner: 1,
+            },
+            generation: 1,
+        };
+        trace.record_route(
+            event,
+            InputOutcome::Dispatch {
+                event,
+                context,
+                kind: DispatchKind::Initial,
+            },
+        );
+        nav.system_hub_selected = 1;
+        trace.observe_state(&nav, false);
+        trace.confirm(&nav, 42, 7);
+        assert!(!trace.complete);
+
+        let target = SelectionFeedbackTarget::new("system-hub", "recent");
+        let visible_at = Instant::now();
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Visible {
+                event_id: 9,
+                target: target.clone(),
+                confirmed_at: visible_at,
+            },
+            42,
+            7,
+        );
+        assert!(!trace.complete);
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
+                event_id: 9,
+                target,
+                visible_for: Duration::from_millis(84),
+                confirmed_at: visible_at + Duration::from_millis(84),
+            },
+            47,
+            12,
+        );
+
+        assert!(trace.complete);
+        assert!(trace.take_frame_trace_finalize_pending());
+        assert!(!trace.take_frame_trace_finalize_pending());
     }
 
     #[test]
