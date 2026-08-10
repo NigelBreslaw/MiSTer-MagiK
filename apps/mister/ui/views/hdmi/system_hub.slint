@@ -79,23 +79,13 @@ component HubCard inherits Rectangle {
     Rectangle { x: parent.width - 26px; y: parent.height - 10px; width: 18px; height: 2px; background: root.ink; }
     Rectangle { x: parent.width - 10px; y: parent.height - 26px; width: 2px; height: 18px; background: root.ink; }
 
-    HubIcon {
-        x: (parent.width - 60px) / 2; y: 12px; width: 60px; height: 44px;
-        kind: root.kind;
-        ink: root.ink;
-    }
+
     Rectangle {
         x: 14px; y: 62px; width: parent.width - 28px; height: 26px;
-        if root.label == "FAVORITES" : Nocive15 {
+        Nocive15 {
             text: root.label;
             color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
             size: Nocive15Size.px15;
-            horizontal-alignment: center;
-        }
-        if root.label != "FAVORITES" : Start2P {
-            text: root.label;
-            color: root.enabled ? (root.focused ? #f8f5fa : #e7dfec) : #71617f;
-            size: Start2PSize.px24;
             horizontal-alignment: center;
         }
     }
