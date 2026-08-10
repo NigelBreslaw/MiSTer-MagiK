@@ -53,7 +53,7 @@ export component HomeGrid inherits Rectangle {
                 height: root.card-height;
                 label: item.label;
                 detail: root.root-menu && item.status == MenuItemStatus.ready ? "" : item.subtitle;
-                focused: index == MisterBridge.selected-index;
+                focused: item.selected;
                 acknowledged: item.acknowledged;
                 status: item.status;
             }

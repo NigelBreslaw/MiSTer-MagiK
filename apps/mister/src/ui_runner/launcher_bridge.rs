@@ -1288,7 +1288,7 @@ mod tests {
     }
 
     #[test]
-    fn menu_item_feedback_mutates_only_the_acknowledged_row() {
+    fn menu_item_state_mutates_only_the_previous_and_next_rows() {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let catalog = ArcadeCatalog::new(
@@ -1340,8 +1340,10 @@ mod tests {
         let after = (0..updated_rows.row_count())
             .map(|index| updated_rows.row_data(index).expect("retained launcher row"))
             .collect::<Vec<_>>();
-        assert_eq!(before[0], after[0]);
+        assert!(before[0].selected);
+        assert!(!after[0].selected);
         assert!(!after[0].acknowledged);
+        assert!(after[1].selected);
         assert!(after[1].acknowledged);
         assert_eq!(before[2], after[2]);
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();

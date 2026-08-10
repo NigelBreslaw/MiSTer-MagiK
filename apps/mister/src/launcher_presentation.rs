@@ -245,6 +245,7 @@ macro_rules! set_string_if_changed {
 pub struct LauncherBridgePresenter {
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
+    projected_selected_index: Option<usize>,
     license_lines_index: Option<usize>,
     license_lines: Option<Rc<VecModel<SharedString>>>,
     selection_feedback: SelectionFeedback,
@@ -400,7 +401,7 @@ impl LauncherBridgePresenter {
                 bridge.set_menu_items(self.menu_items(nav, catalog_version));
             }
         }
-        self.sync_menu_item_feedback(nav);
+        self.sync_menu_item_state(nav);
         self.publish_selection_feedback(&bridge);
 
         let games = active_game_view(catalog, nav);
@@ -445,6 +446,7 @@ impl LauncherBridgePresenter {
         if self.menu_items_key.as_ref() != Some(&key) {
             self.menu_items = Some(build_menu_items(nav, &self.selection_feedback.stamp()));
             self.menu_items_key = Some(key);
+            self.projected_selected_index = Some(nav.selected);
             self.projected_selection_feedback = self.selection_feedback.stamp();
         }
         ModelRc::from(
@@ -511,25 +513,30 @@ impl LauncherBridgePresenter {
         self.selection_feedback.confirm(stamp, confirmed_at)
     }
 
-    fn sync_menu_item_feedback(&mut self, nav: &LauncherNav) {
+    fn sync_menu_item_state(&mut self, nav: &LauncherNav) {
         let stamp = self.selection_feedback.stamp();
-        if self.projected_selection_feedback == stamp {
+        if self.projected_selected_index == Some(nav.selected)
+            && self.projected_selection_feedback == stamp
+        {
             return;
         }
         if let Some(model) = self.menu_items.as_ref() {
             for index in 0..model.row_count() {
                 if let Some(mut row) = model.row_data(index) {
+                    let selected = index == nav.selected;
                     let acknowledged = stamp.entries.iter().any(|entry| {
                         entry.target.surface == nav.current_menu_id()
                             && entry.target.item == row.id.as_str()
                     });
-                    if row.acknowledged != acknowledged {
+                    if row.selected != selected || row.acknowledged != acknowledged {
+                        row.selected = selected;
                         row.acknowledged = acknowledged;
                         model.set_row_data(index, row);
                     }
                 }
             }
         }
+        self.projected_selected_index = Some(nav.selected);
         self.projected_selection_feedback = stamp;
     }
 
@@ -574,7 +581,8 @@ fn build_menu_items(
     let rows = nav
         .current_menu_items()
         .iter()
-        .map(|item| {
+        .enumerate()
+        .map(|(index, item)| {
             let presentation = nav.menu_item_catalog_presentation(item);
             MenuItem {
                 id: item.id.clone().into(),
@@ -605,6 +613,7 @@ fn build_menu_items(
                     CatalogMenuItemStatus::LoadFailed => "Load failed — A to retry".into(),
                     CatalogMenuItemStatus::Ready => format!("{} games", item.count).into(),
                 },
+                selected: index == nav.selected,
                 acknowledged: feedback.entries.iter().any(|entry| {
                     entry.target.surface == nav.current_menu_id() && entry.target.item == item.id
                 }),
