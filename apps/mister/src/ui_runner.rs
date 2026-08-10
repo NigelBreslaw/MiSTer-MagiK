@@ -332,7 +332,7 @@ macro_rules! with_scene_app_layout {
                 UiPixelSize::Px24 => slint_ui::$module::Start2PSize::Px24,
                 UiPixelSize::Px32 => slint_ui::$module::Start2PSize::Px32,
             };
-            mister_ui.set_crt_body_font(slint_ui::$module::Start2PSize::Px8);
+            mister_ui.set_crt_body_font(start2p_size(crt_metrics.body_font));
             mister_ui.set_crt_heading_font(start2p_size(crt_metrics.heading_font));
             mister_ui.set_crt_card_title_font(start2p_size(crt_metrics.card_title_font));
             mister_ui.set_crt_card_detail_font(start2p_size(crt_metrics.card_detail_font));

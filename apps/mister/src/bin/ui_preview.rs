@@ -2794,7 +2794,7 @@ mod macos {
             UiPixelSize::Px24 => mister_magik_ui::launcher::Start2PSize::Px24,
             UiPixelSize::Px32 => mister_magik_ui::launcher::Start2PSize::Px32,
         };
-        ui.set_crt_body_font(mister_magik_ui::launcher::Start2PSize::Px8);
+        ui.set_crt_body_font(start2p_size(metrics.body_font));
         ui.set_crt_heading_font(start2p_size(metrics.heading_font));
         ui.set_crt_card_title_font(start2p_size(metrics.card_title_font));
         ui.set_crt_card_detail_font(start2p_size(metrics.card_detail_font));
@@ -3553,12 +3553,13 @@ mod macos {
 
         #[test]
         fn display_profiles_use_route_geometry_fonts_and_metrics() {
-            for (name, profile, route, render_size, font_family) in [
+            for (name, profile, route, render_size, body_font, font_family) in [
                 (
                     "hdmi",
                     DisplayProfile::Hdmi,
                     ResolvedOutputRoute::Hdmi,
                     (960, 540),
+                    UiPixelSize::Px8,
                     "Press Start 2P",
                 ),
                 (
@@ -3566,6 +3567,7 @@ mod macos {
                     DisplayProfile::Crt240p,
                     ResolvedOutputRoute::Crt240p60,
                     (640, 480),
+                    UiPixelSize::Px16,
                     "Press Start 2P",
                 ),
                 (
@@ -3573,6 +3575,7 @@ mod macos {
                     DisplayProfile::Crt288p,
                     ResolvedOutputRoute::Crt288p50,
                     (640, 288),
+                    UiPixelSize::Px16,
                     "Press Start 2P",
                 ),
                 (
@@ -3580,6 +3583,7 @@ mod macos {
                     DisplayProfile::Crt480p,
                     ResolvedOutputRoute::Crt480p60,
                     (640, 480),
+                    UiPixelSize::Px8,
                     "Press Start 2P",
                 ),
                 (
@@ -3587,6 +3591,7 @@ mod macos {
                     DisplayProfile::Crt576p,
                     ResolvedOutputRoute::Crt576p50,
                     (640, 576),
+                    UiPixelSize::Px8,
                     "Press Start 2P",
                 ),
             ] {
@@ -3602,6 +3607,7 @@ mod macos {
                     CrtUiMetrics::for_display(&display).font_family.label(),
                     font_family
                 );
+                assert_eq!(CrtUiMetrics::for_display(&display).body_font, body_font);
             }
         }
 
