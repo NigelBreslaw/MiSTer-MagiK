@@ -3839,6 +3839,10 @@ impl ScreensaverControl {
         self.preview_active
     }
 
+    fn input_held_for_control(&self, screensaver_wake: bool, physical_input_held: bool) -> bool {
+        screensaver_wake || (self.preview_active && physical_input_held)
+    }
+
     fn cancel_for_exclusive_view(&mut self, now: Instant) -> bool {
         let was_active = self.active || self.start_mode != ScreensaverStartMode::Inactive;
         self.restore_full_frame |= self.active;
@@ -6278,8 +6282,15 @@ pub(super) fn run_launcher_loop(
 
             let raw_screensaver_input_activity =
                 pad.user_activity() || launcher_automation.active();
-            if screensaver.handle_input(frame_now, screensaver_wake, raw_screensaver_input_activity)
-            {
+            let physical_input_held =
+                input_batch_healthy && pad_state_has_active_input(&physical_for_automation);
+            let screensaver_input_held =
+                screensaver.input_held_for_control(screensaver_wake, physical_input_held);
+            if screensaver.handle_input(
+                frame_now,
+                screensaver_input_held,
+                raw_screensaver_input_activity,
+            ) {
                 request_launcher_redraw!();
                 continue;
             }
@@ -15338,9 +15349,12 @@ mod tests {
     }
 
     #[test]
-    fn screensaver_preview_ignores_launch_release_then_consumes_next_input() {
+    fn settings_screensaver_preview_waits_for_activation_release_then_consumes_next_input() {
         let start = Instant::now();
         let mut saver = ScreensaverControl::new(start, ScreensaverStartMode::Inactive);
+        let mut physical_input = PadState::default();
+        physical_input.btn_a = true;
+        assert!(!saver.input_held_for_control(false, true));
 
         saver.preview(start);
         saver.update(start, true, Duration::from_secs(300), true, true);
@@ -15354,11 +15368,29 @@ mod tests {
             saver.preview_fade_alpha(start + Duration::from_millis(200)),
             Some(255)
         );
-        assert!(saver.handle_input(start, true, true));
+        let activation_held =
+            saver.input_held_for_control(false, pad_state_has_active_input(&physical_input));
+        assert!(saver.handle_input(start, activation_held, true));
         assert!(saver.active);
-        assert!(saver.handle_input(start + Duration::from_millis(16), false, true));
+        let activation_still_held =
+            saver.input_held_for_control(false, pad_state_has_active_input(&physical_input));
+        assert!(saver.handle_input(
+            start + Duration::from_millis(16),
+            activation_still_held,
+            true
+        ));
         assert!(saver.active);
-        assert!(saver.handle_input(start + Duration::from_secs(1), true, true));
+
+        physical_input.btn_a = false;
+        let activation_released =
+            saver.input_held_for_control(false, pad_state_has_active_input(&physical_input));
+        assert!(saver.handle_input(start + Duration::from_millis(32), activation_released, true));
+        assert!(saver.active);
+
+        assert!(!saver.handle_input(start + Duration::from_millis(48), false, false));
+        assert!(saver.active);
+        let next_input = saver.input_held_for_control(true, true);
+        assert!(saver.handle_input(start + Duration::from_secs(1), next_input, true));
         assert!(!saver.active);
         assert!(saver.take_restore_full_frame());
         assert!(!saver.take_restore_full_frame());
