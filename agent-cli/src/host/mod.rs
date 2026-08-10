@@ -5602,13 +5602,20 @@ fn run_launcher_response_computers_sweep(
         ),
     ];
     if isolated_profile {
+        let frame_trace_secs = interval_ms
+            .saturating_mul(32)
+            .div_ceil(1_000)
+            .saturating_add(8);
         env_vars.extend([
             ("MISTER_PROFILE".into(), "full".into()),
             (
                 "MISTER_PREVIEW_SCROLL_TRACE".into(),
                 "/tmp/mister-magik/launcher-response-frames.tsv".into(),
             ),
-            ("MISTER_PREVIEW_SCROLL_TRACE_SECS".into(), "45".into()),
+            (
+                "MISTER_PREVIEW_SCROLL_TRACE_SECS".into(),
+                frame_trace_secs.to_string(),
+            ),
             (
                 "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE".into(),
                 LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE.into(),
