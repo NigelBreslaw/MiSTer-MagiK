@@ -1473,7 +1473,6 @@ struct LauncherResponseTrace {
     catalog_phases: Vec<serde_json::Value>,
     scheduler_phases: Vec<serde_json::Value>,
     lab_records: Vec<serde_json::Value>,
-    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
     last_partial_flush_at: Instant,
     partial_confirmed_sent: usize,
     partial_feedback_sent: usize,
@@ -1501,6 +1500,7 @@ struct LauncherResponseTraceSnapshot {
     catalog_phases: Vec<serde_json::Value>,
     scheduler_phases: Vec<serde_json::Value>,
     lab_records: Vec<serde_json::Value>,
+    input_reader_policy: Option<mister_magik_catalog::runtime_thread::RuntimeThreadPolicyReport>,
 }
 
 struct LauncherResponseCatalogPhaseStart {
