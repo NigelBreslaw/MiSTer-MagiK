@@ -11649,7 +11649,11 @@ fn summary_seed_catalog_worker_request(
     }
     let request = ready_catalog_worker_request(refresh_policy);
     if return_catalog_hydration_needed {
-        return Some(request);
+        return Some(if request == CatalogWorkerRequest::LoadOnly {
+            CatalogWorkerRequest::StrictLoad
+        } else {
+            request
+        });
     }
     (request != CatalogWorkerRequest::LoadOnly && refresh_policy.worker_enabled())
         .then_some(request)
@@ -14794,11 +14798,11 @@ mod tests {
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, false, true),
-            Some(CatalogWorkerRequest::LoadOnly)
+            Some(CatalogWorkerRequest::StrictLoad)
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Default, false, true),
-            Some(CatalogWorkerRequest::LoadOnly)
+            Some(CatalogWorkerRequest::StrictLoad)
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),

@@ -95,6 +95,52 @@ fn publish_persisted_registry_seed_at(
     }
 }
 
+fn publish_strict_registry_seed_at(
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    root: &str,
+    storage: &Path,
+) -> Result<(), String> {
+    let load_started = Instant::now();
+    match load_sharded_registry_seed_at(root, storage) {
+        Ok(seed) => {
+            let load_us = load_started.elapsed().as_micros() as u64;
+            let fingerprint = seed.catalog_fingerprint.clone();
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_strict_registry_load".to_string(),
+                detail: format!(
+                    "status=ready load_us={load_us} generation={} systems={} resident_games={}",
+                    seed.generation,
+                    seed.catalog.systems.len(),
+                    seed.catalog.games.len()
+                ),
+            });
+            send_ready_catalog(
+                tx,
+                seed.catalog,
+                None,
+                load_us,
+                CatalogSource::ShardedRegistry,
+                false,
+                Some(fingerprint),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let detail = format!(
+                "status={} load_us={} error={}",
+                error.status,
+                load_started.elapsed().as_micros(),
+                error.to_string().replace('\t', " ")
+            );
+            let _ = tx.send(CatalogWorkerMessage::Timing {
+                name: "catalog_strict_registry_load".to_string(),
+                detail,
+            });
+            Err(error.to_string())
+        }
+    }
+}
+
 fn send_persisted_catalog(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     root: &str,
@@ -536,10 +582,17 @@ pub(super) fn start_library_catalog_worker(
                     });
                 }
             }
-            if request == CatalogWorkerRequest::StrictLoad && !cache_state.has_usable_catalog() {
-                let _ = tx.send(CatalogWorkerMessage::LoadFailed {
-                    error: "catalog is empty".to_string(),
-                });
+            if request == CatalogWorkerRequest::StrictLoad {
+                let storage =
+                    mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+                match publish_strict_registry_seed_at(&tx, &root, &storage) {
+                    Ok(()) => {
+                        let _ = tx.send(CatalogWorkerMessage::Done);
+                    }
+                    Err(error) => {
+                        let _ = tx.send(CatalogWorkerMessage::LoadFailed { error });
+                    }
+                }
                 return;
             }
             let plan = catalog_worker_plan(cache_state, request);
@@ -1964,6 +2017,52 @@ mod tests {
         worker.join().expect("catalog worker");
         assert!(rx.recv().is_err(), "worker must not start search indexing");
         assert!(!delivered_catalog.text_indexes_ready());
+    }
+
+    #[test]
+    fn strict_load_rehydrates_the_published_registry_without_validation() {
+        let (storage, fingerprint) = post_persist_registry_fixture();
+        let (tx, rx) = mpsc::channel();
+        let worker_storage = storage.clone();
+        let worker = std::thread::spawn(move || {
+            publish_strict_registry_seed_at(&tx, "/media/fat/_Arcade", &worker_storage)
+        });
+
+        assert!(matches!(
+            rx.recv().expect("strict load timing"),
+            CatalogWorkerMessage::Timing { name, detail }
+                if name == "catalog_strict_registry_load" && detail.contains("status=ready")
+        ));
+        let catalog = match rx.recv().expect("strict load catalog") {
+            CatalogWorkerMessage::Ready {
+                catalog,
+                source,
+                durable_save_pending,
+                generation_fingerprint,
+                publication_ack,
+                ..
+            } => {
+                assert_eq!(source, CatalogSource::ShardedRegistry);
+                assert!(!durable_save_pending);
+                assert_eq!(
+                    generation_fingerprint.as_deref(),
+                    Some(fingerprint.as_str())
+                );
+                publication_ack
+                    .expect("publication acknowledgement")
+                    .send(())
+                    .expect("acknowledge strict load catalog");
+                catalog
+            }
+            _ => panic!("expected strict load catalog"),
+        };
+        worker
+            .join()
+            .expect("strict load worker")
+            .expect("strict load registry");
+
+        assert_eq!(catalog.systems.len(), 4);
+        std::fs::remove_dir_all(storage).expect("remove registry fixture");
     }
 
     #[test]
