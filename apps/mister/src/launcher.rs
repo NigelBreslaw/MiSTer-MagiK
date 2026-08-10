@@ -1754,6 +1754,40 @@ impl LauncherNav {
         self.open_system_synced(catalog, system_id)
     }
 
+    pub fn focus_system(&mut self, catalog: &ArcadeCatalog, system_id: &str) -> bool {
+        self.sync_launcher_taxonomy(catalog);
+        let Some(destination) = self
+            .taxonomy
+            .primary_destination_for_system(system_id)
+            .cloned()
+        else {
+            return false;
+        };
+        if !self
+            .taxonomy
+            .collection_path_is_valid(&destination.menu_path, &destination.collection_id)
+        {
+            return false;
+        }
+        self.menu_path = destination.menu_path;
+        self.active_collection_id = None;
+        self.screen = Screen::Home;
+        self.settings_focused = false;
+        self.restore_current_menu_view();
+        let Some(index) = self
+            .current_menu_items()
+            .iter()
+            .position(|item| item.id == destination.collection_id)
+        else {
+            return false;
+        };
+        self.selected = index;
+        let menu_count = self.current_menu_count();
+        keep_home_visible(self.selected, &mut self.scroll_x, menu_count);
+        self.remember_current_menu_view();
+        true
+    }
+
     pub fn open_default_arcade(&mut self, catalog: &ArcadeCatalog) -> bool {
         self.sync_launcher_taxonomy(catalog);
         self.open_default_arcade_synced(catalog)
@@ -9370,6 +9404,21 @@ mod tests {
         nav.set_arcade_exit_locked(false);
         nav.leave_arcade(false, "arcade");
         assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn benchmark_focuses_a_system_tile_without_loading_or_opening_it() {
+        let catalog = arcade_catalog(
+            Vec::new(),
+            vec![arcade_system("snes", 2), arcade_system("c64", 3)],
+        );
+        let mut nav = LauncherNav::new();
+
+        assert!(nav.focus_system(&catalog, "snes"));
+        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.current_menu_selected_item_id(), "snes");
+        assert!(nav.active_collection_id().is_none());
+        assert!(!nav.catalog_system_hydration_is_loading("snes"));
     }
 
     #[test]

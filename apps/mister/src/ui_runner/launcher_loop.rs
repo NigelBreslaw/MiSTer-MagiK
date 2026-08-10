@@ -516,8 +516,11 @@ struct ArcadeEntryLatencyTrace {
 
 impl ArcadeEntryLatencyTrace {
     fn from_env() -> Self {
-        let run_id = std::env::var("MISTER_ARCADE_ENTRY_RUN_ID").unwrap_or_default();
-        let writer = std::env::var("MISTER_ARCADE_ENTRY_TRACE")
+        let run_id = std::env::var("MISTER_SYSTEM_ENTRY_RUN_ID")
+            .or_else(|_| std::env::var("MISTER_ARCADE_ENTRY_RUN_ID"))
+            .unwrap_or_default();
+        let writer = std::env::var("MISTER_SYSTEM_ENTRY_TRACE")
+            .or_else(|_| std::env::var("MISTER_ARCADE_ENTRY_TRACE"))
             .ok()
             .and_then(|path| {
                 let file = std::fs::File::create(&path)
@@ -613,6 +616,7 @@ struct ArcadeEntryLatencyTracker {
     enter_presented: bool,
     rows_ready: bool,
     preview_exact: bool,
+    ready_presented: bool,
     first_nav_input_at: Option<Instant>,
     first_nav_presented: bool,
 }
@@ -968,6 +972,7 @@ impl ArcadeEntryLatencyTracker {
             enter_presented: false,
             rows_ready: false,
             preview_exact: false,
+            ready_presented: false,
             first_nav_input_at: None,
             first_nav_presented: false,
         }
@@ -982,6 +987,7 @@ impl ArcadeEntryLatencyTracker {
         self.enter_presented = false;
         self.rows_ready = false;
         self.preview_exact = false;
+        self.ready_presented = false;
         self.first_nav_input_at = None;
         self.first_nav_presented = false;
     }
@@ -1155,7 +1161,10 @@ impl ArcadeEntryLatencyTracker {
             None,
             preview_state,
             &asset_key,
-            "source=preview_state",
+            format!(
+                "source=preview_state selected_has_preview={}",
+                u8::from(selected_has_preview)
+            ),
         );
     }
 
@@ -1214,6 +1223,73 @@ impl ArcadeEntryLatencyTracker {
             );
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_ready_presented_frame(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        preview: &PreviewState,
+        frame: u64,
+        prepare_us: u128,
+        copied_rows: u32,
+        main_active_confirmed: bool,
+    ) {
+        if !system_entry_ready_frame_eligible(
+            self.enter_input_at.is_some(),
+            self.rows_ready,
+            self.preview_exact,
+            self.ready_presented,
+            nav.screen,
+            copied_rows,
+            main_active_confirmed,
+        ) {
+            return;
+        }
+        self.ready_presented = true;
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
+        self.trace.record(
+            start,
+            "system_entry_ready_presented",
+            at,
+            self.enter_input_at,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            Some(frame),
+            Some(prepare_us),
+            preview.trace_cache_state(),
+            &asset_key,
+            format!(
+                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={}",
+                u8::from(selected_has_preview)
+            ),
+        );
+    }
+}
+
+fn system_entry_ready_frame_eligible(
+    entered: bool,
+    rows_ready: bool,
+    preview_terminal: bool,
+    already_recorded: bool,
+    screen: Screen,
+    copied_rows: u32,
+    main_active_confirmed: bool,
+) -> bool {
+    entered
+        && rows_ready
+        && preview_terminal
+        && !already_recorded
+        && screen == Screen::Arcade
+        && copied_rows > 0
+        && main_active_confirmed
 }
 
 fn should_defer_arcade_overlay_bridge(
@@ -4154,6 +4230,7 @@ pub(super) fn run_launcher_loop(
     );
     let env_start_screen = launcher_start_screen_from_env();
     let env_start_system = launcher_start_system_from_env();
+    let system_entry_benchmark_system = launcher_system_entry_benchmark_system_from_env();
     let env_start_menu = launcher_bench_scenario
         .is_some()
         .then(launcher_start_menu_from_env)
@@ -4167,6 +4244,7 @@ pub(super) fn run_launcher_loop(
                 .then_some(Screen::Home)
         })
         .or_else(|| latch_v5_qualification.enabled().then_some(Screen::Arcade))
+        .or_else(|| system_entry_benchmark_system.as_ref().map(|_| Screen::Home))
         .or(env_start_screen)
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
@@ -4182,6 +4260,7 @@ pub(super) fn run_launcher_loop(
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade));
     let launch_return_restore_allowed = launcher_return_to_launcher_requested()
         && env_start_screen.is_none()
+        && system_entry_benchmark_system.is_none()
         && launcher_bench_scenario.is_none()
         && lock_screen.is_none();
     let mut launch_return_session = LaunchReturnSession::new(
@@ -4762,6 +4841,21 @@ pub(super) fn run_launcher_loop(
     nav.set_arcade_exit_locked(return_capsule_active);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     apply_home_selected_from_env(&mut nav, &catalog, start);
+    if let Some(system_id) = system_entry_benchmark_system.as_deref() {
+        if nav.focus_system(&catalog, system_id) {
+            print_startup_event(
+                start,
+                "system_entry_benchmark_focused",
+                format!("system={system_id}"),
+            );
+        } else {
+            print_startup_event(
+                start,
+                "system_entry_benchmark_focus_failed",
+                format!("system={system_id}"),
+            );
+        }
+    }
     let root_arcade_focused = nav.screen == Screen::Home
         && nav
             .current_menu_items()
@@ -9652,7 +9746,20 @@ pub(super) fn run_launcher_loop(
                 && launcher_presenter.latch_failure().is_none();
             if accepted_and_active_confirmed {
                 confirmed_present_sequence = presented_frame.main_present_sequence;
-                selection_feedback_confirmed_at = Some(pace.hit_at.unwrap_or(wait_done));
+                let confirmed_at = pace.hit_at.unwrap_or(wait_done);
+                selection_feedback_confirmed_at = Some(confirmed_at);
+                arcade_entry_latency.record_ready_presented_frame(
+                    start,
+                    confirmed_at,
+                    &lifecycle,
+                    &catalog,
+                    &nav,
+                    &preview,
+                    frames,
+                    prepare_us,
+                    presentation.copied_rows,
+                    true,
+                );
                 settings_navigation_benchmark
                     .note_orientation_presented(nav.settings.screen_orientation);
             }
@@ -11758,6 +11865,50 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_entry_ready_marker_requires_main_active_confirmation() {
+        assert!(!system_entry_ready_frame_eligible(
+            true,
+            true,
+            true,
+            false,
+            Screen::Arcade,
+            240,
+            false,
+        ));
+        assert!(system_entry_ready_frame_eligible(
+            true,
+            true,
+            true,
+            false,
+            Screen::Arcade,
+            240,
+            true,
+        ));
+    }
+
+    #[test]
+    fn system_entry_ready_marker_requires_rows_and_terminal_preview() {
+        assert!(!system_entry_ready_frame_eligible(
+            true,
+            false,
+            true,
+            false,
+            Screen::Arcade,
+            240,
+            true,
+        ));
+        assert!(!system_entry_ready_frame_eligible(
+            true,
+            true,
+            false,
+            false,
+            Screen::Arcade,
+            240,
+            true,
+        ));
+    }
 
     #[test]
     fn discrete_feedback_targets_cover_included_and_excluded_surfaces() {
