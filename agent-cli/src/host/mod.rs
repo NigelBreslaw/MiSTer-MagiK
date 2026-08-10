@@ -16316,7 +16316,7 @@ mod tests {
     #[test]
     fn input_latency_lab_driver_requires_the_exact_absolute_schedule() {
         let epoch_us = 10_000_000;
-        let pulses = (0..64)
+        let pulses = (0_u64..64)
             .map(|ordinal| {
                 let scheduled_at_us = epoch_us + ordinal * 600_000;
                 json!({
