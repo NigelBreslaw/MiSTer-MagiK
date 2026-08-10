@@ -81,8 +81,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_settings_selected(0);
     bridge.set_about_selected(0);
     bridge.set_display_options(ModelRc::new(VecModel::from(
-        mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-            .iter()
+        launcher::settings_display_resolutions()
             .map(|mode| SharedString::from(mode.label))
             .collect::<Vec<_>>(),
     )));
@@ -199,7 +198,8 @@ pub(super) fn sync_settings_bridge(
         bridge,
         get_display_selected,
         set_display_selected,
-        nav.display_selected as i32
+        launcher::settings_display_selection_index(nav.display_selected)
+            .map_or(-1, |index| index as i32)
     );
     set_bridge_if_changed!(
         bridge,

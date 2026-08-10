@@ -20,7 +20,7 @@ mod macos {
     use mister_magik_fb::input_state::PadState;
     use mister_magik_fb::launcher::{
         ArcadeSearchPane, LauncherAction, LauncherEvent, LauncherNav, NavigationTransitionState,
-        Screen,
+        Screen, settings_display_resolution_index, settings_display_resolutions,
     };
     use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
     use mister_magik_fb::launcher_runtime::catalog::{
@@ -467,9 +467,10 @@ mod macos {
             launcher_nav.settings.screen_orientation = orientation;
             launcher_nav.set_portrait_layout(layout.is_portrait());
             launcher_nav.sync_orientation_selection();
-            let display_selected = display_profile.display_resolution_index();
-            launcher_nav.display_selected = display_selected;
-            launcher_nav.display_highlighted = display_selected;
+            launcher_nav.display_selected = display_profile.display_resolution_index();
+            launcher_nav.display_highlighted = display_profile
+                .settings_display_resolution_index()
+                .unwrap_or(0);
             let bridge = launcher.global::<MisterBridge>();
             if let Ok(artwork) = mister_magik_fb::snes_artwork::SnesArtwork::load(
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
@@ -2753,6 +2754,13 @@ mod macos {
                 .expect("preview display profile has a launcher resolution")
         }
 
+        fn settings_display_resolution_index(self) -> Option<usize> {
+            let id = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                [self.display_resolution_index()]
+            .id;
+            settings_display_resolution_index(id)
+        }
+
         const fn label(self) -> &'static str {
             match self {
                 Self::Hdmi => "display:hdmi",
@@ -2981,18 +2989,20 @@ mod macos {
         bridge.set_pressed_now("A · D-pad Right".into());
         bridge.set_last_event_label("Button A pressed".into());
         bridge.set_last_raw_event("type=1 code=304 value=1".into());
-        let display_resolutions =
-            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS;
+        let display_resolutions = settings_display_resolutions().collect::<Vec<_>>();
         bridge.set_display_options(ModelRc::new(VecModel::from(
             display_resolutions
                 .iter()
                 .map(|mode| SharedString::from(mode.label))
                 .collect::<Vec<_>>(),
         )));
-        let display_selected = display_profile.display_resolution_index();
-        bridge.set_display_active_label(display_resolutions[display_selected].label.into());
-        bridge.set_display_selected(display_selected as i32);
-        bridge.set_display_highlighted(display_selected as i32);
+        let active_resolution =
+            mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                [display_profile.display_resolution_index()];
+        let display_selected = display_profile.settings_display_resolution_index();
+        bridge.set_display_active_label(active_resolution.label.into());
+        bridge.set_display_selected(display_selected.map_or(-1, |index| index as i32));
+        bridge.set_display_highlighted(display_selected.map_or(0, |index| index as i32));
         bridge.set_orientation_options(ModelRc::new(VecModel::from(
             ScreenOrientation::ALL
                 .iter()

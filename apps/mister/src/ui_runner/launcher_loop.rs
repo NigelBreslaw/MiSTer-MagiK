@@ -4264,7 +4264,8 @@ pub(super) fn run_launcher_loop(
                     .position(|mode| mode.id == selected_id)
             {
                 nav.display_selected = index;
-                nav.display_highlighted = index;
+                nav.display_highlighted =
+                    launcher::settings_display_selection_index(index).unwrap_or(0);
             }
             if state.return_to_settings {
                 nav.screen = Screen::Settings;
@@ -5225,7 +5226,8 @@ pub(super) fn run_launcher_loop(
                                 .position(|mode| mode.id == state.active)
                         {
                             nav.display_selected = index;
-                            nav.display_highlighted = index;
+                            nav.display_highlighted =
+                                launcher::settings_display_selection_index(index).unwrap_or(0);
                         }
                     }
                 }

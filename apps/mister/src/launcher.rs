@@ -21,6 +21,7 @@ use crate::library_db;
 use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
+use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -81,6 +82,32 @@ const SCREENSAVER_SETTINGS_MAX_SELECTED: usize = 2;
 const LICENSES_MAX_SELECTED: usize = crate::licenses::LICENSE_TITLES.len() - 1;
 const LICENSE_SCROLL_LINE_PX: f64 = 22.0;
 pub const ARCADE_SEARCH_KEY_COLUMNS: usize = 8;
+const SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS: [&str; 2] = ["crt-480p60", "crt-576p50"];
+
+pub fn settings_display_resolutions() -> impl Iterator<Item = &'static DisplayResolution> {
+    DISPLAY_RESOLUTIONS
+        .iter()
+        .filter(|mode| !SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS.contains(&mode.id))
+}
+
+pub fn settings_display_resolution(index: usize) -> Option<&'static DisplayResolution> {
+    settings_display_resolutions().nth(index)
+}
+
+pub fn settings_display_resolution_index(id: &str) -> Option<usize> {
+    settings_display_resolutions().position(|mode| mode.id == id)
+}
+
+pub fn settings_display_selection_index(display_resolution_index: usize) -> Option<usize> {
+    DISPLAY_RESOLUTIONS
+        .get(display_resolution_index)
+        .and_then(|mode| settings_display_resolution_index(mode.id))
+}
+
+fn settings_display_resolution_count() -> usize {
+    settings_display_resolutions().count()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArcadeSearchKeyAction {
     Append(&'static str),
@@ -2897,14 +2924,11 @@ impl LauncherNav {
 
     fn handle_settings(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
         if self.display_combo_open {
-            let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
+            let count = settings_display_resolution_count();
             if pressed.btn_b {
                 self.display_combo_open = false;
-                self.display_highlighted = if self.display_selected < count {
-                    self.display_selected
-                } else {
-                    0
-                };
+                self.display_highlighted =
+                    settings_display_selection_index(self.display_selected).unwrap_or(0);
                 return None;
             }
             if pressed.dpad_down && self.display_highlighted + 1 < count {
@@ -2915,15 +2939,17 @@ impl LauncherNav {
             }
             if pressed.btn_a {
                 self.display_combo_open = false;
-                if self.display_highlighted == self.display_selected {
+                let highlighted = settings_display_resolution(self.display_highlighted)
+                    .expect("highlighted display resolution remains in range");
+                if DISPLAY_RESOLUTIONS
+                    .get(self.display_selected)
+                    .is_some_and(|selected| selected.id == highlighted.id)
+                {
                     return None;
                 }
-                let id = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-                    [self.display_highlighted]
-                    .id;
                 return Some(LauncherEvent {
                     action: LauncherAction::ApplyDisplayResolution,
-                    path: Some(id.to_owned()),
+                    path: Some(highlighted.id.to_owned()),
                     settings: None,
                 });
             }
@@ -2977,13 +3003,8 @@ impl LauncherNav {
         if pressed.btn_a {
             if self.settings_selected == SETTINGS_DISPLAY_SELECTED {
                 self.display_combo_open = true;
-                let count =
-                    mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
-                self.display_highlighted = if self.display_selected < count {
-                    self.display_selected
-                } else {
-                    0
-                };
+                self.display_highlighted =
+                    settings_display_selection_index(self.display_selected).unwrap_or(0);
                 return None;
             }
             if self.settings_selected == SETTINGS_ORIENTATION_SELECTED {
@@ -8403,8 +8424,8 @@ mod tests {
     fn display_combo_navigates_to_the_last_selectable_mode() {
         let catalog = multi_system_catalog();
         let mut nav = LauncherNav::new();
-        let count = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.len();
-        assert_eq!(count, 9);
+        let count = settings_display_resolution_count();
+        assert_eq!(count, 7);
         nav.screen = Screen::Settings;
         nav.display_combo_open = true;
         nav.display_selected = 0;
@@ -8427,7 +8448,26 @@ mod tests {
             .handle_input(&press_a, t0 + Duration::from_millis(64), &catalog)
             .expect("last display mode");
         assert_eq!(event.action, LauncherAction::ApplyDisplayResolution);
-        assert_eq!(event.path.as_deref(), Some("crt-576p50"));
+        assert_eq!(event.path.as_deref(), Some("crt-288p50"));
+    }
+
+    #[test]
+    fn display_settings_hide_scandoubled_crt_modes_without_removing_runtime_support() {
+        let ids = settings_display_resolutions()
+            .map(|mode| mode.id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(settings_display_resolution_index("crt-240p60"), Some(5));
+        assert_eq!(settings_display_resolution_index("crt-288p50"), Some(6));
+        for id in SETTINGS_HIDDEN_DISPLAY_RESOLUTION_IDS {
+            let runtime_index = DISPLAY_RESOLUTIONS
+                .iter()
+                .position(|mode| mode.id == id)
+                .expect("hidden display mode remains in the runtime catalog");
+            assert!(!ids.contains(&id));
+            assert_eq!(settings_display_selection_index(runtime_index), None);
+            assert!(mister_magik_mister_runtime::display_resolution::find(id).is_some());
+        }
     }
 
     #[test]
