@@ -1557,6 +1557,7 @@ impl LauncherResponseTrace {
         }
     }
 
+    #[cfg(test)]
     fn configured_for_test(
         nav: &LauncherNav,
         expected_confirmed: usize,
