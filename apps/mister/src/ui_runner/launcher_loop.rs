@@ -11632,12 +11632,10 @@ fn effective_lock_screen(
 }
 
 fn ready_catalog_worker_request(refresh_policy: CatalogRefreshPolicy) -> CatalogWorkerRequest {
-    if refresh_policy == CatalogRefreshPolicy::Off {
-        CatalogWorkerRequest::LoadOnly
-    } else if refresh_policy.force_requested() {
+    if refresh_policy.force_requested() {
         CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS
     } else {
-        CatalogWorkerRequest::CheckStamp
+        CatalogWorkerRequest::LoadOnly
     }
 }
 
@@ -14769,10 +14767,10 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn ready_catalog_uses_background_worker_for_refresh_or_home_validation() {
+    pub(super) fn ready_catalog_loads_without_refresh_unless_explicitly_forced() {
         assert_eq!(
             ready_catalog_worker_request(CatalogRefreshPolicy::Default),
-            CatalogWorkerRequest::CheckStamp
+            CatalogWorkerRequest::LoadOnly
         );
         assert_eq!(
             ready_catalog_worker_request(CatalogRefreshPolicy::Force),
@@ -14785,9 +14783,13 @@ mod tests {
     }
 
     #[test]
-    pub(super) fn summary_return_hydration_runs_even_when_refresh_is_off() {
+    pub(super) fn summary_seed_skips_refresh_but_preserves_return_hydration() {
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, false, false),
+            None
+        );
+        assert_eq!(
+            summary_seed_catalog_worker_request(CatalogRefreshPolicy::Default, false, false),
             None
         );
         assert_eq!(
@@ -14796,7 +14798,7 @@ mod tests {
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Default, false, true),
-            Some(CatalogWorkerRequest::CheckStamp)
+            Some(CatalogWorkerRequest::LoadOnly)
         );
         assert_eq!(
             summary_seed_catalog_worker_request(CatalogRefreshPolicy::Off, true, true),

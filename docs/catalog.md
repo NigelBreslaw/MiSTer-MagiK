@@ -123,6 +123,11 @@ system database. Arcade's mini-nav is opened eagerly because it is the first
 visible game collection. Other system shards stay closed until predictive Home
 hydration requests them.
 
+When a valid published catalog already exists, normal startup does not scan the
+library or reconcile changed inputs. Users explicitly request catalog updates
+with Settings → **Rebuild Database**; first-run construction still starts
+automatically when no valid catalog exists.
+
 Home navigation predictively schedules bounded background mini-nav loads for
 the highlighted destination (or the default leaf below a highlighted submenu)
 and a small number of nearby, bounded-size siblings. The sibling count and game
