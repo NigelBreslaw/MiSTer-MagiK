@@ -440,9 +440,9 @@ mod tests {
         assert!(matches!(
             lab.claim_due_work(epoch_us, scheduled + MAX_START_LATENESS_US + 1),
             DueWork::SkipLate {
-                ordinal: MOVE_COUNT - 1,
+                ordinal,
                 ..
-            }
+            } if ordinal == MOVE_COUNT - 1
         ));
         assert!(lab.disarmed);
     }
