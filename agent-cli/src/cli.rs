@@ -698,6 +698,7 @@ mod tests {
             "screensaver",
             "catalog-lifecycle",
             "system-entry",
+            "system-entry-critical",
             "particles",
             "particle-profile",
             "particle-capacity",

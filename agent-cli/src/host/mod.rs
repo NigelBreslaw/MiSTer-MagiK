@@ -627,6 +627,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_system_entry(config, output_dir))
     }
 
+    pub(crate) fn profile_system_entry_critical(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_system_entry_critical(config, output_dir))
+    }
+
     pub(crate) fn verify_modal_input(
         &mut self,
         output_dir: &Path,
@@ -7283,6 +7290,12 @@ fn system_entry_artifact_prefix(
     format!("{registry_ordinal:03}-{artifact_system}-run-{sample_index}")
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SystemEntryInvocation {
+    TileActivation,
+    Direct,
+}
+
 fn profile_installed_system_entry(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -7334,6 +7347,7 @@ fn profile_installed_system_entry(
                 *games,
                 ordinal + 1,
                 1,
+                SystemEntryInvocation::TileActivation,
             )?;
             samples_by_system
                 .entry(system.clone())
@@ -7377,6 +7391,7 @@ fn profile_installed_system_entry(
                         .get(&system)
                         .ok_or("system-entry candidate has no registry ordinal")?,
                     sample_index,
+                    SystemEntryInvocation::TileActivation,
                 )?;
                 samples_by_system
                     .get_mut(&system)
@@ -7508,6 +7523,126 @@ fn profile_installed_system_entry(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+const CRITICAL_SYSTEM_ENTRY_SYSTEMS: [&str; 5] = ["c64", "snes", "pc88", "nes", "bbcmicro"];
+
+fn profile_installed_system_entry_critical(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed system-entry benchmark capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability.get("system-entry-v1").and_then(Value::as_bool) != Some(true) {
+        return Err("installed app does not support system-entry-v1".into());
+    }
+    let registry = exec_checked_output(
+        &session,
+        "system-entry registry report",
+        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let games_by_system = registry["systems"]
+        .as_array()
+        .ok_or("system-entry registry has no systems")?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("system")?.as_str()?.to_string(),
+                row.get("games")?.as_u64()?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let run_result = CRITICAL_SYSTEM_ENTRY_SYSTEMS
+        .iter()
+        .enumerate()
+        .map(|(ordinal, system)| {
+            let games = *games_by_system
+                .get(*system)
+                .filter(|games| **games > 0)
+                .ok_or_else(|| format!("critical system-entry target {system} is not populated"))?;
+            run_system_entry_sample(
+                config,
+                &session,
+                output_dir,
+                system,
+                games,
+                ordinal + 1,
+                1,
+                SystemEntryInvocation::Direct,
+            )
+        })
+        .collect::<Result<Vec<_>>>();
+    let restore_result = exec_checked(
+        &session,
+        "system-entry benchmark cleanup",
+        &format!("rm -f {}", sh(SYSTEM_ENTRY_TRACE_REMOTE)),
+    )
+    .and_then(|()| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                timeout_secs: 45,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    });
+    let samples = match (run_result, restore_result) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => return Err(error),
+        (Err(error), Err(restore)) => {
+            return Err(format!("{error}; launcher restoration failed: {restore}").into());
+        }
+    };
+
+    let passed = samples
+        .iter()
+        .all(|sample| system_entry_sample_ready_time(sample).is_some());
+    let worst_system = passed
+        .then(|| {
+            samples
+                .iter()
+                .max_by_key(|sample| system_entry_sample_ready_time(sample).unwrap_or(0))
+                .and_then(|sample| sample["system"].as_str())
+        })
+        .flatten();
+    let systems = samples
+        .iter()
+        .map(|sample| {
+            json!({
+                "system": sample["system"],
+                "games": sample["games"],
+                "ready_presented_ms": system_entry_sample_ready_time(sample),
+                "sample": sample,
+            })
+        })
+        .collect::<Vec<_>>();
+    let summary = json!({
+        "schema": "mister-magik-system-entry-critical-benchmark-v1",
+        "status": if passed { "passed" } else { "failed" },
+        "measurement": "direct collection-entry request to first Main-confirmed frame with full list and terminal selected screenshot",
+        "cache_policy": "fresh launcher process per system; operating-system filesystem cache is not flushed",
+        "invocation": "direct shared production collection-entry path; no tile focus, menu traversal, or synthetic input",
+        "targets": CRITICAL_SYSTEM_ENTRY_SYSTEMS,
+        "worst_system": worst_system,
+        "systems": systems,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_system_entry_sample(
     config: &NativeDeviceConfig,
@@ -7517,6 +7652,7 @@ fn run_system_entry_sample(
     games: u64,
     registry_ordinal: usize,
     sample_index: usize,
+    invocation: SystemEntryInvocation,
 ) -> Result<Value> {
     let run_id = format!(
         "system-entry-{system}-{}",
@@ -7527,32 +7663,38 @@ fn run_system_entry_sample(
     let capture_metadata_file = format!("{artifact_prefix}-capture.json");
     let trace_file = format!("{artifact_prefix}.tsv");
     let run_result = (|| -> Result<Value> {
+        let mut env_vars = vec![
+            ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+            (
+                "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+                system.to_string(),
+            ),
+            (
+                "MISTER_SYSTEM_ENTRY_TRACE".into(),
+                SYSTEM_ENTRY_TRACE_REMOTE.into(),
+            ),
+            ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
+        ];
+        if invocation == SystemEntryInvocation::Direct {
+            env_vars.push(("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT".into(), "1".into()));
+        }
         restart_launcher_with_one_shot_env(
             session,
             LauncherRestartOptions {
-                env_vars: vec![
-                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                    (
-                        "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
-                        system.to_string(),
-                    ),
-                    (
-                        "MISTER_SYSTEM_ENTRY_TRACE".into(),
-                        SYSTEM_ENTRY_TRACE_REMOTE.into(),
-                    ),
-                    ("MISTER_SYSTEM_ENTRY_RUN_ID".into(), run_id.clone()),
-                ],
+                env_vars,
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
-        wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-            status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-                && status.get("screen").and_then(Value::as_str) == Some("home")
-                && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
-        })?;
-        run_launcher_response_driver(session, "a 10 1 1")?;
+        if invocation == SystemEntryInvocation::TileActivation {
+            wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+                status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+                    && status.get("screen").and_then(Value::as_str) == Some("home")
+                    && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
+            })?;
+            run_launcher_response_driver(session, "a 10 1 1")?;
+        }
         let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
         wait_launcher_response_status(session, Duration::from_secs(10), |status| {
             system_entry_status_matches_list(status, system)
@@ -7579,6 +7721,10 @@ fn run_system_entry_sample(
             "status": "passed",
             "sample": sample_index,
             "run_id": run_id,
+            "invocation": match invocation {
+                SystemEntryInvocation::TileActivation => "tile-activation",
+                SystemEntryInvocation::Direct => "direct",
+            },
             "system": system,
             "games": games,
             "rows_ready_ms": system_entry_delta_ms(&trace, "arcade_rows_ready")?,
@@ -7606,6 +7752,7 @@ fn run_system_entry_sample(
             &run_id,
             &artifact_prefix,
             &error.to_string(),
+            invocation,
         ),
     }
 }
@@ -7621,6 +7768,7 @@ fn retain_failed_system_entry_sample(
     run_id: &str,
     artifact_prefix: &str,
     error: &str,
+    invocation: SystemEntryInvocation,
 ) -> Result<Value> {
     let trace_file = format!("{artifact_prefix}.tsv");
     let status_file = format!("{artifact_prefix}-status.json");
@@ -7661,6 +7809,10 @@ fn retain_failed_system_entry_sample(
         "status": "failed",
         "sample": sample_index,
         "run_id": run_id,
+        "invocation": match invocation {
+            SystemEntryInvocation::TileActivation => "tile-activation",
+            SystemEntryInvocation::Direct => "direct",
+        },
         "system": system,
         "games": games,
         "error": error,
@@ -17250,6 +17402,14 @@ mod tests {
         assert_eq!(
             system_entry_artifact_prefix(7, "Commodore 64/NTSC", 2),
             "007-Commodore_64_NTSC-run-2"
+        );
+    }
+
+    #[test]
+    fn critical_system_entry_targets_are_fixed_and_ordered() {
+        assert_eq!(
+            CRITICAL_SYSTEM_ENTRY_SYSTEMS,
+            ["c64", "snes", "pc88", "nes", "bbcmicro"]
         );
     }
 
