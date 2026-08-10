@@ -12,10 +12,10 @@
   },
   "dependencies": {
     "@astrojs/mdx": "^7.0.5",
-    "@astrojs/starlight": "^0.41.6",
-    "astro": "^7.1.6",
+    "@astrojs/starlight": "^0.41.7",
+    "astro": "^7.2.0",
     "astro-mermaid": "^2.0.4",
-    "mermaid": "^11.6.0"
+    "mermaid": "^11.16.1"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
