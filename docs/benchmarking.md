@@ -107,8 +107,9 @@ starts 8 ms before each scheduled press.
 The first six arms are baseline with catalog refresh off, real forced catalog
 refresh, monolithic 16 ms, monolithic 64 ms, cooperative 2 ms quanta totalling
 64 ms, and cooperative 1 ms quanta totalling 64 ms. Three additional
-forced-catalog arms compare the current CPU0/nice -10 input reader against
-CPU1/nice -15 and low-priority round-robin scheduling on CPU0 and CPU1. These
+forced-catalog arms compare the production CPU1/nice -15 input reader against
+the same CPU1 policy applied as a laboratory override and low-priority
+round-robin scheduling on CPU0 and CPU1. These
 reader policies require the same consumed volatile lab token and do not alter
 ordinary runtime scheduling. Per-event `/proc` scheduler accounting is enabled
 only for the current-policy baseline/forced attribution pair; candidate timing

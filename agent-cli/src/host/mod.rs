@@ -5188,7 +5188,7 @@ fn summarize_input_latency_lab_arm(
         .ok_or("input latency trace omitted reader policy")?;
     let (expected_nice, expected_cpus, expected_scheduler, expected_scheduler_policy) =
         match spec.reader_policy {
-            "current" => (-10, "0", "other", 0),
+            "current" => (-15, "1", "other", 0),
             "cpu1-nice" => (-15, "1", "other", 0),
             "cpu0-rr" => (-10, "0", "round-robin", libc::SCHED_RR),
             "cpu1-rr" => (-15, "1", "round-robin", libc::SCHED_RR),

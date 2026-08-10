@@ -60,7 +60,11 @@ impl RuntimeThreadRole {
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
             Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1),
-            Self::InputReader => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu0),
+            // The input proxy IRQ/wake path can leave a runnable CPU0 reader
+            // behind tens of milliseconds of kernel/catalog work.  Keep the
+            // reader with the latency-critical launcher work on CPU1; the
+            // forced-catalog device laboratory bounds this wake at <1 ms.
+            Self::InputReader => RuntimeThreadPolicy::new(-15, ThreadAffinity::Cpu1),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
@@ -601,7 +605,7 @@ mod tests {
     fn every_role_has_the_expected_production_policy() {
         let expected = [
             (RuntimeThreadRole::LauncherUi, -10, ThreadAffinity::Cpu1),
-            (RuntimeThreadRole::InputReader, -10, ThreadAffinity::Cpu0),
+            (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::CatalogForeground,
