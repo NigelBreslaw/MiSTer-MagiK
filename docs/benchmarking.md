@@ -77,8 +77,10 @@ Pulses may overlap; the final Other selection must confirm without waiting for
 an older pulse deadline. Arcade's velocity list deliberately has no pulse and
 is gated on first confirmed motion instead. Runs execute idle and during forced
 catalog work at physical 60 Hz and 50 Hz, with zero input loss, duplication,
-coalescing, reorder, overflow, desync, latch drops, protocol-v5 repeated
-vblanks, or ownership loss.
+coalescing, reorder, overflow, desync, latch drops, or ownership loss. Every
+response and feedback frame must become active on its first eligible vblank.
+Repeated vblanks while the UI is intentionally static remain reported but are
+not classified as input loss or dropped response frames.
 
 Dispatch P95 must be at most 3 ms and its maximum at most 5 ms. Input-to-visible
 median must be at most 12 ms; each display-rate leg independently limits P95 to

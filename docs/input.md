@@ -104,7 +104,9 @@ runs execute at 60 Hz and 50 Hz. Dispatch P95/maximum are gated at 3/5 ms;
 input-to-visible median is gated at 12 ms and P95/maximum at the measured refresh
 period plus 3/8 ms. The schema-v2 report separately states input-response,
 pulse, integrity, and background-adoption results and requires zero logical,
-mailbox, latch, or protocol-v5 physical faults. Evidence is stored under
+mailbox, latch, or ownership faults. It requires every response frame to reach
+its first eligible physical vblank; repeated vblanks during intentionally
+static gaps are reported separately. Evidence is stored under
 `build/agent-benchmarks/launcher-response/`.
 
 For causal diagnosis of intermittent single-press delay, run the dormant

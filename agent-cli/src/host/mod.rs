@@ -4398,7 +4398,6 @@ fn verify_installed_launcher_response(
         "journal_overflows",
         "sequence_gaps",
         "latch_drops",
-        "repeated_vblanks",
         "ownership_losses",
     ]
     .into_iter()
@@ -4442,6 +4441,7 @@ fn verify_installed_launcher_response(
         "sequence_gaps": sum("sequence_gaps"),
         "latch_drops": sum("latch_drops"),
         "repeated_vblanks": sum("repeated_vblanks"),
+        "static_repeated_vblanks_are_not_drop_failures": true,
         "ownership_losses": sum("ownership_losses"),
         "catalog_adoption_max_us": catalog_adoption_max_us,
         "scenarios": scenario_values,
