@@ -4179,8 +4179,6 @@ const INPUT_INTEGRITY_DRIVER: &str =
 const INPUT_INTEGRITY_TRACE_REMOTE: &str = "/tmp/mister-magik/input-integrity-trace.json";
 const LAUNCHER_RESPONSE_TRACE_REMOTE: &str = "/tmp/mister-magik/launcher-response-trace.json";
 const LAUNCHER_RESPONSE_COMPLETE_REMOTE: &str = "/tmp/mister-magik/launcher-response-complete";
-const LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE: &str =
-    "/tmp/mister-magik/launcher-response-frames-complete";
 const INPUT_LATENCY_LAB_READY_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-ready.json";
 const INPUT_LATENCY_LAB_SESSION_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-session";
 const MAIN_INPUT_LATENCY_TRACE_REMOTE: &str = "/tmp/mister-magik/main-input-latency-trace.json";
@@ -5602,29 +5600,7 @@ fn run_launcher_response_computers_sweep(
         ),
     ];
     if isolated_profile {
-        let frame_trace_secs = interval_ms
-            .saturating_mul(32)
-            .div_ceil(1_000)
-            .saturating_add(8);
-        env_vars.extend([
-            ("MISTER_PROFILE".into(), "full".into()),
-            (
-                "MISTER_PREVIEW_SCROLL_TRACE".into(),
-                "/tmp/mister-magik/launcher-response-frames.tsv".into(),
-            ),
-            (
-                "MISTER_PREVIEW_SCROLL_TRACE_SECS".into(),
-                frame_trace_secs.to_string(),
-            ),
-            (
-                "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE".into(),
-                LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE.into(),
-            ),
-            (
-                "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE".into(),
-                LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE.into(),
-            ),
-        ]);
+        env_vars.push(("MISTER_PROFILE".into(), "full".into()));
     }
     restart_launcher_with_one_shot_env(
         session,
@@ -5657,13 +5633,6 @@ fn run_launcher_response_computers_sweep(
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(10),
     )?;
-    if isolated_profile {
-        wait_launcher_response_completion(
-            session,
-            LAUNCHER_RESPONSE_FRAME_COMPLETE_REMOTE,
-            Duration::from_secs(10),
-        )?;
-    }
     let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
     trace["installed_manifest"] = Value::String(
         remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
@@ -5674,14 +5643,6 @@ fn run_launcher_response_computers_sweep(
     )?["input_proxy_protocol"]
         .clone();
     trace["display"] = read_launcher_status(session)?["display"].clone();
-    if isolated_profile {
-        let frame_profile = remote_read(session, "/tmp/mister-magik/launcher-response-frames.tsv")
-            .unwrap_or_default();
-        if frame_profile.trim().is_empty() {
-            return Err("launcher response frame profile is empty after completion".into());
-        }
-        trace["frame_profile_tsv"] = Value::String(frame_profile);
-    }
     Ok(trace)
 }
 
