@@ -1461,6 +1461,7 @@ struct LauncherResponseTrace {
     writer: Option<Sender<LauncherResponseTraceWrite>>,
     input_probe: Option<crate::input_hub::InputObservationProbe>,
     catalog_phases: Vec<serde_json::Value>,
+    lab_records: Vec<serde_json::Value>,
     dirty: bool,
 }
 
@@ -1522,6 +1523,7 @@ impl LauncherResponseTrace {
             writer,
             input_probe,
             catalog_phases: Vec::new(),
+            lab_records: Vec::new(),
             dirty: enabled,
         }
     }
@@ -1550,6 +1552,7 @@ impl LauncherResponseTrace {
             writer: None,
             input_probe: None,
             catalog_phases: Vec::new(),
+            lab_records: Vec::new(),
             dirty: false,
         }
     }
@@ -1830,6 +1833,15 @@ impl LauncherResponseTrace {
         self.dirty = true;
     }
 
+    fn record_lab(&mut self, record: Option<serde_json::Value>) {
+        if self.enabled
+            && let Some(record) = record
+        {
+            self.lab_records.push(record);
+            self.dirty = true;
+        }
+    }
+
     fn update_completion(&mut self) {
         if self.complete || self.expected_confirmed == 0 {
             return;
@@ -1985,6 +1997,7 @@ impl LauncherResponseTrace {
             "records": records,
             "feedback_records": feedback_records,
             "catalog_phases": &self.catalog_phases,
+            "lab_records": &self.lab_records,
             "presentation": presentation,
         });
         if self.writer.as_ref().is_some_and(|writer| {
@@ -3844,6 +3857,7 @@ pub(super) fn run_launcher_loop(
     let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
     let mut launcher_response_trace =
         LauncherResponseTrace::from_env(&nav, pad.input_observation_probe());
+    let mut input_latency_lab = InputLatencyLab::from_env();
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -4579,6 +4593,7 @@ pub(super) fn run_launcher_loop(
         let input_batch = drained_input.batch;
         input_integrity_trace.observe_batch(&input_batch);
         launcher_response_trace.observe_batch(&input_batch);
+        launcher_response_trace.record_lab(input_latency_lab.before_input_route());
         if !input_batch.events.is_empty()
             && let Some(stall_ms) = input_integrity_stall.take()
         {
@@ -6913,6 +6928,8 @@ pub(super) fn run_launcher_loop(
             }
         }
 
+        launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
+
         if empty_collection_invariant_violated(&catalog, &nav) {
             if let Some(system) = active_system(&catalog, &nav) {
                 crate::ui_errln!(
@@ -7624,7 +7641,11 @@ pub(super) fn run_launcher_loop(
                 startup_status,
                 &launch_return_session,
             );
-            let _ = pad.wait_for_input(input_observation, launcher_idle_sleep_duration(&pacer));
+            let idle_sleep = input_latency_lab.time_until_next_work().map_or_else(
+                || launcher_idle_sleep_duration(&pacer),
+                |lab| launcher_idle_sleep_duration(&pacer).min(lab),
+            );
+            let _ = pad.wait_for_input(input_observation, idle_sleep);
             continue;
         }
 

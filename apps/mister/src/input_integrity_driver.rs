@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use serde::Serialize;
+
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
 const EV_ABS: u16 = 3;
@@ -31,6 +33,7 @@ struct DriverPlan {
     pulse_ms: u64,
     gap_ms: u64,
     start_delay_ms: u64,
+    start_at_us: u64,
     count: u32,
     qualification: bool,
     cpu_load: bool,
@@ -58,6 +61,7 @@ impl DriverPlan {
                 pulse_ms: 0,
                 gap_ms: 0,
                 start_delay_ms: 0,
+                start_at_us: 0,
                 count: 109,
                 qualification: true,
                 cpu_load: args.first().map(String::as_str) == Some("qualification-load"),
@@ -75,6 +79,7 @@ impl DriverPlan {
                 pulse_ms: 40,
                 gap_ms: interval_ms - 40,
                 start_delay_ms,
+                start_at_us: 0,
                 count: 8,
                 qualification: false,
                 cpu_load: false,
@@ -92,6 +97,28 @@ impl DriverPlan {
                 pulse_ms: 40,
                 gap_ms: interval_ms - 40,
                 start_delay_ms: 0,
+                start_at_us: 0,
+                count: cycles * 16,
+                qualification: false,
+                cpu_load: false,
+                sequence: DriverSequence::ComputersRoundTrip,
+            });
+        }
+        if args.first().map(String::as_str) == Some("computers-round-trip-at") {
+            let start_at_us = parse_bounded(args.get(1), "start_at_us", 1, u64::MAX)?;
+            let interval_ms = parse_bounded(args.get(2), "interval_ms", 50, 600)?;
+            let cycles = parse_bounded(args.get(3), "cycles", 1, 8)? as u32;
+            if args.len() != 4 {
+                return Err(
+                    "usage: computers-round-trip-at start_at_us interval_ms cycles".to_string(),
+                );
+            }
+            return Ok(Self {
+                key_code: 106,
+                pulse_ms: 40,
+                gap_ms: interval_ms - 40,
+                start_delay_ms: 0,
+                start_at_us,
                 count: cycles * 16,
                 qualification: false,
                 cpu_load: false,
@@ -107,6 +134,7 @@ impl DriverPlan {
                 pulse_ms: 10,
                 gap_ms: 50,
                 start_delay_ms: 0,
+                start_at_us: 0,
                 count: 1,
                 qualification: false,
                 cpu_load: false,
@@ -135,6 +163,7 @@ impl DriverPlan {
             pulse_ms,
             gap_ms,
             start_delay_ms: 0,
+            start_at_us: 0,
             count,
             qualification: false,
             cpu_load: false,
@@ -167,8 +196,11 @@ pub(crate) fn run(args: &[String]) {
             std::process::exit(2);
         }
     };
-    match UinputDevice::create().and_then(|mut device| device.run(plan)) {
-        Ok(()) => crate::ui_logln!(
+    match UinputDevice::create().and_then(|mut device| {
+        device.run(plan)?;
+        Ok(std::mem::take(&mut device.pulses))
+    }) {
+        Ok(pulses) => crate::ui_logln!(
             "{}",
             serde_json::json!({
                 "schema": "mister-magik-input-integrity-driver-v1",
@@ -176,10 +208,12 @@ pub(crate) fn run(args: &[String]) {
                 "pulse_ms": plan.pulse_ms,
                 "gap_ms": plan.gap_ms,
                 "start_delay_ms": plan.start_delay_ms,
+                "start_at_us": plan.start_at_us,
                 "count": plan.count,
                 "qualification": plan.qualification,
                 "cpu_load": plan.cpu_load,
                 "sequence": format!("{:?}", plan.sequence).to_ascii_lowercase(),
+                "pulses": pulses,
             })
         ),
         Err(error) => {
@@ -191,6 +225,16 @@ pub(crate) fn run(args: &[String]) {
 
 struct UinputDevice {
     file: std::fs::File,
+    pulses: Vec<DriverPulseTrace>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct DriverPulseTrace {
+    ordinal: usize,
+    key_code: u16,
+    scheduled_at_us: Option<u64>,
+    emitted_at_us: u64,
+    released_at_us: u64,
 }
 
 impl UinputDevice {
@@ -219,7 +263,10 @@ impl UinputDevice {
         file.write_all(&descriptor)?;
         ioctl_no_arg(&file, UI_DEV_CREATE)?;
         std::thread::sleep(Duration::from_millis(500));
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            pulses: Vec::new(),
+        })
     }
 
     fn run(&mut self, plan: DriverPlan) -> io::Result<()> {
@@ -282,8 +329,22 @@ impl UinputDevice {
             }
             DriverSequence::ComputersRoundTrip => {
                 for index in 0..plan.count {
-                    self.pulse(computers_round_trip_key(index), plan.pulse_ms)?;
-                    if index + 1 < plan.count {
+                    if plan.start_at_us > 0 {
+                        let scheduled_at_us = plan.start_at_us.saturating_add(
+                            u64::from(index)
+                                .saturating_mul(plan.pulse_ms.saturating_add(plan.gap_ms))
+                                .saturating_mul(1_000),
+                        );
+                        wait_until_monotonic(scheduled_at_us, index == 0)?;
+                        self.pulse_at(
+                            computers_round_trip_key(index),
+                            plan.pulse_ms,
+                            Some(scheduled_at_us),
+                        )?;
+                    } else {
+                        self.pulse(computers_round_trip_key(index), plan.pulse_ms)?;
+                    }
+                    if plan.start_at_us == 0 && index + 1 < plan.count {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
                 }
@@ -301,6 +362,15 @@ impl UinputDevice {
     }
 
     fn pulse(&mut self, key_code: u16, duration_ms: u64) -> io::Result<()> {
+        self.pulse_at(key_code, duration_ms, None)
+    }
+
+    fn pulse_at(
+        &mut self,
+        key_code: u16,
+        duration_ms: u64,
+        scheduled_at_us: Option<u64>,
+    ) -> io::Result<()> {
         let (event_type, code, pressed) = match key_code {
             103 => (EV_ABS, ABS_HAT0Y, -1),
             105 => (EV_ABS, ABS_HAT0X, -1),
@@ -318,9 +388,19 @@ impl UinputDevice {
         };
         self.emit(event_type, code, pressed)?;
         self.emit(EV_SYN, SYN_REPORT, 0)?;
+        let emitted_at_us = crate::input_hub::monotonic_us();
         std::thread::sleep(Duration::from_millis(duration_ms));
         self.emit(event_type, code, 0)?;
-        self.emit(EV_SYN, SYN_REPORT, 0)
+        self.emit(EV_SYN, SYN_REPORT, 0)?;
+        let released_at_us = crate::input_hub::monotonic_us();
+        self.pulses.push(DriverPulseTrace {
+            ordinal: self.pulses.len(),
+            key_code,
+            scheduled_at_us,
+            emitted_at_us,
+            released_at_us,
+        });
+        Ok(())
     }
 
     fn emit(&mut self, event_type: u16, code: u16, value: i32) -> io::Result<()> {
@@ -338,6 +418,31 @@ impl UinputDevice {
         bytes[offset + 4..offset + 8].copy_from_slice(&value.to_ne_bytes());
         self.file.write_all(&bytes)
     }
+}
+
+fn wait_until_monotonic(target_us: u64, reject_late_start: bool) -> io::Result<()> {
+    loop {
+        let now_us = crate::input_hub::monotonic_us();
+        if now_us >= target_us {
+            if late_start_exceeded(target_us, now_us, reject_late_start) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "scheduled input epoch is more than 50 ms late",
+                ));
+            }
+            return Ok(());
+        }
+        let remaining_us = target_us - now_us;
+        if remaining_us > 2_000 {
+            std::thread::sleep(Duration::from_micros(remaining_us - 1_000));
+        } else {
+            std::thread::yield_now();
+        }
+    }
+}
+
+fn late_start_exceeded(target_us: u64, now_us: u64, reject_late_start: bool) -> bool {
+    reject_late_start && now_us.saturating_sub(target_us) > 50_000
 }
 
 fn computers_round_trip_key(index: u32) -> u16 {
@@ -393,6 +498,7 @@ mod tests {
                 pulse_ms: 5,
                 gap_ms: 10,
                 start_delay_ms: 0,
+                start_at_us: 0,
                 count: 8,
                 qualification: false,
                 cpu_load: false,
@@ -439,10 +545,20 @@ mod tests {
         assert_eq!(round_trip.pulse_ms, 40);
         assert_eq!(round_trip.gap_ms, 560);
         assert_eq!(round_trip.count, 64);
+        let scheduled = DriverPlan::parse(
+            &["computers-round-trip-at", "12345678", "600", "4"].map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(scheduled.start_at_us, 12_345_678);
+        assert_eq!(scheduled.count, 64);
+        assert_eq!(scheduled.pulse_ms + scheduled.gap_ms, 600);
         assert_eq!(computers_round_trip_key(0), 106);
         assert_eq!(computers_round_trip_key(7), 106);
         assert_eq!(computers_round_trip_key(8), 105);
         assert_eq!(computers_round_trip_key(15), 105);
         assert_eq!(computers_round_trip_key(16), 106);
+        assert!(!late_start_exceeded(1_000_000, 1_050_000, true));
+        assert!(late_start_exceeded(1_000_000, 1_050_001, true));
+        assert!(!late_start_exceeded(1_000_000, 2_000_000, false));
     }
 }
