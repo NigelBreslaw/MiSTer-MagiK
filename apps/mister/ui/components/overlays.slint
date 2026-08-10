@@ -143,7 +143,6 @@ export component StartupSplash inherits Rectangle {
 }
 
 export component BackgroundScanBadge inherits Rectangle {
-    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
 
     width: t.width + 20px;
     height: 28px;
@@ -166,7 +165,7 @@ export component BackgroundScanBadge inherits Rectangle {
         }
         PixelText8 {
             text: ".";
-            color: root.dot-visible ? #d7eef8 : transparent;
+            color: #d7eef8;
             size: PixelTextSize.body12;
             horizontal-alignment: center;
             vertical-alignment: center;

@@ -8,6 +8,7 @@ import { MenuItemStatus } from "../launcher_menu.slint";
 
 component ScanningSubtitle inherits VerticalLayout {
     in property <string> detail;
+    property <bool> dot-visible: Math.mod(floor(animation-tick() / 1ms / 500), 2) == 0;
 
     alignment: center;
     spacing: 2px;
@@ -24,7 +25,7 @@ component ScanningSubtitle inherits VerticalLayout {
 
         PixelText8 {
             text: ".";
-            color: root.detail == "" ? #8ca4b5 : transparent;
+            color: root.detail == "" && root.dot-visible ? #8ca4b5 : transparent;
             size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
@@ -42,7 +43,7 @@ component ScanningSubtitle inherits VerticalLayout {
 
         PixelText8 {
             text: ".";
-            color: #8ca4b5;
+            color: root.dot-visible ? #8ca4b5 : transparent;
             size: PixelTextSize.body12;
             horizontal-alignment: center;
         }
