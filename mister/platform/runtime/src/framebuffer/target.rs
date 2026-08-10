@@ -3,9 +3,7 @@
 
 pub use crate::framebuffer::damage::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 use crate::framebuffer::format::production_label;
-use slint::platform::software_renderer::{
-    LineBufferProvider, PhysicalRegion, Rgb565Pixel, SoftwareRenderer,
-};
+use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
@@ -321,29 +319,6 @@ impl UiFrameTarget {
         renderer.render(&mut self.cached, geometry.render_w())
     }
 
-    /// Renders through Slint's line provider so urgent work can invalidate a
-    /// disposable frame between scanlines. Once invalidated, Slint still gets
-    /// a buffer for every requested line so its frame bookkeeping completes,
-    /// but subsequent pixels go to scratch storage and the caller must not
-    /// present the partially updated cached frame.
-    pub fn render_interruptible(
-        &mut self,
-        renderer: &SoftwareRenderer,
-        geometry: FramebufferTargetGeometry,
-        should_interrupt: impl FnMut() -> bool,
-    ) -> (PhysicalRegion, bool) {
-        self.cached_stride = geometry.render_w();
-        let mut interrupted = false;
-        let region = renderer.render_by_line(InterruptibleFrameBuffer {
-            frame_buffer: &mut self.cached,
-            stride: geometry.render_w(),
-            scratch: vec![Rgb565Pixel(0); geometry.render_w()],
-            interrupted: &mut interrupted,
-            should_interrupt,
-        });
-        (region, interrupted)
-    }
-
     #[cfg(feature = "bench-scenes")]
     pub fn label(&self) -> &'static str {
         "cached-565"
@@ -462,36 +437,6 @@ impl UiFrameTarget {
     }
 }
 
-struct InterruptibleFrameBuffer<'a, F> {
-    frame_buffer: &'a mut [Rgb565Pixel],
-    stride: usize,
-    scratch: Vec<Rgb565Pixel>,
-    interrupted: &'a mut bool,
-    should_interrupt: F,
-}
-
-impl<F: FnMut() -> bool> LineBufferProvider for InterruptibleFrameBuffer<'_, F> {
-    type TargetPixel = Rgb565Pixel;
-
-    fn process_line(
-        &mut self,
-        line: usize,
-        range: std::ops::Range<usize>,
-        render_fn: impl FnOnce(&mut [Self::TargetPixel]),
-    ) {
-        if !*self.interrupted && (self.should_interrupt)() {
-            *self.interrupted = true;
-        }
-        if *self.interrupted {
-            render_fn(&mut self.scratch[..range.len()]);
-            return;
-        }
-        let start = line.saturating_mul(self.stride).saturating_add(range.start);
-        let end = start.saturating_add(range.len());
-        render_fn(&mut self.frame_buffer[start..end]);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,79 +444,6 @@ mod tests {
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
         DirtyRect { x0, y0, x1, y1 }
-    }
-
-    #[test]
-    fn interruptible_frame_buffer_writes_lines_until_interrupted() {
-        let mut pixels = vec![Rgb565Pixel(0); 12];
-        let mut interrupted = false;
-        let mut probes = 0;
-        {
-            let mut provider = InterruptibleFrameBuffer {
-                frame_buffer: &mut pixels,
-                stride: 4,
-                scratch: vec![Rgb565Pixel(0); 4],
-                interrupted: &mut interrupted,
-                should_interrupt: || {
-                    probes += 1;
-                    probes == 2
-                },
-            };
-            provider.process_line(0, 1..3, |line| line.fill(Rgb565Pixel(1)));
-            provider.process_line(1, 0..4, |line| line.fill(Rgb565Pixel(2)));
-            provider.process_line(2, 0..4, |line| line.fill(Rgb565Pixel(3)));
-        }
-
-        assert!(interrupted);
-        assert_eq!(probes, 2, "the probe stops running after interruption");
-        assert_eq!(
-            pixels,
-            vec![
-                Rgb565Pixel(0),
-                Rgb565Pixel(1),
-                Rgb565Pixel(1),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-            ]
-        );
-    }
-
-    #[test]
-    fn interruptible_frame_buffer_preserves_normal_line_ranges() {
-        let mut pixels = vec![Rgb565Pixel(0); 8];
-        let mut interrupted = false;
-        {
-            let mut provider = InterruptibleFrameBuffer {
-                frame_buffer: &mut pixels,
-                stride: 4,
-                scratch: vec![Rgb565Pixel(0); 4],
-                interrupted: &mut interrupted,
-                should_interrupt: || false,
-            };
-            provider.process_line(1, 1..4, |line| line.fill(Rgb565Pixel(9)));
-        }
-
-        assert!(!interrupted);
-        assert_eq!(
-            pixels,
-            vec![
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(0),
-                Rgb565Pixel(9),
-                Rgb565Pixel(9),
-                Rgb565Pixel(9),
-            ]
-        );
     }
 
     fn assert_no_intersections(rects: &[DirtyRect]) {

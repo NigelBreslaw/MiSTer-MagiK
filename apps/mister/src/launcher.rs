@@ -2578,7 +2578,11 @@ impl LauncherNav {
             self.home_scroll.cursor_px = self.selected as f64 * home_tile_pitch() as f64;
             let mut target = self.home_scroll_animation.target().round() as i32;
             keep_home_visible(self.selected, &mut target, count);
-            self.home_scroll_animation.set_target(target as f64);
+            // A discrete focus move is authoritative immediately. Carrying a
+            // viewport spring for up to multiple input periods leaves the UI
+            // rasterizing obsolete motion when the next press arrives.
+            self.scroll_x = target;
+            self.home_scroll_animation.snap_to(target as f64);
             return;
         }
 
@@ -6177,6 +6181,42 @@ mod tests {
         }
         assert!(nav.home_scroll_animation.is_settled());
         assert_eq!(nav.scroll_x as f64, target);
+    }
+
+    #[test]
+    fn launcher_home_discrete_moves_snap_viewport_without_background_settling() {
+        let catalog = arcade_catalog(
+            Vec::new(),
+            (0..10)
+                .map(|index| arcade_system(format!("system-{index}"), 1))
+                .collect(),
+        );
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_menu("menu:consoles:other"));
+        let held_right = pad_with(|pad| pad.dpad_right = true);
+        let start = Instant::now();
+
+        for step in 0..4 {
+            let pressed_at = start + Duration::from_millis(step * 100);
+            nav.handle_input(&held_right, pressed_at, &catalog);
+            nav.handle_input(
+                &PadState::default(),
+                pressed_at + Duration::from_millis(40),
+                &catalog,
+            );
+        }
+
+        assert_eq!(nav.selected, 4);
+        assert_eq!(nav.scroll_x, home_tile_pitch());
+        assert!(nav.home_scroll_animation.is_settled());
+        nav.handle_input(
+            &PadState::default(),
+            start + Duration::from_millis(1_000),
+            &catalog,
+        );
+        assert_eq!(nav.scroll_x, home_tile_pitch());
+        assert!(nav.home_scroll_animation.is_settled());
     }
 
     #[test]

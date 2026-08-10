@@ -3884,7 +3884,6 @@ pub(super) fn run_launcher_loop(
     let mut orientation_confirm_deadline = None;
     let mut orientation_previous = None;
     let mut orientation_full_redraw_pending = layout.is_portrait();
-    let mut slint_raster_repair_pending = false;
     let mut orientation_transition =
         OrientationTransitionRuntime::new(ui.render_w(), ui.render_h());
     let mut orientation_transition_intent = None;
@@ -7414,7 +7413,6 @@ pub(super) fn run_launcher_loop(
             bridge.set_effective_view(effective_view.label().into());
         }
         let mut full_frame_present = std::mem::take(&mut orientation_full_redraw_pending)
-            || slint_raster_repair_pending
             || display_session.should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
@@ -8201,11 +8199,8 @@ pub(super) fn run_launcher_loop(
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
-        } else if composition_decision.force_full_slint_raster || slint_raster_repair_pending {
-            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
-            if rendered {
-                slint_raster_repair_pending = false;
-            }
+        } else if composition_decision.force_full_slint_raster {
+            let (dirty, damage, _) = layer_target.render_slint_full(&window);
             slint_damage = damage;
             dirty
         } else if startup_intro_prepare_live_launcher {
@@ -8213,43 +8208,7 @@ pub(super) fn run_launcher_loop(
             slint_damage = damage;
             dirty
         } else {
-            let interruptible_home_raster = input_batch.events.is_empty()
-                && !latency_critical_input_pending
-                && can_preempt_home_latch_wait(
-                    nav.screen,
-                    false,
-                    !bridge_models.selection_feedback_stamp().entries.is_empty(),
-                    navigation_transition.is_active()
-                        || orientation_transition.is_active()
-                        || full_screen_transition.state() != FullScreenTransitionState::Live,
-                    screensaver.active,
-                    composition_decision.state != UiCompositionState::FullSlint
-                        || composition_decision.retirement_generation.is_some(),
-                    preview_frame_intent.is_actionable(),
-                    startup_intro.is_some(),
-                    launcher_automation.active(),
-                );
-            let (dirty, damage, raster_interrupted) = if interruptible_home_raster {
-                layer_target.render_slint_base_interruptible(&window, || {
-                    input_observation_probe
-                        .as_ref()
-                        .is_some_and(|probe| probe.changed_since(input_observation))
-                })
-            } else {
-                let (dirty, damage) = layer_target.render_slint_base(&window);
-                (dirty, damage, false)
-            };
-            if raster_interrupted {
-                slint_raster_repair_pending = true;
-                launcher_response_trace.record_lab(Some(serde_json::json!({
-                    "phase": "slint-raster-interrupted-input",
-                    "interrupted_at_us": crate::input_hub::monotonic_us(),
-                })));
-                let _ = launcher_response_trace
-                    .record_scheduler_interval("slint-raster-interrupted-input", scheduler_phase);
-                request_launcher_redraw!();
-                continue 'launcher;
-            }
+            let (dirty, damage) = layer_target.render_slint_base(&window);
             let expanded = if layout.is_portrait() {
                 dirty
             } else {
