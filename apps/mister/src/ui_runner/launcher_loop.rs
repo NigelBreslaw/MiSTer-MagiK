@@ -11279,8 +11279,8 @@ mod tests {
                 .frame_stamp(
                     &nav,
                     applied_at_us.saturating_sub(1),
-                    applied_at_us
                     applied_at_us,
+                    applied_at_us
                 )
                 .is_none()
         );
