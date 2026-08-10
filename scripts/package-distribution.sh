@@ -382,7 +382,7 @@ cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.t
 cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
 cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
 cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
-cp "$ROOT/apps/mister/licenses/JERSEY-10.txt" "$STAGE/mister-magik/licenses/JERSEY-10-OFL-1.1.txt"
+cp "$ROOT/apps/mister/licenses/COMMERCIAL-FONTS.txt" "$STAGE/mister-magik/licenses/COMMERCIAL-FONTS.txt"
 cp "$ROOT/crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt" \
   "$STAGE/mister-magik/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
 mkdir -p "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer"
@@ -409,7 +409,8 @@ portion remains under its upstream GPL-3.0 terms.
 
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
-the Press Start 2P and Jersey 10 fonts under SIL OFL-1.1, and the Arcade Cabinet particle model
+the Press Start 2P and Jersey 25 fonts under SIL OFL-1.1, commercially licensed
+Yesterday 10 and Xerxes 10 bitmap glyphs, and the Arcade Cabinet particle model
 by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in
 the mister-magik/licenses/ directory.
 

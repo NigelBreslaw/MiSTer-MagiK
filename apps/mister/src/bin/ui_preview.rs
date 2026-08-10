@@ -3045,6 +3045,7 @@ mod macos {
         );
         bridge.set_menu_title("MiSTer MagiK".into());
         bridge.set_menu_breadcrumb("Systems".into());
+        bridge.set_dev_mode(true);
         if !scenario.uses_launcher_navigation() {
             bridge.set_menu_items(home_menu_items());
         }

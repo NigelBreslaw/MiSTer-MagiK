@@ -237,6 +237,11 @@ class PreCommitTests(unittest.TestCase):
             )
             clean = self.repository.gate(GIT_INDEX_FILE=".git/index")
             self.assertEqual(clean.returncode, 0, clean.stderr)
+            clean_from_git_hook = self.repository.gate(
+                GIT_DIR=str(self.repository.root / ".git"),
+                GIT_WORK_TREE=str(self.repository.root),
+            )
+            self.assertEqual(clean_from_git_hook.returncode, 0, clean_from_git_hook.stderr)
             (self.repository.root / "private/sample/dirty.txt").write_text("dirty\n")
             result = self.repository.gate(GIT_INDEX_FILE=".git/index")
             self.assertEqual(result.returncode, 1)

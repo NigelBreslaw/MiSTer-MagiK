@@ -8,7 +8,8 @@ cargo run \
   --quiet \
   --manifest-path "$ROOT/apps/mister/Cargo.toml" \
   --features asset-tools \
-  --example generate-jersey-bitmap-fonts \
+  --example generate-bitmap-fonts \
   -- \
   "$ROOT/apps/mister/ui/fonts" \
+  "$ROOT/private/magik-assets" \
   "$ROOT/apps/mister/assets/fonts"

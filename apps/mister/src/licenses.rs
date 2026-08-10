@@ -8,7 +8,7 @@ pub const LICENSE_TITLES: [&str; 7] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Press Start 2P",
-    "Jersey 10",
+    "Yesterday 10 + Xerxes 10",
     "Jersey 25",
     "Arcade Cabinet",
     "Slint",
@@ -17,7 +17,7 @@ pub const LICENSE_TITLES: [&str; 7] = [
 const GPL3: &str = include_str!("../../../LICENSE");
 const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
-const JERSEY_10: &str = include_str!("../licenses/JERSEY-10.txt");
+const COMMERCIAL_FONTS: &str = include_str!("../licenses/COMMERCIAL-FONTS.txt");
 const JERSEY_25: &str = include_str!("../licenses/JERSEY-25.txt");
 const ARCADE_CABINET: &str =
     include_str!("../../../crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt");
@@ -29,7 +29,7 @@ pub fn text(index: usize) -> &'static str {
         0 | 6 => GPL3,
         1 => FFMPEG,
         2 => PRESS_START_2P,
-        3 => JERSEY_10,
+        3 => COMMERCIAL_FONTS,
         4 => JERSEY_25,
         _ => ARCADE_CABINET,
     }
@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 3, 4, 6] {
+        for index in [0, 1, 2, 4, 6] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -101,6 +101,8 @@ mod tests {
             );
             assert!(!wrapped_lines(index).is_empty());
         }
+        assert!(COMMERCIAL_FONTS.contains("Yesterday 10"));
+        assert!(COMMERCIAL_FONTS.contains("Xerxes 10"));
     }
 
     #[test]
@@ -111,7 +113,7 @@ mod tests {
                 "MiSTer MagiK",
                 "FFmpeg",
                 "Press Start 2P",
-                "Jersey 10",
+                "Yesterday 10 + Xerxes 10",
                 "Jersey 25",
                 "Arcade Cabinet",
                 "Slint"
@@ -120,7 +122,7 @@ mod tests {
         assert_eq!(text(6), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
-        assert!(JERSEY_10.contains("SIL OPEN FONT LICENSE"));
+        assert!(COMMERCIAL_FONTS.contains("commercial licences"));
         assert!(JERSEY_25.contains("SIL OPEN FONT LICENSE"));
         assert!(ARCADE_CABINET.contains("Lluc Guardiolaa"));
         assert!(ARCADE_CABINET.contains("CC-BY-NC-4.0"));

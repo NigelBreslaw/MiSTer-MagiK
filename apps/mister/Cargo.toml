@@ -27,8 +27,8 @@ path = "examples/render_licenses.rs"
 required-features = ["ui"]
 
 [[example]]
-name = "generate-jersey-bitmap-fonts"
-path = "examples/generate_jersey_bitmap_fonts.rs"
+name = "generate-bitmap-fonts"
+path = "examples/generate_bitmap_fonts.rs"
 required-features = ["asset-tools"]
 
 [[bin]]

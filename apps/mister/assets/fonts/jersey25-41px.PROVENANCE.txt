@@ -9,8 +9,8 @@ Swash hinting: enabled
 Alpha threshold: 128
 Coverage: space and uppercase A-Z
 Encoding: MMBF1, packed 1-bit rows
-Resource SHA-256: 8ab9a562608c440ddecf7ba11a6cc7430690173ab6c45742c23a890b5fd48efd
+Resource SHA-256: 2431c121439dae484be10ae9e4b6224141d15cf4b80c6d0c2b87c7d0edd948b3
 
 Regenerate from the repository root with:
 
-    apps/mister/scripts/generate-jersey-bitmap-fonts.sh
+    apps/mister/scripts/generate-bitmap-fonts.sh

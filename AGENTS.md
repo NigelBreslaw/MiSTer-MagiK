@@ -61,6 +61,7 @@ Do not introduce the retired `magic` spelling or mixed-case path variants.
 - `mister/tools/agent/` — device agent; read its local `AGENTS.md`
 - `apps/desktop/` — macOS companion; read `apps/desktop/AGENTS.md`
 - `scripts/` — validation/deploy/benchmark tooling; read `scripts/AGENTS.md`
+- `private/magik-assets/` — licensed build assets; read its local `AGENTS.md`
 - `private/magik-cloud/` — private submodule; read its local `AGENTS.md`
 - `docs/` — current engineering policy
 - `history/` — dated evidence, not current policy unless linked
@@ -101,8 +102,9 @@ those trees are part of the task.
   workflow. Never attempt a local Quartus/RBF build or retain local RBF output.
 - Enable `.githooks/pre-commit` with
   `git config core.hooksPath .githooks`.
-- Treat `private/magik-cloud` as its own repository: commit and push it first,
-  then update only the parent gitlink.
+- Treat `private/magik-assets` and `private/magik-cloud` as their own
+  repositories: commit and push them first, then update only the parent
+  gitlink.
 - Never stage private screenshots, caches, archives, `.env`, `.wrangler/`,
   credentials, or files under ignored `private/test-fixtures/`.
 - Treat repos in `reference/` as read-only. However you can clone new repos into the folder.
