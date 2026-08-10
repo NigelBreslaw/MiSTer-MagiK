@@ -4341,8 +4341,8 @@ fn verify_installed_launcher_response(
                 scenario_values.push(run_launcher_response_scenario(
                     &session,
                     display_label,
-                    "catalog-round-trip",
-                    "force",
+                    "idle-round-trip",
+                    "off",
                     true,
                 )?);
             } else {
@@ -4417,13 +4417,17 @@ fn verify_installed_launcher_response(
     ]
     .into_iter()
     .all(|field| sum(field) == 0);
+    let background_adoption_applicable = scenarios
+        .iter()
+        .any(|scenario| scenario["catalog_refresh"].as_str() == Some("force"));
     let catalog_adoption_max_us = scenarios
         .iter()
         .filter(|scenario| scenario["catalog_refresh"].as_str() == Some("force"))
         .filter_map(|scenario| scenario["catalog_adoption_max_us"].as_u64())
         .max()
-        .unwrap_or(u64::MAX);
-    let background_adoption_passed = catalog_adoption_max_us > 0 && catalog_adoption_max_us < 8_000;
+        .unwrap_or(0);
+    let background_adoption_passed = !background_adoption_applicable
+        || (catalog_adoption_max_us > 0 && catalog_adoption_max_us < 8_000);
     let passed =
         input_response_passed && pulse_passed && integrity_passed && background_adoption_passed;
     let summary = json!({
@@ -4441,7 +4445,14 @@ fn verify_installed_launcher_response(
         "input_response_status": if input_response_passed { "passed" } else { "failed" },
         "pulse_status": if pulse_passed { "passed" } else { "failed" },
         "integrity_status": if integrity_passed { "passed" } else { "failed" },
-        "background_adoption_status": if background_adoption_passed { "passed" } else { "failed" },
+        "background_adoption_applicable": background_adoption_applicable,
+        "background_adoption_status": if !background_adoption_applicable {
+            "not-applicable"
+        } else if background_adoption_passed {
+            "passed"
+        } else {
+            "failed"
+        },
         "dispatch_p95_us": dispatch_p95_us,
         "dispatch_max_us": dispatch_max_us,
         "confirmed_median_us": confirmed_median_us,

@@ -741,16 +741,27 @@ fn evaluate_input_latency_lab_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
+    let diagnostic_mode = summary.get("diagnostic_mode").and_then(Value::as_str);
+    let background_adoption_applicable = summary
+        .get("background_adoption_applicable")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launcher-response-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || !matches!(summary.get("protocol").and_then(Value::as_u64), Some(2 | 3))
         || summary.get("input_response_status").and_then(Value::as_str) != Some("passed")
         || summary.get("pulse_status").and_then(Value::as_str) != Some("passed")
         || summary.get("integrity_status").and_then(Value::as_str) != Some("passed")
-        || summary
-            .get("background_adoption_status")
-            .and_then(Value::as_str)
-            != Some("passed")
+        || (background_adoption_applicable
+            && summary
+                .get("background_adoption_status")
+                .and_then(Value::as_str)
+                != Some("passed"))
+        || (!background_adoption_applicable
+            && summary
+                .get("background_adoption_status")
+                .and_then(Value::as_str)
+                != Some("not-applicable"))
         || summary
             .get("dispatch_p95_us")
             .and_then(Value::as_u64)
@@ -774,17 +785,19 @@ fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("journal_overflows").and_then(Value::as_u64) != Some(0)
         || summary.get("sequence_gaps").and_then(Value::as_u64) != Some(0)
         || summary.get("latch_drops").and_then(Value::as_u64) != Some(0)
-        || summary.get("repeated_vblanks").and_then(Value::as_u64) != Some(0)
+        || (diagnostic_mode.is_none()
+            && summary.get("repeated_vblanks").and_then(Value::as_u64) != Some(0))
         || summary.get("ownership_losses").and_then(Value::as_u64) != Some(0)
-        || summary
-            .get("catalog_adoption_max_us")
-            .and_then(Value::as_u64)
-            .unwrap_or(u64::MAX)
-            >= 8_000
-        || summary
-            .get("catalog_adoption_max_us")
-            .and_then(Value::as_u64)
-            == Some(0)
+        || (background_adoption_applicable
+            && (summary
+                .get("catalog_adoption_max_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX)
+                >= 8_000
+                || summary
+                    .get("catalog_adoption_max_us")
+                    .and_then(Value::as_u64)
+                    == Some(0)))
     {
         return Err(
             "launcher response qualification did not satisfy the game-quality gates".into(),
@@ -1659,6 +1672,38 @@ mod tests {
         let mut failed = passing;
         failed["pulse_status"] = json!("failed");
         assert!(evaluate_launcher_response_summary(&failed).is_err());
+    }
+
+    #[test]
+    fn isolated_launcher_response_accepts_idle_background_and_static_vblanks() {
+        let mut summary = json!({
+            "schema": "mister-magik-launcher-response-v2",
+            "status": "passed",
+            "protocol": 2,
+            "diagnostic_mode": "1920x1200-200-300-400-600ms-two-round-trips",
+            "input_response_status": "passed",
+            "pulse_status": "passed",
+            "integrity_status": "passed",
+            "background_adoption_applicable": false,
+            "background_adoption_status": "not-applicable",
+            "dispatch_p95_us": 3_000,
+            "dispatch_max_us": 5_000,
+            "confirmed_median_us": 12_000,
+            "lost_actions": 0,
+            "duplicated_actions": 0,
+            "coalesced_actions": 0,
+            "reordered_actions": 0,
+            "proxy_write_failures": 0,
+            "journal_overflows": 0,
+            "sequence_gaps": 0,
+            "latch_drops": 0,
+            "repeated_vblanks": 500,
+            "ownership_losses": 0,
+            "catalog_adoption_max_us": 0,
+        });
+        evaluate_launcher_response_summary(&summary).unwrap();
+        summary.as_object_mut().unwrap().remove("diagnostic_mode");
+        assert!(evaluate_launcher_response_summary(&summary).is_err());
     }
 
     #[test]

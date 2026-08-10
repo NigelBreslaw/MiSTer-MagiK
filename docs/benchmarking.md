@@ -92,12 +92,12 @@ and the overall result passes only when every status passes.
 For attended diagnosis of intermittent single-press latency, set
 `MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE=1` when running `launcher-response`.
 This diagnostic mode is not the release qualification: it holds the physical
-display at 1920×1200p60, keeps forced background catalog refresh active, enters
+display at 1920×1200p60, keeps background catalog refresh off to match the
+production default, enters
 Computers independently for 200, 300, 400, and 600 ms start-to-start schedules.
-Each schedule runs Acorn→Other→Acorn twice, with forced background catalog
-refresh retained, and records every capture, dispatch, and exact active-latch
-confirmation. The ordinary command remains the 60/50 Hz multi-route
-qualification above.
+Each schedule runs Acorn→Other→Acorn twice and records every capture, dispatch,
+and exact active-latch confirmation. The ordinary command remains the 60/50 Hz
+multi-route qualification above.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
