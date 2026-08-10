@@ -26,7 +26,7 @@ use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
-use std::collections::{BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{Sender, channel};
@@ -1392,13 +1392,51 @@ struct LauncherResponseRecord {
     trigger: DispatchKind,
     press_id: u64,
     captured_at_us: u64,
+    drained_at_us: Option<u64>,
     dispatch_at_us: u64,
+    state_applied_at_us: Option<u64>,
     before: LauncherResponseState,
     after: Option<LauncherResponseState>,
     disposition: &'static str,
+    frame: Option<LauncherResponseFrameEvidence>,
     confirmed_at_us: Option<u64>,
     confirmed_frame: Option<u64>,
     confirmed_sequence: Option<u16>,
+}
+
+#[derive(Clone)]
+struct LauncherResponseFrameEvidence {
+    selected: LauncherResponseState,
+    projected_at_us: u64,
+    raster_started_at_us: u64,
+    raster_completed_at_us: u64,
+    post_accepted_at_us: u64,
+    dirty_rect: Option<(usize, usize, usize, usize)>,
+    posted_sequence: u16,
+    post_active_sequence: u16,
+    post_pending_sequence: u16,
+    post_pending: bool,
+    first_eligible_vblank: Option<bool>,
+}
+
+#[derive(Clone)]
+struct LauncherResponseFrameStamp {
+    record_index: usize,
+    selected: LauncherResponseState,
+    projected_at_us: u64,
+    raster_started_at_us: u64,
+    raster_completed_at_us: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LauncherResponsePresentReceipt {
+    post_accepted_at_us: u64,
+    dirty_rect: Option<(usize, usize, usize, usize)>,
+    posted_sequence: u16,
+    post_active_sequence: u16,
+    post_pending_sequence: u16,
+    post_pending: bool,
+    refresh_period_us: u64,
 }
 
 struct LauncherResponseTrace {
@@ -1407,6 +1445,7 @@ struct LauncherResponseTrace {
     feedback_records: Vec<LauncherResponseFeedbackRecord>,
     pending_dispatches: VecDeque<usize>,
     pending_confirmations: VecDeque<usize>,
+    drained_at_us: HashMap<u64, u64>,
     state: LauncherResponseState,
     queue_high_water: usize,
     refresh_period_us: u64,
@@ -1420,6 +1459,8 @@ struct LauncherResponseTrace {
     complete: bool,
     frame_trace_finalize_pending: bool,
     writer: Option<Sender<LauncherResponseTraceWrite>>,
+    input_probe: Option<crate::input_hub::InputObservationProbe>,
+    catalog_phases: Vec<serde_json::Value>,
     dirty: bool,
 }
 
@@ -1429,8 +1470,17 @@ struct LauncherResponseTraceWrite {
     completion_path: Option<String>,
 }
 
+struct LauncherResponseCatalogPhaseStart {
+    label: &'static str,
+    started_at_us: u64,
+    input_generation: Option<u64>,
+}
+
 impl LauncherResponseTrace {
-    fn from_env(nav: &LauncherNav) -> Self {
+    fn from_env(
+        nav: &LauncherNav,
+        input_probe: Option<crate::input_hub::InputObservationProbe>,
+    ) -> Self {
         let enabled = launcher_env_flag("MISTER_LAUNCHER_RESPONSE_TRACE");
         let run_id = std::env::var(LAUNCHER_RESPONSE_RUN_ID_ENV).unwrap_or_default();
         let expected_confirmed =
@@ -1456,6 +1506,7 @@ impl LauncherResponseTrace {
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
+            drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
             refresh_period_us: 0,
@@ -1469,6 +1520,8 @@ impl LauncherResponseTrace {
             complete: false,
             frame_trace_finalize_pending: false,
             writer,
+            input_probe,
+            catalog_phases: Vec::new(),
             dirty: enabled,
         }
     }
@@ -1481,6 +1534,7 @@ impl LauncherResponseTrace {
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
             pending_confirmations: VecDeque::new(),
+            drained_at_us: HashMap::new(),
             state: LauncherResponseState::capture(nav),
             queue_high_water: 0,
             refresh_period_us: 0,
@@ -1494,6 +1548,8 @@ impl LauncherResponseTrace {
             complete: false,
             frame_trace_finalize_pending: false,
             writer: None,
+            input_probe: None,
+            catalog_phases: Vec::new(),
             dirty: false,
         }
     }
@@ -1512,6 +1568,10 @@ impl LauncherResponseTrace {
     fn observe_batch(&mut self, batch: &crate::input_event::InputBatch) {
         if self.enabled {
             self.queue_high_water = self.queue_high_water.max(batch.health.queue_high_water);
+            let drained_at_us = crate::input_hub::monotonic_us();
+            for event in &batch.events {
+                self.drained_at_us.insert(event.press_id.0, drained_at_us);
+            }
         }
     }
 
@@ -1539,10 +1599,13 @@ impl LauncherResponseTrace {
             trigger,
             press_id: event.press_id.0,
             captured_at_us: event.captured_at_us,
+            drained_at_us: self.drained_at_us.remove(&event.press_id.0),
             dispatch_at_us,
+            state_applied_at_us: None,
             before: self.state.clone(),
             after: None,
             disposition,
+            frame: None,
             confirmed_at_us: None,
             confirmed_frame: None,
             confirmed_sequence: None,
@@ -1562,6 +1625,7 @@ impl LauncherResponseTrace {
             self.state = state.clone();
             if let Some(index) = self.pending_dispatches.pop_front() {
                 self.records[index].after = Some(state);
+                self.records[index].state_applied_at_us = Some(crate::input_hub::monotonic_us());
                 self.records[index].disposition = "state-changed";
                 self.pending_confirmations.push_back(index);
             }
@@ -1572,9 +1636,15 @@ impl LauncherResponseTrace {
         }
     }
 
-    fn confirm(&mut self, nav: &LauncherNav, frame: u64, sequence: u16) {
+    fn frame_stamp(
+        &self,
+        nav: &LauncherNav,
+        projected_at_us: u64,
+        raster_started_at_us: u64,
+        raster_completed_at_us: u64,
+    ) -> Option<LauncherResponseFrameStamp> {
         if !self.enabled {
-            return;
+            return None;
         }
         let state = LauncherResponseState::capture(nav);
         let Some(position) = self.pending_confirmations.iter().rposition(|index| {
@@ -1584,15 +1654,61 @@ impl LauncherResponseTrace {
                 .as_ref()
                 .is_some_and(|after| after.matches_presented(&record.before, &state))
         }) else {
+            return None;
+        };
+        Some(LauncherResponseFrameStamp {
+            record_index: self.pending_confirmations[position],
+            selected: state,
+            projected_at_us,
+            raster_started_at_us,
+            raster_completed_at_us,
+        })
+    }
+
+    fn confirm(
+        &mut self,
+        stamp: Option<&LauncherResponseFrameStamp>,
+        receipt: LauncherResponsePresentReceipt,
+        frame: u64,
+        sequence: u16,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let Some(stamp) = stamp else {
+            return;
+        };
+        let Some(position) = self
+            .pending_confirmations
+            .iter()
+            .position(|index| *index == stamp.record_index)
+        else {
             return;
         };
         let index = self
             .pending_confirmations
             .remove(position)
-            .expect("confirmed response index");
+            .expect("stamped response index");
         let confirmed_at_us = crate::input_hub::monotonic_us();
+        let first_eligible_vblank = (receipt.refresh_period_us > 0).then(|| {
+            confirmed_at_us.saturating_sub(receipt.post_accepted_at_us)
+                <= receipt.refresh_period_us.saturating_add(3_000)
+        });
         let record = &mut self.records[index];
         record.disposition = "confirmed";
+        record.frame = Some(LauncherResponseFrameEvidence {
+            selected: stamp.selected.clone(),
+            projected_at_us: stamp.projected_at_us,
+            raster_started_at_us: stamp.raster_started_at_us,
+            raster_completed_at_us: stamp.raster_completed_at_us,
+            post_accepted_at_us: receipt.post_accepted_at_us,
+            dirty_rect: receipt.dirty_rect,
+            posted_sequence: receipt.posted_sequence,
+            post_active_sequence: receipt.post_active_sequence,
+            post_pending_sequence: receipt.post_pending_sequence,
+            post_pending: receipt.post_pending,
+            first_eligible_vblank,
+        });
         record.confirmed_at_us = Some(confirmed_at_us);
         record.confirmed_frame = Some(frame);
         record.confirmed_sequence = Some(sequence);
@@ -1645,6 +1761,72 @@ impl LauncherResponseTrace {
             dwell_us,
         });
         self.update_completion();
+        self.dirty = true;
+    }
+
+    fn begin_catalog_phase(
+        &self,
+        label: &'static str,
+    ) -> Option<LauncherResponseCatalogPhaseStart> {
+        self.enabled.then(|| LauncherResponseCatalogPhaseStart {
+            label,
+            started_at_us: crate::input_hub::monotonic_us(),
+            input_generation: self
+                .input_probe
+                .as_ref()
+                .map(|probe| probe.observe().generation()),
+        })
+    }
+
+    fn catalog_boundary(&self) -> (u64, Option<u64>) {
+        (
+            crate::input_hub::monotonic_us(),
+            self.input_probe
+                .as_ref()
+                .map(|probe| probe.observe().generation()),
+        )
+    }
+
+    fn record_catalog_interval(
+        &mut self,
+        label: &'static str,
+        start: (u64, Option<u64>),
+        end: (u64, Option<u64>),
+        measured_duration_us: u128,
+    ) {
+        self.catalog_phases.push(serde_json::json!({
+            "label": label,
+            "started_at_us": start.0,
+            "completed_at_us": end.0,
+            "duration_us": end.0.saturating_sub(start.0),
+            "measured_duration_us": measured_duration_us.min(u128::from(u64::MAX)) as u64,
+            "input_generation_before": start.1,
+            "input_generation_after": end.1,
+            "input_changed_during": start.1.zip(end.1)
+                .is_some_and(|(before, after)| before != after),
+        }));
+        self.dirty = true;
+    }
+
+    fn end_catalog_phase(&mut self, phase: Option<LauncherResponseCatalogPhaseStart>) {
+        let Some(phase) = phase else {
+            return;
+        };
+        let completed_at_us = crate::input_hub::monotonic_us();
+        let input_generation_after = self
+            .input_probe
+            .as_ref()
+            .map(|probe| probe.observe().generation());
+        self.catalog_phases.push(serde_json::json!({
+            "label": phase.label,
+            "started_at_us": phase.started_at_us,
+            "completed_at_us": completed_at_us,
+            "duration_us": completed_at_us.saturating_sub(phase.started_at_us),
+            "input_generation_before": phase.input_generation,
+            "input_generation_after": input_generation_after,
+            "input_changed_during": phase.input_generation.zip(input_generation_after)
+                .is_some_and(|(before, after)| before != after),
+        }));
         self.dirty = true;
     }
 
@@ -1709,11 +1891,31 @@ impl LauncherResponseTrace {
                     },
                     "press_id": record.press_id,
                     "captured_at_us": record.captured_at_us,
+                    "drained_at_us": record.drained_at_us,
                     "dispatch_at_us": record.dispatch_at_us,
                     "dispatch_latency_us": record.dispatch_at_us.saturating_sub(record.captured_at_us),
+                    "state_applied_at_us": record.state_applied_at_us,
                     "before": record.before.json(),
                     "after": record.after.as_ref().map(LauncherResponseState::json),
                     "disposition": record.disposition,
+                    "frame": record.frame.as_ref().map(|frame| serde_json::json!({
+                        "selected": frame.selected.json(),
+                        "projected_at_us": frame.projected_at_us,
+                        "raster_started_at_us": frame.raster_started_at_us,
+                        "raster_completed_at_us": frame.raster_completed_at_us,
+                        "post_accepted_at_us": frame.post_accepted_at_us,
+                        "dirty_rect": frame.dirty_rect.map(|(x0, y0, x1, y1)| serde_json::json!({
+                            "x0": x0,
+                            "y0": y0,
+                            "x1": x1,
+                            "y1": y1,
+                        })),
+                        "posted_sequence": frame.posted_sequence,
+                        "post_active_sequence": frame.post_active_sequence,
+                        "post_pending_sequence": frame.post_pending_sequence,
+                        "post_pending": frame.post_pending,
+                        "first_eligible_vblank": frame.first_eligible_vblank,
+                    })),
                     "confirmed_at_us": record.confirmed_at_us,
                     "confirmed_latency_us": record.confirmed_at_us.map(|at| at.saturating_sub(record.captured_at_us)),
                     "confirmed_frame": record.confirmed_frame,
@@ -1782,6 +1984,7 @@ impl LauncherResponseTrace {
             "queue_high_water": self.queue_high_water,
             "records": records,
             "feedback_records": feedback_records,
+            "catalog_phases": &self.catalog_phases,
             "presentation": presentation,
         });
         if self.writer.as_ref().is_some_and(|writer| {
@@ -3639,7 +3842,8 @@ pub(super) fn run_launcher_loop(
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| (1..=1_000).contains(value));
     let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
-    let mut launcher_response_trace = LauncherResponseTrace::from_env(&nav);
+    let mut launcher_response_trace =
+        LauncherResponseTrace::from_env(&nav, pad.input_observation_probe());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
     let mut last_clock_text = launcher_clock_text();
@@ -4869,6 +5073,7 @@ pub(super) fn run_launcher_loop(
                     process_catalog_worker_message(
                         message,
                         &mut prepare_trace,
+                        &mut launcher_response_trace,
                         frame_accounting.first_visible_copy_done(),
                         launching,
                         benchmark_media_interaction_active,
@@ -4928,6 +5133,7 @@ pub(super) fn run_launcher_loop(
                 process_catalog_worker_message(
                     message,
                     &mut prepare_trace,
+                    &mut launcher_response_trace,
                     frame_accounting.first_visible_copy_done(),
                     launching,
                     benchmark_media_interaction_active,
@@ -4966,6 +5172,7 @@ pub(super) fn run_launcher_loop(
                             .to_string(),
                     },
                     &mut prepare_trace,
+                    &mut launcher_response_trace,
                     frame_accounting.first_visible_copy_done(),
                     launching,
                     benchmark_media_interaction_active,
@@ -5269,6 +5476,7 @@ pub(super) fn run_launcher_loop(
             let effects = catalog_session.qualification_fresh_rebuild(arcade_root.clone());
             apply_catalog_session_effects(
                 effects,
+                &mut launcher_response_trace,
                 &app,
                 &mut nav,
                 &mut catalog,
@@ -6213,6 +6421,7 @@ pub(super) fn run_launcher_loop(
                                         catalog_session.rebuild_database(arcade_root.clone());
                                     apply_catalog_session_effects(
                                         effects,
+                                        &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
                                         &mut catalog,
@@ -6280,6 +6489,7 @@ pub(super) fn run_launcher_loop(
                                     let effects = catalog_session.continue_with_stale_library();
                                     apply_catalog_session_effects(
                                         effects,
+                                        &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
                                         &mut catalog,
@@ -6306,6 +6516,7 @@ pub(super) fn run_launcher_loop(
                                         catalog_session.rebuild_library(arcade_root.clone());
                                     apply_catalog_session_effects(
                                         effects,
+                                        &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
                                         &mut catalog,
@@ -6816,6 +7027,7 @@ pub(super) fn run_launcher_loop(
         prepare_trace.bridge_sync_us = bridge_sync_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
+        let response_projected_at_us = crate::input_hub::monotonic_us();
         if !startup_intro_suppress_launcher_ui {
             sync_startup_visibility(&app, &lifecycle);
         }
@@ -7721,6 +7933,7 @@ pub(super) fn run_launcher_loop(
         let mut full_screen_transition_release_raster_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
         let mut orientation_controlled_slint_raster_us = 0;
+        let response_raster_started_at_us = crate::input_hub::monotonic_us();
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -7820,6 +8033,13 @@ pub(super) fn run_launcher_loop(
             };
             expanded
         };
+        let response_raster_completed_at_us = crate::input_hub::monotonic_us();
+        let launcher_response_frame_stamp = launcher_response_trace.frame_stamp(
+            &nav,
+            response_projected_at_us,
+            response_raster_started_at_us,
+            response_raster_completed_at_us,
+        );
         if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation)
             && full_screen_transition.state() == FullScreenTransitionState::CapturePending
             && !full_screen_transition.policy().controlled_capture
@@ -8661,6 +8881,17 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
+        let launcher_response_present_receipt = LauncherResponsePresentReceipt {
+            post_accepted_at_us: crate::input_hub::monotonic_us(),
+            dirty_rect: presented_frame
+                .dirty_rect
+                .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1)),
+            posted_sequence: presented_frame.main_present_sequence,
+            post_active_sequence: presented_frame.main_present_post_active_sequence,
+            post_pending_sequence: presented_frame.main_present_post_pending_sequence,
+            post_pending: presented_frame.main_present_post_pending,
+            refresh_period_us: pacer.period_us(),
+        };
         let selection_feedback_stamp = presented_frame.selection_feedback.clone();
         let mut accepted_and_active_confirmed = false;
         let mut confirmed_present_sequence = 0u16;
@@ -8861,7 +9092,8 @@ pub(super) fn run_launcher_loop(
                     presented_frame.main_present_sequence,
                 );
                 launcher_response_trace.confirm(
-                    &nav,
+                    launcher_response_frame_stamp.as_ref(),
+                    launcher_response_present_receipt,
                     frames,
                     presented_frame.main_present_sequence,
                 );
@@ -9406,6 +9638,7 @@ fn benchmark_media_interaction_gate_active(
 fn process_catalog_worker_message(
     message: CatalogWorkerMessage,
     prepare_trace: &mut LauncherPrepareTrace,
+    launcher_response_trace: &mut LauncherResponseTrace,
     first_visible_copy_done: bool,
     launching: bool,
     benchmark_media_interaction_active: bool,
@@ -9471,6 +9704,7 @@ fn process_catalog_worker_message(
     );
     apply_catalog_session_effects(
         effects,
+        launcher_response_trace,
         app,
         nav,
         catalog,
@@ -9986,6 +10220,7 @@ fn maybe_present_modal_input_test_dialog(
 #[allow(clippy::too_many_arguments)]
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
+    launcher_response_trace: &mut LauncherResponseTrace,
     app: &slint_ui::launcher::Launcher,
     nav: &mut LauncherNav,
     catalog: &mut ArcadeCatalog,
@@ -10353,12 +10588,39 @@ fn apply_catalog_session_effects(
                     continue;
                 }
                 let adoption_started = Instant::now();
+                let phase = launcher_response_trace.begin_catalog_phase("hydration-state");
                 nav.catalog_system_hydration_finished(&system_id);
-                *catalog = prepared_catalog;
+                launcher_response_trace.end_catalog_phase(phase);
+                let phase = launcher_response_trace.begin_catalog_phase("catalog-replacement");
+                let retired_catalog = std::mem::replace(catalog, prepared_catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
-                nav.sync_launcher_taxonomy(catalog);
+                launcher_response_trace.end_catalog_phase(phase);
+                let phase = launcher_response_trace.begin_catalog_phase("catalog-retirement");
+                drop(retired_catalog);
+                launcher_response_trace.end_catalog_phase(phase);
+                let taxonomy_start = launcher_response_trace.catalog_boundary();
+                let mut taxonomy_end = None;
+                let taxonomy_timing = nav.sync_launcher_taxonomy_with_timing(catalog, &mut || {
+                    taxonomy_end = Some(launcher_response_trace.catalog_boundary());
+                });
+                let taxonomy_end = taxonomy_end.unwrap_or(taxonomy_start);
+                let navigation_end = launcher_response_trace.catalog_boundary();
+                launcher_response_trace.record_catalog_interval(
+                    "taxonomy-construction",
+                    taxonomy_start,
+                    taxonomy_end,
+                    taxonomy_timing.taxonomy_build_us,
+                );
+                launcher_response_trace.record_catalog_interval(
+                    "navigation-reconciliation",
+                    taxonomy_end,
+                    navigation_end,
+                    taxonomy_timing.navigation_reconcile_us,
+                );
+                let phase = launcher_response_trace.begin_catalog_phase("return-state-restore");
                 let return_restored =
                     reapply_pending_launch_return_state(nav, catalog, launch_return_session);
+                launcher_response_trace.end_catalog_phase(phase);
                 if return_restored {
                     launch_return_session.mark_system_shard_authoritative();
                     emit_return_context_restored(
@@ -10372,7 +10634,9 @@ fn apply_catalog_session_effects(
                     );
                     lifecycle.tick_startup_reveal(now, true, lifecycle_effects);
                 }
+                let phase = launcher_response_trace.begin_catalog_phase("bridge-invalidation");
                 *full_bridge_dirty = true;
+                launcher_response_trace.end_catalog_phase(phase);
                 print_startup_event(
                     start,
                     "catalog_system_shard_ready",
@@ -10978,12 +11242,68 @@ mod tests {
         );
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
-        trace.confirm(&nav, 42, 7);
+        let stamp = trace.frame_stamp(&nav, 1, 2, 3);
+        trace.confirm(
+            stamp.as_ref(),
+            LauncherResponsePresentReceipt::default(),
+            42,
+            7,
+        );
 
         assert_eq!(trace.records.len(), 1);
         assert_eq!(trace.records[0].disposition, "confirmed");
         assert_eq!(trace.records[0].confirmed_frame, Some(42));
         assert_eq!(trace.records[0].confirmed_sequence, Some(7));
+        assert_eq!(
+            trace.records[0]
+                .frame
+                .as_ref()
+                .map(|frame| frame.selected.selected_index),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn launcher_response_confirmation_uses_the_stamped_frame_state() {
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::SystemHub;
+        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        let mut event = normalized_test_press(LogicalAction::Right);
+        event.source.kind = InputSourceKind::MainProxy;
+        let context = ContextId {
+            target: FocusTarget {
+                kind: InputContextKind::Screen,
+                owner: 1,
+            },
+            generation: 1,
+        };
+        trace.record_route(
+            event,
+            InputOutcome::Dispatch {
+                event,
+                context,
+                kind: DispatchKind::Initial,
+            },
+        );
+        nav.system_hub_selected = 1;
+        trace.observe_state(&nav, false);
+        let stamp = trace.frame_stamp(&nav, 10, 11, 12);
+        nav.system_hub_selected = 2;
+        trace.confirm(
+            stamp.as_ref(),
+            LauncherResponsePresentReceipt::default(),
+            5,
+            9,
+        );
+
+        assert_eq!(trace.records[0].disposition, "confirmed");
+        assert_eq!(
+            trace.records[0]
+                .frame
+                .as_ref()
+                .map(|frame| frame.selected.selected_index),
+            Some(1)
+        );
     }
 
     #[test]
@@ -11044,7 +11364,13 @@ mod tests {
         );
         nav.system_hub_selected = 1;
         trace.observe_state(&nav, false);
-        trace.confirm(&nav, 42, 7);
+        let stamp = trace.frame_stamp(&nav, 1, 2, 3);
+        trace.confirm(
+            stamp.as_ref(),
+            LauncherResponsePresentReceipt::default(),
+            42,
+            7,
+        );
         assert!(!trace.complete);
 
         let target = SelectionFeedbackTarget::new("system-hub", "recent");

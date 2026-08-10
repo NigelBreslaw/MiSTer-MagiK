@@ -4951,8 +4951,42 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
         || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
         || trace["runtime"].as_object().is_none()
         || trace["run_id"].as_str().is_none_or(str::is_empty)
+        || trace["catalog_phases"].as_array().is_none()
     {
         return Err("launcher response trace omitted required v3 evidence".into());
+    }
+    for record in launcher_response_confirmed_records(trace, None) {
+        let ordered = [
+            record["captured_at_us"].as_u64(),
+            record["drained_at_us"].as_u64(),
+            record["dispatch_at_us"].as_u64(),
+            record["state_applied_at_us"].as_u64(),
+            record
+                .pointer("/frame/projected_at_us")
+                .and_then(Value::as_u64),
+            record
+                .pointer("/frame/raster_started_at_us")
+                .and_then(Value::as_u64),
+            record
+                .pointer("/frame/raster_completed_at_us")
+                .and_then(Value::as_u64),
+            record
+                .pointer("/frame/post_accepted_at_us")
+                .and_then(Value::as_u64),
+            record["confirmed_at_us"].as_u64(),
+        ];
+        if ordered.iter().any(Option::is_none)
+            || ordered.windows(2).any(|pair| {
+                pair[0]
+                    .zip(pair[1])
+                    .is_none_or(|(before, after)| before > after)
+            })
+        {
+            return Err(format!(
+                "launcher response stage order is incomplete or invalid: {record}"
+            )
+            .into());
+        }
     }
     Ok(())
 }

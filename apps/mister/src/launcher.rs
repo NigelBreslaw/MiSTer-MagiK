@@ -799,6 +799,14 @@ fn directional_row_spring_target(
     target.clamp(0.0, max_scroll)
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct LauncherTaxonomySyncTiming {
+    pub changed: bool,
+    pub taxonomy_build_us: u128,
+    pub navigation_reconcile_us: u128,
+}
+
 pub struct LauncherNav {
     crt_layout: bool,
     portrait_layout: bool,
@@ -1272,9 +1280,28 @@ impl LauncherNav {
     /// system projection changes. Call this after publishing a catalog before
     /// reading menu or active-collection state.
     pub fn sync_launcher_taxonomy(&mut self, catalog: &ArcadeCatalog) -> bool {
+        self.sync_launcher_taxonomy_impl(catalog, false, None)
+            .changed
+    }
+
+    #[doc(hidden)]
+    pub fn sync_launcher_taxonomy_with_timing(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        taxonomy_built: &mut dyn FnMut(),
+    ) -> LauncherTaxonomySyncTiming {
+        self.sync_launcher_taxonomy_impl(catalog, true, Some(taxonomy_built))
+    }
+
+    fn sync_launcher_taxonomy_impl(
+        &mut self,
+        catalog: &ArcadeCatalog,
+        measure: bool,
+        mut taxonomy_built: Option<&mut dyn FnMut()>,
+    ) -> LauncherTaxonomySyncTiming {
         let token = LauncherTaxonomyToken::from_catalog(catalog);
         if self.taxonomy_token == token && self.taxonomy.matches_catalog(catalog) {
-            return false;
+            return LauncherTaxonomySyncTiming::default();
         }
 
         if self.screen == Screen::Home {
@@ -1284,7 +1311,15 @@ impl LauncherNav {
         let old_collection = self.active_collection_id.clone();
         let had_active_collection = old_collection.is_some();
         let build_systems = self.catalog_update_states.keys().cloned().collect();
+        let taxonomy_started = measure.then(Instant::now);
         self.taxonomy = LauncherTaxonomy::from_catalog_with_shells(catalog, &build_systems);
+        let taxonomy_build_us = taxonomy_started
+            .map(|started| started.elapsed().as_micros())
+            .unwrap_or(0);
+        if let Some(taxonomy_built) = taxonomy_built.as_mut() {
+            taxonomy_built();
+        }
+        let navigation_started = measure.then(Instant::now);
         self.taxonomy_token = token;
         for diagnostic in self.taxonomy.diagnostics() {
             crate::ui_errln!("{diagnostic}");
@@ -1311,7 +1346,13 @@ impl LauncherNav {
             if had_active_collection {
                 self.screen = Screen::Home;
                 self.restore_current_menu_view();
-                return true;
+                return LauncherTaxonomySyncTiming {
+                    changed: true,
+                    taxonomy_build_us,
+                    navigation_reconcile_us: navigation_started
+                        .map(|started| started.elapsed().as_micros())
+                        .unwrap_or(0),
+                };
             }
             // Startup and benchmark paths can select the Arcade screen before
             // the catalog is hydrated. That screen always means the root
@@ -1348,7 +1389,13 @@ impl LauncherNav {
         {
             self.arcade.reset();
         }
-        true
+        LauncherTaxonomySyncTiming {
+            changed: true,
+            taxonomy_build_us,
+            navigation_reconcile_us: navigation_started
+                .map(|started| started.elapsed().as_micros())
+                .unwrap_or(0),
+        }
     }
 
     pub fn launcher_taxonomy_token(&self) -> LauncherTaxonomyToken {

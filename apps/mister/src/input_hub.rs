@@ -125,6 +125,30 @@ impl MailboxState {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct InputObservation(u64);
 
+impl InputObservation {
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct InputObservationProbe {
+    mailbox: Arc<InputMailbox>,
+}
+
+impl InputObservationProbe {
+    #[must_use]
+    pub fn observe(&self) -> InputObservation {
+        let state = self
+            .mailbox
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        InputObservation(state.wake_generation)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DrainedInput {
     pub batch: InputBatch,
@@ -185,6 +209,13 @@ impl InputHub {
                 ..InputBatch::default()
             },
             observation: InputObservation(state.wake_generation),
+        }
+    }
+
+    #[must_use]
+    pub fn observation_probe(&self) -> InputObservationProbe {
+        InputObservationProbe {
+            mailbox: Arc::clone(&self.mailbox),
         }
     }
 

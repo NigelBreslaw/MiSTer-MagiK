@@ -11,7 +11,9 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use crate::input_event::DeviceInstanceId;
-use crate::input_hub::{DrainedInput, InputHub, InputObservation, InputWaitOutcome};
+use crate::input_hub::{
+    DrainedInput, InputHub, InputObservation, InputObservationProbe, InputWaitOutcome,
+};
 use crate::input_state::{InputProfile, JS_EVENT_AXIS, JS_EVENT_BUTTON, PadRawEvent};
 pub use crate::input_state::{PadInfo, PadState};
 
@@ -387,6 +389,11 @@ impl PadPool {
         self.input_hub
             .as_ref()
             .map_or_else(DrainedInput::default, InputHub::drain)
+    }
+
+    #[must_use]
+    pub fn input_observation_probe(&self) -> Option<InputObservationProbe> {
+        self.input_hub.as_ref().map(InputHub::observation_probe)
     }
 
     fn active_pad(&self) -> Option<&PadReader> {
