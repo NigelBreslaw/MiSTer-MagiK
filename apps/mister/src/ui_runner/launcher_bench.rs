@@ -442,12 +442,10 @@ pub(super) fn keep_bench_home_visible(scroll_x: &mut i32, selected: usize, count
     let item_w = HOME_TILE_WIDTH + HOME_TILE_GAP;
     let selected_x = selected as i32 * item_w;
     let selected_right = selected_x + HOME_TILE_WIDTH;
-    let next_tile_preview = HOME_TILE_GAP + (HOME_TILE_WIDTH + 1) / 2;
     if selected_x < *scroll_x {
+        *scroll_x = selected_right - HOME_LIST_VISIBLE_W;
+    } else if selected_right > *scroll_x + HOME_LIST_VISIBLE_W {
         *scroll_x = selected_x;
-    }
-    if selected_right + next_tile_preview > *scroll_x + HOME_LIST_VISIBLE_W {
-        *scroll_x = selected_right + next_tile_preview - HOME_LIST_VISIBLE_W;
     }
     let max_scroll = (count as i32 * item_w - HOME_TILE_GAP - HOME_LIST_VISIBLE_W).max(0);
     *scroll_x = (*scroll_x).clamp(0, max_scroll);

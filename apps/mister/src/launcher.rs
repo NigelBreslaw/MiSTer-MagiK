@@ -4657,12 +4657,10 @@ fn retarget_home_spring_monotonically(animation: &mut SpringAnimation, target: f
 fn keep_home_visible(selected: usize, scroll_x: &mut i32, count: usize) {
     let visible_left = selected as i32 * home_tile_pitch();
     let visible_right = visible_left + HOME_TILE_WIDTH;
-    let next_tile_preview = HOME_TILE_GAP + (HOME_TILE_WIDTH + 1) / 2;
     if visible_left < *scroll_x {
+        *scroll_x = visible_right - HOME_LIST_VISIBLE_W;
+    } else if visible_right > *scroll_x + HOME_LIST_VISIBLE_W {
         *scroll_x = visible_left;
-    }
-    if visible_right + next_tile_preview > *scroll_x + HOME_LIST_VISIBLE_W {
-        *scroll_x = visible_right + next_tile_preview - HOME_LIST_VISIBLE_W;
     }
     *scroll_x = (*scroll_x).clamp(0, home_max_scroll(count));
 }
@@ -6208,19 +6206,19 @@ mod tests {
         }
 
         assert_eq!(nav.selected, 4);
-        assert_eq!(nav.scroll_x, home_tile_pitch());
+        assert_eq!(nav.scroll_x, 4 * home_tile_pitch());
         assert!(nav.home_scroll_animation.is_settled());
         nav.handle_input(
             &PadState::default(),
             start + Duration::from_millis(1_000),
             &catalog,
         );
-        assert_eq!(nav.scroll_x, home_tile_pitch());
+        assert_eq!(nav.scroll_x, 4 * home_tile_pitch());
         assert!(nav.home_scroll_animation.is_settled());
     }
 
     #[test]
-    fn home_viewport_shows_four_tiles_and_half_of_the_next_until_the_end() {
+    fn home_viewport_pages_only_when_focus_crosses_an_edge() {
         let half_tile = (HOME_TILE_WIDTH + 1) / 2;
         assert_eq!(
             4 * HOME_TILE_WIDTH + 4 * HOME_TILE_GAP + half_tile,
@@ -6228,14 +6226,26 @@ mod tests {
         );
 
         let mut scroll_x = 0;
+        keep_home_visible(3, &mut scroll_x, 10);
+        assert_eq!(scroll_x, 0);
+
         keep_home_visible(4, &mut scroll_x, 10);
-        assert_eq!(scroll_x, home_tile_pitch());
+        assert_eq!(scroll_x, 4 * home_tile_pitch());
 
-        let next_tile_left = 5 * home_tile_pitch();
-        assert_eq!(scroll_x + HOME_LIST_VISIBLE_W - next_tile_left, half_tile);
+        keep_home_visible(7, &mut scroll_x, 10);
+        assert_eq!(scroll_x, 4 * home_tile_pitch());
 
-        keep_home_visible(9, &mut scroll_x, 10);
+        keep_home_visible(8, &mut scroll_x, 10);
         assert_eq!(scroll_x, home_max_scroll(10));
+
+        keep_home_visible(5, &mut scroll_x, 10);
+        assert_eq!(
+            scroll_x,
+            5 * home_tile_pitch() + HOME_TILE_WIDTH - HOME_LIST_VISIBLE_W
+        );
+
+        keep_home_visible(1, &mut scroll_x, 10);
+        assert_eq!(scroll_x, 0);
 
         let between_tiles = (2 * home_tile_pitch() + 40) as f64;
         let omega = SpringConfiguration::smooth().angular_frequency();
