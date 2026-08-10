@@ -615,7 +615,7 @@ fn evaluate_input_latency_lab_summary(summary: &Value) -> AgentResult<()> {
             .get("artifact_validity_status")
             .and_then(Value::as_str)
             != Some("passed")
-        || summary.get("arms").and_then(Value::as_array).map(Vec::len) != Some(6)
+        || summary.get("arms").and_then(Value::as_array).map(Vec::len) != Some(9)
     {
         return Err("input latency laboratory did not produce complete v1 evidence".into());
     }

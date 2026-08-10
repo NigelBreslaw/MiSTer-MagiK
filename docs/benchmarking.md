@@ -110,7 +110,9 @@ refresh, monolithic 16 ms, monolithic 64 ms, cooperative 2 ms quanta totalling
 forced-catalog arms compare the current CPU0/nice -10 input reader against
 CPU1/nice -15 and low-priority round-robin scheduling on CPU0 and CPU1. These
 reader policies require the same consumed volatile lab token and do not alter
-ordinary runtime scheduling. The experiment reports
+ordinary runtime scheduling. Per-event `/proc` scheduler accounting is enabled
+only for the current-policy baseline/forced attribution pair; candidate timing
+arms retain the non-perturbing poll, CPU, and thread-clock stamps. The experiment reports
 artifact validity, input integrity, obstruction reproduction, cooperative
 recovery, catalog attribution, first-eligible-vblank behavior, and the current
 product-quality result independently. Reader-policy candidates separately

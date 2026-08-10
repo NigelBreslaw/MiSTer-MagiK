@@ -27,6 +27,7 @@ const INPUT_PROXY_PROTOCOL_ENV: &str = "MISTER_MAGIK_INPUT_PROXY_PROTOCOL";
 const INPUT_PROXY_NAME: &str = "MiSTer virtual input";
 const INPUT_LATENCY_LAB_SESSION_ENV: &str = "MISTER_INPUT_LATENCY_LAB_SESSION";
 const INPUT_LATENCY_LAB_READER_POLICY_ENV: &str = "MISTER_INPUT_LATENCY_LAB_READER_POLICY";
+const INPUT_LATENCY_LAB_READER_SCHEDSTAT_ENV: &str = "MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT";
 const INPUT_EVENT_SIZE: usize = if cfg!(target_pointer_width = "64") {
     24
 } else {
@@ -419,7 +420,8 @@ fn capture_loop(mailbox: Arc<InputMailbox>) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .reader_policy = Some(policy);
-    let trace_scheduling = std::env::var("MISTER_LAUNCHER_RESPONSE_TRACE").as_deref() == Ok("1");
+    let trace_scheduling =
+        std::env::var(INPUT_LATENCY_LAB_READER_SCHEDSTAT_ENV).as_deref() == Ok("1");
     let proxy_protocol = std::env::var(INPUT_PROXY_PROTOCOL_ENV).ok();
     let protocol_enabled = std::env::var(INPUT_PROXY_CAPABILITY_ENV).as_deref() == Ok("1")
         && matches!(proxy_protocol.as_deref(), Some("2" | "3"));

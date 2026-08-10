@@ -4463,6 +4463,7 @@ struct InputLatencyLabArmSpec {
     runtime_arm: &'static str,
     catalog_refresh: &'static str,
     reader_policy: &'static str,
+    reader_schedstat: bool,
 }
 
 const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
@@ -4471,54 +4472,63 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "baseline",
         catalog_refresh: "off",
         reader_policy: "current",
+        reader_schedstat: true,
     },
     InputLatencyLabArmSpec {
         label: "real-forced-catalog",
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "current",
+        reader_schedstat: true,
     },
     InputLatencyLabArmSpec {
         label: "monolithic-16ms",
         runtime_arm: "monolithic-16ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "monolithic-64ms",
         runtime_arm: "monolithic-64ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "cooperative-2ms",
         runtime_arm: "cooperative-2ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "cooperative-1ms",
         runtime_arm: "cooperative-1ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "forced-catalog-reader-cpu1-nice",
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu1-nice",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "forced-catalog-reader-cpu0-rr",
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu0-rr",
+        reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
         label: "forced-catalog-reader-cpu1-rr",
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu1-rr",
+        reader_schedstat: false,
     },
 ];
 
@@ -4724,6 +4734,10 @@ fn run_input_latency_lab_arm(
                 (
                     "MISTER_INPUT_LATENCY_LAB_READER_POLICY".into(),
                     spec.reader_policy.into(),
+                ),
+                (
+                    "MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT".into(),
+                    if spec.reader_schedstat { "1" } else { "0" }.into(),
                 ),
             ],
             timeout_secs: 45,
