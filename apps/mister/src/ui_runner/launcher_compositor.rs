@@ -106,6 +106,31 @@ impl<'a> LayerTarget<'a> {
         (slint_dirty, slint_damage)
     }
 
+    pub(super) fn render_slint_base_interruptible(
+        &mut self,
+        window: &MisterSoftwareWindow,
+        should_interrupt: impl FnMut() -> bool,
+    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
+        let mut slint_dirty = None;
+        let mut slint_damage = DirtyRectList::new();
+        let mut interrupted = false;
+        window.draw_if_needed(|renderer| {
+            let geometry = self.drawing_geometry();
+            let (region, was_interrupted) = self.drawing_target_mut().render_interruptible(
+                renderer,
+                geometry,
+                should_interrupt,
+            );
+            interrupted = was_interrupted;
+            if !interrupted {
+                slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
+                slint_damage =
+                    dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
+            }
+        });
+        (slint_dirty, slint_damage, interrupted)
+    }
+
     pub(super) fn render_slint_full(
         &mut self,
         window: &MisterSoftwareWindow,
