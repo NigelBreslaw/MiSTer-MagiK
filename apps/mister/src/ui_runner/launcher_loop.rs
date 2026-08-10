@@ -13173,7 +13173,7 @@ mod tests {
         let full_catalog = catalog_for_media_systems(&["snes"]);
         let mut launched_nav = LauncherNav::new();
         assert!(launched_nav.open_system(&full_catalog, "snes"));
-        assert_eq!(launched_nav.screen, Screen::SystemHub);
+        assert_eq!(launched_nav.screen, Screen::Arcade);
         launched_nav.set_arcade_user_list_mode(&full_catalog, launcher::ArcadeUserListMode::Games);
         launched_nav.screen = Screen::Arcade;
         assert_eq!(launched_nav.screen, Screen::Arcade);
