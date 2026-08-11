@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "commands": {
+    "control": 93,
+    "avalon": 94,
+    "output": 95
+  },
+  "magic": {
+    "control": 19789,
+    "avalon": 19790,
+    "output": 19791
+  },
+  "word_counts": {
+    "control": 48,
+    "avalon": 32,
+    "output": 32
+  },
+  "states": {
+    "idle": 0,
+    "armed": 1,
+    "frozen": 2,
+    "partial": 3
+  },
+  "domains": {
+    "control": 0,
+    "avalon": 1,
+    "output": 2
+  },
+  "dispositions": {
+    "none": 0,
+    "complete": 1,
+    "partial": 2,
+    "aborted": 3,
+    "restarted": 4,
+    "overlong": 5
+  },
+  "flags": {
+    "state_flags": {
+      "monitor_armed": 2,
+      "snapshot_frozen": 3,
+      "mailbox_overrun": 4,
+      "partial_snapshot": 5
+    },
+    "route_flags": {
+      "magik_ownership": 0,
+      "pending": 1,
+      "active_enabled": 2,
+      "apply_accepted": 3,
+      "filtered": 4
+    },
+    "control_fault_flags": {
+      "reset_request": 0,
+      "reset_output": 1,
+      "configuration_lost": 2,
+      "pll_adjust_lock_lost": 3,
+      "owned_osd_write": 4,
+      "route_divergence": 5,
+      "heartbeat_timeout": 6,
+      "mailbox_overrun": 7
+    },
+    "avalon_fault_flags": {
+      "address_outside_slot": 0,
+      "bad_burstcount": 1,
+      "unexpected_return": 2,
+      "excess_return": 3,
+      "request_timeout": 4,
+      "reset_outstanding": 5,
+      "no_reads": 6,
+      "counter_overflow": 7,
+      "write_seen": 8,
+      "bad_byteenable": 9
+    },
+    "output_source_flags": {
+      "direct_mux": 0,
+      "csync_mux": 1,
+      "mode_stable": 2
+    },
+    "output_control_flags": {
+      "magik_ownership": 0,
+      "active_enabled": 1,
+      "reset_request": 2,
+      "configuration_done": 3,
+      "pll_adjust_locked": 4
+    },
+    "output_fault_flags": {
+      "saw_de": 0,
+      "saw_nonblack": 1,
+      "saw_nonwhite": 2,
+      "all_black": 3,
+      "all_white": 4,
+      "timing_changed": 5,
+      "mux_changed": 6,
+      "counter_overflow": 7
+    },
+    "geometry_faults": {
+      "frame_period": 0,
+      "line_count": 1,
+      "active_pixels": 2,
+      "active_lines": 3
+    }
+  },
+  "triggers": {
+    "none": 0,
+    "legacy_owned": 1,
+    "route_divergence": 2,
+    "owned_osd_write": 3,
+    "control_or_clock": 4,
+    "avalon_address": 5,
+    "avalon_burst": 6,
+    "avalon_return": 7,
+    "avalon_timeout": 8,
+    "avalon_no_reads": 9,
+    "final_black": 10,
+    "final_white": 11,
+    "final_timing": 12
+  },
+  "control_words": [
+    "schema", "state_flags", "trigger", "missing_domains", "generation",
+    "boot_epoch", "freeze_clock_low", "freeze_clock_high", "vblank_low",
+    "vblank_high", "legacy_total", "legacy_owned", "legacy_partial",
+    "legacy_abort", "legacy_word_mask", "legacy_disposition", "route_flags",
+    "active_sequence", "active_transaction", "route_epoch", "legacy_word_0",
+    "legacy_word_1", "legacy_word_2", "legacy_word_3", "legacy_word_4",
+    "legacy_word_5", "legacy_word_6", "legacy_word_7", "legacy_word_8",
+    "legacy_word_9", "pre_route_flags", "pre_base_low", "pre_base_high",
+    "pre_width", "pre_height", "pre_hmin", "pre_hmax", "pre_vmin",
+    "pre_vmax", "pre_stride", "post_base_low", "post_base_high",
+    "post_route_flags", "post_width", "post_height", "post_stride",
+    "control_fault_flags", "crc"
+  ],
+  "avalon_words": [
+    "schema", "state_flags", "trigger", "generation", "route_epoch",
+    "route_flags", "expected_base_low", "expected_base_high", "slot_end_low",
+    "slot_end_high", "first_address_low", "first_address_high",
+    "last_address_low", "last_address_high", "accepted_bursts_low",
+    "accepted_bursts_high", "expected_beats_low", "expected_beats_high",
+    "returned_beats_low", "returned_beats_high", "outstanding_low",
+    "outstanding_high", "maximum_outstanding", "maximum_waitrequest",
+    "oldest_request_low", "oldest_request_high", "no_read_frames",
+    "fault_burstcount", "fault_flags", "frame_count", "reserved", "crc"
+  ],
+  "output_words": [
+    "schema", "state_flags", "trigger", "generation", "route_epoch",
+    "active_sequence", "source_flags", "control_flags",
+    "reference_period_low", "reference_period_high", "reference_lines",
+    "reference_pixels_low", "reference_pixels_high", "reference_active_lines",
+    "reference_flags", "fault_period_low", "fault_period_high", "fault_lines",
+    "fault_pixels_low", "fault_pixels_high", "fault_active_lines", "fault_flags",
+    "consecutive_black", "consecutive_white", "geometry_faults",
+    "frame_count_low", "frame_count_high", "heartbeat", "control_changes",
+    "reserved_0", "reserved_1", "crc"
+  ],
+  "crc": {
+    "polynomial": 4129,
+    "initial": 65535,
+    "final_xor": 0,
+    "word_byte_order": "high-low",
+    "header_words": ["command", "schema", "non_crc_word_count"]
+  }
+}

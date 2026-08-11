@@ -1,0 +1,15 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "mister-magik-video-diagnostics-contract"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "GPL-3.0-or-later"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"

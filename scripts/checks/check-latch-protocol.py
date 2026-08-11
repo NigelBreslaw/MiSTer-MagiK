@@ -13,6 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/latch-protocol.json"
+VIDEO_DIAGNOSTICS_SPEC_PATH = (
+    ROOT / "mister/platform/fpga/menu-vblank-latch/video-diagnostics-protocol.json"
+)
 
 
 def crc16_ccitt_false(words: list[int]) -> int:
@@ -27,6 +30,14 @@ def crc16_ccitt_false(words: list[int]) -> int:
 
 subprocess.run(
     [sys.executable, str(ROOT / "scripts/checks/generate-latch-protocol.py"), "--check"],
+    check=True,
+)
+subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "scripts/checks/generate-video-diagnostics-protocol.py"),
+        "--check",
+    ],
     check=True,
 )
 spec = json.loads(SPEC_PATH.read_text())
@@ -61,4 +72,22 @@ for name, golden in spec["goldens"].items():
         raise SystemExit(
             f"{name} CRC mismatch: expected 0x{golden['crc']:04x}, got 0x{actual:04x}"
         )
+
+video_diagnostics = json.loads(VIDEO_DIAGNOSTICS_SPEC_PATH.read_text())
+if video_diagnostics["schema"] != 1:
+    raise SystemExit("video diagnostics protocol schema must be v1")
+if set(video_diagnostics["commands"].values()) & set(spec["commands"].values()):
+    raise SystemExit("video diagnostics commands overlap the latch protocol")
+if set(video_diagnostics["commands"].values()) != {0x5D, 0x5E, 0x5F}:
+    raise SystemExit("video diagnostics commands must be exactly 0x5d-0x5f")
+for group, word_count in video_diagnostics["word_counts"].items():
+    words = video_diagnostics[f"{group}_words"]
+    if len(words) != word_count or words[-1] != "crc":
+        raise SystemExit(f"video diagnostics {group} layout must match its fixed CRC word count")
+if len(set(video_diagnostics["magic"].values())) != len(video_diagnostics["magic"]):
+    raise SystemExit("video diagnostics magic values must be unique")
+for group, flags in video_diagnostics["flags"].items():
+    bits = list(flags.values())
+    if len(bits) != len(set(bits)) or any(bit < 0 or bit > 15 for bit in bits):
+        raise SystemExit(f"video diagnostics {group} flag bits must be unique u16 positions")
 print("latch protocol contract: ok")
