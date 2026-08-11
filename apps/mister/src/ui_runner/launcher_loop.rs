@@ -9112,6 +9112,7 @@ pub(super) fn run_launcher_loop(
         let navigation_transition_frame_started =
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
+        let mut navigation_logical_frame_rendered = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
             let now_us = loop_start
@@ -9266,6 +9267,7 @@ pub(super) fn run_launcher_loop(
                     }
                 } else if let Ok(frame) = navigation_transition.render() {
                     let _ = layer_target.restore_cached(frame);
+                    navigation_logical_frame_rendered = true;
                 }
             }
             full_frame_present = true;
@@ -9408,7 +9410,14 @@ pub(super) fn run_launcher_loop(
             None
         };
         let mut logical_custom_damage = DirtyRectList::new();
-        if slint_damage.is_empty() && physical_custom_damage.is_none() {
+        if navigation_logical_frame_rendered {
+            logical_custom_damage.push(DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: layout.logical_w(),
+                y1: layout.logical_h(),
+            });
+        } else if slint_damage.is_empty() && physical_custom_damage.is_none() {
             logical_custom_damage.push_if_some(this_rect);
         }
         logical_custom_damage.push_if_some(empty_base_cached_rect);
