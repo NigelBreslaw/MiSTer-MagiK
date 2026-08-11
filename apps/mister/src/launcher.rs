@@ -6264,7 +6264,10 @@ mod tests {
             .expect("registry-only collection intent");
 
         assert_eq!(event.action, LauncherAction::OpenCollection);
-        assert_eq!(event.path.as_deref(), Some(MENU_ARCADE_SYSTEM_ID));
+        assert_eq!(
+            event.path.as_deref(),
+            Some(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+        );
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.arcade.selected, 0);
