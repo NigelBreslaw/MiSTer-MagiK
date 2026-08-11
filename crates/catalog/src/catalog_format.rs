@@ -57,6 +57,13 @@ impl CatalogFormatDescriptor {
     }
 
     #[must_use]
+    pub fn navigation_index_predecessor() -> Self {
+        let mut predecessor = Self::current();
+        predecessor.navigation_schema_version = 2;
+        predecessor
+    }
+
+    #[must_use]
     pub fn label(&self) -> String {
         format!(
             "canonical={}/{} shard={} navigation={} projection={}",
@@ -123,6 +130,12 @@ pub fn classify(descriptor: &CatalogFormatDescriptor) -> CatalogFormatStatus {
             required: current,
         };
     }
+    if descriptor == &CatalogFormatDescriptor::navigation_index_predecessor() {
+        return CatalogFormatStatus::UpgradeRequired {
+            installed: descriptor.clone(),
+            required: current,
+        };
+    }
     if has_future_component(descriptor, &current) {
         return CatalogFormatStatus::UnsupportedFuture {
             installed: descriptor.clone(),
@@ -162,6 +175,10 @@ mod tests {
         );
         assert!(matches!(
             classify(&CatalogFormatDescriptor::alpha_predecessor()),
+            CatalogFormatStatus::UpgradeRequired { .. }
+        ));
+        assert!(matches!(
+            classify(&CatalogFormatDescriptor::navigation_index_predecessor()),
             CatalogFormatStatus::UpgradeRequired { .. }
         ));
     }
