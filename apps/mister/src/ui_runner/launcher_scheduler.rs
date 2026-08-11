@@ -226,6 +226,18 @@ impl SystemEntryPrepareWorker {
     }
 }
 
+enum OpenedSystemEntry {
+    Owned(
+        mister_magik_catalog::system_shard::LoadedSystemShard,
+        mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
+    ),
+    Paged {
+        collection: arcade_catalog::SystemCollection,
+        game_count: usize,
+        timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
+    },
+}
+
 fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
@@ -249,14 +261,50 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                     error.to_string(),
                 )
             })?;
+        if worker_system_id == "c64" {
+            let descriptor_started = Instant::now();
+            let candidates = reader.system_sqlite_candidates(&parsed)?;
+            let descriptor_lookup_us = elapsed_us(descriptor_started);
+            let mut failures = Vec::new();
+            for candidate in candidates {
+                let sqlite_pmu = mister_magik_perf_events::sampled_span("system-entry-sqlite-open");
+                let opened = arcade_catalog::SystemCollection::open_paged_sqlite(
+                    worker_system_id.as_str(),
+                    &candidate.sqlite_path,
+                    candidate.generation,
+                    candidate.games,
+                    base_catalog.platform_kind(&worker_system_id),
+                );
+                drop(sqlite_pmu);
+                match opened {
+                    Ok((collection, paged_sqlite)) => {
+                        return Ok(OpenedSystemEntry::Paged {
+                            collection,
+                            game_count: candidate.games,
+                            timing:
+                                mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
+                                    descriptor_lookup_us,
+                                    paged_sqlite: Some(paged_sqlite),
+                                    ..Default::default()
+                                },
+                        });
+                    }
+                    Err(error) => failures.push(error),
+                }
+            }
+            return Err(mister_magik_catalog::sharded_catalog::CatalogError::new(
+                "open-system",
+                format!("paged C64 candidates failed: {}", failures.join("; ")),
+            ));
+        }
         let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
         let result = reader.open_system_shard_with_timing(&parsed);
         drop(open_pmu);
-        result
+        result.map(|(system, timing)| OpenedSystemEntry::Owned(system, timing))
     });
     let navigation_decode_us = load_started.elapsed().as_micros();
     let message = match result {
-        Ok((system, open_timing)) => {
+        Ok(OpenedSystemEntry::Owned(system, open_timing)) => {
             let prepare_started = Instant::now();
             let navigation_indexes = system.navigation_indexes;
             let games = system.games;
@@ -326,6 +374,71 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                     open: open_timing,
                     row_projection_us,
                     collection_index_us,
+                    catalog_replacement_us,
+                    total_wall_us: elapsed_us(load_started),
+                    thread_cpu_us: execution_finished
+                        .thread_cpu_us
+                        .saturating_sub(execution_started.thread_cpu_us),
+                    cpu_start: execution_started.cpu,
+                    cpu_end: execution_finished.cpu,
+                    minor_page_faults: execution_finished
+                        .minor_page_faults
+                        .saturating_sub(execution_started.minor_page_faults),
+                    major_page_faults: execution_finished
+                        .major_page_faults
+                        .saturating_sub(execution_started.major_page_faults),
+                    allocations: allocations.allocations,
+                    allocated_bytes: allocations.bytes,
+                },
+                preview_prelude,
+            }
+        }
+        Ok(OpenedSystemEntry::Paged {
+            collection,
+            game_count,
+            timing: open_timing,
+        }) => {
+            let prepare_started = Instant::now();
+            let preview_prelude = preview_dispatch.and_then(|dispatch| {
+                let game = collection.game_at(0).filter(|game| {
+                    game.has_preview
+                        && !game.preview_archive_path.is_empty()
+                        && !game.preview_asset_key.is_empty()
+                })?;
+                dispatch
+                    .requests
+                    .publish_reserved(
+                        dispatch.generation,
+                        game.title.to_string(),
+                        game.preview_archive_path.to_string(),
+                        game.preview_asset_key.to_string(),
+                    )
+                    .then(|| SystemEntryPreviewPrelude {
+                        generation: dispatch.generation,
+                        title: game.title.to_string(),
+                        preview_archive_path: game.preview_archive_path.to_string(),
+                        preview_asset_key: game.preview_asset_key.to_string(),
+                    })
+            });
+            let replacement_started = Instant::now();
+            let replacement_pmu =
+                mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
+            let catalog = base_catalog.with_system_collection(Arc::new(collection));
+            drop(replacement_pmu);
+            let catalog_replacement_us = elapsed_us(replacement_started);
+            let allocations = crate::allocation_metrics::finish();
+            let execution_finished = system_entry_thread_snapshot();
+            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
+            CatalogWorkerMessage::SystemShardReady {
+                system_id: worker_system_id.clone(),
+                catalog,
+                base_catalog_version,
+                game_count,
+                prepare_us: elapsed_us(prepare_started),
+                profile: SystemEntryCatalogProfile {
+                    open: open_timing,
+                    row_projection_us: 0,
+                    collection_index_us: 0,
                     catalog_replacement_us,
                     total_wall_us: elapsed_us(load_started),
                     thread_cpu_us: execution_finished

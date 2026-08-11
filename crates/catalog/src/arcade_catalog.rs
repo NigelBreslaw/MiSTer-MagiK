@@ -10,11 +10,12 @@ pub use crate::catalog_classify::PlatformKind;
 use crate::catalog_navigation::CatalogNavigationProjection;
 use crate::library_db::{AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF};
 use crate::prepared_collections::PreparedCollectionId;
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 pub const DEFAULT_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 
@@ -131,12 +132,405 @@ pub struct ArcadeCatalog {
 #[derive(Clone, Debug)]
 pub struct SystemCollection {
     system_id: Arc<str>,
-    games: Arc<Vec<ArcadeGameEntry>>,
+    games: SystemCollectionRows,
     cold_metadata: Arc<Vec<ArcadeGameMetadataKey>>,
     platform_kinds: Arc<HashMap<String, PlatformKind>>,
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans: Arc<Vec<StructuredLaunchPlan>>,
     rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
+}
+
+#[derive(Clone, Debug)]
+enum SystemCollectionRows {
+    Owned(Arc<Vec<ArcadeGameEntry>>),
+    Paged(Arc<PagedSqliteSystemRows>),
+}
+
+impl SystemCollectionRows {
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(games) => games.len(),
+            Self::Paged(games) => games.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, index: usize) -> Option<&ArcadeGameEntry> {
+        match self {
+            Self::Owned(games) => games.get(index),
+            Self::Paged(games) => games.get(index),
+        }
+    }
+
+    fn iter(&self) -> SystemCollectionRowsIter<'_> {
+        SystemCollectionRowsIter {
+            rows: self,
+            ordinal: 0,
+        }
+    }
+}
+
+struct SystemCollectionRowsIter<'a> {
+    rows: &'a SystemCollectionRows,
+    ordinal: usize,
+}
+
+impl<'a> Iterator for SystemCollectionRowsIter<'a> {
+    type Item = &'a ArcadeGameEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ordinal = self.ordinal;
+        self.ordinal = self.ordinal.saturating_add(1);
+        self.rows.get(ordinal)
+    }
+}
+
+#[derive(Debug)]
+struct PagedSqliteRow {
+    game: ArcadeGameEntry,
+    metadata: ArcadeGameMetadataKey,
+    launch_plan: Option<StructuredLaunchPlan>,
+}
+
+struct PagedSqliteSystemRows {
+    connection: Mutex<Connection>,
+    system_id: Arc<str>,
+    preview_archive_default: Arc<str>,
+    count: usize,
+    page_rows: usize,
+    rows: Vec<OnceLock<PagedSqliteRow>>,
+    preview_ordinals: OnceLock<Vec<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct PagedSqliteOpenTiming {
+    pub connection_open_us: u64,
+    pub metadata_us: u64,
+    pub query_prepare_us: u64,
+    pub query_first_row_us: u64,
+    pub first_page_us: u64,
+    pub total_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PagedSqlitePageTiming {
+    query_prepare_us: u64,
+    query_first_row_us: u64,
+    total_us: u64,
+}
+
+impl std::fmt::Debug for PagedSqliteSystemRows {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PagedSqliteSystemRows")
+            .field("system_id", &self.system_id)
+            .field("count", &self.count)
+            .field("page_rows", &self.page_rows)
+            .field(
+                "resident_rows",
+                &self.rows.iter().filter(|row| row.get().is_some()).count(),
+            )
+            .finish()
+    }
+}
+
+impl PagedSqliteSystemRows {
+    const DEFAULT_PAGE_ROWS: usize = 64;
+
+    fn open(
+        sqlite_path: &Path,
+        expected_system_id: &str,
+        expected_generation: u64,
+        expected_count: usize,
+    ) -> Result<(Self, PagedSqliteOpenTiming), String> {
+        let total_started = std::time::Instant::now();
+        let connection_started = std::time::Instant::now();
+        let connection = Connection::open_with_flags(
+            sqlite_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("open paged shard SQLite: {error}"))?;
+        let connection_open_us = elapsed_micros(connection_started);
+        connection
+            .pragma_update(None, "query_only", true)
+            .map_err(|error| format!("set paged shard query-only: {error}"))?;
+        let metadata_started = std::time::Instant::now();
+        let meta = |key: &str| {
+            connection
+                .query_row("SELECT value FROM shard_meta WHERE key=?1", [key], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(|error| format!("read paged shard metadata {key}: {error}"))
+        };
+        let system_id = meta("system_id")?;
+        let generation = meta("generation")?
+            .parse::<u64>()
+            .map_err(|error| format!("parse paged shard generation: {error}"))?;
+        let count = meta("game_count")?
+            .parse::<usize>()
+            .map_err(|error| format!("parse paged shard count: {error}"))?;
+        if system_id != expected_system_id
+            || generation != expected_generation
+            || count != expected_count
+        {
+            return Err(format!(
+                "paged shard identity mismatch: expected {expected_system_id}/{expected_generation}/{expected_count}, found {system_id}/{generation}/{count}"
+            ));
+        }
+        let preview_archive_default = Arc::<str>::from(meta("preview_archive_path")?);
+        let metadata_us = elapsed_micros(metadata_started);
+        let rows = std::iter::repeat_with(OnceLock::new).take(count).collect();
+        let paged = Self {
+            connection: Mutex::new(connection),
+            system_id: Arc::from(system_id),
+            preview_archive_default,
+            count,
+            page_rows: Self::DEFAULT_PAGE_ROWS,
+            rows,
+            preview_ordinals: OnceLock::new(),
+        };
+        let first_page = if count > 0 {
+            paged.load_page(0)?
+        } else {
+            PagedSqlitePageTiming::default()
+        };
+        Ok((
+            paged,
+            PagedSqliteOpenTiming {
+                connection_open_us,
+                metadata_us,
+                query_prepare_us: first_page.query_prepare_us,
+                query_first_row_us: first_page.query_first_row_us,
+                first_page_us: first_page.total_us,
+                total_us: elapsed_micros(total_started),
+            },
+        ))
+    }
+
+    fn len(&self) -> usize {
+        self.count
+    }
+
+    fn get(&self, ordinal: usize) -> Option<&ArcadeGameEntry> {
+        let slot = self.rows.get(ordinal)?;
+        if slot.get().is_none() && self.load_page(ordinal / self.page_rows).is_err() {
+            return None;
+        }
+        slot.get().map(|row| &row.game)
+    }
+
+    fn metadata_at(&self, ordinal: usize) -> Option<&ArcadeGameMetadataKey> {
+        self.get(ordinal)?;
+        self.rows
+            .get(ordinal)
+            .and_then(OnceLock::get)
+            .map(|row| &row.metadata)
+    }
+
+    fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
+        if let Some(plan) = self.rows.iter().filter_map(OnceLock::get).find_map(|row| {
+            row.launch_plan
+                .as_ref()
+                .filter(|plan| plan.launch_ref.as_ref() == launch_ref)
+        }) {
+            return Some(plan);
+        }
+        let ordinal = self
+            .connection
+            .lock()
+            .ok()?
+            .query_row(
+                "SELECT ordinal FROM games WHERE launch_ref=?1 LIMIT 1",
+                [launch_ref],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()??;
+        let ordinal = usize::try_from(ordinal).ok()?;
+        self.get(ordinal)?;
+        self.rows
+            .get(ordinal)
+            .and_then(OnceLock::get)
+            .and_then(|row| row.launch_plan.as_ref())
+    }
+
+    fn preview_ordinals(&self) -> &[usize] {
+        self.preview_ordinals.get_or_init(|| {
+            let Ok(connection) = self.connection.lock() else {
+                return Vec::new();
+            };
+            let Ok(mut statement) = connection
+                .prepare("SELECT ordinal FROM games WHERE has_preview=1 ORDER BY ordinal")
+            else {
+                return Vec::new();
+            };
+            let Ok(rows) = statement.query_map([], |row| row.get::<_, i64>(0)) else {
+                return Vec::new();
+            };
+            rows.filter_map(Result::ok)
+                .filter_map(|ordinal| usize::try_from(ordinal).ok())
+                .collect()
+        })
+    }
+
+    fn load_page(&self, page: usize) -> Result<PagedSqlitePageTiming, String> {
+        let total_started = std::time::Instant::now();
+        let first = page.saturating_mul(self.page_rows);
+        if first >= self.count {
+            return Ok(PagedSqlitePageTiming::default());
+        }
+        let end = first.saturating_add(self.page_rows).min(self.count);
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "paged shard SQLite mutex was poisoned".to_string())?;
+        let prepare_started = std::time::Instant::now();
+        let mut statement = connection
+            .prepare(
+                "SELECT ordinal,title,launch_ref,preview_archive_path,preview_asset_key,
+                        has_preview,year,manufacturer,category,players,control,is_new,
+                        launch_plan_json
+                 FROM games WHERE ordinal>=?1 AND ordinal<?2 ORDER BY ordinal",
+            )
+            .map_err(|error| format!("prepare paged shard rows: {error}"))?;
+        let query_prepare_us = elapsed_micros(prepare_started);
+        let query_started = std::time::Instant::now();
+        let mut rows = statement
+            .query(params![
+                i64::try_from(first)
+                    .map_err(|_| "paged shard first ordinal exceeds SQLite integer")?,
+                i64::try_from(end).map_err(|_| "paged shard end ordinal exceeds SQLite integer")?,
+            ])
+            .map_err(|error| format!("query paged shard rows: {error}"))?;
+        let mut loaded = 0usize;
+        let mut query_first_row_us = 0;
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| format!("read paged shard row: {error}"))?
+        {
+            if loaded == 0 {
+                query_first_row_us = elapsed_micros(query_started);
+            }
+            let ordinal = usize::try_from(
+                row.get::<_, i64>(0)
+                    .map_err(|error| format!("read paged shard ordinal: {error}"))?,
+            )
+            .map_err(|_| "paged shard ordinal is negative or exceeds platform size")?;
+            if !(first..end).contains(&ordinal) {
+                return Err("paged shard returned an ordinal outside the requested page".into());
+            }
+            let title = Arc::<str>::from(
+                row.get::<_, String>(1)
+                    .map_err(|error| format!("read paged shard title: {error}"))?,
+            );
+            let launch_ref = Arc::<str>::from(
+                row.get::<_, String>(2)
+                    .map_err(|error| format!("read paged shard launch ref: {error}"))?,
+            );
+            let preview_archive_path = row
+                .get::<_, Option<String>>(3)
+                .map_err(|error| format!("read paged shard preview archive: {error}"))?
+                .map(Arc::<str>::from)
+                .unwrap_or_else(|| Arc::clone(&self.preview_archive_default));
+            let preview_asset_key = row
+                .get::<_, String>(4)
+                .map_err(|error| format!("read paged shard preview key: {error}"))?;
+            let preview_asset_key = if preview_asset_key == title.as_ref() {
+                Arc::clone(&title)
+            } else {
+                Arc::from(preview_asset_key)
+            };
+            let metadata = ArcadeGameMetadataKey {
+                year: row
+                    .get(6)
+                    .map_err(|error| format!("read paged shard year: {error}"))?,
+                manufacturer: row
+                    .get(7)
+                    .map_err(|error| format!("read paged shard manufacturer: {error}"))?,
+                category: row
+                    .get(8)
+                    .map_err(|error| format!("read paged shard category: {error}"))?,
+                players: row
+                    .get(9)
+                    .map_err(|error| format!("read paged shard players: {error}"))?,
+                control: row
+                    .get(10)
+                    .map_err(|error| format!("read paged shard control: {error}"))?,
+            };
+            let launch_plan = row
+                .get::<_, Option<String>>(12)
+                .map_err(|error| format!("read paged shard launch plan: {error}"))?
+                .map(|encoded| {
+                    serde_json::from_str::<crate::system_shard::SystemLaunchPlan>(&encoded)
+                })
+                .transpose()
+                .map_err(|error| format!("decode paged shard launch plan: {error}"))?
+                .map(|plan| StructuredLaunchPlan {
+                    launch_ref: if plan.launch_ref == launch_ref.as_ref() {
+                        Arc::clone(&launch_ref)
+                    } else {
+                        Arc::from(plan.launch_ref)
+                    },
+                    title: if plan.title == title.as_ref() {
+                        Arc::clone(&title)
+                    } else {
+                        Arc::from(plan.title)
+                    },
+                    system_id: if plan.system_id == self.system_id.as_ref() {
+                        Arc::clone(&self.system_id)
+                    } else {
+                        Arc::from(plan.system_id)
+                    },
+                    core_path: Arc::from(plan.core_path),
+                    payload_path: Arc::from(plan.payload_path),
+                    mount_kind: Arc::from(plan.mount_kind),
+                    mount_index: plan.mount_index,
+                    delay_secs: plan.delay_secs,
+                });
+            let paged_row = PagedSqliteRow {
+                game: ArcadeGameEntry {
+                    title,
+                    mra_path: launch_ref,
+                    preview_archive_path,
+                    preview_asset_key,
+                    has_preview: row
+                        .get(5)
+                        .map_err(|error| format!("read paged shard preview flag: {error}"))?,
+                    system_id: Arc::clone(&self.system_id),
+                    year: None,
+                    manufacturer: Arc::from(""),
+                    category: Arc::from(""),
+                    players: None,
+                    control: Arc::from(""),
+                    is_new: row
+                        .get(11)
+                        .map_err(|error| format!("read paged shard new flag: {error}"))?,
+                },
+                metadata,
+                launch_plan,
+            };
+            let _ = self.rows[ordinal].set(paged_row);
+            loaded += 1;
+        }
+        if loaded != end - first {
+            return Err(format!(
+                "paged shard page is incomplete: expected {}, found {loaded}",
+                end - first
+            ));
+        }
+        Ok(PagedSqlitePageTiming {
+            query_prepare_us,
+            query_first_row_us,
+            total_us: elapsed_micros(total_started),
+        })
+    }
+}
+
+fn elapsed_micros(started: std::time::Instant) -> u64 {
+    started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
 }
 
 impl SystemCollection {
@@ -227,13 +621,64 @@ impl SystemCollection {
         launch_plans.sort_unstable_by(|left, right| left.launch_ref.cmp(&right.launch_ref));
         Self {
             system_id,
-            games: Arc::new(games),
+            games: SystemCollectionRows::Owned(Arc::new(games)),
             cold_metadata: Arc::new(cold_metadata),
             platform_kinds,
             preview_games_by_system: Arc::new(preview_games_by_system),
             launch_plans: Arc::new(launch_plans),
             rich_indexes: Arc::new(OnceLock::new()),
         }
+    }
+
+    fn all_launch_plans(&self) -> Vec<StructuredLaunchPlan> {
+        match &self.games {
+            SystemCollectionRows::Owned(_) => self.launch_plans.as_ref().clone(),
+            SystemCollectionRows::Paged(games) => (0..games.len())
+                .filter_map(|ordinal| {
+                    games.get(ordinal)?;
+                    games
+                        .rows
+                        .get(ordinal)
+                        .and_then(OnceLock::get)
+                        .and_then(|row| row.launch_plan.clone())
+                })
+                .collect(),
+        }
+    }
+
+    /// Opens an immutable system collection backed by bounded SQLite row pages.
+    ///
+    /// Only the first page is fetched during construction. Any ordinal remains synchronously
+    /// addressable and faults its containing page on first use. This is an intentionally isolated
+    /// pilot path; immutable NavPack collections supersede it if the experiment succeeds.
+    pub fn open_paged_sqlite(
+        system_id: impl Into<Arc<str>>,
+        sqlite_path: &Path,
+        generation: u64,
+        game_count: usize,
+        platform_kind: PlatformKind,
+    ) -> Result<(Self, PagedSqliteOpenTiming), String> {
+        let system_id = system_id.into();
+        let (games, timing) =
+            PagedSqliteSystemRows::open(sqlite_path, &system_id, generation, game_count)?;
+        let games = Arc::new(games);
+        let platform_kinds = Arc::new(HashMap::from([(system_id.to_string(), platform_kind)]));
+        Ok((
+            Self {
+                system_id,
+                games: SystemCollectionRows::Paged(games),
+                cold_metadata: Arc::new(Vec::new()),
+                platform_kinds,
+                preview_games_by_system: Arc::new(HashMap::new()),
+                launch_plans: Arc::new(Vec::new()),
+                rich_indexes: Arc::new(OnceLock::new()),
+            },
+            timing,
+        ))
+    }
+
+    pub fn game_at(&self, ordinal: usize) -> Option<&ArcadeGameEntry> {
+        self.games.get(ordinal)
     }
 
     pub fn system_id(&self) -> &str {
@@ -256,6 +701,9 @@ impl SystemCollection {
     }
 
     fn preview_game_indexes(&self) -> &[usize] {
+        if let SystemCollectionRows::Paged(games) = &self.games {
+            return games.preview_ordinals();
+        }
         self.preview_games_by_system
             .get(self.system_id.as_ref())
             .map(Vec::as_slice)
@@ -289,29 +737,42 @@ impl SystemCollection {
     }
 
     fn metadata_at(&self, index: usize) -> Option<&ArcadeGameMetadataKey> {
-        self.cold_metadata.get(index)
+        match &self.games {
+            SystemCollectionRows::Owned(_) => self.cold_metadata.get(index),
+            SystemCollectionRows::Paged(games) => games.metadata_at(index),
+        }
+    }
+
+    fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
+        match &self.games {
+            SystemCollectionRows::Owned(_) => self
+                .launch_plans
+                .binary_search_by(|plan| plan.launch_ref.as_ref().cmp(launch_ref))
+                .ok()
+                .and_then(|index| self.launch_plans.get(index)),
+            SystemCollectionRows::Paged(games) => games.launch_plan_for_ref(launch_ref),
+        }
     }
 
     fn rich_indexes(&self) -> &ArcadeCatalogIndexes {
         self.rich_indexes.get_or_init(|| {
-            let games = self
-                .games
-                .iter()
-                .zip(self.cold_metadata.iter())
-                .map(|(hot, metadata)| {
+            let games = (0..self.games.len())
+                .filter_map(|ordinal| {
+                    let hot = self.games.get(ordinal)?;
+                    let metadata = self.metadata_at(ordinal)?;
                     let mut game = hot.clone();
                     game.year = metadata.year;
                     game.manufacturer = Arc::from(metadata.manufacturer.as_str());
                     game.category = Arc::from(metadata.category.as_str());
                     game.players = metadata.players;
                     game.control = Arc::from(metadata.control.as_str());
-                    game
+                    Some(game)
                 })
                 .collect::<Vec<_>>();
             build_arcade_catalog_indexes(
                 &games,
                 &self.platform_kinds,
-                self.launch_plans.as_ref().clone(),
+                self.all_launch_plans(),
                 CatalogIndexMode::Eager,
                 None,
             )
@@ -381,6 +842,11 @@ pub enum ArcadeGameView<'a> {
         games: &'a [ArcadeGameEntry],
         indexes: &'a [usize],
     },
+    Collection(&'a SystemCollection),
+    CollectionIndexed {
+        collection: &'a SystemCollection,
+        indexes: &'a [usize],
+    },
 }
 
 impl<'a> ArcadeGameView<'a> {
@@ -396,10 +862,23 @@ impl<'a> ArcadeGameView<'a> {
         Self::Indexed { games, indexes }
     }
 
+    fn collection(collection: &'a SystemCollection) -> Self {
+        Self::Collection(collection)
+    }
+
+    fn collection_indexed(collection: &'a SystemCollection, indexes: &'a [usize]) -> Self {
+        Self::CollectionIndexed {
+            collection,
+            indexes,
+        }
+    }
+
     pub fn len(self) -> usize {
         match self {
             Self::Contiguous(games) => games.len(),
             Self::Indexed { indexes, .. } => indexes.len(),
+            Self::Collection(collection) => collection.len(),
+            Self::CollectionIndexed { indexes, .. } => indexes.len(),
         }
     }
 
@@ -413,6 +892,13 @@ impl<'a> ArcadeGameView<'a> {
             Self::Indexed { games, indexes } => indexes
                 .get(index)
                 .and_then(|game_index| games.get(*game_index)),
+            Self::Collection(collection) => collection.games.get(index),
+            Self::CollectionIndexed {
+                collection,
+                indexes,
+            } => indexes
+                .get(index)
+                .and_then(|game_index| collection.games.get(*game_index)),
         }
     }
 
@@ -766,13 +1252,7 @@ impl ArcadeCatalog {
     ) -> Option<&StructuredLaunchPlan> {
         self.system_collections
             .values()
-            .find_map(|collection| {
-                collection
-                    .launch_plans
-                    .binary_search_by(|plan| plan.launch_ref.as_ref().cmp(launch_ref))
-                    .ok()
-                    .and_then(|index| collection.launch_plans.get(index))
-            })
+            .find_map(|collection| collection.launch_plan_for_ref(launch_ref))
             .or_else(|| self.launch_plans_by_ref.get(launch_ref))
     }
 
@@ -917,7 +1397,7 @@ impl ArcadeCatalog {
     pub fn system_game_view(&self, system_id: &str) -> ArcadeGameView<'_> {
         self.system_collection(system_id).map_or_else(
             || ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id)),
-            |collection| ArcadeGameView::contiguous(&collection.games),
+            ArcadeGameView::collection,
         )
     }
 
@@ -928,7 +1408,7 @@ impl ArcadeCatalog {
     ) -> ArcadeGameView<'a> {
         self.system_collection(system_id).map_or_else(
             || ArcadeGameView::indexed(&self.games, indexes),
-            |collection| ArcadeGameView::indexed(&collection.games, indexes),
+            |collection| ArcadeGameView::collection_indexed(collection, indexes),
         )
     }
 
@@ -1187,8 +1667,8 @@ impl ArcadeCatalog {
                     )
                 },
                 |collection| {
-                    ArcadeGameView::indexed(
-                        &collection.games,
+                    ArcadeGameView::collection_indexed(
+                        collection,
                         collection.filtered_game_indexes(filter),
                     )
                 },
@@ -2363,6 +2843,123 @@ pub fn system_title(id: &str) -> String {
 mod tests {
     use super::*;
 
+    fn paged_sqlite_fixture(rows: usize) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-paged-system-{}-{}.sqlite3",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE shard_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
+                 CREATE TABLE games(
+                    stable_key TEXT PRIMARY KEY,ordinal INTEGER NOT NULL UNIQUE,title TEXT NOT NULL,
+                    launch_ref TEXT NOT NULL,preview_archive_path TEXT,preview_asset_key TEXT NOT NULL,
+                    has_preview INTEGER NOT NULL,year INTEGER,manufacturer TEXT NOT NULL,
+                    category TEXT NOT NULL,players INTEGER,control TEXT NOT NULL,is_new INTEGER NOT NULL,
+                    launch_plan_json TEXT
+                 ) WITHOUT ROWID;",
+            )
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        for (key, value) in [
+            ("system_id", "c64".to_string()),
+            ("generation", "7".to_string()),
+            ("game_count", rows.to_string()),
+            ("preview_archive_path", "/preview/c64.zip".to_string()),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO shard_meta(key,value) VALUES(?1,?2)",
+                    params![key, value],
+                )
+                .unwrap();
+        }
+        let mut insert = transaction
+            .prepare("INSERT INTO games VALUES(?1,?2,?3,?4,NULL,?5,?6,?7,?8,?9,?10,?11,0,?12)")
+            .unwrap();
+        for ordinal in 0..rows {
+            let title = format!("Game {ordinal:03}");
+            let launch_ref = format!("magik-plan:c64:{ordinal}");
+            let launch_plan = serde_json::to_string(&crate::system_shard::SystemLaunchPlan {
+                launch_ref: launch_ref.clone(),
+                title: title.clone(),
+                system_id: "c64".into(),
+                core_path: "C64".into(),
+                payload_path: format!("/games/{ordinal}.d64"),
+                mount_kind: "mount-image".into(),
+                mount_index: 0,
+                delay_secs: 1,
+            })
+            .unwrap();
+            insert
+                .execute(params![
+                    format!("c64:{ordinal}"),
+                    ordinal as i64,
+                    title,
+                    launch_ref,
+                    format!("Game {ordinal:03}"),
+                    i64::from(ordinal % 3 == 0),
+                    (1980 + ordinal % 10) as i64,
+                    "Fixture",
+                    "Action",
+                    1,
+                    "Joystick",
+                    launch_plan,
+                ])
+                .unwrap();
+        }
+        drop(insert);
+        transaction.commit().unwrap();
+        drop(connection);
+        path
+    }
+
+    #[test]
+    fn paged_sqlite_collection_fetches_only_touched_pages_and_keeps_all_ordinals_addressable() {
+        let path = paged_sqlite_fixture(130);
+        let (collection, timing) =
+            SystemCollection::open_paged_sqlite("c64", &path, 7, 130, PlatformKind::Computer)
+                .unwrap();
+        let SystemCollectionRows::Paged(rows) = &collection.games else {
+            panic!("expected paged collection");
+        };
+        assert_eq!(
+            rows.rows.iter().filter(|row| row.get().is_some()).count(),
+            64
+        );
+        assert!(timing.query_first_row_us <= timing.first_page_us);
+        assert_eq!(collection.game_at(129).unwrap().title.as_ref(), "Game 129");
+        assert_eq!(
+            rows.rows.iter().filter(|row| row.get().is_some()).count(),
+            66
+        );
+        assert_eq!(collection.metadata_at(129).unwrap().year, Some(1989));
+        assert_eq!(
+            collection
+                .launch_plan_for_ref("magik-plan:c64:129")
+                .unwrap()
+                .payload_path
+                .as_ref(),
+            "/games/129.d64"
+        );
+        assert_eq!(collection.games.iter().count(), 130);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn paged_sqlite_collection_rejects_generation_mismatch() {
+        let path = paged_sqlite_fixture(1);
+        let error = SystemCollection::open_paged_sqlite("c64", &path, 8, 1, PlatformKind::Computer)
+            .unwrap_err();
+        assert!(error.contains("identity mismatch"));
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn replacing_one_system_keeps_other_rows_and_launch_plans() {
         let old_plan = StructuredLaunchPlan {
@@ -2494,7 +3091,7 @@ mod tests {
         ));
 
         assert!(collection.rich_indexes.get().is_none());
-        assert!(collection.games[0].manufacturer.is_empty());
+        assert!(collection.games.get(0).unwrap().manufacturer.is_empty());
         assert!(matches!(
             collection
                 .launch_plans

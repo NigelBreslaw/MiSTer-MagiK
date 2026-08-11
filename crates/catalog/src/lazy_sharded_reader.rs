@@ -23,11 +23,21 @@ pub struct LazyShardedCatalogReader {
     navigation_compatibility: NavigationCompatibility,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LazySystemGeneration {
+    pub generation: u64,
+    pub sqlite_path: PathBuf,
+    pub sqlite_hash: String,
+    pub games: usize,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct LazySystemOpenTiming {
     pub descriptor_lookup_us: u64,
     pub navigation: SystemNavigationOpenTiming,
     pub projection_us: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paged_sqlite: Option<crate::arcade_catalog::PagedSqliteOpenTiming>,
 }
 
 impl LazyShardedCatalogReader {
@@ -184,8 +194,40 @@ impl LazyShardedCatalogReader {
                 descriptor_lookup_us,
                 navigation,
                 projection_us: 0,
+                paged_sqlite: None,
             },
         ))
+    }
+
+    /// Returns immutable active/previous SQLite candidates without opening either artifact.
+    pub fn system_sqlite_candidates(
+        &self,
+        system_id: &SystemId,
+    ) -> Result<Vec<LazySystemGeneration>, CatalogError> {
+        let system = self
+            .manifest
+            .systems
+            .iter()
+            .find(|system| &system.system_id == system_id)
+            .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
+        [
+            &system.active,
+            system.previous.as_ref().unwrap_or(&system.active),
+        ]
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| *index == 0 || system.previous.is_some())
+        .map(|(_, generation)| {
+            Ok(LazySystemGeneration {
+                generation: generation.generation,
+                sqlite_path: self.storage_root.join(&generation.sqlite_path),
+                sqlite_hash: generation.sqlite_hash.clone(),
+                games: usize::try_from(generation.games).map_err(|_| {
+                    CatalogError::new("open-system", "system game count exceeds platform size")
+                })?,
+            })
+        })
+        .collect()
     }
 }
 
