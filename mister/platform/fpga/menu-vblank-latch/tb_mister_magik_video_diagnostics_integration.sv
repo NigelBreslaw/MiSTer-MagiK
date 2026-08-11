@@ -17,7 +17,7 @@ module tb_mister_magik_video_diagnostics_integration;
 	reg [239:0] frozen_avalon_payload, frozen_output_payload;
 	wire snapshot_request, monitor_armed, route_context;
 	wire [15:0] generation, expected_route_epoch, expected_active_seq, expected_route_flags;
-	wire [31:0] expected_base, expected_end;
+	wire [31:0] expected_base;
 	wire avalon_fault, avalon_ack, output_heartbeat, output_fault, output_ack;
 	wire [7:0] avalon_trigger, output_trigger;
 	wire [239:0] avalon_payload, output_payload;
@@ -48,7 +48,7 @@ module tb_mister_magik_video_diagnostics_integration;
 		.output_snapshot_payload_async(output_payload),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(monitor_armed),
 		.diagnostic_generation(generation), .route_context_toggle(route_context),
-		.expected_base(expected_base), .expected_slot_end(expected_end),
+		.expected_base(expected_base),
 		.expected_route_epoch(expected_route_epoch),
 		.expected_active_seq(expected_active_seq),
 		.expected_route_flags(expected_route_flags), .response_valid(), .response_data()
@@ -59,7 +59,6 @@ module tb_mister_magik_video_diagnostics_integration;
 		.snapshot_request_toggle_async(snapshot_request),
 		.diagnostic_generation_async(generation),
 		.route_context_toggle_async(route_context), .expected_base_async(expected_base),
-		.expected_slot_end_async(expected_end),
 		.expected_route_epoch_async(expected_route_epoch),
 		.expected_route_flags_async(expected_route_flags), .frame_marker_async(hdmi_vbl),
 		.reset_out_async(1'b0), .vbuf_address(expected_base[31:4]),

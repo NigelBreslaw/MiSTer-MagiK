@@ -5,6 +5,7 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_output;
+`include "mister_magik_video_diagnostics_protocol.svh"
 	reg clk = 1'b0;
 	always #4 clk = ~clk;
 	reg armed = 1'b0, request = 1'b0, route_toggle = 1'b0;
@@ -107,7 +108,8 @@ module tb_mister_magik_video_diagnostics_output;
 		request = ~request;
 		repeat(5) @(negedge clk);
 		if(ack != request) $fatal(1, "output snapshot did not acknowledge");
-		if(word_at(0) != 16'd2 || word_at(2) != 16'd10 || word_at(3) != generation)
+		if(word_at(0) != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA ||
+		   word_at(2) != 16'd10 || word_at(3) != generation)
 			$fatal(1, "output snapshot identity mismatch");
 		if(word_at(4) != route_epoch || word_at(5) != active_seq)
 			$fatal(1, "output route context mismatch");

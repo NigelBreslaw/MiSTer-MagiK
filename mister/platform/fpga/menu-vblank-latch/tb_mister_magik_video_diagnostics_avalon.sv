@@ -5,6 +5,7 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_avalon;
+`include "mister_magik_video_diagnostics_protocol.svh"
 	reg clk_100m = 1'b0;
 	always #5 clk_100m = ~clk_100m;
 
@@ -14,7 +15,6 @@ module tb_mister_magik_video_diagnostics_avalon;
 	reg [15:0] generation = 16'd7;
 	reg route_context = 1'b0;
 	reg [31:0] expected_base = 32'h227e9000;
-	reg [31:0] expected_end = 32'h229ea000;
 	reg [15:0] route_epoch = 16'd11;
 	reg [15:0] route_flags = 16'h0005;
 	reg frame_marker = 1'b0;
@@ -38,7 +38,7 @@ module tb_mister_magik_video_diagnostics_avalon;
 		.snapshot_request_toggle_async(snapshot_request),
 		.diagnostic_generation_async(generation),
 		.route_context_toggle_async(route_context), .expected_base_async(expected_base),
-		.expected_slot_end_async(expected_end), .expected_route_epoch_async(route_epoch),
+		.expected_route_epoch_async(route_epoch),
 		.expected_route_flags_async(route_flags), .frame_marker_async(frame_marker),
 		.reset_out_async(reset_out), .vbuf_address(address),
 		.vbuf_burstcount(burstcount), .vbuf_waitrequest(waitrequest),
@@ -53,7 +53,7 @@ module tb_mister_magik_video_diagnostics_avalon;
 		.snapshot_request_toggle_async(1'b0),
 		.diagnostic_generation_async(generation),
 		.route_context_toggle_async(route_context), .expected_base_async(expected_base),
-		.expected_slot_end_async(expected_end), .expected_route_epoch_async(route_epoch),
+		.expected_route_epoch_async(route_epoch),
 		.expected_route_flags_async(route_flags), .frame_marker_async(frame_marker),
 		.reset_out_async(reset_out), .vbuf_address(address),
 		.vbuf_burstcount(burstcount), .vbuf_waitrequest(waitrequest),
@@ -98,7 +98,6 @@ module tb_mister_magik_video_diagnostics_avalon;
 		// be used to reject the new route while its observer mailbox settles.
 		@(negedge clk_100m);
 		expected_base = 32'h22fd2000;
-		expected_end = 32'h231d3000;
 		route_epoch = route_epoch + 1'd1;
 		route_context = ~route_context;
 		address = 28'h22fd200;
@@ -148,7 +147,8 @@ module tb_mister_magik_video_diagnostics_avalon;
 		snapshot_request = ~snapshot_request;
 		repeat(5) @(negedge clk_100m);
 		if(snapshot_ack != snapshot_request) $fatal(1, "snapshot mailbox did not acknowledge");
-		if(word_at(0) != 16'd2 || word_at(2) != 16'd6 || word_at(3) != generation)
+		if(word_at(0) != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA ||
+		   word_at(2) != 16'd6 || word_at(3) != generation)
 			$fatal(1, "snapshot identity mismatch schema=%h trigger=%h generation=%h expected=%h",
 				word_at(0), word_at(2), word_at(3), generation);
 		if(word_at(4) != route_epoch || word_at(5) != route_flags)

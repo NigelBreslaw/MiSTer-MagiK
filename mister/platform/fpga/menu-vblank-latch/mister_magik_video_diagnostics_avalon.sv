@@ -11,7 +11,6 @@ module mister_magik_video_diagnostics_avalon (
 	input  wire [15:0]  diagnostic_generation_async,
 	input  wire         route_context_toggle_async,
 	input  wire [31:0]  expected_base_async,
-	input  wire [31:0]  expected_slot_end_async,
 	input  wire [15:0]  expected_route_epoch_async,
 	input  wire [15:0]  expected_route_flags_async,
 	input  wire         frame_marker_async,
@@ -46,7 +45,8 @@ module mister_magik_video_diagnostics_avalon (
 	reg route_capture_pending = 1'b0, fault_notify_pending = 1'b0;
 	reg [15:0] snapshot_generation = 16'd0;
 
-	reg [31:0] expected_base = 32'd0, expected_slot_end = 32'd0;
+	reg [31:0] expected_base = 32'd0;
+	wire [31:0] expected_slot_end = expected_base + 32'h00201000;
 	reg [15:0] route_epoch = 16'd0;
 	reg [4:0] route_flags = 5'd0;
 	reg [15:0] accepted_bursts = 16'd0, returned_beats = 16'd0;
@@ -62,8 +62,8 @@ module mister_magik_video_diagnostics_avalon (
 	reg [9:0] observed_flags_now;
 	wire route_context_changing =
 		(route_sync != route_seen) || route_capture_pending ||
-		({expected_base, expected_slot_end, route_epoch, route_flags} !=
-		 {expected_base_async, expected_slot_end_async,
+		({expected_base, route_epoch, route_flags} !=
+		 {expected_base_async,
 		  expected_route_epoch_async, expected_route_flags_async[4:0]});
 
 	wire [15:0] snapshot_state_word =
@@ -120,25 +120,23 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(!frozen && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
-		    ({expected_base, expected_slot_end, route_epoch, route_flags} !=
-		     {expected_base_async, expected_slot_end_async,
+		    ({expected_base, route_epoch, route_flags} !=
+		     {expected_base_async,
 		      expected_route_epoch_async, expected_route_flags_async[4:0]})))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
 			expected_base <= expected_base_async;
-			expected_slot_end <= expected_slot_end_async;
 			route_epoch <= expected_route_epoch_async;
 			route_flags <= expected_route_flags_async[4:0];
 			route_capture_pending <= 1'b1;
 		end
 		else if(!frozen && route_capture_pending) begin
-			if({expected_base, expected_slot_end, route_epoch, route_flags} ==
-			   {expected_base_async, expected_slot_end_async,
+			if({expected_base, route_epoch, route_flags} ==
+			   {expected_base_async,
 				expected_route_epoch_async, expected_route_flags_async[4:0]})
 				route_capture_pending <= 1'b0;
 			else begin
 				expected_base <= expected_base_async;
-				expected_slot_end <= expected_slot_end_async;
 				route_epoch <= expected_route_epoch_async;
 				route_flags <= expected_route_flags_async[4:0];
 			end

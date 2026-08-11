@@ -36,7 +36,7 @@ module tb_mister_magik_video_diagnostics_timeout;
 		.output_snapshot_ack_async(1'b0), .output_snapshot_payload_async(240'd0),
 		.snapshot_request_toggle(request), .monitor_armed(armed),
 		.diagnostic_generation(), .route_context_toggle(), .expected_base(),
-		.expected_slot_end(), .expected_route_epoch(), .expected_active_seq(),
+		.expected_route_epoch(), .expected_active_seq(),
 		.expected_route_flags(), .response_valid(response_valid),
 		.response_data(response_data)
 	);

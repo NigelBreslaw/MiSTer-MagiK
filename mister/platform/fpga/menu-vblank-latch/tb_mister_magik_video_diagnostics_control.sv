@@ -5,6 +5,7 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_control;
+`include "mister_magik_video_diagnostics_protocol.svh"
 	reg clk_sys = 1'b0;
 	always #5 clk_sys = ~clk_sys;
 
@@ -56,7 +57,7 @@ module tb_mister_magik_video_diagnostics_control;
 	wire response_valid;
 	wire [15:0] response_data;
 	wire route_context_toggle;
-	wire [31:0] expected_base, expected_slot_end;
+	wire [31:0] expected_base;
 	wire [15:0] expected_route_epoch, expected_active_seq, expected_route_flags;
 
 	mister_magik_video_diagnostics_control dut (
@@ -84,7 +85,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(monitor_armed),
 		.diagnostic_generation(diagnostic_generation),
 		.route_context_toggle(route_context_toggle), .expected_base(expected_base),
-		.expected_slot_end(expected_slot_end), .expected_route_epoch(expected_route_epoch),
+		.expected_route_epoch(expected_route_epoch),
 		.expected_active_seq(expected_active_seq), .expected_route_flags(expected_route_flags),
 		.response_valid(response_valid), .response_data(response_data)
 	);
@@ -131,7 +132,7 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	integer index;
-	reg [15:0] words [0:47];
+	reg [15:0] words [0:40];
 	reg [15:0] crc;
 	task automatic read_native_snapshot;
 		input [7:0] selected_command;
@@ -145,7 +146,7 @@ module tb_mister_magik_video_diagnostics_control;
 			@(negedge clk_sys); io_strobe = 1'b0;
 			crc = 16'hffff;
 			crc = crc_word(crc, {8'd0, selected_command});
-			crc = crc_word(crc, 16'd2);
+			crc = crc_word(crc, MAGIK_VIDEO_DIAGNOSTICS_SCHEMA);
 			crc = crc_word(crc, 16'd15);
 			for(index=0; index<16; index=index+1) begin
 				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
@@ -161,15 +162,16 @@ module tb_mister_magik_video_diagnostics_control;
 			if(words[15] != crc)
 				$fatal(1, "native CRC mismatch command=%h expected=%h got=%h",
 					selected_command, crc, words[15]);
-			if(words[0] != 16'd2 || words[4] != expected_word_four)
+			if(words[0] != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA ||
+			   words[4] != expected_word_four)
 				$fatal(1, "native payload mismatch command=%h", selected_command);
 		end
 	endtask
 
 	initial begin
-		avalon_payload[0 +: 16] = 16'd2;
+		avalon_payload[0 +: 16] = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
 		avalon_payload[4*16 +: 16] = 16'h1111;
-		output_payload[0 +: 16] = 16'd2;
+		output_payload[0 +: 16] = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
 		repeat(4) @(negedge clk_sys);
 
 		// The independent responder must ignore every existing latch opcode.
@@ -210,23 +212,27 @@ module tb_mister_magik_video_diagnostics_control;
 		@(negedge clk_sys); io_strobe = 1'b0;
 		crc = 16'hffff;
 		crc = crc_word(crc,16'h005d);
-		crc = crc_word(crc,16'd2);
-		crc = crc_word(crc,16'd47);
-		for(index=0; index<48; index=index+1) begin
+		crc = crc_word(crc,MAGIK_VIDEO_DIAGNOSTICS_SCHEMA);
+		crc = crc_word(crc,MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1'd1);
+		for(index=0; index<MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS; index=index+1) begin
 			@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
 			#1;
 			if(!response_valid) $fatal(1, "response ended at word %0d", index);
 			words[index] = response_data;
-			if(index < 47) crc = crc_word(crc,response_data);
+			if(index < (MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1))
+				crc = crc_word(crc,response_data);
 			@(negedge clk_sys); io_strobe = 1'b0;
 		end
 		close_command();
-		if(words[47] != crc) $fatal(1, "control CRC mismatch expected=%h got=%h", crc, words[47]);
-		if(words[0] != 2 || words[2] != 1 || words[10] != 2 ||
-		   words[12] != 1 || words[13] != 1 || words[14] != 16'h03ff)
+		if(words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1] != crc)
+			$fatal(1, "control CRC mismatch expected=%h got=%h", crc,
+				words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1]);
+		if(words[0] != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA || words[2] != 1 ||
+		   words[7] != 16'h0201 || words[8] != 16'h0101 ||
+		   words[9] != 16'h13ff)
 			$fatal(1, "control identity/trigger/mask mismatch");
 		for(index=0; index<10; index=index+1)
-			if(words[20+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
+			if(words[14+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
 		read_native_snapshot(8'h5e, 16'h4d4e, 16'h1111);
 		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 		$display("video diagnostics control tests passed");

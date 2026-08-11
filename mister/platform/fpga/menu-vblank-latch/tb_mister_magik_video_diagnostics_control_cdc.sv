@@ -36,7 +36,7 @@ module video_diagnostics_control_cdc_case #(
 		.output_snapshot_payload_async(240'd0),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(),
 		.diagnostic_generation(), .route_context_toggle(), .expected_base(),
-		.expected_slot_end(), .expected_route_epoch(), .expected_active_seq(),
+		.expected_route_epoch(), .expected_active_seq(),
 		.expected_route_flags(), .response_valid(), .response_data()
 	);
 

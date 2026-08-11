@@ -1,5 +1,5 @@
 {
-  "schema": 2,
+  "schema": 3,
   "commands": {
     "control": 93,
     "avalon": 94,
@@ -11,7 +11,7 @@
     "output": 19791
   },
   "word_counts": {
-    "control": 48,
+    "control": 41,
     "avalon": 16,
     "output": 16
   },
@@ -115,18 +115,37 @@
   },
   "control_words": [
     "schema", "state_flags", "trigger", "missing_domains", "generation",
-    "boot_epoch", "freeze_clock_low", "freeze_clock_high", "vblank_low",
-    "vblank_high", "legacy_total", "legacy_owned", "legacy_partial",
-    "legacy_abort", "legacy_word_mask", "legacy_disposition", "route_flags",
-    "active_sequence", "active_transaction", "route_epoch", "legacy_word_0",
+    "boot_epoch", "vblank", "legacy_total_owned", "legacy_partial_abort",
+    "legacy_mask_disposition", "route_control_flags", "active_sequence",
+    "active_transaction", "route_epoch", "legacy_word_0",
     "legacy_word_1", "legacy_word_2", "legacy_word_3", "legacy_word_4",
     "legacy_word_5", "legacy_word_6", "legacy_word_7", "legacy_word_8",
     "legacy_word_9", "pre_route_flags", "pre_base_low", "pre_base_high",
     "pre_width", "pre_height", "pre_hmin", "pre_hmax", "pre_vmin",
     "pre_vmax", "pre_stride", "post_base_low", "post_base_high",
     "post_route_flags", "post_width", "post_height", "post_stride",
-    "control_fault_flags", "crc"
+    "crc"
   ],
+  "control_packed_fields": {
+    "legacy_total_owned": {
+      "legacy_total": [15, 8],
+      "legacy_owned": [7, 0]
+    },
+    "legacy_partial_abort": {
+      "legacy_partial": [15, 8],
+      "legacy_abort": [7, 0]
+    },
+    "legacy_mask_disposition": {
+      "legacy_disposition": [15, 12],
+      "reserved_zero": [11, 10],
+      "legacy_word_mask": [9, 0]
+    },
+    "route_control_flags": {
+      "control_fault_flags": [15, 8],
+      "reserved_zero": [7, 5],
+      "route_flags": [4, 0]
+    }
+  },
   "avalon_words": [
     "schema", "state_flags", "trigger", "generation", "route_epoch",
     "route_flags", "expected_base_low", "expected_base_high",

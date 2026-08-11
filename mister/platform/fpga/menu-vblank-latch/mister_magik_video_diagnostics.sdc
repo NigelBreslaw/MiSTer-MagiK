@@ -86,14 +86,12 @@ set magik_diag_output_coherence_pins [magik_require_data_pins output_payload_coh
 
 set magik_diag_control_context [magik_require_registers control_context [list \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|expected_base*} \
-	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|expected_slot_end*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|expected_route_epoch*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|expected_active_seq*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|expected_route_flags*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|generation*}]]
 set magik_diag_avalon_context [magik_require_registers avalon_context [list \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|expected_base*} \
-	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|expected_slot_end*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|route_epoch*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|route_flags*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|snapshot_generation*}]]

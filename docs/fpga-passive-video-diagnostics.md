@@ -29,10 +29,13 @@ The diagnostic ABI is separate from latch protocol v5. Existing commands
 unchanged. Every diagnostic response has its own magic, fixed length, schema,
 and CRC-16/CCITT-FALSE value.
 
-Schema 2 keeps the complete 48-word control history and uses compact 16-word
-Avalon and HDMI event records. The native records retain the first/last actual
-address, accepted/returned accounting, route generation, reference timing,
-and fault flags without carrying generic trace history or pixel-rate counters.
+Schema 3 keeps the complete legacy payload and route geometry in a compact
+41-word control history, with compact 16-word Avalon and HDMI event records.
+The control record uses a 16-bit vblank epoch and saturating 8-bit lifetime
+event counters; host monotonic timestamps retain the wider collection timeline.
+The native records retain the first/last actual address, accepted/returned
+accounting, route generation, reference timing, and fault flags without
+carrying generic trace history or pixel-rate counters.
 
 ## Collection
 
@@ -64,7 +67,7 @@ health, or SDRAM data correctness.
 ## Release gates
 
 The FPGA fast gate checks the separate generated contract, all native-domain
-fault-injection simulations, the complete 48-word control response, final response
+fault-injection simulations, the complete 41-word control response, final response
 priority, immutable latch hashes, exact pinned Menu integration, passive cone
 boundaries, and explicit synchronizer identification. Native diagnostic records
 are held immutable before acknowledgement, their generation is sampled twice

@@ -135,17 +135,16 @@ pub fn decode_control(words: &[u16]) -> Result<VideoDiagnosticsControlSnapshot, 
         ],
         words,
     )?;
+    let route_control_flags = words[VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS];
+    let legacy_mask_disposition = words[VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION];
     if words[VIDEO_DIAGNOSTICS_CONTROL_MISSING_DOMAINS] & !0x0006 != 0
-        || words[VIDEO_DIAGNOSTICS_CONTROL_ROUTE_FLAGS] & !VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK != 0
+        || route_control_flags & 0x00e0 != 0
         || words[VIDEO_DIAGNOSTICS_CONTROL_PRE_ROUTE_FLAGS] & !VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK
             != 0
         || words[VIDEO_DIAGNOSTICS_CONTROL_POST_ROUTE_FLAGS] & !VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK
             != 0
-        || words[VIDEO_DIAGNOSTICS_CONTROL_CONTROL_FAULT_FLAGS]
-            & !VIDEO_DIAGNOSTICS_CONTROL_FAULT_FLAGS_MASK
-            != 0
-        || words[VIDEO_DIAGNOSTICS_CONTROL_LEGACY_DISPOSITION]
-            > VIDEO_DIAGNOSTICS_DISPOSITION_OVERLONG
+        || legacy_mask_disposition & 0x0c00 != 0
+        || (legacy_mask_disposition >> 12) > VIDEO_DIAGNOSTICS_DISPOSITION_OVERLONG
     {
         return Err("control video diagnostics contains reserved bits".to_string());
     }
@@ -220,7 +219,10 @@ mod tests {
         let control = zero_words::<VIDEO_DIAGNOSTICS_CONTROL_WORDS>(GET_VIDEO_DIAGNOSTICS_CONTROL);
         let avalon = zero_words::<VIDEO_DIAGNOSTICS_AVALON_WORDS>(GET_VIDEO_DIAGNOSTICS_AVALON);
         let output = zero_words::<VIDEO_DIAGNOSTICS_OUTPUT_WORDS>(GET_VIDEO_DIAGNOSTICS_OUTPUT);
-        assert_eq!(control[47], VIDEO_DIAGNOSTICS_CONTROL_ZERO_GOLDEN_CRC);
+        assert_eq!(
+            control[VIDEO_DIAGNOSTICS_CONTROL_CRC],
+            VIDEO_DIAGNOSTICS_CONTROL_ZERO_GOLDEN_CRC
+        );
         assert_eq!(avalon[15], VIDEO_DIAGNOSTICS_AVALON_ZERO_GOLDEN_CRC);
         assert_eq!(output[15], VIDEO_DIAGNOSTICS_OUTPUT_ZERO_GOLDEN_CRC);
         assert_eq!(
@@ -264,5 +266,25 @@ mod tests {
             &reserved[..VIDEO_DIAGNOSTICS_OUTPUT_CRC],
         );
         assert!(decode_output(&reserved).is_err());
+    }
+
+    #[test]
+    fn compact_control_fields_reject_reserved_bits() {
+        let mut words =
+            zero_words::<VIDEO_DIAGNOSTICS_CONTROL_WORDS>(GET_VIDEO_DIAGNOSTICS_CONTROL);
+        words[VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS] = 0x0020;
+        words[VIDEO_DIAGNOSTICS_CONTROL_CRC] = message_crc(
+            GET_VIDEO_DIAGNOSTICS_CONTROL,
+            &words[..VIDEO_DIAGNOSTICS_CONTROL_CRC],
+        );
+        assert!(decode_control(&words).is_err());
+
+        words[VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS] = 0;
+        words[VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION] = 0x6000;
+        words[VIDEO_DIAGNOSTICS_CONTROL_CRC] = message_crc(
+            GET_VIDEO_DIAGNOSTICS_CONTROL,
+            &words[..VIDEO_DIAGNOSTICS_CONTROL_CRC],
+        );
+        assert!(decode_control(&words).is_err());
     }
 }

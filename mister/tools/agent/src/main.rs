@@ -3203,10 +3203,18 @@ mod linux {
                     "generation": self.control_after.generation,
                     "route_epoch": control_route_epoch,
                     "state_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_STATE_FLAGS],
-                    "route_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_ROUTE_FLAGS],
-                    "control_fault_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_CONTROL_FAULT_FLAGS],
-                    "legacy_disposition": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_DISPOSITION],
-                    "legacy_word_mask": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_WORD_MASK],
+                    "route_flags": self.control_after.words
+                        [contract::VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS]
+                        & contract::VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK,
+                    "control_fault_flags": self.control_after.words
+                        [contract::VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS]
+                        >> 8,
+                    "legacy_disposition": self.control_after.words
+                        [contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION]
+                        >> 12,
+                    "legacy_word_mask": self.control_after.words
+                        [contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION]
+                        & 0x03ff,
                     "raw_words": self.control_after.words,
                 },
                 "avalon": {

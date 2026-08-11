@@ -67,7 +67,6 @@ module mister_magik_video_diagnostics_control #(
 	output wire [15:0]  diagnostic_generation,
 	output reg          route_context_toggle = 1'b0,
 	output reg  [31:0]  expected_base = 32'd0,
-	output reg  [31:0]  expected_slot_end = 32'd0,
 	output reg  [15:0]  expected_route_epoch = 16'd0,
 	output reg  [15:0]  expected_active_seq = 16'd0,
 	output reg  [15:0]  expected_route_flags = 16'd0,
@@ -78,7 +77,6 @@ module mister_magik_video_diagnostics_control #(
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	localparam [31:0] MAGIK_SCANOUT_SLOT_CAPACITY = 32'd2101248;
 	reg [7:0] command = 8'd0;
 	reg       has_command = 1'b0;
 	reg [7:0] word_count = 8'd0;
@@ -103,9 +101,7 @@ module mister_magik_video_diagnostics_control #(
 	reg [7:0] trigger = MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE;
 	reg [2:0] missing_domains = 3'b000;
 	reg [15:0] generation = 16'd0;
-	reg [31:0] clock_count = 32'd0;
-	reg [31:0] freeze_clock = 32'd0;
-	reg [31:0] vblank_count = 32'd0;
+	reg [15:0] vblank_count = 16'd0;
 	reg [1:0] settle_vblanks = 2'd0;
 	reg ownership = 1'b0;
 	assign monitor_armed = state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED;
@@ -141,10 +137,10 @@ module mister_magik_video_diagnostics_control #(
 	reg legacy_owned_at_start = 1'b0;
 	reg [9:0] legacy_mask = 10'd0;
 	reg [15:0] legacy_words [0:9];
-	reg [15:0] legacy_total = 16'd0;
-	reg [15:0] legacy_owned = 16'd0;
-	reg [15:0] legacy_partial = 16'd0;
-	reg [15:0] legacy_abort = 16'd0;
+	reg [7:0] legacy_total = 8'd0;
+	reg [7:0] legacy_owned = 8'd0;
+	reg [7:0] legacy_partial = 8'd0;
+	reg [7:0] legacy_abort = 8'd0;
 	reg [3:0] legacy_disposition = MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_NONE;
 
 	reg [31:0] pre_base = 32'd0, post_base = 32'd0;
@@ -158,7 +154,7 @@ module mister_magik_video_diagnostics_control #(
 	reg [1:0] route_mismatch_vblanks = 2'd0;
 	reg [11:0] freeze_timeout = 12'd0;
 	reg freeze_pending = 1'b0;
-	reg [31:0] frozen_vblank_count = 32'd0;
+	reg [15:0] frozen_vblank_count = 16'd0;
 	reg [15:0] frozen_active_seq = 16'd0, frozen_post_count = 16'd0;
 	reg [15:0] frozen_active_route_epoch = 16'd0;
 	reg [4:0] frozen_route_state_flags = 5'd0;
@@ -242,47 +238,41 @@ module mister_magik_video_diagnostics_control #(
 					3: current_snapshot_word = {13'd0, missing_domains};
 					4: current_snapshot_word = generation;
 					5: current_snapshot_word = 16'd1;
-					6: current_snapshot_word = freeze_clock[15:0];
-					7: current_snapshot_word = freeze_clock[31:16];
-					8: current_snapshot_word = frozen_vblank_count[15:0];
-					9: current_snapshot_word = frozen_vblank_count[31:16];
-					10: current_snapshot_word = legacy_total;
-					11: current_snapshot_word = legacy_owned;
-					12: current_snapshot_word = legacy_partial;
-					13: current_snapshot_word = legacy_abort;
-					14: current_snapshot_word = {6'd0, legacy_mask};
-					15: current_snapshot_word = {12'd0, legacy_disposition};
-					16: current_snapshot_word = {11'd0, frozen_route_state_flags};
-					17: current_snapshot_word = frozen_active_seq;
-					18: current_snapshot_word = frozen_post_count;
-					19: current_snapshot_word = frozen_active_route_epoch;
-					20: current_snapshot_word = legacy_words[0];
-					21: current_snapshot_word = legacy_words[1];
-					22: current_snapshot_word = legacy_words[2];
-					23: current_snapshot_word = legacy_words[3];
-					24: current_snapshot_word = legacy_words[4];
-					25: current_snapshot_word = legacy_words[5];
-					26: current_snapshot_word = legacy_words[6];
-					27: current_snapshot_word = legacy_words[7];
-					28: current_snapshot_word = legacy_words[8];
-					29: current_snapshot_word = legacy_words[9];
-					30: current_snapshot_word = {11'd0, pre_route_flags};
-					31: current_snapshot_word = pre_base[15:0];
-					32: current_snapshot_word = pre_base[31:16];
-					33: current_snapshot_word = pre_width;
-					34: current_snapshot_word = pre_height;
-					35: current_snapshot_word = pre_hmin;
-					36: current_snapshot_word = pre_hmax;
-					37: current_snapshot_word = pre_vmin;
-					38: current_snapshot_word = pre_vmax;
-					39: current_snapshot_word = {2'd0, pre_stride};
-					40: current_snapshot_word = post_base[15:0];
-					41: current_snapshot_word = post_base[31:16];
-					42: current_snapshot_word = {11'd0, post_route_flags};
-					43: current_snapshot_word = post_width;
-					44: current_snapshot_word = post_height;
-					45: current_snapshot_word = {2'd0, post_stride};
-					46: current_snapshot_word = {8'd0, control_fault_flags};
+					6: current_snapshot_word = frozen_vblank_count;
+					7: current_snapshot_word = {legacy_total, legacy_owned};
+					8: current_snapshot_word = {legacy_partial, legacy_abort};
+					9: current_snapshot_word = {legacy_disposition, 2'd0, legacy_mask};
+					10: current_snapshot_word = {control_fault_flags, 3'd0,
+						frozen_route_state_flags};
+					11: current_snapshot_word = frozen_active_seq;
+					12: current_snapshot_word = frozen_post_count;
+					13: current_snapshot_word = frozen_active_route_epoch;
+					14: current_snapshot_word = legacy_words[0];
+					15: current_snapshot_word = legacy_words[1];
+					16: current_snapshot_word = legacy_words[2];
+					17: current_snapshot_word = legacy_words[3];
+					18: current_snapshot_word = legacy_words[4];
+					19: current_snapshot_word = legacy_words[5];
+					20: current_snapshot_word = legacy_words[6];
+					21: current_snapshot_word = legacy_words[7];
+					22: current_snapshot_word = legacy_words[8];
+					23: current_snapshot_word = legacy_words[9];
+					24: current_snapshot_word = {11'd0, pre_route_flags};
+					25: current_snapshot_word = pre_base[15:0];
+					26: current_snapshot_word = pre_base[31:16];
+					27: current_snapshot_word = pre_width;
+					28: current_snapshot_word = pre_height;
+					29: current_snapshot_word = pre_hmin;
+					30: current_snapshot_word = pre_hmax;
+					31: current_snapshot_word = pre_vmin;
+					32: current_snapshot_word = pre_vmax;
+					33: current_snapshot_word = {2'd0, pre_stride};
+					34: current_snapshot_word = post_base[15:0];
+					35: current_snapshot_word = post_base[31:16];
+					36: current_snapshot_word = {11'd0, post_route_flags};
+					37: current_snapshot_word = post_width;
+					38: current_snapshot_word = post_height;
+					39: current_snapshot_word = {2'd0, post_stride};
 					default: current_snapshot_word = 16'd0;
 				endcase
 			end
@@ -366,7 +356,6 @@ module mister_magik_video_diagnostics_control #(
 		freeze_request_now = 1'b0;
 		freeze_request_trigger = MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE;
 		freeze_request_flags = 8'd0;
-		clock_count <= clock_count + 1'd1;
 		vbl_d <= control_vbl_sys;
 		avalon_fault_meta <= avalon_fault_toggle_async;
 		avalon_fault_sys <= avalon_fault_meta;
@@ -419,7 +408,6 @@ module mister_magik_video_diagnostics_control #(
 			ownership <= 1'b1;
 			settle_vblanks <= 2'd0;
 			expected_base <= route_base;
-			expected_slot_end <= route_base + MAGIK_SCANOUT_SLOT_CAPACITY;
 			expected_route_epoch <= active_route_epoch + 1'd1;
 			expected_active_seq <= pending_seq;
 			expected_route_flags <= {11'd0, route_flt, 1'b1, route_en, 1'b0, 1'b1};
@@ -486,7 +474,7 @@ module mister_magik_video_diagnostics_control #(
 			word_count <= 8'd0;
 			if(legacy_open) begin
 				legacy_open <= 1'b0;
-				legacy_total <= legacy_total + 1'd1;
+				if(legacy_total != 8'hff) legacy_total <= legacy_total + 1'd1;
 				post_base <= lfb_base;
 				post_route_flags <= {lfb_flt, 1'b0, lfb_en, pending, ownership};
 				post_width <= lfb_width;
@@ -496,11 +484,11 @@ module mister_magik_video_diagnostics_control #(
 					legacy_disposition <= MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_COMPLETE;
 				else begin
 					legacy_disposition <= MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_PARTIAL;
-					legacy_partial <= legacy_partial + 1'd1;
-					legacy_abort <= legacy_abort + 1'd1;
+					if(legacy_partial != 8'hff) legacy_partial <= legacy_partial + 1'd1;
+					if(legacy_abort != 8'hff) legacy_abort <= legacy_abort + 1'd1;
 				end
 				if(legacy_owned_at_start) begin
-					legacy_owned <= legacy_owned + 1'd1;
+					if(legacy_owned != 8'hff) legacy_owned <= legacy_owned + 1'd1;
 					request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED, 8'd0);
 				end
 			end
@@ -571,7 +559,6 @@ module mister_magik_video_diagnostics_control #(
 		if(freeze_request_now) begin
 			trigger <= freeze_request_trigger;
 			generation <= generation + 1'd1;
-			freeze_clock <= clock_count;
 			frozen_vblank_count <= vblank_count;
 			frozen_route_state_flags <= apply_accepted ?
 				{route_flt, 1'b1, route_en, 1'b0, 1'b1} :
