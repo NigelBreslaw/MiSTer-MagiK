@@ -4821,8 +4821,12 @@ pub(super) fn run_launcher_loop(
                 start,
                 "system_entry_preludes_warmed",
                 format!(
-                    "systems={} exact_previews={} terminal_empty={} elapsed_us={} cpu=0",
-                    report.systems, report.exact_previews, report.terminal_empty, report.elapsed_us
+                    "systems={} viewport_rows={} exact_previews={} terminal_empty={} elapsed_us={} cpu=0",
+                    report.systems,
+                    report.viewport_rows,
+                    report.exact_previews,
+                    report.terminal_empty,
+                    report.elapsed_us
                 ),
             ),
             Err(error) => print_startup_event(

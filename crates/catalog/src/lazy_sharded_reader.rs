@@ -37,6 +37,7 @@ pub struct LazySystemGeneration {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct EntryPreludeWarmupReport {
     pub systems: usize,
+    pub viewport_rows: usize,
     pub exact_previews: usize,
     pub terminal_empty: usize,
     pub elapsed_us: u64,
@@ -284,8 +285,12 @@ impl LazyShardedCatalogReader {
                     games,
                 )
                 .and_then(|(mapped, _)| {
-                    let prelude = mapped.entry_prelude()?;
-                    Ok((prelude.selected_preview.is_some(), prelude.terminal_empty))
+                    let prelude = mapped.fault_entry_viewport()?;
+                    Ok((
+                        prelude.first_viewport_ordinals.len(),
+                        prelude.selected_preview.is_some(),
+                        prelude.terminal_empty,
+                    ))
                 }) {
                     Ok(state) => {
                         warmed = Some(state);
@@ -294,7 +299,7 @@ impl LazyShardedCatalogReader {
                     Err(error) => errors.push(error),
                 }
             }
-            let Some((exact_preview, terminal_empty)) = warmed else {
+            let Some((viewport_rows, exact_preview, terminal_empty)) = warmed else {
                 return Err(CatalogError::new(
                     "warm-entry-preludes",
                     format!(
@@ -305,6 +310,7 @@ impl LazyShardedCatalogReader {
                 ));
             };
             report.systems += 1;
+            report.viewport_rows += viewport_rows;
             report.exact_previews += usize::from(exact_preview);
             report.terminal_empty += usize::from(terminal_empty);
         }
@@ -385,6 +391,7 @@ mod tests {
         let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
         let report = reader.warm_entry_preludes().unwrap();
         assert_eq!(report.systems, 2);
+        assert_eq!(report.viewport_rows, 2);
         assert_eq!(report.exact_previews, 0);
         assert_eq!(report.terminal_empty, 2);
         assert!(reader.open_system(&system("c64")).is_err());

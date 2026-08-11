@@ -176,6 +176,15 @@ impl MappedNavPack {
         )
     }
 
+    /// Validates the bounded prelude and faults every hot row/string page it names.
+    pub fn fault_entry_viewport(&self) -> Result<NavPackEntryPreludeRef<'_>, String> {
+        let prelude = self.entry_prelude()?;
+        for ordinal in &prelude.first_viewport_ordinals {
+            let _ = self.row(*ordinal)?;
+        }
+        Ok(prelude)
+    }
+
     pub fn row(&self, ordinal: usize) -> Result<NavPackRowRef<'_>, String> {
         if ordinal >= self.identity.games {
             return Err("NavPack row ordinal is out of bounds".into());
@@ -1069,7 +1078,7 @@ mod tests {
             MappedNavPack::open(&path, encoded.len() as u64, "c64", 9, games.len()).unwrap();
         std::fs::remove_file(path).unwrap();
 
-        let prelude = mapped.entry_prelude().unwrap();
+        let prelude = mapped.fault_entry_viewport().unwrap();
         assert_eq!(prelude.first_viewport_ordinals, vec![0, 1]);
         assert!(!prelude.terminal_empty);
         let selected = prelude.selected_preview.unwrap();
