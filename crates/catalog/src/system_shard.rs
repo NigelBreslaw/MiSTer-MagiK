@@ -15,6 +15,9 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 
+const NAVIGATION_HEADER_MAX_BYTES: usize = 256;
+const NAVIGATION_SCHEMA_KEY: &[u8] = b"schema_version";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SystemShardLimits {
     pub max_sqlite_bytes: u64,
@@ -778,12 +781,7 @@ fn decode_navigation_with_timing(
         ));
     }
     let envelope_started = std::time::Instant::now();
-    let schema = serde_json::from_slice::<serde_json::Value>(&decoded)
-        .map_err(|error| SystemShardError::with("parse navigation envelope", error))?
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| SystemShardError::new("read", "navigation schema is missing"))?;
+    let schema = decode_navigation_schema_header(&decoded)?;
     let envelope_parse_us = elapsed_us(envelope_started);
     let typed_parse_started = std::time::Instant::now();
     let stored = match (schema, compatibility) {
@@ -814,6 +812,81 @@ fn decode_navigation_with_timing(
             ..SystemNavigationOpenTiming::default()
         },
     ))
+}
+
+fn decode_navigation_schema_header(decoded: &[u8]) -> Result<u32, SystemShardError> {
+    let header = decoded
+        .get(..decoded.len().min(NAVIGATION_HEADER_MAX_BYTES))
+        .unwrap_or(decoded);
+    let mut cursor = 0usize;
+    skip_json_whitespace(header, &mut cursor);
+    if header.get(cursor) != Some(&b'{') {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation header is not a JSON object",
+        ));
+    }
+    cursor += 1;
+    skip_json_whitespace(header, &mut cursor);
+    if header.get(cursor) != Some(&b'\"') {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation schema header is missing",
+        ));
+    }
+    cursor += 1;
+    let key_end = cursor
+        .checked_add(NAVIGATION_SCHEMA_KEY.len())
+        .filter(|end| header.get(cursor..*end) == Some(NAVIGATION_SCHEMA_KEY))
+        .ok_or_else(|| SystemShardError::new("read", "navigation schema header is missing"))?;
+    cursor = key_end;
+    if header.get(cursor) != Some(&b'\"') {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation schema header is malformed",
+        ));
+    }
+    cursor += 1;
+    skip_json_whitespace(header, &mut cursor);
+    if header.get(cursor) != Some(&b':') {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation schema header is malformed",
+        ));
+    }
+    cursor += 1;
+    skip_json_whitespace(header, &mut cursor);
+    let number_start = cursor;
+    while header.get(cursor).is_some_and(u8::is_ascii_digit) {
+        cursor += 1;
+    }
+    if cursor == number_start {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation schema header is malformed",
+        ));
+    }
+    let schema = std::str::from_utf8(&header[number_start..cursor])
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| SystemShardError::new("read", "navigation schema header is invalid"))?;
+    skip_json_whitespace(header, &mut cursor);
+    if !matches!(header.get(cursor), Some(b',' | b'}')) {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation schema header is malformed",
+        ));
+    }
+    Ok(schema)
+}
+
+fn skip_json_whitespace(bytes: &[u8], cursor: &mut usize) {
+    while bytes
+        .get(*cursor)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+    {
+        *cursor += 1;
+    }
 }
 
 fn elapsed_us(started: std::time::Instant) -> u64 {
@@ -1189,6 +1262,74 @@ mod tests {
             error.message(),
             "decoded navigation length exceeds configured limit"
         );
+    }
+
+    #[test]
+    fn bounded_navigation_header_accepts_canonical_whitespace() {
+        assert_eq!(
+            decode_navigation_schema_header(b" \n { \"schema_version\" : 3 , \"games\": [] }")
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn bounded_navigation_header_rejects_reordered_malformed_and_overflowing_schema() {
+        for malformed in [
+            br#"{"system_id":"c64","schema_version":3,"games":[]}"#.as_slice(),
+            br#"{"schema_version":"3","games":[]}"#.as_slice(),
+            br#"{"schema_version":4294967296,"games":[]}"#.as_slice(),
+            br#"[]"#.as_slice(),
+        ] {
+            assert!(decode_navigation_schema_header(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn current_navigation_decodes_a_c64_sized_fixture_in_one_typed_pass() {
+        let games = (0..15_089)
+            .map(|index| SystemGame {
+                stable_key: format!("game-{index:05}"),
+                title: format!("Synthetic C64 Game {index:05}"),
+                launch_ref: format!("/games/C64/game-{index:05}.d64"),
+                ..SystemGame::default()
+            })
+            .collect::<Vec<_>>();
+        let stored = StoredNavigation {
+            schema_version: NAVIGATION_SCHEMA_VERSION,
+            system_id: "c64".to_string(),
+            generation: 7,
+            games,
+        };
+        let encoded = lz4_flex::compress_prepend_size(&serde_json::to_vec(&stored).unwrap());
+        let limits = SystemShardLimits {
+            max_navigation_compressed_bytes: 64 * 1024 * 1024,
+            max_navigation_decoded_bytes: 64 * 1024 * 1024,
+            max_games: 20_000,
+            ..limits()
+        };
+
+        let (decoded, timing) =
+            decode_navigation_with_timing(&encoded, limits, NavigationCompatibility::CurrentOnly)
+                .unwrap();
+
+        assert_eq!(decoded.games.len(), 15_089);
+        assert_eq!(decoded.games[0].stable_key, "game-00000");
+        assert_eq!(decoded.games[15_088].stable_key, "game-15088");
+        assert!(timing.typed_parse_us > 0);
+    }
+
+    #[test]
+    fn bounded_navigation_header_preserves_future_schema_rejection() {
+        let decoded = br#"{"schema_version":99,"system_id":"c64","generation":1,"games":[]}"#;
+        let encoded = lz4_flex::compress_prepend_size(decoded);
+        let error = decode_navigation(
+            &encoded,
+            limits(),
+            NavigationCompatibility::CurrentOrAlphaV1,
+        )
+        .unwrap_err();
+        assert_eq!(error.message(), "navigation schema 99 is unsupported");
     }
 
     #[test]
