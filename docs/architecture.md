@@ -412,6 +412,15 @@ Latch acceptance is not a release acknowledgement: the chart returns to
 `Live` only after the forced frame's sequence is confirmed active at a physical
 refresh.
 
+Every non-`Live` state owns CPU1. Slint timers, runtime-status serialization,
+catalog/search polling, media maintenance, update checks, and other launcher
+background work remain quiescent for the complete ownership interval. A cold
+system entry has one exception: CPU1 may perform one non-blocking newest-result
+acknowledgement per frame. That path cannot drain general catalog or search
+queues, and a contended mailbox defers acknowledgement instead of waiting.
+Selected-preview adoption may also finish the exact generation-bound entry
+preview; ordinary scrolling prefetch remains disabled.
+
 Screenshot presentation and direct-layer retirement are parallel state-chart
 regions. Preview demand (`Empty` or `Image`) is independent from route
 eligibility (`Eligible`, `Occluded`, or `Unavailable`). Bridge synchronization
@@ -622,8 +631,9 @@ half density at their native framebuffer geometry with the complete 16:9 scene
 centred in the 4:3 raster. The 240p handoff derives its native target through
 the standard centred 640×480-to-640×240 transform while retaining the original
 composition cache. Warm boot and return-from-game keep HDMI black until the
-first intended launcher frame is ready. Warm registry startup opens only Arcade's
-mini-nav before reveal; other systems remain lazy. Return-from-game consumes a
+first intended launcher frame is ready. Warm registry startup faults only
+bounded entry preludes on CPU0 before reveal; complete collections, including
+Arcade, remain lazy. Return-from-game consumes a
 bounded catalog capsule when possible. If that capsule is unavailable, only the
 registry and selected system mini-nav are foreground reveal work. Return-from-game
 may wait at most 250ms for the selected
@@ -696,18 +706,19 @@ display without valid scan-out.
 ## Catalog And Preview Model
 
 Catalog V3 is the sole authoritative production catalog. Its schema-one
-manifest registry names immutable schema-four SQLite/schema-two mini-nav pairs
-for each playable system. A small checksummed Arcade bootstrap mini-nav may be
+manifest registry names immutable schema-four SQLite, schema-two mini-nav, and
+schema-two NavPack artifacts for each playable system. A small checksummed
+Arcade bootstrap mini-nav may be
 retained beside Catalog V3 as a disposable startup accelerator; it is never a
 complete catalog or publication authority.
-Warm startup reads the registry and Arcade mini-nav only. Non-Arcade systems
-remain as registry summaries until their collection is activated. Collection
+Warm startup reads the registry and bounded NavPack entry preludes only. Every
+system remains a registry summary until its collection is activated. Collection
 activation is an atomic state transition: an already resident destination
 commits in the input frame; a cold destination leaves the originating Home view
-presented until the worker result has been applied, then commits before bridge
-synchronization and drawing. A registered, populated collection may never be
-presented with zero resident rows. The registry's summed counts are the full
-catalog total, while resident rows describe only hydrated memory.
+presented while CPU0 prepares the mapped `SystemCollection`, then commits before
+bridge synchronization and drawing. A registered, populated collection may
+never be presented with zero resident rows. The registry's summed counts are
+the full catalog total, while resident rows describe only hydrated memory.
 
 A build without a valid registry first probes the retained Arcade mini-nav. A
 matching index restores the exact local Arcade projection; a missing, corrupt,

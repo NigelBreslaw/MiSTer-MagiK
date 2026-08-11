@@ -201,7 +201,7 @@ The device agent exposes no binary-only runtime replacement endpoint.
 
 `scripts/agent benchmark system-entry` measures every populated Catalog V3
 system. Each system gets a fresh launcher process containing registry summaries
-and the eager Arcade rows only; merely focusing the destination tile performs
+and bounded entry preludes only; merely focusing the destination tile performs
 no shard load. The benchmark sends one production-path activation press, then
 records row readiness, the first presented list frame, selected-preview
 readiness, and the first Main-confirmed active frame containing both the full
@@ -258,14 +258,24 @@ began and the provenance of the terminal preview (for example decoded cache,
 archive, or authoritative empty). This makes startup-only advantages such as
 Arcade residency visible in both screening and confirmation reports.
 
+The direct modes intentionally contain no fullscreen animation. Their
+protocol-v5 source-to-ready observation therefore reports repeated vblanks as
+diagnostic static-source intervals and never labels them dropped frames; latch
+drops remain a hard failure. Actual animation cadence is qualified separately
+by a scenario with an exact transition-start-to-confirmed-endpoint window, such
+as `settings-navigation`. Static repeated vblanks and animation dropped frames
+must not be combined.
+
 `scripts/agent benchmark system-entry-critical-profile` is attribution-only.
 It runs isolated C64 and SNES direct entries with the dormant installed-runtime
 pprof sampler and per-thread Cortex-A9 PMU spans enabled. The retained evidence
-splits registry/descriptor lookup, navigation read and hash, LZ4 decompression,
-envelope and typed JSON parsing, validation, row projection, catalog
-replacement and CPU1 adoption. It also records worker wall/thread CPU time,
-CPU identity, page faults, compressed/decoded bytes and measured allocations,
-plus selected-preview I/O/decode timing and destination-frame preparation.
+splits descriptor lookup, NavPack open/mmap/header/first-viewport work, JSON
+fallback read and hash, LZ4 decompression, envelope and typed parsing,
+validation, row projection, collection publication and CPU1 adoption. It also
+records whether the retained startup generation map was reused, worker
+wall/thread CPU time, CPU identity, page faults, compressed/decoded bytes and
+measured allocations, plus selected-preview I/O/decode timing and
+destination-frame preparation.
 Profiled samples never determine a performance pass; the unprofiled screening
 and confirmation commands remain authoritative.
 

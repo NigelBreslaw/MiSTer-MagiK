@@ -2,10 +2,10 @@
 
 Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
 registry, state, binding, and scanner-cache schemas are version **1**; the
-mini-navigation schema is version **2** and the SQLite shard schema is version
-**4**. There is no legacy read
-fallback, migration bridge, dual publication, global summary, or global
-navigation file.
+mini-navigation and NavPack schemas are version **2** and the SQLite shard
+schema is version **4**. There is no global summary or global navigation file.
+The JSON mini-navigation reader remains the checked compatibility fallback for
+a missing or rejected NavPack.
 
 The catalog is split by playable system (`arcade`, `snes`, `c64`, and so on),
 not by launcher presentation groups such as Nintendo or Sega. A system is the
@@ -16,8 +16,8 @@ catalog storage.
 ## Goals
 
 - Reveal a useful UI as soon as Arcade is available on a first build.
-- Start warm launches from a small registry and one eager Arcade mini-nav.
-- Load other systems only when selected.
+- Start warm launches from a small registry and bounded entry preludes.
+- Load every system, including Arcade, only when activated.
 - Rebuild and publish only changed system projections.
 - Keep the published generation launchable while warm reconciliation prepares
   its replacement.
@@ -41,8 +41,10 @@ catalog-v3/
   systems/
     arcade/<generation>.sqlite3
     arcade/<generation>.nav.lz4b
+    arcade/<generation>.navpack
     snes/<generation>.sqlite3
     snes/<generation>.nav.lz4b
+    snes/<generation>.navpack
     ...
   state/
     catalog-state.sqlite3
@@ -53,8 +55,9 @@ catalog-v3/
 ```
 
 The two manifest slots provide an atomic registry commit. Each manifest names
-the active and, where retained, previous immutable SQLite/navigation pair for
-every system, including sizes, hashes, metadata, generation, and game count.
+the active and, where retained, previous immutable SQLite/navigation/NavPack
+set for every system, including sizes, hashes, metadata, generation, and game
+count.
 Readers choose the newest completely valid slot. Partially written generations
 are unreachable.
 
@@ -119,23 +122,34 @@ current build recreates them.
 
 Warm startup reads the registry first. This supplies system titles, placement,
 ordering, counts, and immutable artifact references without opening every
-system database. Arcade's mini-nav is opened eagerly because it is the first
-visible game collection. Other system shards stay closed until the user
-activates their collection.
+system database. Before input readiness, the CPU0 entry worker opens the exact
+registry generation once, validates the bounded NavPack headers, and faults the
+ten-row entry preludes. It retains that generation-bound reader for later
+activation. This deterministic work is independent of tile focus: highlighting
+a tile or moving past neighbouring tiles performs no catalog I/O, preview
+request, or hydration. Full row, cold-metadata, launch, and string regions stay
+unfaulted until activation.
 
 When a valid published catalog already exists, normal startup does not scan the
 library or reconcile changed inputs. Users explicitly request catalog updates
 with Settings → **Rebuild Database**; first-run construction still starts
 automatically when no valid catalog exists.
 
-Activating a non-resident collection schedules its mini-nav load. Loaded rows
-and structured launch plans are merged into a complete
-replacement catalog on the existing shard worker. The launcher validates the
-catalog version and adopts that prepared value with a cheap swap; it never
-projects rows or rebuilds catalog indexes on the UI thread. Immutable indexes
-are shared between catalog snapshots, so worker handoff and empty taxonomy
-placeholders are cheap. A stale prepared result is discarded and requested
-again against the current version. Loaded rows remain resident.
+Activating a non-resident collection schedules one foreground request on the
+long-lived CPU0 `SystemEntryPrepare` worker. The preferred path opens the
+generation-scoped NavPack through `mmap` and exposes an immutable
+`Arc<SystemCollection>` with fixed-width checked rows, cold metadata, structured
+launch tables, persisted ordinals, and string tables. The full collection is
+synchronously addressable without allocating one Rust object per game. Missing
+or rejected NavPacks use the JSON mini-navigation compatibility reader and are
+reported as a performance fallback.
+
+The CPU0 worker publishes a generation- and sequence-bound prepared outcome to
+a newest-wins mailbox. CPU1 uses a non-blocking acknowledgement, selects the
+prepared collection in O(1), and retires stale results on CPU0. It never
+projects rows, constructs indexes, destroys a large collection, or waits on the
+mailbox. A stale prepared result is discarded and requested again against the
+current version. Loaded collections remain resident.
 Active lazy hydration is visually silent: destination tiles keep their normal
 ready and focus presentation unless the shard load actually fails. Activating
 a collection is atomic: the launcher stays on the populated source view until
@@ -148,7 +162,7 @@ The following numbers are deliberately distinct:
 
 - total registered games: sum of all active system counts in the registry;
 - registered systems: active system entries in the registry;
-- resident Arcade games: eagerly loaded Arcade rows;
+- resident Arcade games: Arcade rows loaded by activation or return restore;
 - selected-system games: rows loaded lazily for the current non-Arcade system.
 
 Resident Arcade rows must never be reported as the total catalog.
