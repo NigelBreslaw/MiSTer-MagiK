@@ -593,7 +593,12 @@ impl<'a> TaxonomyBuilder<'a> {
             .catalog
             .systems
             .iter()
-            .filter(|system| self.catalog.platform_kind(&system.id) == PlatformKind::Arcade)
+            .filter(|system| {
+                self.taxonomy
+                    .primary_system_destinations
+                    .get(&normalize_system_id(&system.id))
+                    .is_some_and(|destination| destination.collection_id == MENU_ARCADE_SYSTEM_ID)
+            })
             .fold(0usize, |total, system| total.saturating_add(system.count));
         let arcade_count = resident_arcade_count.max(declared_arcade_count);
         let mut items = Vec::new();

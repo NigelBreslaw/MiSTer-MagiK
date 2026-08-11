@@ -6253,14 +6253,18 @@ mod tests {
     }
 
     #[test]
-    fn launcher_does_not_offer_arcade_when_visible_projection_has_no_rows() {
+    fn registry_only_arcade_activation_waits_for_the_runtime_commit() {
         let catalog = arcade_catalog(vec![], vec![arcade_system("arcade", 911)]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
 
-        assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
+        let event = nav
+            .handle_input_with_collection_intents(&press_a, t0, &catalog)
+            .expect("registry-only collection intent");
 
+        assert_eq!(event.action, LauncherAction::OpenCollection);
+        assert_eq!(event.path.as_deref(), Some(MENU_ARCADE_SYSTEM_ID));
         assert_eq!(nav.screen, Screen::Home);
         assert_eq!(nav.selected, 0);
         assert_eq!(nav.arcade.selected, 0);
