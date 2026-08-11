@@ -6,7 +6,6 @@
 use crate::arcade_catalog::{self, ArcadeCatalog};
 use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
 use mister_magik_catalog::system_shard::{SystemGame, SystemNavigationIndexes};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -206,8 +205,9 @@ pub fn arcade_rows_from_owned_persisted_shard(
     Vec<arcade_catalog::StructuredLaunchPlan>,
 ) {
     let shared_system_id = Arc::<str>::from(system_id);
-    let mut strings = ArcStringInterner::default();
-    strings.retain(shared_system_id.clone());
+    let mut preview_archives = SmallArcStringPool::default();
+    let mut core_paths = SmallArcStringPool::default();
+    let mut mount_kinds = SmallArcStringPool::default();
     let mut projected = Vec::with_capacity(games.len());
     let mut metadata = Vec::with_capacity(games.len());
     let mut launch_plans_by_ordinal = Vec::with_capacity(games.len());
@@ -215,16 +215,16 @@ pub fn arcade_rows_from_owned_persisted_shard(
         let title = Arc::<str>::from(game.title);
         let launch_ref = Arc::<str>::from(game.launch_ref);
         let launch_plan = game.launch_plan.map(|plan| {
-            let plan_title = strings.reuse_or_intern(plan.title, &title);
-            let plan_launch_ref = strings.reuse_or_intern(plan.launch_ref, &launch_ref);
-            let plan_system_id = strings.reuse_or_intern(plan.system_id, &shared_system_id);
+            let plan_title = reuse_or_arc(plan.title, &title);
+            let plan_launch_ref = reuse_or_arc(plan.launch_ref, &launch_ref);
+            let plan_system_id = reuse_or_arc(plan.system_id, &shared_system_id);
             arcade_catalog::StructuredLaunchPlan {
                 launch_ref: plan_launch_ref,
                 title: plan_title,
                 system_id: plan_system_id,
-                core_path: Arc::from(plan.core_path),
+                core_path: core_paths.intern(plan.core_path),
                 payload_path: Arc::from(plan.payload_path),
-                mount_kind: strings.intern(plan.mount_kind),
+                mount_kind: mount_kinds.intern(plan.mount_kind),
                 mount_index: plan.mount_index,
                 delay_secs: plan.delay_secs,
             }
@@ -238,10 +238,10 @@ pub fn arcade_rows_from_owned_persisted_shard(
             control: game.control,
         });
         projected.push(arcade_catalog::ArcadeGameEntry {
+            preview_asset_key: reuse_or_arc(game.preview_asset_key, &title),
             title,
             mra_path: launch_ref,
-            preview_archive_path: strings.intern(game.preview_archive_path),
-            preview_asset_key: Arc::from(game.preview_asset_key),
+            preview_archive_path: preview_archives.intern(game.preview_archive_path),
             has_preview: game.has_preview,
             system_id: shared_system_id.clone(),
             year: None,
@@ -264,31 +264,32 @@ pub fn arcade_rows_from_owned_persisted_shard(
     (projected, metadata, launch_plans)
 }
 
-#[derive(Default)]
-struct ArcStringInterner {
-    values: HashSet<Arc<str>>,
+fn reuse_or_arc(value: String, preferred: &Arc<str>) -> Arc<str> {
+    if value == preferred.as_ref() {
+        preferred.clone()
+    } else {
+        Arc::from(value)
+    }
 }
 
-impl ArcStringInterner {
-    fn retain(&mut self, value: Arc<str>) {
-        self.values.insert(value);
-    }
+/// Tiny field-local pool for values which are normally constant within one system.
+///
+/// A general hash interner made every projected row hash its archive, core and mount strings.
+/// These domains contain only a handful of values, so a short linear probe avoids both the hash
+/// cost and duplicate allocations without growing a global per-row string table.
+#[derive(Default)]
+struct SmallArcStringPool {
+    values: Vec<Arc<str>>,
+}
 
+impl SmallArcStringPool {
     fn intern(&mut self, value: String) -> Arc<str> {
-        if let Some(shared) = self.values.get(value.as_str()) {
+        if let Some(shared) = self.values.iter().find(|shared| shared.as_ref() == value) {
             return shared.clone();
         }
         let shared = Arc::<str>::from(value);
-        self.values.insert(shared.clone());
+        self.values.push(shared.clone());
         shared
-    }
-
-    fn reuse_or_intern(&mut self, value: String, preferred: &Arc<str>) -> Arc<str> {
-        if value == preferred.as_ref() {
-            preferred.clone()
-        } else {
-            self.intern(value)
-        }
     }
 }
 
