@@ -1554,7 +1554,7 @@ fn smoke_development_delivery(
         exec_checked(&session, "delivery smoke", &command)?;
         let (_, _, present_state) = wait_delivery_present_state(&session, Duration::from_secs(10))?;
         match present_state {
-            DeliveryPresentState::Latch => {
+            DeliveryPresentState::Latch | DeliveryPresentState::CatalogMigration => {
                 exec_checked(
                     &session,
                     "delivery latch health",
@@ -1738,6 +1738,7 @@ fn retain_diagnostic_evidence(session: &Session, facts: &Value) -> Result<PathBu
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeliveryPresentState {
     Latch,
+    CatalogMigration,
     Compatibility,
 }
 
@@ -1766,7 +1767,18 @@ fn validate_delivery_present_state(
     match (present_backend, present_status) {
         ("fpga-vblank-latch-hidden", "ok") => {
             if !input_enabled {
-                return Err("latch delivery input is not enabled".into());
+                let catalog_migration = status.get("catalog_ready").and_then(Value::as_bool)
+                    == Some(false)
+                    && status.get("catalog_scan_visible").and_then(Value::as_bool) == Some(true)
+                    && status.get("startup_mode").and_then(Value::as_str)
+                        == Some("cold_no_catalog")
+                    && status.get("startup_reveal_state").and_then(Value::as_str)
+                        == Some("catalog_progress_visible")
+                    && status.get("frames").and_then(Value::as_u64).unwrap_or(0) > 0;
+                if catalog_migration {
+                    return Ok(DeliveryPresentState::CatalogMigration);
+                }
+                return Err("latch delivery input is not enabled outside catalog migration".into());
             }
             Ok(DeliveryPresentState::Latch)
         }
@@ -20147,6 +20159,21 @@ H: Handlers=event3 js0"#
             validate_delivery_present_state(&latch, None).unwrap(),
             DeliveryPresentState::Latch
         );
+
+        let mut migration = latch.clone();
+        migration["input_enabled"] = json!(false);
+        migration["catalog_ready"] = json!(false);
+        migration["catalog_scan_visible"] = json!(true);
+        migration["startup_mode"] = json!("cold_no_catalog");
+        migration["startup_reveal_state"] = json!("catalog_progress_visible");
+        migration["frames"] = json!(12);
+        assert_eq!(
+            validate_delivery_present_state(&migration, None).unwrap(),
+            DeliveryPresentState::CatalogMigration
+        );
+
+        migration["catalog_scan_visible"] = json!(false);
+        assert!(validate_delivery_present_state(&migration, None).is_err());
 
         let mut compatibility = delivery_status(
             "compatibility",
