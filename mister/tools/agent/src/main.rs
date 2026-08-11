@@ -2448,7 +2448,123 @@ mod linux {
                 "updated_unix_ms",
             ),
             "latch_failure": current_latch_failure_report(),
+            "fpga_video_diagnostics": fpga_video_diagnostics_json(),
         })
+    }
+
+    fn video_diagnostics_state_name(
+        state: mister_magik_video_diagnostics_contract::VideoDiagnosticsState,
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract::VideoDiagnosticsState;
+        match state {
+            VideoDiagnosticsState::Idle => "idle",
+            VideoDiagnosticsState::Armed => "armed",
+            VideoDiagnosticsState::Frozen => "frozen",
+            VideoDiagnosticsState::Partial => "partial",
+        }
+    }
+
+    fn fpga_video_diagnostics_unavailable(reason: impl Into<String>) -> Value {
+        json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v1",
+            "available": false,
+            "coherent": false,
+            "classification": "unclassified",
+            "reason": reason.into(),
+        })
+    }
+
+    fn fpga_video_diagnostics_json() -> Value {
+        let capture_start_monotonic_us = uptime_ms_now().saturating_mul(1_000);
+        let main_before = read_json_value("/tmp/mister-magik/main-status.json");
+        if main_before.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive") {
+            return fpga_video_diagnostics_unavailable(
+                "diagnostic readout requires stable LauncherActive ownership",
+            );
+        }
+        let owner_epoch_before = main_before.get("fpga_owner_epoch").and_then(Value::as_u64);
+        let mut fpga = match FpgaIo::open() {
+            Ok(fpga) => fpga,
+            Err(error) => {
+                return fpga_video_diagnostics_unavailable(format!("open FPGA IO: {error}"));
+            }
+        };
+        let _uio_guard = match fpga.lock_uio_transaction() {
+            Ok(guard) => guard,
+            Err(error) => {
+                return fpga_video_diagnostics_unavailable(format!(
+                    "lock FPGA UIO transaction: {error}"
+                ));
+            }
+        };
+        let latch_status = match fpga.read_latched_fbuf_status() {
+            Ok(status)
+                if status.flags & (1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP)
+                    != 0 =>
+            {
+                status
+            }
+            Ok(_) => {
+                return fpga_video_diagnostics_unavailable(
+                    "diagnostic readout requires active MagiK FPGA ownership",
+                );
+            }
+            Err(error) => {
+                return fpga_video_diagnostics_unavailable(format!(
+                    "read FPGA latch ownership: {error}"
+                ));
+            }
+        };
+        let latch_status_json = Some(json!({
+            "active_sequence": latch_status.active_sequence,
+            "pending_sequence": latch_status.pending_sequence,
+            "flags": latch_status.flags,
+            "flip_count": latch_status.flip_count,
+            "post_count": latch_status.post_count,
+            "drop_count": latch_status.drop_count,
+            "active_base": latch_status.active_base,
+            "active_width": latch_status.active_width,
+            "active_height": latch_status.active_height,
+            "active_stride": latch_status.active_stride,
+        }));
+        let readout = match fpga.read_video_diagnostics() {
+            Ok(readout) => readout,
+            Err(error) => {
+                return fpga_video_diagnostics_unavailable(format!(
+                    "read passive FPGA video diagnostics: {error}"
+                ));
+            }
+        };
+        let main_after = read_json_value("/tmp/mister-magik/main-status.json");
+        let owner_epoch_after = main_after.get("fpga_owner_epoch").and_then(Value::as_u64);
+        let launcher_state_stable =
+            main_after.get("launcher_state").and_then(Value::as_str) == Some("LauncherActive");
+        let (latch_ownership_stable, ownership_check_error) = match fpga.read_latched_fbuf_status()
+        {
+            Ok(status) => (
+                Some(
+                    status.flags & (1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP) != 0,
+                ),
+                None,
+            ),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let owner_stable = owner_epoch_before.is_some()
+            && owner_epoch_before == owner_epoch_after
+            && launcher_state_stable
+            && latch_ownership_stable == Some(true);
+        let capture_end_monotonic_us = uptime_ms_now().saturating_mul(1_000);
+        readout.to_json(
+            owner_stable,
+            latch_ownership_stable,
+            launcher_state_stable,
+            ownership_check_error,
+            owner_epoch_before,
+            owner_epoch_after,
+            latch_status_json,
+            capture_start_monotonic_us,
+            capture_end_monotonic_us,
+        )
     }
 
     fn magik_control(args: Value) -> Result<Value, String> {
@@ -2945,6 +3061,184 @@ mod linux {
         Ok(raw)
     }
 
+    struct VideoDiagnosticsReadout {
+        control_before: mister_magik_video_diagnostics_contract::VideoDiagnosticsControlSnapshot,
+        avalon: mister_magik_video_diagnostics_contract::VideoDiagnosticsAvalonSnapshot,
+        output: mister_magik_video_diagnostics_contract::VideoDiagnosticsOutputSnapshot,
+        control_after: mister_magik_video_diagnostics_contract::VideoDiagnosticsControlSnapshot,
+    }
+
+    pub(super) fn video_diagnostics_ownership_state(
+        owner_epoch_before: Option<u64>,
+        owner_epoch_after: Option<u64>,
+        latch_ownership_stable: Option<bool>,
+        launcher_state_stable: bool,
+    ) -> (bool, bool) {
+        let changed = !launcher_state_stable
+            || (owner_epoch_before.is_some() && owner_epoch_before != owner_epoch_after)
+            || latch_ownership_stable == Some(false);
+        let unverified = owner_epoch_before.is_none()
+            || owner_epoch_after.is_none()
+            || latch_ownership_stable.is_none();
+        (changed, unverified)
+    }
+
+    impl VideoDiagnosticsReadout {
+        fn generations_match(&self) -> bool {
+            self.control_before.generation == self.control_after.generation
+                && self.control_after.generation == self.avalon.generation
+                && self.control_after.generation == self.output.generation
+        }
+
+        fn to_json(
+            &self,
+            owner_stable: bool,
+            latch_ownership_stable: Option<bool>,
+            launcher_state_stable: bool,
+            ownership_check_error: Option<String>,
+            owner_epoch_before: Option<u64>,
+            owner_epoch_after: Option<u64>,
+            latch_status: Option<Value>,
+            capture_start_monotonic_us: u64,
+            capture_end_monotonic_us: u64,
+        ) -> Value {
+            use mister_magik_video_diagnostics_contract as contract;
+
+            let control_generation_stable =
+                self.control_before.generation == self.control_after.generation;
+            let generations_match = self.generations_match();
+            let control_route_epoch =
+                self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_ROUTE_EPOCH];
+            let avalon_route_epoch =
+                self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ROUTE_EPOCH];
+            let output_route_epoch =
+                self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_ROUTE_EPOCH];
+            let route_epochs_match = control_route_epoch == avalon_route_epoch
+                && control_route_epoch == output_route_epoch;
+            let missing_domains =
+                self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_MISSING_DOMAINS];
+            let all_frozen =
+                matches!(
+                    self.control_after.state,
+                    contract::VideoDiagnosticsState::Frozen
+                ) && matches!(self.avalon.state, contract::VideoDiagnosticsState::Frozen)
+                    && matches!(self.output.state, contract::VideoDiagnosticsState::Frozen);
+            let mailbox_overrun = [
+                &self.control_after.words,
+                &self.avalon.words,
+                &self.output.words,
+            ]
+            .iter()
+            .any(|words| words[1] & contract::VIDEO_DIAGNOSTICS_STATE_FLAGS_MAILBOX_OVERRUN != 0);
+            let (ownership_changed, ownership_unverified) = video_diagnostics_ownership_state(
+                owner_epoch_before,
+                owner_epoch_after,
+                latch_ownership_stable,
+                launcher_state_stable,
+            );
+            let coherent = owner_stable
+                && latch_ownership_stable == Some(true)
+                && generations_match
+                && route_epochs_match
+                && missing_domains == 0
+                && all_frozen
+                && !mailbox_overrun;
+            let partial = missing_domains != 0
+                || mailbox_overrun
+                || ownership_unverified
+                || matches!(
+                    self.control_after.state,
+                    contract::VideoDiagnosticsState::Partial
+                );
+            let trigger = self.control_after.trigger;
+            let classification = if partial {
+                "partial"
+            } else if ownership_changed {
+                "control_or_clock"
+            } else if !coherent {
+                "unclassified"
+            } else {
+                match trigger {
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED
+                    | contract::VIDEO_DIAGNOSTICS_TRIGGER_ROUTE_DIVERGENCE
+                    | contract::VIDEO_DIAGNOSTICS_TRIGGER_OWNED_OSD_WRITE => "legacy_control",
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK => "control_or_clock",
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_NO_READS => "avalon_no_reads",
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_ADDRESS
+                    | contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST
+                    | contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN
+                    | contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT => {
+                        "avalon_stall_or_return"
+                    }
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK => "final_black",
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE => "final_white",
+                    contract::VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING => "final_timing",
+                    _ => "unclassified",
+                }
+            };
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v1",
+                "available": true,
+                "coherent": coherent,
+                "classification": classification,
+                "capture_start_monotonic_us": capture_start_monotonic_us,
+                "capture_end_monotonic_us": capture_end_monotonic_us,
+                "owner_epoch_before": owner_epoch_before,
+                "owner_epoch_after": owner_epoch_after,
+                "latch_status": latch_status,
+                "coherence": {
+                    "control_generation_stable": control_generation_stable,
+                    "generations_match": generations_match,
+                    "route_epochs_match": route_epochs_match,
+                    "missing_domains": missing_domains,
+                    "all_domains_frozen": all_frozen,
+                    "mailbox_overrun": mailbox_overrun,
+                    "latch_ownership_stable": latch_ownership_stable,
+                    "launcher_state_stable": launcher_state_stable,
+                    "ownership_check_error": ownership_check_error,
+                },
+                "control": {
+                    "state": video_diagnostics_state_name(self.control_after.state),
+                    "trigger": self.control_after.trigger,
+                    "generation": self.control_after.generation,
+                    "route_epoch": control_route_epoch,
+                    "state_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_STATE_FLAGS],
+                    "route_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_ROUTE_FLAGS],
+                    "control_fault_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_CONTROL_FAULT_FLAGS],
+                    "legacy_disposition": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_DISPOSITION],
+                    "legacy_word_mask": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_WORD_MASK],
+                    "raw_words": self.control_after.words,
+                },
+                "avalon": {
+                    "state": video_diagnostics_state_name(self.avalon.state),
+                    "trigger": self.avalon.trigger,
+                    "generation": self.avalon.generation,
+                    "route_epoch": avalon_route_epoch,
+                    "state_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_STATE_FLAGS],
+                    "route_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ROUTE_FLAGS],
+                    "fault_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS],
+                    "accepted_bursts": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS_LOW])
+                        | (u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS_HIGH]) << 16),
+                    "returned_beats": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS_LOW])
+                        | (u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS_HIGH]) << 16),
+                    "raw_words": self.avalon.words,
+                },
+                "output": {
+                    "state": video_diagnostics_state_name(self.output.state),
+                    "trigger": self.output.trigger,
+                    "generation": self.output.generation,
+                    "route_epoch": output_route_epoch,
+                    "state_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_STATE_FLAGS],
+                    "source_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_SOURCE_FLAGS],
+                    "control_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS],
+                    "fault_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS],
+                    "geometry_faults": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_GEOMETRY_FAULTS],
+                    "raw_words": self.output.words,
+                },
+            })
+        }
+    }
+
     struct FpgaIo {
         base: *mut u8,
         _file: File,
@@ -3065,6 +3359,80 @@ mod linux {
                 }
                 result => result,
             }
+        }
+
+        fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
+            match self.read_video_diagnostics_once() {
+                Err(first) if first.kind() == io::ErrorKind::InvalidData => {
+                    self.reset_spi_transport();
+                    self.read_video_diagnostics_once()
+                }
+                Ok(first) if !first.generations_match() => {
+                    self.reset_spi_transport();
+                    self.read_video_diagnostics_once()
+                }
+                result => result,
+            }
+        }
+
+        fn read_video_diagnostics_once(&mut self) -> io::Result<VideoDiagnosticsReadout> {
+            use mister_magik_video_diagnostics_contract as contract;
+
+            let control_before = self
+                .read_video_diagnostics_record::<{ contract::VIDEO_DIAGNOSTICS_CONTROL_WORDS }>(
+                    contract::GET_VIDEO_DIAGNOSTICS_CONTROL,
+                    contract::VIDEO_DIAGNOSTICS_CONTROL_MAGIC,
+                )?;
+            let avalon = self
+                .read_video_diagnostics_record::<{ contract::VIDEO_DIAGNOSTICS_AVALON_WORDS }>(
+                    contract::GET_VIDEO_DIAGNOSTICS_AVALON,
+                    contract::VIDEO_DIAGNOSTICS_AVALON_MAGIC,
+                )?;
+            let output = self
+                .read_video_diagnostics_record::<{ contract::VIDEO_DIAGNOSTICS_OUTPUT_WORDS }>(
+                    contract::GET_VIDEO_DIAGNOSTICS_OUTPUT,
+                    contract::VIDEO_DIAGNOSTICS_OUTPUT_MAGIC,
+                )?;
+            let control_after = self
+                .read_video_diagnostics_record::<{ contract::VIDEO_DIAGNOSTICS_CONTROL_WORDS }>(
+                    contract::GET_VIDEO_DIAGNOSTICS_CONTROL,
+                    contract::VIDEO_DIAGNOSTICS_CONTROL_MAGIC,
+                )?;
+            Ok(VideoDiagnosticsReadout {
+                control_before: contract::decode_control(&control_before)
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+                avalon: contract::decode_avalon(&avalon)
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+                output: contract::decode_output(&output)
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+                control_after: contract::decode_control(&control_after)
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+            })
+        }
+
+        fn read_video_diagnostics_record<const N: usize>(
+            &mut self,
+            command: u16,
+            magic: u16,
+        ) -> io::Result<[u16; N]> {
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(command)?;
+                if magic_hi != magic && magic_lo != magic {
+                    return Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "video diagnostics command 0x{command:02x} unsupported: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                        ),
+                    ));
+                }
+                let mut words = [0u16; N];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                Ok(words)
+            })();
+            self.disable_io();
+            result
         }
 
         fn read_presentation_telemetry_once(
@@ -5147,6 +5515,23 @@ mod tests {
         let value = linux::network_rate_json(Some(previous), current);
         assert_eq!(value["rx_bytes_per_sec"], 500);
         assert_eq!(value["tx_bytes_per_sec"], 250);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn video_diagnostics_distinguishes_changed_and_unverified_ownership() {
+        assert_eq!(
+            linux::video_diagnostics_ownership_state(Some(4), Some(4), Some(true), true),
+            (false, false)
+        );
+        assert_eq!(
+            linux::video_diagnostics_ownership_state(Some(4), Some(5), Some(false), false),
+            (true, false)
+        );
+        assert_eq!(
+            linux::video_diagnostics_ownership_state(Some(4), Some(4), None, true),
+            (false, true)
+        );
     }
 
     #[cfg(not(target_os = "linux"))]

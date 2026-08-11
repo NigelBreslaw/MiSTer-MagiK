@@ -134,6 +134,7 @@ dependencies = [
  "mister-magik-framebuffer-stream",
  "mister-magik-latch-contract",
  "mister-magik-scanout-contract",
+ "mister-magik-video-diagnostics-contract",
  "quick-xml",
  "serde_json",
  "sha2",
@@ -157,6 +158,10 @@ version = "0.1.0"
 
 [[package]]
 name = "mister-magik-scanout-contract"
+version = "0.1.0"
+
+[[package]]
+name = "mister-magik-video-diagnostics-contract"
 version = "0.1.0"
 
 [[package]]

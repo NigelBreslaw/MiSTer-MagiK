@@ -16817,6 +16817,13 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "updated_unix_ms",
         ),
         "latch_failure": ssh_current_latch_failure_report(&sess),
+        "fpga_video_diagnostics": {
+            "schema": "mister-magik-fpga-video-diagnostics-v1",
+            "available": false,
+            "coherent": false,
+            "classification": "unclassified",
+            "reason": "agent transport unavailable; raw FPGA UIO is not read over SSH",
+        },
     }))
 }
 
@@ -16855,6 +16862,11 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
         out_dir,
         "latch-failure-latest.json",
         bundle.pointer("/latch_failure/report"),
+    )?;
+    write_json_member(
+        out_dir,
+        "fpga-video-diagnostics.json",
+        bundle.get("fpga_video_diagnostics"),
     )?;
 
     write_string_pointer(out_dir, "ps.txt", bundle.pointer("/processes/ps"))?;
@@ -21782,6 +21794,12 @@ H: Handlers=event3 js0"#
                     "episode_id": "report-latch-test"
                 }
             },
+            "fpga_video_diagnostics": {
+                "schema": "mister-magik-fpga-video-diagnostics-v1",
+                "available": true,
+                "coherent": true,
+                "classification": "final_black"
+            },
         });
 
         write_diagnostics_bundle(&out, &bundle).unwrap();
@@ -21799,6 +21817,10 @@ H: Handlers=event3 js0"#
             serde_json::from_slice(&fs::read(out.join("latch-failure-latest.json")).unwrap())
                 .unwrap();
         assert_eq!(latch["schema"], "mister-magik-latch-failure-report-v1");
+        let fpga_video: Value =
+            serde_json::from_slice(&fs::read(out.join("fpga-video-diagnostics.json")).unwrap())
+                .unwrap();
+        assert_eq!(fpga_video["classification"], "final_black");
         let _ = fs::remove_dir_all(out);
     }
 

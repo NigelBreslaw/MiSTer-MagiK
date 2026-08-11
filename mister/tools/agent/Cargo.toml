@@ -26,6 +26,7 @@ lz4_flex = "0.14.0"
 mister-magik-framebuffer-stream = { path = "../../../crates/framebuffer-stream" }
 mister-magik-scanout-contract = { path = "../../platform/contracts/scanout" }
 mister-magik-latch-contract = { path = "../../platform/contracts/latch" }
+mister-magik-video-diagnostics-contract = { path = "../../platform/contracts/video-diagnostics" }
 mister-magik-agent-protocol = { path = "../../../crates/agent-protocol" }
 quick-xml = "0.41.0"
 serde_json = "1"
