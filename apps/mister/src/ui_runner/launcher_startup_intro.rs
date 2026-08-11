@@ -414,7 +414,7 @@ impl StartupIntroSession {
     }
 
     pub(super) fn restore_handoff_snapshot(&self, target: &mut LayerTarget<'_>) -> bool {
-        target.restore_cached(&self.handoff_snapshot)
+        target.restore_presentation_cached(&self.handoff_snapshot)
     }
 
     pub(super) fn take_buffers(&mut self) -> Option<PluginLatchFrameBuffers> {

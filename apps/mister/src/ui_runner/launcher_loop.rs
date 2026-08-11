@@ -8687,7 +8687,7 @@ pub(super) fn run_launcher_loop(
         let mut startup_intro_failure = None;
         if let Some(intro) = startup_intro.as_mut() {
             if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
-                let launcher_pixels = layer_target.cached_frame_view().pixels();
+                let launcher_pixels = layer_target.presentation_frame_view().pixels();
                 if let Err(error) = intro.begin_launcher_snapshot_preparation(launcher_pixels) {
                     startup_intro_failure = Some(error);
                 } else {
