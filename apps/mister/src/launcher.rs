@@ -1853,6 +1853,15 @@ impl LauncherNav {
         let count = self.active_arcade_game_count(catalog, &collection.id);
         self.restore_game_list_state(&collection.id, count);
         self.screen = Screen::Arcade;
+        if collection
+            .system_id
+            .as_deref()
+            .unwrap_or(&collection.legacy_system_id)
+            .eq_ignore_ascii_case("snes")
+        {
+            self.screen = Screen::SystemHub;
+            self.system_hub_selected = 0;
+        }
         if let Some(system_index) = catalog.systems.iter().position(|system| {
             collection
                 .system_id
@@ -2244,6 +2253,9 @@ impl LauncherNav {
                 .is_some_and(|collection_id| self.activate_collection(catalog, collection_id)),
             LauncherAction::NavigateBack if self.screen == Screen::Home => self.pop_menu(),
             LauncherAction::NavigateBack if self.screen == Screen::Arcade => {
+                if self.return_arcade_to_system_hub() {
+                    return true;
+                }
                 let collection_id = self.active_collection_scope_id(catalog).to_string();
                 let before = self.screen;
                 self.leave_arcade(false, &collection_id);
@@ -2651,6 +2663,9 @@ impl LauncherNav {
                     path: None,
                     settings: None,
                 });
+            }
+            if self.return_arcade_to_system_hub() {
+                return None;
             }
             self.leave_arcade(false, &collection_id);
             return None;
@@ -3329,6 +3344,19 @@ impl LauncherNav {
         self.arcade_filter.drawer_open = false;
         self.arcade_search = ArcadeSearchState::new();
         self.arcade.reset();
+    }
+
+    pub fn return_arcade_to_system_hub(&mut self) -> bool {
+        if self
+            .active_collection_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case("snes"))
+        {
+            self.screen = Screen::SystemHub;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn arcade_user_list_mode(&self) -> ArcadeUserListMode {
@@ -9703,7 +9731,7 @@ mod tests {
     }
 
     #[test]
-    fn snes_routes_directly_to_its_game_list_and_returns_home() {
+    fn snes_routes_through_hub_and_lists_return_to_it() {
         let catalog = arcade_catalog(
             vec![
                 arcade_game("F-Zero")
@@ -9715,11 +9743,72 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&catalog, "snes"));
-        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.screen, Screen::SystemHub);
 
         let now = Instant::now();
-        nav.handle_input(&pad_with(|pad| pad.btn_b = true), now, &catalog);
-        assert_eq!(nav.screen, Screen::Home);
+        nav.handle_input(&pad_with(|pad| pad.btn_a = true), now, &catalog);
+        assert_eq!(nav.screen, Screen::Arcade);
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(1),
+            &catalog,
+        );
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_b = true),
+            now + Duration::from_millis(2),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::SystemHub);
+    }
+
+    #[test]
+    fn snes_hub_opens_recent_and_favourite_lists() {
+        let catalog = arcade_catalog(
+            vec![
+                arcade_game("F-Zero")
+                    .system_id("snes")
+                    .path("/media/fat/games/SNES/F-Zero.sfc")
+                    .build(),
+            ],
+            vec![arcade_system("snes", 1)],
+        );
+        let mut nav = LauncherNav::new();
+        nav.set_user_game_refs(
+            &catalog,
+            ["/media/fat/games/SNES/F-Zero.sfc".to_string()],
+            vec!["/media/fat/games/SNES/F-Zero.sfc".to_string()],
+        );
+        assert!(nav.open_system(&catalog, "snes"));
+
+        let now = Instant::now();
+        nav.handle_input(&pad_with(|pad| pad.dpad_right = true), now, &catalog);
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(1),
+            &catalog,
+        );
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_a = true),
+            now + Duration::from_millis(2),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Recent);
+
+        nav.return_arcade_to_system_hub();
+        nav.system_hub_selected = 2;
+        nav.handle_input(
+            &PadState::default(),
+            now + Duration::from_millis(3),
+            &catalog,
+        );
+        nav.handle_input(
+            &pad_with(|pad| pad.btn_a = true),
+            now + Duration::from_millis(4),
+            &catalog,
+        );
+        assert_eq!(nav.screen, Screen::Arcade);
+        assert_eq!(nav.arcade_user_list_mode(), ArcadeUserListMode::Favourites);
     }
 
     #[test]

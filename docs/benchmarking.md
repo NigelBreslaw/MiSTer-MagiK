@@ -206,7 +206,9 @@ no shard load. The benchmark sends one production-path activation press, then
 records row readiness, the first presented list frame, selected-preview
 readiness, and the first Main-confirmed active frame containing both the full
 list and the terminal selected screenshot state. It retains that frame as a
-PNG together with capture metadata and the event trace.
+PNG together with capture metadata and the event trace. The benchmark enters
+the game list directly; production SNES activation first presents the System
+Hub containing Games, Recent, and Favorites.
 
 The discovery sweep samples every populated system once. The three slowest
 systems then receive two additional samples, and `summary.json` identifies the
@@ -215,8 +217,7 @@ cold: the launcher is restarted for every sample, but the operating-system
 filesystem cache is deliberately not flushed. Screenshot capture starts only
 after the ready marker and after the asynchronous launcher status confirms the
 same active system list; both the status wait and capture are excluded from the
-latency. SNES opens its game list directly, like every other system, rather
-than routing through the optional hub screen.
+latency.
 
 A system that does not reach the authoritative ready marker is retained as a
 failed sample with its partial trace, final launcher status, and any available

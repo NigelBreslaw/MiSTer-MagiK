@@ -639,6 +639,7 @@ struct PendingCollectionEntry {
     collection_id: String,
     requested_at: Instant,
     source: launcher::HomeViewState,
+    open_game_list_directly: bool,
 }
 
 struct PendingNavigationTransition {
@@ -946,6 +947,10 @@ fn commit_pending_collection_entry(
     nav.catalog_system_hydration_finished(&entry.collection_id);
     if !nav.activate_collection(catalog, &entry.collection_id) {
         return false;
+    }
+    if entry.open_game_list_directly && nav.screen == Screen::SystemHub {
+        nav.set_arcade_user_list_mode(catalog, launcher::ArcadeUserListMode::Games);
+        nav.screen = Screen::Arcade;
     }
     print_startup_event(
         start,
@@ -3803,6 +3808,7 @@ fn begin_cold_collection_entry(
     collection_id: &str,
     requested_at: Instant,
     trace_source: &'static str,
+    open_game_list_directly: bool,
     arcade_entry_latency: &mut ArcadeEntryLatencyTracker,
     lifecycle: &LauncherLifecycle,
     start: Instant,
@@ -3862,6 +3868,7 @@ fn begin_cold_collection_entry(
                 collection_id: collection_id.to_string(),
                 requested_at,
                 source: nav.home_view_state(),
+                open_game_list_directly,
             }
         });
     ColdCollectionEntryStart {
@@ -5667,6 +5674,13 @@ pub(super) fn run_launcher_loop(
                     true,
                 );
                 if nav.open_system(&catalog, &collection_id) {
+                    if nav.screen == Screen::SystemHub {
+                        nav.set_arcade_user_list_mode(
+                            &catalog,
+                            launcher::ArcadeUserListMode::Games,
+                        );
+                        nav.screen = Screen::Arcade;
+                    }
                     arcade_entry_latency.record_rows_ready(
                         start,
                         requested_at,
@@ -5687,6 +5701,7 @@ pub(super) fn run_launcher_loop(
                     &collection_id,
                     requested_at,
                     "benchmark-direct",
+                    true,
                     &mut arcade_entry_latency,
                     &lifecycle,
                     start,
@@ -7046,6 +7061,7 @@ pub(super) fn run_launcher_loop(
                                             collection_id,
                                             requested_at,
                                             "open-collection-intent",
+                                            false,
                                             &mut arcade_entry_latency,
                                             &lifecycle,
                                             start,
@@ -13706,7 +13722,7 @@ mod tests {
         let full_catalog = catalog_for_media_systems(&["snes"]);
         let mut launched_nav = LauncherNav::new();
         assert!(launched_nav.open_system(&full_catalog, "snes"));
-        assert_eq!(launched_nav.screen, Screen::Arcade);
+        assert_eq!(launched_nav.screen, Screen::SystemHub);
         launched_nav.set_arcade_user_list_mode(&full_catalog, launcher::ArcadeUserListMode::Games);
         launched_nav.screen = Screen::Arcade;
         assert_eq!(launched_nav.screen, Screen::Arcade);
@@ -14038,6 +14054,7 @@ mod tests {
             collection_id: "c64".to_string(),
             requested_at: Instant::now(),
             source: nav.home_view_state(),
+            open_game_list_directly: false,
         });
         let source_bridge = LauncherBridgeKey::from_nav(&nav);
 
@@ -14069,6 +14086,44 @@ mod tests {
     }
 
     #[test]
+    fn cold_snes_commit_opens_the_hub_except_for_direct_benchmarks() {
+        let registry = ArcadeCatalog::new(
+            std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+        let hydrated = crate::test_support::arcade_catalog(
+            vec![
+                crate::test_support::arcade_game("F-Zero")
+                    .system_id("snes")
+                    .build(),
+            ],
+            vec![crate::test_support::arcade_system("snes", 1)],
+        );
+
+        for (open_game_list_directly, expected_screen) in
+            [(false, Screen::SystemHub), (true, Screen::Arcade)]
+        {
+            let mut nav = LauncherNav::new();
+            nav.sync_launcher_taxonomy(&registry);
+            let mut pending = Some(PendingCollectionEntry {
+                collection_id: "snes".to_string(),
+                requested_at: Instant::now(),
+                source: nav.home_view_state(),
+                open_game_list_directly,
+            });
+
+            assert!(commit_pending_collection_entry(
+                &mut pending,
+                &mut nav,
+                &hydrated,
+                Instant::now(),
+            ));
+            assert_eq!(nav.screen, expected_screen);
+        }
+    }
+
+    #[test]
     fn failed_pending_collection_restores_home_without_clearing_load_failure() {
         let catalog = ArcadeCatalog::new(
             std::path::PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT),
@@ -14082,6 +14137,7 @@ mod tests {
             collection_id: "c64".to_string(),
             requested_at: Instant::now(),
             source: source.clone(),
+            open_game_list_directly: false,
         });
         nav.catalog_system_hydration_failed("c64");
 
@@ -14109,6 +14165,7 @@ mod tests {
             collection_id: "c64".to_string(),
             requested_at: Instant::now(),
             source: nav.home_view_state(),
+            open_game_list_directly: false,
         });
         let event = normalized_test_press(crate::input_event::LogicalAction::Back);
 
