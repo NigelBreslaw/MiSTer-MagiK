@@ -7347,12 +7347,6 @@ fn system_entry_artifact_prefix(
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SystemEntryInvocation {
-    TileActivation,
-    Direct,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SystemEntryInstrumentation {
     Normal,
     Profile,
@@ -7409,7 +7403,6 @@ fn profile_installed_system_entry(
                 *games,
                 ordinal + 1,
                 1,
-                SystemEntryInvocation::TileActivation,
                 SystemEntryInstrumentation::Normal,
             )?;
             samples_by_system
@@ -7454,7 +7447,6 @@ fn profile_installed_system_entry(
                         .get(&system)
                         .ok_or("system-entry candidate has no registry ordinal")?,
                     sample_index,
-                    SystemEntryInvocation::TileActivation,
                     SystemEntryInstrumentation::Normal,
                 )?;
                 samples_by_system
@@ -7567,7 +7559,8 @@ fn profile_installed_system_entry(
     let summary = json!({
         "schema": "mister-magik-system-entry-benchmark-v1",
         "status": if passed { "passed" } else { "failed" },
-        "measurement": "activation input to first authoritative frame with full list and terminal selected screenshot",
+        "measurement": "direct collection-entry request to first Main-confirmed frame with full list and terminal selected screenshot",
+        "invocation": "direct shared production collection-entry path; no tile focus, menu traversal, or synthetic input",
         "cache_policy": "fresh launcher process per sample; operating-system filesystem cache is not flushed",
         "sampling": {
             "discovery_runs_per_system": 1,
@@ -7662,7 +7655,6 @@ fn profile_installed_system_entry_critical(
                 games,
                 ordinal + 1,
                 1,
-                SystemEntryInvocation::Direct,
                 SystemEntryInstrumentation::Normal,
             )
         })
@@ -7807,7 +7799,6 @@ fn profile_installed_system_entry_repeated(
                     *games,
                     ordinal + 1,
                     sample_index,
-                    SystemEntryInvocation::Direct,
                     SystemEntryInstrumentation::Normal,
                 )?);
             }
@@ -7931,7 +7922,6 @@ fn profile_installed_system_entry_critical_profile(
                     .ok_or_else(|| format!("profile target {system} is not populated"))?,
                 ordinal + 1,
                 1,
-                SystemEntryInvocation::Direct,
                 SystemEntryInstrumentation::Profile,
             )
         })
@@ -8105,7 +8095,6 @@ fn run_system_entry_sample(
     games: u64,
     registry_ordinal: usize,
     sample_index: usize,
-    invocation: SystemEntryInvocation,
     instrumentation: SystemEntryInstrumentation,
 ) -> Result<Value> {
     let run_id = format!(
@@ -8149,9 +8138,7 @@ fn run_system_entry_sample(
                 SYSTEM_ENTRY_PROFILE_REMOTE.into(),
             ),
         ];
-        if invocation == SystemEntryInvocation::Direct {
-            env_vars.push(("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT".into(), "1".into()));
-        }
+        env_vars.push(("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT".into(), "1".into()));
         if instrumentation == SystemEntryInstrumentation::Profile {
             env_vars.extend([
                 ("MISTER_PMU_PROFILE".into(), "1".into()),
@@ -8183,14 +8170,6 @@ fn run_system_entry_sample(
                 ..LauncherRestartOptions::default()
             },
         )?;
-        if invocation == SystemEntryInvocation::TileActivation {
-            wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-                status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-                    && status.get("screen").and_then(Value::as_str) == Some("home")
-                    && status.get("selected_item_id").and_then(Value::as_str) == Some(system)
-            })?;
-            run_launcher_response_driver(session, "a 10 1 1")?;
-        }
         let trace = wait_system_entry_trace(session, &run_id, system, Duration::from_secs(45))?;
         wait_launcher_response_status(session, Duration::from_secs(10), |status| {
             system_entry_status_matches_list(status, system)
@@ -8304,10 +8283,7 @@ fn run_system_entry_sample(
             "status": "passed",
             "sample": sample_index,
             "run_id": run_id,
-            "invocation": match invocation {
-                SystemEntryInvocation::TileActivation => "tile-activation",
-                SystemEntryInvocation::Direct => "direct",
-            },
+            "invocation": "direct",
             "system": system,
             "games": games,
             "loaded_games": loaded_games,
@@ -8366,7 +8342,6 @@ fn run_system_entry_sample(
             &run_id,
             &artifact_prefix,
             &error.to_string(),
-            invocation,
         ),
     }
 }
@@ -8382,7 +8357,6 @@ fn retain_failed_system_entry_sample(
     run_id: &str,
     artifact_prefix: &str,
     error: &str,
-    invocation: SystemEntryInvocation,
 ) -> Result<Value> {
     let trace_file = format!("{artifact_prefix}.tsv");
     let status_file = format!("{artifact_prefix}-status.json");
@@ -8423,10 +8397,7 @@ fn retain_failed_system_entry_sample(
         "status": "failed",
         "sample": sample_index,
         "run_id": run_id,
-        "invocation": match invocation {
-            SystemEntryInvocation::TileActivation => "tile-activation",
-            SystemEntryInvocation::Direct => "direct",
-        },
+        "invocation": "direct",
         "system": system,
         "games": games,
         "error": error,
