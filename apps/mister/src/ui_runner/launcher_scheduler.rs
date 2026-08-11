@@ -284,16 +284,17 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let projection_started = Instant::now();
             let projection_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-row-projection");
-            let (replacement, launch_plans) =
+            let (replacement, cold_metadata, launch_plans) =
                 arcade_rows_from_owned_persisted_shard(&worker_system_id, games);
             drop(projection_pmu);
             let row_projection_us = elapsed_us(projection_started);
             let collection_index_started = Instant::now();
             let collection_index_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-collection-index");
-            let collection = Arc::new(arcade_catalog::SystemCollection::new(
+            let collection = Arc::new(arcade_catalog::SystemCollection::new_with_metadata(
                 worker_system_id.as_str(),
                 replacement,
+                cold_metadata,
                 launch_plans,
                 base_catalog.platform_kind(&worker_system_id),
             ));

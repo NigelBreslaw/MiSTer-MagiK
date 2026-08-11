@@ -132,20 +132,39 @@ pub struct ArcadeCatalog {
 pub struct SystemCollection {
     system_id: Arc<str>,
     games: Arc<Vec<ArcadeGameEntry>>,
+    cold_metadata: Arc<Vec<ArcadeGameMetadataKey>>,
     platform_kinds: Arc<HashMap<String, PlatformKind>>,
-    games_by_filter: Arc<HashMap<ArcadeFilterKey, Vec<usize>>>,
-    filter_options_by_system: Arc<HashMap<String, ArcadeSystemFilterOptions>>,
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
     launch_plans_by_ref: Arc<HashMap<Arc<str>, StructuredLaunchPlan>>,
-    search_keys: Arc<Vec<ArcadeSearchKey>>,
-    autocomplete: Arc<ArcadeAutocompleteIndex>,
-    lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
+    rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
 }
 
 impl SystemCollection {
     pub fn new(
         system_id: impl Into<Arc<str>>,
+        mut games: Vec<ArcadeGameEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kind: PlatformKind,
+    ) -> Self {
+        let cold_metadata = games
+            .iter_mut()
+            .map(|game| {
+                let metadata = game.metadata_key();
+                game.year = None;
+                game.manufacturer = Arc::from("");
+                game.category = Arc::from("");
+                game.players = None;
+                game.control = Arc::from("");
+                metadata
+            })
+            .collect();
+        Self::new_with_metadata(system_id, games, cold_metadata, launch_plans, platform_kind)
+    }
+
+    pub fn new_with_metadata(
+        system_id: impl Into<Arc<str>>,
         games: Vec<ArcadeGameEntry>,
+        cold_metadata: Vec<ArcadeGameMetadataKey>,
         launch_plans: Vec<StructuredLaunchPlan>,
         platform_kind: PlatformKind,
     ) -> Self {
@@ -155,25 +174,18 @@ impl SystemCollection {
                 .iter()
                 .all(|game| game.system_id.as_ref() == system_id.as_ref())
         );
+        debug_assert_eq!(games.len(), cold_metadata.len());
         let platform_kinds = Arc::new(HashMap::from([(system_id.to_string(), platform_kind)]));
-        let indexes = build_arcade_catalog_indexes(
-            &games,
-            &platform_kinds,
-            launch_plans,
-            CatalogIndexMode::DeferredText,
-            None,
-        );
+        let (preview_games_by_system, launch_plans_by_ref) =
+            build_system_collection_hot_indexes(&games, &platform_kinds, launch_plans);
         Self {
             system_id,
             games: Arc::new(games),
+            cold_metadata: Arc::new(cold_metadata),
             platform_kinds,
-            games_by_filter: Arc::new(indexes.games_by_filter),
-            filter_options_by_system: Arc::new(indexes.filter_options_by_system),
-            preview_games_by_system: Arc::new(indexes.preview_games_by_system),
-            launch_plans_by_ref: Arc::new(indexes.launch_plans_by_ref),
-            search_keys: Arc::new(indexes.search_keys),
-            autocomplete: Arc::new(indexes.autocomplete),
-            lazy_text_indexes: Arc::new(OnceLock::new()),
+            preview_games_by_system: Arc::new(preview_games_by_system),
+            launch_plans_by_ref: Arc::new(launch_plans_by_ref),
+            rich_indexes: Arc::new(OnceLock::new()),
         }
     }
 
@@ -191,7 +203,7 @@ impl SystemCollection {
 
     fn filtered_game_indexes(&self, filter: &ArcadeFilter) -> &[usize] {
         filter_key(&self.system_id, filter)
-            .and_then(|key| self.games_by_filter.get(&key))
+            .and_then(|key| self.rich_indexes().games_by_filter.get(&key))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }
@@ -205,51 +217,58 @@ impl SystemCollection {
 
     fn filter_options(&self) -> &ArcadeSystemFilterOptions {
         static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
-        self.filter_options_by_system
+        self.rich_indexes()
+            .filter_options_by_system
             .get(self.system_id.as_ref())
             .unwrap_or_else(|| EMPTY.get_or_init(ArcadeSystemFilterOptions::default))
     }
 
     fn try_search_keys(&self) -> Option<&[ArcadeSearchKey]> {
-        if self.search_keys.len() == self.games.len() {
-            Some(&self.search_keys)
-        } else {
-            self.lazy_text_indexes
-                .get()
-                .map(|indexes| indexes.search_keys.as_slice())
-        }
+        self.rich_indexes
+            .get()
+            .map(|indexes| indexes.search_keys.as_slice())
     }
 
     fn search_keys(&self) -> &[ArcadeSearchKey] {
-        if self.search_keys.len() == self.games.len() {
-            &self.search_keys
-        } else {
-            &self
-                .lazy_text_indexes
-                .get_or_init(|| build_arcade_text_indexes(&self.games, &self.platform_kinds))
-                .search_keys
-        }
+        &self.rich_indexes().search_keys
     }
 
     fn try_autocomplete(&self) -> Option<&ArcadeAutocompleteIndex> {
-        if self.autocomplete.is_empty() && !self.games.is_empty() {
-            self.lazy_text_indexes
-                .get()
-                .map(|indexes| &indexes.autocomplete)
-        } else {
-            Some(&self.autocomplete)
-        }
+        self.rich_indexes.get().map(|indexes| &indexes.autocomplete)
     }
 
     fn autocomplete(&self) -> &ArcadeAutocompleteIndex {
-        if self.autocomplete.is_empty() && !self.games.is_empty() {
-            &self
-                .lazy_text_indexes
-                .get_or_init(|| build_arcade_text_indexes(&self.games, &self.platform_kinds))
-                .autocomplete
-        } else {
-            &self.autocomplete
-        }
+        &self.rich_indexes().autocomplete
+    }
+
+    fn metadata_at(&self, index: usize) -> Option<&ArcadeGameMetadataKey> {
+        self.cold_metadata.get(index)
+    }
+
+    fn rich_indexes(&self) -> &ArcadeCatalogIndexes {
+        self.rich_indexes.get_or_init(|| {
+            let games = self
+                .games
+                .iter()
+                .zip(self.cold_metadata.iter())
+                .map(|(hot, metadata)| {
+                    let mut game = hot.clone();
+                    game.year = metadata.year;
+                    game.manufacturer = Arc::from(metadata.manufacturer.as_str());
+                    game.category = Arc::from(metadata.category.as_str());
+                    game.players = metadata.players;
+                    game.control = Arc::from(metadata.control.as_str());
+                    game
+                })
+                .collect::<Vec<_>>();
+            build_arcade_catalog_indexes(
+                &games,
+                &self.platform_kinds,
+                self.launch_plans_by_ref.values().cloned().collect(),
+                CatalogIndexMode::Eager,
+                None,
+            )
+        })
     }
 }
 
@@ -827,6 +846,21 @@ impl ArcadeCatalog {
         self.system_game_view(system_id).get(index)
     }
 
+    /// Returns rich metadata for a system row without placing it in the hot navigation row.
+    pub fn system_game_metadata_at(
+        &self,
+        system_id: &str,
+        index: usize,
+    ) -> Option<ArcadeGameMetadataKey> {
+        self.system_collection(system_id).map_or_else(
+            || {
+                self.system_game_at(system_id, index)
+                    .map(ArcadeGameEntry::metadata_key)
+            },
+            |collection| collection.metadata_at(index).cloned(),
+        )
+    }
+
     pub fn system_game_view(&self, system_id: &str) -> ArcadeGameView<'_> {
         self.system_collection(system_id).map_or_else(
             || ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id)),
@@ -1305,6 +1339,7 @@ impl ArcadeCatalog {
     }
 }
 
+#[derive(Debug)]
 struct ArcadeCatalogIndexes {
     games_by_system: HashMap<String, Vec<usize>>,
     games_by_filter: HashMap<ArcadeFilterKey, Vec<usize>>,
@@ -1531,6 +1566,48 @@ fn build_arcade_catalog_indexes(
         search_keys: std::mem::take(&mut text_indexes.search_keys),
         autocomplete: std::mem::take(&mut text_indexes.autocomplete),
     }
+}
+
+fn build_system_collection_hot_indexes(
+    games: &[ArcadeGameEntry],
+    platform_kinds: &HashMap<String, PlatformKind>,
+    launch_plans: Vec<StructuredLaunchPlan>,
+) -> (
+    HashMap<String, Vec<usize>>,
+    HashMap<Arc<str>, StructuredLaunchPlan>,
+) {
+    let mut preview_games_by_system = HashMap::<String, Vec<usize>>::new();
+    let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
+    for (idx, game) in games.iter().enumerate() {
+        if !has_preview_image(game) {
+            continue;
+        }
+        for system_id in game_collection_ids(game, platform_kinds)
+            .into_iter()
+            .flatten()
+        {
+            let preview_indexes = preview_games_by_system
+                .entry(system_id.to_owned())
+                .or_default();
+            let best_by_key = preview_best_by_system
+                .entry(system_id.to_owned())
+                .or_default();
+            let key = preview_dedupe_key(&game.title);
+            if let Some(&preview_pos) = best_by_key.get(&key) {
+                if prefer_preview_game(game, &games[preview_indexes[preview_pos]]) {
+                    preview_indexes[preview_pos] = idx;
+                }
+            } else {
+                best_by_key.insert(key, preview_indexes.len());
+                preview_indexes.push(idx);
+            }
+        }
+    }
+    let launch_plans_by_ref = launch_plans
+        .into_iter()
+        .map(|plan| (plan.launch_ref.clone(), plan))
+        .collect();
+    (preview_games_by_system, launch_plans_by_ref)
 }
 
 fn build_arcade_text_indexes(
@@ -2364,12 +2441,20 @@ mod tests {
             delay_secs: 1,
         };
 
-        let hydrated = catalog.with_system_collection(Arc::new(SystemCollection::new(
+        let collection = Arc::new(SystemCollection::new(
             "c64",
             vec![game],
             vec![plan],
             PlatformKind::Computer,
-        )));
+        ));
+
+        assert!(collection.rich_indexes.get().is_none());
+        assert!(collection.games[0].manufacturer.is_empty());
+        assert!(matches!(
+            collection.launch_plans_by_ref.get("magik-plan:c64:new"),
+            Some(_)
+        ));
+        let hydrated = catalog.with_system_collection(collection.clone());
 
         assert_eq!(hydrated.system_game_count("c64"), 1);
         assert_eq!(
@@ -2377,10 +2462,22 @@ mod tests {
             "New C64 Game"
         );
         assert_eq!(
+            hydrated.system_game_metadata_at("c64", 0),
+            Some(ArcadeGameMetadataKey {
+                year: Some(1987),
+                manufacturer: "Example".into(),
+                category: "Action".into(),
+                players: Some(1),
+                control: "joy".into(),
+            })
+        );
+        assert!(collection.rich_indexes.get().is_none());
+        assert_eq!(
             hydrated.filtered_game_count("c64", &ArcadeFilter::Category("Action".into())),
             1
         );
         assert_eq!(hydrated.category_options("c64")[0].label, "Action");
+        assert!(collection.rich_indexes.get().is_some());
         assert_eq!(hydrated.system_preview_game_count("c64"), 1);
         assert_eq!(
             hydrated

@@ -201,12 +201,14 @@ pub fn arcade_rows_from_owned_persisted_shard(
     games: Vec<SystemGame>,
 ) -> (
     Vec<arcade_catalog::ArcadeGameEntry>,
+    Vec<arcade_catalog::ArcadeGameMetadataKey>,
     Vec<arcade_catalog::StructuredLaunchPlan>,
 ) {
     let shared_system_id = Arc::<str>::from(system_id);
     let mut strings = ArcStringInterner::default();
     strings.retain(shared_system_id.clone());
     let mut projected = Vec::with_capacity(games.len());
+    let mut metadata = Vec::with_capacity(games.len());
     let mut launch_plans = Vec::with_capacity(
         games
             .iter()
@@ -231,6 +233,13 @@ pub fn arcade_rows_from_owned_persisted_shard(
                 delay_secs: plan.delay_secs,
             });
         }
+        metadata.push(arcade_catalog::ArcadeGameMetadataKey {
+            year: game.year,
+            manufacturer: game.manufacturer,
+            category: game.category,
+            players: game.players,
+            control: game.control,
+        });
         projected.push(arcade_catalog::ArcadeGameEntry {
             title,
             mra_path: launch_ref,
@@ -238,15 +247,15 @@ pub fn arcade_rows_from_owned_persisted_shard(
             preview_asset_key: Arc::from(game.preview_asset_key),
             has_preview: game.has_preview,
             system_id: shared_system_id.clone(),
-            year: game.year,
-            manufacturer: strings.intern(game.manufacturer),
-            category: strings.intern(game.category),
-            players: game.players,
-            control: strings.intern(game.control),
+            year: None,
+            manufacturer: Arc::from(""),
+            category: Arc::from(""),
+            players: None,
+            control: Arc::from(""),
             is_new: game.is_new,
         });
     }
-    (projected, launch_plans)
+    (projected, metadata, launch_plans)
 }
 
 #[derive(Default)]
@@ -394,28 +403,32 @@ mod tests {
             },
         ];
         let (expected_rows, expected_plans) = arcade_rows_from_persisted_shard("snes", &source);
-        let (actual_rows, actual_plans) = arcade_rows_from_owned_persisted_shard("snes", source);
+        let (actual_rows, actual_metadata, actual_plans) =
+            arcade_rows_from_owned_persisted_shard("snes", source);
 
         assert_eq!(actual_plans, expected_plans);
         assert_eq!(actual_rows.len(), expected_rows.len());
-        for (actual, expected) in actual_rows.iter().zip(&expected_rows) {
+        for ((actual, metadata), expected) in
+            actual_rows.iter().zip(&actual_metadata).zip(&expected_rows)
+        {
             assert_eq!(actual.title, expected.title);
             assert_eq!(actual.mra_path, expected.mra_path);
             assert_eq!(actual.preview_archive_path, expected.preview_archive_path);
             assert_eq!(actual.preview_asset_key, expected.preview_asset_key);
             assert_eq!(actual.has_preview, expected.has_preview);
             assert_eq!(actual.system_id, expected.system_id);
-            assert_eq!(actual.year, expected.year);
-            assert_eq!(actual.manufacturer, expected.manufacturer);
-            assert_eq!(actual.category, expected.category);
-            assert_eq!(actual.players, expected.players);
-            assert_eq!(actual.control, expected.control);
+            assert_eq!(metadata, &expected.metadata_key());
+            assert_eq!(actual.year, None);
+            assert!(actual.manufacturer.is_empty());
+            assert!(actual.category.is_empty());
+            assert_eq!(actual.players, None);
+            assert!(actual.control.is_empty());
             assert_eq!(actual.is_new, expected.is_new);
         }
     }
 
     #[test]
-    fn owned_projection_interns_system_and_repeated_system_metadata() {
+    fn owned_projection_shares_hot_system_values_and_detaches_rich_metadata() {
         let repeated = |stable_key: &str, title: &str| SystemGame {
             stable_key: stable_key.into(),
             title: title.into(),
@@ -426,7 +439,7 @@ mod tests {
             control: "joy".into(),
             ..SystemGame::default()
         };
-        let (rows, _) = arcade_rows_from_owned_persisted_shard(
+        let (rows, metadata, _) = arcade_rows_from_owned_persisted_shard(
             "snes",
             vec![repeated("one", "One"), repeated("two", "Two")],
         );
@@ -436,8 +449,8 @@ mod tests {
             &rows[0].preview_archive_path,
             &rows[1].preview_archive_path
         ));
-        assert!(Arc::ptr_eq(&rows[0].manufacturer, &rows[1].manufacturer));
-        assert!(Arc::ptr_eq(&rows[0].category, &rows[1].category));
-        assert!(Arc::ptr_eq(&rows[0].control, &rows[1].control));
+        assert_eq!(metadata[0].manufacturer, metadata[1].manufacturer);
+        assert_eq!(metadata[0].category, metadata[1].category);
+        assert_eq!(metadata[0].control, metadata[1].control);
     }
 }
