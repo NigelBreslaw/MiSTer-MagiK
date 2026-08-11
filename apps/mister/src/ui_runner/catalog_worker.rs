@@ -2083,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_event_rehydrates_live_handheld_counts_before_completion() {
+    fn persisted_event_publishes_live_handheld_counts_before_completion() {
         let (storage, fingerprint) = post_persist_registry_fixture();
         let (tx, rx) = mpsc::channel();
         let worker_storage = storage.clone();
@@ -2162,12 +2162,10 @@ mod tests {
                 .count,
             1
         );
-        assert_eq!(
-            catalog.games.len(),
-            1,
-            "only Arcade rows should be resident"
+        assert!(
+            catalog.games.is_empty(),
+            "registry publication must not hydrate any system rows"
         );
-        assert_eq!(catalog.games[0].system_id.as_ref(), "arcade");
 
         let mut nav = LauncherNav::new();
         nav.catalog_build_started();

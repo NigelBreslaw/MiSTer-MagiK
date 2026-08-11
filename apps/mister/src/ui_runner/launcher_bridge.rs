@@ -1127,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn arcade_collection_uses_loaded_rows_as_count_authority() {
+    fn arcade_collection_reports_missing_registry_rows_as_loading() {
         let catalog = ArcadeCatalog::new(
             PathBuf::from(DEFAULT_ARCADE_ROOT),
             vec![arcade_game("Arcade One").system_id("arcade").build()],
@@ -1152,7 +1152,7 @@ mod tests {
             1
         );
         assert_eq!(active_system_game_view(&catalog, &nav).len(), 1);
-        assert!(!active_system_games_loading(&catalog, &nav));
+        assert!(active_system_games_loading(&catalog, &nav));
     }
 
     #[test]
@@ -1326,7 +1326,7 @@ mod tests {
         let rows = models.menu_items(&nav, 1);
         let presentation = models.menu_item_presentation();
 
-        assert_eq!(rows.row_count(), 3);
+        assert_eq!(rows.row_count(), 4);
         let before = (0..rows.row_count())
             .map(|index| rows.row_data(index).expect("initial launcher row"))
             .collect::<Vec<_>>();
@@ -1366,6 +1366,7 @@ mod tests {
         assert!(presentation_after[1].selected);
         assert!(presentation_after[1].acknowledged);
         assert_eq!(presentation_before[2], presentation_after[2]);
+        assert_eq!(presentation_before[3], presentation_after[3]);
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         assert!(bridge.invoke_selection_feedback_query(
             "".into(),
