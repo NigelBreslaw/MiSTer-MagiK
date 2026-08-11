@@ -626,6 +626,13 @@ struct ArcadeEntryLatencyTracker {
     first_nav_input_at: Option<Instant>,
     first_nav_presented: bool,
     catalog_resident_at_input: Option<bool>,
+    presentation_start: Option<SystemEntryPresentationStart>,
+}
+
+#[derive(Clone, Copy)]
+struct SystemEntryPresentationStart {
+    telemetry: mister_magik_latch_contract::PresentationTelemetry,
+    latch_drop_count: u16,
 }
 
 struct PendingCollectionEntry {
@@ -1015,6 +1022,7 @@ impl ArcadeEntryLatencyTracker {
             first_nav_input_at: None,
             first_nav_presented: false,
             catalog_resident_at_input: None,
+            presentation_start: None,
         }
     }
 
@@ -1032,6 +1040,18 @@ impl ArcadeEntryLatencyTracker {
         self.first_nav_input_at = None;
         self.first_nav_presented = false;
         self.catalog_resident_at_input = None;
+        self.presentation_start = None;
+    }
+
+    fn capture_presentation_start(
+        &mut self,
+        telemetry: Option<mister_magik_latch_contract::PresentationTelemetry>,
+        latch_drop_count: u16,
+    ) {
+        self.presentation_start = telemetry.map(|telemetry| SystemEntryPresentationStart {
+            telemetry,
+            latch_drop_count,
+        });
     }
 
     fn preview_adoption_in_progress(&self) -> bool {
@@ -1364,6 +1384,8 @@ impl ArcadeEntryLatencyTracker {
         main_active_confirmed: bool,
         catalog_generation: usize,
         main_sequence: u16,
+        presentation_end: Option<mister_magik_latch_contract::PresentationTelemetry>,
+        latch_drop_count: u16,
     ) -> bool {
         if !self.destination_prepared
             || !system_entry_ready_frame_eligible(
@@ -1382,6 +1404,22 @@ impl ArcadeEntryLatencyTracker {
         let system = Self::active_system_id(catalog, nav);
         let asset_key = Self::selected_asset_key(catalog, nav);
         let selected_has_preview = selected_arcade_game_has_preview(nav, catalog);
+        let cadence = self
+            .presentation_start
+            .zip(presentation_end)
+            .filter(|(start, end)| {
+                start.telemetry.magik_ownership()
+                    && end.magik_ownership()
+                    && start.telemetry.lifetime_invariant_valid()
+                    && end.lifetime_invariant_valid()
+            })
+            .map(|(start, end)| {
+                (
+                    end.repeated_vblank_count
+                        .wrapping_sub(start.telemetry.repeated_vblank_count),
+                    latch_drop_count.wrapping_sub(start.latch_drop_count),
+                )
+            });
         self.trace.record(
             start,
             "system_entry_ready_presented",
@@ -1396,11 +1434,18 @@ impl ArcadeEntryLatencyTracker {
             preview.trace_cache_state(),
             &asset_key,
             format!(
-                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={}",
+                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={} cadence_authoritative={} repeated_vblank_delta={} latch_drop_delta={}",
                 u8::from(selected_has_preview),
                 catalog_generation,
                 preview.presentation_generation(),
                 main_sequence,
+                u8::from(cadence.is_some()),
+                cadence
+                    .map(|(repeated, _)| repeated.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
+                cadence
+                    .map(|(_, dropped)| dropped.to_string())
+                    .unwrap_or_else(|| "unavailable".to_string()),
             ),
         );
         true
@@ -5719,6 +5764,10 @@ pub(super) fn run_launcher_loop(
             let requested_at = Instant::now();
             mister_magik_perf_events::clear_process_profiles();
             system_entry_cpu_profile = cpu_profile::start_system_entry();
+            arcade_entry_latency.capture_presentation_start(
+                f.read_magik_presentation_telemetry().ok(),
+                frame_accounting.last_latch_drop_count(),
+            );
             if collection_has_resident_rows(&catalog, &collection_id) {
                 arcade_entry_latency.record_collection_enter_input(
                     start,
@@ -10090,6 +10139,8 @@ pub(super) fn run_launcher_loop(
                     true,
                     catalog_version,
                     confirmed_present_sequence,
+                    f.read_magik_presentation_telemetry().ok(),
+                    presented_frame.main_present_drop_count,
                 ) && let Err(error) =
                     cpu_profile::finish_system_entry_async(system_entry_cpu_profile.take())
                 {

@@ -1513,6 +1513,10 @@ impl LauncherFrameAccounting {
         self.record_first_frame(frame, start, catalog_ready);
     }
 
+    pub(super) fn last_latch_drop_count(&self) -> u16 {
+        self.last_latch_drop_count
+    }
+
     pub(super) fn write_finished_frame_trace(
         &mut self,
         frame: &LauncherPresentedFrame,

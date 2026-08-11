@@ -8277,6 +8277,16 @@ fn run_system_entry_sample(
         let ready_main_sequence = system_entry_detail_u64(ready, "main_sequence")?;
         let catalog_generation = system_entry_detail_u64(ready, "catalog_generation")?;
         let preview_generation = system_entry_detail_u64(ready, "preview_generation")?;
+        let cadence_authoritative = system_entry_detail_flag(ready, "cadence_authoritative")?;
+        let repeated_vblank_delta = system_entry_detail_u64(ready, "repeated_vblank_delta")?;
+        let latch_drop_delta = system_entry_detail_u64(ready, "latch_drop_delta")?;
+        if !cadence_authoritative || repeated_vblank_delta != 0 || latch_drop_delta != 0 {
+            return Err(format!(
+                "system-entry {system} transition cadence failed: authoritative={} repeated_vblank_delta={repeated_vblank_delta} latch_drop_delta={latch_drop_delta}",
+                u8::from(cadence_authoritative)
+            )
+            .into());
+        }
         let destination_catalog_generation =
             system_entry_detail_u64(destination_prepared, "catalog_generation")?;
         let destination_preview_generation =
@@ -8335,6 +8345,12 @@ fn run_system_entry_sample(
                 "first_list_frame_prepare_us": first_list_prepare_us,
                 "cpu1_handoff_ms": ready_presented_ms.saturating_sub(destination_prepared_ms),
                 "destination_publication_ms": ready_presented_ms.saturating_sub(prerequisites_ready_ms),
+            },
+            "transition_cadence": {
+                "authoritative": cadence_authoritative,
+                "dropped_frames": repeated_vblank_delta,
+                "repeated_vblank_delta": repeated_vblank_delta,
+                "latch_drop_delta": latch_drop_delta,
             },
             "selected_has_preview": selected_has_preview,
             "preview_state": preview_state,
@@ -18087,6 +18103,22 @@ mod tests {
             12
         );
         assert_eq!(system_entry_detail_u64(&row, "main_sequence").unwrap(), 41);
+    }
+
+    #[test]
+    fn system_entry_trace_keeps_physical_and_latch_cadence_independent() {
+        let mut row = vec![String::new(); 13];
+        row[12] = "cadence_authoritative=1 repeated_vblank_delta=0 latch_drop_delta=2".into();
+
+        assert!(system_entry_detail_flag(&row, "cadence_authoritative").unwrap());
+        assert_eq!(
+            system_entry_detail_u64(&row, "repeated_vblank_delta").unwrap(),
+            0
+        );
+        assert_eq!(
+            system_entry_detail_u64(&row, "latch_drop_delta").unwrap(),
+            2
+        );
     }
 
     #[test]
