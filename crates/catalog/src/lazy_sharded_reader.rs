@@ -11,8 +11,8 @@ use crate::sharded_catalog::{
     SystemSummary,
 };
 use crate::system_shard::{
-    NavigationCompatibility, SystemNavigationOpenTiming,
-    open_system_navigation_with_compatibility_and_timing,
+    LoadedSystemShard, NavigationCompatibility, SystemNavigationOpenTiming,
+    open_verified_system_navigation_with_compatibility_and_timing,
 };
 use std::path::{Path, PathBuf};
 
@@ -81,47 +81,13 @@ impl LazyShardedCatalogReader {
         &self,
         system_id: &SystemId,
     ) -> Result<(SystemCatalog, LazySystemOpenTiming), CatalogError> {
-        let descriptor_started = std::time::Instant::now();
+        let (loaded, mut timing) = self.open_system_shard_with_timing(system_id)?;
         let system = self
             .manifest
             .systems
             .iter()
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
-        let descriptor_lookup_us = elapsed_us(descriptor_started);
-        let open = |generation: &crate::shard_registry::PublishedGeneration| {
-            let (loaded, timing) = open_system_navigation_with_compatibility_and_timing(
-                &self.storage_root.join(&generation.navigation_path),
-                system_id,
-                generation.generation,
-                self.limits.shard,
-                self.navigation_compatibility,
-            )
-            .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
-            if loaded.navigation_hash != generation.navigation_hash {
-                return Err(CatalogError::new(
-                    "open-system",
-                    "navigation checksum does not match manifest",
-                ));
-            }
-            Ok((loaded, timing))
-        };
-        let (loaded, navigation) = match open(&system.active) {
-            Ok(loaded) => loaded,
-            Err(active_error) => match system.previous.as_ref() {
-                Some(previous) => open(previous).map_err(|previous_error| {
-                    CatalogError::new(
-                        "open-system",
-                        format!(
-                            "active shard failed: {active_error}; previous shard failed: {previous_error}"
-                        ),
-                    )
-                })?,
-                None => {
-                    return Err(CatalogError::new("open-system", active_error.to_string()));
-                }
-            },
-        };
         let projection_started = std::time::Instant::now();
         let catalog = SystemCatalog::new(
             SystemSummary {
@@ -162,12 +128,62 @@ impl LazyShardedCatalogReader {
                 })
                 .collect(),
         );
+        timing.projection_us = elapsed_us(projection_started);
+        Ok((catalog, timing))
+    }
+
+    pub fn open_system_shard_with_timing(
+        &self,
+        system_id: &SystemId,
+    ) -> Result<(LoadedSystemShard, LazySystemOpenTiming), CatalogError> {
+        let descriptor_started = std::time::Instant::now();
+        let system = self
+            .manifest
+            .systems
+            .iter()
+            .find(|system| &system.system_id == system_id)
+            .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
+        let descriptor_lookup_us = elapsed_us(descriptor_started);
+        let open = |generation: &crate::shard_registry::PublishedGeneration| {
+            let (loaded, timing) = open_verified_system_navigation_with_compatibility_and_timing(
+                &self.storage_root.join(&generation.navigation_path),
+                system_id,
+                generation.generation,
+                &generation.navigation_hash,
+                self.limits.shard,
+                self.navigation_compatibility,
+            )
+            .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
+            if loaded.navigation_hash != generation.navigation_hash {
+                return Err(CatalogError::new(
+                    "open-system",
+                    "navigation checksum does not match manifest",
+                ));
+            }
+            Ok((loaded, timing))
+        };
+        let (loaded, navigation) = match open(&system.active) {
+            Ok(loaded) => loaded,
+            Err(active_error) => match system.previous.as_ref() {
+                Some(previous) => open(previous).map_err(|previous_error| {
+                    CatalogError::new(
+                        "open-system",
+                        format!(
+                            "active shard failed: {active_error}; previous shard failed: {previous_error}"
+                        ),
+                    )
+                })?,
+                None => {
+                    return Err(CatalogError::new("open-system", active_error.to_string()));
+                }
+            },
+        };
         Ok((
-            catalog,
+            loaded,
             LazySystemOpenTiming {
                 descriptor_lookup_us,
                 navigation,
-                projection_us: elapsed_us(projection_started),
+                projection_us: 0,
             },
         ))
     }
@@ -242,6 +258,24 @@ mod tests {
         assert_eq!(snes.summary().system_id.as_str(), "snes");
         assert_eq!(snes.games().len(), 1);
         assert!(reader.open_system(&system("c64")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn launcher_open_returns_owned_persisted_rows_without_catalog_projection() {
+        let root = temporary_root("owned-system-rows");
+        seed(&root);
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+
+        let (loaded, timing) = reader
+            .open_system_shard_with_timing(&system("snes"))
+            .unwrap();
+
+        assert_eq!(loaded.system_id.as_str(), "snes");
+        assert_eq!(loaded.generation, 1);
+        assert_eq!(loaded.games.len(), 1);
+        assert_eq!(loaded.games[0].title, "SNES Game");
+        assert_eq!(timing.projection_us, 0);
         fs::remove_dir_all(root).unwrap();
     }
 

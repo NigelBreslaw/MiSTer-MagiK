@@ -239,7 +239,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 )
             })?;
         let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
-        let result = reader.open_system_with_timing(&parsed);
+        let result = reader.open_system_shard_with_timing(&parsed);
         drop(open_pmu);
         result
     });
@@ -247,7 +247,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let message = match result {
         Ok((system, open_timing)) => {
             let prepare_started = Instant::now();
-            let games = system.games();
+            let games = system.games;
             let game_count = games.len();
             let preview_prelude = preview_dispatch.and_then(|dispatch| {
                 let game = games.first().filter(|game| {
@@ -273,7 +273,8 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let projection_started = Instant::now();
             let projection_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-row-projection");
-            let (replacement, launch_plans) = arcade_rows_from_shard(&worker_system_id, games);
+            let (replacement, launch_plans) =
+                arcade_rows_from_owned_persisted_shard(&worker_system_id, games);
             drop(projection_pmu);
             let row_projection_us = elapsed_us(projection_started);
             let replacement_started = Instant::now();

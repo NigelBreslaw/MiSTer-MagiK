@@ -630,12 +630,68 @@ pub fn open_system_navigation_with_compatibility_and_timing(
     limits: SystemShardLimits,
     compatibility: NavigationCompatibility,
 ) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
+    open_system_navigation_with_validation(
+        navigation_path,
+        expected_system_id,
+        expected_generation,
+        limits,
+        compatibility,
+        NavigationValidation::Full,
+    )
+}
+
+/// Open navigation whose checksum is bound to an already accepted manifest generation.
+///
+/// The publishing path rejects duplicate stable keys before switching the manifest. Once the
+/// payload checksum matches that immutable descriptor, repeating the set construction during
+/// every system entry adds no safety. Unbound compatibility readers continue to perform the full
+/// duplicate check.
+pub fn open_verified_system_navigation_with_compatibility_and_timing(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    expected_navigation_hash: &str,
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
+    open_system_navigation_with_validation(
+        navigation_path,
+        expected_system_id,
+        expected_generation,
+        limits,
+        compatibility,
+        NavigationValidation::ManifestBound(expected_navigation_hash),
+    )
+}
+
+#[derive(Clone, Copy)]
+enum NavigationValidation<'a> {
+    Full,
+    ManifestBound(&'a str),
+}
+
+fn open_system_navigation_with_validation(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+    validation: NavigationValidation<'_>,
+) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
     let read_started = std::time::Instant::now();
     let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
     let read_us = elapsed_us(read_started);
     let hash_started = std::time::Instant::now();
     let navigation_hash = checksum_hex(&navigation);
     let hash_us = elapsed_us(hash_started);
+    if let NavigationValidation::ManifestBound(expected_hash) = validation
+        && navigation_hash != expected_hash
+    {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation checksum does not match verified manifest generation",
+        ));
+    }
     let (stored, mut timing) = decode_navigation_with_timing(&navigation, limits, compatibility)?;
     if stored.system_id != expected_system_id.as_str() || stored.generation != expected_generation {
         return Err(SystemShardError::new(
@@ -645,7 +701,12 @@ pub fn open_system_navigation_with_compatibility_and_timing(
     }
     let games = stored.games;
     let validation_started = std::time::Instant::now();
-    validate_loaded_games(&games, limits.max_games)?;
+    match validation {
+        NavigationValidation::Full => validate_loaded_games(&games, limits.max_games)?,
+        NavigationValidation::ManifestBound(_) => {
+            validate_loaded_game_shapes(&games, limits.max_games)?
+        }
+    }
     timing.read_us = read_us;
     timing.hash_us = hash_us;
     timing.validation_us = elapsed_us(validation_started);
@@ -687,22 +748,33 @@ fn validate_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemSh
 }
 
 fn validate_loaded_games(games: &[SystemGame], max_games: usize) -> Result<(), SystemShardError> {
+    validate_loaded_game_shapes(games, max_games)?;
+    let mut keys = BTreeSet::new();
+    if games.iter().any(|game| !keys.insert(&game.stable_key)) {
+        return Err(SystemShardError::new(
+            "read",
+            "navigation contains duplicate game rows",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_loaded_game_shapes(
+    games: &[SystemGame],
+    max_games: usize,
+) -> Result<(), SystemShardError> {
     if games.len() > max_games {
         return Err(SystemShardError::new(
             "read",
             "system game count exceeds configured limit",
         ));
     }
-    let mut keys = BTreeSet::new();
     if games.iter().any(|game| {
-        game.stable_key.is_empty()
-            || game.title.is_empty()
-            || game.launch_ref.is_empty()
-            || !keys.insert(&game.stable_key)
+        game.stable_key.is_empty() || game.title.is_empty() || game.launch_ref.is_empty()
     }) {
         return Err(SystemShardError::new(
             "read",
-            "navigation contains invalid or duplicate game rows",
+            "navigation contains invalid game rows",
         ));
     }
     Ok(())
@@ -1120,6 +1192,63 @@ mod tests {
         .unwrap();
         assert!(timing.compressed_bytes > 0);
         assert!(timing.decoded_bytes > 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn verified_navigation_requires_the_published_payload_hash() {
+        let root = temporary_root("verified-navigation");
+        let sqlite = root.join("1.sqlite3");
+        let navigation = root.join("1.nav.lz4b");
+        let data = fixture_data();
+        let published = write_system_shard(&sqlite, &navigation, &data, limits()).unwrap();
+
+        let loaded = open_verified_system_navigation_with_compatibility_and_timing(
+            &navigation,
+            &data.system_id,
+            data.generation,
+            &published.navigation_hash,
+            limits(),
+            NavigationCompatibility::CurrentOnly,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(loaded.games, data.games);
+        assert_eq!(
+            open_verified_system_navigation_with_compatibility_and_timing(
+                &navigation,
+                &data.system_id,
+                data.generation,
+                "wrong-hash",
+                limits(),
+                NavigationCompatibility::CurrentOnly,
+            )
+            .unwrap_err()
+            .message(),
+            "navigation checksum does not match verified manifest generation"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn publication_rejects_duplicate_stable_keys_before_manifest_binding() {
+        let root = temporary_root("duplicate-publication");
+        let sqlite = root.join("1.sqlite3");
+        let navigation = root.join("1.nav.lz4b");
+        let mut data = fixture_data();
+        let mut duplicate = data.games[0].clone();
+        duplicate.title = "Duplicate".into();
+        duplicate.launch_ref = "/games/Duplicate.rom".into();
+        data.games.push(duplicate);
+
+        assert_eq!(
+            write_system_shard(&sqlite, &navigation, &data, limits())
+                .unwrap_err()
+                .message(),
+            "games need non-empty unique keys, titles, and launch references"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
