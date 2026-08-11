@@ -4428,6 +4428,13 @@ pub fn apply_launch_return_state(
     let Some((menu_path, collection_id)) = resolve_return_destination(nav, catalog, &state) else {
         return false;
     };
+    if !catalog
+        .system_game_view(&collection_id)
+        .iter()
+        .any(|game| game.mra_path.as_ref() == state.game_path)
+    {
+        return false;
+    }
     if !nav.open_destination(catalog, menu_path, &collection_id) {
         return false;
     }

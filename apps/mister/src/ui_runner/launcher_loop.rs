@@ -13718,18 +13718,32 @@ mod tests {
     }
 
     #[test]
-    fn registry_replacement_requests_return_shard_after_capsule_restore() {
-        let full_catalog = catalog_for_media_systems(&["snes"]);
+    fn registry_replacement_preserves_return_list_while_requesting_its_shard() {
+        let full_catalog = arcade_catalog(
+            (0..3)
+                .map(|index| {
+                    arcade_game(format!("SNES game {index}"))
+                        .path(format!("/media/fat/games/SNES/game-{index}.sfc"))
+                        .system_id("snes")
+                        .build()
+                })
+                .collect(),
+            vec![arcade_system("snes", 3)],
+        );
         let mut launched_nav = LauncherNav::new();
         assert!(launched_nav.open_system(&full_catalog, "snes"));
         assert_eq!(launched_nav.screen, Screen::SystemHub);
         launched_nav.set_arcade_user_list_mode(&full_catalog, launcher::ArcadeUserListMode::Games);
         launched_nav.screen = Screen::Arcade;
-        assert_eq!(launched_nav.screen, Screen::Arcade);
+        launched_nav.arcade.restore_position(
+            2,
+            2 * launched_nav.arcade.row_height(),
+            full_catalog.system_game_count("snes"),
+        );
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &full_catalog,
-            "/media/fat/_Arcade/snes.mra",
+            "/media/fat/games/SNES/game-2.sfc",
         )
         .expect("return state");
         let mut session = LaunchReturnSession::new(Some(state));
@@ -13739,8 +13753,11 @@ mod tests {
             &full_catalog,
             CatalogSource::ReturnCapsule
         ));
+        assert_eq!(restored_nav.screen, Screen::Arcade);
+        assert_eq!(restored_nav.arcade.selected, 2);
+        assert!(restored_nav.arcade.is_settled_at_selected());
 
-        let registry = arcade_catalog(Vec::new(), vec![arcade_system("snes", 1)]);
+        let registry = arcade_catalog(Vec::new(), vec![arcade_system("snes", 3)]);
         restored_nav.sync_launcher_taxonomy(&registry);
         let mut scheduler = LauncherScheduler::new(false);
         let _ = initialize_catalog_generation(&mut scheduler, Some("generation-a".to_string()));
@@ -13756,8 +13773,21 @@ mod tests {
             now,
             now,
         ));
+        assert_eq!(restored_nav.screen, Screen::Arcade);
+        assert_eq!(restored_nav.active_collection_id(), Some("snes"));
+        assert_eq!(restored_nav.arcade.selected, 2);
+        assert!(restored_nav.arcade.is_settled_at_selected());
         assert!(scheduler.system_shard_attempted("snes"));
         assert!(restored_nav.catalog_system_hydration_is_loading("snes"));
+
+        assert!(session.apply(
+            &mut restored_nav,
+            &full_catalog,
+            CatalogSource::NavigationProjection,
+        ));
+        assert_eq!(restored_nav.screen, Screen::Arcade);
+        assert_eq!(restored_nav.arcade.selected, 2);
+        assert!(restored_nav.arcade.is_settled_at_selected());
     }
 
     #[test]
