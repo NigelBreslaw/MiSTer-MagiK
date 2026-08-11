@@ -4412,7 +4412,6 @@ struct OrientationPreparationTrace {
 fn render_immediate_launcher_frame(
     window: &MisterSoftwareWindow,
     target: &mut UiFrameTarget,
-    ui: &UiDisplay,
     layout: UiLayoutGeometry,
 ) -> Option<DirtyRect> {
     let mut layer_target = LayerTarget::new_oriented(target, layout);
@@ -6131,7 +6130,7 @@ pub(super) fn run_launcher_loop(
                         ui,
                     );
                     update_slint_animations(animation_clock);
-                    let recovery_rect = render_immediate_launcher_frame(window, target, ui, layout);
+                    let recovery_rect = render_immediate_launcher_frame(window, target, layout);
                     if let Some(rect) = recovery_rect {
                         let _ = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     } else {
@@ -7247,8 +7246,7 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ =
-                                        render_immediate_launcher_frame(window, target, ui, layout);
+                                    let _ = render_immediate_launcher_frame(window, target, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7310,8 +7308,7 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ =
-                                        render_immediate_launcher_frame(window, target, ui, layout);
+                                    let _ = render_immediate_launcher_frame(window, target, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7621,7 +7618,7 @@ pub(super) fn run_launcher_loop(
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
-                                let _ = render_immediate_launcher_frame(window, target, ui, layout);
+                                let _ = render_immediate_launcher_frame(window, target, layout);
                                 let _pace = pacer.wait();
                                 copy_cached_rows_565(
                                     disp,
