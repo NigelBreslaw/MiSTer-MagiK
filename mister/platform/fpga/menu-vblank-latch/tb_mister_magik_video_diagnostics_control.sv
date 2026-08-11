@@ -52,6 +52,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [495:0] output_payload = 496'd0;
 	wire snapshot_request;
 	wire monitor_armed;
+	wire [15:0] diagnostic_generation;
 	wire response_valid;
 	wire [15:0] response_data;
 	wire route_context_toggle;
@@ -81,6 +82,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.output_snapshot_ack_async(snapshot_request),
 		.output_snapshot_payload_async(output_payload),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(monitor_armed),
+		.diagnostic_generation(diagnostic_generation),
 		.route_context_toggle(route_context_toggle), .expected_base(expected_base),
 		.expected_slot_end(expected_slot_end), .expected_route_epoch(expected_route_epoch),
 		.expected_active_seq(expected_active_seq), .expected_route_flags(expected_route_flags),

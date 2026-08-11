@@ -61,6 +61,7 @@ module mister_magik_video_diagnostics_control (
 
 	output reg          snapshot_request_toggle = 1'b0,
 	output wire         monitor_armed,
+	output wire [15:0]  diagnostic_generation,
 	output reg          route_context_toggle = 1'b0,
 	output reg  [31:0]  expected_base = 32'd0,
 	output reg  [31:0]  expected_slot_end = 32'd0,
@@ -105,6 +106,7 @@ module mister_magik_video_diagnostics_control (
 	reg [1:0] settle_vblanks = 2'd0;
 	reg ownership = 1'b0;
 	assign monitor_armed = state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED;
+	assign diagnostic_generation = generation;
 
 	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg avalon_fault_meta = 1'b0, avalon_fault_sys = 1'b0;

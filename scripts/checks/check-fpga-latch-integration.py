@@ -150,6 +150,7 @@ def main() -> None:
     bootstrap_black = source_dir / "mister_magik_bootstrap_black.sv"
     protocol = source_dir / "mister_magik_latch_protocol.svh"
     diagnostics_control = source_dir / "mister_magik_video_diagnostics_control.sv"
+    diagnostics_avalon = source_dir / "mister_magik_video_diagnostics_avalon.sv"
     diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
@@ -167,6 +168,7 @@ def main() -> None:
             bootstrap_black,
             protocol,
             diagnostics_control,
+            diagnostics_avalon,
             diagnostics_protocol,
         ):
             shutil.copy2(source, work / "sys" / source.name)
@@ -180,6 +182,8 @@ def main() -> None:
                 "sys/mister_magik_bootstrap_black.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_video_diagnostics_control.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_video_diagnostics_avalon.sv\n"
             )
 
         patched = (work / "sys/sys_top.v").read_text()
@@ -188,6 +192,7 @@ def main() -> None:
             APPLY_BUNDLE: 1,
             "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 1,
+            "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 1,
             "if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;\n"
             "\t\t\tif(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
         }
@@ -198,6 +203,17 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+
+        avalon_binding = re.search(
+            r"mister_magik_video_diagnostics_avalon\s+"
+            r"magik_video_diagnostics_avalon\s*\((.*?)\);",
+            patched,
+            re.S,
+        )
+        if avalon_binding is None:
+            fail("missing passive Avalon diagnostics binding")
+        if re.search(r"\.vbuf_(?:read|write)data\s*\(", avalon_binding.group(1)):
+            fail("passive Avalon diagnostics must not tap framebuffer data")
 
         video_paths = {
             "native black to shared scanline stage": re.compile(
@@ -258,6 +274,7 @@ def main() -> None:
             "SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv",
         )
         bad_assignments = [
             assignment for assignment in assignments if qsf_text.count(assignment) != 1

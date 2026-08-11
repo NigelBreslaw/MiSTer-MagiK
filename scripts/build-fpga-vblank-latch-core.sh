@@ -11,6 +11,7 @@ LATCH_BRIDGE="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sy
 BOOTSTRAP_BLACK_RTL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv"
 LATCH_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh"
 VIDEO_DIAGNOSTICS_CONTROL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv"
+VIDEO_DIAGNOSTICS_AVALON="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv"
 VIDEO_DIAGNOSTICS_PROTOCOL="$ROOT/mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_protocol.svh"
 TIMING_REPORT_TCL="$ROOT/mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl"
 OUT_DIR="${MISTER_FPGA_OUT_DIR:-$ROOT/build/fpga-vblank-latch}"
@@ -157,9 +158,11 @@ case "$APPLY_PATCH" in
     cp "$BOOTSTRAP_BLACK_RTL" "$WORK_DIR/sys/mister_magik_bootstrap_black.sv"
     cp "$LATCH_PROTOCOL" "$WORK_DIR/sys/mister_magik_latch_protocol.svh"
     cp "$VIDEO_DIAGNOSTICS_CONTROL" "$WORK_DIR/sys/mister_magik_video_diagnostics_control.sv"
+    cp "$VIDEO_DIAGNOSTICS_AVALON" "$WORK_DIR/sys/mister_magik_video_diagnostics_avalon.sv"
     cp "$VIDEO_DIAGNOSTICS_PROTOCOL" "$WORK_DIR/sys/mister_magik_video_diagnostics_protocol.svh"
     printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv\n' >> "$WORK_DIR/menu.qsf"
     printf 'set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv\n' >> "$WORK_DIR/menu.qsf"
+    printf 'set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac
 if [[ ! "$BUILD_DATE" =~ ^[0-9]{6}$ ]]; then
