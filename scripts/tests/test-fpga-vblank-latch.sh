@@ -21,6 +21,21 @@ iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 
 vvp "$build_dir/tb_mister_magik_vblank_latch.vvp"
 
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+	-s tb_mister_magik_video_diagnostics_control \
+	-o "$build_dir/tb_mister_magik_video_diagnostics_control.vvp" \
+	"$rtl_dir/mister_magik_video_diagnostics_control.sv" \
+	"$rtl_dir/tb_mister_magik_video_diagnostics_control.sv"
+
+vvp "$build_dir/tb_mister_magik_video_diagnostics_control.vvp"
+
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+	-s tb_mister_magik_video_diagnostics_control_cdc \
+	-o "$build_dir/tb_mister_magik_video_diagnostics_control_cdc.vvp" \
+	"$rtl_dir/mister_magik_video_diagnostics_control.sv" \
+	"$rtl_dir/tb_mister_magik_video_diagnostics_control_cdc.sv"
+
+vvp "$build_dir/tb_mister_magik_video_diagnostics_control_cdc.vvp"
 iverilog -g2012 -Wall -Wimplicit \
 	-s tb_mister_magik_bootstrap_black \
 	-o "$build_dir/tb_mister_magik_bootstrap_black.vvp" \

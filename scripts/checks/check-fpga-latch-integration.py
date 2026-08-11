@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import shutil
 import subprocess
@@ -24,6 +25,13 @@ COMMAND_PATTERNS = {
     "0x5d": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5d", re.I),
     "0x5e": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5e", re.I),
     "0x5f": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')5f", re.I),
+}
+
+IMMUTABLE_LATCH_SHA256 = {
+    "mister_magik_vblank_latch.sv": "47def40bc8b064373efa328a56ab0396272855a2190f17d700f27b8a29382090",
+    "mister_magik_latch_sys_top_bridge.sv": "5960883a0f8740ffc18fcd63ce8c99da9a9819bcbc903ca119bfc66810fd68e9",
+    "mister_magik_latch_protocol.svh": "bc26dff578940790a70e379718f8f1b8eda7122efd267e0e5e7cc244f1347a7b",
+    "latch-protocol.json": "69eef7979ad235c49989870b82534d187c9d97da40feb6e7647fd8e62adbec54",
 }
 
 BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
@@ -141,13 +149,26 @@ def main() -> None:
     bridge = source_dir / "mister_magik_latch_sys_top_bridge.sv"
     bootstrap_black = source_dir / "mister_magik_bootstrap_black.sv"
     protocol = source_dir / "mister_magik_latch_protocol.svh"
+    diagnostics_control = source_dir / "mister_magik_video_diagnostics_control.sv"
+    diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
-        for source in (rtl, bridge, bootstrap_black, protocol):
+        for name, expected in IMMUTABLE_LATCH_SHA256.items():
+            actual = hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
+            if actual != expected:
+                fail(f"immutable latch source changed: {name} expected {expected}, got {actual}")
+        for source in (
+            rtl,
+            bridge,
+            bootstrap_black,
+            protocol,
+            diagnostics_control,
+            diagnostics_protocol,
+        ):
             shutil.copy2(source, work / "sys" / source.name)
         with (work / "menu.qsf").open("a") as output:
             output.write(
@@ -157,6 +178,8 @@ def main() -> None:
                 "sys/mister_magik_latch_sys_top_bridge.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_bootstrap_black.sv\n"
+                "set_global_assignment -name SYSTEMVERILOG_FILE "
+                "sys/mister_magik_video_diagnostics_control.sv\n"
             )
 
         patched = (work / "sys/sys_top.v").read_text()
@@ -164,6 +187,9 @@ def main() -> None:
             BRIDGE_MAPPING: 1,
             APPLY_BUNDLE: 1,
             "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
+            "mister_magik_video_diagnostics_control magik_video_diagnostics": 1,
+            "if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;\n"
+            "\t\t\tif(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -231,6 +257,7 @@ def main() -> None:
             "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv",
         )
         bad_assignments = [
             assignment for assignment in assignments if qsf_text.count(assignment) != 1

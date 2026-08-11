@@ -2,7 +2,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..d05a447 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,68 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,150 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -28,6 +28,17 @@ index a416879..d05a447 100644
 +wire [15:0] magik_lfb_drop_count;
 +wire [15:0] magik_lfb_reject_count;
 +wire [15:0] magik_lfb_active_route_epoch;
++wire        magik_diag_response_valid;
++wire [15:0] magik_diag_response_data;
++wire        magik_diag_snapshot_request;
++wire        magik_diag_monitor_armed;
++wire        magik_diag_route_context_toggle;
++wire [31:0] magik_diag_expected_base;
++wire [31:0] magik_diag_expected_slot_end;
++wire [15:0] magik_diag_expected_route_epoch;
++wire [15:0] magik_diag_expected_active_seq;
++wire [15:0] magik_diag_expected_route_flags;
++wire [495:0] magik_diag_empty_snapshot = 496'd0;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -68,10 +79,71 @@ index a416879..d05a447 100644
 +	.active_route_epoch(magik_lfb_active_route_epoch)
 +);
 +
++mister_magik_video_diagnostics_control magik_video_diagnostics
++(
++	.clk_sys(clk_sys),
++	.hdmi_vbl(hdmi_vbl),
++	.io_uio(io_uio),
++	.io_strobe(io_strobe),
++	.io_osd(io_osd_hdmi | io_osd_vga),
++	.io_din(io_din),
++	.apply_accepted(magik_lfb_apply_accepted),
++	.pending(magik_lfb_pending),
++	.pending_seq(magik_lfb_pending_seq),
++	.active_seq(magik_lfb_active_seq),
++	.post_count(magik_lfb_post_count),
++	.active_route_epoch(magik_lfb_active_route_epoch),
++	.route_en(magik_lfb_en),
++	.route_flt(magik_lfb_flt),
++	.route_fmt(magik_lfb_fmt),
++	.route_width(magik_lfb_width),
++	.route_height(magik_lfb_height),
++	.route_hmin(magik_lfb_hmin),
++	.route_hmax(magik_lfb_hmax),
++	.route_vmin(magik_lfb_vmin),
++	.route_vmax(magik_lfb_vmax),
++	.route_base(magik_lfb_base),
++	.route_stride(magik_lfb_stride),
++	.lfb_en(LFB_EN),
++	.lfb_flt(LFB_FLT),
++	.lfb_fmt(LFB_FMT),
++	.lfb_width(LFB_WIDTH),
++	.lfb_height(LFB_HEIGHT),
++	.lfb_hmin(LFB_HMIN),
++	.lfb_hmax(LFB_HMAX),
++	.lfb_vmin(LFB_VMIN),
++	.lfb_vmax(LFB_VMAX),
++	.lfb_base(LFB_BASE),
++	.lfb_stride(LFB_STRIDE),
++	.reset_req(reset_req),
++	.reset_out(reset),
++	.cfg_done(cfg_done),
++	.pll_adjust_locked(led_locked),
++	.output_heartbeat_toggle_async(hdmi_vbl),
++	.avalon_fault_toggle_async(1'b0),
++	.avalon_trigger_async(8'd0),
++	.avalon_snapshot_ack_async(magik_diag_snapshot_request),
++	.avalon_snapshot_payload_async(magik_diag_empty_snapshot),
++	.output_fault_toggle_async(1'b0),
++	.output_trigger_async(8'd0),
++	.output_snapshot_ack_async(magik_diag_snapshot_request),
++	.output_snapshot_payload_async(magik_diag_empty_snapshot),
++	.snapshot_request_toggle(magik_diag_snapshot_request),
++	.monitor_armed(magik_diag_monitor_armed),
++	.route_context_toggle(magik_diag_route_context_toggle),
++	.expected_base(magik_diag_expected_base),
++	.expected_slot_end(magik_diag_expected_slot_end),
++	.expected_route_epoch(magik_diag_expected_route_epoch),
++	.expected_active_seq(magik_diag_expected_active_seq),
++	.expected_route_flags(magik_diag_expected_route_flags),
++	.response_valid(magik_diag_response_valid),
++	.response_data(magik_diag_response_data)
++);
++
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +422,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +493,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -91,23 +163,25 @@ index a416879..d05a447 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +482,7 @@ always@(posedge clk_sys) begin
+@@ -407,6 +553,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +538,7 @@ always@(posedge clk_sys) begin
+@@ -462,6 +610,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -1380,15 +1457,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1530,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;
