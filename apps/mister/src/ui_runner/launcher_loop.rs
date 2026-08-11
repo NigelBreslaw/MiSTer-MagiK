@@ -1019,8 +1019,8 @@ impl ArcadeEntryLatencyTracker {
         self.catalog_resident_at_input = None;
     }
 
-    fn entry_in_progress(&self) -> bool {
-        self.enter_input_at.is_some() && !self.ready_presented
+    fn preview_adoption_in_progress(&self) -> bool {
+        self.enter_input_at.is_some() && self.rows_ready && !self.ready_presented
     }
 
     fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
@@ -7988,7 +7988,7 @@ pub(super) fn run_launcher_loop(
         let mut preview_apply_trace = PreviewApplyTrace::default();
         let preview_result_work_allowed = system_entry_preview_work_allowed(
             background_work_allowed,
-            arcade_entry_latency.entry_in_progress(),
+            arcade_entry_latency.preview_adoption_in_progress(),
         );
         let preview_apply_dirty = if !launching
             && preview_result_work_allowed
@@ -13019,7 +13019,7 @@ mod tests {
     }
 
     #[test]
-    fn active_system_entry_can_adopt_its_preview_while_background_work_is_gated() {
+    fn row_ready_system_entry_can_adopt_its_preview_while_background_work_is_gated() {
         assert!(system_entry_preview_work_allowed(false, true));
         assert!(system_entry_preview_work_allowed(true, false));
         assert!(!system_entry_preview_work_allowed(false, false));
