@@ -22,7 +22,7 @@ pub const DEFAULT_SHARDED_CATALOG_DIR: &str = "/media/fat/mister-magik/catalog-v
 pub const DEFAULT_USER_STATE_PATH: &str = "/media/fat/mister-magik/user-state.sqlite3";
 
 pub const SCHEMA_VERSION: u32 = 67;
-pub const CATALOG_BUILD_VERSION: u32 = 16;
+pub const CATALOG_BUILD_VERSION: u32 = 17;
 
 pub fn default_sqlite_path() -> PathBuf {
     configured_path(

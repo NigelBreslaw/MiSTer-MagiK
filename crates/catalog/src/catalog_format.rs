@@ -58,15 +58,22 @@ impl CatalogFormatDescriptor {
 
     #[must_use]
     pub fn navigation_index_predecessor() -> Self {
-        let mut predecessor = Self::current();
+        let mut predecessor = Self::navpack_predecessor();
         predecessor.navigation_schema_version = 2;
         predecessor
     }
 
     #[must_use]
     pub fn navpack_predecessor() -> Self {
-        let mut predecessor = Self::current();
+        let mut predecessor = Self::entry_prelude_predecessor();
         predecessor.shard_schema_version = 4;
+        predecessor
+    }
+
+    #[must_use]
+    pub fn entry_prelude_predecessor() -> Self {
+        let mut predecessor = Self::current();
+        predecessor.catalog_build_version = 16;
         predecessor
     }
 
@@ -149,6 +156,12 @@ pub fn classify(descriptor: &CatalogFormatDescriptor) -> CatalogFormatStatus {
             required: current,
         };
     }
+    if descriptor == &CatalogFormatDescriptor::entry_prelude_predecessor() {
+        return CatalogFormatStatus::UpgradeRequired {
+            installed: descriptor.clone(),
+            required: current,
+        };
+    }
     if has_future_component(descriptor, &current) {
         return CatalogFormatStatus::UnsupportedFuture {
             installed: descriptor.clone(),
@@ -198,6 +211,14 @@ mod tests {
             classify(&CatalogFormatDescriptor::navpack_predecessor()),
             CatalogFormatStatus::UpgradeRequired { .. }
         ));
+        assert!(matches!(
+            classify(&CatalogFormatDescriptor::entry_prelude_predecessor()),
+            CatalogFormatStatus::UpgradeRequired { .. }
+        ));
+        assert_eq!(
+            CatalogFormatDescriptor::entry_prelude_predecessor().catalog_build_version,
+            16
+        );
     }
 
     #[test]
