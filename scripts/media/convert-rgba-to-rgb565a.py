@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """Convert an RGBA PNG into MiSTer MagiK's external RGB565A1 asset format."""
 
 from __future__ import annotations
