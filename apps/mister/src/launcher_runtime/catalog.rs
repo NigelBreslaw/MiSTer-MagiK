@@ -198,7 +198,7 @@ pub fn arcade_rows_from_persisted_shard(
 
 pub fn arcade_rows_from_owned_persisted_shard(
     system_id: &str,
-    games: Vec<SystemGame>,
+    mut games: Vec<SystemGame>,
     indexes: &SystemNavigationIndexes,
 ) -> (
     Vec<arcade_catalog::ArcadeGameEntry>,
@@ -210,26 +210,46 @@ pub fn arcade_rows_from_owned_persisted_shard(
     strings.retain(shared_system_id.clone());
     let mut projected = Vec::with_capacity(games.len());
     let mut metadata = Vec::with_capacity(games.len());
-    let mut launch_plans_by_ordinal = Vec::with_capacity(games.len());
-    for game in games {
-        let title = Arc::<str>::from(game.title);
-        let launch_ref = Arc::<str>::from(game.launch_ref);
-        let launch_plan = game.launch_plan.map(|plan| {
-            let plan_title = strings.reuse_or_intern(plan.title, &title);
-            let plan_launch_ref = strings.reuse_or_intern(plan.launch_ref, &launch_ref);
-            let plan_system_id = strings.reuse_or_intern(plan.system_id, &shared_system_id);
-            arcade_catalog::StructuredLaunchPlan {
-                launch_ref: plan_launch_ref,
-                title: plan_title,
-                system_id: plan_system_id,
-                core_path: Arc::from(plan.core_path),
-                payload_path: Arc::from(plan.payload_path),
-                mount_kind: strings.intern(plan.mount_kind),
-                mount_index: plan.mount_index,
-                delay_secs: plan.delay_secs,
-            }
+    let mut launch_plan_rank_by_ordinal = vec![None; games.len()];
+    let mut launch_plans = Vec::with_capacity(indexes.launch_ordinals.len());
+    for ordinal in &indexes.launch_ordinals {
+        let ordinal = *ordinal as usize;
+        let Some(game) = games.get_mut(ordinal) else {
+            continue;
+        };
+        let Some(plan) = game.launch_plan.take() else {
+            continue;
+        };
+        let title = Arc::<str>::from(game.title.as_str());
+        let launch_ref = Arc::<str>::from(game.launch_ref.as_str());
+        let plan_title = strings.reuse_or_intern(plan.title, &title);
+        let plan_launch_ref = strings.reuse_or_intern(plan.launch_ref, &launch_ref);
+        let plan_system_id = strings.reuse_or_intern(plan.system_id, &shared_system_id);
+        launch_plan_rank_by_ordinal[ordinal] = Some(launch_plans.len());
+        launch_plans.push(arcade_catalog::StructuredLaunchPlan {
+            launch_ref: plan_launch_ref,
+            title: plan_title,
+            system_id: plan_system_id,
+            core_path: Arc::from(plan.core_path),
+            payload_path: Arc::from(plan.payload_path),
+            mount_kind: strings.intern(plan.mount_kind),
+            mount_index: plan.mount_index,
+            delay_secs: plan.delay_secs,
         });
-        launch_plans_by_ordinal.push(launch_plan);
+    }
+    for (ordinal, game) in games.into_iter().enumerate() {
+        let (title, launch_ref) = launch_plan_rank_by_ordinal[ordinal].map_or_else(
+            || {
+                (
+                    Arc::<str>::from(game.title.as_str()),
+                    Arc::<str>::from(game.launch_ref.as_str()),
+                )
+            },
+            |rank| {
+                let plan = &launch_plans[rank];
+                (plan.title.clone(), plan.launch_ref.clone())
+            },
+        );
         metadata.push(arcade_catalog::ArcadeGameMetadataKey {
             year: game.year,
             manufacturer: game.manufacturer,
@@ -252,15 +272,6 @@ pub fn arcade_rows_from_owned_persisted_shard(
             is_new: game.is_new,
         });
     }
-    let launch_plans = indexes
-        .launch_ordinals
-        .iter()
-        .filter_map(|ordinal| {
-            launch_plans_by_ordinal
-                .get_mut(*ordinal as usize)
-                .and_then(Option::take)
-        })
-        .collect();
     (projected, metadata, launch_plans)
 }
 
