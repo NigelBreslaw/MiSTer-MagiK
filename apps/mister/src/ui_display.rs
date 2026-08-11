@@ -17,6 +17,7 @@ use mister_magik_core::display::{
     DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
     runtime_display_geometry_v1, video_mode_geometry,
 };
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565Rect};
 use mister_magik_mister_runtime::framebuffer::damage::DirtyRect;
 pub use mister_magik_mister_runtime::settings::ScreenOrientation;
 
@@ -170,6 +171,7 @@ pub struct CrtContentRect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiLayoutGeometry {
     orientation: ScreenOrientation,
+    output_layout: Rgb565OutputLayout,
     logical_w: usize,
     logical_h: usize,
     composition_w: usize,
@@ -192,8 +194,16 @@ impl UiLayoutGeometry {
             logical_h,
             display.content_rect(),
         );
+        let output_layout = Rgb565OutputLayout::new(
+            logical_w,
+            logical_h,
+            composition_w,
+            Self::output_rotation(orientation),
+        )
+        .expect("display-derived UI geometry is a valid RGB565 output layout");
         Self {
             orientation,
+            output_layout,
             logical_w,
             logical_h,
             composition_w,
@@ -230,43 +240,31 @@ impl UiLayoutGeometry {
         self.content_rect
     }
 
+    pub const fn output_layout(self) -> Rgb565OutputLayout {
+        self.output_layout
+    }
+
     /// Maps a logical pixel coordinate into the persistent composition cache.
     pub fn logical_pixel_to_composition(self, x: usize, y: usize) -> (usize, usize) {
-        debug_assert!(x < self.logical_w && y < self.logical_h);
-        match self.orientation {
-            ScreenOrientation::Normal => (x, y),
-            // Monitor mounted clockwise: counterclockwise buffer rotation.
-            ScreenOrientation::MonitorClockwise => (y, self.logical_w - 1 - x),
-            // Monitor mounted counterclockwise: clockwise buffer rotation.
-            ScreenOrientation::MonitorCounterclockwise => (self.logical_h - 1 - y, x),
-        }
+        self.output_layout.logical_to_physical(x, y)
     }
 
     pub fn composition_pixel_to_logical(self, x: usize, y: usize) -> (usize, usize) {
-        debug_assert!(x < self.composition_w && y < self.composition_h);
-        match self.orientation {
-            ScreenOrientation::Normal => (x, y),
-            ScreenOrientation::MonitorClockwise => (self.logical_w - 1 - y, x),
-            ScreenOrientation::MonitorCounterclockwise => (y, self.logical_h - 1 - x),
-        }
+        self.output_layout.physical_to_logical(x, y)
     }
 
     pub fn logical_rect_to_composition(self, rect: DirtyRect) -> DirtyRect {
-        let rect = self.clamp_logical_rect(rect);
-        match self.orientation {
-            ScreenOrientation::Normal => rect,
-            ScreenOrientation::MonitorClockwise => DirtyRect {
-                x0: rect.y0,
-                y0: self.logical_w - rect.x1,
-                x1: rect.y1,
-                y1: self.logical_w - rect.x0,
-            },
-            ScreenOrientation::MonitorCounterclockwise => DirtyRect {
-                x0: self.logical_h - rect.y1,
-                y0: rect.x0,
-                x1: self.logical_h - rect.y0,
-                y1: rect.x1,
-            },
+        let mapped = self.output_layout.logical_rect_to_physical(Rgb565Rect {
+            x0: rect.x0,
+            y0: rect.y0,
+            x1: rect.x1,
+            y1: rect.y1,
+        });
+        DirtyRect {
+            x0: mapped.x0,
+            y0: mapped.y0,
+            x1: mapped.x1,
+            y1: mapped.y1,
         }
     }
 
@@ -294,12 +292,13 @@ impl UiLayoutGeometry {
         }
     }
 
-    fn clamp_logical_rect(self, rect: DirtyRect) -> DirtyRect {
-        DirtyRect {
-            x0: rect.x0.min(self.logical_w),
-            y0: rect.y0.min(self.logical_h),
-            x1: rect.x1.min(self.logical_w),
-            y1: rect.y1.min(self.logical_h),
+    const fn output_rotation(orientation: ScreenOrientation) -> OutputRotation {
+        match orientation {
+            ScreenOrientation::Normal => OutputRotation::None,
+            // A clockwise-mounted monitor requires counterclockwise output.
+            ScreenOrientation::MonitorClockwise => OutputRotation::CounterClockwise90,
+            // A counterclockwise-mounted monitor requires clockwise output.
+            ScreenOrientation::MonitorCounterclockwise => OutputRotation::Clockwise90,
         }
     }
 
@@ -311,6 +310,17 @@ impl UiLayoutGeometry {
     ) -> CrtContentRect {
         let mapped = Self {
             orientation,
+            output_layout: Rgb565OutputLayout::new(
+                logical_w,
+                logical_h,
+                if orientation.is_portrait() {
+                    logical_h
+                } else {
+                    logical_w
+                },
+                Self::output_rotation(orientation),
+            )
+            .expect("content mapping uses valid UI geometry"),
             logical_w,
             logical_h,
             composition_w: if orientation.is_portrait() {
@@ -1179,6 +1189,11 @@ mod tests {
 
         assert_eq!((layout.logical_w(), layout.logical_h()), (540, 960));
         assert_eq!((layout.composition_w(), layout.composition_h()), (960, 540));
+        assert_eq!(
+            layout.output_layout().rotation(),
+            OutputRotation::CounterClockwise90
+        );
+        assert_eq!(layout.output_layout().physical_stride(), 960);
         assert_eq!((ui.fb_w(), ui.fb_h()), (960, 540));
         assert_eq!((ui.output_w(), ui.output_h()), (1920, 1080));
         assert_eq!((ui.scan_w(), ui.scan_h()), (1920, 1080));
