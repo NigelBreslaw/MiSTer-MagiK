@@ -98,8 +98,11 @@ those trees are part of the task.
   install/restore scripts.
 - Apple Silicon ARM builds use Apple `container` by default. Do not switch to
   Docker/OrbStack.
-- RBF synthesis runs only in the `Build MiSTer MagiK Platform` GitHub Actions
-  workflow. Never attempt a local Quartus/RBF build or retain local RBF output.
+- RBF synthesis runs either in the `Build MiSTer MagiK Platform` GitHub Actions
+  workflow or through the typed Apple Silicon `scripts/agent fpga signoff`
+  workflow. Never invoke Quartus, its installer, or the FPGA build script
+  directly. Local RBFs are ignored signoff-cache artifacts and are never
+  deployable or release-qualified by the local workflow.
 - Enable `.githooks/pre-commit` with
   `git config core.hooksPath .githooks`.
 - Treat `private/magik-assets` and `private/magik-cloud` as their own
@@ -119,6 +122,8 @@ scripts/agent benchmark
 scripts/agent capture usb-video
 scripts/agent diagnose
 scripts/agent dependencies sync path/to/Cargo.toml
+QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
+scripts/agent fpga signoff
 scripts/agent release qualify
 git add -- path/to/file
 git commit -m "Describe the completed change"
@@ -151,6 +156,12 @@ input. By default it writes a validated 1920x1080 JPEG under the OS temporary
 directory unless `--output PATH` is supplied. With `--seconds N` it instead
 writes a bounded 1920x1080 QuickTime movie for 1–60 seconds. Both modes print a
 Markdown artifact link and refuse to overwrite explicit output paths.
+`fpga signoff` resolves the current local `main` ref, builds stock Menu, the
+exact pinned pre-observer revision, and final Main inputs in generated isolated
+checkouts, then runs the unchanged Quartus delta checker. Completed synthesis
+is cached before validation, so an expected delta failure can be rerun without
+rebuilding. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
+multiple worktrees must share the Quartus install and synthesis cache.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct hook or CI assurance commands directly; those boundaries select and

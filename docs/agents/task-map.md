@@ -22,7 +22,7 @@ the extra-assurance column identifies attended or specialized work beyond it.
 | Documentation | `documentation/src/content/docs/` | `documentation/src/content/docs/contributing/` | None | Pre-commit, pre-push, and CI | None | Rust targets, device |
 | Packaging/releases | `scripts/package-distribution.sh` | `docs/releases.md` | None | Pre-commit, pre-push, and CI | Operator gate: `scripts/agent release qualify` | UI runtime internals |
 | Kernel scanout | `mister/platform/kernel/scanout-slots/` | `docs/kernel-scanout-plugin-assurance.md` | None | Pre-push and CI | Kernel build and attended device qualification | Catalog, desktop |
-| FPGA latch | `mister/platform/fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | None | Pre-push and GitHub Actions RBF build | Quartus/device signoff | Catalog, documentation |
+| FPGA latch | `mister/platform/fpga/menu-vblank-latch/` | `docs/fpga-latch-release.md` | None | Pre-push, typed local Apple FPGA signoff, and GitHub Actions RBF build | Quartus/device signoff | Catalog, documentation |
 
 For dated evidence, search explicitly with `rg --no-ignore history/`. For
 unknown work, run `scripts/agent plan` to preview the full affected assurance

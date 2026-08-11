@@ -128,6 +128,7 @@ fn command_label(command: &CliCommand) -> &'static str {
         CliCommand::SceneLab { .. } => "scene-lab",
         CliCommand::Clean => "clean",
         CliCommand::Dependencies { .. } => "dependencies",
+        CliCommand::Fpga { .. } => "fpga",
         CliCommand::Build { .. } => "build",
         CliCommand::Ci { .. } => "ci",
     }
@@ -256,6 +257,10 @@ fn dispatch(
         }
         CliCommand::Dependencies { command } => {
             agent_cli::dependencies::execute(repository, command, reporter)?;
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Fpga { command } => {
+            agent_cli::fpga::execute(repository, command, reporter)?;
             return Ok(Outcome::Passed);
         }
         CliCommand::Device {

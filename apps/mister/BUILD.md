@@ -38,6 +38,31 @@ platform assurance.
 rollback, and smoke verification. Human-only fixed scene operation is available
 through `scripts/agent device scene`; it is separate from building and deployment.
 
+## Local FPGA signoff
+
+Apple Silicon can run the complete matched FPGA signoff locally:
+
+```text
+QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
+scripts/agent fpga signoff
+```
+
+Setup installs pinned Quartus Lite 17.0 Build 595 into the ignored local cache.
+Quartus itself runs in an amd64 Apple container under Rosetta; the official
+installer uses a QEMU amd64 chroot because it cannot complete under Rosetta.
+Signoff reads the local `main` ref without switching the caller's worktree,
+uses isolated generated source checkouts, builds the same stock, pinned
+pre-observer, and final seed-1 variants as CI, and runs the same delta checker.
+Rosetta requires Quartus parallel synthesis to be disabled; fitter and timing
+remain parallel. That compatibility setting is applied identically to all
+three variants and is part of the synthesis-cache identity.
+
+Completed synthesis is cached before the checker runs. A failing signoff is
+therefore reproducible without another synthesis pass. Use an absolute
+`MISTER_FPGA_LOCAL_ROOT` shared by worktrees when another local agent must reuse
+the install and completed variants. Local RBFs remain diagnostic artifacts;
+only the GitHub platform workflow can publish or qualify an RBF for deployment.
+
 Compilation intent is explicit:
 
 | Intent | Cargo policy | Artifact use |

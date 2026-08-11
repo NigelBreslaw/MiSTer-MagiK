@@ -24,6 +24,7 @@ pub mod doctor;
 pub mod error;
 pub mod evidence;
 pub mod executor;
+pub mod fpga;
 pub mod game_databases;
 pub mod git;
 pub mod hooks;

@@ -93,6 +93,12 @@ or block-memory use. The final build must also have zero TNS and at least 0.20
 ns setup and hold slack. A changed RBF still requires the normal release
 qualification before device deployment.
 
+On Apple Silicon, `scripts/agent fpga signoff` runs that same three-way build
+and unchanged checker in Apple containers. It resolves the local `main` ref in
+an isolated generated checkout, caches completed synthesis before validation,
+and retains a failing report for fast reruns. Local Rosetta synthesis is a
+development signoff lane only; GitHub still owns publishable platform RBFs.
+
 Internal `ascal.vhd` probes, SDRAM data inspection, BRAM history, SignalTap,
 writable diagnostics, and pixel-rate CRCs are explicitly outside Phase 2. They
 require a new evidence-backed plan.

@@ -5,6 +5,7 @@ use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
+use crate::fpga::FpgaCommand;
 use crate::live_particles::LiveParticlesCommand;
 use crate::model::{BenchmarkScenario, Scope};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
@@ -95,6 +96,11 @@ pub enum Command {
     Dependencies {
         #[command(subcommand)]
         command: DependenciesCommand,
+    },
+    /// Build and verify the matched FPGA signoff set locally on Apple Silicon.
+    Fpga {
+        #[command(subcommand)]
+        command: FpgaCommand,
     },
     #[command(hide = true)]
     Build {
@@ -690,6 +696,13 @@ mod tests {
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deploy-recipe", "launcher-device"]).is_err());
+    }
+
+    #[test]
+    fn fpga_local_workflow_has_typed_setup_and_signoff_commands() {
+        assert!(Cli::try_parse_from(["agent-cli", "fpga", "setup"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "fpga", "signoff"]).is_ok());
+        assert!(Cli::try_parse_from(["agent-cli", "fpga", "signoff", "--rebuild"]).is_ok());
     }
 
     #[test]
