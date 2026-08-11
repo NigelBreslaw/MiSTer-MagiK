@@ -446,7 +446,7 @@ fn execute_system_entry_critical(
     let detail = device.profile(BenchmarkProfile::SystemEntryCritical, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-system-entry-critical-benchmark-v2")
+        != Some("mister-magik-system-entry-critical-benchmark-v3")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
         || summary
             .get("systems")
