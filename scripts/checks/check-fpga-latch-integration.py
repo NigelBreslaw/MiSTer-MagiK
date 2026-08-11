@@ -191,6 +191,8 @@ def main() -> None:
         fail("diagnostic skew constraint does not suppress inapplicable CCPP analysis")
     if "fault_burstcount*" in diagnostics_sdc_text:
         fail("diagnostic SDC requires the constant-folded burstcount payload register")
+    if "reference_flags*" in diagnostics_sdc_text:
+        fail("diagnostic SDC requires the constant-folded reference-flags register")
     if diagnostics_sdc_text.count("magik_require_registers") < 8:
         fail("diagnostic CDC constraints do not reject empty node collections")
     diagnostic_hierarchies = (

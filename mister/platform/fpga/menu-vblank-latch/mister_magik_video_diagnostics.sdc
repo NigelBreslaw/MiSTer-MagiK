@@ -61,7 +61,6 @@ set magik_diag_output_source [magik_require_registers output_payload [list \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|reference_lines*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|reference_pixels*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|reference_active_lines*} \
-	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|reference_flags*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|fault_period*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|fault_lines*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|fault_pixels*} \
@@ -73,6 +72,8 @@ set magik_diag_output_source [magik_require_registers output_payload [list \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|frame_count*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|snapshot_heartbeat*} \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|control_changes*}]]
+# Reference capture requires DE, nonblack, and nonwhite, so reference_flags is
+# constant 0x0007 in this implementation and Quartus removes its register.
 set magik_diag_output_destination [magik_require_registers output_payload_destination [list \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|output_verify_candidate*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|output_verify_sample*} \
