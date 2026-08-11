@@ -94,9 +94,17 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         window.draw_if_needed(|renderer| {
-            let region = self.drawing_target_mut().render(renderer);
-            slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
-            slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
+            let region = self.target.render(renderer);
+            slint_dirty = dirty_rect(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
+            slint_damage = dirty_rects(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
         });
         (slint_dirty, slint_damage)
     }
@@ -108,9 +116,17 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         let rendered = window.draw_full_frame_if_needed(|renderer| {
-            let region = self.drawing_target_mut().render(renderer);
-            slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
-            slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
+            let region = self.target.render(renderer);
+            slint_dirty = dirty_rect(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
+            slint_damage = dirty_rects(
+                &region,
+                self.layout.composition_w(),
+                self.layout.composition_h(),
+            );
         });
         (slint_dirty, slint_damage, rendered)
     }
@@ -210,19 +226,6 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.drawing_target_mut(), snapshot)
-    }
-
-    pub(super) fn sync_full_portrait_composition(&mut self) {
-        if !self.layout.is_portrait() {
-            return;
-        }
-        let full = DirtyRectList::from_one(DirtyRect {
-            x0: 0,
-            y0: 0,
-            x1: self.layout.logical_w(),
-            y1: self.layout.logical_h(),
-        });
-        let _ = self.rotate_damage_to_composition(&full);
     }
 
     pub(super) fn swap_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {

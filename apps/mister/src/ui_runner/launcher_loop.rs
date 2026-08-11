@@ -4410,8 +4410,7 @@ fn render_immediate_launcher_frame(
     if damage.is_empty() {
         damage.push_if_some(dirty);
     }
-    let mapped = layer_target.rotate_damage_to_composition(&damage);
-    mapped.iter().reduce(DirtyRect::union)
+    damage.iter().reduce(DirtyRect::union)
 }
 
 fn preview_archive_warm_skip_enabled() -> bool {
@@ -9004,12 +9003,19 @@ pub(super) fn run_launcher_loop(
         let frame_t2 = Instant::now();
         let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_start = Instant::now();
+        let logical_slint_rect = this_rect.map(|rect| {
+            if layout.is_portrait() && !slint_damage.is_empty() {
+                layout.composition_rect_to_logical_rect(rect)
+            } else {
+                rect
+            }
+        });
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
-                this_rect,
+                logical_slint_rect,
                 full_frame_present,
             );
             if nav.arcade_filter.drawer_open {
@@ -9070,7 +9076,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     &mut preview_transition,
                     loop_start.duration_since(run_start),
-                    this_rect,
+                    logical_slint_rect,
                     full_frame_present,
                 )
             } else {
@@ -9180,9 +9186,6 @@ pub(super) fn run_launcher_loop(
                     }
                 }
                 if destination_layers_ready {
-                    if navigation_transition.settings_physical_space() {
-                        layer_target.sync_full_portrait_composition();
-                    }
                     if let Some((waited, timed_out)) = status_quiesce {
                         navigation_transition.note_pending_status_quiesce(
                             waited.as_micros().min(u64::MAX as u128) as u64,
@@ -9337,8 +9340,8 @@ pub(super) fn run_launcher_loop(
         let full_rect = DirtyRect {
             x0: 0,
             y0: 0,
-            x1: layout.logical_w(),
-            y1: layout.logical_h(),
+            x1: layout.composition_w(),
+            y1: layout.composition_h(),
         };
         let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
@@ -9387,29 +9390,23 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let mut cached_damage = if full_frame_present {
-            DirtyRectList::from_one(full_rect)
-        } else if slint_damage.is_empty() {
-            let mut damage = DirtyRectList::new();
-            damage.push_if_some(this_rect);
-            damage
-        } else {
-            slint_damage
-        };
-        cached_damage.push_if_some(empty_base_cached_rect);
-        cached_damage.push_if_some(raw_preview_cached_rect);
-        cached_damage.push_if_some(cached_arcade_rect);
-        let orientation_damage_rects_before = cached_damage.len() as u32;
+        let mut logical_custom_damage = DirtyRectList::new();
+        if slint_damage.is_empty() {
+            logical_custom_damage.push_if_some(this_rect);
+        }
+        logical_custom_damage.push_if_some(empty_base_cached_rect);
+        logical_custom_damage.push_if_some(raw_preview_cached_rect);
+        logical_custom_damage.push_if_some(cached_arcade_rect);
+        let orientation_damage_rects_before = logical_custom_damage.len() as u32;
         let damage_rotation_started = Instant::now();
-        let mut cached_damage = if navigation_settings_physical_space {
-            DirtyRectList::from_one(DirtyRect {
-                x0: 0,
-                y0: 0,
-                x1: ui.render_w(),
-                y1: ui.render_h(),
-            })
+        let mapped_custom_damage =
+            layer_target.rotate_damage_to_composition(&logical_custom_damage);
+        let mut cached_damage = if full_frame_present || navigation_settings_physical_space {
+            DirtyRectList::from_one(full_rect)
         } else {
-            layer_target.rotate_damage_to_composition(&cached_damage)
+            let mut damage = slint_damage;
+            damage.extend_from(&mapped_custom_damage);
+            damage
         };
         let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();
         let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
