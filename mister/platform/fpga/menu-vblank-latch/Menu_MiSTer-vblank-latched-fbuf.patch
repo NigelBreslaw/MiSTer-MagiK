@@ -42,12 +42,12 @@ index a416879..d05a447 100644
 +wire        magik_diag_avalon_fault;
 +wire  [7:0] magik_diag_avalon_trigger;
 +wire        magik_diag_avalon_snapshot_ack;
-+wire [495:0] magik_diag_avalon_snapshot;
++wire [239:0] magik_diag_avalon_snapshot;
 +wire        magik_diag_output_heartbeat;
 +wire        magik_diag_output_fault;
 +wire  [7:0] magik_diag_output_trigger;
 +wire        magik_diag_output_snapshot_ack;
-+wire [495:0] magik_diag_output_snapshot;
++wire [239:0] magik_diag_output_snapshot;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(

@@ -169,7 +169,6 @@ pub fn decode_avalon(words: &[u16]) -> Result<VideoDiagnosticsAvalonSnapshot, St
     if words[VIDEO_DIAGNOSTICS_AVALON_ROUTE_FLAGS] & !VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK != 0
         || words[VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS] & !VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_MASK
             != 0
-        || words[VIDEO_DIAGNOSTICS_AVALON_RESERVED] != 0
     {
         return Err("Avalon video diagnostics contains reserved bits".to_string());
     }
@@ -188,17 +187,17 @@ pub fn decode_output(words: &[u16]) -> Result<VideoDiagnosticsOutputSnapshot, St
         ],
         words,
     )?;
+    let fault_summary = words[VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY];
+    let fault_flags = fault_summary & 0x00ff;
+    let geometry_faults = (fault_summary >> 8) & 0x0007;
     if words[VIDEO_DIAGNOSTICS_OUTPUT_SOURCE_FLAGS] & !VIDEO_DIAGNOSTICS_OUTPUT_SOURCE_FLAGS_MASK
         != 0
         || words[VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS]
             & !VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS_MASK
             != 0
-        || words[VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS] & !VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_MASK
-            != 0
-        || words[VIDEO_DIAGNOSTICS_OUTPUT_GEOMETRY_FAULTS] & !VIDEO_DIAGNOSTICS_GEOMETRY_FAULTS_MASK
-            != 0
-        || words[VIDEO_DIAGNOSTICS_OUTPUT_RESERVED_0] != 0
-        || words[VIDEO_DIAGNOSTICS_OUTPUT_RESERVED_1] != 0
+        || fault_flags & !VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_MASK != 0
+        || geometry_faults & !VIDEO_DIAGNOSTICS_GEOMETRY_FAULTS_MASK != 0
+        || fault_summary & 0xf800 != 0
     {
         return Err("output video diagnostics contains reserved bits".to_string());
     }
@@ -222,8 +221,8 @@ mod tests {
         let avalon = zero_words::<VIDEO_DIAGNOSTICS_AVALON_WORDS>(GET_VIDEO_DIAGNOSTICS_AVALON);
         let output = zero_words::<VIDEO_DIAGNOSTICS_OUTPUT_WORDS>(GET_VIDEO_DIAGNOSTICS_OUTPUT);
         assert_eq!(control[47], VIDEO_DIAGNOSTICS_CONTROL_ZERO_GOLDEN_CRC);
-        assert_eq!(avalon[31], VIDEO_DIAGNOSTICS_AVALON_ZERO_GOLDEN_CRC);
-        assert_eq!(output[31], VIDEO_DIAGNOSTICS_OUTPUT_ZERO_GOLDEN_CRC);
+        assert_eq!(avalon[15], VIDEO_DIAGNOSTICS_AVALON_ZERO_GOLDEN_CRC);
+        assert_eq!(output[15], VIDEO_DIAGNOSTICS_OUTPUT_ZERO_GOLDEN_CRC);
         assert_eq!(
             decode_control(&control).unwrap().state,
             VideoDiagnosticsState::Idle
@@ -246,25 +245,24 @@ mod tests {
         words[0] = VIDEO_DIAGNOSTICS_SCHEMA;
         words[5] ^= 1;
         assert!(decode_avalon(&words).is_err());
-        assert!(decode_avalon(&words[..31]).is_err());
+        assert!(decode_avalon(&words[..15]).is_err());
 
         let mut reserved =
             zero_words::<VIDEO_DIAGNOSTICS_OUTPUT_WORDS>(GET_VIDEO_DIAGNOSTICS_OUTPUT);
         reserved[1] = 0x8000;
-        reserved[31] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..31]);
+        reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
         assert!(decode_output(&reserved).is_err());
         reserved[1] = 0;
         reserved[2] = VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST;
-        reserved[31] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..31]);
+        reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
         assert!(decode_output(&reserved).is_err());
 
-        let mut reserved_avalon =
-            zero_words::<VIDEO_DIAGNOSTICS_AVALON_WORDS>(GET_VIDEO_DIAGNOSTICS_AVALON);
-        reserved_avalon[VIDEO_DIAGNOSTICS_AVALON_RESERVED] = 1;
-        reserved_avalon[VIDEO_DIAGNOSTICS_AVALON_CRC] = message_crc(
-            GET_VIDEO_DIAGNOSTICS_AVALON,
-            &reserved_avalon[..VIDEO_DIAGNOSTICS_AVALON_CRC],
+        reserved[2] = VIDEO_DIAGNOSTICS_TRIGGER_NONE;
+        reserved[VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY] = 0x8000;
+        reserved[VIDEO_DIAGNOSTICS_OUTPUT_CRC] = message_crc(
+            GET_VIDEO_DIAGNOSTICS_OUTPUT,
+            &reserved[..VIDEO_DIAGNOSTICS_OUTPUT_CRC],
         );
-        assert!(decode_avalon(&reserved_avalon).is_err());
+        assert!(decode_output(&reserved).is_err());
     }
 }

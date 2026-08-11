@@ -187,6 +187,8 @@ def main() -> None:
         fail("diagnostic bundled-data net-delay constraint is missing")
     if diagnostics_sdc_text.count("set_max_skew -from") != 1:
         fail("diagnostic bundled-data skew constraint is missing")
+    if diagnostics_sdc_text.count("set_false_path -from") != 1:
+        fail("diagnostic bundled-data paths are not isolated from functional timing")
     if diagnostics_sdc_text.count("-exclude {ccpp}") != 1:
         fail("diagnostic skew constraint does not suppress inapplicable CCPP analysis")
     if "fault_burstcount*" in diagnostics_sdc_text:

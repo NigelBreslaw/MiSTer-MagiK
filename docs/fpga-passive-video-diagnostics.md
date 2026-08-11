@@ -12,10 +12,10 @@ reconfigured:
 
 - `0x5D` records complete, partial, restarted, and owned legacy `0x2F`
   transactions and the surrounding route/control state in `clk_sys`.
-- `0x5E` records accepted `vbuf_*` addresses, burst and return accounting,
-  stalls, outstanding age, resets, and no-read frame intervals in `clk_100m`.
+- `0x5E` records accepted `vbuf_*` addresses, saturated accepted-burst and
+  returned-beat counts, timeout/reset faults, and no-read frame intervals in `clk_100m`.
   It does not connect to `vbuf_readdata` or `vbuf_writedata`.
-- `0x5F` records frame/line/active-pixel totals and all-black/all-white state
+- `0x5F` records frame, line, and active-line totals and all-black/all-white state
   from the already-registered `hdmi_out_*` signals in `hdmi_tx_clk`. It does
   not hash, copy, or modify pixels.
 
@@ -28,6 +28,11 @@ The diagnostic ABI is separate from latch protocol v5. Existing commands
 `0x57`–`0x5C`, capability bits, responses, ownership, and apply priority remain
 unchanged. Every diagnostic response has its own magic, fixed length, schema,
 and CRC-16/CCITT-FALSE value.
+
+Schema 2 keeps the complete 48-word control history and uses compact 16-word
+Avalon and HDMI event records. The native records retain the first/last actual
+address, accepted/returned accounting, route generation, reference timing,
+and fault flags without carrying generic trace history or pixel-rate counters.
 
 ## Collection
 
@@ -59,11 +64,14 @@ health, or SDRAM data correctness.
 ## Release gates
 
 The FPGA fast gate checks the separate generated contract, all native-domain
-fault-injection simulations, full responses past word 15, final response
+fault-injection simulations, the complete 48-word control response, final response
 priority, immutable latch hashes, exact pinned Menu integration, passive cone
-boundaries, and explicit synchronizer identification. Wide diagnostic records
-are held immutable before acknowledgement, sampled twice in `clk_sys`, and
-covered by nonempty 8 ns net-delay and 2 ns bus-skew constraints. The synthesis
+boundaries, and explicit synchronizer identification. Native diagnostic records
+are held immutable before acknowledgement, their generation is sampled twice
+in `clk_sys`, and the complete payload is covered by nonempty 8 ns net-delay
+and 2 ns bus-skew constraints. The bundled paths are excluded from ordinary
+functional setup/hold analysis while remaining subject to those explicit CDC
+bounds. The synthesis
 workflow applies the same analysis-only exclusive-to-asynchronous clock-group
 change to stock, pre-observer, and final work trees so TimeQuest analyzes those
 skew constraints without biasing the observer delta. No generated clock or

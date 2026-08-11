@@ -16,7 +16,7 @@ module tb_mister_magik_video_diagnostics_output;
 	reg de = 1'b0, hs = 1'b0, vs = 1'b0;
 	wire heartbeat, fault, ack;
 	wire [7:0] trigger;
-	wire [495:0] payload;
+	wire [239:0] payload;
 
 	mister_magik_video_diagnostics_output dut (
 		.hdmi_tx_clk(clk), .monitor_armed_async(armed),
@@ -78,7 +78,7 @@ module tb_mister_magik_video_diagnostics_output;
 	endtask
 
 	reg first_fault;
-	reg [495:0] frozen_payload;
+	reg [239:0] frozen_payload;
 	initial begin
 		repeat(4) @(negedge clk);
 		route_toggle = ~route_toggle;
@@ -107,11 +107,11 @@ module tb_mister_magik_video_diagnostics_output;
 		request = ~request;
 		repeat(5) @(negedge clk);
 		if(ack != request) $fatal(1, "output snapshot did not acknowledge");
-		if(word_at(0) != 16'd1 || word_at(2) != 16'd10 || word_at(3) != generation)
+		if(word_at(0) != 16'd2 || word_at(2) != 16'd10 || word_at(3) != generation)
 			$fatal(1, "output snapshot identity mismatch");
 		if(word_at(4) != route_epoch || word_at(5) != active_seq)
 			$fatal(1, "output route context mismatch");
-		if((word_at(21) & 16'h0008) == 0 || (word_at(21) & 16'h0001) != 0)
+		if((word_at(14) & 16'h0008) == 0 || (word_at(14) & 16'h0001) != 0)
 			$fatal(1, "no-DE black frame evidence was not distinguished");
 		frozen_payload = payload;
 		mux_csync = 1'b1;

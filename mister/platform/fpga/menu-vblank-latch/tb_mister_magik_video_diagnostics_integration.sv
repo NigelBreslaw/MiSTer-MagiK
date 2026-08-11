@@ -14,13 +14,13 @@ module tb_mister_magik_video_diagnostics_integration;
 	reg io_strobe = 1'b0, io_osd = 1'b0, apply = 1'b0;
 	reg [15:0] pending_seq = 16'd23;
 	reg [15:0] active_seq = 16'd22, active_route_epoch = 16'd6;
-	reg [495:0] frozen_avalon_payload, frozen_output_payload;
+	reg [239:0] frozen_avalon_payload, frozen_output_payload;
 	wire snapshot_request, monitor_armed, route_context;
 	wire [15:0] generation, expected_route_epoch, expected_active_seq, expected_route_flags;
 	wire [31:0] expected_base, expected_end;
 	wire avalon_fault, avalon_ack, output_heartbeat, output_fault, output_ack;
 	wire [7:0] avalon_trigger, output_trigger;
-	wire [495:0] avalon_payload, output_payload;
+	wire [239:0] avalon_payload, output_payload;
 
 	mister_magik_video_diagnostics_control #(
 		.HEARTBEAT_TIMEOUT_CYCLES(24'd1000), .SNAPSHOT_TIMEOUT_CYCLES(12'd200)

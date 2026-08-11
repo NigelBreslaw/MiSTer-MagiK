@@ -48,8 +48,8 @@ module tb_mister_magik_video_diagnostics_control;
 	reg output_heartbeat = 1'b0;
 	reg avalon_fault = 1'b0;
 	reg output_fault = 1'b0;
-	reg [495:0] avalon_payload = 496'd0;
-	reg [495:0] output_payload = 496'd0;
+	reg [239:0] avalon_payload = 240'd0;
+	reg [239:0] output_payload = 240'd0;
 	wire snapshot_request;
 	wire monitor_armed;
 	wire [15:0] diagnostic_generation;
@@ -145,31 +145,31 @@ module tb_mister_magik_video_diagnostics_control;
 			@(negedge clk_sys); io_strobe = 1'b0;
 			crc = 16'hffff;
 			crc = crc_word(crc, {8'd0, selected_command});
-			crc = crc_word(crc, 16'd1);
-			crc = crc_word(crc, 16'd31);
-			for(index=0; index<32; index=index+1) begin
+			crc = crc_word(crc, 16'd2);
+			crc = crc_word(crc, 16'd15);
+			for(index=0; index<16; index=index+1) begin
 				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
 				#1;
 				if(!response_valid)
 					$fatal(1, "native response ended command=%h word=%0d",
 						selected_command, index);
 				words[index] = response_data;
-				if(index < 31) crc = crc_word(crc, response_data);
+				if(index < 15) crc = crc_word(crc, response_data);
 				@(negedge clk_sys); io_strobe = 1'b0;
 			end
 			close_command();
-			if(words[31] != crc)
+			if(words[15] != crc)
 				$fatal(1, "native CRC mismatch command=%h expected=%h got=%h",
-					selected_command, crc, words[31]);
-			if(words[0] != 16'd1 || words[4] != expected_word_four)
+					selected_command, crc, words[15]);
+			if(words[0] != 16'd2 || words[4] != expected_word_four)
 				$fatal(1, "native payload mismatch command=%h", selected_command);
 		end
 	endtask
 
 	initial begin
-		avalon_payload[0 +: 16] = 16'd1;
+		avalon_payload[0 +: 16] = 16'd2;
 		avalon_payload[4*16 +: 16] = 16'h1111;
-		output_payload[0 +: 16] = 16'd1;
+		output_payload[0 +: 16] = 16'd2;
 		repeat(4) @(negedge clk_sys);
 
 		// The independent responder must ignore every existing latch opcode.
@@ -210,7 +210,7 @@ module tb_mister_magik_video_diagnostics_control;
 		@(negedge clk_sys); io_strobe = 1'b0;
 		crc = 16'hffff;
 		crc = crc_word(crc,16'h005d);
-		crc = crc_word(crc,16'd1);
+		crc = crc_word(crc,16'd2);
 		crc = crc_word(crc,16'd47);
 		for(index=0; index<48; index=index+1) begin
 			@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
@@ -222,7 +222,7 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 		close_command();
 		if(words[47] != crc) $fatal(1, "control CRC mismatch expected=%h got=%h", crc, words[47]);
-		if(words[0] != 1 || words[2] != 1 || words[10] != 2 ||
+		if(words[0] != 2 || words[2] != 1 || words[10] != 2 ||
 		   words[12] != 1 || words[13] != 1 || words[14] != 16'h03ff)
 			$fatal(1, "control identity/trigger/mask mismatch");
 		for(index=0; index<10; index=index+1)
@@ -236,20 +236,25 @@ module tb_mister_magik_video_diagnostics_control;
 	always @(snapshot_request) begin
 		if(snapshot_request) fork
 			begin
-				wait(dut.avalon_verify_pending && dut.avalon_verify_index == 6'd4);
+				wait(dut.avalon_sample_pending);
 				@(negedge clk_sys);
-				avalon_payload[4*16 +: 16] = 16'h2222;
+				avalon_payload[3*16 +: 16] = 16'h2222;
 				@(negedge clk_sys);
-				avalon_payload[4*16 +: 16] = 16'h1111;
+				avalon_payload[3*16 +: 16] = diagnostic_generation;
 			end
 			begin
-				wait(dut.output_verify_pending && dut.output_verify_index == 6'd4);
+				wait(dut.output_sample_pending);
 				@(negedge clk_sys);
-				output_payload[4*16 +: 16] = 16'h3333;
+				output_payload[3*16 +: 16] = 16'h3333;
 				@(negedge clk_sys);
-				output_payload[4*16 +: 16] = 16'd0;
+				output_payload[3*16 +: 16] = diagnostic_generation;
 			end
 		join_none
+	end
+
+	always @(diagnostic_generation) begin
+		avalon_payload[3*16 +: 16] = diagnostic_generation;
+		output_payload[3*16 +: 16] = diagnostic_generation;
 	end
 endmodule
 

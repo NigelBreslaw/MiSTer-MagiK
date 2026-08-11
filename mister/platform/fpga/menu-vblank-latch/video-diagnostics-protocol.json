@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "commands": {
     "control": 93,
     "avalon": 94,
@@ -12,8 +12,8 @@
   },
   "word_counts": {
     "control": 48,
-    "avalon": 32,
-    "output": 32
+    "avalon": 16,
+    "output": 16
   },
   "states": {
     "idle": 0,
@@ -95,8 +95,7 @@
     "geometry_faults": {
       "frame_period": 0,
       "line_count": 1,
-      "active_pixels": 2,
-      "active_lines": 3
+      "active_lines": 2
     }
   },
   "triggers": {
@@ -130,25 +129,17 @@
   ],
   "avalon_words": [
     "schema", "state_flags", "trigger", "generation", "route_epoch",
-    "route_flags", "expected_base_low", "expected_base_high", "slot_end_low",
-    "slot_end_high", "first_address_low", "first_address_high",
-    "last_address_low", "last_address_high", "accepted_bursts_low",
-    "accepted_bursts_high", "expected_beats_low", "expected_beats_high",
-    "returned_beats_low", "returned_beats_high", "outstanding_low",
-    "outstanding_high", "maximum_outstanding", "maximum_waitrequest",
-    "oldest_request_low", "oldest_request_high", "no_read_frames",
-    "fault_burstcount", "fault_flags", "frame_count", "reserved", "crc"
+    "route_flags", "expected_base_low", "expected_base_high",
+    "first_address_low", "first_address_high", "last_address_low",
+    "last_address_high", "accepted_bursts", "returned_beats",
+    "fault_flags", "crc"
   ],
   "output_words": [
     "schema", "state_flags", "trigger", "generation", "route_epoch",
     "active_sequence", "source_flags", "control_flags",
     "reference_period_low", "reference_period_high", "reference_lines",
-    "reference_pixels_low", "reference_pixels_high", "reference_active_lines",
-    "reference_flags", "fault_period_low", "fault_period_high", "fault_lines",
-    "fault_pixels_low", "fault_pixels_high", "fault_active_lines", "fault_flags",
-    "consecutive_black", "consecutive_white", "geometry_faults",
-    "frame_count_low", "frame_count_high", "heartbeat", "control_changes",
-    "reserved_0", "reserved_1", "crc"
+    "reference_active_lines", "fault_period_low", "fault_period_high",
+    "fault_summary", "crc"
   ],
   "crc": {
     "polynomial": 4129,

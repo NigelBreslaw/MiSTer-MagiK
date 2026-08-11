@@ -26,7 +26,7 @@ module mister_magik_video_diagnostics_avalon (
 	output reg          fault_toggle = 1'b0,
 	output reg  [7:0]   fault_trigger = 8'd0,
 	output reg          snapshot_ack_toggle = 1'b0,
-	output wire [495:0] snapshot_payload
+	output wire [239:0] snapshot_payload
 );
 
 `include "mister_magik_video_diagnostics_protocol.svh"
@@ -48,15 +48,10 @@ module mister_magik_video_diagnostics_avalon (
 
 	reg [31:0] expected_base = 32'd0, expected_slot_end = 32'd0;
 	reg [15:0] route_epoch = 16'd0, route_flags = 16'd0;
-	reg [31:0] accepted_bursts = 32'd0;
-	reg [31:0] expected_beats = 32'd0, returned_beats = 32'd0;
-	reg [31:0] outstanding = 32'd0, maximum_outstanding = 32'd0;
-	reg [15:0] waitrequest_run = 16'd0, maximum_waitrequest = 16'd0;
-	reg [31:0] oldest_request = 32'd0;
+	reg [15:0] accepted_bursts = 16'd0, returned_beats = 16'd0;
+	reg [20:0] outstanding = 21'd0, stall_age = 21'd0;
 	reg [27:0] first_address = 28'd0, last_address = 28'd0;
-	reg [15:0] frame_count = 16'd0;
 	reg [15:0] fault_flags = 16'd0;
-	reg [7:0] fault_burstcount = 8'd0;
 	reg [1:0] no_read_frames = 2'd0;
 	reg reads_since_frame = 1'b0;
 	reg frozen = 1'b0, mailbox_overrun = 1'b0;
@@ -76,14 +71,10 @@ module mister_magik_video_diagnostics_avalon (
 			MAGIK_VIDEO_DIAGNOSTICS_STATE_FLAGS_MONITOR_ARMED) :
 			MAGIK_VIDEO_DIAGNOSTICS_STATE_IDLE));
 	assign snapshot_payload = {
-		16'd0, frame_count, fault_flags, {8'd0, fault_burstcount},
-		{14'd0, no_read_frames}, oldest_request[31:16], oldest_request[15:0],
-		maximum_waitrequest, maximum_outstanding[15:0], outstanding[31:16],
-		outstanding[15:0], returned_beats[31:16], returned_beats[15:0],
-		expected_beats[31:16], expected_beats[15:0], accepted_bursts[31:16],
-		accepted_bursts[15:0], {4'd0, last_address[27:16]}, last_address[15:0],
-		{4'd0, first_address[27:16]}, first_address[15:0], expected_slot_end[31:16],
-		expected_slot_end[15:0], expected_base[31:16], expected_base[15:0],
+		fault_flags, returned_beats, accepted_bursts,
+		{4'd0, last_address[27:16]}, last_address[15:0],
+		{4'd0, first_address[27:16]}, first_address[15:0],
+		expected_base[31:16], expected_base[15:0],
 		route_flags, route_epoch, snapshot_generation, {8'd0, fault_trigger},
 		snapshot_state_word, MAGIK_VIDEO_DIAGNOSTICS_SCHEMA};
 
@@ -150,7 +141,6 @@ module mister_magik_video_diagnostics_avalon (
 
 		frame_seen <= frame_sync;
 		if(frame_sync && !frame_seen && !frozen) begin
-			if(frame_count != 16'hffff) frame_count <= frame_count + 1'd1;
 			if(armed) begin
 				if(reads_since_frame) no_read_frames <= 2'd0;
 				else if(no_read_frames < 3) no_read_frames <= no_read_frames + 1'd1;
@@ -161,32 +151,17 @@ module mister_magik_video_diagnostics_avalon (
 			end
 		end
 
-		if(!frozen && vbuf_read && vbuf_waitrequest) begin
-			if(waitrequest_run != 16'hffff) waitrequest_run <= waitrequest_run + 1'd1;
-			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
-				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
-			if((waitrequest_run >= maximum_waitrequest) && (waitrequest_run != 16'hffff))
-				maximum_waitrequest <= waitrequest_run + 1'd1;
-		end
-		else if(!frozen) waitrequest_run <= 16'd0;
-
 		if(vbuf_read && !vbuf_waitrequest && !frozen) begin
 			if(accepted_bursts == 0) first_address <= vbuf_address;
 			last_address <= vbuf_address;
 			reads_since_frame <= 1'b1;
-			if(accepted_bursts != 32'hffffffff) accepted_bursts <= accepted_bursts + 1'd1;
+			if(accepted_bursts != 16'hffff) accepted_bursts <= accepted_bursts + 1'd1;
 			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
 				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
-			if(expected_beats <= 32'hffffff7f) expected_beats <= expected_beats + vbuf_burstcount;
+			if(outstanding <= 21'h1fff7f) outstanding <= outstanding + vbuf_burstcount;
 			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
 				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
-			if(outstanding <= 32'hffffff7f) outstanding <= outstanding + vbuf_burstcount;
-			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
-				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
-			if((outstanding + vbuf_burstcount) > maximum_outstanding)
-				maximum_outstanding <= outstanding + vbuf_burstcount;
 			if(vbuf_burstcount != 8'd128) begin
-				fault_burstcount <= vbuf_burstcount;
 				freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST,
 					MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_BAD_BURSTCOUNT);
 			end
@@ -197,7 +172,7 @@ module mister_magik_video_diagnostics_avalon (
 		end
 
 		if(vbuf_readdatavalid && !frozen) begin
-			if(returned_beats != 32'hffffffff) returned_beats <= returned_beats + 1'd1;
+			if(returned_beats != 16'hffff) returned_beats <= returned_beats + 1'd1;
 			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
 				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
 			if((outstanding == 0) && !(vbuf_read && !vbuf_waitrequest))
@@ -209,13 +184,13 @@ module mister_magik_video_diagnostics_avalon (
 		end
 
 		if(!frozen) begin
-			if(outstanding != 0) begin
-				if(oldest_request != 32'hffffffff) oldest_request <= oldest_request + 1'd1;
-				if(oldest_request == 32'h000fffff)
+			if((outstanding != 0) || (vbuf_read && vbuf_waitrequest)) begin
+				if(stall_age < 21'h100000) stall_age <= stall_age + 1'd1;
+				if(stall_age == 21'h0fffff)
 					freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
 						MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_REQUEST_TIMEOUT);
 			end
-			else oldest_request <= 32'd0;
+			else stall_age <= 21'd0;
 		end
 
 		if(reset_sync && (outstanding != 0) && !frozen)
@@ -223,10 +198,10 @@ module mister_magik_video_diagnostics_avalon (
 				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_RESET_OUTSTANDING);
 
 		if(vbuf_write && !vbuf_waitrequest && !frozen) begin
-			fault_flags <= fault_flags | MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_WRITE_SEEN;
-			if(vbuf_byteenable != 16'hffff)
-				fault_flags <= fault_flags |
-					MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_BAD_BYTEENABLE;
+			fault_flags <= fault_flags |
+				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_WRITE_SEEN |
+				((vbuf_byteenable != 16'hffff) ?
+				 MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_BAD_BYTEENABLE : 16'd0);
 		end
 
 		if(request_sync != request_seen) begin

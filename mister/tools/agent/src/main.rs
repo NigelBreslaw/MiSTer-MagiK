@@ -3217,10 +3217,9 @@ mod linux {
                     "state_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_STATE_FLAGS],
                     "route_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ROUTE_FLAGS],
                     "fault_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS],
-                    "accepted_bursts": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS_LOW])
-                        | (u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS_HIGH]) << 16),
-                    "returned_beats": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS_LOW])
-                        | (u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS_HIGH]) << 16),
+                    "accepted_bursts": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS],
+                    "expected_beats": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS]) * 128,
+                    "returned_beats": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS],
                     "raw_words": self.avalon.words,
                 },
                 "output": {
@@ -3231,8 +3230,8 @@ mod linux {
                     "state_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_STATE_FLAGS],
                     "source_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_SOURCE_FLAGS],
                     "control_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS],
-                    "fault_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS],
-                    "geometry_faults": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_GEOMETRY_FAULTS],
+                    "fault_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY] & 0x00ff,
+                    "geometry_faults": (self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY] >> 8) & 0x0007,
                     "raw_words": self.output.words,
                 },
             })

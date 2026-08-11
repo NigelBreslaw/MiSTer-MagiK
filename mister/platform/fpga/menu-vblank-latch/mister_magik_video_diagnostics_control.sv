@@ -56,11 +56,11 @@ module mister_magik_video_diagnostics_control #(
 	input  wire         avalon_fault_toggle_async,
 	input  wire [7:0]   avalon_trigger_async,
 	input  wire         avalon_snapshot_ack_async,
-	input  wire [495:0] avalon_snapshot_payload_async,
+	input  wire [239:0] avalon_snapshot_payload_async,
 	input  wire         output_fault_toggle_async,
 	input  wire [7:0]   output_trigger_async,
 	input  wire         output_snapshot_ack_async,
-	input  wire [495:0] output_snapshot_payload_async,
+	input  wire [239:0] output_snapshot_payload_async,
 
 	output reg          snapshot_request_toggle = 1'b0,
 	output wire         monitor_armed,
@@ -92,7 +92,9 @@ module mister_magik_video_diagnostics_control #(
 	wire [7:0] response_words =
 		(command_id == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ?
 			MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS :
-			MAGIK_VIDEO_DIAGNOSTICS_AVALON_WORDS;
+		(command_id == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON) ?
+			MAGIK_VIDEO_DIAGNOSTICS_AVALON_WORDS :
+			MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_WORDS;
 	assign response_valid =
 		(command_start && diagnostic_command) ||
 		(command_data && diagnostic_command && (word_count < response_words));
@@ -162,7 +164,6 @@ module mister_magik_video_diagnostics_control #(
 
 	reg avalon_verify_pending = 1'b0, output_verify_pending = 1'b0;
 	reg avalon_sample_pending = 1'b0, output_sample_pending = 1'b0;
-	reg [5:0] avalon_verify_index = 6'd0, output_verify_index = 6'd0;
 	reg [15:0] avalon_verify_candidate = 16'd0, output_verify_candidate = 16'd0;
 	reg [15:0] avalon_verify_sample = 16'd0, output_verify_sample = 16'd0;
 	reg avalon_trigger_verify_pending = 1'b0, output_trigger_verify_pending = 1'b0;
@@ -283,11 +284,11 @@ module mister_magik_video_diagnostics_control #(
 				endcase
 			end
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
-				if(word_count < 31)
+				if(word_count < (MAGIK_VIDEO_DIAGNOSTICS_AVALON_WORDS - 1'd1))
 					current_snapshot_word =
 						avalon_snapshot_payload_async[word_count*16 +: 16];
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
-				if(word_count < 31)
+				if(word_count < (MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_WORDS - 1'd1))
 					current_snapshot_word =
 						output_snapshot_payload_async[word_count*16 +: 16];
 			default: current_snapshot_word = 16'd0;
@@ -429,8 +430,7 @@ module mister_magik_video_diagnostics_control #(
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON) ||
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT)) begin
 				tx_command <= io_din[7:0];
-				tx_crc <= crc_header(io_din[7:0],
-					(io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ? 16'd47 : 16'd31);
+				tx_crc <= crc_header(io_din[7:0], response_words - 1'd1);
 			end
 		end
 		else if(command_data) begin
@@ -534,66 +534,46 @@ module mister_magik_video_diagnostics_control #(
 			freeze_timeout <= freeze_timeout + 1'd1;
 			if(avalon_ack_sys != avalon_ack_seen) begin
 				avalon_ack_seen <= avalon_ack_sys;
-				avalon_verify_index <= 6'd0;
-				avalon_verify_candidate <= avalon_snapshot_payload_async[15:0];
+				avalon_verify_candidate <= avalon_snapshot_payload_async[63:48];
 				avalon_sample_pending <= 1'b1;
 				avalon_verify_pending <= 1'b0;
 			end
 			if(output_ack_sys != output_ack_seen) begin
 				output_ack_seen <= output_ack_sys;
-				output_verify_index <= 6'd0;
-				output_verify_candidate <= output_snapshot_payload_async[15:0];
+				output_verify_candidate <= output_snapshot_payload_async[63:48];
 				output_sample_pending <= 1'b1;
 				output_verify_pending <= 1'b0;
 			end
 			if(avalon_sample_pending) begin
-				avalon_verify_sample <=
-					avalon_snapshot_payload_async[avalon_verify_index*16 +: 16];
+				avalon_verify_sample <= avalon_snapshot_payload_async[63:48];
 				avalon_sample_pending <= 1'b0;
 				avalon_verify_pending <= 1'b1;
 			end
 			else if(avalon_verify_pending) begin
-				if(avalon_verify_candidate == avalon_verify_sample) begin
-					if(avalon_verify_index == 6'd30) begin
-						avalon_verify_pending <= 1'b0;
-						missing_domains[1] <= 1'b0;
-					end
-					else begin
-						avalon_verify_index <= avalon_verify_index + 1'd1;
-						avalon_verify_candidate <=
-							avalon_snapshot_payload_async[(avalon_verify_index + 1'd1)*16 +: 16];
-						avalon_sample_pending <= 1'b1;
-						avalon_verify_pending <= 1'b0;
-					end
+				if((avalon_verify_candidate == avalon_verify_sample) &&
+				   (avalon_verify_sample == generation)) begin
+					avalon_verify_pending <= 1'b0;
+					missing_domains[1] <= 1'b0;
 				end
 				else begin
-					avalon_verify_candidate <= avalon_verify_sample;
+					avalon_verify_candidate <= avalon_snapshot_payload_async[63:48];
 					avalon_sample_pending <= 1'b1;
 					avalon_verify_pending <= 1'b0;
 				end
 			end
 			if(output_sample_pending) begin
-				output_verify_sample <=
-					output_snapshot_payload_async[output_verify_index*16 +: 16];
+				output_verify_sample <= output_snapshot_payload_async[63:48];
 				output_sample_pending <= 1'b0;
 				output_verify_pending <= 1'b1;
 			end
 			else if(output_verify_pending) begin
-				if(output_verify_candidate == output_verify_sample) begin
-					if(output_verify_index == 6'd30) begin
-						output_verify_pending <= 1'b0;
-						missing_domains[2] <= 1'b0;
-					end
-					else begin
-						output_verify_index <= output_verify_index + 1'd1;
-						output_verify_candidate <=
-							output_snapshot_payload_async[(output_verify_index + 1'd1)*16 +: 16];
-						output_sample_pending <= 1'b1;
-						output_verify_pending <= 1'b0;
-					end
+				if((output_verify_candidate == output_verify_sample) &&
+				   (output_verify_sample == generation)) begin
+					output_verify_pending <= 1'b0;
+					missing_domains[2] <= 1'b0;
 				end
 				else begin
-					output_verify_candidate <= output_verify_sample;
+					output_verify_candidate <= output_snapshot_payload_async[63:48];
 					output_sample_pending <= 1'b1;
 					output_verify_pending <= 1'b0;
 				end

@@ -29,7 +29,7 @@ module tb_mister_magik_video_diagnostics_avalon;
 	wire fault_toggle;
 	wire [7:0] fault_trigger;
 	wire snapshot_ack;
-	wire [495:0] payload;
+	wire [239:0] payload;
 	wire address_fault_toggle;
 	wire [7:0] address_fault_trigger;
 
@@ -87,7 +87,7 @@ module tb_mister_magik_video_diagnostics_avalon;
 	endtask
 
 	reg initial_fault;
-	reg [495:0] frozen_payload;
+	reg [239:0] frozen_payload;
 	initial begin
 		repeat(4) @(negedge clk_100m);
 		route_context = ~route_context;
@@ -136,14 +136,14 @@ module tb_mister_magik_video_diagnostics_avalon;
 		snapshot_request = ~snapshot_request;
 		repeat(5) @(negedge clk_100m);
 		if(snapshot_ack != snapshot_request) $fatal(1, "snapshot mailbox did not acknowledge");
-		if(word_at(0) != 16'd1 || word_at(2) != 16'd6 || word_at(3) != generation)
+		if(word_at(0) != 16'd2 || word_at(2) != 16'd6 || word_at(3) != generation)
 			$fatal(1, "snapshot identity mismatch schema=%h trigger=%h generation=%h expected=%h",
 				word_at(0), word_at(2), word_at(3), generation);
 		if(word_at(4) != route_epoch || word_at(5) != route_flags)
 			$fatal(1, "route context mismatch");
 		if((word_at(1) & 16'h000c) != 16'h000c)
 			$fatal(1, "snapshot state flags mismatch");
-		if((word_at(28) & 16'h0002) == 0 || word_at(27) != 16'd4)
+		if((word_at(14) & 16'h0002) == 0)
 			$fatal(1, "burst fault context missing");
 		frozen_payload = payload;
 		frame_marker = ~frame_marker;
