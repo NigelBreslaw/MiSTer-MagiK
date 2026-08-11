@@ -66,6 +66,8 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
     let mut role_arcade = 0usize;
     let mut role_console = 0usize;
     let mut role_computer = 0usize;
+    let mut navpack_systems = 0usize;
+    let mut navpack_bytes = 0u64;
     let mut rows = String::new();
     for summary in registry.systems() {
         let system = reader
@@ -86,6 +88,24 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             limits.shard,
         )
         .map_err(|error| format!("open V3 projection metadata {}: {error}", summary.system_id))?;
+        let navpack = manifest_system
+            .active
+            .navpack
+            .as_ref()
+            .ok_or_else(|| format!("missing active NavPack for {}", summary.system_id))?;
+        let navpack_contents = std::fs::read(storage.join(&navpack.path))
+            .map_err(|error| format!("read NavPack {}: {error}", summary.system_id))?;
+        crate::navpack::validate(
+            &navpack_contents,
+            summary.system_id.as_str(),
+            summary.generation,
+            system.games().len(),
+        )
+        .map_err(|error| format!("validate NavPack {}: {error}", summary.system_id))?;
+        navpack_systems += 1;
+        navpack_bytes = navpack_bytes
+            .checked_add(navpack.bytes)
+            .ok_or_else(|| "NavPack byte total overflow".to_string())?;
         let projection_stats = full_shard.projection_stats.unwrap_or(
             crate::system_shard::SystemShardProjectionStats {
                 source_games: system.games().len(),
@@ -131,8 +151,9 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             }
         };
         rows.push_str(&format!(
-            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\tpreview_keys={preview_keys}\tavailable_previews={available_previews}\tsource_games={}\tvisible_families={}\tcollapsed_variants={}\n",
+            "catalog_v3_system_tsv\tsystem={}\trole={role}\tgeneration={}\tregistry_games={}\tshard_games={}\tnavpack_bytes={}\tpreview_keys={preview_keys}\tavailable_previews={available_previews}\tsource_games={}\tvisible_families={}\tcollapsed_variants={}\n",
             summary.system_id, summary.generation, summary.games, games,
+            navpack.bytes,
             projection_stats.source_games,
             projection_stats.visible_families,
             projection_stats.collapsed_variants,
@@ -149,10 +170,12 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
         ));
     }
     let mut output = format!(
-        "catalog_v3_summary_tsv\tvalid=1\tschema=1\tgeneration={}\tsystems={}\ttotal_games={}\tarcade_resident_games={}\tstate_discoveries={}\tarcade_roles={}\tconsole_roles={}\tcomputer_roles={}\tfingerprint={}\n",
+        "catalog_v3_summary_tsv\tvalid=1\tschema=1\tgeneration={}\tsystems={}\ttotal_games={}\tnavpack_systems={}\tnavpack_bytes={}\tarcade_resident_games={}\tstate_discoveries={}\tarcade_roles={}\tconsole_roles={}\tcomputer_roles={}\tfingerprint={}\n",
         manifest.generation,
         manifest.systems.len(),
         total_games,
+        navpack_systems,
+        navpack_bytes,
         arcade_resident,
         state.stats.discoveries,
         role_arcade,
@@ -329,9 +352,13 @@ mod tests {
         let report = inspect_catalog(&root).expect("inspect Lynx catalog");
 
         assert!(report.contains(&format!(
-            "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tpreview_keys=2\tavailable_previews=1\tsource_games=5\tvisible_families=3\tcollapsed_variants=2",
+            "catalog_v3_system_tsv\tsystem=atarilynx\trole=console\tgeneration={}\tregistry_games=3\tshard_games=3\tnavpack_bytes=",
             outcome.generation
         )));
+        assert!(report.contains(
+            "\tpreview_keys=2\tavailable_previews=1\tsource_games=5\tvisible_families=3\tcollapsed_variants=2"
+        ));
+        assert!(report.contains("\tnavpack_systems=1\t"));
         std::fs::remove_dir_all(root.join("systems")).expect("remove system artifacts");
         let registry_report = inspect_registry(&root).expect("inspect registry without shards");
         assert!(registry_report.contains(&format!(
