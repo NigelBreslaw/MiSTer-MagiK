@@ -144,6 +144,7 @@ pub struct SystemCollection {
 enum SystemCollectionRows {
     Owned(Arc<Vec<ArcadeGameEntry>>),
     Paged(Arc<PagedSqliteSystemRows>),
+    NavPack(Arc<NavPackSystemRows>),
 }
 
 impl SystemCollectionRows {
@@ -151,6 +152,7 @@ impl SystemCollectionRows {
         match self {
             Self::Owned(games) => games.len(),
             Self::Paged(games) => games.len(),
+            Self::NavPack(games) => games.len(),
         }
     }
 
@@ -162,6 +164,7 @@ impl SystemCollectionRows {
         match self {
             Self::Owned(games) => games.get(index),
             Self::Paged(games) => games.get(index),
+            Self::NavPack(games) => games.get(index),
         }
     }
 
@@ -193,6 +196,195 @@ struct PagedSqliteRow {
     game: ArcadeGameEntry,
     metadata: ArcadeGameMetadataKey,
     launch_plan: Option<StructuredLaunchPlan>,
+}
+
+#[derive(Debug)]
+struct NavPackRow {
+    game: ArcadeGameEntry,
+    metadata: ArcadeGameMetadataKey,
+    launch_plan: Option<StructuredLaunchPlan>,
+}
+
+struct NavPackSystemRows {
+    pack: Arc<crate::navpack::MappedNavPack>,
+    system_id: Arc<str>,
+    rows: Vec<OnceLock<NavPackRow>>,
+    preview_ordinals: OnceLock<Vec<usize>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct NavPackCollectionOpenTiming {
+    pub file_open_us: u64,
+    pub mmap_us: u64,
+    pub header_validation_us: u64,
+    pub first_viewport_us: u64,
+    pub total_us: u64,
+}
+
+impl std::fmt::Debug for NavPackSystemRows {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NavPackSystemRows")
+            .field("system_id", &self.system_id)
+            .field("count", &self.rows.len())
+            .field(
+                "resident_rows",
+                &self.rows.iter().filter(|row| row.get().is_some()).count(),
+            )
+            .finish()
+    }
+}
+
+impl NavPackSystemRows {
+    const FIRST_VIEWPORT_ROWS: usize = 10;
+
+    fn open(
+        path: &Path,
+        expected_bytes: u64,
+        expected_system_id: &str,
+        expected_generation: u64,
+        expected_count: usize,
+    ) -> Result<(Self, NavPackCollectionOpenTiming), String> {
+        let total_started = std::time::Instant::now();
+        let (pack, open) = crate::navpack::MappedNavPack::open(
+            path,
+            expected_bytes,
+            expected_system_id,
+            expected_generation,
+            expected_count,
+        )?;
+        let rows = std::iter::repeat_with(OnceLock::new)
+            .take(expected_count)
+            .collect();
+        let collection = Self {
+            pack: Arc::new(pack),
+            system_id: Arc::from(expected_system_id),
+            rows,
+            preview_ordinals: OnceLock::new(),
+        };
+        let viewport_started = std::time::Instant::now();
+        for ordinal in 0..expected_count.min(Self::FIRST_VIEWPORT_ROWS) {
+            collection.materialize(ordinal)?;
+        }
+        Ok((
+            collection,
+            NavPackCollectionOpenTiming {
+                file_open_us: open.file_open_us,
+                mmap_us: open.mmap_us,
+                header_validation_us: open.header_validation_us,
+                first_viewport_us: elapsed_micros(viewport_started),
+                total_us: elapsed_micros(total_started),
+            },
+        ))
+    }
+
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn get(&self, ordinal: usize) -> Option<&ArcadeGameEntry> {
+        self.materialize(ordinal).ok().map(|row| &row.game)
+    }
+
+    fn metadata_at(&self, ordinal: usize) -> Option<&ArcadeGameMetadataKey> {
+        self.materialize(ordinal).ok().map(|row| &row.metadata)
+    }
+
+    fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
+        if let Some(plan) = self.rows.iter().filter_map(OnceLock::get).find_map(|row| {
+            row.launch_plan
+                .as_ref()
+                .filter(|plan| plan.launch_ref.as_ref() == launch_ref)
+        }) {
+            return Some(plan);
+        }
+        let ordinal = (0..self.len()).find(|ordinal| {
+            self.pack
+                .row(*ordinal)
+                .is_ok_and(|row| row.launch_ref == launch_ref)
+        })?;
+        self.materialize(ordinal).ok()?.launch_plan.as_ref()
+    }
+
+    fn preview_ordinals(&self) -> &[usize] {
+        self.preview_ordinals.get_or_init(|| {
+            (0..self.len())
+                .filter(|ordinal| self.pack.row(*ordinal).is_ok_and(|row| row.has_preview))
+                .collect()
+        })
+    }
+
+    fn materialize(&self, ordinal: usize) -> Result<&NavPackRow, String> {
+        let slot = self
+            .rows
+            .get(ordinal)
+            .ok_or_else(|| "NavPack row ordinal is out of bounds".to_string())?;
+        if let Some(row) = slot.get() {
+            return Ok(row);
+        }
+        let hot = self.pack.row(ordinal)?;
+        let cold = self.pack.metadata(ordinal)?;
+        let title = Arc::<str>::from(hot.title);
+        let launch_ref = Arc::<str>::from(hot.launch_ref);
+        let preview_asset_key = if hot.preview_asset_key == hot.title {
+            Arc::clone(&title)
+        } else {
+            Arc::from(hot.preview_asset_key)
+        };
+        let launch_plan = hot
+            .launch_index
+            .map(|index| self.pack.launch(index))
+            .transpose()?
+            .map(|plan| StructuredLaunchPlan {
+                launch_ref: if plan.launch_ref == hot.launch_ref {
+                    Arc::clone(&launch_ref)
+                } else {
+                    Arc::from(plan.launch_ref)
+                },
+                title: if plan.title == hot.title {
+                    Arc::clone(&title)
+                } else {
+                    Arc::from(plan.title)
+                },
+                system_id: if plan.system_id == self.system_id.as_ref() {
+                    Arc::clone(&self.system_id)
+                } else {
+                    Arc::from(plan.system_id)
+                },
+                core_path: Arc::from(plan.core_path),
+                payload_path: Arc::from(plan.payload_path),
+                mount_kind: Arc::from(plan.mount_kind),
+                mount_index: plan.mount_index,
+                delay_secs: plan.delay_secs,
+            });
+        let row = NavPackRow {
+            game: ArcadeGameEntry {
+                title,
+                mra_path: launch_ref,
+                preview_archive_path: Arc::from(hot.preview_archive_path),
+                preview_asset_key,
+                has_preview: hot.has_preview,
+                system_id: Arc::clone(&self.system_id),
+                year: None,
+                manufacturer: Arc::from(""),
+                category: Arc::from(""),
+                players: None,
+                control: Arc::from(""),
+                is_new: hot.is_new,
+            },
+            metadata: ArcadeGameMetadataKey {
+                year: cold.year,
+                manufacturer: cold.manufacturer.to_string(),
+                category: cold.category.to_string(),
+                players: cold.players,
+                control: cold.control.to_string(),
+            },
+            launch_plan,
+        };
+        let _ = slot.set(row);
+        slot.get()
+            .ok_or_else(|| "NavPack row publication failed".to_string())
+    }
 }
 
 struct PagedSqliteSystemRows {
@@ -643,6 +835,9 @@ impl SystemCollection {
                         .and_then(|row| row.launch_plan.clone())
                 })
                 .collect(),
+            SystemCollectionRows::NavPack(games) => (0..games.len())
+                .filter_map(|ordinal| games.materialize(ordinal).ok()?.launch_plan.clone())
+                .collect(),
         }
     }
 
@@ -677,6 +872,42 @@ impl SystemCollection {
         ))
     }
 
+    /// Opens a complete immutable collection from a checked, generation-bound NavPack mapping.
+    ///
+    /// Entry validates only the fixed header and materializes the first visible viewport. Every
+    /// remaining ordinal stays synchronously addressable through the retained mapping.
+    pub fn open_navpack(
+        system_id: impl Into<Arc<str>>,
+        navpack_path: &Path,
+        navpack_bytes: u64,
+        generation: u64,
+        game_count: usize,
+        platform_kind: PlatformKind,
+    ) -> Result<(Self, NavPackCollectionOpenTiming), String> {
+        let system_id = system_id.into();
+        let (games, timing) = NavPackSystemRows::open(
+            navpack_path,
+            navpack_bytes,
+            &system_id,
+            generation,
+            game_count,
+        )?;
+        let games = Arc::new(games);
+        let platform_kinds = Arc::new(HashMap::from([(system_id.to_string(), platform_kind)]));
+        Ok((
+            Self {
+                system_id,
+                games: SystemCollectionRows::NavPack(games),
+                cold_metadata: Arc::new(Vec::new()),
+                platform_kinds,
+                preview_games_by_system: Arc::new(HashMap::new()),
+                launch_plans: Arc::new(Vec::new()),
+                rich_indexes: Arc::new(OnceLock::new()),
+            },
+            timing,
+        ))
+    }
+
     pub fn game_at(&self, ordinal: usize) -> Option<&ArcadeGameEntry> {
         self.games.get(ordinal)
     }
@@ -701,8 +932,10 @@ impl SystemCollection {
     }
 
     fn preview_game_indexes(&self) -> &[usize] {
-        if let SystemCollectionRows::Paged(games) = &self.games {
-            return games.preview_ordinals();
+        match &self.games {
+            SystemCollectionRows::Paged(games) => return games.preview_ordinals(),
+            SystemCollectionRows::NavPack(games) => return games.preview_ordinals(),
+            SystemCollectionRows::Owned(_) => {}
         }
         self.preview_games_by_system
             .get(self.system_id.as_ref())
@@ -740,6 +973,7 @@ impl SystemCollection {
         match &self.games {
             SystemCollectionRows::Owned(_) => self.cold_metadata.get(index),
             SystemCollectionRows::Paged(games) => games.metadata_at(index),
+            SystemCollectionRows::NavPack(games) => games.metadata_at(index),
         }
     }
 
@@ -751,6 +985,7 @@ impl SystemCollection {
                 .ok()
                 .and_then(|index| self.launch_plans.get(index)),
             SystemCollectionRows::Paged(games) => games.launch_plan_for_ref(launch_ref),
+            SystemCollectionRows::NavPack(games) => games.launch_plan_for_ref(launch_ref),
         }
     }
 
@@ -2919,6 +3154,52 @@ mod tests {
         path
     }
 
+    #[cfg(feature = "builder")]
+    fn navpack_fixture(rows: usize) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-mapped-system-{}-{}.navpack",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let games = (0..rows)
+            .map(|ordinal| {
+                let title = format!("Game {ordinal:03}");
+                let launch_ref = format!("magik-plan:c64:{ordinal}");
+                crate::system_shard::SystemGame {
+                    stable_key: format!("c64:{ordinal}"),
+                    title: title.clone(),
+                    launch_ref: launch_ref.clone(),
+                    preview_archive_path: "/preview/c64.zip".into(),
+                    preview_asset_key: title.clone(),
+                    has_preview: ordinal % 3 == 0,
+                    year: Some((1980 + ordinal % 10) as u16),
+                    manufacturer: "Fixture".into(),
+                    category: "Action".into(),
+                    players: Some(1),
+                    control: "Joystick".into(),
+                    is_new: false,
+                    launch_plan: Some(crate::system_shard::SystemLaunchPlan {
+                        launch_ref,
+                        title,
+                        system_id: "c64".into(),
+                        core_path: "C64".into(),
+                        payload_path: format!("/games/{ordinal}.d64"),
+                        mount_kind: "mount-image".into(),
+                        mount_index: 0,
+                        delay_secs: 1,
+                    }),
+                }
+            })
+            .collect::<Vec<_>>();
+        let indexes = crate::system_shard::build_navigation_indexes(&games).unwrap();
+        let encoded = crate::navpack::encode("c64", 7, &games, &indexes).unwrap();
+        std::fs::write(&path, encoded).unwrap();
+        path
+    }
+
     #[test]
     fn paged_sqlite_collection_fetches_only_touched_pages_and_keeps_all_ordinals_addressable() {
         let path = paged_sqlite_fixture(130);
@@ -2957,6 +3238,36 @@ mod tests {
         let error = SystemCollection::open_paged_sqlite("c64", &path, 8, 1, PlatformKind::Computer)
             .unwrap_err();
         assert!(error.contains("identity mismatch"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn navpack_collection_materializes_only_the_first_viewport_and_preserves_row_semantics() {
+        let path = navpack_fixture(130);
+        let bytes = std::fs::metadata(&path).unwrap().len();
+        let (collection, timing) =
+            SystemCollection::open_navpack("c64", &path, bytes, 7, 130, PlatformKind::Computer)
+                .unwrap();
+        let SystemCollectionRows::NavPack(rows) = &collection.games else {
+            panic!("expected NavPack collection");
+        };
+        assert_eq!(
+            rows.rows.iter().filter(|row| row.get().is_some()).count(),
+            NavPackSystemRows::FIRST_VIEWPORT_ROWS
+        );
+        assert!(timing.first_viewport_us <= timing.total_us);
+        assert_eq!(collection.game_at(129).unwrap().title.as_ref(), "Game 129");
+        assert_eq!(collection.metadata_at(129).unwrap().year, Some(1989));
+        assert_eq!(
+            collection
+                .launch_plan_for_ref("magik-plan:c64:129")
+                .unwrap()
+                .payload_path
+                .as_ref(),
+            "/games/129.d64"
+        );
+        assert_eq!(collection.games.iter().count(), 130);
         std::fs::remove_file(path).unwrap();
     }
 

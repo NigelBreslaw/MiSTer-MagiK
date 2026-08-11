@@ -231,7 +231,7 @@ enum OpenedSystemEntry {
         mister_magik_catalog::system_shard::LoadedSystemShard,
         mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
     ),
-    Paged {
+    Collection {
         collection: arcade_catalog::SystemCollection,
         game_count: usize,
         timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
@@ -267,6 +267,37 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let descriptor_lookup_us = elapsed_us(descriptor_started);
             let mut failures = Vec::new();
             for candidate in candidates {
+                if let (Some(navpack_path), Some(navpack_bytes), Some(_navpack_hash)) = (
+                    candidate.navpack_path.as_ref(),
+                    candidate.navpack_bytes,
+                    candidate.navpack_hash.as_ref(),
+                ) {
+                    let navpack_pmu =
+                        mister_magik_perf_events::sampled_span("system-entry-navpack-open");
+                    let opened = arcade_catalog::SystemCollection::open_navpack(
+                        worker_system_id.as_str(),
+                        navpack_path,
+                        navpack_bytes,
+                        candidate.generation,
+                        candidate.games,
+                        base_catalog.platform_kind(&worker_system_id),
+                    );
+                    drop(navpack_pmu);
+                    match opened {
+                        Ok((collection, navpack)) => {
+                            return Ok(OpenedSystemEntry::Collection {
+                                collection,
+                                game_count: candidate.games,
+                                timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
+                                    descriptor_lookup_us,
+                                    navpack: Some(navpack),
+                                    ..Default::default()
+                                },
+                            });
+                        }
+                        Err(error) => failures.push(format!("NavPack: {error}")),
+                    }
+                }
                 let sqlite_pmu = mister_magik_perf_events::sampled_span("system-entry-sqlite-open");
                 let opened = arcade_catalog::SystemCollection::open_paged_sqlite(
                     worker_system_id.as_str(),
@@ -278,7 +309,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 drop(sqlite_pmu);
                 match opened {
                     Ok((collection, paged_sqlite)) => {
-                        return Ok(OpenedSystemEntry::Paged {
+                        return Ok(OpenedSystemEntry::Collection {
                             collection,
                             game_count: candidate.games,
                             timing:
@@ -289,7 +320,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                                 },
                         });
                     }
-                    Err(error) => failures.push(error),
+                    Err(error) => failures.push(format!("SQLite: {error}")),
                 }
             }
             return Err(mister_magik_catalog::sharded_catalog::CatalogError::new(
@@ -393,7 +424,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 preview_prelude,
             }
         }
-        Ok(OpenedSystemEntry::Paged {
+        Ok(OpenedSystemEntry::Collection {
             collection,
             game_count,
             timing: open_timing,

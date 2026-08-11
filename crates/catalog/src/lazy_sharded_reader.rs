@@ -28,6 +28,9 @@ pub struct LazySystemGeneration {
     pub generation: u64,
     pub sqlite_path: PathBuf,
     pub sqlite_hash: String,
+    pub navpack_path: Option<PathBuf>,
+    pub navpack_bytes: Option<u64>,
+    pub navpack_hash: Option<String>,
     pub games: usize,
 }
 
@@ -38,6 +41,8 @@ pub struct LazySystemOpenTiming {
     pub projection_us: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paged_sqlite: Option<crate::arcade_catalog::PagedSqliteOpenTiming>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub navpack: Option<crate::arcade_catalog::NavPackCollectionOpenTiming>,
 }
 
 impl LazyShardedCatalogReader {
@@ -195,6 +200,7 @@ impl LazyShardedCatalogReader {
                 navigation,
                 projection_us: 0,
                 paged_sqlite: None,
+                navpack: None,
             },
         ))
     }
@@ -222,6 +228,15 @@ impl LazyShardedCatalogReader {
                 generation: generation.generation,
                 sqlite_path: self.storage_root.join(&generation.sqlite_path),
                 sqlite_hash: generation.sqlite_hash.clone(),
+                navpack_path: generation
+                    .navpack
+                    .as_ref()
+                    .map(|navpack| self.storage_root.join(&navpack.path)),
+                navpack_bytes: generation.navpack.as_ref().map(|navpack| navpack.bytes),
+                navpack_hash: generation
+                    .navpack
+                    .as_ref()
+                    .map(|navpack| navpack.hash.clone()),
                 games: usize::try_from(generation.games).map_err(|_| {
                     CatalogError::new("open-system", "system game count exceeds platform size")
                 })?,
