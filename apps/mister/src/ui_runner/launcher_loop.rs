@@ -8613,7 +8613,7 @@ pub(super) fn run_launcher_loop(
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take() {
-                if !layer_target.swap_cached(&mut snapshot) {
+                if !layer_target.swap_presentation_cached(&mut snapshot) {
                     crate::ui_errln!(
                         "screensaver: launcher frame restore size mismatch snapshot={} cached={}",
                         snapshot.len(),
@@ -8639,8 +8639,7 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 screensaver_loader = Some(LauncherScreensaverLoader::start(
-                    layout.logical_w(),
-                    layout.logical_h(),
+                    layout.output_layout(),
                     screensaver_show_started,
                 ));
             }
@@ -8749,7 +8748,7 @@ pub(super) fn run_launcher_loop(
             match render_ahead_poll {
                 RenderAheadPoll::Frame(frame) => {
                     let mut pixels = frame.pixels;
-                    if layer_target.swap_cached(&mut pixels) {
+                    if layer_target.swap_presentation_cached(&mut pixels) {
                         retain_or_defer_screensaver_buffer(
                             &mut screensaver_launcher_frame,
                             &mut screensaver_buffer_to_recycle_after_present,
@@ -8807,7 +8806,7 @@ pub(super) fn run_launcher_loop(
                     );
                     screensaver.fail_current_activation(Instant::now());
                     if let Some(mut snapshot) = screensaver_launcher_frame.take()
-                        && !layer_target.swap_cached(&mut snapshot)
+                        && !layer_target.swap_presentation_cached(&mut snapshot)
                     {
                         crate::ui_errln!(
                             "screensaver: launcher frame restore size mismatch after pipeline disconnect snapshot={} cached={}",
@@ -8873,8 +8872,8 @@ pub(super) fn run_launcher_loop(
                     Some(DirtyRect {
                         x0: 0,
                         y0: 0,
-                        x1: layout.logical_w(),
-                        y1: layout.logical_h(),
+                        x1: layout.composition_w(),
+                        y1: layout.composition_h(),
                     })
                 }
             } else {
@@ -9364,6 +9363,7 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
+        let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
@@ -9391,7 +9391,7 @@ pub(super) fn run_launcher_loop(
             None
         };
         let mut logical_custom_damage = DirtyRectList::new();
-        if slint_damage.is_empty() {
+        if slint_damage.is_empty() && physical_custom_damage.is_none() {
             logical_custom_damage.push_if_some(this_rect);
         }
         logical_custom_damage.push_if_some(empty_base_cached_rect);
@@ -9406,6 +9406,7 @@ pub(super) fn run_launcher_loop(
         } else {
             let mut damage = slint_damage;
             damage.extend_from(&mapped_custom_damage);
+            damage.push_if_some(physical_custom_damage);
             damage
         };
         let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();

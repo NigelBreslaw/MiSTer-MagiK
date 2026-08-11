@@ -234,12 +234,17 @@ impl<'a> LayerTarget<'a> {
             .swap_cached_565(replacement, width)
     }
 
+    pub(super) fn swap_presentation_cached(&mut self, replacement: &mut Vec<Rgb565Pixel>) -> bool {
+        self.target
+            .swap_cached_565(replacement, self.layout.composition_w())
+    }
+
     pub(super) fn blend_screensaver_crossfade(
         &mut self,
         launcher_frame: &[Rgb565Pixel],
         alpha: u8,
     ) -> DirtyRect {
-        let cached = self.drawing_target_mut().cached_565_mut();
+        let cached = self.target.cached_565_mut();
         if cached.len() == launcher_frame.len() {
             for (pixel, source) in cached.iter_mut().zip(launcher_frame) {
                 *pixel = blend_565(*source, *pixel, alpha);
@@ -248,8 +253,8 @@ impl<'a> LayerTarget<'a> {
         DirtyRect {
             x0: 0,
             y0: 0,
-            x1: self.layout.logical_w(),
-            y1: self.layout.logical_h(),
+            x1: self.layout.composition_w(),
+            y1: self.layout.composition_h(),
         }
     }
 
