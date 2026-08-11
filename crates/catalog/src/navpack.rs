@@ -1064,7 +1064,6 @@ mod tests {
         let identity = validate(&encoded, "c64", 9, 2).unwrap();
         assert_eq!(identity.games, 2);
         assert_eq!(identity.launches, 1);
-        assert_eq!(encoded.len() % 1, 0);
     }
 
     #[test]

@@ -2963,12 +2963,12 @@ mod tests {
 
         assert!(collection.rich_indexes.get().is_none());
         assert!(collection.games.get(0).unwrap().manufacturer.is_empty());
-        assert!(matches!(
+        assert!(
             collection
                 .launch_plans
-                .binary_search_by(|plan| plan.launch_ref.as_ref().cmp("magik-plan:c64:new")),
-            Ok(_)
-        ));
+                .binary_search_by(|plan| plan.launch_ref.as_ref().cmp("magik-plan:c64:new"))
+                .is_ok()
+        );
         let hydrated = catalog.with_system_collection(collection.clone());
 
         assert_eq!(hydrated.system_game_count("c64"), 1);

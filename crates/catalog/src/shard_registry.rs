@@ -749,13 +749,13 @@ fn validate_generation(
             "manifest artifact size does not match file",
         ));
     }
-    if let Some((path, published)) = &navpack {
-        if regular_file_size(path, limits.shard.max_sqlite_bytes)? != published.bytes {
-            return Err(RegistryError::new(
-                "validate-manifest",
-                "manifest NavPack size does not match file",
-            ));
-        }
+    if let Some((path, published)) = &navpack
+        && regular_file_size(path, limits.shard.max_sqlite_bytes)? != published.bytes
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest NavPack size does not match file",
+        ));
     }
     if verify_hashes
         && (file_checksum(&sqlite)? != generation.sqlite_hash
@@ -766,15 +766,14 @@ fn validate_generation(
             "manifest artifact hash does not match file",
         ));
     }
-    if verify_hashes {
-        if let Some((path, published)) = &navpack {
-            if file_checksum(path)? != published.hash {
-                return Err(RegistryError::new(
-                    "validate-manifest",
-                    "manifest NavPack hash does not match file",
-                ));
-            }
-        }
+    if verify_hashes
+        && let Some((path, published)) = &navpack
+        && file_checksum(path)? != published.hash
+    {
+        return Err(RegistryError::new(
+            "validate-manifest",
+            "manifest NavPack hash does not match file",
+        ));
     }
     Ok(())
 }
