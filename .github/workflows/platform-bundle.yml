@@ -11,6 +11,11 @@ on:
         required: false
         default: false
         type: boolean
+      retain_experimental_fpga:
+        description: Retain an unqualified diagnostic RBF when FPGA signoff fails
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: build-mister-magik-platform
@@ -664,6 +669,7 @@ jobs:
           key: platform-fpga-synthesis-v0.1-${{ needs.plan.outputs.fpga-synthesis-id }}
 
       - name: Verify Quartus delta
+        id: quartus_delta
         env:
           COMPONENT_ID: ${{ needs.plan.outputs.fpga-id }}
           COMPONENT_REVISION: ${{ steps.metadata.outputs.component_revision }}
@@ -709,6 +715,30 @@ jobs:
           path: build/fpga-component
           if-no-files-found: error
           retention-days: 30
+
+      - name: Mark unqualified experimental FPGA output
+        if: failure() && steps.quartus_delta.outcome == 'failure' && inputs.retain_experimental_fpga == true && inputs.publish != true
+        run: |
+          cat > build/fpga-signoff/patched/EXPERIMENTAL-UNQUALIFIED.txt <<EOF
+          This RBF failed production FPGA signoff and is retained only for attended diagnosis.
+          It must not be published, released, or installed as a production platform component.
+          source_sha=$GITHUB_SHA
+          workflow_run_id=$GITHUB_RUN_ID
+          EOF
+
+      - name: Retain unqualified experimental diagnostic RBF
+        if: failure() && steps.quartus_delta.outcome == 'failure' && inputs.retain_experimental_fpga == true && inputs.publish != true
+        uses: actions/upload-artifact@v7
+        with:
+          name: experimental-fpga-unqualified-${{ github.run_id }}
+          path: |
+            build/fpga-signoff/patched/menu-magik-vblank-latch.rbf
+            build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
+            build/fpga-signoff/patched/EXPERIMENTAL-UNQUALIFIED.txt
+            build/fpga-signoff/quartus-delta-signoff.tsv
+            build/fpga-signoff/patched/reports/**
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Retain failed FPGA diagnostics
         if: failure()
