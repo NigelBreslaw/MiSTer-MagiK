@@ -264,11 +264,12 @@ impl PreparedSystemEntryMailbox {
         *newest = Some(outcome);
     }
 
-    fn take(&self) -> Option<SystemEntryPrepareOutcome> {
-        self.newest
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
+    fn try_take(&self) -> Option<SystemEntryPrepareOutcome> {
+        match self.newest.try_lock() {
+            Ok(mut newest) => newest.take(),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().take(),
+        }
     }
 }
 
@@ -1088,12 +1089,27 @@ impl LauncherScheduler {
             self.search_query = SearchQueryJobState::Idle;
             self.start_next_arcade_search();
         }
+        self.poll_system_entry_into(out);
+        disconnected
+    }
+
+    /// Poll only the foreground system-entry handoff.
+    ///
+    /// This is the sole scheduler acknowledgement allowed while a full-screen
+    /// transition owns CPU1. It never waits for the CPU0 worker and never
+    /// drains catalog validation or search results.
+    pub(super) fn poll_system_entry(&mut self, out: &mut CatalogJobEventBuf) {
+        out.clear();
+        self.poll_system_entry_into(out);
+    }
+
+    fn poll_system_entry_into(&mut self, out: &mut CatalogJobEventBuf) {
         let mut shard_terminal = false;
         if matches!(self.system_shard, SystemShardJobState::Running { .. })
             && out.events.len() < CATALOG_MESSAGES_PER_FRAME
             && let Some(worker) = self.system_entry_prepare.as_ref()
         {
-            if let Some(outcome) = worker.results.take() {
+            if let Some(outcome) = worker.results.try_take() {
                 shard_terminal = true;
                 let outcome_is_current = matches!(
                     &self.system_shard,
@@ -1125,7 +1141,6 @@ impl LauncherScheduler {
             self.system_shard = SystemShardJobState::Idle;
             self.start_next_system_shard_load();
         }
-        disconnected
     }
 
     pub(super) fn tick_catalog_progress(&mut self, background_work_allowed: bool, now: Instant) {
@@ -1591,13 +1606,30 @@ mod tests {
             }));
         }
 
-        let outcome = mailbox.take().expect("newest outcome");
+        let outcome = mailbox.try_take().expect("newest outcome");
         assert_eq!(outcome.sequence(), 6);
         assert!(matches!(
             outcome,
             SystemEntryPrepareOutcome::Failed(FailedSystemEntry { error, .. }) if error == "six"
         ));
-        assert!(mailbox.take().is_none());
+        assert!(mailbox.try_take().is_none());
+    }
+
+    #[test]
+    fn prepared_system_entry_mailbox_never_blocks_cpu1() {
+        let mailbox = PreparedSystemEntryMailbox::default();
+        mailbox.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+            sequence: 4,
+            generation: Some("generation-a".to_string()),
+            system_id: "c64".to_string(),
+            error: "ready".to_string(),
+        }));
+        let guard = mailbox.newest.lock().unwrap();
+
+        assert!(mailbox.try_take().is_none());
+
+        drop(guard);
+        assert_eq!(mailbox.try_take().expect("deferred outcome").sequence(), 4);
     }
 
     #[test]
@@ -1885,6 +1917,57 @@ mod tests {
 
         scheduler.poll_catalog(&mut events);
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn transition_entry_poll_does_not_drain_general_catalog_work() {
+        let (catalog_tx, catalog_rx) = mpsc::channel();
+        catalog_tx
+            .send(CatalogWorkerMessage::Timing {
+                name: "background".to_string(),
+                detail: String::new(),
+            })
+            .unwrap();
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
+        let (requests, _request_rx) = mpsc::channel();
+        let (_liveness_tx, liveness) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
+            requests,
+            results: Arc::clone(&results),
+            liveness,
+        });
+        scheduler.system_shard_generation = Some("generation-a".to_string());
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "c64".to_string(),
+            generation: Some("generation-a".to_string()),
+            sequence: 11,
+        };
+        results.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+            sequence: 11,
+            generation: Some("generation-a".to_string()),
+            system_id: "c64".to_string(),
+            error: "terminal".to_string(),
+        }));
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_system_entry(&mut events);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.events.first(),
+            Some(CatalogWorkerMessage::SystemShardFailed { system_id, .. }) if system_id == "c64"
+        ));
+        assert!(matches!(
+            catalog_tx.send(CatalogWorkerMessage::Done),
+            Ok(())
+        ));
+        scheduler.poll_catalog(&mut events);
+        assert!(matches!(
+            events.events.first(),
+            Some(CatalogWorkerMessage::Timing { name, .. }) if name == "background"
+        ));
     }
 
     #[test]

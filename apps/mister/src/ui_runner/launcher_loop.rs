@@ -682,6 +682,10 @@ fn system_entry_preview_work_allowed(
     background_work_allowed || system_entry_in_progress
 }
 
+fn full_screen_transition_owns_cpu1(state: FullScreenTransitionState) -> bool {
+    state != FullScreenTransitionState::Live
+}
+
 fn configure_arcade_list_renderer_geometry(
     renderer: &mut ArcadeListRenderer,
     nav: &LauncherNav,
@@ -5398,8 +5402,8 @@ pub(super) fn run_launcher_loop(
         let loop_start = Instant::now();
         let slint_timer_dispatch_started = Instant::now();
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
-        let navigation_snapshot_locked_at_loop_start =
-            full_screen_transition_policy_at_loop_start.snapshot_locked;
+        let full_screen_transition_owned_at_loop_start =
+            full_screen_transition_owns_cpu1(full_screen_transition.state());
         let current_pad_state = pad.state();
         let directional_input_held = current_pad_state.dpad_up
             || current_pad_state.dpad_down
@@ -5415,7 +5419,7 @@ pub(super) fn run_launcher_loop(
                 orientation_transition.is_active(),
                 directional_input_held,
             )
-            && !navigation_snapshot_locked_at_loop_start;
+            && !full_screen_transition_owned_at_loop_start;
         let startup_intro_needs_live_launcher = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
@@ -5837,7 +5841,7 @@ pub(super) fn run_launcher_loop(
         let clock_update_us = clock_update_start
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
-        if let Some(available) = update_check.try_recv() {
+        if background_work_allowed && let Some(available) = update_check.try_recv() {
             if available {
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 bridge.set_update_available(true);
@@ -5909,16 +5913,22 @@ pub(super) fn run_launcher_loop(
         {
             deferred_catalog_events.push_back(message);
         }
-        let system_entry_catalog_poll_allowed =
-            background_work_allowed || pending_collection_entry.is_some();
-        if system_entry_catalog_poll_allowed
+        let system_entry_handoff_only = !background_work_allowed
+            && pending_collection_entry.is_some()
+            && scheduler.system_entry_prepare_active();
+        if (background_work_allowed || system_entry_handoff_only)
             && catalog_messages_need_polling(
                 pending_catalog_ready.is_some(),
                 catalog_session.refresh_done(),
                 scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
             )
         {
-            let catalog_disconnected = scheduler.poll_catalog(&mut catalog_events);
+            let catalog_disconnected = if system_entry_handoff_only {
+                scheduler.poll_system_entry(&mut catalog_events);
+                false
+            } else {
+                scheduler.poll_catalog(&mut catalog_events)
+            };
             deferred_catalog_events.extend(catalog_events.drain());
 
             let mut catalog_messages_processed = 0usize;
@@ -7993,7 +8003,9 @@ pub(super) fn run_launcher_loop(
         let confirm_visible = bridge.get_confirm_visible();
         let confirm_selected = bridge.get_confirm_selected();
         let status_write_due = frame_accounting.status_write_due();
-        let status_snapshot_due = status_write_due && !navigation_transition.is_active();
+        let status_snapshot_due = status_write_due
+            && !navigation_transition.is_active()
+            && !full_screen_transition_owns_cpu1(full_screen_transition.state());
         let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
@@ -12443,6 +12455,22 @@ mod tests {
         assert!(should_defer_launcher_background_work(0, true, false, false));
         assert!(should_defer_launcher_background_work(0, false, true, false));
         assert!(should_defer_launcher_background_work(0, false, false, true));
+    }
+
+    #[test]
+    fn every_owned_full_screen_transition_state_quiesces_cpu1() {
+        assert!(!full_screen_transition_owns_cpu1(
+            FullScreenTransitionState::Live
+        ));
+        assert!(full_screen_transition_owns_cpu1(
+            FullScreenTransitionState::CapturePending
+        ));
+        assert!(full_screen_transition_owns_cpu1(
+            FullScreenTransitionState::SnapshotLocked
+        ));
+        assert!(full_screen_transition_owns_cpu1(
+            FullScreenTransitionState::Releasing
+        ));
     }
 
     #[test]
