@@ -23,7 +23,7 @@ pub(super) fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t1 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = target.render(renderer, frame_target_geometry(ui));
+                let region = target.render(renderer);
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             let t2 = Instant::now();
@@ -68,7 +68,7 @@ pub(super) fn run_bench_frame(
             update_slint_animations(animation_clock);
             let t2 = Instant::now();
             window.draw_if_needed(|renderer| {
-                let region = target.render(renderer, frame_target_geometry(ui));
+                let region = target.render(renderer);
                 this_rect = dirty_rect(&region, ui.render_w(), ui.render_h());
             });
             present_timing.wait_until_present_time(vsync_done);

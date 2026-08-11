@@ -310,13 +310,12 @@ impl UiFrameTarget {
         Self::cached(geometry)
     }
 
-    pub fn render(
-        &mut self,
-        renderer: &SoftwareRenderer,
-        geometry: FramebufferTargetGeometry,
-    ) -> PhysicalRegion {
-        self.cached_stride = geometry.render_w();
-        renderer.render(&mut self.cached, geometry.render_w())
+    pub fn render(&mut self, renderer: &SoftwareRenderer) -> PhysicalRegion {
+        renderer.render(&mut self.cached, self.cached_stride)
+    }
+
+    pub const fn cached_stride(&self) -> usize {
+        self.cached_stride
     }
 
     #[cfg(feature = "bench-scenes")]

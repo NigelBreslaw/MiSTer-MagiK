@@ -87,10 +87,6 @@ impl<'a> LayerTarget<'a> {
         self.logical_target.as_deref_mut().unwrap_or(self.target)
     }
 
-    fn drawing_geometry(&self) -> FramebufferTargetGeometry {
-        FramebufferTargetGeometry::new(self.layout.logical_w(), self.layout.logical_h())
-    }
-
     pub(super) fn render_slint_base(
         &mut self,
         window: &MisterSoftwareWindow,
@@ -98,8 +94,7 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         window.draw_if_needed(|renderer| {
-            let geometry = self.drawing_geometry();
-            let region = self.drawing_target_mut().render(renderer, geometry);
+            let region = self.drawing_target_mut().render(renderer);
             slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
             slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
         });
@@ -113,8 +108,7 @@ impl<'a> LayerTarget<'a> {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
         let rendered = window.draw_full_frame_if_needed(|renderer| {
-            let geometry = self.drawing_geometry();
-            let region = self.drawing_target_mut().render(renderer, geometry);
+            let region = self.drawing_target_mut().render(renderer);
             slint_dirty = dirty_rect(&region, self.layout.logical_w(), self.layout.logical_h());
             slint_damage = dirty_rects(&region, self.layout.logical_w(), self.layout.logical_h());
         });

@@ -1408,10 +1408,7 @@ mod macos {
             slint::platform::update_timers_and_animations();
             self.slint_window.request_redraw();
             self.slint_window.draw_if_needed(|renderer| {
-                self.frame_target.render(
-                    renderer,
-                    FramebufferTargetGeometry::new(self.frame_width, self.frame_height),
-                );
+                self.frame_target.render(renderer);
             });
             if matches!(
                 self.scenario,
