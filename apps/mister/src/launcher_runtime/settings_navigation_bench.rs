@@ -199,6 +199,9 @@ impl SettingsNavigationBenchmark {
             let (button, press_id) = self.active_press.take()?;
             return Some(self.input_event(button, press_id, InputPhase::Released, captured_at_us));
         }
+        if self.records.len() == SETTINGS_NAVIGATION_ROUTE.len() && self.orientation_index == 0 {
+            return None;
+        }
         if !full_screen_live || self.active.is_some() || !self.orientation_ready {
             return None;
         }
@@ -465,6 +468,40 @@ mod tests {
                     .unwrap()
             ),
             "home"
+        );
+    }
+
+    #[test]
+    fn completed_landscape_route_waits_for_orientation_change_before_more_input() {
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
+        for (index, leg) in SETTINGS_NAVIGATION_ROUTE.into_iter().enumerate() {
+            benchmark.note_started(
+                leg.route,
+                leg.direction,
+                leg.source,
+                leg.destination,
+                index as u64,
+            );
+            benchmark.note_rendered_endpoint(index as u64 + 1);
+            let started_at = Instant::now();
+            benchmark.capture_presentation_start(started_at, Ok(presentation_telemetry(10)));
+            benchmark.note_confirmed_presentation(
+                leg.destination,
+                index as u64 + 2,
+                index as u16 + 1,
+                started_at + Duration::from_millis(300),
+                Ok(presentation_telemetry(28)),
+            );
+        }
+
+        assert!(
+            benchmark
+                .event_for(Screen::Home, true, 0, true, 1)
+                .is_none()
+        );
+        assert_eq!(
+            benchmark.take_orientation_change(Screen::Home, true),
+            Some(ScreenOrientation::MonitorCounterclockwise)
         );
     }
 
