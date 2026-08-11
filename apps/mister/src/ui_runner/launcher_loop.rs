@@ -42,6 +42,43 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
+fn navigation_geometry_to_composition(
+    layout: UiLayoutGeometry,
+    mut geometry: NavigationTransitionGeometry,
+) -> NavigationTransitionGeometry {
+    fn map_rect(
+        layout: UiLayoutGeometry,
+        rect: NavigationTransitionRect,
+    ) -> NavigationTransitionRect {
+        if rect.width == 0 || rect.height == 0 {
+            return rect;
+        }
+        let mapped = layout.logical_rect_to_composition(DirtyRect {
+            x0: rect.x as usize,
+            y0: rect.y as usize,
+            x1: rect.right() as usize,
+            y1: rect.bottom() as usize,
+        });
+        NavigationTransitionRect {
+            x: mapped.x0.min(u16::MAX as usize) as u16,
+            y: mapped.y0.min(u16::MAX as usize) as u16,
+            width: mapped.width().min(u16::MAX as usize) as u16,
+            height: mapped.rows().min(u16::MAX as usize) as u16,
+        }
+    }
+
+    geometry.source_card = map_rect(layout, geometry.source_card);
+    geometry.source_label = map_rect(layout, geometry.source_label);
+    geometry.source_detail = map_rect(layout, geometry.source_detail);
+    geometry.destination_title = map_rect(layout, geometry.destination_title);
+    geometry.destination_detail = map_rect(layout, geometry.destination_detail);
+    geometry.destination_list = map_rect(layout, geometry.destination_list);
+    geometry.destination_selected_row = map_rect(layout, geometry.destination_selected_row);
+    geometry.destination_preview = map_rect(layout, geometry.destination_preview);
+    geometry.destination_footer = map_rect(layout, geometry.destination_footer);
+    geometry
+}
+
 fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
 }
@@ -7071,15 +7108,6 @@ pub(super) fn run_launcher_loop(
                                     let transition_spec =
                                         navigation_transition_for_intent(&nav, &event);
                                     if transition_spec.is_some()
-                                        && let Some(logical_target) = portrait_target.as_mut()
-                                    {
-                                        let _ = sync_composition_to_logical(
-                                            target,
-                                            logical_target,
-                                            layout,
-                                        );
-                                    }
-                                    if transition_spec.is_some()
                                         && nav.screen == Screen::Arcade
                                         && !crt_layout
                                     {
@@ -7167,22 +7195,37 @@ pub(super) fn run_launcher_loop(
                                                 }
                                             };
                                             geometry.is_some_and(|geometry| {
-                                                navigation_transition
-                                                    .begin(
+                                                let started = if layout.is_portrait() {
+                                                    navigation_transition.begin_physical(
                                                         edge,
                                                         direction,
-                                                        geometry,
-                                                        portrait_target.as_ref().map_or_else(
-                                                            || target.cached_565(),
-                                                            UiFrameTarget::cached_565,
+                                                        navigation_geometry_to_composition(
+                                                            layout, geometry,
                                                         ),
+                                                        geometry,
+                                                        layout.composition_w(),
+                                                        layout.composition_h(),
+                                                        target.cached_565(),
                                                         frame_now
                                                             .saturating_duration_since(start)
                                                             .as_micros()
                                                             .min(u64::MAX as u128)
                                                             as u64,
                                                     )
-                                                    .unwrap_or(false)
+                                                } else {
+                                                    navigation_transition.begin(
+                                                        edge,
+                                                        direction,
+                                                        geometry,
+                                                        target.cached_565(),
+                                                        frame_now
+                                                            .saturating_duration_since(start)
+                                                            .as_micros()
+                                                            .min(u64::MAX as u128)
+                                                            as u64,
+                                                    )
+                                                };
+                                                started.unwrap_or(false)
                                             })
                                         });
                                     let transition_started = navigation_runtime_started
@@ -9130,7 +9173,10 @@ pub(super) fn run_launcher_loop(
                         && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
-                if destination_raster_ready && layout.is_portrait() {
+                if destination_raster_ready
+                    && layout.is_portrait()
+                    && !navigation_transition.settings_physical_space()
+                {
                     let _ = layer_target.sync_composition_to_logical();
                 }
                 let mut destination_layers_ready =
@@ -9145,18 +9191,28 @@ pub(super) fn run_launcher_loop(
                     );
                     let preview_surface_ready = if !preview_expected || preview.terminal_empty() {
                         if preview_snapshot_ready {
-                            let _ = layer_target.clear_cached_preview();
+                            if navigation_transition.settings_physical_space() {
+                                let _ = layer_target.clear_presentation_preview();
+                            } else {
+                                let _ = layer_target.clear_cached_preview();
+                            }
                             true
                         } else {
                             false
                         }
                     } else if preview_snapshot_ready {
-                        match layer_target.compose_exact_preview(&preview) {
-                            Some(RawPreviewPresent::Cached(_)) => true,
-                            Some(RawPreviewPresent::Direct(rect)) => {
-                                layer_target.compose_direct_preview_rect(rect) > 0
+                        if navigation_transition.settings_physical_space() {
+                            layer_target
+                                .compose_exact_preview_physical(&preview)
+                                .is_some()
+                        } else {
+                            match layer_target.compose_exact_preview(&preview) {
+                                Some(RawPreviewPresent::Cached(_)) => true,
+                                Some(RawPreviewPresent::Direct(rect)) => {
+                                    layer_target.compose_direct_preview_rect(rect) > 0
+                                }
+                                None => false,
                             }
-                            None => false,
                         }
                     } else {
                         false
@@ -9173,10 +9229,15 @@ pub(super) fn run_launcher_loop(
                             nav.arcade.visual_index,
                             true,
                         ) {
-                            let _ = layer_target.compose_arcade_list_snapshot_update(
-                                &mut arcade_list_renderer,
-                                update,
-                            );
+                            if navigation_transition.settings_physical_space() {
+                                let _ = layer_target
+                                    .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                            } else {
+                                let _ = layer_target.compose_arcade_list_snapshot_update(
+                                    &mut arcade_list_renderer,
+                                    update,
+                                );
+                            }
                         }
                         destination_layers_ready = true;
                     }
@@ -12219,6 +12280,31 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portrait_navigation_geometry_uses_physical_rectangles() {
+        let display = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);
+        let logical_rect = NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+        let geometry = NavigationTransitionGeometry {
+            source_card: logical_rect,
+            destination_preview: logical_rect,
+            ..NavigationTransitionGeometry::default()
+        };
+
+        let mapped = navigation_geometry_to_composition(layout, geometry);
+
+        assert_eq!(mapped.source_card, mapped.destination_preview);
+        assert_eq!(mapped.source_card.x, 0);
+        assert_eq!(mapped.source_card.y, 1);
+        assert_eq!(mapped.source_card.width, 1);
+        assert_eq!(mapped.source_card.height, 2);
+    }
 
     #[test]
     fn system_entry_ready_marker_requires_main_active_confirmation() {

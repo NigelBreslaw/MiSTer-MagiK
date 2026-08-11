@@ -154,6 +154,24 @@ impl<'a> LayerTarget<'a> {
         rect
     }
 
+    pub(super) fn clear_presentation_preview(&mut self) -> DirtyRect {
+        if !self.layout.is_portrait() {
+            return self.clear_cached_preview();
+        }
+        let logical_rect = preview_screen_rect(&self.drawing_ui);
+        let mut surface = mister_magik_framebuffer_scenes::Rgb565SurfaceMut::new(
+            self.target.cached_565_mut(),
+            self.layout.output_layout(),
+        )
+        .expect("launcher output layout matches its cached target");
+        for y in logical_rect.y0..logical_rect.y1 {
+            for x in logical_rect.x0..logical_rect.x1 {
+                let _ = surface.set(x, y, Rgb565Pixel(0));
+            }
+        }
+        self.layout.logical_rect_to_composition(logical_rect)
+    }
+
     pub(super) fn render_screensaver(
         &mut self,
         saver: &mut LauncherScreensaver,
@@ -304,6 +322,28 @@ impl<'a> LayerTarget<'a> {
                 .blit_raw_preview(&self.drawing_ui, &frame, true)
                 .map(RawPreviewPresent::Cached)
         }
+    }
+
+    pub(super) fn compose_exact_preview_physical(
+        &mut self,
+        preview: &PreviewState,
+    ) -> Option<DirtyRect> {
+        if !self.layout.is_portrait() {
+            return self
+                .compose_exact_preview(preview)
+                .and_then(RawPreviewPresent::cached_rect);
+        }
+        let frame = preview.raw_frame()?;
+        if frame.status() != PreviewRawFrameStatus::Ready {
+            return None;
+        }
+        let logical_rect = self
+            .logical_target
+            .as_deref_mut()
+            .expect("portrait logical target")
+            .blit_raw_preview(&self.drawing_ui, &frame, true)?;
+        let mapped = self.rotate_damage_to_composition(&DirtyRectList::from_one(logical_rect));
+        mapped.iter().next()
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
