@@ -120,6 +120,137 @@ pub struct ArcadeCatalog {
     search_keys: Arc<Vec<ArcadeSearchKey>>,
     autocomplete: Arc<ArcadeAutocompleteIndex>,
     lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
+    system_collections: Arc<HashMap<String, Arc<SystemCollection>>>,
+}
+
+/// Immutable navigation segment for one hydrated system.
+///
+/// The complete row set and its navigation indexes are built on CPU0 before publication. Catalog
+/// adoption then shares this segment instead of cloning resident rows into a new monolithic
+/// catalog.
+#[derive(Clone, Debug)]
+pub struct SystemCollection {
+    system_id: Arc<str>,
+    games: Arc<Vec<ArcadeGameEntry>>,
+    platform_kinds: Arc<HashMap<String, PlatformKind>>,
+    games_by_filter: Arc<HashMap<ArcadeFilterKey, Vec<usize>>>,
+    filter_options_by_system: Arc<HashMap<String, ArcadeSystemFilterOptions>>,
+    preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
+    launch_plans_by_ref: Arc<HashMap<Arc<str>, StructuredLaunchPlan>>,
+    search_keys: Arc<Vec<ArcadeSearchKey>>,
+    autocomplete: Arc<ArcadeAutocompleteIndex>,
+    lazy_text_indexes: Arc<OnceLock<ArcadeTextIndexes>>,
+}
+
+impl SystemCollection {
+    pub fn new(
+        system_id: impl Into<Arc<str>>,
+        games: Vec<ArcadeGameEntry>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kind: PlatformKind,
+    ) -> Self {
+        let system_id = system_id.into();
+        debug_assert!(
+            games
+                .iter()
+                .all(|game| game.system_id.as_ref() == system_id.as_ref())
+        );
+        let platform_kinds = Arc::new(HashMap::from([(system_id.to_string(), platform_kind)]));
+        let indexes = build_arcade_catalog_indexes(
+            &games,
+            &platform_kinds,
+            launch_plans,
+            CatalogIndexMode::DeferredText,
+            None,
+        );
+        Self {
+            system_id,
+            games: Arc::new(games),
+            platform_kinds,
+            games_by_filter: Arc::new(indexes.games_by_filter),
+            filter_options_by_system: Arc::new(indexes.filter_options_by_system),
+            preview_games_by_system: Arc::new(indexes.preview_games_by_system),
+            launch_plans_by_ref: Arc::new(indexes.launch_plans_by_ref),
+            search_keys: Arc::new(indexes.search_keys),
+            autocomplete: Arc::new(indexes.autocomplete),
+            lazy_text_indexes: Arc::new(OnceLock::new()),
+        }
+    }
+
+    pub fn system_id(&self) -> &str {
+        &self.system_id
+    }
+
+    pub fn len(&self) -> usize {
+        self.games.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.games.is_empty()
+    }
+
+    fn filtered_game_indexes(&self, filter: &ArcadeFilter) -> &[usize] {
+        filter_key(&self.system_id, filter)
+            .and_then(|key| self.games_by_filter.get(&key))
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn preview_game_indexes(&self) -> &[usize] {
+        self.preview_games_by_system
+            .get(self.system_id.as_ref())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn filter_options(&self) -> &ArcadeSystemFilterOptions {
+        static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
+        self.filter_options_by_system
+            .get(self.system_id.as_ref())
+            .unwrap_or_else(|| EMPTY.get_or_init(ArcadeSystemFilterOptions::default))
+    }
+
+    fn try_search_keys(&self) -> Option<&[ArcadeSearchKey]> {
+        if self.search_keys.len() == self.games.len() {
+            Some(&self.search_keys)
+        } else {
+            self.lazy_text_indexes
+                .get()
+                .map(|indexes| indexes.search_keys.as_slice())
+        }
+    }
+
+    fn search_keys(&self) -> &[ArcadeSearchKey] {
+        if self.search_keys.len() == self.games.len() {
+            &self.search_keys
+        } else {
+            &self
+                .lazy_text_indexes
+                .get_or_init(|| build_arcade_text_indexes(&self.games, &self.platform_kinds))
+                .search_keys
+        }
+    }
+
+    fn try_autocomplete(&self) -> Option<&ArcadeAutocompleteIndex> {
+        if self.autocomplete.is_empty() && !self.games.is_empty() {
+            self.lazy_text_indexes
+                .get()
+                .map(|indexes| &indexes.autocomplete)
+        } else {
+            Some(&self.autocomplete)
+        }
+    }
+
+    fn autocomplete(&self) -> &ArcadeAutocompleteIndex {
+        if self.autocomplete.is_empty() && !self.games.is_empty() {
+            &self
+                .lazy_text_indexes
+                .get_or_init(|| build_arcade_text_indexes(&self.games, &self.platform_kinds))
+                .autocomplete
+        } else {
+            &self.autocomplete
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -415,6 +546,7 @@ impl ArcadeCatalog {
             search_keys: Arc::new(indexes.search_keys),
             autocomplete: Arc::new(indexes.autocomplete),
             lazy_text_indexes: Arc::new(OnceLock::new()),
+            system_collections: Arc::new(HashMap::new()),
         }
     }
 
@@ -494,17 +626,33 @@ impl ArcadeCatalog {
     }
 
     pub fn title_for_path(&self, mra_path: &str) -> &str {
-        self.games
-            .iter()
-            .find(|g| g.mra_path.as_ref() == mra_path)
+        self.system_collections
+            .values()
+            .find_map(|collection| {
+                collection
+                    .games
+                    .iter()
+                    .find(|game| game.mra_path.as_ref() == mra_path)
+            })
+            .or_else(|| self.games.iter().find(|g| g.mra_path.as_ref() == mra_path))
             .map(|g| g.title.as_ref())
             .unwrap_or("Game")
     }
 
     pub fn game_for_launch_ref(&self, launch_ref: &str) -> Option<&ArcadeGameEntry> {
-        self.games
-            .iter()
-            .find(|game| game.mra_path.as_ref() == launch_ref)
+        self.system_collections
+            .values()
+            .find_map(|collection| {
+                collection
+                    .games
+                    .iter()
+                    .find(|game| game.mra_path.as_ref() == launch_ref)
+            })
+            .or_else(|| {
+                self.games
+                    .iter()
+                    .find(|game| game.mra_path.as_ref() == launch_ref)
+            })
     }
 
     pub fn user_game_identity_for_ref(
@@ -534,8 +682,7 @@ impl ArcadeCatalog {
                 launch_ref: Arc::from(launch_ref),
             });
         }
-        self.launch_plans_by_ref
-            .get(launch_ref)
+        self.structured_launch_plan_for_ref(launch_ref)
             .cloned()
             .map(LaunchTarget::Structured)
             .unwrap_or_else(|| {
@@ -551,7 +698,10 @@ impl ArcadeCatalog {
         &self,
         launch_ref: &str,
     ) -> Option<&StructuredLaunchPlan> {
-        self.launch_plans_by_ref.get(launch_ref)
+        self.system_collections
+            .values()
+            .find_map(|collection| collection.launch_plans_by_ref.get(launch_ref))
+            .or_else(|| self.launch_plans_by_ref.get(launch_ref))
     }
 
     pub fn system_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
@@ -598,38 +748,26 @@ impl ArcadeCatalog {
         replacement: Vec<ArcadeGameEntry>,
         replacement_plans: Vec<StructuredLaunchPlan>,
     ) -> Self {
-        let mut games = self
-            .games
-            .iter()
-            .filter(|game| game.system_id.as_ref() != system_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        games.extend(replacement);
-        let mut systems = self.systems.clone();
-        if let Some(system) = systems.iter_mut().find(|system| system.id == system_id) {
-            system.count = games
-                .iter()
-                .filter(|game| game.system_id.as_ref() == system_id)
-                .count();
+        self.with_system_collection(Arc::new(SystemCollection::new(
+            system_id,
+            replacement,
+            replacement_plans,
+            self.platform_kind(system_id),
+        )))
+    }
+
+    pub fn with_system_collection(&self, collection: Arc<SystemCollection>) -> Self {
+        let mut catalog = self.clone();
+        let system_id = collection.system_id().to_string();
+        if let Some(system) = catalog
+            .systems
+            .iter_mut()
+            .find(|system| system.id == system_id)
+        {
+            system.count = collection.len();
         }
-        let retained_refs = games
-            .iter()
-            .map(|game| game.mra_path.clone())
-            .collect::<BTreeSet<_>>();
-        let mut launch_plans = self
-            .launch_plans_by_ref
-            .values()
-            .filter(|plan| retained_refs.contains(&plan.launch_ref))
-            .cloned()
-            .collect::<Vec<_>>();
-        launch_plans.extend(replacement_plans);
-        Self::new_with_deferred_text_indexes_and_platform_kinds(
-            self.root.clone(),
-            games,
-            systems,
-            launch_plans,
-            self.platform_kinds.as_ref().clone(),
-        )
+        Arc::make_mut(&mut catalog.system_collections).insert(system_id, collection);
+        catalog
     }
 
     /// Adds a zero-game system shell so progressive launcher taxonomy can
@@ -673,11 +811,16 @@ impl ArcadeCatalog {
             .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
         Arc::make_mut(&mut catalog.projection_stats_by_system)
             .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
+        Arc::make_mut(&mut catalog.system_collections)
+            .retain(|system_id, _| retained_system_ids.contains(system_id.as_str()));
         catalog
     }
 
     pub fn system_game_count(&self, system_id: &str) -> usize {
-        self.system_game_indexes(system_id).len()
+        self.system_collection(system_id).map_or_else(
+            || self.system_game_indexes(system_id).len(),
+            |value| value.len(),
+        )
     }
 
     pub fn system_game_at(&self, system_id: &str, index: usize) -> Option<&ArcadeGameEntry> {
@@ -685,14 +828,27 @@ impl ArcadeCatalog {
     }
 
     pub fn system_game_view(&self, system_id: &str) -> ArcadeGameView<'_> {
-        ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id))
+        self.system_collection(system_id).map_or_else(
+            || ArcadeGameView::indexed(&self.games, self.system_game_indexes(system_id)),
+            |collection| ArcadeGameView::contiguous(&collection.games),
+        )
+    }
+
+    pub fn indexed_system_game_view<'a>(
+        &'a self,
+        system_id: &str,
+        indexes: &'a [usize],
+    ) -> ArcadeGameView<'a> {
+        self.system_collection(system_id).map_or_else(
+            || ArcadeGameView::indexed(&self.games, indexes),
+            |collection| ArcadeGameView::indexed(&collection.games, indexes),
+        )
     }
 
     pub fn search_source_system_ids(&self, collection_id: &str) -> Vec<String> {
         let mut seen = HashSet::new();
-        self.system_game_indexes(collection_id)
+        self.system_game_view(collection_id)
             .iter()
-            .filter_map(|index| self.games.get(*index))
             .filter_map(|game| {
                 let system_id = game.system_id.to_string();
                 seen.insert(system_id.clone()).then_some(system_id)
@@ -701,14 +857,22 @@ impl ArcadeCatalog {
     }
 
     pub fn resolve_system_game_ordinal(&self, system_id: &str, ordinal: usize) -> Option<usize> {
-        self.system_game_indexes(system_id).get(ordinal).copied()
+        self.system_collection(system_id).map_or_else(
+            || self.system_game_indexes(system_id).get(ordinal).copied(),
+            |collection| (ordinal < collection.len()).then_some(ordinal),
+        )
     }
 
     pub fn collection_game_index_set(&self, collection_id: &str) -> HashSet<usize> {
-        self.system_game_indexes(collection_id)
-            .iter()
-            .copied()
-            .collect()
+        self.system_collection(collection_id).map_or_else(
+            || {
+                self.system_game_indexes(collection_id)
+                    .iter()
+                    .copied()
+                    .collect()
+            },
+            |collection| (0..collection.len()).collect(),
+        )
     }
 
     pub fn search_game_indexes(&self, system_id: &str, query: &str) -> Vec<usize> {
@@ -716,15 +880,22 @@ impl ArcadeCatalog {
         let compact_needle = compact_search_match_key(query);
         let tokens = search_query_tokens(&needle);
         if needle.is_empty() && compact_needle.is_empty() {
-            return self.system_game_indexes(system_id).to_vec();
+            return self.system_collection(system_id).map_or_else(
+                || self.system_game_indexes(system_id).to_vec(),
+                |collection| (0..collection.len()).collect(),
+            );
         }
-        let mut scored: Vec<SearchMatch> = self
-            .system_game_indexes(system_id)
-            .iter()
-            .copied()
+        let collection = self.system_collection(system_id);
+        let indexes = collection.map_or_else(
+            || self.system_game_indexes(system_id).to_vec(),
+            |collection| (0..collection.len()).collect(),
+        );
+        let search_keys =
+            collection.map_or_else(|| self.search_keys(), |value| value.search_keys());
+        let mut scored: Vec<SearchMatch> = indexes
+            .into_iter()
             .filter_map(|index| {
-                let score = self
-                    .search_keys()
+                let score = search_keys
                     .get(index)
                     .and_then(|key| key.score(&tokens, &compact_needle))?;
                 Some(SearchMatch { index, score })
@@ -743,13 +914,22 @@ impl ArcadeCatalog {
         let compact_needle = compact_search_match_key(query);
         let tokens = search_query_tokens(&needle);
         if needle.is_empty() && compact_needle.is_empty() {
-            return Some(self.system_game_indexes(system_id).to_vec());
+            return Some(self.system_collection(system_id).map_or_else(
+                || self.system_game_indexes(system_id).to_vec(),
+                |collection| (0..collection.len()).collect(),
+            ));
         }
-        let search_keys = self.try_search_keys()?;
-        let mut scored: Vec<SearchMatch> = self
-            .system_game_indexes(system_id)
-            .iter()
-            .copied()
+        let collection = self.system_collection(system_id);
+        let search_keys = match collection {
+            Some(collection) => collection.try_search_keys()?,
+            None => self.try_search_keys()?,
+        };
+        let indexes = collection.map_or_else(
+            || self.system_game_indexes(system_id).to_vec(),
+            |collection| (0..collection.len()).collect(),
+        );
+        let mut scored: Vec<SearchMatch> = indexes
+            .into_iter()
             .filter_map(|index| {
                 let score = search_keys
                     .get(index)
@@ -763,7 +943,11 @@ impl ArcadeCatalog {
 
     pub fn autocomplete_search_word(&self, system_id: &str, query: &str) -> String {
         let fragment = current_search_word(query);
-        self.autocomplete()
+        self.system_collection(system_id)
+            .map_or_else(
+                || self.autocomplete(),
+                |collection| collection.autocomplete(),
+            )
             .suggest(system_id, fragment)
             .unwrap_or_default()
     }
@@ -772,8 +956,12 @@ impl ArcadeCatalog {
     /// available, without performing work on the caller.
     pub fn try_autocomplete_search_word(&self, system_id: &str, query: &str) -> Option<String> {
         let fragment = current_search_word(query);
+        let autocomplete = match self.system_collection(system_id) {
+            Some(collection) => collection.try_autocomplete()?,
+            None => self.try_autocomplete()?,
+        };
         Some(
-            self.try_autocomplete()?
+            autocomplete
                 .suggest(system_id, fragment)
                 .unwrap_or_default(),
         )
@@ -868,7 +1056,10 @@ impl ArcadeCatalog {
         match filter {
             ArcadeFilter::All => self.system_game_count(system_id),
             ArcadeFilter::Search => self.system_game_count(system_id),
-            _ => self.filtered_game_indexes(system_id, filter).len(),
+            _ => self.system_collection(system_id).map_or_else(
+                || self.filtered_game_indexes(system_id, filter).len(),
+                |collection| collection.filtered_game_indexes(filter).len(),
+            ),
         }
     }
 
@@ -881,10 +1072,19 @@ impl ArcadeCatalog {
         match filter {
             ArcadeFilter::All => self.system_game_at(system_id, index),
             ArcadeFilter::Search => self.system_game_at(system_id, index),
-            _ => self
-                .filtered_game_indexes(system_id, filter)
-                .get(index)
-                .and_then(|game_index| self.games.get(*game_index)),
+            _ => self.system_collection(system_id).map_or_else(
+                || {
+                    self.filtered_game_indexes(system_id, filter)
+                        .get(index)
+                        .and_then(|game_index| self.games.get(*game_index))
+                },
+                |collection| {
+                    collection
+                        .filtered_game_indexes(filter)
+                        .get(index)
+                        .and_then(|game_index| collection.games.get(*game_index))
+                },
+            ),
         }
     }
 
@@ -892,9 +1092,20 @@ impl ArcadeCatalog {
         match filter {
             ArcadeFilter::All => self.system_game_view(system_id),
             ArcadeFilter::Search => self.system_game_view(system_id),
-            _ => {
-                ArcadeGameView::indexed(&self.games, self.filtered_game_indexes(system_id, filter))
-            }
+            _ => self.system_collection(system_id).map_or_else(
+                || {
+                    ArcadeGameView::indexed(
+                        &self.games,
+                        self.filtered_game_indexes(system_id, filter),
+                    )
+                },
+                |collection| {
+                    ArcadeGameView::indexed(
+                        &collection.games,
+                        collection.filtered_game_indexes(filter),
+                    )
+                },
+            ),
         }
     }
 
@@ -1014,21 +1225,46 @@ impl ArcadeCatalog {
     }
 
     pub fn system_preview_games(&self, system_id: &str) -> Vec<ArcadeGameEntry> {
-        self.preview_game_indexes(system_id)
-            .iter()
-            .filter_map(|index| self.games.get(*index).cloned())
-            .collect()
+        self.system_collection(system_id).map_or_else(
+            || {
+                self.preview_game_indexes(system_id)
+                    .iter()
+                    .filter_map(|index| self.games.get(*index).cloned())
+                    .collect()
+            },
+            |collection| {
+                collection
+                    .preview_game_indexes()
+                    .iter()
+                    .filter_map(|index| collection.games.get(*index).cloned())
+                    .collect()
+            },
+        )
     }
 
     pub fn system_preview_game_count(&self, system_id: &str) -> usize {
-        self.preview_game_indexes(system_id).len()
+        self.system_collection(system_id).map_or_else(
+            || self.preview_game_indexes(system_id).len(),
+            |collection| collection.preview_game_indexes().len(),
+        )
     }
 
     pub fn system_preview_game_at(&self, system_id: &str, index: usize) -> Option<ArcadeGameEntry> {
-        self.preview_game_indexes(system_id)
-            .get(index)
-            .and_then(|game_index| self.games.get(*game_index))
-            .cloned()
+        self.system_collection(system_id).map_or_else(
+            || {
+                self.preview_game_indexes(system_id)
+                    .get(index)
+                    .and_then(|game_index| self.games.get(*game_index))
+                    .cloned()
+            },
+            |collection| {
+                collection
+                    .preview_game_indexes()
+                    .get(index)
+                    .and_then(|game_index| collection.games.get(*game_index))
+                    .cloned()
+            },
+        )
     }
 
     fn preview_game_indexes(&self, system_id: &str) -> &[usize] {
@@ -1054,9 +1290,18 @@ impl ArcadeCatalog {
 
     fn filter_options(&self, system_id: &str) -> &ArcadeSystemFilterOptions {
         static EMPTY: OnceLock<ArcadeSystemFilterOptions> = OnceLock::new();
-        self.filter_options_by_system
-            .get(system_id)
-            .unwrap_or_else(|| EMPTY.get_or_init(ArcadeSystemFilterOptions::default))
+        self.system_collection(system_id).map_or_else(
+            || {
+                self.filter_options_by_system
+                    .get(system_id)
+                    .unwrap_or_else(|| EMPTY.get_or_init(ArcadeSystemFilterOptions::default))
+            },
+            SystemCollection::filter_options,
+        )
+    }
+
+    fn system_collection(&self, system_id: &str) -> Option<&SystemCollection> {
+        self.system_collections.get(system_id).map(Arc::as_ref)
     }
 }
 
@@ -2074,6 +2319,82 @@ mod tests {
             replaced.launch_target_for_ref("magik-plan:snes"),
             LaunchTarget::Structured(_)
         ));
+        assert!(Arc::ptr_eq(&catalog.games, &replaced.games));
+        assert_eq!(catalog.games[0].title.as_ref(), "Old");
+        assert_eq!(
+            replaced.system_game_at("c64", 0).unwrap().title.as_ref(),
+            "New"
+        );
+    }
+
+    #[test]
+    fn system_collection_routes_rows_filters_previews_and_launches() {
+        let catalog = ArcadeCatalog::new_with_deferred_text_indexes(
+            PathBuf::from("/fixture"),
+            Vec::new(),
+            vec![GameSystemEntry {
+                id: "c64".into(),
+                title: "Commodore 64".into(),
+                count: 0,
+            }],
+            Vec::new(),
+        );
+        let game = ArcadeGameEntry {
+            title: "New C64 Game".into(),
+            mra_path: "magik-plan:c64:new".into(),
+            preview_archive_path: "/preview/c64.zip".into(),
+            preview_asset_key: "New C64 Game".into(),
+            has_preview: true,
+            system_id: "c64".into(),
+            year: Some(1987),
+            manufacturer: "Example".into(),
+            category: "Action".into(),
+            players: Some(1),
+            control: "joy".into(),
+            is_new: true,
+        };
+        let plan = StructuredLaunchPlan {
+            launch_ref: game.mra_path.clone(),
+            title: game.title.clone(),
+            system_id: game.system_id.clone(),
+            core_path: "C64".into(),
+            payload_path: "/games/C64/New C64 Game.d64".into(),
+            mount_kind: "mount-image".into(),
+            mount_index: 0,
+            delay_secs: 1,
+        };
+
+        let hydrated = catalog.with_system_collection(Arc::new(SystemCollection::new(
+            "c64",
+            vec![game],
+            vec![plan],
+            PlatformKind::Computer,
+        )));
+
+        assert_eq!(hydrated.system_game_count("c64"), 1);
+        assert_eq!(
+            hydrated.system_game_at("c64", 0).unwrap().title.as_ref(),
+            "New C64 Game"
+        );
+        assert_eq!(
+            hydrated.filtered_game_count("c64", &ArcadeFilter::Category("Action".into())),
+            1
+        );
+        assert_eq!(hydrated.category_options("c64")[0].label, "Action");
+        assert_eq!(hydrated.system_preview_game_count("c64"), 1);
+        assert_eq!(
+            hydrated
+                .system_preview_game_at("c64", 0)
+                .unwrap()
+                .preview_asset_key
+                .as_ref(),
+            "New C64 Game"
+        );
+        assert!(matches!(
+            hydrated.launch_target_for_ref("magik-plan:c64:new"),
+            LaunchTarget::Structured(_)
+        ));
+        assert_eq!(hydrated.search_source_system_ids("c64"), vec!["c64"]);
     }
 
     #[test]

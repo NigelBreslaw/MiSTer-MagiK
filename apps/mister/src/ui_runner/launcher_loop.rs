@@ -11586,7 +11586,7 @@ fn apply_catalog_session_effects(
                     preview.adopt_system_entry_preview(game, prelude);
                 }
                 let phase = launcher_response_trace.begin_catalog_phase("catalog-retirement");
-                drop(retired_catalog);
+                scheduler.retire_catalog(retired_catalog);
                 launcher_response_trace.end_catalog_phase(phase);
                 let taxonomy_start = launcher_response_trace.catalog_boundary();
                 let mut taxonomy_end = None;

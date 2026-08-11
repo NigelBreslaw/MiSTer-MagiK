@@ -3370,15 +3370,14 @@ impl LauncherNav {
     }
 
     fn rebuild_user_list_indexes(&mut self, catalog: &ArcadeCatalog) {
+        let snes_games = catalog.system_game_view("snes");
         let refs: Vec<&str> = match self.arcade_user_list_mode {
             ArcadeUserListMode::Games => Vec::new(),
             ArcadeUserListMode::Recent => {
                 self.recent_launch_refs.iter().map(String::as_str).collect()
             }
-            ArcadeUserListMode::Favourites => catalog
-                .games
+            ArcadeUserListMode::Favourites => snes_games
                 .iter()
-                .filter(|game| game.system_id.eq_ignore_ascii_case("snes"))
                 .map(|game| game.mra_path.as_ref())
                 .filter(|launch_ref| self.favourite_launch_refs.contains(*launch_ref))
                 .collect(),
@@ -3386,8 +3385,7 @@ impl LauncherNav {
         self.user_list_indexes = refs
             .into_iter()
             .filter_map(|launch_ref| {
-                catalog
-                    .games
+                snes_games
                     .iter()
                     .position(|game| game.mra_path.as_ref() == launch_ref)
             })
@@ -3439,10 +3437,7 @@ impl LauncherNav {
         system_id: &str,
     ) -> crate::arcade_catalog::ArcadeGameView<'a> {
         if self.arcade_user_list_mode != ArcadeUserListMode::Games {
-            return crate::arcade_catalog::ArcadeGameView::indexed(
-                &catalog.games,
-                &self.user_list_indexes,
-            );
+            return catalog.indexed_system_game_view("snes", &self.user_list_indexes);
         }
         let system_id = self.effective_collection_id(system_id);
         if self.arcade_search.is_active(&self.arcade_filter.active)
@@ -3450,10 +3445,7 @@ impl LauncherNav {
             && self.arcade_search.result_system_id == system_id
             && self.arcade_search.result_query == self.arcade_search.query
         {
-            crate::arcade_catalog::ArcadeGameView::indexed(
-                &catalog.games,
-                &self.arcade_search.results,
-            )
+            catalog.indexed_system_game_view(system_id, &self.arcade_search.results)
         } else {
             catalog.filtered_game_view(system_id, &self.arcade_filter.active)
         }

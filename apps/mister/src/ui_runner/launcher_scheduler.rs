@@ -172,19 +172,24 @@ struct SystemEntryPrepareRequest {
     request: SystemShardRequest,
 }
 
+enum SystemEntryPrepareCommand {
+    Prepare(SystemEntryPrepareRequest),
+    RetireCatalog(ArcadeCatalog),
+}
+
 struct SystemEntryPrepareResult {
     generation: Option<String>,
     message: CatalogWorkerMessage,
 }
 
 struct SystemEntryPrepareWorker {
-    requests: mpsc::Sender<SystemEntryPrepareRequest>,
+    requests: mpsc::Sender<SystemEntryPrepareCommand>,
     results: mpsc::Receiver<SystemEntryPrepareResult>,
 }
 
 impl SystemEntryPrepareWorker {
     fn start() -> Option<Self> {
-        let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareRequest>();
+        let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareCommand>();
         let (result_tx, result_rx) = mpsc::channel::<SystemEntryPrepareResult>();
         std::thread::Builder::new()
             .name("system-entry-prepare".to_string())
@@ -192,18 +197,24 @@ impl SystemEntryPrepareWorker {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
                 );
-                while let Ok(work) = request_rx.recv() {
-                    let _lease =
-                        mister_magik_catalog::work_coordinator::foreground("system-entry-prepare");
-                    let message = prepare_system_shard(work.request);
-                    if result_tx
-                        .send(SystemEntryPrepareResult {
-                            generation: work.generation,
-                            message,
-                        })
-                        .is_err()
-                    {
-                        break;
+                while let Ok(command) = request_rx.recv() {
+                    match command {
+                        SystemEntryPrepareCommand::Prepare(work) => {
+                            let _lease = mister_magik_catalog::work_coordinator::foreground(
+                                "system-entry-prepare",
+                            );
+                            let message = prepare_system_shard(work.request);
+                            if result_tx
+                                .send(SystemEntryPrepareResult {
+                                    generation: work.generation,
+                                    message,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        SystemEntryPrepareCommand::RetireCatalog(catalog) => drop(catalog),
                     }
                 }
             })
@@ -277,11 +288,21 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 arcade_rows_from_owned_persisted_shard(&worker_system_id, games);
             drop(projection_pmu);
             let row_projection_us = elapsed_us(projection_started);
+            let collection_index_started = Instant::now();
+            let collection_index_pmu =
+                mister_magik_perf_events::sampled_span("system-entry-collection-index");
+            let collection = Arc::new(arcade_catalog::SystemCollection::new(
+                worker_system_id.as_str(),
+                replacement,
+                launch_plans,
+                base_catalog.platform_kind(&worker_system_id),
+            ));
+            drop(collection_index_pmu);
+            let collection_index_us = elapsed_us(collection_index_started);
             let replacement_started = Instant::now();
             let replacement_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog =
-                base_catalog.replacing_system_games(&worker_system_id, replacement, launch_plans);
+            let catalog = base_catalog.with_system_collection(collection);
             drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
@@ -296,6 +317,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 profile: SystemEntryCatalogProfile {
                     open: open_timing,
                     row_projection_us,
+                    collection_index_us,
                     catalog_replacement_us,
                     total_wall_us: elapsed_us(load_started),
                     thread_cpu_us: execution_finished
@@ -538,15 +560,28 @@ impl LauncherScheduler {
         let dispatched = self.system_entry_prepare.as_ref().is_some_and(|worker| {
             worker
                 .requests
-                .send(SystemEntryPrepareRequest {
-                    generation,
-                    request,
-                })
+                .send(SystemEntryPrepareCommand::Prepare(
+                    SystemEntryPrepareRequest {
+                        generation,
+                        request,
+                    },
+                ))
                 .is_ok()
         });
         if !dispatched {
             self.system_shard = SystemShardJobState::Idle;
             self.start_next_system_shard_load();
+        }
+    }
+
+    pub(super) fn retire_catalog(&self, catalog: ArcadeCatalog) {
+        if let Some(worker) = &self.system_entry_prepare {
+            if let Err(error) = worker
+                .requests
+                .send(SystemEntryPrepareCommand::RetireCatalog(catalog))
+            {
+                drop(error.0);
+            }
         }
     }
 

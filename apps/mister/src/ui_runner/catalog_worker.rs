@@ -1486,6 +1486,7 @@ pub(super) enum CatalogWorkerMessage {
 pub(super) struct SystemEntryCatalogProfile {
     pub(super) open: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
     pub(super) row_projection_us: u64,
+    pub(super) collection_index_us: u64,
     pub(super) catalog_replacement_us: u64,
     pub(super) total_wall_us: u64,
     pub(super) thread_cpu_us: u64,
