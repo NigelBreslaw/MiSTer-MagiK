@@ -168,10 +168,12 @@ module mister_magik_video_diagnostics_control #(
 	reg [7:0] avalon_trigger_candidate = 8'd0, output_trigger_candidate = 8'd0;
 	reg [7:0] avalon_trigger_sample = 8'd0, output_trigger_sample = 8'd0;
 	integer capture_index;
+	integer read_index;
 
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] tx_crc_word = 16'd0;
 	reg tx_crc_pending = 1'b0;
+	(* keep = "true" *) reg [39:0] read_select = 40'd0;
 	reg freeze_request_now;
 	reg [7:0] freeze_request_trigger;
 	reg [7:0] freeze_request_flags;
@@ -224,99 +226,72 @@ module mister_magik_video_diagnostics_control #(
 		end
 	endfunction
 
-	// Keep the control selector explicit. Quartus 17 otherwise treats state
-	// referenced only through nested automatic functions as unused and can
-	// optimize diagnostic evidence out of the response path.
+	// A registered one-hot cursor prevents Quartus 17 from flattening the three
+	// independent records into one pathological binary-addressed selector.
+	(* keep = "true" *) reg [15:0] control_snapshot_word;
+	(* keep = "true" *) reg [15:0] avalon_snapshot_word;
+	(* keep = "true" *) reg [15:0] output_snapshot_word;
 	reg [15:0] current_snapshot_word;
 	always @(*) begin
-		current_snapshot_word = 16'd0;
+		control_snapshot_word =
+			({16{read_select[0]}} & MAGIK_VIDEO_DIAGNOSTICS_SCHEMA) |
+			({16{read_select[1]}} & state_flags()) |
+			({16{read_select[2]}} & {8'd0, trigger}) |
+			({16{read_select[3]}} & {13'd0, missing_domains}) |
+			({16{read_select[4]}} & generation) |
+			({16{read_select[5]}} & 16'd1) |
+			({16{read_select[6]}} & frozen_vblank_count) |
+			({16{read_select[7]}} & {legacy_total, legacy_owned}) |
+			({16{read_select[8]}} & {legacy_partial, legacy_abort}) |
+			({16{read_select[9]}} & {legacy_disposition, 2'd0, legacy_mask}) |
+			({16{read_select[10]}} & {control_fault_flags, 3'd0,
+				frozen_route_state_flags}) |
+			({16{read_select[11]}} & frozen_active_seq) |
+			({16{read_select[12]}} & frozen_post_count) |
+			({16{read_select[13]}} & frozen_active_route_epoch) |
+			({16{read_select[14]}} & legacy_words[0]) |
+			({16{read_select[15]}} & legacy_words[1]) |
+			({16{read_select[16]}} & legacy_words[2]) |
+			({16{read_select[17]}} & legacy_words[3]) |
+			({16{read_select[18]}} & legacy_words[4]) |
+			({16{read_select[19]}} & legacy_words[5]) |
+			({16{read_select[20]}} & legacy_words[6]) |
+			({16{read_select[21]}} & legacy_words[7]) |
+			({16{read_select[22]}} & legacy_words[8]) |
+			({16{read_select[23]}} & legacy_words[9]) |
+			({16{read_select[24]}} & {11'd0, pre_route_flags}) |
+			({16{read_select[25]}} & pre_base[15:0]) |
+			({16{read_select[26]}} & pre_base[31:16]) |
+			({16{read_select[27]}} & pre_width) |
+			({16{read_select[28]}} & pre_height) |
+			({16{read_select[29]}} & pre_hmin) |
+			({16{read_select[30]}} & pre_hmax) |
+			({16{read_select[31]}} & pre_vmin) |
+			({16{read_select[32]}} & pre_vmax) |
+			({16{read_select[33]}} & {2'd0, pre_stride}) |
+			({16{read_select[34]}} & post_base[15:0]) |
+			({16{read_select[35]}} & post_base[31:16]) |
+			({16{read_select[36]}} & {11'd0, post_route_flags}) |
+			({16{read_select[37]}} & post_width) |
+			({16{read_select[38]}} & post_height) |
+			({16{read_select[39]}} & {2'd0, post_stride});
+		avalon_snapshot_word = 16'd0;
+		output_snapshot_word = 16'd0;
+		for(read_index = 0; read_index < 15; read_index = read_index + 1) begin
+			avalon_snapshot_word = avalon_snapshot_word |
+				({16{read_select[read_index]}} &
+				 avalon_snapshot_payload_async[read_index*16 +: 16]);
+			output_snapshot_word = output_snapshot_word |
+				({16{read_select[read_index]}} &
+				 output_snapshot_payload_async[read_index*16 +: 16]);
+		end
 		case(command_id)
-			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL: begin
-				case(word_count)
-					0: current_snapshot_word = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
-					1: current_snapshot_word = state_flags();
-					2: current_snapshot_word = {8'd0, trigger};
-					3: current_snapshot_word = {13'd0, missing_domains};
-					4: current_snapshot_word = generation;
-					5: current_snapshot_word = 16'd1;
-					6: current_snapshot_word = frozen_vblank_count;
-					7: current_snapshot_word = {legacy_total, legacy_owned};
-					8: current_snapshot_word = {legacy_partial, legacy_abort};
-					9: current_snapshot_word = {legacy_disposition, 2'd0, legacy_mask};
-					10: current_snapshot_word = {control_fault_flags, 3'd0,
-						frozen_route_state_flags};
-					11: current_snapshot_word = frozen_active_seq;
-					12: current_snapshot_word = frozen_post_count;
-					13: current_snapshot_word = frozen_active_route_epoch;
-					14: current_snapshot_word = legacy_words[0];
-					15: current_snapshot_word = legacy_words[1];
-					16: current_snapshot_word = legacy_words[2];
-					17: current_snapshot_word = legacy_words[3];
-					18: current_snapshot_word = legacy_words[4];
-					19: current_snapshot_word = legacy_words[5];
-					20: current_snapshot_word = legacy_words[6];
-					21: current_snapshot_word = legacy_words[7];
-					22: current_snapshot_word = legacy_words[8];
-					23: current_snapshot_word = legacy_words[9];
-					24: current_snapshot_word = {11'd0, pre_route_flags};
-					25: current_snapshot_word = pre_base[15:0];
-					26: current_snapshot_word = pre_base[31:16];
-					27: current_snapshot_word = pre_width;
-					28: current_snapshot_word = pre_height;
-					29: current_snapshot_word = pre_hmin;
-					30: current_snapshot_word = pre_hmax;
-					31: current_snapshot_word = pre_vmin;
-					32: current_snapshot_word = pre_vmax;
-					33: current_snapshot_word = {2'd0, pre_stride};
-					34: current_snapshot_word = post_base[15:0];
-					35: current_snapshot_word = post_base[31:16];
-					36: current_snapshot_word = {11'd0, post_route_flags};
-					37: current_snapshot_word = post_width;
-					38: current_snapshot_word = post_height;
-					39: current_snapshot_word = {2'd0, post_stride};
-					default: current_snapshot_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON: begin
-				case(word_count)
-					0: current_snapshot_word = avalon_snapshot_payload_async[15:0];
-					1: current_snapshot_word = avalon_snapshot_payload_async[31:16];
-					2: current_snapshot_word = avalon_snapshot_payload_async[47:32];
-					3: current_snapshot_word = avalon_snapshot_payload_async[63:48];
-					4: current_snapshot_word = avalon_snapshot_payload_async[79:64];
-					5: current_snapshot_word = avalon_snapshot_payload_async[95:80];
-					6: current_snapshot_word = avalon_snapshot_payload_async[111:96];
-					7: current_snapshot_word = avalon_snapshot_payload_async[127:112];
-					8: current_snapshot_word = avalon_snapshot_payload_async[143:128];
-					9: current_snapshot_word = avalon_snapshot_payload_async[159:144];
-					10: current_snapshot_word = avalon_snapshot_payload_async[175:160];
-					11: current_snapshot_word = avalon_snapshot_payload_async[191:176];
-					12: current_snapshot_word = avalon_snapshot_payload_async[207:192];
-					13: current_snapshot_word = avalon_snapshot_payload_async[223:208];
-					14: current_snapshot_word = avalon_snapshot_payload_async[239:224];
-					default: current_snapshot_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT: begin
-				case(word_count)
-					0: current_snapshot_word = output_snapshot_payload_async[15:0];
-					1: current_snapshot_word = output_snapshot_payload_async[31:16];
-					2: current_snapshot_word = output_snapshot_payload_async[47:32];
-					3: current_snapshot_word = output_snapshot_payload_async[63:48];
-					4: current_snapshot_word = output_snapshot_payload_async[79:64];
-					5: current_snapshot_word = output_snapshot_payload_async[95:80];
-					6: current_snapshot_word = output_snapshot_payload_async[111:96];
-					7: current_snapshot_word = output_snapshot_payload_async[127:112];
-					8: current_snapshot_word = output_snapshot_payload_async[143:128];
-					9: current_snapshot_word = output_snapshot_payload_async[159:144];
-					10: current_snapshot_word = output_snapshot_payload_async[175:160];
-					11: current_snapshot_word = output_snapshot_payload_async[191:176];
-					12: current_snapshot_word = output_snapshot_payload_async[207:192];
-					13: current_snapshot_word = output_snapshot_payload_async[223:208];
-					14: current_snapshot_word = output_snapshot_payload_async[239:224];
-					default: current_snapshot_word = 16'd0;
-				endcase
-			end
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL:
+				current_snapshot_word = control_snapshot_word;
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
+				current_snapshot_word = avalon_snapshot_word;
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
+				current_snapshot_word = output_snapshot_word;
 			default: current_snapshot_word = 16'd0;
 		endcase
 	end
@@ -425,6 +400,7 @@ module mister_magik_video_diagnostics_control #(
 			command <= io_din[7:0];
 			has_command <= 1'b1;
 			word_count <= 8'd0;
+			read_select <= diagnostic_command ? 40'd1 : 40'd0;
 			if(io_din[7:0] == 8'h57) begin
 				// Observer-only transaction count is supplied by post_count.
 			end
@@ -453,6 +429,8 @@ module mister_magik_video_diagnostics_control #(
 		end
 		else if(command_data) begin
 			word_count <= word_count + 1'd1;
+			if(diagnostic_command)
+				read_select <= {read_select[38:0], 1'b0};
 			if((command == 8'h2f) && legacy_open && (word_count < 10)) begin
 				case(word_count)
 					0: legacy_words[0] <= io_din;
@@ -480,6 +458,7 @@ module mister_magik_video_diagnostics_control #(
 			has_command <= 1'b0;
 			command <= 8'd0;
 			word_count <= 8'd0;
+			read_select <= 40'd0;
 			if(legacy_open) begin
 				legacy_open <= 1'b0;
 				if(legacy_total != 8'hff) legacy_total <= legacy_total + 1'd1;
