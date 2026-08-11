@@ -398,6 +398,7 @@ impl SceneBufferId {
 pub struct SceneTarget<'a> {
     pixels: &'a mut [Rgb565Pixel],
     geometry: SceneGeometry,
+    output_layout: Rgb565OutputLayout,
     buffer_id: SceneBufferId,
 }
 
@@ -407,15 +408,37 @@ impl<'a> SceneTarget<'a> {
         geometry: SceneGeometry,
         buffer_id: SceneBufferId,
     ) -> Result<Self, SceneError> {
-        if pixels.len() != geometry.len() {
+        Self::new_oriented(
+            pixels,
+            geometry,
+            Rgb565OutputLayout::identity(geometry),
+            buffer_id,
+        )
+    }
+
+    pub fn new_oriented(
+        pixels: &'a mut [Rgb565Pixel],
+        geometry: SceneGeometry,
+        output_layout: Rgb565OutputLayout,
+        buffer_id: SceneBufferId,
+    ) -> Result<Self, SceneError> {
+        if geometry.width() != output_layout.logical_width()
+            || geometry.height() != output_layout.logical_height()
+        {
+            return Err(SceneError::InvalidGeometry(
+                "scene logical geometry does not match its output layout",
+            ));
+        }
+        if pixels.len() != output_layout.len() {
             return Err(SceneError::TargetSizeMismatch {
                 actual: pixels.len(),
-                expected: geometry.len(),
+                expected: output_layout.len(),
             });
         }
         Ok(Self {
             pixels,
             geometry,
+            output_layout,
             buffer_id,
         })
     }
@@ -423,6 +446,11 @@ impl<'a> SceneTarget<'a> {
     #[must_use]
     pub const fn geometry(&self) -> SceneGeometry {
         self.geometry
+    }
+
+    #[must_use]
+    pub const fn output_layout(&self) -> Rgb565OutputLayout {
+        self.output_layout
     }
 
     #[must_use]
@@ -438,6 +466,12 @@ impl<'a> SceneTarget<'a> {
     #[must_use]
     pub fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
         self.pixels
+    }
+
+    #[must_use]
+    pub fn surface_mut(&mut self) -> Rgb565SurfaceMut<'_, Rgb565Pixel> {
+        Rgb565SurfaceMut::new(self.pixels, self.output_layout)
+            .expect("scene target validates its output layout at construction")
     }
 
     #[must_use]
@@ -536,7 +570,24 @@ mod tests {
         let mut pixels = [Rgb565Pixel(0); 6];
         let target = SceneTarget::new(&mut pixels, geometry, id).unwrap();
         assert_eq!(target.geometry(), geometry);
+        assert_eq!(
+            target.output_layout(),
+            Rgb565OutputLayout::identity(geometry)
+        );
         assert_eq!(target.buffer_id(), id);
+    }
+
+    #[test]
+    fn oriented_scene_target_separates_logical_and_physical_geometry() {
+        let geometry = SceneGeometry::new(2, 3, 2).unwrap();
+        let output = Rgb565OutputLayout::new(2, 3, 4, OutputRotation::Clockwise90).unwrap();
+        let id = SceneBufferId::new(0, 2).unwrap();
+        let mut pixels = [Rgb565Pixel(0); 8];
+        let mut target = SceneTarget::new_oriented(&mut pixels, geometry, output, id).unwrap();
+        assert_eq!(target.geometry(), geometry);
+        assert_eq!(target.output_layout(), output);
+        assert!(target.surface_mut().set(0, 0, Rgb565Pixel(7)));
+        assert_eq!(pixels[2], Rgb565Pixel(7));
     }
 
     #[test]
