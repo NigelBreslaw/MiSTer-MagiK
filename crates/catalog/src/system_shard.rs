@@ -7,9 +7,7 @@ use crate::catalog_classify::SystemId;
 use crate::sharded_catalog::{NAVIGATION_SCHEMA_VERSION, SHARD_SCHEMA_VERSION};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "builder")]
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -76,7 +74,20 @@ pub struct LoadedSystemShard {
     pub generation: u64,
     pub navigation_hash: String,
     pub projection_stats: Option<SystemShardProjectionStats>,
+    pub navigation_indexes: SystemNavigationIndexes,
     pub games: Vec<SystemGame>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SystemNavigationIndexes {
+    pub title_ordinals: Vec<u32>,
+    pub preview_ordinals: Vec<u32>,
+    pub launch_ordinals: Vec<u32>,
+    pub categories: Vec<(String, Vec<u32>)>,
+    pub decades: Vec<(u16, Vec<u32>)>,
+    pub manufacturers: Vec<(String, Vec<u32>)>,
+    pub players: Vec<(u8, Vec<u32>)>,
+    pub controls: Vec<(String, Vec<u32>)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -100,6 +111,15 @@ pub(crate) enum ShardDurability {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct StoredNavigation {
+    schema_version: u32,
+    system_id: String,
+    generation: u64,
+    indexes: SystemNavigationIndexes,
+    games: Vec<SystemGame>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+struct StoredNavigationV2 {
     schema_version: u32,
     system_id: String,
     generation: u64,
@@ -162,6 +182,7 @@ struct StoredNavigationRef<'a> {
     schema_version: u32,
     system_id: &'a str,
     generation: u64,
+    indexes: &'a SystemNavigationIndexes,
     games: &'a [SystemGame],
 }
 
@@ -190,12 +211,14 @@ pub(crate) fn write_system_shard_with_durability(
     durability: ShardDurability,
 ) -> Result<LoadedSystemShard, SystemShardError> {
     validate_games(&data.games, limits.max_games)?;
+    let navigation_indexes = build_navigation_indexes(&data.games)?;
     let navigation_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_NAVIGATION);
     let navigation = {
         let stored = StoredNavigationRef {
             schema_version: NAVIGATION_SCHEMA_VERSION,
             system_id: data.system_id.as_str(),
             generation: data.generation,
+            indexes: &navigation_indexes,
             games: &data.games,
         };
         encode_navigation(&stored, limits)?
@@ -585,6 +608,7 @@ pub fn open_system_shard(
         generation,
         navigation_hash: stored_hash,
         projection_stats,
+        navigation_indexes: stored.indexes,
         games: stored.games,
     })
 }
@@ -700,12 +724,22 @@ fn open_system_navigation_with_validation(
         ));
     }
     let games = stored.games;
+    let navigation_indexes = stored.indexes;
     let validation_started = std::time::Instant::now();
     match validation {
         NavigationValidation::Full => validate_loaded_games(&games, limits.max_games)?,
         NavigationValidation::ManifestBound(_) => {
             validate_loaded_game_shapes(&games, limits.max_games)?
         }
+    }
+    validate_navigation_index_bounds(&navigation_indexes, games.len())?;
+    if matches!(validation, NavigationValidation::Full)
+        && navigation_indexes != build_navigation_indexes(&games)?
+    {
+        return Err(SystemShardError::new(
+            "read",
+            "persisted navigation indexes do not match game rows",
+        ));
     }
     timing.read_us = read_us;
     timing.hash_us = hash_us;
@@ -717,6 +751,7 @@ fn open_system_navigation_with_validation(
             generation: expected_generation,
             navigation_hash,
             projection_stats: None,
+            navigation_indexes,
             games,
         },
         timing,
@@ -775,6 +810,133 @@ fn validate_loaded_game_shapes(
         return Err(SystemShardError::new(
             "read",
             "navigation contains invalid game rows",
+        ));
+    }
+    Ok(())
+}
+
+fn build_navigation_indexes(
+    games: &[SystemGame],
+) -> Result<SystemNavigationIndexes, SystemShardError> {
+    let ordinal = |index: usize| {
+        u32::try_from(index).map_err(|_| SystemShardError::new("write", "game ordinal exceeds u32"))
+    };
+    let mut title_ordinals = (0..games.len()).collect::<Vec<_>>();
+    title_ordinals.sort_unstable_by(|left, right| {
+        games[*left]
+            .title
+            .to_ascii_lowercase()
+            .cmp(&games[*right].title.to_ascii_lowercase())
+            .then_with(|| games[*left].stable_key.cmp(&games[*right].stable_key))
+    });
+    let mut preview_ordinals = Vec::new();
+    let mut launch_ordinals = Vec::new();
+    let mut categories = BTreeMap::<String, Vec<u32>>::new();
+    let mut decades = BTreeMap::<u16, Vec<u32>>::new();
+    let mut manufacturers = BTreeMap::<String, Vec<u32>>::new();
+    let mut players = BTreeMap::<u8, Vec<u32>>::new();
+    let mut controls = BTreeMap::<String, Vec<u32>>::new();
+    for (index, game) in games.iter().enumerate() {
+        let ordinal = ordinal(index)?;
+        if game.has_preview
+            && !game.preview_archive_path.is_empty()
+            && !game.preview_asset_key.is_empty()
+        {
+            preview_ordinals.push(ordinal);
+        }
+        if game.launch_plan.is_some() {
+            launch_ordinals.push(ordinal);
+        }
+        let category = game.category.trim();
+        if !category.is_empty() {
+            categories
+                .entry(category.to_owned())
+                .or_default()
+                .push(ordinal);
+        }
+        if let Some(year) = game.year {
+            decades.entry((year / 10) * 10).or_default().push(ordinal);
+        }
+        let manufacturer = game.manufacturer.trim();
+        if !manufacturer.is_empty() {
+            manufacturers
+                .entry(manufacturer.to_owned())
+                .or_default()
+                .push(ordinal);
+        }
+        if let Some(player_count) = game.players {
+            players.entry(player_count).or_default().push(ordinal);
+        }
+        let control = game.control.trim();
+        if !control.is_empty() {
+            controls
+                .entry(control.to_owned())
+                .or_default()
+                .push(ordinal);
+        }
+    }
+    launch_ordinals.sort_unstable_by(|left, right| {
+        games[*left as usize]
+            .launch_ref
+            .cmp(&games[*right as usize].launch_ref)
+    });
+    Ok(SystemNavigationIndexes {
+        title_ordinals: title_ordinals
+            .into_iter()
+            .map(ordinal)
+            .collect::<Result<_, _>>()?,
+        preview_ordinals,
+        launch_ordinals,
+        categories: categories.into_iter().collect(),
+        decades: decades.into_iter().collect(),
+        manufacturers: manufacturers.into_iter().collect(),
+        players: players.into_iter().collect(),
+        controls: controls.into_iter().collect(),
+    })
+}
+
+fn validate_navigation_index_bounds(
+    indexes: &SystemNavigationIndexes,
+    game_count: usize,
+) -> Result<(), SystemShardError> {
+    let valid = |ordinal: &u32| (*ordinal as usize) < game_count;
+    let postings_valid = |postings: &[(String, Vec<u32>)]| {
+        postings
+            .iter()
+            .all(|(_, ordinals)| ordinals.iter().all(valid))
+    };
+    if indexes.title_ordinals.len() != game_count
+        || indexes.title_ordinals.iter().any(|ordinal| !valid(ordinal))
+        || indexes
+            .title_ordinals
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != game_count
+        || indexes
+            .preview_ordinals
+            .iter()
+            .any(|ordinal| !valid(ordinal))
+        || indexes
+            .launch_ordinals
+            .iter()
+            .any(|ordinal| !valid(ordinal))
+        || !postings_valid(&indexes.categories)
+        || !postings_valid(&indexes.manufacturers)
+        || !postings_valid(&indexes.controls)
+        || indexes
+            .decades
+            .iter()
+            .any(|(_, ordinals)| ordinals.iter().any(|ordinal| !valid(ordinal)))
+        || indexes
+            .players
+            .iter()
+            .any(|(_, ordinals)| ordinals.iter().any(|ordinal| !valid(ordinal)))
+    {
+        return Err(SystemShardError::new(
+            "read",
+            "persisted navigation index contains invalid ordinals",
         ));
     }
     Ok(())
@@ -859,14 +1021,33 @@ fn decode_navigation_with_timing(
     let stored = match (schema, compatibility) {
         (NAVIGATION_SCHEMA_VERSION, _) => serde_json::from_slice(&decoded)
             .map_err(|error| SystemShardError::with("parse navigation", error)),
-        (1, NavigationCompatibility::CurrentOrAlphaV1) => {
-            let stored: StoredNavigationV1 = serde_json::from_slice(&decoded)
-                .map_err(|error| SystemShardError::with("parse alpha navigation", error))?;
+        (2, NavigationCompatibility::CurrentOrAlphaV1) => {
+            let stored: StoredNavigationV2 = serde_json::from_slice(&decoded)
+                .map_err(|error| SystemShardError::with("parse v2 navigation", error))?;
+            let indexes = build_navigation_indexes(&stored.games)?;
             Ok(StoredNavigation {
                 schema_version: stored.schema_version,
                 system_id: stored.system_id,
                 generation: stored.generation,
-                games: stored.games.into_iter().map(SystemGame::from).collect(),
+                indexes,
+                games: stored.games,
+            })
+        }
+        (1, NavigationCompatibility::CurrentOrAlphaV1) => {
+            let stored: StoredNavigationV1 = serde_json::from_slice(&decoded)
+                .map_err(|error| SystemShardError::with("parse alpha navigation", error))?;
+            let games = stored
+                .games
+                .into_iter()
+                .map(SystemGame::from)
+                .collect::<Vec<_>>();
+            let indexes = build_navigation_indexes(&games)?;
+            Ok(StoredNavigation {
+                schema_version: stored.schema_version,
+                system_id: stored.system_id,
+                generation: stored.generation,
+                indexes,
+                games,
             })
         }
         _ => Err(SystemShardError::new(
@@ -1171,6 +1352,10 @@ mod tests {
         assert_eq!(loaded.system_id, data.system_id);
         assert_eq!(loaded.generation, 1);
         assert_eq!(loaded.games, data.games);
+        assert_eq!(
+            loaded.navigation_indexes,
+            build_navigation_indexes(&data.games).unwrap()
+        );
         assert_eq!(loaded.projection_stats, None);
         assert_eq!(loaded.navigation_hash.len(), 16);
         let connection = Connection::open(&sqlite).unwrap();
@@ -1215,6 +1400,19 @@ mod tests {
         .unwrap()
         .0;
         assert_eq!(loaded.games, data.games);
+        assert!(
+            open_verified_system_navigation_with_compatibility_and_timing(
+                &navigation,
+                &data.system_id,
+                data.generation + 1,
+                &published.navigation_hash,
+                limits(),
+                NavigationCompatibility::CurrentOnly,
+            )
+            .unwrap_err()
+            .message()
+            .contains("identity or generation")
+        );
         assert_eq!(
             open_verified_system_navigation_with_compatibility_and_timing(
                 &navigation,
@@ -1227,6 +1425,33 @@ mod tests {
             .unwrap_err()
             .message(),
             "navigation checksum does not match verified manifest generation"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn navigation_rejects_out_of_bounds_persisted_indexes() {
+        let root = temporary_root("corrupt-index");
+        let navigation = root.join("1.nav.lz4b");
+        fs::create_dir_all(&root).unwrap();
+        let data = fixture_data();
+        let mut indexes = build_navigation_indexes(&data.games).unwrap();
+        indexes.preview_ordinals.push(u32::MAX);
+        let stored = StoredNavigationRef {
+            schema_version: NAVIGATION_SCHEMA_VERSION,
+            system_id: data.system_id.as_str(),
+            generation: data.generation,
+            indexes: &indexes,
+            games: &data.games,
+        };
+        fs::write(&navigation, encode_navigation(&stored, limits()).unwrap()).unwrap();
+
+        assert_eq!(
+            open_system_navigation(&navigation, &data.system_id, data.generation, limits())
+                .unwrap_err()
+                .message(),
+            "persisted navigation index contains invalid ordinals"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1428,6 +1653,7 @@ mod tests {
             schema_version: NAVIGATION_SCHEMA_VERSION,
             system_id: "c64".to_string(),
             generation: 7,
+            indexes: build_navigation_indexes(&games).unwrap(),
             games,
         };
         let encoded = lz4_flex::compress_prepend_size(&serde_json::to_vec(&stored).unwrap());

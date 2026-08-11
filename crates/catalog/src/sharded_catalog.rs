@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 pub const SHARD_SCHEMA_VERSION: u32 = 4;
 pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub const NAVIGATION_SCHEMA_VERSION: u32 = 2;
+pub const NAVIGATION_SCHEMA_VERSION: u32 = 3;
 pub const PRODUCTION_PROJECTION_CONTRACT: &str = "rich-game-v2";
 
 #[derive(Clone, Debug, Eq, PartialEq)]

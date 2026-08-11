@@ -258,6 +258,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let message = match result {
         Ok((system, open_timing)) => {
             let prepare_started = Instant::now();
+            let navigation_indexes = system.navigation_indexes;
             let games = system.games;
             let game_count = games.len();
             let preview_prelude = preview_dispatch.and_then(|dispatch| {
@@ -284,20 +285,26 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let projection_started = Instant::now();
             let projection_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-row-projection");
-            let (replacement, cold_metadata, launch_plans) =
-                arcade_rows_from_owned_persisted_shard(&worker_system_id, games);
+            let (replacement, cold_metadata, launch_plans) = arcade_rows_from_owned_persisted_shard(
+                &worker_system_id,
+                games,
+                &navigation_indexes,
+            );
             drop(projection_pmu);
             let row_projection_us = elapsed_us(projection_started);
             let collection_index_started = Instant::now();
             let collection_index_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-collection-index");
-            let collection = Arc::new(arcade_catalog::SystemCollection::new_with_metadata(
-                worker_system_id.as_str(),
-                replacement,
-                cold_metadata,
-                launch_plans,
-                base_catalog.platform_kind(&worker_system_id),
-            ));
+            let collection = Arc::new(
+                arcade_catalog::SystemCollection::new_with_persisted_indexes(
+                    worker_system_id.as_str(),
+                    replacement,
+                    cold_metadata,
+                    launch_plans,
+                    base_catalog.platform_kind(&worker_system_id),
+                    navigation_indexes.preview_ordinals,
+                ),
+            );
             drop(collection_index_pmu);
             let collection_index_us = elapsed_us(collection_index_started);
             let replacement_started = Instant::now();

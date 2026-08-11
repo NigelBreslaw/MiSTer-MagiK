@@ -135,7 +135,7 @@ pub struct SystemCollection {
     cold_metadata: Arc<Vec<ArcadeGameMetadataKey>>,
     platform_kinds: Arc<HashMap<String, PlatformKind>>,
     preview_games_by_system: Arc<HashMap<String, Vec<usize>>>,
-    launch_plans_by_ref: Arc<HashMap<Arc<str>, StructuredLaunchPlan>>,
+    launch_plans: Arc<Vec<StructuredLaunchPlan>>,
     rich_indexes: Arc<OnceLock<ArcadeCatalogIndexes>>,
 }
 
@@ -168,6 +168,42 @@ impl SystemCollection {
         launch_plans: Vec<StructuredLaunchPlan>,
         platform_kind: PlatformKind,
     ) -> Self {
+        Self::new_inner(
+            system_id,
+            games,
+            cold_metadata,
+            launch_plans,
+            platform_kind,
+            None,
+        )
+    }
+
+    pub fn new_with_persisted_indexes(
+        system_id: impl Into<Arc<str>>,
+        games: Vec<ArcadeGameEntry>,
+        cold_metadata: Vec<ArcadeGameMetadataKey>,
+        launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kind: PlatformKind,
+        preview_ordinals: Vec<u32>,
+    ) -> Self {
+        Self::new_inner(
+            system_id,
+            games,
+            cold_metadata,
+            launch_plans,
+            platform_kind,
+            Some(preview_ordinals),
+        )
+    }
+
+    fn new_inner(
+        system_id: impl Into<Arc<str>>,
+        games: Vec<ArcadeGameEntry>,
+        cold_metadata: Vec<ArcadeGameMetadataKey>,
+        mut launch_plans: Vec<StructuredLaunchPlan>,
+        platform_kind: PlatformKind,
+        preview_ordinals: Option<Vec<u32>>,
+    ) -> Self {
         let system_id = system_id.into();
         debug_assert!(
             games
@@ -176,15 +212,26 @@ impl SystemCollection {
         );
         debug_assert_eq!(games.len(), cold_metadata.len());
         let platform_kinds = Arc::new(HashMap::from([(system_id.to_string(), platform_kind)]));
-        let (preview_games_by_system, launch_plans_by_ref) =
-            build_system_collection_hot_indexes(&games, &platform_kinds, launch_plans);
+        let preview_games_by_system = preview_ordinals.map_or_else(
+            || build_system_collection_preview_indexes(&games, &platform_kinds),
+            |ordinals| {
+                HashMap::from([(
+                    system_id.to_string(),
+                    ordinals
+                        .into_iter()
+                        .map(|ordinal| ordinal as usize)
+                        .collect(),
+                )])
+            },
+        );
+        launch_plans.sort_unstable_by(|left, right| left.launch_ref.cmp(&right.launch_ref));
         Self {
             system_id,
             games: Arc::new(games),
             cold_metadata: Arc::new(cold_metadata),
             platform_kinds,
             preview_games_by_system: Arc::new(preview_games_by_system),
-            launch_plans_by_ref: Arc::new(launch_plans_by_ref),
+            launch_plans: Arc::new(launch_plans),
             rich_indexes: Arc::new(OnceLock::new()),
         }
     }
@@ -264,7 +311,7 @@ impl SystemCollection {
             build_arcade_catalog_indexes(
                 &games,
                 &self.platform_kinds,
-                self.launch_plans_by_ref.values().cloned().collect(),
+                self.launch_plans.as_ref().clone(),
                 CatalogIndexMode::Eager,
                 None,
             )
@@ -719,7 +766,13 @@ impl ArcadeCatalog {
     ) -> Option<&StructuredLaunchPlan> {
         self.system_collections
             .values()
-            .find_map(|collection| collection.launch_plans_by_ref.get(launch_ref))
+            .find_map(|collection| {
+                collection
+                    .launch_plans
+                    .binary_search_by(|plan| plan.launch_ref.as_ref().cmp(launch_ref))
+                    .ok()
+                    .and_then(|index| collection.launch_plans.get(index))
+            })
             .or_else(|| self.launch_plans_by_ref.get(launch_ref))
     }
 
@@ -1568,14 +1621,10 @@ fn build_arcade_catalog_indexes(
     }
 }
 
-fn build_system_collection_hot_indexes(
+fn build_system_collection_preview_indexes(
     games: &[ArcadeGameEntry],
     platform_kinds: &HashMap<String, PlatformKind>,
-    launch_plans: Vec<StructuredLaunchPlan>,
-) -> (
-    HashMap<String, Vec<usize>>,
-    HashMap<Arc<str>, StructuredLaunchPlan>,
-) {
+) -> HashMap<String, Vec<usize>> {
     let mut preview_games_by_system = HashMap::<String, Vec<usize>>::new();
     let mut preview_best_by_system = HashMap::<String, HashMap<String, usize>>::new();
     for (idx, game) in games.iter().enumerate() {
@@ -1603,11 +1652,7 @@ fn build_system_collection_hot_indexes(
             }
         }
     }
-    let launch_plans_by_ref = launch_plans
-        .into_iter()
-        .map(|plan| (plan.launch_ref.clone(), plan))
-        .collect();
-    (preview_games_by_system, launch_plans_by_ref)
+    preview_games_by_system
 }
 
 fn build_arcade_text_indexes(
@@ -2451,8 +2496,10 @@ mod tests {
         assert!(collection.rich_indexes.get().is_none());
         assert!(collection.games[0].manufacturer.is_empty());
         assert!(matches!(
-            collection.launch_plans_by_ref.get("magik-plan:c64:new"),
-            Some(_)
+            collection
+                .launch_plans
+                .binary_search_by(|plan| plan.launch_ref.as_ref().cmp("magik-plan:c64:new")),
+            Ok(_)
         ));
         let hydrated = catalog.with_system_collection(collection.clone());
 

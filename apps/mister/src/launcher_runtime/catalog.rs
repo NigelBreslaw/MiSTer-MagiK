@@ -5,7 +5,7 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog};
 use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
-use mister_magik_catalog::system_shard::SystemGame;
+use mister_magik_catalog::system_shard::{SystemGame, SystemNavigationIndexes};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -199,6 +199,7 @@ pub fn arcade_rows_from_persisted_shard(
 pub fn arcade_rows_from_owned_persisted_shard(
     system_id: &str,
     games: Vec<SystemGame>,
+    indexes: &SystemNavigationIndexes,
 ) -> (
     Vec<arcade_catalog::ArcadeGameEntry>,
     Vec<arcade_catalog::ArcadeGameMetadataKey>,
@@ -209,20 +210,15 @@ pub fn arcade_rows_from_owned_persisted_shard(
     strings.retain(shared_system_id.clone());
     let mut projected = Vec::with_capacity(games.len());
     let mut metadata = Vec::with_capacity(games.len());
-    let mut launch_plans = Vec::with_capacity(
-        games
-            .iter()
-            .filter(|game| game.launch_plan.is_some())
-            .count(),
-    );
+    let mut launch_plans_by_ordinal = Vec::with_capacity(games.len());
     for game in games {
         let title = Arc::<str>::from(game.title);
         let launch_ref = Arc::<str>::from(game.launch_ref);
-        if let Some(plan) = game.launch_plan {
+        let launch_plan = game.launch_plan.map(|plan| {
             let plan_title = strings.reuse_or_intern(plan.title, &title);
             let plan_launch_ref = strings.reuse_or_intern(plan.launch_ref, &launch_ref);
             let plan_system_id = strings.reuse_or_intern(plan.system_id, &shared_system_id);
-            launch_plans.push(arcade_catalog::StructuredLaunchPlan {
+            arcade_catalog::StructuredLaunchPlan {
                 launch_ref: plan_launch_ref,
                 title: plan_title,
                 system_id: plan_system_id,
@@ -231,8 +227,9 @@ pub fn arcade_rows_from_owned_persisted_shard(
                 mount_kind: strings.intern(plan.mount_kind),
                 mount_index: plan.mount_index,
                 delay_secs: plan.delay_secs,
-            });
-        }
+            }
+        });
+        launch_plans_by_ordinal.push(launch_plan);
         metadata.push(arcade_catalog::ArcadeGameMetadataKey {
             year: game.year,
             manufacturer: game.manufacturer,
@@ -255,6 +252,15 @@ pub fn arcade_rows_from_owned_persisted_shard(
             is_new: game.is_new,
         });
     }
+    let launch_plans = indexes
+        .launch_ordinals
+        .iter()
+        .filter_map(|ordinal| {
+            launch_plans_by_ordinal
+                .get_mut(*ordinal as usize)
+                .and_then(Option::take)
+        })
+        .collect();
     (projected, metadata, launch_plans)
 }
 
@@ -403,8 +409,14 @@ mod tests {
             },
         ];
         let (expected_rows, expected_plans) = arcade_rows_from_persisted_shard("snes", &source);
+        let indexes = SystemNavigationIndexes {
+            title_ordinals: vec![0, 1],
+            preview_ordinals: vec![0],
+            launch_ordinals: vec![0],
+            ..SystemNavigationIndexes::default()
+        };
         let (actual_rows, actual_metadata, actual_plans) =
-            arcade_rows_from_owned_persisted_shard("snes", source);
+            arcade_rows_from_owned_persisted_shard("snes", source, &indexes);
 
         assert_eq!(actual_plans, expected_plans);
         assert_eq!(actual_rows.len(), expected_rows.len());
@@ -439,9 +451,14 @@ mod tests {
             control: "joy".into(),
             ..SystemGame::default()
         };
+        let indexes = SystemNavigationIndexes {
+            title_ordinals: vec![0, 1],
+            ..SystemNavigationIndexes::default()
+        };
         let (rows, metadata, _) = arcade_rows_from_owned_persisted_shard(
             "snes",
             vec![repeated("one", "One"), repeated("two", "Two")],
+            &indexes,
         );
 
         assert!(Arc::ptr_eq(&rows[0].system_id, &rows[1].system_id));
