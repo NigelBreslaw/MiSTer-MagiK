@@ -63,7 +63,7 @@ fn navigation_geometry_to_composition(
             x: mapped.x0.min(u16::MAX as usize) as u16,
             y: mapped.y0.min(u16::MAX as usize) as u16,
             width: mapped.width().min(u16::MAX as usize) as u16,
-            height: mapped.rows().min(u16::MAX as usize) as u16,
+            height: mapped.rows().min(u32::from(u16::MAX)) as u16,
         }
     }
 
@@ -4415,7 +4415,7 @@ fn render_immediate_launcher_frame(
     ui: &UiDisplay,
     layout: UiLayoutGeometry,
 ) -> Option<DirtyRect> {
-    let mut layer_target = LayerTarget::new_oriented(target, ui, layout);
+    let mut layer_target = LayerTarget::new_oriented(target, layout);
     let (dirty, mut damage) = layer_target.render_slint_base(window);
     if damage.is_empty() {
         damage.push_if_some(dirty);
@@ -8596,7 +8596,7 @@ pub(super) fn run_launcher_loop(
         if full_screen_transition_policy_before_render.advance_slint_timers {
             update_slint_animations(animation_clock);
         }
-        let mut layer_target = LayerTarget::new_oriented(target, ui, layout);
+        let mut layer_target = LayerTarget::new_oriented(target, layout);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());

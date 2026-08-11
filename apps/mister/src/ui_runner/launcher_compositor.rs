@@ -59,11 +59,7 @@ impl<'a> LayerTarget<'a> {
         }
     }
 
-    pub(super) fn new_oriented(
-        target: &'a mut UiFrameTarget,
-        ui: &'a UiDisplay,
-        layout: UiLayoutGeometry,
-    ) -> Self {
+    pub(super) fn new_oriented(target: &'a mut UiFrameTarget, layout: UiLayoutGeometry) -> Self {
         Self {
             target,
             layout,
