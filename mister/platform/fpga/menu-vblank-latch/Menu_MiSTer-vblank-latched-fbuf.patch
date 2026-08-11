@@ -2,7 +2,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..d05a447 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,145 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,149 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -43,7 +43,11 @@ index a416879..d05a447 100644
 +wire  [7:0] magik_diag_avalon_trigger;
 +wire        magik_diag_avalon_snapshot_ack;
 +wire [495:0] magik_diag_avalon_snapshot;
-+wire [495:0] magik_diag_empty_snapshot = 496'd0;
++wire        magik_diag_output_heartbeat;
++wire        magik_diag_output_fault;
++wire  [7:0] magik_diag_output_trigger;
++wire        magik_diag_output_snapshot_ack;
++wire [495:0] magik_diag_output_snapshot;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -124,15 +128,15 @@ index a416879..d05a447 100644
 +	.reset_out(reset),
 +	.cfg_done(cfg_done),
 +	.pll_adjust_locked(led_locked),
-+	.output_heartbeat_toggle_async(hdmi_vbl),
++	.output_heartbeat_toggle_async(magik_diag_output_heartbeat),
 +	.avalon_fault_toggle_async(magik_diag_avalon_fault),
 +	.avalon_trigger_async(magik_diag_avalon_trigger),
 +	.avalon_snapshot_ack_async(magik_diag_avalon_snapshot_ack),
 +	.avalon_snapshot_payload_async(magik_diag_avalon_snapshot),
-+	.output_fault_toggle_async(1'b0),
-+	.output_trigger_async(8'd0),
-+	.output_snapshot_ack_async(magik_diag_snapshot_request),
-+	.output_snapshot_payload_async(magik_diag_empty_snapshot),
++	.output_fault_toggle_async(magik_diag_output_fault),
++	.output_trigger_async(magik_diag_output_trigger),
++	.output_snapshot_ack_async(magik_diag_output_snapshot_ack),
++	.output_snapshot_payload_async(magik_diag_output_snapshot),
 +	.snapshot_request_toggle(magik_diag_snapshot_request),
 +	.monitor_armed(magik_diag_monitor_armed),
 +	.diagnostic_generation(magik_diag_generation),
@@ -149,7 +153,7 @@ index a416879..d05a447 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +499,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +503,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -169,7 +173,7 @@ index a416879..d05a447 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +559,8 @@ always@(posedge clk_sys) begin
+@@ -407,6 +563,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -178,7 +182,7 @@ index a416879..d05a447 100644
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +614,8 @@ always@(posedge clk_sys) begin
+@@ -462,6 +618,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
@@ -187,7 +191,7 @@ index a416879..d05a447 100644
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -695,16 +851,42 @@ wire clk_pal = clk_audio;
+@@ -695,16 +855,42 @@ wire clk_pal = clk_audio;
  
  
  wire  [27:0] vbuf_address;
@@ -230,7 +234,42 @@ index a416879..d05a447 100644
  wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
  wire         freeze;
  wire         bob_deint;
-@@ -1380,15 +1562,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1332,8 +1518,34 @@ always @(posedge hdmi_tx_clk) begin
+ end
+ 
++mister_magik_video_diagnostics_output magik_video_diagnostics_output
++(
++	.hdmi_tx_clk(hdmi_tx_clk),
++	.monitor_armed_async(magik_diag_monitor_armed),
++	.snapshot_request_toggle_async(magik_diag_snapshot_request),
++	.diagnostic_generation_async(magik_diag_generation),
++	.route_context_toggle_async(magik_diag_route_context_toggle),
++	.expected_route_epoch_async(magik_diag_expected_route_epoch),
++	.expected_active_seq_async(magik_diag_expected_active_seq),
++	.expected_route_flags_async(magik_diag_expected_route_flags),
++	.mux_direct_async(~vga_fb & direct_video),
++	.mux_csync_async(direct_video & csync_en),
++	.reset_req_async(reset_req),
++	.cfg_done_async(cfg_done),
++	.pll_adjust_locked_async(led_locked),
++	.hdmi_out_d(hdmi_out_d),
++	.hdmi_out_de(hdmi_out_de),
++	.hdmi_out_hs(hdmi_out_hs),
++	.hdmi_out_vs(hdmi_out_vs),
++	.heartbeat_toggle(magik_diag_output_heartbeat),
++	.fault_toggle(magik_diag_output_fault),
++	.fault_trigger(magik_diag_output_trigger),
++	.snapshot_ack_toggle(magik_diag_output_snapshot_ack),
++	.snapshot_payload(magik_diag_output_snapshot)
++);
++
+ assign HDMI_TX_HS = hdmi_out_hs;
+ assign HDMI_TX_VS = hdmi_out_vs;
+ assign HDMI_TX_DE = hdmi_out_de;
+ assign HDMI_TX_D  = hdmi_out_d;
+ 
+ /////////////////////////  VGA output  //////////////////////////////////
+@@ -1380,15 +1592,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

@@ -6,7 +6,10 @@
 
 // Passive diagnostic recorder. Its only functional-system outputs are the
 // response pair for the dedicated read-only opcodes.
-module mister_magik_video_diagnostics_control (
+module mister_magik_video_diagnostics_control #(
+	parameter [23:0] HEARTBEAT_TIMEOUT_CYCLES = 24'd10000000,
+	parameter [11:0] SNAPSHOT_TIMEOUT_CYCLES = 12'd4095
+) (
 	input  wire         clk_sys,
 	input  wire         hdmi_vbl,
 	input  wire         io_uio,
@@ -76,8 +79,6 @@ module mister_magik_video_diagnostics_control (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	localparam [31:0] MAGIK_SCANOUT_SLOT_CAPACITY = 32'd2101248;
-	localparam [23:0] HEARTBEAT_TIMEOUT_CYCLES = 24'd10000000;
-
 	reg [7:0] command = 8'd0;
 	reg       has_command = 1'b0;
 	reg [7:0] word_count = 8'd0;
@@ -311,7 +312,7 @@ module mister_magik_video_diagnostics_control (
 		input [7:0] fault_trigger;
 		input [15:0] fault_flags;
 		begin
-			if((state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED) && !fault_taken_now) begin
+			if((state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED) && !freeze_pending && !fault_taken_now) begin
 				fault_taken_now = 1'b1;
 				trigger <= fault_trigger;
 				generation <= generation + 1'd1;
@@ -596,7 +597,7 @@ module mister_magik_video_diagnostics_control (
 				freeze_pending <= 1'b0;
 				state <= MAGIK_VIDEO_DIAGNOSTICS_STATE_FROZEN;
 			end
-			else if(freeze_timeout == 12'hfff) begin
+			else if(freeze_timeout == SNAPSHOT_TIMEOUT_CYCLES) begin
 				freeze_pending <= 1'b0;
 				state <= MAGIK_VIDEO_DIAGNOSTICS_STATE_PARTIAL;
 			end

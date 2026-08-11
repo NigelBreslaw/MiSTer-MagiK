@@ -18,7 +18,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] pending_seq = 16'd12;
 	reg [15:0] active_seq = 16'd0;
 	reg [15:0] post_count = 16'd0;
-	reg [15:0] active_route_epoch = 16'd0;
+	reg [15:0] active_route_epoch = 16'd11;
 	reg route_en = 1'b1;
 	reg route_flt = 1'b0;
 	reg [5:0] route_fmt = 6'd4;

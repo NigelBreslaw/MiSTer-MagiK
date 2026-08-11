@@ -44,6 +44,22 @@ iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 	"$rtl_dir/tb_mister_magik_video_diagnostics_avalon.sv"
 
 vvp "$build_dir/tb_mister_magik_video_diagnostics_avalon.vvp"
+
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+	-s tb_mister_magik_video_diagnostics_output \
+	-o "$build_dir/tb_mister_magik_video_diagnostics_output.vvp" \
+	"$rtl_dir/mister_magik_video_diagnostics_output.sv" \
+	"$rtl_dir/tb_mister_magik_video_diagnostics_output.sv"
+
+vvp "$build_dir/tb_mister_magik_video_diagnostics_output.vvp"
+
+iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
+	-s tb_mister_magik_video_diagnostics_timeout \
+	-o "$build_dir/tb_mister_magik_video_diagnostics_timeout.vvp" \
+	"$rtl_dir/mister_magik_video_diagnostics_control.sv" \
+	"$rtl_dir/tb_mister_magik_video_diagnostics_timeout.sv"
+
+vvp "$build_dir/tb_mister_magik_video_diagnostics_timeout.vvp"
 iverilog -g2012 -Wall -Wimplicit \
 	-s tb_mister_magik_bootstrap_black \
 	-o "$build_dir/tb_mister_magik_bootstrap_black.vvp" \
