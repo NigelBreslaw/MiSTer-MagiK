@@ -1474,8 +1474,13 @@ mod tests {
                 );
                 blit_coverage_phase(
                     &mut actual,
-                    screen_width,
-                    screen_height,
+                    Rgb565OutputLayout::new(
+                        screen_width,
+                        screen_height,
+                        screen_width,
+                        OutputRotation::None,
+                    )
+                    .unwrap(),
                     image,
                     coverage,
                     x,
