@@ -12,7 +12,7 @@ use crate::schedule::{
 };
 use crate::slack::{PreparationSlack, RenderPauseReceipt};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
-use mister_magik_framebuffer_scenes::{Rgb565Pixel, SceneGeometry};
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Pixel, SceneGeometry};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -106,8 +106,18 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
         config: LiveScreenshotConfig,
         buffers: [B; 3],
     ) -> Result<Self, String> {
+        let output_layout = Rgb565OutputLayout::identity(config.geometry);
+        Self::start_oriented(archive, config, output_layout, buffers)
+    }
+
+    pub fn start_oriented(
+        archive: ResidentPreviewArchive,
+        config: LiveScreenshotConfig,
+        output_layout: Rgb565OutputLayout,
+        buffers: [B; 3],
+    ) -> Result<Self, String> {
         let preparation_slack = Arc::new(PreparationSlack::new());
-        let parade = ScreenshotParade::new(
+        let parade = ScreenshotParade::new_oriented(
             archive,
             ScreenshotParadeConfig {
                 geometry: config.geometry,
@@ -115,6 +125,7 @@ impl<B: ScreenshotBuffer> LiveScreenshotParade<B> {
                 worker_start: config.scale_worker_start,
                 preparation_slack: Some(Arc::clone(&preparation_slack)),
             },
+            output_layout,
         )?;
         let (producer, reservoir) = strict_render_reservoir(buffers, 0);
         let stopped = Arc::new(AtomicBool::new(false));

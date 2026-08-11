@@ -3,7 +3,7 @@
 
 use crate::slack::PreparationSlack;
 use mister_magik_catalog::preview_worker::PreviewPixels;
-use mister_magik_framebuffer_scenes::Rgb565Pixel;
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565Pixel};
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub const PARADE_SUBPIXEL_ONE: i64 = 256;
@@ -297,15 +297,13 @@ impl PreparedScreenshotCard {
     pub(crate) fn blit(
         &self,
         dst: &mut [Rgb565Pixel],
-        screen_width: usize,
-        screen_height: usize,
+        output_layout: Rgb565OutputLayout,
         x_fp: i64,
         y: isize,
     ) {
         blit_sixteenth_phase(
             dst,
-            screen_width,
-            screen_height,
+            output_layout,
             &self.image,
             &self.base_coverage,
             &self.shifted_phases,
@@ -319,16 +317,14 @@ impl PreparedScreenshotCard {
     pub(crate) fn blit_with_coverage_probe(
         &self,
         dst: &mut [Rgb565Pixel],
-        screen_width: usize,
-        screen_height: usize,
+        output_layout: Rgb565OutputLayout,
         x_fp: i64,
         y: isize,
         base_background: Rgb565Pixel,
     ) -> CoverageBlitStats {
         blit_sixteenth_phase_probed(
             dst,
-            screen_width,
-            screen_height,
+            output_layout,
             &self.image,
             &self.base_coverage,
             &self.shifted_phases,
@@ -1134,8 +1130,7 @@ fn quantize_phase(x_fp: i64) -> QuantizedPhase {
 #[allow(clippy::too_many_arguments)]
 fn blit_sixteenth_phase(
     dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
+    output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     base_coverage: &CoveragePlane,
     shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
@@ -1144,15 +1139,7 @@ fn blit_sixteenth_phase(
 ) {
     let quantized = quantize_phase(x_fp);
     if quantized.phase == 0 {
-        blit_coverage_phase(
-            dst,
-            screen_width,
-            screen_height,
-            image,
-            base_coverage,
-            quantized.x,
-            y,
-        );
+        blit_coverage_phase(dst, output_layout, image, base_coverage, quantized.x, y);
         return;
     }
     let Some(shifted) = shifted_phases.get(quantized.phase - 1) else {
@@ -1161,8 +1148,7 @@ fn blit_sixteenth_phase(
     };
     blit_coverage_phase(
         dst,
-        screen_width,
-        screen_height,
+        output_layout,
         &shifted.image,
         &shifted.coverage,
         quantized.x,
@@ -1175,8 +1161,7 @@ fn blit_sixteenth_phase(
 #[inline(never)]
 fn blit_sixteenth_phase_probed(
     dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
+    output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     base_coverage: &CoveragePlane,
     shifted_phases: &[PreparedLinearPhase; CRT_SHIFTED_PHASE_COUNT],
@@ -1188,8 +1173,7 @@ fn blit_sixteenth_phase_probed(
     if quantized.phase == 0 {
         return blit_coverage_phase_probed(
             dst,
-            screen_width,
-            screen_height,
+            output_layout,
             image,
             base_coverage,
             quantized.x,
@@ -1203,8 +1187,7 @@ fn blit_sixteenth_phase_probed(
     };
     blit_coverage_phase_probed(
         dst,
-        screen_width,
-        screen_height,
+        output_layout,
         &shifted.image,
         &shifted.coverage,
         quantized.x,
@@ -1216,13 +1199,14 @@ fn blit_sixteenth_phase_probed(
 #[allow(clippy::too_many_arguments)]
 fn blit_coverage_phase(
     dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
+    output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     coverage: &CoveragePlane,
     x: isize,
     y: isize,
 ) {
+    let screen_width = output_layout.logical_width();
+    let screen_height = output_layout.logical_height();
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
     let base_background = color565(0, 0, 10);
@@ -1237,7 +1221,7 @@ fn blit_coverage_phase(
             continue;
         }
         let source_row = source_y * image.stride;
-        let target_row = target_y as usize * screen_width;
+        let target_y = target_y as usize;
         let command = coverage.rows.get(source_y).copied().unwrap_or_default();
         for sample in
             &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
@@ -1246,7 +1230,8 @@ fn blit_coverage_phase(
             if !(source_x0..source_x1).contains(&source_x) {
                 continue;
             }
-            let target = target_row + (x + source_x as isize) as usize;
+            let target_x = (x + source_x as isize) as usize;
+            let target = output_layout.physical_offset(target_x, target_y);
             if dst[target] == base_background {
                 dst[target] = sample.base_composite;
             } else {
@@ -1263,10 +1248,19 @@ fn blit_coverage_phase(
         let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
         let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
         if opaque_end > opaque_start {
-            let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
-            dst[target_start..target_start + copy_len]
-                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+            if output_layout.rotation() == OutputRotation::None {
+                let target_start = target_y * screen_width + (x + opaque_start as isize) as usize;
+                dst[target_start..target_start + copy_len].copy_from_slice(
+                    &image.pixels[source_row + opaque_start..source_row + opaque_end],
+                );
+            } else {
+                for source_x in opaque_start..opaque_end {
+                    let target_x = (x + source_x as isize) as usize;
+                    let target = output_layout.physical_offset(target_x, target_y);
+                    dst[target] = image.pixels[source_row + source_x];
+                }
+            }
         }
     }
 }
@@ -1276,14 +1270,15 @@ fn blit_coverage_phase(
 #[inline(never)]
 fn blit_coverage_phase_probed(
     dst: &mut [Rgb565Pixel],
-    screen_width: usize,
-    screen_height: usize,
+    output_layout: Rgb565OutputLayout,
     image: &ScreenshotImage,
     coverage: &CoveragePlane,
     x: isize,
     y: isize,
     base_background: Rgb565Pixel,
 ) -> CoverageBlitStats {
+    let screen_width = output_layout.logical_width();
+    let screen_height = output_layout.logical_height();
     let srgb_to_linear = srgb_to_linear_table();
     let linear_to_srgb = linear_to_srgb_table();
     let mut stats = CoverageBlitStats::default();
@@ -1298,7 +1293,7 @@ fn blit_coverage_phase_probed(
             continue;
         }
         let source_row = source_y * image.stride;
-        let target_row = target_y as usize * screen_width;
+        let target_y = target_y as usize;
         let command = coverage.rows.get(source_y).copied().unwrap_or_default();
         for sample in
             &coverage.partial_samples[command.partial_start as usize..command.partial_end as usize]
@@ -1307,7 +1302,8 @@ fn blit_coverage_phase_probed(
             if !(source_x0..source_x1).contains(&source_x) {
                 continue;
             }
-            let target = target_row + (x + source_x as isize) as usize;
+            let target_x = (x + source_x as isize) as usize;
+            let target = output_layout.physical_offset(target_x, target_y);
             stats.composite_calls += 1;
             stats.partial_edge_pixels += 1;
             if dst[target] == base_background {
@@ -1327,10 +1323,19 @@ fn blit_coverage_phase_probed(
         let opaque_start = usize::from(command.opaque.start).clamp(source_x0, source_x1);
         let opaque_end = usize::from(command.opaque.end).clamp(opaque_start, source_x1);
         if opaque_end > opaque_start {
-            let target_start = target_row + (x + opaque_start as isize) as usize;
             let copy_len = opaque_end - opaque_start;
-            dst[target_start..target_start + copy_len]
-                .copy_from_slice(&image.pixels[source_row + opaque_start..source_row + opaque_end]);
+            if output_layout.rotation() == OutputRotation::None {
+                let target_start = target_y * screen_width + (x + opaque_start as isize) as usize;
+                dst[target_start..target_start + copy_len].copy_from_slice(
+                    &image.pixels[source_row + opaque_start..source_row + opaque_end],
+                );
+            } else {
+                for source_x in opaque_start..opaque_end {
+                    let target_x = (x + source_x as isize) as usize;
+                    let target = output_layout.physical_offset(target_x, target_y);
+                    dst[target] = image.pixels[source_row + source_x];
+                }
+            }
         }
     }
     stats
@@ -1695,7 +1700,12 @@ mod tests {
         let card = PreparedScreenshotCard::prepare(&source, 1, 135);
         let background = color565(4, 8, 12);
         let mut frame = vec![background; 32 * 24];
-        card.blit(&mut frame, 32, 24, 3 * PARADE_SUBPIXEL_ONE, 2);
+        card.blit(
+            &mut frame,
+            Rgb565OutputLayout::new(32, 24, 32, OutputRotation::None).unwrap(),
+            3 * PARADE_SUBPIXEL_ONE,
+            2,
+        );
         let corner_coverage = card.base_coverage.alpha_at(0, 0);
         assert!((1..255).contains(&corner_coverage));
         let mut expected_corner = [background];
@@ -1719,8 +1729,7 @@ mod tests {
         let mut frame = vec![background; 32 * 24];
         card.blit(
             &mut frame,
-            32,
-            24,
+            Rgb565OutputLayout::new(32, 24, 32, OutputRotation::None).unwrap(),
             3 * PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
             2,
         );
