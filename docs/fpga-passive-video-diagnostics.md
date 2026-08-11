@@ -1,0 +1,84 @@
+# Passive FPGA video diagnostics
+
+The Phase 2 recorder localizes rare black, white, corrupt-pixel, and timing
+failures without changing the framebuffer latch, scaler, SDRAM data path,
+reset path, clock selection, or final video outputs. It is evidence collection,
+not a health verdict or an automatic fix.
+
+## Checkpoints
+
+The RBF retains three independent first-fault records until the FPGA is
+reconfigured:
+
+- `0x5D` records complete, partial, restarted, and owned legacy `0x2F`
+  transactions and the surrounding route/control state in `clk_sys`.
+- `0x5E` records accepted `vbuf_*` addresses, burst and return accounting,
+  stalls, outstanding age, resets, and no-read frame intervals in `clk_100m`.
+  It does not connect to `vbuf_readdata` or `vbuf_writedata`.
+- `0x5F` records frame/line/active-pixel totals and all-black/all-white state
+  from the already-registered `hdmi_out_*` signals in `hdmi_tx_clk`. It does
+  not hash, copy, or modify pixels.
+
+The observer arms only after an accepted MiSTer MagiK route and two owned
+vblanks. The first fault freezes its native domain and requests stable mailbox
+snapshots from the other domains. A missing clock produces a partial snapshot
+after 4,096 `clk_sys` cycles. Reads never clear or mutate evidence.
+
+The diagnostic ABI is separate from latch protocol v5. Existing commands
+`0x57`–`0x5C`, capability bits, responses, ownership, and apply priority remain
+unchanged. Every diagnostic response has its own magic, fixed length, schema,
+and CRC-16/CCITT-FALSE value.
+
+## Collection
+
+Use the authenticated support bundle after a failure, before restarting or
+reposting:
+
+```text
+scripts/agent device diagnostics --out PATH
+```
+
+The device agent reads control → Avalon → HDMI → control while holding the
+existing FPGA UIO advisory lock. It retries the complete set once for CRC or
+generation instability, checks Main's FPGA-owner epoch before and after, and
+writes `fpga-video-diagnostics.json` beside the existing bundle members. SSH
+fallback explicitly reports the record unavailable; it never reads raw UIO.
+
+Do not poll these commands continuously. The Rust launcher presenter uses the
+same advisory lock for its complete latch transaction; legacy Main UIO paths
+do not. Collection is therefore restricted to a stable `LauncherActive`
+ownership interval, and owner-epoch, launcher-state, or confirmed latch-owner
+changes invalidate the snapshot.
+
+Classifications are deliberately conservative: `legacy_control`,
+`avalon_no_reads`, `avalon_stall_or_return`, `final_black`, `final_white`,
+`final_timing`, `control_or_clock`, `partial`, or `unclassified`. They identify
+where retained evidence first disagreed; they do not prove a repair, HDMI sink
+health, or SDRAM data correctness.
+
+## Release gates
+
+The FPGA fast gate checks the separate generated contract, all native-domain
+fault-injection simulations, full responses past word 15, final response
+priority, immutable latch hashes, exact pinned Menu integration, passive cone
+boundaries, and explicit synchronizer identification. Wide diagnostic records
+are held immutable before acknowledgement, sampled twice in `clk_sys`, and
+covered by nonempty 8 ns net-delay and 2 ns bus-skew constraints. The synthesis
+workflow applies the same analysis-only exclusive-to-asynchronous clock-group
+change to stock, pre-observer, and final work trees so TimeQuest analyzes those
+skew constraints without biasing the observer delta. No generated clock or
+functional RTL is changed.
+
+The matched seed-1 Quartus signoff builds stock Menu, the exact pre-observer
+latch revision pinned by `video-diagnostics-baseline.commit`, and the final
+diagnostic RBF. Functional warning, constraint-identity, and synchronizer drift
+remain stock-versus-final checks. Observer overhead is final relative to the
+pre-observer build: no added unconstrained output paths, no more than 0.10 ns
+slack degradation, no more than 800 ALMs or 1,500 registers, and no added DSP
+or block-memory use. The final build must also have zero TNS and at least 0.20
+ns setup and hold slack. A changed RBF still requires the normal release
+qualification before device deployment.
+
+Internal `ascal.vhd` probes, SDRAM data inspection, BRAM history, SignalTap,
+writable diagnostics, and pixel-rate CRCs are explicitly outside Phase 2. They
+require a new evidence-backed plan.

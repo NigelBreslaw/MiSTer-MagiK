@@ -38,6 +38,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
     "cargo_agent": (
         "mister/tools/agent/Cargo.lock",
         "crates/framebuffer-stream/Cargo.lock",
+        "mister/platform/contracts/video-diagnostics/Cargo.toml",
+        "mister/platform/contracts/video-diagnostics/src/**/*.rs",
     ),
     "cargo_dist": (
         "apps/mister/Cargo.lock",
@@ -95,6 +97,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/tools/agent/Cargo.lock",
         "mister/tools/agent/Cargo.toml",
         "mister/tools/agent/src/**/*.rs",
+        "mister/platform/contracts/video-diagnostics/Cargo.toml",
+        "mister/platform/contracts/video-diagnostics/src/**/*.rs",
         "agent-cli/Cargo.lock",
         "mister/platform/runtime/Cargo.toml",
         "mister/platform/runtime/build.rs",
@@ -145,6 +149,8 @@ GROUPS: dict[str, tuple[str, ...]] = {
         "mister/tools/agent/Cargo.lock",
         "mister/tools/agent/Cargo.toml",
         "mister/tools/agent/src/**/*.rs",
+        "mister/platform/contracts/video-diagnostics/Cargo.toml",
+        "mister/platform/contracts/video-diagnostics/src/**/*.rs",
         "crates/framebuffer-stream/Cargo.lock",
         "crates/framebuffer-stream/Cargo.toml",
         "crates/framebuffer-stream/src/**/*.rs",

@@ -8,6 +8,7 @@ on:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
       - "mister/platform/contracts/latch/**"
+      - "mister/platform/contracts/video-diagnostics/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - "scripts/checks/check-latch-protocol.py"
@@ -15,20 +16,24 @@ on:
       - "scripts/checks/check-fpga-latch-integration.py"
       - "scripts/checks/check-fpga-quartus-delta.py"
       - "scripts/checks/generate-latch-protocol.py"
+      - "scripts/checks/generate-video-diagnostics-protocol.py"
       - "scripts/checks/verify-crt-qualification-evidence.py"
       - "scripts/checks/verify-fpga-rbf-manifest.py"
       - "scripts/platform-component-inputs/fpga-v0.1.txt"
       - "scripts/release/platform/platform-component-id.py"
       - "scripts/tests/test-crt-qualification-evidence.py"
       - "scripts/tests/test-fpga-rbf-manifest.py"
+      - "scripts/tests/test-fpga-quartus-delta.py"
       - "scripts/tests/test-fpga-vblank-latch.sh"
       - "scripts/tests/test-platform-component-id.py"
       - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
+      - ".github/workflows/platform-bundle.yml"
   push:
     paths:
       - "mister/platform/fpga/menu-vblank-latch/**"
       - "mister/platform/contracts/latch/**"
+      - "mister/platform/contracts/video-diagnostics/**"
       - "scripts/*fpga*latch*"
       - "scripts/build-fpga-vblank-latch-core.sh"
       - "scripts/checks/check-latch-protocol.py"
@@ -36,16 +41,19 @@ on:
       - "scripts/checks/check-fpga-latch-integration.py"
       - "scripts/checks/check-fpga-quartus-delta.py"
       - "scripts/checks/generate-latch-protocol.py"
+      - "scripts/checks/generate-video-diagnostics-protocol.py"
       - "scripts/checks/verify-crt-qualification-evidence.py"
       - "scripts/checks/verify-fpga-rbf-manifest.py"
       - "scripts/platform-component-inputs/fpga-v0.1.txt"
       - "scripts/release/platform/platform-component-id.py"
       - "scripts/tests/test-crt-qualification-evidence.py"
       - "scripts/tests/test-fpga-rbf-manifest.py"
+      - "scripts/tests/test-fpga-quartus-delta.py"
       - "scripts/tests/test-fpga-vblank-latch.sh"
       - "scripts/tests/test-platform-component-id.py"
       - "agent-cli/src/platform_bundle.rs"
       - ".github/workflows/fpga-latch-fast.yml"
+      - ".github/workflows/platform-bundle.yml"
 
 permissions:
   contents: read
@@ -81,6 +89,10 @@ jobs:
           path: build/Menu_MiSTer
       - name: Run warning-clean Icarus simulation
         run: scripts/tests/test-fpga-vblank-latch.sh
+      - name: Verify latch and passive diagnostics contracts
+        run: scripts/checks/check-latch-protocol.py
+      - name: Verify Quartus resource and timing policy fixtures
+        run: python3 scripts/tests/test-fpga-quartus-delta.py
       - name: Lint custom RTL
         run: >-
           verilator --lint-only --Wall --Wno-fatal
@@ -88,6 +100,9 @@ jobs:
           mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv
           mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv
           mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv
+          mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv
       - name: Verify pinned patch integration and opcode ownership
         run: scripts/checks/check-fpga-latch-integration.py --simulate build/Menu_MiSTer
       - name: Measure reachable custom RTL coverage

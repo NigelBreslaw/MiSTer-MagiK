@@ -105,7 +105,7 @@ active.
 - [x] Latch-only requirements and requirement-to-test matrix
 - [x] Extracted RTL and reduced Menu integration patch
 - [x] Complete reachable RTL and functional requirement coverage
-- [x] Passing matched stock-versus-patched Quartus delta
+- [x] Passing matched stock, pre-observer, and final Quartus delta
 - [x] Exact-RBF manifest and deployment verification
 - [x] Matched primary-device 960x540 performance and latch integrity
 - [x] Deliberate overflow and recovery

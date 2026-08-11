@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# Inputs that can change the stock or patched Quartus synthesis result.
+# Inputs that can change the stock, pre-observer, or final Quartus result.
 # Validation and workflow-only inputs intentionally belong to fpga-v0.1.txt,
 # so fixing qualification logic does not force identical RBFs to be rebuilt.
 mister/platform/fpga/menu-vblank-latch

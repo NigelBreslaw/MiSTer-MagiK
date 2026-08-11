@@ -153,12 +153,56 @@ def main() -> None:
     diagnostics_avalon = source_dir / "mister_magik_video_diagnostics_avalon.sv"
     diagnostics_output = source_dir / "mister_magik_video_diagnostics_output.sv"
     diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
+    diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
+    control_source = diagnostics_control.read_text()
+    avalon_source = diagnostics_avalon.read_text()
+    output_source = diagnostics_output.read_text()
+    if re.search(r"\bvbuf_(?:read|write)data\b", avalon_source):
+        fail("passive Avalon diagnostics source must not expose framebuffer data")
+    if avalon_source.count('ASYNC_REG = "TRUE"') < 5:
+        fail("passive Avalon diagnostics synchronizers are not explicitly identified")
+    if output_source.count('ASYNC_REG = "TRUE"') < 8:
+        fail("final HDMI diagnostics synchronizers are not explicitly identified")
+    if control_source.count('ASYNC_REG = "TRUE"') < 9:
+        fail("control diagnostics synchronizers are not explicitly identified")
+    control_cdc_bindings = {
+        "hdmi_vbl": "control_vbl_meta <= hdmi_vbl;",
+        "reset_req": "control_reset_req_meta <= reset_req;",
+        "reset_out": "control_reset_out_meta <= reset_out;",
+        "pll_adjust_locked": "control_pll_lock_meta <= pll_adjust_locked;",
+    }
+    for raw_name, binding in control_cdc_bindings.items():
+        if binding not in control_source or len(re.findall(rf"\b{raw_name}\b", control_source)) != 2:
+            fail(f"control diagnostics consumes raw asynchronous {raw_name} outside its first stage")
+    if "cfg_done_meta" in control_source or "cfg_done_sys" in control_source:
+        fail("clk_sys cfg_done was unnecessarily synchronized in control diagnostics")
+    diagnostics_sdc_text = diagnostics_sdc.read_text()
+    if "get_registers -nowarn -hierarchical" in diagnostics_sdc_text:
+        fail("diagnostic SDC uses unsupported Quartus get_registers syntax")
+    if "get_registers -nowarn -no_duplicates" not in diagnostics_sdc_text:
+        fail("diagnostic SDC does not use exact non-duplicated register collections")
+    if diagnostics_sdc_text.count("set_net_delay -max") != 1:
+        fail("diagnostic bundled-data net-delay constraint is missing")
+    if diagnostics_sdc_text.count("set_max_skew -from") != 1:
+        fail("diagnostic bundled-data skew constraint is missing")
+    if diagnostics_sdc_text.count("magik_require_registers") < 8:
+        fail("diagnostic CDC constraints do not reject empty node collections")
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
         subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
         subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
+        sys_top_sdc = work / "sys/sys_top.sdc"
+        sdc_bytes = sys_top_sdc.read_bytes()
+        clock_group = b"set_clock_groups -exclusive"
+        if sdc_bytes.count(clock_group) != 1:
+            fail("pinned Menu clock-group constraint changed unexpectedly")
+        sys_top_sdc.write_bytes(
+            sdc_bytes.replace(clock_group, b"set_clock_groups -asynchronous")
+        )
+        if sys_top_sdc.read_bytes().count(b"set_clock_groups -asynchronous") != 1:
+            fail("diagnostic clock groups were not marked asynchronous")
         for name, expected in IMMUTABLE_LATCH_SHA256.items():
             actual = hashlib.sha256((source_dir / name).read_bytes()).hexdigest()
             if actual != expected:
@@ -172,6 +216,7 @@ def main() -> None:
             diagnostics_avalon,
             diagnostics_output,
             diagnostics_protocol,
+            diagnostics_sdc,
         ):
             shutil.copy2(source, work / "sys" / source.name)
         with (work / "menu.qsf").open("a") as output:
@@ -188,6 +233,8 @@ def main() -> None:
                 "sys/mister_magik_video_diagnostics_avalon.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_video_diagnostics_output.sv\n"
+                "set_global_assignment -name SDC_FILE "
+                "sys/mister_magik_video_diagnostics.sdc\n"
             )
 
         patched = (work / "sys/sys_top.v").read_text()
@@ -208,6 +255,12 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        if re.search(
+            r"\b(?:LFB_|FB_|hdmi_out_|vbuf_|reset_req)[A-Za-z0-9_]*\s*"
+            r"(?:<=|=)\s*magik_diag_",
+            patched,
+        ):
+            fail("diagnostic output reaches a functional datapath assignment")
 
         avalon_binding = re.search(
             r"mister_magik_video_diagnostics_avalon\s+"
@@ -298,6 +351,7 @@ def main() -> None:
             "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_output.sv",
+            "SDC_FILE sys/mister_magik_video_diagnostics.sdc",
         )
         bad_assignments = [
             assignment for assignment in assignments if qsf_text.count(assignment) != 1

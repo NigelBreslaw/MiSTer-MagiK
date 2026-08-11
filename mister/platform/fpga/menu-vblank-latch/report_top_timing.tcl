@@ -22,5 +22,20 @@ report_timing \
 	-detail full_path \
 	-file output_files/menu.top-hold-paths.rpt
 
+report_max_skew \
+	-panel_name "MagiK Diagnostic CDC Skew" \
+	-npaths 50 \
+	-detail path_only \
+	-file output_files/menu.magik-diagnostic-cdc-skew.rpt
+report_net_delay \
+	-panel_name "MagiK Diagnostic CDC Net Delay" \
+	-nworst 50 \
+	-file output_files/menu.magik-diagnostic-cdc-net-delay.rpt
+report_metastability \
+	-nchains 1000 \
+	-file output_files/menu.magik-diagnostic-metastability.rpt
+report_exceptions \
+	-file output_files/menu.timing-exceptions.rpt
+
 delete_timing_netlist
 project_close

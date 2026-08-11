@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Compare stock and patched Quartus reports for FPGA release signoff."""
+"""Compare stock, pre-observer, and final Quartus reports for FPGA signoff."""
 
 from __future__ import annotations
 
@@ -28,9 +28,16 @@ MTBF_VALUE_RE = re.compile(rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s
 UNCONSTRAINED_RE = re.compile(r"\bunconstrained\b|not fully constrained", re.IGNORECASE)
 UNCONSTRAINED_OUTPUT_RE = re.compile(r"Unconstrained Output Port Paths\s*;\s*(\d+)\s*;", re.IGNORECASE)
 UNCALCULATED_FRACTION_RE = re.compile(r"Fraction of Chains for which MTBFs Could Not be Calculated:\s*([0-9.]+)", re.IGNORECASE)
-SYNC_ASSIGN_RE = re.compile(r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED_IF_ASYNCHRONOUS.*;\s*(vbl_meta|vbl_sys)\s*;", re.IGNORECASE)
+SYNC_ASSIGN_RE = re.compile(
+    r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED_IF_ASYNCHRONOUS",
+    re.IGNORECASE,
+)
+SOURCE_ASSIGNMENTS_RE = re.compile(
+    r"^\s*;\s*Source assignments for\s+(.+?)\s*;\s*$",
+    re.IGNORECASE,
+)
 RESOURCE_RE = re.compile(
-    r"^\s*(Total (?:logic elements|registers|block memory bits|DSP Blocks))\s*[:;]\s*([\d,]+)",
+    r"^\s*;?\s*((?:Logic utilization \(in ALMs\)|Total (?:logic elements|registers|block memory bits|DSP Blocks)))\s*[:;]\s*([\d,]+)",
     re.IGNORECASE,
 )
 BOOTSTRAP_BLACK_LOOP_WARNING = "332125:Found combinational loop of 6 nodes"
@@ -42,6 +49,82 @@ EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
         BOOTSTRAP_BLACK_COMBOUT_WARNING,
         BOOTSTRAP_BLACK_DATA_WARNING,
     )
+)
+MINIMUM_SLACK_NS = 0.20
+MAXIMUM_SLACK_DEGRADATION_NS = 0.10
+MAXIMUM_LOGIC_ELEMENT_DELTA = 800
+MAXIMUM_REGISTER_DELTA = 1_500
+EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS = 22
+EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
+    *tuple(
+        f"mister_magik_video_diagnostics_control:magik_video_diagnostics|{name}"
+        for name in (
+            "avalon_fault_meta",
+            "avalon_fault_sys",
+            "output_fault_meta",
+            "output_fault_sys",
+            "avalon_ack_meta",
+            "avalon_ack_sys",
+            "output_ack_meta",
+            "output_ack_sys",
+            "heartbeat_meta",
+            "heartbeat_sys",
+            "control_vbl_meta",
+            "control_vbl_sys",
+            "control_reset_req_meta",
+            "control_reset_req_sys",
+            "control_reset_out_meta",
+            "control_reset_out_sys",
+            "control_pll_lock_meta",
+            "control_pll_lock_sys",
+        )
+    ),
+    *tuple(
+        f"mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|{name}"
+        for name in (
+            "armed_meta",
+            "armed",
+            "request_meta",
+            "request_sync",
+            "route_meta",
+            "route_sync",
+            "frame_meta",
+            "frame_sync",
+            "reset_meta",
+            "reset_sync",
+        )
+    ),
+    *tuple(
+        f"mister_magik_video_diagnostics_output:magik_video_diagnostics_output|{name}"
+        for name in (
+            "armed_meta",
+            "armed",
+            "request_meta",
+            "request_sync",
+            "route_meta",
+            "route_sync",
+            "direct_meta",
+            "direct_sync",
+            "csync_meta",
+            "csync_sync",
+            "reset_meta",
+            "reset_sync",
+            "cfg_meta",
+            "cfg_sync",
+            "pll_meta",
+            "pll_sync",
+        )
+    ),
+)
+EXPECTED_CDC_ANALYSIS_LABELS = frozenset(
+    {"avalon_payload", "output_payload", "avalon_route", "output_route", "fault_trigger"}
+)
+DIAGNOSTIC_REPORT_NAMES = frozenset(
+    {
+        "menu.magik-diagnostic-cdc-skew.rpt",
+        "menu.magik-diagnostic-cdc-net-delay.rpt",
+        "menu.magik-diagnostic-metastability.rpt",
+    }
 )
 
 
@@ -56,14 +139,44 @@ def warning_identity(match: re.Match[str]) -> str:
     return f"{code}:{normalize_space(match.group(2))}"
 
 
-def read_inputs(paths: Iterable[Path]) -> str:
+def parse_sync_assignments(lines: Iterable[str]) -> set[str]:
+    assignments: set[str] = set()
+    hierarchy: str | None = None
+    for line in lines:
+        source_assignments = SOURCE_ASSIGNMENTS_RE.match(line)
+        if source_assignments:
+            hierarchy = normalize_space(source_assignments.group(1))
+            continue
+        if not SYNC_ASSIGN_RE.search(line):
+            continue
+        fields = [normalize_space(field) for field in line.split(";") if field.strip()]
+        if not fields:
+            continue
+        target = fields[-1]
+        if hierarchy and "|" not in target:
+            target = f"{hierarchy}|{target}"
+        assignments.add(target.lower())
+    return assignments
+
+
+def read_inputs(paths: Iterable[Path]) -> tuple[str, str | None, dict[str, str]]:
     chunks: list[str] = []
+    fitter_summaries: list[str] = []
+    diagnostic_reports: dict[str, str] = {}
     for path in paths:
         try:
-            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+            text = path.read_text(encoding="utf-8", errors="replace")
         except OSError as error:
             raise ValueError(f"cannot read {path}: {error}") from error
-    return "\n".join(chunks)
+        if path.name in DIAGNOSTIC_REPORT_NAMES:
+            if path.name in diagnostic_reports:
+                raise ValueError(f"duplicate diagnostic timing report: {path.name}")
+            diagnostic_reports[path.name] = text
+            continue
+        chunks.append(text)
+        if path.name.endswith(".fit.summary"):
+            fitter_summaries.append(text)
+    return "\n".join(chunks), "\n".join(fitter_summaries) or None, diagnostic_reports
 
 
 def finite_number(value: str) -> float | None:
@@ -74,7 +187,11 @@ def finite_number(value: str) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, object]:
+def parse_report(
+    text: str,
+    synchronizer_re: re.Pattern[str],
+    fitter_summary: str | None = None,
+) -> dict[str, object]:
     lines = text.splitlines()
     warnings: Counter[str] = Counter()
     slacks: dict[str, list[float]] = {"setup": [], "hold": []}
@@ -84,7 +201,8 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
     custom_sync_lines: list[int] = []
     custom_sync_mtbf = False
     resources: dict[str, int] = {}
-    sync_assignments: set[str] = set()
+    sync_assignments = parse_sync_assignments(lines)
+    diagnostic_analysis_labels: Counter[str] = Counter()
     uncalculated_fractions: list[float] = []
     unconstrained_output_paths: list[int] = []
     timing_section: str | None = None
@@ -135,9 +253,11 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
         if synchronizer_re.search(line):
             custom_sync_lines.append(index)
 
-        sync_assignment = SYNC_ASSIGN_RE.search(line)
-        if sync_assignment:
-            sync_assignments.add(sync_assignment.group(1).lower())
+        analysis_label = re.search(
+            r"MagiK diagnostics CDC analysis applied:\s*([a-z_]+)", line
+        )
+        if analysis_label:
+            diagnostic_analysis_labels[analysis_label.group(1)] += 1
 
         fraction = UNCALCULATED_FRACTION_RE.search(line)
         if fraction:
@@ -145,9 +265,14 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
             if value is not None:
                 uncalculated_fractions.append(value)
 
+    # Aggregated inputs also contain Analysis & Synthesis estimates. Resource
+    # budgets must use the final fitter summary when Quartus emitted one.
+    for line in (fitter_summary or text).splitlines():
         resource = RESOURCE_RE.search(line)
         if resource:
-            resources[normalize_space(resource.group(1)).lower()] = int(resource.group(2).replace(",", ""))
+            resources[normalize_space(resource.group(1)).lower()] = int(
+                resource.group(2).replace(",", "")
+            )
 
     for index in custom_sync_lines:
         window = " ".join(lines[index : min(index + 6, len(lines))])
@@ -168,6 +293,7 @@ def parse_report(text: str, synchronizer_re: re.Pattern[str]) -> dict[str, objec
         "custom_sync_mtbf": custom_sync_mtbf,
         "resources": resources,
         "sync_assignments": sync_assignments,
+        "diagnostic_analysis_labels": diagnostic_analysis_labels,
         "uncalculated_fractions": uncalculated_fractions,
         "unconstrained_output_paths": unconstrained_output_paths,
     }
@@ -203,8 +329,97 @@ def estimated_calculable_chains(chain_counts: list[int], uncalculated_fractions:
     return int(math.floor(total * (1.0 - uncalculated_fraction) + 0.5))
 
 
-def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[str], dict[str, object]]:
+def validate_diagnostic_reports(
+    reports: dict[str, str], analysis_labels: Counter[str]
+) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
+    missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
+    unexpected_reports = sorted(reports.keys() - DIAGNOSTIC_REPORT_NAMES)
+    if missing_reports or unexpected_reports:
+        reasons.append("diagnostic_cdc_report_missing")
+
+    labels_valid = set(analysis_labels) == EXPECTED_CDC_ANALYSIS_LABELS and all(
+        analysis_labels[label] >= 1 for label in EXPECTED_CDC_ANALYSIS_LABELS
+    )
+    if not labels_valid:
+        reasons.append("diagnostic_cdc_analysis_missing")
+
+    analysis_counts: dict[str, int | None] = {}
+    minimum_slacks: dict[str, float | None] = {}
+    for name, command in (
+        ("menu.magik-diagnostic-cdc-skew.rpt", "set_max_skew"),
+        ("menu.magik-diagnostic-cdc-net-delay.rpt", "set_net_delay"),
+    ):
+        text = reports.get(name, "")
+        if not text.strip() or re.search(
+            r"\bno (?:valid )?(?:paths?|results?)\b", text, re.IGNORECASE
+        ):
+            reasons.append("diagnostic_cdc_paths_missing")
+            analysis_counts[name] = None
+            minimum_slacks[name] = None
+            continue
+        command_matches = list(re.finditer(rf"\b{command}\b", text, re.IGNORECASE))
+        analysis_counts[name] = len(command_matches)
+        if len(command_matches) != len(EXPECTED_CDC_ANALYSIS_LABELS):
+            reasons.append("diagnostic_cdc_analysis_count")
+        section_slacks: list[float] = []
+        for index, match in enumerate(command_matches):
+            end = (
+                command_matches[index + 1].start()
+                if index + 1 < len(command_matches)
+                else len(text)
+            )
+            section = text[match.start():end]
+            slack_values = [
+                value
+                for value in (
+                    finite_number(slack.group(1))
+                    for slack in re.finditer(
+                        rf"\bslack\b[^\r\n]*?({NUMBER})", section, re.IGNORECASE
+                    )
+                )
+                if value is not None
+            ]
+            if not slack_values:
+                reasons.append("diagnostic_cdc_slack_missing")
+            else:
+                section_slacks.append(min(slack_values))
+        minimum_slacks[name] = min(section_slacks, default=None)
+        if section_slacks and min(section_slacks) < 0:
+            reasons.append("diagnostic_cdc_slack_negative")
+
+    metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
+    metastability_lower = metastability.lower()
+    missing_metastability_chains = [
+        suffix
+        for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES
+        if suffix not in metastability_lower
+    ]
+    if not metastability.strip() or re.search(
+        r"\bno (?:valid )?(?:chains?|results?)\b", metastability, re.IGNORECASE
+    ):
+        reasons.append("diagnostic_metastability_report_missing")
+    elif missing_metastability_chains:
+        reasons.append("diagnostic_metastability_chain_missing")
+
+    return sorted(set(reasons)), {
+        "diagnostic_cdc_reports": sorted(reports),
+        "diagnostic_cdc_analysis_labels": dict(sorted(analysis_labels.items())),
+        "diagnostic_cdc_analysis_counts": analysis_counts,
+        "diagnostic_cdc_minimum_slacks": minimum_slacks,
+        "missing_diagnostic_metastability_chains": missing_metastability_chains,
+    }
+
+
+def compare(
+    stock: dict[str, object],
+    baseline: dict[str, object],
+    patched: dict[str, object],
+) -> tuple[list[str], dict[str, object]]:
+    reasons: list[str] = []
+    # Warning, constraint-identity, and CDC checks describe functional drift
+    # from upstream Menu. Observer cost is the final build relative to the
+    # exact patched latch build before the observer was introduced.
     stock_warnings = stock["warnings"]
     patched_warnings = patched["warnings"]
     assert isinstance(stock_warnings, Counter) and isinstance(patched_warnings, Counter)
@@ -225,20 +440,64 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     added_unconstrained = counter_delta(stock_unconstrained, patched_unconstrained)
     if added_unconstrained:
         reasons.append("unconstrained_added")
-    stock_output_paths = stock["unconstrained_output_paths"]
+    baseline_output_paths = baseline["unconstrained_output_paths"]
     patched_output_paths = patched["unconstrained_output_paths"]
-    assert isinstance(stock_output_paths, list) and isinstance(patched_output_paths, list)
-    if not stock_output_paths or not patched_output_paths:
+    assert isinstance(baseline_output_paths, list) and isinstance(patched_output_paths, list)
+    if not baseline_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
+    elif max(patched_output_paths) > max(baseline_output_paths):
+        reasons.append("unconstrained_output_paths_added")
 
     slacks = patched["slacks"]
+    baseline_slacks = baseline["slacks"]
     assert isinstance(slacks, dict)
+    assert isinstance(baseline_slacks, dict)
     for kind in ("setup", "hold"):
         values = slacks[kind]
+        baseline_values = baseline_slacks[kind]
+        if not baseline_values:
+            reasons.append(f"baseline_{kind}_slack_missing")
         if not values:
             reasons.append(f"{kind}_slack_missing")
-        elif min(values) < 0:
-            reasons.append(f"{kind}_slack_negative")
+        else:
+            patched_min = min(values)
+            if patched_min < MINIMUM_SLACK_NS:
+                reasons.append(f"{kind}_slack_below_minimum")
+            if (
+                baseline_values
+                and min(baseline_values) - patched_min > MAXIMUM_SLACK_DEGRADATION_NS
+            ):
+                reasons.append(f"{kind}_slack_degradation")
+
+    baseline_resources = baseline["resources"]
+    patched_resources = patched["resources"]
+    assert isinstance(baseline_resources, dict) and isinstance(patched_resources, dict)
+    logic_resource = (
+        "logic utilization (in alms)"
+        if "logic utilization (in alms)" in baseline_resources
+        or "logic utilization (in alms)" in patched_resources
+        else "total logic elements"
+    )
+    resource_limits = {
+        logic_resource: MAXIMUM_LOGIC_ELEMENT_DELTA,
+        "total registers": MAXIMUM_REGISTER_DELTA,
+        "total block memory bits": 0,
+        "total dsp blocks": 0,
+    }
+    resource_deltas: dict[str, int | None] = {}
+    for resource, limit in resource_limits.items():
+        if resource not in baseline_resources or resource not in patched_resources:
+            reasons.append("resource_summary_missing")
+            resource_deltas[resource] = None
+            continue
+        delta = patched_resources[resource] - baseline_resources[resource]
+        resource_deltas[resource] = delta
+        if delta > limit:
+            reasons.append(
+                "logic_alms_delta"
+                if resource == "logic utilization (in alms)"
+                else resource.replace("total ", "").replace(" ", "_") + "_delta"
+            )
 
     tns = patched["tns"]
     assert isinstance(tns, list)
@@ -251,26 +510,52 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
     assert isinstance(chain_counts, list)
     if not chain_counts or max(chain_counts) <= 0:
         reasons.append("synchronizer_report_missing")
-    stock_chain_counts = stock["chain_counts"]
-    assert isinstance(stock_chain_counts, list)
+    baseline_chain_counts = baseline["chain_counts"]
+    assert isinstance(baseline_chain_counts, list)
     sync_assignments = patched["sync_assignments"]
     assert isinstance(sync_assignments, set)
-    custom_assignment_seen = sync_assignments == {"vbl_meta", "vbl_sys"}
-    stock_fractions = stock["uncalculated_fractions"]
+    missing_sync_assignments = [
+        suffix
+        for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES
+        if not any(assignment.endswith(suffix) for assignment in sync_assignments)
+    ]
+    custom_assignment_seen = not missing_sync_assignments
+    baseline_fractions = baseline["uncalculated_fractions"]
     patched_fractions = patched["uncalculated_fractions"]
-    assert isinstance(stock_fractions, list) and isinstance(patched_fractions, list)
-    stock_calculable_chains = estimated_calculable_chains(stock_chain_counts, stock_fractions)
+    assert isinstance(baseline_fractions, list) and isinstance(patched_fractions, list)
+    baseline_calculable_chains = estimated_calculable_chains(
+        baseline_chain_counts, baseline_fractions
+    )
     patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
+    chain_delta_exact = (
+        baseline_chain_counts
+        and chain_counts
+        and max(chain_counts)
+        == max(baseline_chain_counts) + EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS
+    )
     custom_delta_calculable = (
-        stock_calculable_chains is not None
+        baseline_calculable_chains is not None
         and patched_calculable_chains is not None
-        and patched_calculable_chains >= stock_calculable_chains + 1
+        and patched_calculable_chains
+        == baseline_calculable_chains + EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
-    elif not custom_delta_calculable:
+    if not chain_delta_exact:
+        reasons.append("custom_synchronizer_chain_count")
+    if not custom_delta_calculable:
         reasons.append("custom_synchronizer_mtbf_missing")
 
+    analysis_labels = patched["diagnostic_analysis_labels"]
+    diagnostic_reports = patched["diagnostic_reports"]
+    assert isinstance(analysis_labels, Counter) and isinstance(diagnostic_reports, dict)
+    diagnostic_reasons, diagnostic_details = validate_diagnostic_reports(
+        diagnostic_reports, analysis_labels
+    )
+    reasons.extend(diagnostic_reasons)
+
+    stock_output_paths = stock["unconstrained_output_paths"]
+    assert isinstance(stock_output_paths, list)
     details = {
         "stock_warning_count": sum(stock_warnings.values()),
         "patched_warning_count": sum(patched_warnings.values()),
@@ -282,14 +567,20 @@ def compare(stock: dict[str, object], patched: dict[str, object]) -> tuple[list[
         "patched_hold_slack_min": min(slacks["hold"]) if slacks["hold"] else None,
         "patched_tns_max_abs": max((abs(value) for value in tns), default=None),
         "patched_synchronizer_chains": max(chain_counts, default=None),
-        "stock_calculable_synchronizer_chains": stock_calculable_chains,
+        "baseline_synchronizer_chains": max(baseline_chain_counts, default=None),
+        "baseline_calculable_synchronizer_chains": baseline_calculable_chains,
         "patched_calculable_synchronizer_chains": patched_calculable_chains,
+        "missing_sync_assignments": missing_sync_assignments,
         "custom_sync_seen": custom_assignment_seen,
         "custom_sync_mtbf": custom_delta_calculable,
         "stock_unconstrained_output_paths": max(stock_output_paths, default=None),
+        "baseline_unconstrained_output_paths": max(baseline_output_paths, default=None),
         "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
         "stock_resources": stock["resources"],
+        "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],
+        "resource_deltas": resource_deltas,
+        **diagnostic_details,
     }
     return sorted(set(reasons)), details
 
@@ -307,6 +598,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stock", action="append", type=Path, required=True, help="stock log/report; repeatable")
     parser.add_argument("--patched", action="append", type=Path, required=True, help="patched log/report; repeatable")
     parser.add_argument(
+        "--baseline",
+        action="append",
+        type=Path,
+        required=True,
+        help="exact pre-observer patched log/report; repeatable",
+    )
+    parser.add_argument(
         "--synchronizer-regex",
         default=r"mister_magik_vblank_latch.*(?:vbl_meta|vbl_sys)|(?:vbl_meta|vbl_sys).*mister_magik_vblank_latch",
         help="case-insensitive regex identifying the custom synchronizer report row",
@@ -316,12 +614,19 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         sync_re = re.compile(args.synchronizer_regex, re.IGNORECASE)
-        stock = parse_report(read_inputs(args.stock), sync_re)
-        patched = parse_report(read_inputs(args.patched), sync_re)
+        stock_text, stock_fitter, stock_diagnostic_reports = read_inputs(args.stock)
+        baseline_text, baseline_fitter, baseline_diagnostic_reports = read_inputs(args.baseline)
+        patched_text, patched_fitter, patched_diagnostic_reports = read_inputs(args.patched)
+        stock = parse_report(stock_text, sync_re, stock_fitter)
+        baseline = parse_report(baseline_text, sync_re, baseline_fitter)
+        patched = parse_report(patched_text, sync_re, patched_fitter)
+        stock["diagnostic_reports"] = stock_diagnostic_reports
+        baseline["diagnostic_reports"] = baseline_diagnostic_reports
+        patched["diagnostic_reports"] = patched_diagnostic_reports
     except (ValueError, re.error) as error:
         parser.error(str(error))
 
-    reasons, details = compare(stock, patched)
+    reasons, details = compare(stock, baseline, patched)
     valid = not reasons
     result = {"valid": int(valid), "invalid_reason": ",".join(reasons) if reasons else "ok", **details}
     if args.json:

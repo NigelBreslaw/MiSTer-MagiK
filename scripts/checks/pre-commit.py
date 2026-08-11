@@ -93,6 +93,11 @@ CRATE_FORMATTERS = (
         "mister/platform/contracts/latch",
         "mister/platform/contracts/latch/Cargo.toml",
     ),
+    (
+        "video-diagnostics-contract.format",
+        "mister/platform/contracts/video-diagnostics",
+        "mister/platform/contracts/video-diagnostics/Cargo.toml",
+    ),
     ("magik-core.format", "crates/magik-core", "crates/magik-core/Cargo.toml"),
     (
         "media-contract.format",

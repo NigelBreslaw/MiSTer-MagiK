@@ -4,11 +4,13 @@
 # MiSTer MagiK FPGA component identity inputs, format v0.1.
 mister/platform/fpga/menu-vblank-latch
 mister/platform/contracts/latch
+mister/platform/contracts/video-diagnostics
 mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
 scripts/install-quartus-lite-docker.sh
 scripts/checks/check-latch-protocol.py
 scripts/checks/generate-latch-protocol.py
+scripts/checks/generate-video-diagnostics-protocol.py
 scripts/checks/check-fpga-latch-integration.py
 scripts/checks/check-fpga-latch-coverage.py
 scripts/checks/check-fpga-quartus-delta.py
@@ -16,6 +18,7 @@ scripts/checks/verify-fpga-rbf-manifest.py
 scripts/checks/verify-crt-qualification-evidence.py
 scripts/tests/test-fpga-vblank-latch.sh
 scripts/tests/test-fpga-rbf-manifest.py
+scripts/tests/test-fpga-quartus-delta.py
 scripts/tests/test-crt-qualification-evidence.py
 scripts/tests/test-platform-component-id.py
 .github/workflows/fpga-latch-fast.yml

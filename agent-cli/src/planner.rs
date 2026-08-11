@@ -18,6 +18,7 @@ const MISTER_APP_COMPILED_INPUTS: &[&str] = &[
     "crates/screenshot-parade",
     "mister/platform/contracts/latch",
     "mister/platform/contracts/scanout",
+    "mister/platform/contracts/video-diagnostics",
     "mister/platform/runtime",
 ];
 
@@ -1026,6 +1027,12 @@ fn add_path_operations(
         "scanout-contract",
         out,
     );
+    add_crate(
+        path,
+        "mister/platform/contracts/video-diagnostics",
+        "video-diagnostics-contract",
+        out,
+    );
     add_crate(path, "mister/tools/agent", "mister-agent", out);
     add_crate(path, "mister/tools/manager", "mister-manager", out);
 }
@@ -1527,6 +1534,29 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].args, ["scripts/tests/test-pre-commit.py"]);
+    }
+
+    #[test]
+    fn video_diagnostics_contract_changes_select_crate_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["mister/platform/contracts/video-diagnostics/src/lib.rs".into()],
+        )
+        .unwrap();
+        let ids: BTreeSet<_> = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect();
+        for id in [
+            "video-diagnostics-contract.format",
+            "video-diagnostics-contract.tests",
+            "video-diagnostics-contract.clippy",
+        ] {
+            assert!(ids.contains(id), "missing {id}");
+        }
     }
 
     #[test]
