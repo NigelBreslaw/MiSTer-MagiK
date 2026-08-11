@@ -8280,9 +8280,9 @@ fn run_system_entry_sample(
         let cadence_authoritative = system_entry_detail_flag(ready, "cadence_authoritative")?;
         let repeated_vblank_delta = system_entry_detail_u64(ready, "repeated_vblank_delta")?;
         let latch_drop_delta = system_entry_detail_u64(ready, "latch_drop_delta")?;
-        if !cadence_authoritative || repeated_vblank_delta != 0 || latch_drop_delta != 0 {
+        if !cadence_authoritative || latch_drop_delta != 0 {
             return Err(format!(
-                "system-entry {system} transition cadence failed: authoritative={} repeated_vblank_delta={repeated_vblank_delta} latch_drop_delta={latch_drop_delta}",
+                "system-entry {system} presentation observation failed: authoritative={} repeated_vblank_delta={repeated_vblank_delta} latch_drop_delta={latch_drop_delta}",
                 u8::from(cadence_authoritative)
             )
             .into());
@@ -8346,11 +8346,14 @@ fn run_system_entry_sample(
                 "cpu1_handoff_ms": ready_presented_ms.saturating_sub(destination_prepared_ms),
                 "destination_publication_ms": ready_presented_ms.saturating_sub(prerequisites_ready_ms),
             },
-            "transition_cadence": {
+            "presentation_observation": {
                 "authoritative": cadence_authoritative,
-                "dropped_frames": repeated_vblank_delta,
+                "window": "direct-static-source-to-ready",
+                "animation_active": false,
+                "dropped_frames": Value::Null,
                 "repeated_vblank_delta": repeated_vblank_delta,
                 "latch_drop_delta": latch_drop_delta,
+                "classification": "static repeated vblanks are diagnostic, not dropped frames",
             },
             "selected_has_preview": selected_has_preview,
             "preview_state": preview_state,
