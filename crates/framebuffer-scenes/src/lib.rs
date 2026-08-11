@@ -144,6 +144,11 @@ impl Rgb565OutputLayout {
     }
 
     #[must_use]
+    pub const fn is_empty(self) -> bool {
+        false
+    }
+
+    #[must_use]
     pub const fn rotation(self) -> OutputRotation {
         self.rotation
     }
