@@ -178,11 +178,9 @@ enum SystemEntryPrepareCommand {
     Prepare(SystemEntryPrepareRequest),
     RetireOutcome(SystemEntryPrepareOutcome),
     RetireCatalog(ArcadeCatalog),
-    WarmEntryPreludes {
+    OpenGeneration {
         generation: Option<String>,
-        reply: mpsc::SyncSender<
-            Result<mister_magik_catalog::lazy_sharded_reader::EntryPreludeWarmupReport, String>,
-        >,
+        reply: mpsc::SyncSender<Result<u64, String>>,
     },
 }
 
@@ -321,18 +319,16 @@ impl SystemEntryPrepareWorker {
                         }
                         SystemEntryPrepareCommand::RetireOutcome(outcome) => drop(outcome),
                         SystemEntryPrepareCommand::RetireCatalog(catalog) => drop(catalog),
-                        SystemEntryPrepareCommand::WarmEntryPreludes { generation, reply } => {
+                        SystemEntryPrepareCommand::OpenGeneration { generation, reply } => {
+                            let started = Instant::now();
                             let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
                                 &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
                                 mister_magik_catalog::production_sharded_projection::production_registry_limits(),
                             )
                             .map_err(|error| error.to_string())
-                            .and_then(|reader| {
-                                let report = reader
-                                    .warm_entry_preludes()
-                                    .map_err(|error| error.to_string())?;
+                            .map(|reader| {
                                 warmed_generation = Some((generation, reader));
-                                Ok(report)
+                                started.elapsed().as_micros().try_into().unwrap_or(u64::MAX)
                             });
                             let _ = reply.send(result);
                         }
@@ -638,9 +634,7 @@ impl LauncherScheduler {
         self.system_shard_attempted.contains(system_id)
     }
 
-    pub(super) fn warm_entry_preludes_before_input(
-        &self,
-    ) -> Result<mister_magik_catalog::lazy_sharded_reader::EntryPreludeWarmupReport, String> {
+    pub(super) fn open_system_entry_reader_before_input(&self) -> Result<u64, String> {
         let worker = self
             .system_entry_prepare
             .as_ref()
@@ -648,14 +642,14 @@ impl LauncherScheduler {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         worker
             .requests
-            .send(SystemEntryPrepareCommand::WarmEntryPreludes {
+            .send(SystemEntryPrepareCommand::OpenGeneration {
                 generation: self.system_shard_generation.clone(),
                 reply: reply_tx,
             })
             .map_err(|_| "system-entry prepare worker disconnected".to_string())?;
         reply_rx
             .recv_timeout(Duration::from_secs(5))
-            .map_err(|_| "system-entry prelude warmup timed out".to_string())?
+            .map_err(|_| "system-entry reader open timed out".to_string())?
     }
 
     pub(super) fn request_system_shard(

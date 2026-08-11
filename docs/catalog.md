@@ -16,7 +16,8 @@ catalog storage.
 ## Goals
 
 - Reveal a useful UI as soon as Arcade is available on a first build.
-- Start warm launches from a small registry and bounded entry preludes.
+- Start warm launches from a small registry and fault one bounded entry prelude
+  only when its system is activated.
 - Load every system, including Arcade, only when activated.
 - Rebuild and publish only changed system projections.
 - Keep the published generation launchable while warm reconciliation prepares
@@ -122,13 +123,12 @@ current build recreates them.
 
 Warm startup reads the registry first. This supplies system titles, placement,
 ordering, counts, and immutable artifact references without opening every
-system database. Before input readiness, the CPU0 entry worker opens the exact
-registry generation once, validates the bounded NavPack headers, and faults the
-ten-row entry preludes. It retains that generation-bound reader for later
-activation. This deterministic work is independent of tile focus: highlighting
-a tile or moving past neighbouring tiles performs no catalog I/O, preview
-request, or hydration. Full row, cold-metadata, launch, and string regions stay
-unfaulted until activation.
+system database. Before input readiness, the CPU0 entry worker opens and
+retains the exact generation-bound reader. The active system's NavPack header
+and ten-row entry prelude are validated and faulted only when that system is
+activated. Highlighting a tile or moving past neighbouring tiles performs no
+catalog I/O, preview request, or hydration. Full row, cold-metadata, launch,
+and string regions stay unfaulted until activation.
 
 When a valid published catalog already exists, normal startup does not scan the
 library or reconcile changed inputs. Users explicitly request catalog updates

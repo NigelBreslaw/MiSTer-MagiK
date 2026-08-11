@@ -202,8 +202,8 @@ The device agent exposes no binary-only runtime replacement endpoint.
 
 `scripts/agent benchmark system-entry` measures every populated Catalog V3
 system. Each system gets a fresh launcher process containing registry summaries
-and bounded entry preludes only; merely focusing the destination tile performs
-no shard load. The benchmark sends one production-path activation press, then
+and a generation-bound entry reader; merely focusing the destination tile
+performs no shard load or prelude fault. The benchmark sends one production-path activation press, then
 records row readiness, the first presented list frame, selected-preview
 readiness, and the first Main-confirmed active frame containing both the full
 list and the terminal selected screenshot state. It retains that frame as a

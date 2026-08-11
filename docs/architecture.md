@@ -631,9 +631,10 @@ half density at their native framebuffer geometry with the complete 16:9 scene
 centred in the 4:3 raster. The 240p handoff derives its native target through
 the standard centred 640×480-to-640×240 transform while retaining the original
 composition cache. Warm boot and return-from-game keep HDMI black until the
-first intended launcher frame is ready. Warm registry startup faults only
-bounded entry preludes on CPU0 before reveal; complete collections, including
-Arcade, remain lazy. Return-from-game consumes a
+first intended launcher frame is ready. Warm registry startup opens the
+generation-bound CPU0 entry reader before reveal; each bounded entry prelude
+and complete collection, including Arcade, remains lazy until activation.
+Return-from-game consumes a
 bounded catalog capsule when possible. If that capsule is unavailable, only the
 registry and selected system mini-nav are foreground reveal work. Return-from-game
 may wait at most 250ms for the selected
@@ -711,8 +712,9 @@ schema-two NavPack artifacts for each playable system. A small checksummed
 Arcade bootstrap mini-nav may be
 retained beside Catalog V3 as a disposable startup accelerator; it is never a
 complete catalog or publication authority.
-Warm startup reads the registry and bounded NavPack entry preludes only. Every
-system remains a registry summary until its collection is activated. Collection
+Warm startup reads the registry and opens the generation-bound NavPack reader.
+Every system remains a registry summary with an unfaulted entry prelude until
+its collection is activated. Collection
 activation is an atomic state transition: an already resident destination
 commits in the input frame; a cold destination leaves the originating Home view
 presented while CPU0 prepares the mapped `SystemCollection`, then commits before

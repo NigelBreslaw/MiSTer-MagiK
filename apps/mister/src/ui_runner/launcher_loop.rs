@@ -4891,22 +4891,19 @@ pub(super) fn run_launcher_loop(
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     if sharded_seed_ready {
-        match scheduler.warm_entry_preludes_before_input() {
-            Ok(report) => print_startup_event(
+        match scheduler.open_system_entry_reader_before_input() {
+            Ok(elapsed_us) => print_startup_event(
                 start,
-                "system_entry_preludes_warmed",
+                "system_entry_reader_opened",
                 format!(
-                    "systems={} viewport_rows={} exact_previews={} terminal_empty={} elapsed_us={} cpu=0",
-                    report.systems,
-                    report.viewport_rows,
-                    report.exact_previews,
-                    report.terminal_empty,
-                    report.elapsed_us
+                    "generation={} elapsed_us={} cpu=0 preludes=on-demand",
+                    catalog_generation.current.as_deref().unwrap_or("unknown"),
+                    elapsed_us,
                 ),
             ),
             Err(error) => print_startup_event(
                 start,
-                "system_entry_preludes_warmup_failed",
+                "system_entry_reader_open_failed",
                 format!("error={}", error.replace('\t', " ")),
             ),
         }
