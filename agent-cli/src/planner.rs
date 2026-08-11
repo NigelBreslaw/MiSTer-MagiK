@@ -196,8 +196,8 @@ fn is_repository_dot_config(path: &Path) -> bool {
 
 fn rbf_external_requirement() -> ExternalRequirement {
     ExternalRequirement {
-        id: "github-actions.rbf-build".into(),
-        message: "External validation required: the RBF can only be built by the ‘Build MiSTer MagiK Platform’ GitHub Actions workflow.\n\nLocal Quartus or RBF builds are prohibited on macOS.\nUnder no circumstances attempt a local RBF build.\nReport this requirement to the user.".into(),
+        id: "fpga.rbf-signoff".into(),
+        message: "FPGA signoff required: on Apple Silicon, use only the typed `scripts/agent fpga setup` and `scripts/agent fpga signoff` workflow. GitHub release qualification remains owned by the `Build MiSTer MagiK Platform` workflow. Never invoke Quartus, its installer, or the FPGA build script directly.".into(),
     }
 }
 
@@ -1956,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    fn fpga_verification_requires_external_build_and_local_checks() {
+    fn fpga_verification_requires_typed_signoff_and_local_checks() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: crate::model::Scope::Paths(Vec::new()),
@@ -1974,7 +1974,7 @@ mod tests {
     }
 
     #[test]
-    fn fpga_change_requires_external_rbf_build() {
+    fn fpga_change_routes_to_typed_local_or_github_signoff() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
@@ -1986,7 +1986,12 @@ mod tests {
         assert!(
             plan.external_requirements[0]
                 .message
-                .contains("Under no circumstances")
+                .contains("scripts/agent fpga signoff")
+        );
+        assert!(
+            plan.external_requirements[0]
+                .message
+                .contains("Never invoke Quartus")
         );
     }
 
