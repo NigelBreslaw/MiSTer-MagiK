@@ -4308,15 +4308,12 @@ fn apply_orientation_layout(
     orientation: ScreenOrientation,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
-    portrait_target: &mut Option<UiFrameTarget>,
     navigation_transition: &mut NavigationTransitionRuntime,
 ) {
     nav.settings.screen_orientation = orientation;
     nav.sync_orientation_selection();
     *layout = UiLayoutGeometry::for_display(ui, orientation);
     nav.set_portrait_layout(layout.is_portrait());
-    *portrait_target = None;
-
     let mister_ui = app.global::<slint_ui::launcher::MisterUi>();
     mister_ui.set_window_width(layout.logical_w() as i32);
     mister_ui.set_window_height(layout.logical_h() as i32);
@@ -4359,7 +4356,6 @@ fn begin_orientation_transition(
     reduce_motion: bool,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
-    portrait_target: &mut Option<UiFrameTarget>,
     navigation_transition: &mut NavigationTransitionRuntime,
     full_screen_transition: &mut FullScreenTransitionStateChart,
     orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
@@ -4381,16 +4377,7 @@ fn begin_orientation_transition(
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
     let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
     let layout_started = Instant::now();
-    apply_orientation_layout(
-        app,
-        window,
-        ui,
-        to,
-        nav,
-        layout,
-        portrait_target,
-        navigation_transition,
-    );
+    apply_orientation_layout(app, window, ui, to, nav, layout, navigation_transition);
     *orientation_preparation_trace = OrientationPreparationTrace {
         begin_us: begin_started.elapsed().as_micros(),
         source_snapshot_us,
@@ -4425,11 +4412,10 @@ struct OrientationPreparationTrace {
 fn render_immediate_launcher_frame(
     window: &MisterSoftwareWindow,
     target: &mut UiFrameTarget,
-    portrait_target: &mut Option<UiFrameTarget>,
     ui: &UiDisplay,
     layout: UiLayoutGeometry,
 ) -> Option<DirtyRect> {
-    let mut layer_target = LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
+    let mut layer_target = LayerTarget::new_oriented(target, ui, layout);
     let (dirty, mut damage) = layer_target.render_slint_base(window);
     if damage.is_empty() {
         damage.push_if_some(dirty);
@@ -4610,7 +4596,6 @@ pub(super) fn run_launcher_loop(
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
-    let mut portrait_target = None;
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
     let mut navigation_transition = NavigationTransitionRuntime::new(
@@ -5425,7 +5410,6 @@ pub(super) fn run_launcher_loop(
                 false,
                 &mut nav,
                 &mut layout,
-                &mut portrait_target,
                 &mut navigation_transition,
                 &mut full_screen_transition,
                 &mut orientation_transition_generation,
@@ -5491,7 +5475,6 @@ pub(super) fn run_launcher_loop(
                         nav.settings.reduce_motion,
                         &mut nav,
                         &mut layout,
-                        &mut portrait_target,
                         &mut navigation_transition,
                         &mut full_screen_transition,
                         &mut orientation_transition_generation,
@@ -6147,13 +6130,7 @@ pub(super) fn run_launcher_loop(
                         ui,
                     );
                     update_slint_animations(animation_clock);
-                    let recovery_rect = render_immediate_launcher_frame(
-                        window,
-                        target,
-                        &mut portrait_target,
-                        ui,
-                        layout,
-                    );
+                    let recovery_rect = render_immediate_launcher_frame(window, target, ui, layout);
                     if let Some(rect) = recovery_rect {
                         let _ = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     } else {
@@ -6859,7 +6836,6 @@ pub(super) fn run_launcher_loop(
                                 orientation,
                                 &mut nav,
                                 &mut layout,
-                                &mut portrait_target,
                                 &mut navigation_transition,
                             );
                             full_bridge_dirty = true;
@@ -7270,13 +7246,8 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(
-                                        window,
-                                        target,
-                                        &mut portrait_target,
-                                        ui,
-                                        layout,
-                                    );
+                                    let _ =
+                                        render_immediate_launcher_frame(window, target, ui, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7338,13 +7309,8 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(
-                                        window,
-                                        target,
-                                        &mut portrait_target,
-                                        ui,
-                                        layout,
-                                    );
+                                    let _ =
+                                        render_immediate_launcher_frame(window, target, ui, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7476,7 +7442,6 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
-                                            &mut portrait_target,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -7522,7 +7487,6 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
-                                            &mut portrait_target,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -7656,13 +7620,7 @@ pub(super) fn run_launcher_loop(
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
-                                let _ = render_immediate_launcher_frame(
-                                    window,
-                                    target,
-                                    &mut portrait_target,
-                                    ui,
-                                    layout,
-                                );
+                                let _ = render_immediate_launcher_frame(window, target, ui, layout);
                                 let _pace = pacer.wait();
                                 copy_cached_rows_565(
                                     disp,
@@ -8637,8 +8595,7 @@ pub(super) fn run_launcher_loop(
         if full_screen_transition_policy_before_render.advance_slint_timers {
             update_slint_animations(animation_clock);
         }
-        let mut layer_target =
-            LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
+        let mut layer_target = LayerTarget::new_oriented(target, ui, layout);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
@@ -9159,12 +9116,6 @@ pub(super) fn run_launcher_loop(
                         && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
-                if destination_raster_ready
-                    && layout.is_portrait()
-                    && !navigation_transition.settings_physical_space()
-                {
-                    let _ = layer_target.sync_composition_to_logical();
-                }
                 let mut destination_layers_ready =
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
@@ -9485,9 +9436,8 @@ pub(super) fn run_launcher_loop(
         logical_custom_damage.push_if_some(logical_raw_preview_rect);
         logical_custom_damage.push_if_some(cached_arcade_rect);
         let orientation_damage_rects_before = logical_custom_damage.len() as u32;
-        let damage_rotation_started = Instant::now();
-        let mapped_custom_damage =
-            layer_target.rotate_damage_to_composition(&logical_custom_damage);
+        debug_assert!(!layout.is_portrait() || logical_custom_damage.is_empty());
+        let mapped_custom_damage = logical_custom_damage;
         let mut cached_damage = if full_frame_present || navigation_settings_physical_space {
             DirtyRectList::from_one(full_rect)
         } else {
@@ -9499,7 +9449,9 @@ pub(super) fn run_launcher_loop(
             damage.push_if_some(physical_raw_preview_rect);
             damage
         };
-        let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();
+        // Retain the v1 telemetry field for schema compatibility. Native Slint
+        // and custom layer composition no longer run a post-raster rotation.
+        let orientation_damage_rotation_us = 0;
         let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
         if orientation_transition.is_active() {
             let orientation_started = Instant::now();
