@@ -58,7 +58,9 @@ remain parallel. That compatibility setting is applied identically to all
 three variants and is part of the synthesis-cache identity.
 
 Completed synthesis is cached before the checker runs. A failing signoff is
-therefore reproducible without another synthesis pass. Use an absolute
+therefore reproducible without another synthesis pass. The cache is keyed by
+FPGA synthesis inputs rather than the whole Main commit, so workflow or
+documentation-only commits do not trigger three unnecessary builds. Use an absolute
 `MISTER_FPGA_LOCAL_ROOT` shared by worktrees when another local agent must reuse
 the install and completed variants. Local RBFs remain diagnostic artifacts;
 only the GitHub platform workflow can publish or qualify an RBF for deployment.

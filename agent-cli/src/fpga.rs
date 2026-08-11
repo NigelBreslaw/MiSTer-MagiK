@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const MENU_REPOSITORY: &str = "https://github.com/MiSTer-devel/Menu_MiSTer.git";
-const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v1";
+const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v2";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
@@ -99,16 +99,16 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &main_revision,
         ],
     )?;
-    let cache_manifest = cache_manifest(&main_revision, &menu_revision, &baseline_revision);
     let local_root = local_root(repository);
     let signoff_root = local_root.join("signoff");
-    let marker = signoff_root.join("local-signoff-input-v1.txt");
+    let marker = signoff_root.join("local-signoff-input-v2.txt");
+    let source_root = local_root.join("sources/main");
+    prepare_local_checkout(repository, &source_root, &main_revision)?;
+    let synthesis_identity = component_identity(&source_root, "fpga-synthesis")?;
+    let cache_manifest = cache_manifest(&synthesis_identity, &menu_revision, &baseline_revision);
     let cache_hit = !rebuild
         && fs::read_to_string(&marker).is_ok_and(|value| value == cache_manifest)
         && variants_complete(&signoff_root);
-
-    let source_root = local_root.join("sources/main");
-    prepare_local_checkout(repository, &source_root, &main_revision)?;
 
     if cache_hit {
         reporter.emit(
@@ -183,10 +183,31 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     run_delta_checker(&source_root, &signoff_root)
 }
 
-fn cache_manifest(main: &str, menu: &str, baseline: &str) -> String {
+fn cache_manifest(synthesis_identity: &str, menu: &str, baseline: &str) -> String {
     format!(
-        "format={SIGNOFF_FORMAT}\nmain_revision={main}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed=1\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
+        "format={SIGNOFF_FORMAT}\nfpga_synthesis_input_sha256={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed=1\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
     )
+}
+
+fn component_identity(repository: &Path, component: &str) -> AgentResult<String> {
+    let output = Command::new("python3")
+        .arg(repository.join("scripts/release/platform/platform-component-id.py"))
+        .args(["component", component])
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("cannot compute {component} identity: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot compute {component} identity: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let identity = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("invalid {component} identity: {identity}").into());
+    }
+    Ok(identity)
 }
 
 fn local_root(repository: &Path) -> PathBuf {
@@ -528,9 +549,9 @@ mod tests {
 
     #[test]
     fn cache_manifest_binds_every_matched_build_input() {
-        let manifest = cache_manifest(&"a".repeat(40), &"b".repeat(40), &"c".repeat(40));
+        let manifest = cache_manifest(&"a".repeat(64), &"b".repeat(40), &"c".repeat(40));
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
-        assert!(manifest.contains("main_revision=aaaaaaaa"));
+        assert!(manifest.contains("fpga_synthesis_input_sha256=aaaaaaaa"));
         assert!(manifest.contains("menu_revision=bbbbbbbb"));
         assert!(manifest.contains("baseline_revision=cccccccc"));
         assert!(manifest.contains("quartus_seed=1"));

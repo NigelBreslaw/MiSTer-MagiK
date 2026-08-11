@@ -160,7 +160,8 @@ Markdown artifact link and refuse to overwrite explicit output paths.
 exact pinned pre-observer revision, and final Main inputs in generated isolated
 checkouts, then runs the unchanged Quartus delta checker. Completed synthesis
 is cached before validation, so an expected delta failure can be rerun without
-rebuilding. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
+rebuilding. The cache key uses the FPGA synthesis identity, so unrelated Main
+commits do not invalidate it. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
 multiple worktrees must share the Quartus install and synthesis cache.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
