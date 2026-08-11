@@ -172,19 +172,52 @@ struct SystemEntryPrepareRequest {
     request: SystemShardRequest,
 }
 
+enum SystemEntryPrepareCommand {
+    InstallGeneration(Option<String>),
+    Prepare(SystemEntryPrepareRequest),
+}
+
 struct SystemEntryPrepareResult {
     generation: Option<String>,
     message: CatalogWorkerMessage,
 }
 
 struct SystemEntryPrepareWorker {
-    requests: mpsc::Sender<SystemEntryPrepareRequest>,
+    requests: mpsc::Sender<SystemEntryPrepareCommand>,
     results: mpsc::Receiver<SystemEntryPrepareResult>,
+}
+
+struct SystemEntryRegistry {
+    generation: String,
+    reader: mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader,
+    verified: mister_magik_catalog::lazy_sharded_reader::VerifiedCatalogArtifacts,
+}
+
+impl SystemEntryRegistry {
+    fn open(generation: String) -> Option<Self> {
+        let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+        let reader = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+            &storage,
+            mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+        )
+        .ok()?;
+        let verified = reader.verify_navigation_artifacts();
+        crate::ui_logln!(
+            "catalog_system_entry_registry_ready generation={} verified_artifacts={}",
+            generation,
+            verified.verified_count()
+        );
+        Some(Self {
+            generation,
+            reader,
+            verified,
+        })
+    }
 }
 
 impl SystemEntryPrepareWorker {
     fn start() -> Option<Self> {
-        let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareRequest>();
+        let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareCommand>();
         let (result_tx, result_rx) = mpsc::channel::<SystemEntryPrepareResult>();
         std::thread::Builder::new()
             .name("system-entry-prepare".to_string())
@@ -192,18 +225,30 @@ impl SystemEntryPrepareWorker {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
                 );
-                while let Ok(work) = request_rx.recv() {
-                    let _lease =
-                        mister_magik_catalog::work_coordinator::foreground("system-entry-prepare");
-                    let message = prepare_system_shard(work.request);
-                    if result_tx
-                        .send(SystemEntryPrepareResult {
-                            generation: work.generation,
-                            message,
-                        })
-                        .is_err()
-                    {
-                        break;
+                let mut registry = None;
+                while let Ok(command) = request_rx.recv() {
+                    match command {
+                        SystemEntryPrepareCommand::InstallGeneration(generation) => {
+                            registry = generation.and_then(SystemEntryRegistry::open);
+                        }
+                        SystemEntryPrepareCommand::Prepare(work) => {
+                            let _lease = mister_magik_catalog::work_coordinator::foreground(
+                                "system-entry-prepare",
+                            );
+                            let retained = registry.as_ref().filter(|registry| {
+                                Some(registry.generation.as_str()) == work.generation.as_deref()
+                            });
+                            let message = prepare_system_shard(work.request, retained);
+                            if result_tx
+                                .send(SystemEntryPrepareResult {
+                                    generation: work.generation,
+                                    message,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
                     }
                 }
             })
@@ -215,7 +260,10 @@ impl SystemEntryPrepareWorker {
     }
 }
 
-fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
+fn prepare_system_shard(
+    request: SystemShardRequest,
+    retained_registry: Option<&SystemEntryRegistry>,
+) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
     let base_catalog = request.base_catalog;
@@ -223,14 +271,31 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let preview_dispatch = request.preview;
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
-    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
     let descriptor_pmu = mister_magik_perf_events::sampled_span("system-entry-registry-open");
-    let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-        &storage,
-        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-    );
-    drop(descriptor_pmu);
-    let result = result.and_then(|reader| {
+    let result = (|| {
+        let fallback_reader = if retained_registry.is_none() {
+            let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+            Some(
+                mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                    &storage,
+                    mister_magik_catalog::production_sharded_projection::production_registry_limits(
+                    ),
+                )?,
+            )
+        } else {
+            None
+        };
+        let (reader, verified) = retained_registry.map_or_else(
+            || {
+                (
+                    fallback_reader
+                        .as_ref()
+                        .expect("fallback reader exists without retained registry"),
+                    None,
+                )
+            },
+            |registry| (&registry.reader, Some(&registry.verified)),
+        );
         let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&worker_system_id)
             .map_err(|error| {
                 mister_magik_catalog::sharded_catalog::CatalogError::new(
@@ -239,10 +304,11 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 )
             })?;
         let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
-        let result = reader.open_system_with_timing(&parsed);
+        let result = reader.open_system_with_verified_timing(&parsed, verified);
         drop(open_pmu);
         result
-    });
+    })();
+    drop(descriptor_pmu);
     let navigation_decode_us = load_started.elapsed().as_micros();
     let message = match result {
         Ok((system, open_timing)) => {
@@ -469,6 +535,16 @@ impl LauncherScheduler {
         self.system_shard_generation = generation.map(str::to_string);
         self.system_shard_attempted.clear();
         self.system_shard_queue.clear();
+        if self.system_entry_prepare.as_ref().is_some_and(|worker| {
+            worker
+                .requests
+                .send(SystemEntryPrepareCommand::InstallGeneration(
+                    self.system_shard_generation.clone(),
+                ))
+                .is_err()
+        }) {
+            self.system_entry_prepare = None;
+        }
         true
     }
 
@@ -537,10 +613,12 @@ impl LauncherScheduler {
         let dispatched = self.system_entry_prepare.as_ref().is_some_and(|worker| {
             worker
                 .requests
-                .send(SystemEntryPrepareRequest {
-                    generation,
-                    request,
-                })
+                .send(SystemEntryPrepareCommand::Prepare(
+                    SystemEntryPrepareRequest {
+                        generation,
+                        request,
+                    },
+                ))
                 .is_ok()
         });
         if !dispatched {

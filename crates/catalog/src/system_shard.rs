@@ -627,12 +627,53 @@ pub fn open_system_navigation_with_compatibility_and_timing(
     limits: SystemShardLimits,
     compatibility: NavigationCompatibility,
 ) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
+    open_system_navigation_with_hash_policy_and_timing(
+        navigation_path,
+        expected_system_id,
+        expected_generation,
+        limits,
+        compatibility,
+        None,
+    )
+}
+
+pub(crate) fn open_verified_system_navigation_with_compatibility_and_timing(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    expected_navigation_hash: &str,
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
+    open_system_navigation_with_hash_policy_and_timing(
+        navigation_path,
+        expected_system_id,
+        expected_generation,
+        limits,
+        compatibility,
+        Some(expected_navigation_hash),
+    )
+}
+
+fn open_system_navigation_with_hash_policy_and_timing(
+    navigation_path: &Path,
+    expected_system_id: &SystemId,
+    expected_generation: u64,
+    limits: SystemShardLimits,
+    compatibility: NavigationCompatibility,
+    verified_navigation_hash: Option<&str>,
+) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
     let read_started = std::time::Instant::now();
     let navigation = read_bounded(navigation_path, limits.max_navigation_compressed_bytes)?;
     let read_us = elapsed_us(read_started);
-    let hash_started = std::time::Instant::now();
-    let navigation_hash = checksum_hex(&navigation);
-    let hash_us = elapsed_us(hash_started);
+    let (navigation_hash, hash_us) = match verified_navigation_hash {
+        Some(hash) => (hash.to_string(), 0),
+        None => {
+            let hash_started = std::time::Instant::now();
+            let hash = checksum_hex(&navigation);
+            (hash, elapsed_us(hash_started))
+        }
+    };
     let (stored, mut timing) = decode_navigation_with_timing(&navigation, limits, compatibility)?;
     if stored.system_id != expected_system_id.as_str() || stored.generation != expected_generation {
         return Err(SystemShardError::new(

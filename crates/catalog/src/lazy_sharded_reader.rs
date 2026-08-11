@@ -13,14 +13,70 @@ use crate::sharded_catalog::{
 use crate::system_shard::{
     NavigationCompatibility, SystemNavigationOpenTiming,
     open_system_navigation_with_compatibility_and_timing,
+    open_verified_system_navigation_with_compatibility_and_timing,
 };
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub struct LazyShardedCatalogReader {
     storage_root: PathBuf,
     limits: RegistryLimits,
     manifest: CatalogManifest,
     navigation_compatibility: NavigationCompatibility,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct VerifiedCatalogArtifacts {
+    manifest_generation: u64,
+    systems: BTreeMap<SystemId, Vec<VerifiedNavigationArtifact>>,
+}
+
+#[derive(Clone, Debug)]
+struct VerifiedNavigationArtifact {
+    generation: u64,
+    path: PathBuf,
+    hash: String,
+    bytes: u64,
+    modified: Option<SystemTime>,
+}
+
+impl VerifiedCatalogArtifacts {
+    pub fn verified_count(&self) -> usize {
+        self.systems.values().map(Vec::len).sum()
+    }
+
+    fn artifact(
+        &self,
+        manifest_generation: u64,
+        system_id: &SystemId,
+        generation: &crate::shard_registry::PublishedGeneration,
+        storage_root: &Path,
+    ) -> Option<&VerifiedNavigationArtifact> {
+        if self.manifest_generation != manifest_generation {
+            return None;
+        }
+        let artifact = self.systems.get(system_id)?.iter().find(|artifact| {
+            artifact.generation == generation.generation
+                && artifact.path == generation.navigation_path
+                && artifact.hash == generation.navigation_hash
+                && artifact.bytes == generation.navigation_bytes
+        })?;
+        artifact
+            .matches_file(&storage_root.join(&artifact.path))
+            .then_some(artifact)
+    }
+}
+
+impl VerifiedNavigationArtifact {
+    fn matches_file(&self, path: &Path) -> bool {
+        fs::symlink_metadata(path).is_ok_and(|metadata| {
+            metadata.file_type().is_file()
+                && metadata.len() == self.bytes
+                && metadata.modified().ok() == self.modified
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -77,27 +133,95 @@ impl LazyShardedCatalogReader {
         })
     }
 
+    pub fn verify_navigation_artifacts(&self) -> VerifiedCatalogArtifacts {
+        let mut verified = VerifiedCatalogArtifacts {
+            manifest_generation: self.manifest.generation,
+            systems: BTreeMap::new(),
+        };
+        for system in &self.manifest.systems {
+            for generation in std::iter::once(&system.active).chain(system.previous.iter()) {
+                let path = self.storage_root.join(&generation.navigation_path);
+                let Ok(metadata) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if !metadata.file_type().is_file()
+                    || metadata.len() != generation.navigation_bytes
+                    || metadata.len() > self.limits.shard.max_navigation_compressed_bytes as u64
+                {
+                    continue;
+                }
+                let Ok(bytes) = fs::read(&path) else {
+                    continue;
+                };
+                if crate::system_shard::checksum_hex(&bytes) != generation.navigation_hash {
+                    continue;
+                }
+                verified
+                    .systems
+                    .entry(system.system_id.clone())
+                    .or_default()
+                    .push(VerifiedNavigationArtifact {
+                        generation: generation.generation,
+                        path: generation.navigation_path.clone(),
+                        hash: generation.navigation_hash.clone(),
+                        bytes: generation.navigation_bytes,
+                        modified: metadata.modified().ok(),
+                    });
+            }
+        }
+        verified
+    }
+
     pub fn open_system_with_timing(
         &self,
         system_id: &SystemId,
+    ) -> Result<(SystemCatalog, LazySystemOpenTiming), CatalogError> {
+        self.open_system_with_verified_timing(system_id, None)
+    }
+
+    pub fn open_system_with_verified_timing(
+        &self,
+        system_id: &SystemId,
+        verified: Option<&VerifiedCatalogArtifacts>,
     ) -> Result<(SystemCatalog, LazySystemOpenTiming), CatalogError> {
         let descriptor_started = std::time::Instant::now();
         let system = self
             .manifest
             .systems
-            .iter()
-            .find(|system| &system.system_id == system_id)
+            .binary_search_by(|system| system.system_id.cmp(system_id))
+            .ok()
+            .and_then(|index| self.manifest.systems.get(index))
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let descriptor_lookup_us = elapsed_us(descriptor_started);
         let open = |generation: &crate::shard_registry::PublishedGeneration| {
-            let (loaded, timing) = open_system_navigation_with_compatibility_and_timing(
-                &self.storage_root.join(&generation.navigation_path),
-                system_id,
-                generation.generation,
-                self.limits.shard,
-                self.navigation_compatibility,
-            )
-            .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
+            let path = self.storage_root.join(&generation.navigation_path);
+            let verified_artifact = verified.and_then(|verified| {
+                verified.artifact(
+                    self.manifest.generation,
+                    system_id,
+                    generation,
+                    &self.storage_root,
+                )
+            });
+            let result = match verified_artifact {
+                Some(artifact) => open_verified_system_navigation_with_compatibility_and_timing(
+                    &path,
+                    system_id,
+                    generation.generation,
+                    &artifact.hash,
+                    self.limits.shard,
+                    self.navigation_compatibility,
+                ),
+                None => open_system_navigation_with_compatibility_and_timing(
+                    &path,
+                    system_id,
+                    generation.generation,
+                    self.limits.shard,
+                    self.navigation_compatibility,
+                ),
+            };
+            let (loaded, timing) =
+                result.map_err(|error| CatalogError::new("open-system", error.to_string()))?;
             if loaded.navigation_hash != generation.navigation_hash {
                 return Err(CatalogError::new(
                     "open-system",
@@ -246,6 +370,30 @@ mod tests {
     }
 
     #[test]
+    fn verified_artifacts_skip_entry_hashing_but_stale_tokens_do_not() {
+        let root = temporary_root("verified-artifacts");
+        seed(&root);
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let verified = reader.verify_navigation_artifacts();
+        assert_eq!(verified.verified_count(), 2);
+
+        let (_, timing) = reader
+            .open_system_with_verified_timing(&system("snes"), Some(&verified))
+            .unwrap();
+        assert_eq!(timing.navigation.hash_us, 0);
+
+        let stale = VerifiedCatalogArtifacts {
+            manifest_generation: 0,
+            ..VerifiedCatalogArtifacts::default()
+        };
+        let (_, timing) = reader
+            .open_system_with_verified_timing(&system("snes"), Some(&stale))
+            .unwrap();
+        assert!(timing.navigation.hash_us > 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn corrupt_active_system_falls_back_to_its_previous_generation() {
         let root = temporary_root("system-fallback");
         seed(&root);
@@ -292,16 +440,23 @@ mod tests {
             limits(),
         )
         .unwrap();
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let verified = reader.verify_navigation_artifacts();
         fs::write(
             root.join("systems/snes/2.nav.lz4b"),
             b"corrupt active shard",
         )
         .unwrap();
 
-        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
-        let snes = reader.open_system(&snes_id).unwrap();
+        let (snes, timing) = reader
+            .open_system_with_verified_timing(&snes_id, Some(&verified))
+            .unwrap();
         assert_eq!(snes.summary().generation, 1);
         assert_eq!(snes.games()[0].title, "SNES Game");
+        assert_eq!(
+            timing.navigation.hash_us, 0,
+            "previous generation stays verified"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
