@@ -602,13 +602,22 @@ pub(crate) fn validate_published_system(
     limits: RegistryLimits,
 ) -> Result<(), RegistryError> {
     validate_manifest_system_with_options(storage_root, system, limits, true, true)?;
-    for generation in std::iter::once(&system.active).chain(system.previous.iter()) {
-        open_system_shard(
-            &storage_root.join(&generation.sqlite_path),
-            &storage_root.join(&generation.navigation_path),
+    open_system_shard(
+        &storage_root.join(&system.active.sqlite_path),
+        &storage_root.join(&system.active.navigation_path),
+        &system.system_id,
+        system.active.generation,
+        limits.shard,
+    )
+    .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
+    if let Some(previous) = &system.previous {
+        crate::system_shard::open_verified_system_navigation_with_compatibility_and_timing(
+            &storage_root.join(&previous.navigation_path),
             &system.system_id,
-            generation.generation,
+            previous.generation,
+            &previous.navigation_hash,
             limits.shard,
+            crate::system_shard::NavigationCompatibility::CurrentOrAlphaV1,
         )
         .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
     }
