@@ -54,7 +54,8 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.10
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 1_500
-EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS = 22
+EXPECTED_OBSERVER_REPORTED_CHAINS = 25
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 22
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     *tuple(
         f"mister_magik_video_diagnostics_control:magik_video_diagnostics|{name}"
@@ -370,6 +371,11 @@ def validate_diagnostic_reports(
                 else len(text)
             )
             section = text[match.start():end]
+            row_slack = re.match(
+                rf"\s*;?\s*{command}\s*;\s*({NUMBER})\s*;",
+                section,
+                re.IGNORECASE,
+            )
             slack_values = [
                 value
                 for value in (
@@ -380,6 +386,10 @@ def validate_diagnostic_reports(
                 )
                 if value is not None
             ]
+            if row_slack:
+                value = finite_number(row_slack.group(1))
+                if value is not None:
+                    slack_values.append(value)
             if not slack_values:
                 reasons.append("diagnostic_cdc_slack_missing")
             else:
@@ -531,13 +541,13 @@ def compare(
         baseline_chain_counts
         and chain_counts
         and max(chain_counts)
-        == max(baseline_chain_counts) + EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS
+        == max(baseline_chain_counts) + EXPECTED_OBSERVER_REPORTED_CHAINS
     )
     custom_delta_calculable = (
         baseline_calculable_chains is not None
         and patched_calculable_chains is not None
         and patched_calculable_chains
-        == baseline_calculable_chains + EXPECTED_OBSERVER_SYNCHRONIZER_CHAINS
+        == baseline_calculable_chains + EXPECTED_OBSERVER_CALCULABLE_CHAINS
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")

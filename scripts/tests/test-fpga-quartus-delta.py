@@ -95,8 +95,8 @@ SYNC_ASSIGNMENTS = (
     CONTROL_SYNC_ASSIGNMENTS + AVALON_SYNC_ASSIGNMENTS + OUTPUT_SYNC_ASSIGNMENTS
 )
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 27 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.148
+Info (332114): Report Metastability: Found 30 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.233
 Info: MagiK diagnostics CDC analysis applied: avalon_payload
 Info: MagiK diagnostics CDC analysis applied: output_payload
 Info: MagiK diagnostics CDC analysis applied: avalon_route
@@ -112,7 +112,7 @@ VALID_DIAGNOSTIC_REPORTS = {
         f"set_net_delay analysis_{index} Slack 7.000\n" for index in range(5)
     ),
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 27 synchronizer chains.\n"
+        "Report Metastability: Found 30 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES
@@ -197,7 +197,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_exact_observer_chain_delta_is_required(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 27 synchronizer chains", "Found 26 synchronizer chains"
+            "Found 30 synchronizer chains", "Found 29 synchronizer chains"
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)

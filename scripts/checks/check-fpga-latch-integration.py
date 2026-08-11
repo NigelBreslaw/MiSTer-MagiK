@@ -183,12 +183,14 @@ def main() -> None:
         fail("diagnostic SDC uses unsupported Quartus get_registers syntax")
     if "get_registers -nowarn -no_duplicates" not in diagnostics_sdc_text:
         fail("diagnostic SDC does not use exact non-duplicated register collections")
+    if "get_pins -nowarn -no_duplicates" not in diagnostics_sdc_text:
+        fail("diagnostic SDC does not constrain direct register data pins")
     if diagnostics_sdc_text.count("set_net_delay -max") != 1:
         fail("diagnostic bundled-data net-delay constraint is missing")
     if diagnostics_sdc_text.count("set_max_skew -from") != 1:
         fail("diagnostic bundled-data skew constraint is missing")
-    if diagnostics_sdc_text.count("set_false_path -from") != 1:
-        fail("diagnostic bundled-data paths are not isolated from functional timing")
+    if "set_false_path -from" in diagnostics_sdc_text:
+        fail("diagnostic false path overrides its explicit skew analysis")
     if diagnostics_sdc_text.count("-exclude {ccpp}") != 1:
         fail("diagnostic skew constraint does not suppress inapplicable CCPP analysis")
     if "fault_burstcount*" in diagnostics_sdc_text:
@@ -197,6 +199,11 @@ def main() -> None:
         fail("diagnostic SDC requires the constant-folded reference-flags register")
     if diagnostics_sdc_text.count("magik_require_registers") < 8:
         fail("diagnostic CDC constraints do not reject empty node collections")
+    if diagnostics_sdc_text.count("magik_require_data_pins") < 5:
+        fail("diagnostic CDC skew constraints do not reject empty data-pin collections")
+    for data_pin in ("|d\"", "|asdata\"", "|sdata\""):
+        if data_pin not in diagnostics_sdc_text:
+            fail(f"diagnostic CDC skew constraints omit legal data pin {data_pin[:-1]}")
     diagnostic_hierarchies = (
         "mister_magik_video_diagnostics_control:magik_video_diagnostics|",
         "mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|",

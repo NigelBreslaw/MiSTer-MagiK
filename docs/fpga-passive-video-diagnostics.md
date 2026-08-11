@@ -68,10 +68,13 @@ fault-injection simulations, the complete 48-word control response, final respon
 priority, immutable latch hashes, exact pinned Menu integration, passive cone
 boundaries, and explicit synchronizer identification. Native diagnostic records
 are held immutable before acknowledgement, their generation is sampled twice
-in `clk_sys`, and the complete payload is covered by nonempty 8 ns net-delay
-and 2 ns bus-skew constraints. The bundled paths are excluded from ordinary
-functional setup/hold analysis while remaining subject to those explicit CDC
-bounds. The synthesis
+in `clk_sys`, and the complete payload is covered by a nonempty 8 ns net-delay
+constraint. The generation, route-context, and fault-trigger bundles also have
+a 2 ns skew bound terminating only at their destination registers' data pins;
+clock-enable and readout logic is deliberately outside that coherence check.
+The asynchronous clock groups exclude the bundled paths from ordinary
+functional setup/hold analysis while leaving those explicit CDC bounds
+effective. The synthesis
 workflow applies the same analysis-only exclusive-to-asynchronous clock-group
 change to stock, pre-observer, and final work trees so TimeQuest analyzes those
 skew constraints without biasing the observer delta. No generated clock or
