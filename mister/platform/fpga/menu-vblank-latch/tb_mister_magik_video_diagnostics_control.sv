@@ -233,6 +233,26 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "control identity/trigger/mask mismatch");
 		for(index=0; index<10; index=index+1)
 			if(words[14+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
+
+		// Closing mid-record must discard the prefetched word. A fresh command
+		// must restart at payload word zero.
+		io_uio = 1'b1;
+		strobe_word(16'h005d);
+		strobe_word(16'd0);
+		strobe_word(16'd0);
+		strobe_word(16'd0);
+		close_command();
+		io_uio = 1'b1;
+		@(negedge clk_sys); io_din = 16'h005d; io_strobe = 1'b1;
+		#1 if(!response_valid || response_data != 16'h4d4d)
+			$fatal(1, "missing control magic after aborted read");
+		@(negedge clk_sys); io_strobe = 1'b0;
+		@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+		#1 if(!response_valid || response_data != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA)
+			$fatal(1, "aborted control read did not restart at word zero");
+		@(negedge clk_sys); io_strobe = 1'b0;
+		close_command();
+
 		read_native_snapshot(8'h5e, 16'h4d4e, 16'h1111);
 		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 		$display("video diagnostics control tests passed");

@@ -83,6 +83,8 @@ module mister_magik_video_diagnostics_control #(
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire [7:0] command_id = has_command ? command : io_din[7:0];
+	wire [7:0] snapshot_select_command = command_start ? io_din[7:0] : command;
+	wire [7:0] snapshot_select_word = command_start ? 8'd0 : (word_count + 1'd1);
 	wire diagnostic_command =
 		(command_id == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ||
 		(command_id == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON) ||
@@ -167,6 +169,7 @@ module mister_magik_video_diagnostics_control #(
 
 	reg [15:0] tx_crc = 16'hffff;
 	reg [7:0] tx_command = 8'd0;
+	reg [15:0] response_word = 16'd0;
 	reg freeze_request_now;
 	reg [7:0] freeze_request_trigger;
 	reg [7:0] freeze_request_flags;
@@ -225,9 +228,9 @@ module mister_magik_video_diagnostics_control #(
 	reg [15:0] current_snapshot_word;
 	always @(*) begin
 		current_snapshot_word = 16'd0;
-		case(command_id)
+		case(snapshot_select_command)
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL: begin
-				case(word_count)
+				case(snapshot_select_word)
 					0: current_snapshot_word = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
 					1: current_snapshot_word = state_flags();
 					2: current_snapshot_word = {8'd0, trigger};
@@ -273,7 +276,7 @@ module mister_magik_video_diagnostics_control #(
 				endcase
 			end
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON: begin
-				case(word_count)
+				case(snapshot_select_word)
 					0: current_snapshot_word = avalon_snapshot_payload_async[15:0];
 					1: current_snapshot_word = avalon_snapshot_payload_async[31:16];
 					2: current_snapshot_word = avalon_snapshot_payload_async[47:32];
@@ -293,7 +296,7 @@ module mister_magik_video_diagnostics_control #(
 				endcase
 			end
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT: begin
-				case(word_count)
+				case(snapshot_select_word)
 					0: current_snapshot_word = output_snapshot_payload_async[15:0];
 					1: current_snapshot_word = output_snapshot_payload_async[31:16];
 					2: current_snapshot_word = output_snapshot_payload_async[47:32];
@@ -331,7 +334,7 @@ module mister_magik_video_diagnostics_control #(
 		end
 		else if(command_data && diagnostic_command) begin
 			if(word_count == (response_words - 1'd1)) response_data = tx_crc;
-			else response_data = current_snapshot_word;
+			else response_data = response_word;
 		end
 	end
 
@@ -438,6 +441,7 @@ module mister_magik_video_diagnostics_control #(
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT)) begin
 				tx_command <= io_din[7:0];
 				tx_crc <= crc_header(io_din[7:0], response_words - 1'd1);
+				response_word <= current_snapshot_word;
 			end
 		end
 		else if(command_data) begin
@@ -461,13 +465,16 @@ module mister_magik_video_diagnostics_control #(
 			end
 			if((command == tx_command) && diagnostic_command &&
 			   (word_count < (response_words - 1'd1)))
-				tx_crc <= crc_update_word(tx_crc, current_snapshot_word);
+				tx_crc <= crc_update_word(tx_crc, response_word);
+			if(diagnostic_command && (word_count < (response_words - 2'd2)))
+				response_word <= current_snapshot_word;
 		end
 
 		if(!io_uio && has_command) begin
 			has_command <= 1'b0;
 			command <= 8'd0;
 			word_count <= 8'd0;
+			response_word <= 16'd0;
 			if(legacy_open) begin
 				legacy_open <= 1'b0;
 				if(legacy_total != 8'hff) legacy_total <= legacy_total + 1'd1;
