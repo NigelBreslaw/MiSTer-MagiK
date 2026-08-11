@@ -4,8 +4,8 @@ Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
 registry, state, binding, and scanner-cache schemas are version **1**; the
 mini-navigation and NavPack schemas are version **2** and the SQLite shard
 schema is version **4**. There is no global summary or global navigation file.
-The JSON mini-navigation reader remains the checked compatibility fallback for
-a missing or rejected NavPack.
+JSON mini-navigation remains a build and integrity artifact; interactive system
+entry accepts only the active generation's checked NavPack.
 
 The catalog is split by playable system (`arcade`, `snes`, `c64`, and so on),
 not by launcher presentation groups such as Nintendo or Sega. A system is the
@@ -136,13 +136,14 @@ with Settings → **Rebuild Database**; first-run construction still starts
 automatically when no valid catalog exists.
 
 Activating a non-resident collection schedules one foreground request on the
-long-lived CPU0 `SystemEntryPrepare` worker. The preferred path opens the
+long-lived CPU0 `SystemEntryPrepare` worker. It opens the active
 generation-scoped NavPack through `mmap` and exposes an immutable
 `Arc<SystemCollection>` with fixed-width checked rows, cold metadata, structured
 launch tables, persisted ordinals, and string tables. The full collection is
-synchronously addressable without allocating one Rust object per game. Missing
-or rejected NavPacks use the JSON mini-navigation compatibility reader and are
-reported as a performance fallback.
+synchronously addressable without allocating one Rust object per game. A
+missing, stale, or rejected NavPack fails the collection request and requires a
+catalog rebuild; the launcher never switches to SQLite, JSON, or a previous
+generation during entry.
 
 The CPU0 worker publishes a generation- and sequence-bound prepared outcome to
 a newest-wins mailbox. CPU1 uses a non-blocking acknowledgement, selects the
@@ -169,14 +170,13 @@ Resident Arcade rows must never be reported as the total catalog.
 
 ## First Build And Progressive Reveal
 
-With no valid registry, the launcher first probes the bounded
-`arcade-bootstrap.nav.lz4b` index beside `catalog-v3`.
-The index is an exact, checksummed Arcade mini-nav plus its source stamp. A
-matching index restores the canonical Arcade rows and structured launch plans
-without walking `_Arcade` or opening every MRA. Missing, corrupt, oversized, or
-stale indexes enter the first-run particle intro and fall back to a CPU0 Arcade
-scan. When that bounded projection is acknowledged, the launcher can prepare
-Home and Arcade off screen.
+With no valid registry, the launcher enters the normal first-build lifecycle;
+it does not seed itself from an older Arcade-only projection. The CPU0 builder
+may use the bounded `arcade-bootstrap.nav.lz4b` index beside `catalog-v3` to
+accelerate its first-visible Arcade phase. The index is an exact, checksummed
+Arcade mini-nav plus its source stamp, but it is builder input rather than a
+launcher catalog source. Missing, corrupt, oversized, or stale indexes cause
+the builder to scan Arcade normally.
 System discoveries update scanning tiles while the complete authoritative scan
 continues. These progressive discovery tiles are presentation-only placeholders:
 they cannot schedule a system-shard read until a valid registry generation is

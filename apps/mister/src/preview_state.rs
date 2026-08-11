@@ -2076,50 +2076,6 @@ pub(crate) fn schedule_arcade_preview_window(
     )
 }
 
-pub(crate) fn prewarm_arcade_selected_preview(
-    games: ArcadeGameView<'_>,
-    selected: usize,
-    preview: &mut PreviewState,
-) -> bool {
-    if !preview_loading_enabled() {
-        return false;
-    }
-    let Some(selected_game) = games.get(selected) else {
-        return false;
-    };
-    let Some(candidate) = first_available_preview_candidate(
-        games,
-        selected,
-        DEFAULT_PREVIEW_RADIUS,
-        &mut preview.cache,
-    ) else {
-        return false;
-    };
-    let preview_key = candidate.preview_key.clone();
-    preview.selected_mra_path = Some(selected_game.mra_path.to_string());
-    preview.selected_preview_key = Some(preview_key.clone());
-    if preview.cache.contains(&preview_key) || preview.cache.contains_failed(&preview_key) {
-        return false;
-    }
-    let generation = preview.worker.request_selected(
-        candidate.game.title.to_string(),
-        candidate.game.preview_archive_path.to_string(),
-        candidate.game.preview_asset_key.to_string(),
-    );
-    preview.current_generation = generation;
-    preview.demand_loading();
-    crate::ui_errln!(
-        "startup_timing\tpreview_selected_prewarm_requested\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tgeneration={}",
-        preview.trace_elapsed_ms(),
-        candidate.game.system_id,
-        selected,
-        candidate.game.title,
-        candidate.game.preview_asset_key,
-        generation
-    );
-    true
-}
-
 pub(crate) fn apply_ready_preview(
     app: &slint_ui::launcher::Launcher,
     preview: &mut PreviewState,

@@ -39,41 +39,6 @@ pub enum BuilderExecutionPolicy {
     BackgroundContinuous,
 }
 
-#[derive(Debug)]
-pub struct RetainedArcadeStartupSeed {
-    pub catalog: ArcadeCatalog,
-    pub stamp_fingerprint: String,
-    pub probe_us: u64,
-    pub decode_us: u64,
-    pub bytes: u64,
-}
-
-#[derive(Debug)]
-pub enum RetainedArcadeStartupProbe {
-    Ready(Box<RetainedArcadeStartupSeed>),
-    Unavailable { reason: String, probe_us: u64 },
-}
-
-/// Loads the bounded, source-validated Arcade projection retained by the
-/// first-visible builder. This is a launcher seed only; the authoritative
-/// full catalog build must still run in the background.
-pub fn probe_retained_arcade_startup_seed(root: &Path) -> RetainedArcadeStartupProbe {
-    match crate::arcade_bootstrap_index::probe(root) {
-        crate::arcade_bootstrap_index::ProbeResult::Hit(loaded) => {
-            RetainedArcadeStartupProbe::Ready(Box::new(RetainedArcadeStartupSeed {
-                catalog: loaded.catalog,
-                stamp_fingerprint: loaded.stamp.fingerprint_hex(),
-                probe_us: loaded.probe_us,
-                decode_us: loaded.decode_us,
-                bytes: loaded.bytes,
-            }))
-        }
-        crate::arcade_bootstrap_index::ProbeResult::Miss { reason, probe_us } => {
-            RetainedArcadeStartupProbe::Unavailable { reason, probe_us }
-        }
-    }
-}
-
 /// Controls cooperative catalog checkpoints. Production launcher policy keeps
 /// this enabled continuously; tests may close it to exercise checkpoint safety.
 pub fn set_background_heavy_work_allowed(allowed: bool) {

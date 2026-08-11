@@ -5,9 +5,8 @@
 
 use crate::arcade_catalog::{self, ArcadeCatalog};
 use mister_magik_catalog::sharded_catalog::{CatalogGame, CatalogReader};
-use mister_magik_catalog::system_shard::{SystemGame, SystemNavigationIndexes};
+use mister_magik_catalog::system_shard::SystemGame;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 pub struct ShardedCatalogSeed {
     pub catalog: ArcadeCatalog,
@@ -184,104 +183,6 @@ pub fn arcade_rows_from_persisted_shard(
     )
 }
 
-pub fn arcade_rows_from_owned_persisted_shard(
-    system_id: &str,
-    games: Vec<SystemGame>,
-    indexes: &SystemNavigationIndexes,
-) -> (
-    Vec<arcade_catalog::ArcadeGameEntry>,
-    Vec<arcade_catalog::ArcadeGameMetadataKey>,
-    Vec<arcade_catalog::StructuredLaunchPlan>,
-) {
-    let shared_system_id = Arc::<str>::from(system_id);
-    let mut preview_archives = SmallArcStringPool::default();
-    let mut core_paths = SmallArcStringPool::default();
-    let mut mount_kinds = SmallArcStringPool::default();
-    let mut projected = Vec::with_capacity(games.len());
-    let mut metadata = Vec::with_capacity(games.len());
-    let mut launch_plans_by_ordinal = Vec::with_capacity(games.len());
-    for game in games {
-        let title = Arc::<str>::from(game.title);
-        let launch_ref = Arc::<str>::from(game.launch_ref);
-        let launch_plan = game.launch_plan.map(|plan| {
-            let plan_title = reuse_or_arc(plan.title, &title);
-            let plan_launch_ref = reuse_or_arc(plan.launch_ref, &launch_ref);
-            let plan_system_id = reuse_or_arc(plan.system_id, &shared_system_id);
-            arcade_catalog::StructuredLaunchPlan {
-                launch_ref: plan_launch_ref,
-                title: plan_title,
-                system_id: plan_system_id,
-                core_path: core_paths.intern(plan.core_path),
-                payload_path: Arc::from(plan.payload_path),
-                mount_kind: mount_kinds.intern(plan.mount_kind),
-                mount_index: plan.mount_index,
-                delay_secs: plan.delay_secs,
-            }
-        });
-        launch_plans_by_ordinal.push(launch_plan);
-        metadata.push(arcade_catalog::ArcadeGameMetadataKey {
-            year: game.year,
-            manufacturer: game.manufacturer,
-            category: game.category,
-            players: game.players,
-            control: game.control,
-        });
-        projected.push(arcade_catalog::ArcadeGameEntry {
-            preview_asset_key: reuse_or_arc(game.preview_asset_key, &title),
-            title,
-            mra_path: launch_ref,
-            preview_archive_path: preview_archives.intern(game.preview_archive_path),
-            has_preview: game.has_preview,
-            system_id: shared_system_id.clone(),
-            year: None,
-            manufacturer: Arc::from(""),
-            category: Arc::from(""),
-            players: None,
-            control: Arc::from(""),
-            is_new: game.is_new,
-        });
-    }
-    let launch_plans = indexes
-        .launch_ordinals
-        .iter()
-        .filter_map(|ordinal| {
-            launch_plans_by_ordinal
-                .get_mut(*ordinal as usize)
-                .and_then(Option::take)
-        })
-        .collect();
-    (projected, metadata, launch_plans)
-}
-
-fn reuse_or_arc(value: String, preferred: &Arc<str>) -> Arc<str> {
-    if value == preferred.as_ref() {
-        preferred.clone()
-    } else {
-        Arc::from(value)
-    }
-}
-
-/// Tiny field-local pool for values which are normally constant within one system.
-///
-/// A general hash interner made every projected row hash its archive, core and mount strings.
-/// These domains contain only a handful of values, so a short linear probe avoids both the hash
-/// cost and duplicate allocations without growing a global per-row string table.
-#[derive(Default)]
-struct SmallArcStringPool {
-    values: Vec<Arc<str>>,
-}
-
-impl SmallArcStringPool {
-    fn intern(&mut self, value: String) -> Arc<str> {
-        if let Some(shared) = self.values.iter().find(|shared| shared.as_ref() == value) {
-            return shared.clone();
-        }
-        let shared = Arc::<str>::from(value);
-        self.values.push(shared.clone());
-        shared
-    }
-}
-
 struct ProjectedGame<'a> {
     title: &'a str,
     launch_ref: &'a str,
@@ -353,7 +254,6 @@ fn project_rows<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mister_magik_catalog::system_shard::SystemLaunchPlan;
 
     #[test]
     fn registry_seed_keeps_arcade_nonresident_until_activation() {
@@ -379,111 +279,5 @@ mod tests {
             catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
             0
         );
-    }
-
-    #[test]
-    fn owned_projection_matches_borrowed_rows_and_structured_launch_plan() {
-        let source = vec![
-            SystemGame {
-                stable_key: "snes:first".into(),
-                title: "First Game".into(),
-                launch_ref: "magik-plan:snes:first".into(),
-                preview_archive_path: "/media/fat/preview/snes.zip".into(),
-                preview_asset_key: "First Game".into(),
-                has_preview: true,
-                year: Some(1992),
-                manufacturer: "Example".into(),
-                category: "Platform".into(),
-                players: Some(2),
-                control: "joy".into(),
-                is_new: true,
-                launch_plan: Some(SystemLaunchPlan {
-                    launch_ref: "magik-plan:snes:first".into(),
-                    title: "First Game".into(),
-                    system_id: "snes".into(),
-                    core_path: "/media/fat/_Console/SNES_20200101.rbf".into(),
-                    payload_path: "/media/fat/games/SNES/First Game.sfc".into(),
-                    mount_kind: "rom".into(),
-                    mount_index: 0,
-                    delay_secs: 1,
-                }),
-            },
-            SystemGame {
-                stable_key: "snes:second".into(),
-                title: "Second Game".into(),
-                launch_ref: "/media/fat/games/SNES/Second Game.sfc".into(),
-                preview_archive_path: "/media/fat/preview/snes.zip".into(),
-                preview_asset_key: String::new(),
-                has_preview: false,
-                year: None,
-                manufacturer: "Example".into(),
-                category: "Platform".into(),
-                players: None,
-                control: "joy".into(),
-                is_new: false,
-                launch_plan: None,
-            },
-        ];
-        let (expected_rows, expected_plans) = arcade_rows_from_persisted_shard("snes", &source);
-        let indexes = SystemNavigationIndexes {
-            title_ordinals: vec![0, 1],
-            preview_ordinals: vec![0],
-            launch_ordinals: vec![0],
-            ..SystemNavigationIndexes::default()
-        };
-        let (actual_rows, actual_metadata, actual_plans) =
-            arcade_rows_from_owned_persisted_shard("snes", source, &indexes);
-
-        assert_eq!(actual_plans, expected_plans);
-        assert_eq!(actual_rows.len(), expected_rows.len());
-        for ((actual, metadata), expected) in
-            actual_rows.iter().zip(&actual_metadata).zip(&expected_rows)
-        {
-            assert_eq!(actual.title, expected.title);
-            assert_eq!(actual.mra_path, expected.mra_path);
-            assert_eq!(actual.preview_archive_path, expected.preview_archive_path);
-            assert_eq!(actual.preview_asset_key, expected.preview_asset_key);
-            assert_eq!(actual.has_preview, expected.has_preview);
-            assert_eq!(actual.system_id, expected.system_id);
-            assert_eq!(metadata, &expected.metadata_key());
-            assert_eq!(actual.year, None);
-            assert!(actual.manufacturer.is_empty());
-            assert!(actual.category.is_empty());
-            assert_eq!(actual.players, None);
-            assert!(actual.control.is_empty());
-            assert_eq!(actual.is_new, expected.is_new);
-        }
-    }
-
-    #[test]
-    fn owned_projection_shares_hot_system_values_and_detaches_rich_metadata() {
-        let repeated = |stable_key: &str, title: &str| SystemGame {
-            stable_key: stable_key.into(),
-            title: title.into(),
-            launch_ref: format!("/games/{title}.rom"),
-            preview_archive_path: "/preview/system.zip".into(),
-            manufacturer: "Example".into(),
-            category: "Platform".into(),
-            control: "joy".into(),
-            ..SystemGame::default()
-        };
-        let indexes = SystemNavigationIndexes {
-            title_ordinals: vec![0, 1],
-            ..SystemNavigationIndexes::default()
-        };
-        let (rows, metadata, _) = arcade_rows_from_owned_persisted_shard(
-            "snes",
-            vec![repeated("one", "One"), repeated("two", "Two")],
-            &indexes,
-        );
-
-        assert!(Arc::ptr_eq(&rows[0].system_id, &rows[1].system_id));
-        assert!(Arc::ptr_eq(
-            &rows[0].preview_archive_path,
-            &rows[1].preview_archive_path
-        ));
-        assert_eq!(metadata[0].manufacturer, metadata[1].manufacturer);
-        assert_eq!(metadata[0].category, metadata[1].category);
-        assert_eq!(metadata[0].control, metadata[1].control);
     }
 }

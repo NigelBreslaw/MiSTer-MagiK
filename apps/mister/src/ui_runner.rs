@@ -37,8 +37,8 @@ use crate::preview_state::{
     ARCADE_PREVIEW_BOX_H, ARCADE_PREVIEW_BOX_W, ARCADE_PREVIEW_BOX_X, ARCADE_PREVIEW_BOX_Y,
     PreviewFrameIntent, PreviewPresentationState, PreviewPresentationTarget, PreviewRawFrame,
     PreviewRawFrameStatus, PreviewRawPixels, PreviewRawTransitionFrame, PreviewRoute, PreviewState,
-    apply_ready_preview, preview_visual_pct, prewarm_arcade_selected_preview,
-    request_arcade_preview_window, schedule_arcade_preview_window,
+    apply_ready_preview, preview_visual_pct, request_arcade_preview_window,
+    schedule_arcade_preview_window,
 };
 use crate::return_catalog_capsule;
 use crate::runtime_status::{self, LauncherStatus};

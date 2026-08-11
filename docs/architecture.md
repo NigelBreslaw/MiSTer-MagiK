@@ -720,10 +720,11 @@ bridge synchronization and drawing. A registered, populated collection may
 never be presented with zero resident rows. The registry's summed counts are
 the full catalog total, while resident rows describe only hydrated memory.
 
-A build without a valid registry first probes the retained Arcade mini-nav. A
-matching index restores the exact local Arcade projection; a missing, corrupt,
-oversized, or stale index starts the 20-second first-run particle intro and a
-CPU0-confined first-visible Arcade scan. The interactive Slint launcher is
+A build without a valid registry enters the first-build lifecycle. Its CPU0
+builder may use the retained Arcade mini-nav to accelerate the first-visible
+projection, but the launcher never treats that index as a catalog seed. A
+missing, corrupt, oversized, or stale index causes a normal CPU0-confined
+first-visible Arcade scan. The interactive Slint launcher is
 not rendered continuously behind the intro: timer dispatch and bridge sync are
 suppressed while catalog changes accumulate in Rust. The existing lifecycle
 `launcher_reveal_ready` transition is the only capture gate; no parallel

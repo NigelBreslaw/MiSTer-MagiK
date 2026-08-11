@@ -37,7 +37,7 @@ const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200)
 const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
-const SYSTEM_ENTRY_BENCHMARK_DIRECT_SETTLE_MS: u64 = 2_000;
+const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
@@ -46,8 +46,8 @@ fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEve
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
 }
 
-fn system_entry_benchmark_direct_settled(elapsed_ms: u64, input_enabled_ms: u64) -> bool {
-    elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_DIRECT_SETTLE_MS
+fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> bool {
+    elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
 
 fn discrete_selection_feedback_target(
@@ -4507,15 +4507,10 @@ pub(super) fn run_launcher_loop(
     let env_start_screen = launcher_start_screen_from_env();
     let env_start_system = launcher_start_system_from_env();
     let system_entry_benchmark_system = launcher_system_entry_benchmark_system_from_env();
-    let system_entry_benchmark_direct = launcher_system_entry_benchmark_direct_from_env();
-    let mut pending_direct_system_entry = system_entry_benchmark_direct
-        .then(|| {
-            system_entry_benchmark_system
-                .as_deref()
-                .map(system_entry_collection_id)
-                .map(str::to_string)
-        })
-        .flatten();
+    let mut pending_system_entry_benchmark = system_entry_benchmark_system
+        .as_deref()
+        .map(system_entry_collection_id)
+        .map(str::to_string);
     let env_start_menu = launcher_bench_scenario
         .is_some()
         .then(launcher_start_menu_from_env)
@@ -4885,52 +4880,7 @@ pub(super) fn run_launcher_loop(
         catalog = seed.catalog;
         catalog_ready = true;
     }
-    let retained_arcade_seed =
-        (!capsule_seed_ready && !sharded_seed_ready).then(|| {
-            let probe = mister_magik_catalog::builder_service::probe_retained_arcade_startup_seed(
-                Path::new(&arcade_root),
-            );
-            match &probe {
-                mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Ready(seed) => {
-                    print_startup_event(
-                        start,
-                        "retained_arcade_startup_seed",
-                        format!(
-                            "status=ready games={} probe_us={} decode_us={} bytes={}",
-                            seed.catalog.len(), seed.probe_us, seed.decode_us, seed.bytes
-                        ),
-                    );
-                }
-                mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Unavailable {
-                    reason,
-                    probe_us,
-                } => {
-                    print_startup_event(
-                        start,
-                        "retained_arcade_startup_seed",
-                        format!("status=unavailable reason={reason} probe_us={probe_us}"),
-                    );
-                }
-            }
-            probe
-        });
-    let retained_arcade_seed = match retained_arcade_seed {
-        Some(mister_magik_catalog::builder_service::RetainedArcadeStartupProbe::Ready(seed)) => {
-            Some(seed)
-        }
-        _ => None,
-    };
-    let retained_arcade_seed_ready = retained_arcade_seed.is_some();
-    let retained_arcade_fingerprint = retained_arcade_seed
-        .as_ref()
-        .map(|seed| seed.stamp_fingerprint.clone());
-    if let Some(seed) = retained_arcade_seed {
-        catalog = seed.catalog;
-        catalog_ready = true;
-    }
-    let initial_catalog_fingerprint = return_capsule_fingerprint
-        .or(sharded_catalog_fingerprint)
-        .or(retained_arcade_fingerprint);
+    let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
     if sharded_seed_ready {
@@ -5041,30 +4991,6 @@ pub(super) fn run_launcher_loop(
         } else {
             catalog_session.mark_refresh_done();
         }
-    } else if retained_arcade_seed_ready {
-        startup_ready_catalog_source = CatalogSource::RetainedArcadeBootstrap;
-        catalog_session.note_summary_seed_ready();
-        if preview_route.allows_preview_work() {
-            media_session.request_catalog_seed();
-        }
-        catalog_version = catalog_version.wrapping_add(1);
-        print_startup_event(
-            start,
-            "catalog_worker_deferred",
-            format!(
-                "root={} request={} reason=retained_arcade_bootstrap",
-                arcade_root,
-                CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS.label()
-            ),
-        );
-        // The retained projection is sufficient for immediate Arcade
-        // navigation but is never the authoritative complete library.
-        catalog_session.defer_catalog_worker(
-            arcade_root.clone(),
-            CatalogWorkerRequest::RECONCILE_CHANGED_INPUTS,
-            CatalogWorkerInitialCache::AlreadyProbedMissing,
-            CatalogExecutionMode::BackgroundInteractive,
-        );
     } else {
         let sqlite_state = catalog_startup_sqlite_state(&sqlite_path);
         match catalog_startup_without_summary_plan(
@@ -5148,43 +5074,6 @@ pub(super) fn run_launcher_loop(
     nav.set_arcade_exit_locked(return_capsule_active);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     apply_home_selected_from_env(&mut nav, &catalog, start);
-    if !system_entry_benchmark_direct
-        && let Some(system_id) = system_entry_benchmark_system.as_deref()
-    {
-        if nav.focus_system(&catalog, system_id) {
-            print_startup_event(
-                start,
-                "system_entry_benchmark_focused",
-                format!("system={system_id}"),
-            );
-        } else {
-            print_startup_event(
-                start,
-                "system_entry_benchmark_focus_failed",
-                format!("system={system_id}"),
-            );
-        }
-    }
-    let root_arcade_focused = nav.screen == Screen::Home
-        && nav
-            .current_menu_items()
-            .get(nav.selected)
-            .is_some_and(|item| item.id == arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-    let restored_arcade_collection = (nav.screen == Screen::Arcade)
-        .then(|| nav.active_collection_scope_id(&catalog))
-        .filter(|collection_id| !collection_id.is_empty());
-    if catalog_ready
-        && (root_arcade_focused || restored_arcade_collection.is_some())
-        && preview_route.allows_preview_work()
-    {
-        let collection_id =
-            restored_arcade_collection.unwrap_or(arcade_catalog::MENU_ARCADE_SYSTEM_ID);
-        let games = catalog.system_game_view(collection_id);
-        if !games.is_empty() {
-            let selected = nav.arcade.selected.min(games.len() - 1);
-            let _ = prewarm_arcade_selected_preview(games, selected, &mut preview);
-        }
-    }
     let bridge_systems_t = Instant::now();
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade))
@@ -5752,14 +5641,14 @@ pub(super) fn run_launcher_loop(
             .min(u64::MAX as u128) as u64;
         if catalog_ready
             && lifecycle.startup_input_enabled()
-            && system_entry_benchmark_direct_settled(
+            && system_entry_benchmark_settled(
                 loop_elapsed_ms,
                 lifecycle.startup_status().input_enabled_ms,
             )
             && effective_view.accepts_application_input()
             && nav.screen == Screen::Home
             && pending_collection_entry.is_none()
-            && let Some(collection_id) = pending_direct_system_entry.take()
+            && let Some(collection_id) = pending_system_entry_benchmark.take()
         {
             let requested_at = Instant::now();
             mister_magik_perf_events::clear_process_profiles();
@@ -12359,8 +12248,8 @@ mod tests {
 
     #[test]
     fn direct_system_entry_measurement_starts_after_home_settles() {
-        assert!(!system_entry_benchmark_direct_settled(2_245, 246));
-        assert!(system_entry_benchmark_direct_settled(2_246, 246));
+        assert!(!system_entry_benchmark_settled(2_245, 246));
+        assert!(system_entry_benchmark_settled(2_246, 246));
     }
 
     #[test]

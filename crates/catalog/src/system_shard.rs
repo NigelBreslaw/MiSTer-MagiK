@@ -118,64 +118,6 @@ struct StoredNavigation {
     games: Vec<SystemGame>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-struct StoredNavigationV2 {
-    schema_version: u32,
-    system_id: String,
-    generation: u64,
-    games: Vec<SystemGame>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-struct StoredNavigationV1 {
-    schema_version: u32,
-    system_id: String,
-    generation: u64,
-    games: Vec<SystemGameV1>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-struct SystemGameV1 {
-    stable_key: String,
-    title: String,
-    launch_ref: String,
-    preview_archive_path: String,
-    preview_asset_key: String,
-    has_preview: bool,
-    year: Option<u16>,
-    manufacturer: String,
-    players: Option<u8>,
-    control: String,
-    is_new: bool,
-    launch_plan: Option<SystemLaunchPlan>,
-}
-
-impl From<SystemGameV1> for SystemGame {
-    fn from(game: SystemGameV1) -> Self {
-        Self {
-            stable_key: game.stable_key,
-            title: game.title,
-            launch_ref: game.launch_ref,
-            preview_archive_path: game.preview_archive_path,
-            preview_asset_key: game.preview_asset_key,
-            has_preview: game.has_preview,
-            year: game.year,
-            manufacturer: game.manufacturer,
-            category: String::new(),
-            players: game.players,
-            control: game.control,
-            is_new: game.is_new,
-            launch_plan: game.launch_plan,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NavigationCompatibility {
-    CurrentOnly,
-    CurrentOrAlphaV1,
-}
-
 #[cfg(feature = "builder")]
 #[derive(Serialize)]
 struct StoredNavigationRef<'a> {
@@ -519,7 +461,7 @@ pub fn open_system_shard(
             "adjacent navigation hash does not match shard",
         ));
     }
-    let stored = decode_navigation(&navigation, limits, NavigationCompatibility::CurrentOnly)?;
+    let stored = decode_navigation(&navigation, limits)?;
     if stored.schema_version != NAVIGATION_SCHEMA_VERSION
         || stored.system_id != system_id.as_str()
         || stored.generation != generation
@@ -643,45 +585,26 @@ pub fn open_system_navigation(
     expected_generation: u64,
     limits: SystemShardLimits,
 ) -> Result<LoadedSystemShard, SystemShardError> {
-    open_system_navigation_with_compatibility(
+    open_system_navigation_with_timing(
         navigation_path,
         expected_system_id,
         expected_generation,
         limits,
-        NavigationCompatibility::CurrentOnly,
-    )
-}
-
-pub fn open_system_navigation_with_compatibility(
-    navigation_path: &Path,
-    expected_system_id: &SystemId,
-    expected_generation: u64,
-    limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
-) -> Result<LoadedSystemShard, SystemShardError> {
-    open_system_navigation_with_compatibility_and_timing(
-        navigation_path,
-        expected_system_id,
-        expected_generation,
-        limits,
-        compatibility,
     )
     .map(|(loaded, _)| loaded)
 }
 
-pub fn open_system_navigation_with_compatibility_and_timing(
+pub fn open_system_navigation_with_timing(
     navigation_path: &Path,
     expected_system_id: &SystemId,
     expected_generation: u64,
     limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
 ) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
     open_system_navigation_with_validation(
         navigation_path,
         expected_system_id,
         expected_generation,
         limits,
-        compatibility,
         NavigationValidation::Full,
     )
 }
@@ -690,22 +613,20 @@ pub fn open_system_navigation_with_compatibility_and_timing(
 ///
 /// The publishing path rejects duplicate stable keys before switching the manifest. Once the
 /// payload checksum matches that immutable descriptor, repeating the set construction during
-/// every system entry adds no safety. Unbound compatibility readers continue to perform the full
-/// duplicate check.
-pub fn open_verified_system_navigation_with_compatibility_and_timing(
+/// every system entry adds no safety. Unbound readers continue to perform the full duplicate
+/// check.
+pub fn open_verified_system_navigation_with_timing(
     navigation_path: &Path,
     expected_system_id: &SystemId,
     expected_generation: u64,
     expected_navigation_hash: &str,
     limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
 ) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
     open_system_navigation_with_validation(
         navigation_path,
         expected_system_id,
         expected_generation,
         limits,
-        compatibility,
         NavigationValidation::ManifestBound(expected_navigation_hash),
     )
 }
@@ -721,7 +642,6 @@ fn open_system_navigation_with_validation(
     expected_system_id: &SystemId,
     expected_generation: u64,
     limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
     validation: NavigationValidation<'_>,
 ) -> Result<(LoadedSystemShard, SystemNavigationOpenTiming), SystemShardError> {
     let read_started = std::time::Instant::now();
@@ -738,7 +658,7 @@ fn open_system_navigation_with_validation(
             "navigation checksum does not match verified manifest generation",
         ));
     }
-    let (stored, mut timing) = decode_navigation_with_timing(&navigation, limits, compatibility)?;
+    let (stored, mut timing) = decode_navigation_with_timing(&navigation, limits)?;
     if stored.system_id != expected_system_id.as_str() || stored.generation != expected_generation {
         return Err(SystemShardError::new(
             "read",
@@ -1006,15 +926,13 @@ fn encode_navigation(
 fn decode_navigation(
     encoded: &[u8],
     limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
 ) -> Result<StoredNavigation, SystemShardError> {
-    decode_navigation_with_timing(encoded, limits, compatibility).map(|(stored, _)| stored)
+    decode_navigation_with_timing(encoded, limits).map(|(stored, _)| stored)
 }
 
 fn decode_navigation_with_timing(
     encoded: &[u8],
     limits: SystemShardLimits,
-    compatibility: NavigationCompatibility,
 ) -> Result<(StoredNavigation, SystemNavigationOpenTiming), SystemShardError> {
     let prefix = encoded
         .get(..4)
@@ -1040,38 +958,9 @@ fn decode_navigation_with_timing(
     let schema = decode_navigation_schema_header(&decoded)?;
     let envelope_parse_us = elapsed_us(envelope_started);
     let typed_parse_started = std::time::Instant::now();
-    let stored = match (schema, compatibility) {
-        (NAVIGATION_SCHEMA_VERSION, _) => serde_json::from_slice(&decoded)
+    let stored = match schema {
+        NAVIGATION_SCHEMA_VERSION => serde_json::from_slice(&decoded)
             .map_err(|error| SystemShardError::with("parse navigation", error)),
-        (2, NavigationCompatibility::CurrentOrAlphaV1) => {
-            let stored: StoredNavigationV2 = serde_json::from_slice(&decoded)
-                .map_err(|error| SystemShardError::with("parse v2 navigation", error))?;
-            let indexes = build_navigation_indexes(&stored.games)?;
-            Ok(StoredNavigation {
-                schema_version: stored.schema_version,
-                system_id: stored.system_id,
-                generation: stored.generation,
-                indexes,
-                games: stored.games,
-            })
-        }
-        (1, NavigationCompatibility::CurrentOrAlphaV1) => {
-            let stored: StoredNavigationV1 = serde_json::from_slice(&decoded)
-                .map_err(|error| SystemShardError::with("parse alpha navigation", error))?;
-            let games = stored
-                .games
-                .into_iter()
-                .map(SystemGame::from)
-                .collect::<Vec<_>>();
-            let indexes = build_navigation_indexes(&games)?;
-            Ok(StoredNavigation {
-                schema_version: stored.schema_version,
-                system_id: stored.system_id,
-                generation: stored.generation,
-                indexes,
-                games,
-            })
-        }
         _ => Err(SystemShardError::new(
             "read",
             format!("navigation schema {schema} is unsupported"),
@@ -1389,12 +1278,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(defaults, 1);
-        let (_, timing) = open_system_navigation_with_compatibility_and_timing(
+        let (_, timing) = open_system_navigation_with_timing(
             &navigation,
             &data.system_id,
             data.generation,
             limits(),
-            NavigationCompatibility::CurrentOnly,
         )
         .unwrap();
         assert!(timing.compressed_bytes > 0);
@@ -1411,38 +1299,35 @@ mod tests {
         let data = fixture_data();
         let published = write_system_shard(&sqlite, &navigation, &data, limits()).unwrap();
 
-        let loaded = open_verified_system_navigation_with_compatibility_and_timing(
+        let loaded = open_verified_system_navigation_with_timing(
             &navigation,
             &data.system_id,
             data.generation,
             &published.navigation_hash,
             limits(),
-            NavigationCompatibility::CurrentOnly,
         )
         .unwrap()
         .0;
         assert_eq!(loaded.games, data.games);
         assert!(
-            open_verified_system_navigation_with_compatibility_and_timing(
+            open_verified_system_navigation_with_timing(
                 &navigation,
                 &data.system_id,
                 data.generation + 1,
                 &published.navigation_hash,
                 limits(),
-                NavigationCompatibility::CurrentOnly,
             )
             .unwrap_err()
             .message()
             .contains("identity or generation")
         );
         assert_eq!(
-            open_verified_system_navigation_with_compatibility_and_timing(
+            open_verified_system_navigation_with_timing(
                 &navigation,
                 &data.system_id,
                 data.generation,
                 "wrong-hash",
                 limits(),
-                NavigationCompatibility::CurrentOnly,
             )
             .unwrap_err()
             .message(),
@@ -1631,7 +1516,6 @@ mod tests {
                 max_navigation_decoded_bytes: 100,
                 ..limits()
             },
-            NavigationCompatibility::CurrentOnly,
         )
         .unwrap_err();
         assert_eq!(
@@ -1686,9 +1570,7 @@ mod tests {
             ..limits()
         };
 
-        let (decoded, timing) =
-            decode_navigation_with_timing(&encoded, limits, NavigationCompatibility::CurrentOnly)
-                .unwrap();
+        let (decoded, timing) = decode_navigation_with_timing(&encoded, limits).unwrap();
 
         assert_eq!(decoded.games.len(), 15_089);
         assert_eq!(decoded.games[0].stable_key, "game-00000");
@@ -1700,41 +1582,8 @@ mod tests {
     fn bounded_navigation_header_preserves_future_schema_rejection() {
         let decoded = br#"{"schema_version":99,"system_id":"c64","generation":1,"games":[]}"#;
         let encoded = lz4_flex::compress_prepend_size(decoded);
-        let error = decode_navigation(
-            &encoded,
-            limits(),
-            NavigationCompatibility::CurrentOrAlphaV1,
-        )
-        .unwrap_err();
+        let error = decode_navigation(&encoded, limits()).unwrap_err();
         assert_eq!(error.message(), "navigation schema 99 is unsupported");
-    }
-
-    #[test]
-    #[cfg(feature = "builder")]
-    fn alpha_navigation_is_explicitly_upgraded_in_memory() {
-        let root = temporary_root("alpha-navigation-v1");
-        let navigation = root.join("7.nav.lz4b");
-        let decoded = fs::read(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/compat/alpha-ef79bbb2-shard3-nav1-rich2/navigation-v1.json"),
-        )
-        .unwrap();
-        fs::write(&navigation, lz4_flex::compress_prepend_size(&decoded)).unwrap();
-        let system_id = SystemId::parse("arcade").unwrap();
-
-        assert!(open_system_navigation(&navigation, &system_id, 7, limits()).is_err());
-        let loaded = open_system_navigation_with_compatibility(
-            &navigation,
-            &system_id,
-            7,
-            limits(),
-            NavigationCompatibility::CurrentOrAlphaV1,
-        )
-        .unwrap();
-        assert_eq!(loaded.games.len(), 1);
-        assert_eq!(loaded.games[0].title, "Alpha Fixture");
-        assert!(loaded.games[0].category.is_empty());
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(feature = "builder")]

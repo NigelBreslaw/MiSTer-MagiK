@@ -269,12 +269,10 @@ must not be combined.
 `scripts/agent benchmark system-entry-critical-profile` is attribution-only.
 It runs isolated C64 and SNES direct entries with the dormant installed-runtime
 pprof sampler and per-thread Cortex-A9 PMU spans enabled. The retained evidence
-splits descriptor lookup, NavPack open/mmap/header/first-viewport work, JSON
-fallback read and hash, LZ4 decompression, envelope and typed parsing,
-validation, row projection, collection publication and CPU1 adoption. It also
-records whether the retained startup generation map was reused, worker
-wall/thread CPU time, CPU identity, page faults, compressed/decoded bytes and
-measured allocations, plus selected-preview I/O/decode timing and
+splits descriptor lookup, NavPack open/mmap/header/first-viewport work,
+collection publication and CPU1 adoption. It also records worker
+wall/thread CPU time, CPU identity, page faults and measured allocations, plus
+selected-preview I/O/decode timing and
 destination-frame preparation.
 Profiled samples never determine a performance pass; the unprofiled screening
 and confirmation commands remain authoritative.

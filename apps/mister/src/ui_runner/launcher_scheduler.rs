@@ -305,7 +305,14 @@ impl SystemEntryPrepareWorker {
                                     warmed_generation_matches(generation, &work.generation)
                                 })
                                 .map(|(_, reader)| reader);
-                            let message = prepare_system_shard(work.request, reader);
+                            let message = match reader {
+                                Some(reader) => prepare_system_shard(work.request, reader),
+                                None => CatalogWorkerMessage::SystemShardFailed {
+                                    system_id: work.request.system_id,
+                                    error: "system-entry NavPack generation was not warmed before input"
+                                        .to_string(),
+                                },
+                            };
                             worker_results.publish(system_entry_prepare_outcome(
                                 work.sequence,
                                 work.generation,
@@ -382,18 +389,6 @@ fn system_entry_prepare_outcome(
     }
 }
 
-enum OpenedSystemEntry {
-    Owned(
-        mister_magik_catalog::system_shard::LoadedSystemShard,
-        mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
-    ),
-    Collection {
-        collection: arcade_catalog::SystemCollection,
-        game_count: usize,
-        timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
-    },
-}
-
 fn publish_prepared_system_collection(
     base_catalog: &ArcadeCatalog,
     requested_collection_id: &str,
@@ -416,7 +411,7 @@ fn publish_prepared_system_collection(
 
 fn prepare_system_shard(
     request: SystemShardRequest,
-    warmed_reader: Option<&mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader>,
+    reader: &mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader,
 ) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
@@ -429,26 +424,7 @@ fn prepare_system_shard(
         .to_string();
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
-    let descriptor_pmu = mister_magik_perf_events::sampled_span("system-entry-registry-open");
     let result = (|| {
-        let fallback_reader = if warmed_reader.is_none() {
-            let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-            Some(
-                mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-                    &storage,
-                    mister_magik_catalog::production_sharded_projection::production_registry_limits(
-                    ),
-                )?,
-            )
-        } else {
-            None
-        };
-        let reader = warmed_reader.unwrap_or_else(|| {
-            fallback_reader
-                .as_ref()
-                .expect("fallback reader exists without a warmed generation")
-        });
-        drop(descriptor_pmu);
         let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&artifact_system_id)
             .map_err(|error| {
             mister_magik_catalog::sharded_catalog::CatalogError::new(
@@ -457,171 +433,37 @@ fn prepare_system_shard(
             )
         })?;
         let descriptor_started = Instant::now();
-        let candidates = reader.system_generation_candidates(&parsed)?;
+        let descriptor_pmu =
+            mister_magik_perf_events::sampled_span("system-entry-descriptor-lookup");
+        let generation = reader.active_system_generation(&parsed)?;
+        drop(descriptor_pmu);
         let descriptor_lookup_us = elapsed_us(descriptor_started);
-        for candidate in candidates {
-            if let (Some(navpack_path), Some(navpack_bytes), Some(_navpack_hash)) = (
-                candidate.navpack_path.as_ref(),
-                candidate.navpack_bytes,
-                candidate.navpack_hash.as_ref(),
-            ) {
-                let navpack_pmu =
-                    mister_magik_perf_events::sampled_span("system-entry-navpack-open");
-                let opened = arcade_catalog::SystemCollection::open_navpack(
-                    artifact_system_id.as_str(),
-                    navpack_path,
-                    navpack_bytes,
-                    candidate.generation,
-                    candidate.games,
-                    base_catalog.platform_kind(&artifact_system_id),
-                );
-                drop(navpack_pmu);
-                if let Ok((collection, navpack)) = opened {
-                    return Ok(OpenedSystemEntry::Collection {
-                        collection,
-                        game_count: candidate.games,
-                        timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
-                            descriptor_lookup_us,
-                            navpack: Some(navpack),
-                            ..Default::default()
-                        },
-                    });
-                }
-            }
-            if artifact_system_id == "c64" {
-                let sqlite_pmu = mister_magik_perf_events::sampled_span("system-entry-sqlite-open");
-                let opened = arcade_catalog::SystemCollection::open_paged_sqlite(
-                    artifact_system_id.as_str(),
-                    &candidate.sqlite_path,
-                    candidate.generation,
-                    candidate.games,
-                    base_catalog.platform_kind(&artifact_system_id),
-                );
-                drop(sqlite_pmu);
-                match opened {
-                    Ok((collection, paged_sqlite)) => {
-                        return Ok(OpenedSystemEntry::Collection {
-                            collection,
-                            game_count: candidate.games,
-                            timing:
-                                mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
-                                    descriptor_lookup_us,
-                                    paged_sqlite: Some(paged_sqlite),
-                                    ..Default::default()
-                                },
-                        });
-                    }
-                    Err(_) => {}
-                }
-            }
-        }
-        let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
-        let result = reader.open_system_shard_with_timing(&parsed);
-        drop(open_pmu);
-        result.map(|(system, timing)| OpenedSystemEntry::Owned(system, timing))
-    })();
-    let navigation_decode_us = load_started.elapsed().as_micros();
-    let message = match result {
-        Ok(OpenedSystemEntry::Owned(system, open_timing)) => {
-            let prepare_started = Instant::now();
-            let navigation_indexes = system.navigation_indexes;
-            let games = system.games;
-            let game_count = games.len();
-            let preview_prelude = preview_dispatch.and_then(|dispatch| {
-                let game = games.first().filter(|game| {
-                    game.has_preview
-                        && !game.preview_archive_path.is_empty()
-                        && !game.preview_asset_key.is_empty()
-                })?;
-                dispatch
-                    .requests
-                    .publish_reserved(
-                        dispatch.generation,
-                        game.title.clone(),
-                        game.preview_archive_path.clone(),
-                        game.preview_asset_key.clone(),
-                    )
-                    .then(|| SystemEntryPreviewPrelude {
-                        generation: dispatch.generation,
-                        title: game.title.clone(),
-                        preview_archive_path: game.preview_archive_path.clone(),
-                        preview_asset_key: game.preview_asset_key.clone(),
-                    })
-            });
-            let projection_started = Instant::now();
-            let projection_pmu =
-                mister_magik_perf_events::sampled_span("system-entry-row-projection");
-            let (replacement, cold_metadata, launch_plans) = arcade_rows_from_owned_persisted_shard(
-                &artifact_system_id,
-                games,
-                &navigation_indexes,
-            );
-            drop(projection_pmu);
-            let row_projection_us = elapsed_us(projection_started);
-            let collection_index_started = Instant::now();
-            let collection_index_pmu =
-                mister_magik_perf_events::sampled_span("system-entry-collection-index");
-            let collection = Arc::new(
-                arcade_catalog::SystemCollection::new_with_persisted_indexes(
-                    artifact_system_id.as_str(),
-                    replacement,
-                    cold_metadata,
-                    launch_plans,
-                    base_catalog.platform_kind(&artifact_system_id),
-                    navigation_indexes.preview_ordinals,
-                ),
-            );
-            drop(collection_index_pmu);
-            let collection_index_us = elapsed_us(collection_index_started);
-            let replacement_started = Instant::now();
-            let replacement_pmu =
-                mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog = publish_prepared_system_collection(
-                &base_catalog,
-                &worker_system_id,
-                &artifact_system_id,
-                collection,
-            );
-            drop(replacement_pmu);
-            let catalog_replacement_us = elapsed_us(replacement_started);
-            let allocations = crate::allocation_metrics::finish();
-            let execution_finished = system_entry_thread_snapshot();
-            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
-            CatalogWorkerMessage::SystemShardReady {
-                system_id: worker_system_id.clone(),
-                catalog,
-                base_catalog_version,
-                game_count,
-                prepare_us: elapsed_us(prepare_started),
-                profile: SystemEntryCatalogProfile {
-                    warmed_generation_map: warmed_reader.is_some(),
-                    open: open_timing,
-                    row_projection_us,
-                    collection_index_us,
-                    catalog_replacement_us,
-                    total_wall_us: elapsed_us(load_started),
-                    thread_cpu_us: execution_finished
-                        .thread_cpu_us
-                        .saturating_sub(execution_started.thread_cpu_us),
-                    cpu_start: execution_started.cpu,
-                    cpu_end: execution_finished.cpu,
-                    minor_page_faults: execution_finished
-                        .minor_page_faults
-                        .saturating_sub(execution_started.minor_page_faults),
-                    major_page_faults: execution_finished
-                        .major_page_faults
-                        .saturating_sub(execution_started.major_page_faults),
-                    allocations: allocations.allocations,
-                    allocated_bytes: allocations.bytes,
-                },
-                preview_prelude,
-            }
-        }
-        Ok(OpenedSystemEntry::Collection {
+        let navpack_pmu = mister_magik_perf_events::sampled_span("system-entry-navpack-open");
+        let (collection, navpack) = arcade_catalog::SystemCollection::open_navpack(
+            artifact_system_id.as_str(),
+            &generation.navpack_path,
+            generation.navpack_bytes,
+            generation.generation,
+            generation.games,
+            base_catalog.platform_kind(&artifact_system_id),
+        )
+        .map_err(|error| {
+            mister_magik_catalog::sharded_catalog::CatalogError::new("open-system", error)
+        })?;
+        drop(navpack_pmu);
+        Ok((
             collection,
-            game_count,
-            timing: open_timing,
-        }) => {
+            generation.games,
+            mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
+                descriptor_lookup_us,
+                navpack: Some(navpack),
+                ..Default::default()
+            },
+        ))
+    })();
+    let navpack_open_us = load_started.elapsed().as_micros();
+    let message = match result {
+        Ok((collection, game_count, open_timing)) => {
             let prepare_started = Instant::now();
             let preview_prelude = preview_dispatch.and_then(|dispatch| {
                 let game = collection.game_at(0).filter(|game| {
@@ -665,10 +507,7 @@ fn prepare_system_shard(
                 game_count,
                 prepare_us: elapsed_us(prepare_started),
                 profile: SystemEntryCatalogProfile {
-                    warmed_generation_map: warmed_reader.is_some(),
                     open: open_timing,
-                    row_projection_us: 0,
-                    collection_index_us: 0,
                     catalog_replacement_us,
                     total_wall_us: elapsed_us(load_started),
                     thread_cpu_us: execution_finished
@@ -708,9 +547,9 @@ fn prepare_system_shard(
         load_started.elapsed().as_micros()
     );
     crate::ui_logln!(
-        "catalog_navigation_decode system={} decode_us={}",
+        "catalog_system_navpack_open system={} open_us={}",
         worker_system_id,
-        navigation_decode_us
+        navpack_open_us
     );
     message
 }

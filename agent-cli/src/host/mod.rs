@@ -8151,7 +8151,6 @@ fn run_system_entry_sample(
                 SYSTEM_ENTRY_PROFILE_REMOTE.into(),
             ),
         ];
-        env_vars.push(("MISTER_SYSTEM_ENTRY_BENCHMARK_DIRECT".into(), "1".into()));
         if instrumentation == SystemEntryInstrumentation::Profile {
             env_vars.extend([
                 ("MISTER_PMU_PROFILE".into(), "1".into()),

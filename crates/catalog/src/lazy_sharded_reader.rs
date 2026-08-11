@@ -11,8 +11,7 @@ use crate::sharded_catalog::{
     SystemSummary,
 };
 use crate::system_shard::{
-    LoadedSystemShard, NavigationCompatibility, SystemNavigationOpenTiming,
-    open_verified_system_navigation_with_compatibility_and_timing,
+    LoadedSystemShard, SystemNavigationOpenTiming, open_verified_system_navigation_with_timing,
 };
 use std::path::{Path, PathBuf};
 
@@ -20,17 +19,13 @@ pub struct LazyShardedCatalogReader {
     storage_root: PathBuf,
     limits: RegistryLimits,
     manifest: CatalogManifest,
-    navigation_compatibility: NavigationCompatibility,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LazySystemGeneration {
     pub generation: u64,
-    pub sqlite_path: PathBuf,
-    pub sqlite_hash: String,
-    pub navpack_path: Option<PathBuf>,
-    pub navpack_bytes: Option<u64>,
-    pub navpack_hash: Option<String>,
+    pub navpack_path: PathBuf,
+    pub navpack_bytes: u64,
     pub games: usize,
 }
 
@@ -49,8 +44,6 @@ pub struct LazySystemOpenTiming {
     pub navigation: SystemNavigationOpenTiming,
     pub projection_us: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub paged_sqlite: Option<crate::arcade_catalog::PagedSqliteOpenTiming>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub navpack: Option<crate::arcade_catalog::NavPackCollectionOpenTiming>,
 }
 
@@ -58,12 +51,27 @@ impl LazyShardedCatalogReader {
     pub fn open(storage_root: &Path, limits: RegistryLimits) -> Result<Self, CatalogError> {
         let manifest = read_latest_manifest_lazy(storage_root, limits)
             .map_err(|error| CatalogError::new("read-manifest", error.to_string()))?;
-        let navigation_compatibility = match manifest.format.as_ref() {
-            None => NavigationCompatibility::CurrentOrAlphaV1,
+        match manifest.format.as_ref() {
+            None => {
+                return Err(CatalogError::new(
+                    "read-manifest",
+                    "catalog format descriptor is missing",
+                ));
+            }
             Some(format) => match crate::catalog_format::classify(format) {
-                CatalogFormatStatus::Current => NavigationCompatibility::CurrentOnly,
-                CatalogFormatStatus::UpgradeRequired { .. } => {
-                    NavigationCompatibility::CurrentOrAlphaV1
+                CatalogFormatStatus::Current => {}
+                CatalogFormatStatus::UpgradeRequired {
+                    installed,
+                    required,
+                } => {
+                    return Err(CatalogError::new(
+                        "read-manifest",
+                        format!(
+                            "catalog rebuild required: installed {}, required {}",
+                            installed.label(),
+                            required.label()
+                        ),
+                    ));
                 }
                 CatalogFormatStatus::UnsupportedFuture {
                     installed,
@@ -92,12 +100,11 @@ impl LazyShardedCatalogReader {
                     ));
                 }
             },
-        };
+        }
         Ok(Self {
             storage_root: storage_root.to_path_buf(),
             limits,
             manifest,
-            navigation_compatibility,
         })
     }
 
@@ -168,90 +175,49 @@ impl LazyShardedCatalogReader {
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
         let descriptor_lookup_us = elapsed_us(descriptor_started);
-        let open = |generation: &crate::shard_registry::PublishedGeneration| {
-            let (loaded, timing) = open_verified_system_navigation_with_compatibility_and_timing(
-                &self.storage_root.join(&generation.navigation_path),
-                system_id,
-                generation.generation,
-                &generation.navigation_hash,
-                self.limits.shard,
-                self.navigation_compatibility,
-            )
-            .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
-            if loaded.navigation_hash != generation.navigation_hash {
-                return Err(CatalogError::new(
-                    "open-system",
-                    "navigation checksum does not match manifest",
-                ));
-            }
-            Ok((loaded, timing))
-        };
-        let (loaded, navigation) = match open(&system.active) {
-            Ok(loaded) => loaded,
-            Err(active_error) => match system.previous.as_ref() {
-                Some(previous) => open(previous).map_err(|previous_error| {
-                    CatalogError::new(
-                        "open-system",
-                        format!(
-                            "active shard failed: {active_error}; previous shard failed: {previous_error}"
-                        ),
-                    )
-                })?,
-                None => {
-                    return Err(CatalogError::new("open-system", active_error.to_string()));
-                }
-            },
-        };
+        let generation = &system.active;
+        let (loaded, navigation) = open_verified_system_navigation_with_timing(
+            &self.storage_root.join(&generation.navigation_path),
+            system_id,
+            generation.generation,
+            &generation.navigation_hash,
+            self.limits.shard,
+        )
+        .map_err(|error| CatalogError::new("open-system", error.to_string()))?;
         Ok((
             loaded,
             LazySystemOpenTiming {
                 descriptor_lookup_us,
                 navigation,
                 projection_us: 0,
-                paged_sqlite: None,
                 navpack: None,
             },
         ))
     }
 
-    /// Returns immutable active/previous generation descriptors without opening any artifact.
-    pub fn system_generation_candidates(
+    /// Returns the immutable active NavPack descriptor without opening the artifact.
+    pub fn active_system_generation(
         &self,
         system_id: &SystemId,
-    ) -> Result<Vec<LazySystemGeneration>, CatalogError> {
+    ) -> Result<LazySystemGeneration, CatalogError> {
         let system = self
             .manifest
             .systems
             .iter()
             .find(|system| &system.system_id == system_id)
             .ok_or_else(|| CatalogError::new("open-system", "system is absent from manifest"))?;
-        [
-            &system.active,
-            system.previous.as_ref().unwrap_or(&system.active),
-        ]
-        .into_iter()
-        .enumerate()
-        .filter(|(index, _)| *index == 0 || system.previous.is_some())
-        .map(|(_, generation)| {
-            Ok(LazySystemGeneration {
-                generation: generation.generation,
-                sqlite_path: self.storage_root.join(&generation.sqlite_path),
-                sqlite_hash: generation.sqlite_hash.clone(),
-                navpack_path: generation
-                    .navpack
-                    .as_ref()
-                    .map(|navpack| self.storage_root.join(&navpack.path)),
-                navpack_bytes: generation.navpack.as_ref().map(|navpack| navpack.bytes),
-                navpack_hash: generation
-                    .navpack
-                    .as_ref()
-                    .map(|navpack| navpack.hash.clone()),
-                games: usize::try_from(generation.games).map_err(|_| {
-                    CatalogError::new("open-system", "system game count exceeds platform size")
-                })?,
-            })
+        let generation = &system.active;
+        let navpack = generation.navpack.as_ref().ok_or_else(|| {
+            CatalogError::new("open-system", "active system generation has no NavPack")
+        })?;
+        Ok(LazySystemGeneration {
+            generation: generation.generation,
+            navpack_path: self.storage_root.join(&navpack.path),
+            navpack_bytes: navpack.bytes,
+            games: usize::try_from(generation.games).map_err(|_| {
+                CatalogError::new("open-system", "system game count exceeds platform size")
+            })?,
         })
-        .collect()
     }
 
     /// Maps and faults only each populated system's bounded entry prelude.
@@ -262,53 +228,42 @@ impl LazyShardedCatalogReader {
             if system.active.games == 0 {
                 continue;
             }
-            let candidates = [Some(&system.active), system.previous.as_ref()];
-            let mut errors = Vec::new();
-            let mut warmed = None;
-            for generation in candidates.into_iter().flatten() {
-                let Some(navpack) = generation.navpack.as_ref() else {
-                    errors.push("generation has no NavPack".to_string());
-                    continue;
-                };
-                let games = usize::try_from(generation.games).map_err(|_| {
-                    CatalogError::new(
-                        "warm-entry-preludes",
-                        "system game count exceeds platform size",
-                    )
-                })?;
-                let path = self.storage_root.join(&navpack.path);
-                match crate::navpack::MappedNavPack::open(
-                    &path,
-                    navpack.bytes,
-                    system.system_id.as_str(),
-                    generation.generation,
-                    games,
-                )
-                .and_then(|(mapped, _)| {
-                    let prelude = mapped.fault_entry_viewport()?;
-                    Ok((
-                        prelude.first_viewport_ordinals.len(),
-                        prelude.selected_preview.is_some(),
-                        prelude.terminal_empty,
-                    ))
-                }) {
-                    Ok(state) => {
-                        warmed = Some(state);
-                        break;
-                    }
-                    Err(error) => errors.push(error),
-                }
-            }
-            let Some((viewport_rows, exact_preview, terminal_empty)) = warmed else {
-                return Err(CatalogError::new(
+            let generation = &system.active;
+            let navpack = generation.navpack.as_ref().ok_or_else(|| {
+                CatalogError::new(
                     "warm-entry-preludes",
-                    format!(
-                        "{} has no usable entry prelude: {}",
-                        system.system_id,
-                        errors.join("; ")
-                    ),
-                ));
-            };
+                    format!("{} active generation has no NavPack", system.system_id),
+                )
+            })?;
+            let games = usize::try_from(generation.games).map_err(|_| {
+                CatalogError::new(
+                    "warm-entry-preludes",
+                    "system game count exceeds platform size",
+                )
+            })?;
+            let path = self.storage_root.join(&navpack.path);
+            let (mapped, _) = crate::navpack::MappedNavPack::open(
+                &path,
+                navpack.bytes,
+                system.system_id.as_str(),
+                generation.generation,
+                games,
+            )
+            .map_err(|error| {
+                CatalogError::new(
+                    "warm-entry-preludes",
+                    format!("{} active NavPack is unusable: {error}", system.system_id),
+                )
+            })?;
+            let prelude = mapped.fault_entry_viewport().map_err(|error| {
+                CatalogError::new(
+                    "warm-entry-preludes",
+                    format!("{} entry prelude is unusable: {error}", system.system_id),
+                )
+            })?;
+            let viewport_rows = prelude.first_viewport_ordinals.len();
+            let exact_preview = prelude.selected_preview.is_some();
+            let terminal_empty = prelude.terminal_empty;
             report.systems += 1;
             report.viewport_rows += viewport_rows;
             report.exact_previews += usize::from(exact_preview);
@@ -435,8 +390,8 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_active_system_falls_back_to_its_previous_generation() {
-        let root = temporary_root("system-fallback");
+    fn corrupt_active_system_is_rejected_even_when_a_previous_generation_exists() {
+        let root = temporary_root("corrupt-active-system");
         seed(&root);
         let current = crate::shard_registry::read_latest_manifest(&root, limits()).unwrap();
         let snes_id = system("snes");
@@ -488,9 +443,7 @@ mod tests {
         .unwrap();
 
         let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
-        let snes = reader.open_system(&snes_id).unwrap();
-        assert_eq!(snes.summary().generation, 1);
-        assert_eq!(snes.games()[0].title, "SNES Game");
+        assert!(reader.open_system(&snes_id).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
