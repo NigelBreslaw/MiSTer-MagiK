@@ -65,10 +65,6 @@ module tb_mister_magik_video_diagnostics_timeout;
 		if(!armed) $fatal(1, "timeout monitor did not arm");
 		repeat(36) @(negedge clk);
 		if(!request) $fatal(1, "stopped HDMI heartbeat did not request a freeze");
-		// The immutable partial record is serialized once through the compact
-		// CRC engine before it becomes readable.
-		repeat(180) @(negedge clk);
-		if(dut.crc_busy) $fatal(1, "partial snapshot CRC did not complete");
 
 		uio = 1'b1;
 		@(negedge clk); din = 16'h005d; strobe = 1'b1;

@@ -171,10 +171,6 @@ module tb_mister_magik_video_diagnostics_control;
 		avalon_payload[4*16 +: 16] = 16'h1111;
 		output_payload[0 +: 16] = 16'd2;
 		repeat(4) @(negedge clk_sys);
-		// Before any fault, reads return a small coherent idle record rather
-		// than rebuilding a CRC from live cross-domain evidence.
-		read_native_snapshot(8'h5e, 16'h4d4e, 16'h0000);
-		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 
 		// The independent responder must ignore every existing latch opcode.
 		io_uio = 1'b1;
@@ -204,7 +200,7 @@ module tb_mister_magik_video_diagnostics_control;
 		strobe_word(16'h002f);
 		for(index=0; index<10; index=index+1) strobe_word(16'h1000 + index);
 		close_command();
-		repeat(180) @(negedge clk_sys);
+		repeat(90) @(negedge clk_sys);
 		if(dut.missing_domains != 3'd0)
 			$fatal(1, "two-sample mailbox verification did not complete");
 

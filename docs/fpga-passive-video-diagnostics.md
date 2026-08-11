@@ -24,12 +24,6 @@ vblanks. The first fault freezes its native domain and requests stable mailbox
 snapshots from the other domains. A missing clock produces a partial snapshot
 after 4,096 `clk_sys` cycles. Reads never clear or mutate evidence.
 
-Once capture finishes, one small registered engine calculates each immutable
-record CRC before readout is enabled. Idle and armed reads use fixed minimal
-records; they do not serialize changing cross-domain counters. This keeps the
-post-fault evidence and wire format intact while avoiding a wide live CRC cone
-that would otherwise dominate FPGA logic use.
-
 The diagnostic ABI is separate from latch protocol v5. Existing commands
 `0x57`–`0x5C`, capability bits, responses, ownership, and apply priority remain
 unchanged. Every diagnostic response has its own magic, fixed length, schema,
