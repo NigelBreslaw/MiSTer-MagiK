@@ -154,7 +154,7 @@ module mister_magik_video_diagnostics_control #(
 	reg [11:0] pre_vmin = 12'd0, pre_vmax = 12'd0;
 	reg [13:0] pre_stride = 14'd0, post_stride = 14'd0;
 	reg [11:0] post_width = 12'd0, post_height = 12'd0;
-	reg [15:0] control_fault_flags = 16'd0;
+	reg [7:0] control_fault_flags = 8'd0;
 	reg [1:0] route_mismatch_vblanks = 2'd0;
 	reg [11:0] freeze_timeout = 12'd0;
 	reg freeze_pending = 1'b0;
@@ -174,7 +174,9 @@ module mister_magik_video_diagnostics_control #(
 
 	reg [15:0] tx_crc = 16'hffff;
 	reg [7:0] tx_command = 8'd0;
-	reg fault_taken_now;
+	reg freeze_request_now;
+	reg [7:0] freeze_request_trigger;
+	reg [7:0] freeze_request_flags;
 
 	initial begin
 		for(capture_index = 0; capture_index < 10; capture_index = capture_index + 1)
@@ -279,7 +281,7 @@ module mister_magik_video_diagnostics_control #(
 					43: current_snapshot_word = post_width;
 					44: current_snapshot_word = post_height;
 					45: current_snapshot_word = {2'd0, post_stride};
-					46: current_snapshot_word = control_fault_flags;
+					46: current_snapshot_word = {8'd0, control_fault_flags};
 					default: current_snapshot_word = 16'd0;
 				endcase
 			end
@@ -314,35 +316,23 @@ module mister_magik_video_diagnostics_control #(
 		end
 	end
 
-	task automatic begin_freeze;
+	task automatic request_freeze;
 		input [7:0] fault_trigger;
-		input [15:0] fault_flags;
+		input [7:0] fault_flags;
 		begin
-			if((state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED) && !freeze_pending && !fault_taken_now) begin
-				fault_taken_now = 1'b1;
-				trigger <= fault_trigger;
-				generation <= generation + 1'd1;
-				freeze_clock <= clock_count;
-				frozen_vblank_count <= vblank_count;
-				frozen_route_state_flags <= apply_accepted ?
-					{11'd0, route_flt, 1'b1, route_en, 1'b0, 1'b1} :
-					{11'd0, route_flt, 1'b0, route_en, pending, ownership};
-				frozen_active_seq <= apply_accepted ? pending_seq : active_seq;
-				frozen_post_count <= post_count;
-				frozen_active_route_epoch <= apply_accepted ?
-					(active_route_epoch + 1'd1) : active_route_epoch;
-				legacy_open <= 1'b0;
-				control_fault_flags <= control_fault_flags | fault_flags;
-				missing_domains <= 3'b110;
-				freeze_timeout <= 12'd0;
-				freeze_pending <= 1'b1;
-				snapshot_request_toggle <= ~snapshot_request_toggle;
+			if((state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED) &&
+			   !freeze_pending && !freeze_request_now) begin
+				freeze_request_now = 1'b1;
+				freeze_request_trigger = fault_trigger;
+				freeze_request_flags = fault_flags;
 			end
 		end
 	endtask
 
 	always @(posedge clk_sys) begin
-		fault_taken_now = 1'b0;
+		freeze_request_now = 1'b0;
+		freeze_request_trigger = MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE;
+		freeze_request_flags = 8'd0;
 		clock_count <= clock_count + 1'd1;
 		vbl_d <= control_vbl_sys;
 		avalon_fault_meta <= avalon_fault_toggle_async;
@@ -382,7 +372,7 @@ module mister_magik_video_diagnostics_control #(
 					{route_en,route_flt,route_fmt,route_width,route_height,route_hmin,
 					route_hmax,route_vmin,route_vmax,route_base,route_stride}) begin
 					if(route_mismatch_vblanks == 1)
-						begin_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_ROUTE_DIVERGENCE,
+						request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_ROUTE_DIVERGENCE,
 							MAGIK_VIDEO_DIAGNOSTICS_CONTROL_FAULT_FLAGS_ROUTE_DIVERGENCE);
 					else route_mismatch_vblanks <= route_mismatch_vblanks + 1'd1;
 				end
@@ -466,23 +456,23 @@ module mister_magik_video_diagnostics_control #(
 				end
 				if(legacy_owned_at_start) begin
 					legacy_owned <= legacy_owned + 1'd1;
-					begin_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED, 16'd0);
+					request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED, 8'd0);
 				end
 			end
 		end
 
 		if(monitor_armed && io_osd && io_strobe)
-			begin_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_OWNED_OSD_WRITE,
+			request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_OWNED_OSD_WRITE,
 				MAGIK_VIDEO_DIAGNOSTICS_CONTROL_FAULT_FLAGS_OWNED_OSD_WRITE);
 		if(monitor_armed &&
 		   (control_reset_req_sys || control_reset_out_sys ||
 		    !cfg_done || !control_pll_lock_sys))
-			begin_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
+			request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
 				{8'd0, heartbeat_age == HEARTBEAT_TIMEOUT_CYCLES, 2'd0,
 				 !control_pll_lock_sys, !cfg_done,
 				 control_reset_out_sys, control_reset_req_sys});
 		if(monitor_armed && heartbeat_age == HEARTBEAT_TIMEOUT_CYCLES)
-			begin_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
+			request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
 				MAGIK_VIDEO_DIAGNOSTICS_CONTROL_FAULT_FLAGS_HEARTBEAT_TIMEOUT);
 
 		if(monitor_armed && (avalon_fault_sys != avalon_fault_seen)) begin
@@ -505,7 +495,7 @@ module mister_magik_video_diagnostics_control #(
 		else if(avalon_trigger_verify_pending) begin
 			if(avalon_trigger_candidate == avalon_trigger_sample) begin
 				avalon_trigger_verify_pending <= 1'b0;
-				begin_freeze(avalon_trigger_candidate, 16'd0);
+				request_freeze(avalon_trigger_candidate, 8'd0);
 			end
 			else begin
 				avalon_trigger_candidate <= avalon_trigger_sample;
@@ -521,13 +511,36 @@ module mister_magik_video_diagnostics_control #(
 		else if(output_trigger_verify_pending) begin
 			if(output_trigger_candidate == output_trigger_sample) begin
 				output_trigger_verify_pending <= 1'b0;
-				begin_freeze(output_trigger_candidate, 16'd0);
+				request_freeze(output_trigger_candidate, 8'd0);
 			end
 			else begin
 				output_trigger_candidate <= output_trigger_sample;
 				output_trigger_sample_pending <= 1'b1;
 				output_trigger_verify_pending <= 1'b0;
 			end
+		end
+
+		// Commit at one site after priority arbitration. Keeping the wide frozen
+		// context behind one enable prevents Quartus from building an eight-way
+		// mux for every evidence bit.
+		if(freeze_request_now) begin
+			trigger <= freeze_request_trigger;
+			generation <= generation + 1'd1;
+			freeze_clock <= clock_count;
+			frozen_vblank_count <= vblank_count;
+			frozen_route_state_flags <= apply_accepted ?
+				{11'd0, route_flt, 1'b1, route_en, 1'b0, 1'b1} :
+				{11'd0, route_flt, 1'b0, route_en, pending, ownership};
+			frozen_active_seq <= apply_accepted ? pending_seq : active_seq;
+			frozen_post_count <= post_count;
+			frozen_active_route_epoch <= apply_accepted ?
+				(active_route_epoch + 1'd1) : active_route_epoch;
+			legacy_open <= 1'b0;
+			control_fault_flags <= control_fault_flags | freeze_request_flags;
+			missing_domains <= 3'b110;
+			freeze_timeout <= 12'd0;
+			freeze_pending <= 1'b1;
+			snapshot_request_toggle <= ~snapshot_request_toggle;
 		end
 
 		if(freeze_pending) begin
