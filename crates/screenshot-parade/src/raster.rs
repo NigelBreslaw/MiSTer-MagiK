@@ -1722,6 +1722,41 @@ mod tests {
     }
 
     #[test]
+    fn oriented_blit_matches_the_identity_frame_in_logical_coordinates() {
+        let source = test_image(8, 6);
+        let card = PreparedScreenshotCard::prepare(&source, 1, 135);
+        let background = color565(4, 8, 12);
+        let identity = Rgb565OutputLayout::new(32, 24, 32, OutputRotation::None).unwrap();
+        let rotated =
+            Rgb565OutputLayout::new(32, 24, 24, OutputRotation::CounterClockwise90).unwrap();
+        let mut identity_frame = vec![background; identity.len()];
+        let mut rotated_frame = vec![background; rotated.len()];
+
+        card.blit(
+            &mut identity_frame,
+            identity,
+            3 * PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+            2,
+        );
+        card.blit(
+            &mut rotated_frame,
+            rotated,
+            3 * PARADE_SUBPIXEL_ONE + PARADE_SUBPIXEL_ONE / 2,
+            2,
+        );
+
+        for y in 0..identity.logical_height() {
+            for x in 0..identity.logical_width() {
+                assert_eq!(
+                    identity_frame[identity.physical_offset(x, y)],
+                    rotated_frame[rotated.physical_offset(x, y)],
+                    "logical pixel ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fractional_blits_do_not_paint_outside_the_card_rows() {
         let source = test_image(8, 6);
         let card = PreparedScreenshotCard::prepare(&source, 1, 135);
