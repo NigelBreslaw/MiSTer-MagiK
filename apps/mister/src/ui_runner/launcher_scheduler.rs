@@ -178,11 +178,12 @@ enum SystemEntryPrepareCommand {
     Prepare(SystemEntryPrepareRequest),
     RetireOutcome(SystemEntryPrepareOutcome),
     RetireCatalog(ArcadeCatalog),
-    WarmEntryPreludes(
-        mpsc::SyncSender<
+    WarmEntryPreludes {
+        generation: Option<String>,
+        reply: mpsc::SyncSender<
             Result<mister_magik_catalog::lazy_sharded_reader::EntryPreludeWarmupReport, String>,
         >,
-    ),
+    },
 }
 
 struct PreparedSystemEntry {
@@ -290,13 +291,20 @@ impl SystemEntryPrepareWorker {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
                 );
+                let mut warmed_generation = None;
                 while let Ok(command) = request_rx.recv() {
                     match command {
                         SystemEntryPrepareCommand::Prepare(work) => {
                             let _lease = mister_magik_catalog::work_coordinator::foreground(
                                 "system-entry-prepare",
                             );
-                            let message = prepare_system_shard(work.request);
+                            let reader = warmed_generation
+                                .as_ref()
+                                .filter(|(generation, _)| {
+                                    warmed_generation_matches(generation, &work.generation)
+                                })
+                                .map(|(_, reader)| reader);
+                            let message = prepare_system_shard(work.request, reader);
                             worker_results.publish(system_entry_prepare_outcome(
                                 work.sequence,
                                 work.generation,
@@ -305,14 +313,18 @@ impl SystemEntryPrepareWorker {
                         }
                         SystemEntryPrepareCommand::RetireOutcome(outcome) => drop(outcome),
                         SystemEntryPrepareCommand::RetireCatalog(catalog) => drop(catalog),
-                        SystemEntryPrepareCommand::WarmEntryPreludes(reply) => {
+                        SystemEntryPrepareCommand::WarmEntryPreludes { generation, reply } => {
                             let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
                                 &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
                                 mister_magik_catalog::production_sharded_projection::production_registry_limits(),
                             )
                             .map_err(|error| error.to_string())
                             .and_then(|reader| {
-                                reader.warm_entry_preludes().map_err(|error| error.to_string())
+                                let report = reader
+                                    .warm_entry_preludes()
+                                    .map_err(|error| error.to_string())?;
+                                warmed_generation = Some((generation, reader));
+                                Ok(report)
                             });
                             let _ = reply.send(result);
                         }
@@ -326,6 +338,10 @@ impl SystemEntryPrepareWorker {
             liveness: liveness_rx,
         })
     }
+}
+
+fn warmed_generation_matches(warmed: &Option<String>, requested: &Option<String>) -> bool {
+    warmed.is_some() && warmed == requested
 }
 
 fn system_entry_prepare_outcome(
@@ -397,7 +413,10 @@ fn publish_prepared_system_collection(
     catalog
 }
 
-fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
+fn prepare_system_shard(
+    request: SystemShardRequest,
+    warmed_reader: Option<&mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader>,
+) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
     let base_catalog = request.base_catalog;
@@ -409,14 +428,26 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
         .to_string();
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
-    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
     let descriptor_pmu = mister_magik_perf_events::sampled_span("system-entry-registry-open");
-    let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-        &storage,
-        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-    );
-    drop(descriptor_pmu);
-    let result = result.and_then(|reader| {
+    let result = (|| {
+        let fallback_reader = if warmed_reader.is_none() {
+            let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+            Some(
+                mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                    &storage,
+                    mister_magik_catalog::production_sharded_projection::production_registry_limits(
+                    ),
+                )?,
+            )
+        } else {
+            None
+        };
+        let reader = warmed_reader.unwrap_or_else(|| {
+            fallback_reader
+                .as_ref()
+                .expect("fallback reader exists without a warmed generation")
+        });
+        drop(descriptor_pmu);
         let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&artifact_system_id)
             .map_err(|error| {
             mister_magik_catalog::sharded_catalog::CatalogError::new(
@@ -487,7 +518,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
         let result = reader.open_system_shard_with_timing(&parsed);
         drop(open_pmu);
         result.map(|(system, timing)| OpenedSystemEntry::Owned(system, timing))
-    });
+    })();
     let navigation_decode_us = load_started.elapsed().as_micros();
     let message = match result {
         Ok(OpenedSystemEntry::Owned(system, open_timing)) => {
@@ -562,6 +593,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 game_count,
                 prepare_us: elapsed_us(prepare_started),
                 profile: SystemEntryCatalogProfile {
+                    warmed_generation_map: warmed_reader.is_some(),
                     open: open_timing,
                     row_projection_us,
                     collection_index_us,
@@ -632,6 +664,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 game_count,
                 prepare_us: elapsed_us(prepare_started),
                 profile: SystemEntryCatalogProfile {
+                    warmed_generation_map: warmed_reader.is_some(),
                     open: open_timing,
                     row_projection_us: 0,
                     collection_index_us: 0,
@@ -768,7 +801,10 @@ impl LauncherScheduler {
         let (reply_tx, reply_rx) = mpsc::sync_channel(1);
         worker
             .requests
-            .send(SystemEntryPrepareCommand::WarmEntryPreludes(reply_tx))
+            .send(SystemEntryPrepareCommand::WarmEntryPreludes {
+                generation: self.system_shard_generation.clone(),
+                reply: reply_tx,
+            })
             .map_err(|_| "system-entry prepare worker disconnected".to_string())?;
         reply_rx
             .recv_timeout(Duration::from_secs(5))
@@ -1562,6 +1598,17 @@ mod tests {
             SystemEntryPrepareOutcome::Failed(FailedSystemEntry { error, .. }) if error == "six"
         ));
         assert!(mailbox.take().is_none());
+    }
+
+    #[test]
+    fn warmed_generation_map_is_used_only_for_the_exact_catalog_generation() {
+        let generation_a = Some("generation-a".to_string());
+        let generation_b = Some("generation-b".to_string());
+
+        assert!(warmed_generation_matches(&generation_a, &generation_a));
+        assert!(!warmed_generation_matches(&generation_a, &generation_b));
+        assert!(!warmed_generation_matches(&generation_a, &None));
+        assert!(!warmed_generation_matches(&None, &None));
     }
 
     #[test]
