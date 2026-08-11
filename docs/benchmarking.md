@@ -238,9 +238,9 @@ full `system-entry` benchmark only when the critical set needs to be
 rediscovered.
 
 `scripts/agent benchmark system-entry-critical-confirm` repeats that same
-direct measurement 20 times per critical system and reports nearest-rank P95,
+direct measurement 10 times per critical system and reports nearest-rank P95,
 median, and maximum latency for every stage. `scripts/agent benchmark
-system-entry-qualification` applies the 20-process contract to every populated
+system-entry-qualification` applies the 10-process contract to every populated
 registry system in registry order. Both modes retain partial failed samples
 instead of dropping them from the artifact set or treating them as slow
 successful samples.

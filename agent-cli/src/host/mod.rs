@@ -7761,7 +7761,7 @@ fn profile_installed_system_entry_repeated(
     output_dir: &Path,
     mode: SystemEntryRepeatedMode,
 ) -> Result<String> {
-    const SAMPLES_PER_SYSTEM: usize = 20;
+    const SAMPLES_PER_SYSTEM: usize = 10;
 
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;

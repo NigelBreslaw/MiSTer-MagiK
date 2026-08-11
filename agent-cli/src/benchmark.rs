@@ -201,8 +201,8 @@ fn require_clean_installed_commit(
             output_dir,
             reporter,
             BenchmarkProfile::SystemEntryCriticalConfirm,
-            "mister-magik-system-entry-critical-confirm-benchmark-v1",
-            "confirming direct collection entry for the fixed critical systems with 20 fresh processes each",
+            "mister-magik-system-entry-critical-confirm-benchmark-v2",
+            "confirming direct collection entry for the fixed critical systems with 10 fresh processes each",
         ),
         BenchmarkScenario::SystemEntryCriticalProfile => execute_system_entry_repeated(
             &mut device,
@@ -219,8 +219,8 @@ fn require_clean_installed_commit(
             output_dir,
             reporter,
             BenchmarkProfile::SystemEntryQualification,
-            "mister-magik-system-entry-qualification-benchmark-v1",
-            "qualifying direct collection entry for every populated system with 20 fresh processes each",
+            "mister-magik-system-entry-qualification-benchmark-v2",
+            "qualifying direct collection entry for every populated system with 10 fresh processes each",
         ),
         BenchmarkScenario::LaunchReturn => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, false)
