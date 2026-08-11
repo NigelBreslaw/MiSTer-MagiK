@@ -424,7 +424,14 @@ fn prepare_system_shard(
         .to_string();
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
-    let result = (|| {
+    let result: Result<
+        (
+            arcade_catalog::SystemCollection,
+            usize,
+            mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming,
+        ),
+        mister_magik_catalog::sharded_catalog::CatalogError,
+    > = (|| {
         let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&artifact_system_id)
             .map_err(|error| {
             mister_magik_catalog::sharded_catalog::CatalogError::new(
