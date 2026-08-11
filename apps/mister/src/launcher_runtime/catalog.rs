@@ -271,7 +271,7 @@ mod tests {
             games: 942,
         }];
 
-        let catalog = registry_only_catalog(DEFAULT_ARCADE_ROOT, &systems);
+        let catalog = registry_only_catalog(arcade_catalog::DEFAULT_ARCADE_ROOT, &systems);
 
         assert_eq!(catalog.systems[0].count, 942);
         assert_eq!(catalog.system_game_count("arcade"), 0);
