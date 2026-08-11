@@ -1600,16 +1600,29 @@ impl ArcadeCatalog {
     }
 
     pub fn with_system_collection(&self, collection: Arc<SystemCollection>) -> Self {
-        let mut catalog = self.clone();
         let system_id = collection.system_id().to_string();
+        self.with_system_collection_for_id(system_id, collection)
+    }
+
+    /// Publishes a collection under a launcher collection alias.
+    ///
+    /// The Home Arcade tile uses `menu:arcade`, while its immutable artifact identity remains
+    /// `arcade`. Keeping the alias at the catalog boundary preserves row and launch identities.
+    pub fn with_system_collection_for_id(
+        &self,
+        collection_id: impl Into<String>,
+        collection: Arc<SystemCollection>,
+    ) -> Self {
+        let mut catalog = self.clone();
+        let collection_id = collection_id.into();
         if let Some(system) = catalog
             .systems
             .iter_mut()
-            .find(|system| system.id == system_id)
+            .find(|system| system.id == collection_id)
         {
             system.count = collection.len();
         }
-        Arc::make_mut(&mut catalog.system_collections).insert(system_id, collection);
+        Arc::make_mut(&mut catalog.system_collections).insert(collection_id, collection);
         catalog
     }
 
@@ -3408,6 +3421,51 @@ mod tests {
             replaced.system_game_at("c64", 0).unwrap().title.as_ref(),
             "New"
         );
+    }
+
+    #[test]
+    fn collection_alias_keeps_arcade_artifact_row_identity() {
+        let base = ArcadeCatalog::new(
+            PathBuf::from(DEFAULT_ARCADE_ROOT),
+            Vec::new(),
+            vec![GameSystemEntry {
+                id: "arcade".into(),
+                title: "Arcade".into(),
+                count: 1,
+            }],
+        );
+        let collection = Arc::new(SystemCollection::new(
+            "arcade",
+            vec![ArcadeGameEntry {
+                title: "Fixture".into(),
+                mra_path: "/media/fat/_Arcade/Fixture.mra".into(),
+                preview_archive_path: "/media/fat/preview/arcade.zip".into(),
+                preview_asset_key: "Fixture".into(),
+                has_preview: true,
+                system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
+                players: None,
+                control: "".into(),
+                is_new: false,
+            }],
+            Vec::new(),
+            PlatformKind::Arcade,
+        ));
+
+        let catalog = base.with_system_collection_for_id(MENU_ARCADE_SYSTEM_ID, collection);
+
+        assert_eq!(catalog.system_game_count(MENU_ARCADE_SYSTEM_ID), 1);
+        assert_eq!(
+            catalog
+                .system_game_at(MENU_ARCADE_SYSTEM_ID, 0)
+                .unwrap()
+                .system_id
+                .as_ref(),
+            "arcade"
+        );
+        assert_eq!(catalog.system_game_count("arcade"), 0);
     }
 
     #[test]

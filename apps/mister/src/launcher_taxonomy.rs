@@ -588,7 +588,14 @@ impl<'a> TaxonomyBuilder<'a> {
     }
 
     fn build_root_menu(&mut self) {
-        let arcade_count = self.catalog.system_game_count(MENU_ARCADE_SYSTEM_ID);
+        let resident_arcade_count = self.catalog.system_game_count(MENU_ARCADE_SYSTEM_ID);
+        let declared_arcade_count = self
+            .catalog
+            .systems
+            .iter()
+            .filter(|system| self.catalog.platform_kind(&system.id) == PlatformKind::Arcade)
+            .fold(0usize, |total, system| total.saturating_add(system.count));
+        let arcade_count = resident_arcade_count.max(declared_arcade_count);
         let mut items = Vec::new();
         if arcade_count > 0 {
             self.taxonomy.collections.insert(
@@ -835,6 +842,26 @@ mod tests {
                 COMPUTERS_MENU_ID,
                 HANDHELDS_MENU_ID,
             ]
+        );
+    }
+
+    #[test]
+    fn registry_only_arcade_count_keeps_the_home_tile_without_resident_rows() {
+        let catalog = catalog_with_kind("arcade", PlatformKind::Arcade);
+        assert_eq!(catalog.system_game_count(MENU_ARCADE_SYSTEM_ID), 0);
+
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog);
+        let arcade = taxonomy
+            .collection(MENU_ARCADE_SYSTEM_ID)
+            .expect("registry Arcade tile");
+
+        assert_eq!(arcade.count, 1);
+        assert_eq!(
+            taxonomy
+                .primary_destination_for_system("arcade")
+                .unwrap()
+                .collection_id,
+            MENU_ARCADE_SYSTEM_ID
         );
     }
 

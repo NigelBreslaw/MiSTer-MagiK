@@ -71,8 +71,19 @@ pub fn load_sharded_registry_seed_at(
             status: "stale",
             error: error.to_string(),
         })?;
-    let systems = registry
-        .systems()
+    let generation = registry.generation();
+    Ok(ShardedCatalogSeed {
+        catalog: registry_only_catalog(root, registry.systems()),
+        catalog_fingerprint,
+        generation,
+    })
+}
+
+fn registry_only_catalog(
+    root: &str,
+    registry_systems: &[mister_magik_catalog::sharded_catalog::SystemSummary],
+) -> ArcadeCatalog {
+    let systems = registry_systems
         .iter()
         .map(|system| arcade_catalog::GameSystemEntry {
             id: system.system_id.as_str().to_owned(),
@@ -80,29 +91,11 @@ pub fn load_sharded_registry_seed_at(
             count: usize::try_from(system.games).unwrap_or(usize::MAX),
         })
         .collect::<Vec<_>>();
-    let generation = registry.generation();
-    let arcade_id = mister_magik_catalog::catalog_classify::SystemId::parse(
-        arcade_catalog::MENU_ARCADE_SYSTEM_ID.trim_start_matches("menu:"),
-    )
-    .ok();
-    let (games, launch_plans) = match arcade_id.as_ref() {
-        Some(system_id)
-            if registry
-                .systems()
-                .iter()
-                .any(|system| &system.system_id == system_id) =>
-        {
-            let system =
-                reader
-                    .open_system(system_id)
-                    .map_err(|error| ShardedCatalogSeedLoadError {
-                        status: "failed",
-                        error: format!("registered Arcade catalog cannot be opened: {error}"),
-                    })?;
-            arcade_rows_from_shard("arcade", system.games())
-        }
-        _ => (Vec::new(), Vec::new()),
-    };
+    // Startup publishes only registry counts. Arcade uses the same on-demand NavPack path as
+    // every other system; the retained bootstrap remains a recovery path when Catalog V3 cannot
+    // seed the launcher at all.
+    let games = Vec::new();
+    let launch_plans = Vec::new();
     let platform_kinds = systems
         .iter()
         .map(|system| {
@@ -112,17 +105,13 @@ pub fn load_sharded_registry_seed_at(
             )
         })
         .collect();
-    Ok(ShardedCatalogSeed {
-        catalog: ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
-            PathBuf::from(root),
-            games,
-            systems,
-            launch_plans,
-            platform_kinds,
-        ),
-        catalog_fingerprint,
-        generation,
-    })
+    ArcadeCatalog::new_with_deferred_text_indexes_and_platform_kinds(
+        PathBuf::from(root),
+        games,
+        systems,
+        launch_plans,
+        platform_kinds,
+    )
 }
 
 pub fn arcade_rows_from_shard(
@@ -365,6 +354,32 @@ fn project_rows<'a>(
 mod tests {
     use super::*;
     use mister_magik_catalog::system_shard::SystemLaunchPlan;
+
+    #[test]
+    fn registry_seed_keeps_arcade_nonresident_until_activation() {
+        use mister_magik_catalog::catalog_classify::SystemId;
+        use mister_magik_catalog::sharded_catalog::SystemSummary;
+
+        let arcade = SystemId::parse("arcade").unwrap();
+        let systems = vec![SystemSummary {
+            system_id: arcade,
+            display_title: "Arcade".into(),
+            section: "arcade".into(),
+            family: "arcade".into(),
+            order: 0,
+            generation: 3,
+            games: 942,
+        }];
+
+        let catalog = registry_only_catalog(DEFAULT_ARCADE_ROOT, &systems);
+
+        assert_eq!(catalog.systems[0].count, 942);
+        assert_eq!(catalog.system_game_count("arcade"), 0);
+        assert_eq!(
+            catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+            0
+        );
+    }
 
     #[test]
     fn owned_projection_matches_borrowed_rows_and_structured_launch_plan() {

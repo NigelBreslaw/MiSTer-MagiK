@@ -102,6 +102,20 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             system.games().len(),
         )
         .map_err(|error| format!("validate NavPack {}: {error}", summary.system_id))?;
+        let (mapped_navpack, _) = crate::navpack::MappedNavPack::open(
+            &storage.join(&navpack.path),
+            navpack.bytes,
+            summary.system_id.as_str(),
+            summary.generation,
+            system.games().len(),
+        )
+        .map_err(|error| format!("map NavPack {}: {error}", summary.system_id))?;
+        validate_navpack_rows(&mapped_navpack, system.games()).map_err(|error| {
+            format!(
+                "compare NavPack {} with JSON shard: {error}",
+                summary.system_id
+            )
+        })?;
         navpack_systems += 1;
         navpack_bytes = navpack_bytes
             .checked_add(navpack.bytes)
@@ -185,6 +199,49 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
     );
     output.push_str(&rows);
     Ok(output)
+}
+
+fn validate_navpack_rows(
+    navpack: &crate::navpack::MappedNavPack,
+    games: &[crate::sharded_catalog::CatalogGame],
+) -> Result<(), String> {
+    for (ordinal, game) in games.iter().enumerate() {
+        let row = navpack.row(ordinal)?;
+        let metadata = navpack.metadata(ordinal)?;
+        if row.title != game.title
+            || row.launch_ref != game.launch_ref
+            || row.preview_archive_path != game.preview_archive_path
+            || row.preview_asset_key != game.preview_asset_key
+            || row.has_preview != game.has_preview
+            || row.is_new != game.is_new
+            || metadata.year != game.year
+            || metadata.manufacturer != game.manufacturer
+            || metadata.category != game.category
+            || metadata.players != game.players
+            || metadata.control != game.control
+        {
+            return Err(format!("row {ordinal} differs"));
+        }
+        match (row.launch_index, game.launch_plan.as_ref()) {
+            (None, None) => {}
+            (Some(index), Some(expected)) => {
+                let actual = navpack.launch(index)?;
+                if actual.launch_ref != expected.launch_ref
+                    || actual.title != expected.title
+                    || actual.system_id != expected.system_id
+                    || actual.core_path != expected.core_path
+                    || actual.payload_path != expected.payload_path
+                    || actual.mount_kind != expected.mount_kind
+                    || actual.mount_index != expected.mount_index
+                    || actual.delay_secs != expected.delay_secs
+                {
+                    return Err(format!("launch plan {ordinal} differs"));
+                }
+            }
+            _ => return Err(format!("launch presence {ordinal} differs")),
+        }
+    }
+    Ok(())
 }
 
 fn validate_visible_system_rows(

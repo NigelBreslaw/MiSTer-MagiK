@@ -205,8 +205,8 @@ impl LazyShardedCatalogReader {
         ))
     }
 
-    /// Returns immutable active/previous SQLite candidates without opening either artifact.
-    pub fn system_sqlite_candidates(
+    /// Returns immutable active/previous generation descriptors without opening any artifact.
+    pub fn system_generation_candidates(
         &self,
         system_id: &SystemId,
     ) -> Result<Vec<LazySystemGeneration>, CatalogError> {

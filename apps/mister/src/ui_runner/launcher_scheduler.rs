@@ -244,6 +244,10 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let base_catalog = request.base_catalog;
     let base_catalog_version = request.base_catalog_version;
     let preview_dispatch = request.preview;
+    let artifact_system_id = worker_system_id
+        .strip_prefix("menu:")
+        .unwrap_or(&worker_system_id)
+        .to_string();
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
     let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
@@ -254,57 +258,53 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     );
     drop(descriptor_pmu);
     let result = result.and_then(|reader| {
-        let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&worker_system_id)
+        let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&artifact_system_id)
             .map_err(|error| {
-                mister_magik_catalog::sharded_catalog::CatalogError::new(
-                    "open-system",
-                    error.to_string(),
-                )
-            })?;
-        if worker_system_id == "c64" {
-            let descriptor_started = Instant::now();
-            let candidates = reader.system_sqlite_candidates(&parsed)?;
-            let descriptor_lookup_us = elapsed_us(descriptor_started);
-            let mut failures = Vec::new();
-            for candidate in candidates {
-                if let (Some(navpack_path), Some(navpack_bytes), Some(_navpack_hash)) = (
-                    candidate.navpack_path.as_ref(),
-                    candidate.navpack_bytes,
-                    candidate.navpack_hash.as_ref(),
-                ) {
-                    let navpack_pmu =
-                        mister_magik_perf_events::sampled_span("system-entry-navpack-open");
-                    let opened = arcade_catalog::SystemCollection::open_navpack(
-                        worker_system_id.as_str(),
-                        navpack_path,
-                        navpack_bytes,
-                        candidate.generation,
-                        candidate.games,
-                        base_catalog.platform_kind(&worker_system_id),
-                    );
-                    drop(navpack_pmu);
-                    match opened {
-                        Ok((collection, navpack)) => {
-                            return Ok(OpenedSystemEntry::Collection {
-                                collection,
-                                game_count: candidate.games,
-                                timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
-                                    descriptor_lookup_us,
-                                    navpack: Some(navpack),
-                                    ..Default::default()
-                                },
-                            });
-                        }
-                        Err(error) => failures.push(format!("NavPack: {error}")),
-                    }
+            mister_magik_catalog::sharded_catalog::CatalogError::new(
+                "open-system",
+                error.to_string(),
+            )
+        })?;
+        let descriptor_started = Instant::now();
+        let candidates = reader.system_generation_candidates(&parsed)?;
+        let descriptor_lookup_us = elapsed_us(descriptor_started);
+        for candidate in candidates {
+            if let (Some(navpack_path), Some(navpack_bytes), Some(_navpack_hash)) = (
+                candidate.navpack_path.as_ref(),
+                candidate.navpack_bytes,
+                candidate.navpack_hash.as_ref(),
+            ) {
+                let navpack_pmu =
+                    mister_magik_perf_events::sampled_span("system-entry-navpack-open");
+                let opened = arcade_catalog::SystemCollection::open_navpack(
+                    artifact_system_id.as_str(),
+                    navpack_path,
+                    navpack_bytes,
+                    candidate.generation,
+                    candidate.games,
+                    base_catalog.platform_kind(&artifact_system_id),
+                );
+                drop(navpack_pmu);
+                if let Ok((collection, navpack)) = opened {
+                    return Ok(OpenedSystemEntry::Collection {
+                        collection,
+                        game_count: candidate.games,
+                        timing: mister_magik_catalog::lazy_sharded_reader::LazySystemOpenTiming {
+                            descriptor_lookup_us,
+                            navpack: Some(navpack),
+                            ..Default::default()
+                        },
+                    });
                 }
+            }
+            if artifact_system_id == "c64" {
                 let sqlite_pmu = mister_magik_perf_events::sampled_span("system-entry-sqlite-open");
                 let opened = arcade_catalog::SystemCollection::open_paged_sqlite(
-                    worker_system_id.as_str(),
+                    artifact_system_id.as_str(),
                     &candidate.sqlite_path,
                     candidate.generation,
                     candidate.games,
-                    base_catalog.platform_kind(&worker_system_id),
+                    base_catalog.platform_kind(&artifact_system_id),
                 );
                 drop(sqlite_pmu);
                 match opened {
@@ -320,13 +320,9 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                                 },
                         });
                     }
-                    Err(error) => failures.push(format!("SQLite: {error}")),
+                    Err(_) => {}
                 }
             }
-            return Err(mister_magik_catalog::sharded_catalog::CatalogError::new(
-                "open-system",
-                format!("paged C64 candidates failed: {}", failures.join("; ")),
-            ));
         }
         let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
         let result = reader.open_system_shard_with_timing(&parsed);
@@ -365,7 +361,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let projection_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-row-projection");
             let (replacement, cold_metadata, launch_plans) = arcade_rows_from_owned_persisted_shard(
-                &worker_system_id,
+                &artifact_system_id,
                 games,
                 &navigation_indexes,
             );
@@ -376,11 +372,11 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                 mister_magik_perf_events::sampled_span("system-entry-collection-index");
             let collection = Arc::new(
                 arcade_catalog::SystemCollection::new_with_persisted_indexes(
-                    worker_system_id.as_str(),
+                    artifact_system_id.as_str(),
                     replacement,
                     cold_metadata,
                     launch_plans,
-                    base_catalog.platform_kind(&worker_system_id),
+                    base_catalog.platform_kind(&artifact_system_id),
                     navigation_indexes.preview_ordinals,
                 ),
             );
@@ -389,7 +385,8 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let replacement_started = Instant::now();
             let replacement_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog = base_catalog.with_system_collection(collection);
+            let catalog =
+                base_catalog.with_system_collection_for_id(worker_system_id.clone(), collection);
             drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
@@ -454,7 +451,8 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let replacement_started = Instant::now();
             let replacement_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog = base_catalog.with_system_collection(Arc::new(collection));
+            let catalog = base_catalog
+                .with_system_collection_for_id(worker_system_id.clone(), Arc::new(collection));
             drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
