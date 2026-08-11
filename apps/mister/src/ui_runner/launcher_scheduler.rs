@@ -229,7 +229,15 @@ impl SystemEntryPrepareWorker {
                 while let Ok(command) = request_rx.recv() {
                     match command {
                         SystemEntryPrepareCommand::InstallGeneration(generation) => {
+                            // Registry verification is startup background work. Selected preview
+                            // preparation on the same CPU must be able to preempt the sweep.
+                            mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                                mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryVerify,
+                            );
                             registry = generation.and_then(SystemEntryRegistry::open);
+                            mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                                mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
+                            );
                         }
                         SystemEntryPrepareCommand::Prepare(work) => {
                             let _lease = mister_magik_catalog::work_coordinator::foreground(

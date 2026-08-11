@@ -12,6 +12,7 @@ pub enum RuntimeThreadRole {
     InputDiscovery,
     CatalogWorker,
     SystemEntryPrepare,
+    SystemEntryVerify,
     CatalogForeground,
     SearchIndex,
     LibraryWalker,
@@ -40,6 +41,7 @@ impl RuntimeThreadRole {
             Self::InputDiscovery => "input-discovery",
             Self::CatalogWorker => "catalog-worker",
             Self::SystemEntryPrepare => "system-entry-prepare",
+            Self::SystemEntryVerify => "system-entry-verify",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
             Self::LibraryWalker => "library-walker",
@@ -74,6 +76,7 @@ impl RuntimeThreadRole {
             Self::InputDiscovery => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
             Self::SystemEntryPrepare => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
+            Self::SystemEntryVerify => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
             // coordinator can yield it to an actual foreground request.
@@ -559,6 +562,7 @@ mod tests {
         for role in [
             RuntimeThreadRole::CatalogWorker,
             RuntimeThreadRole::SystemEntryPrepare,
+            RuntimeThreadRole::SystemEntryVerify,
             RuntimeThreadRole::InputDiscovery,
             RuntimeThreadRole::LibraryWalker,
             RuntimeThreadRole::MediaWorker,
@@ -624,6 +628,11 @@ mod tests {
             (
                 RuntimeThreadRole::SystemEntryPrepare,
                 0,
+                ThreadAffinity::Cpu0,
+            ),
+            (
+                RuntimeThreadRole::SystemEntryVerify,
+                10,
                 ThreadAffinity::Cpu0,
             ),
             (
