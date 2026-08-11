@@ -133,6 +133,39 @@ module tb_mister_magik_video_diagnostics_control;
 	integer index;
 	reg [15:0] words [0:47];
 	reg [15:0] crc;
+	task automatic read_native_snapshot;
+		input [7:0] selected_command;
+		input [15:0] expected_magic;
+		input [15:0] expected_word_four;
+		begin
+			io_uio = 1'b1;
+			@(negedge clk_sys); io_din = {8'd0, selected_command}; io_strobe = 1'b1;
+			#1 if(!response_valid || response_data != expected_magic)
+				$fatal(1, "missing native snapshot magic command=%h", selected_command);
+			@(negedge clk_sys); io_strobe = 1'b0;
+			crc = 16'hffff;
+			crc = crc_word(crc, {8'd0, selected_command});
+			crc = crc_word(crc, 16'd1);
+			crc = crc_word(crc, 16'd31);
+			for(index=0; index<32; index=index+1) begin
+				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+				#1;
+				if(!response_valid)
+					$fatal(1, "native response ended command=%h word=%0d",
+						selected_command, index);
+				words[index] = response_data;
+				if(index < 31) crc = crc_word(crc, response_data);
+				@(negedge clk_sys); io_strobe = 1'b0;
+			end
+			close_command();
+			if(words[31] != crc)
+				$fatal(1, "native CRC mismatch command=%h expected=%h got=%h",
+					selected_command, crc, words[31]);
+			if(words[0] != 16'd1 || words[4] != expected_word_four)
+				$fatal(1, "native payload mismatch command=%h", selected_command);
+		end
+	endtask
+
 	initial begin
 		avalon_payload[0 +: 16] = 16'd1;
 		avalon_payload[4*16 +: 16] = 16'h1111;
@@ -194,6 +227,8 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "control identity/trigger/mask mismatch");
 		for(index=0; index<10; index=index+1)
 			if(words[20+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
+		read_native_snapshot(8'h5e, 16'h4d4e, 16'h1111);
+		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 		$display("video diagnostics control tests passed");
 		$finish;
 	end

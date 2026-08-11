@@ -109,23 +109,23 @@ module mister_magik_video_diagnostics_control #(
 	assign monitor_armed = state == MAGIK_VIDEO_DIAGNOSTICS_STATE_ARMED;
 	assign diagnostic_generation = generation;
 
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg avalon_fault_meta = 1'b0, avalon_fault_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg output_fault_meta = 1'b0, output_fault_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg avalon_ack_meta = 1'b0, avalon_ack_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg output_ack_meta = 1'b0, output_ack_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg heartbeat_meta = 1'b0, heartbeat_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_vbl_meta = 1'b0, control_vbl_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_reset_req_meta = 1'b0, control_reset_req_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_reset_out_meta = 1'b0, control_reset_out_sys = 1'b0;
-	(* ASYNC_REG = "TRUE", altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_pll_lock_meta = 1'b0, control_pll_lock_sys = 1'b0;
 	reg avalon_fault_seen = 1'b0, output_fault_seen = 1'b0;
 	reg avalon_ack_seen = 1'b0, output_ack_seen = 1'b0;
@@ -223,71 +223,76 @@ module mister_magik_video_diagnostics_control #(
 		end
 	endfunction
 
-	function automatic [15:0] control_word;
-		input [7:0] index;
-		begin
-			case(index)
-				0: control_word = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
-				1: control_word = state_flags();
-				2: control_word = {8'd0, trigger};
-				3: control_word = {13'd0, missing_domains};
-				4: control_word = generation;
-				5: control_word = 16'd1;
-				6: control_word = freeze_clock[15:0];
-				7: control_word = freeze_clock[31:16];
-				8: control_word = frozen_vblank_count[15:0];
-				9: control_word = frozen_vblank_count[31:16];
-				10: control_word = legacy_total;
-				11: control_word = legacy_owned;
-				12: control_word = legacy_partial;
-				13: control_word = legacy_abort;
-				14: control_word = {6'd0, legacy_mask};
-				15: control_word = {12'd0, legacy_disposition};
-				16: control_word = frozen_route_state_flags;
-				17: control_word = frozen_active_seq;
-				18: control_word = frozen_post_count;
-				19: control_word = frozen_active_route_epoch;
-				20,21,22,23,24,25,26,27,28,29: control_word = legacy_words[index-20];
-				30: control_word = pre_route_flags;
-				31: control_word = pre_base[15:0];
-				32: control_word = pre_base[31:16];
-				33: control_word = pre_width;
-				34: control_word = pre_height;
-				35: control_word = pre_hmin;
-				36: control_word = pre_hmax;
-				37: control_word = pre_vmin;
-				38: control_word = pre_vmax;
-				39: control_word = {2'd0, pre_stride};
-				40: control_word = post_base[15:0];
-				41: control_word = post_base[31:16];
-				42: control_word = post_route_flags;
-				43: control_word = post_width;
-				44: control_word = post_height;
-				45: control_word = {2'd0, post_stride};
-				46: control_word = control_fault_flags;
-				default: control_word = 16'd0;
-			endcase
-		end
-	endfunction
-
-	function automatic [15:0] snapshot_word;
-		input [7:0] selected_command;
-		input [7:0] index;
-		begin
-			case(selected_command)
-				MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL: snapshot_word = control_word(index);
-				MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
-					snapshot_word = (index < 31) ?
-						avalon_snapshot_payload_async[index*16 +: 16] : 16'd0;
-				MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
-					snapshot_word = (index < 31) ?
-						output_snapshot_payload_async[index*16 +: 16] : 16'd0;
-				default: snapshot_word = 16'd0;
-			endcase
-		end
-	endfunction
-
-	wire [15:0] current_snapshot_word = snapshot_word(command_id, word_count);
+	// Keep the control selector explicit. Quartus 17 otherwise treats state
+	// referenced only through nested automatic functions as unused and can
+	// optimize diagnostic evidence out of the response path.
+	reg [15:0] current_snapshot_word;
+	always @(*) begin
+		current_snapshot_word = 16'd0;
+		case(command_id)
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL: begin
+				case(word_count)
+					0: current_snapshot_word = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
+					1: current_snapshot_word = state_flags();
+					2: current_snapshot_word = {8'd0, trigger};
+					3: current_snapshot_word = {13'd0, missing_domains};
+					4: current_snapshot_word = generation;
+					5: current_snapshot_word = 16'd1;
+					6: current_snapshot_word = freeze_clock[15:0];
+					7: current_snapshot_word = freeze_clock[31:16];
+					8: current_snapshot_word = frozen_vblank_count[15:0];
+					9: current_snapshot_word = frozen_vblank_count[31:16];
+					10: current_snapshot_word = legacy_total;
+					11: current_snapshot_word = legacy_owned;
+					12: current_snapshot_word = legacy_partial;
+					13: current_snapshot_word = legacy_abort;
+					14: current_snapshot_word = {6'd0, legacy_mask};
+					15: current_snapshot_word = {12'd0, legacy_disposition};
+					16: current_snapshot_word = frozen_route_state_flags;
+					17: current_snapshot_word = frozen_active_seq;
+					18: current_snapshot_word = frozen_post_count;
+					19: current_snapshot_word = frozen_active_route_epoch;
+					20: current_snapshot_word = legacy_words[0];
+					21: current_snapshot_word = legacy_words[1];
+					22: current_snapshot_word = legacy_words[2];
+					23: current_snapshot_word = legacy_words[3];
+					24: current_snapshot_word = legacy_words[4];
+					25: current_snapshot_word = legacy_words[5];
+					26: current_snapshot_word = legacy_words[6];
+					27: current_snapshot_word = legacy_words[7];
+					28: current_snapshot_word = legacy_words[8];
+					29: current_snapshot_word = legacy_words[9];
+					30: current_snapshot_word = pre_route_flags;
+					31: current_snapshot_word = pre_base[15:0];
+					32: current_snapshot_word = pre_base[31:16];
+					33: current_snapshot_word = pre_width;
+					34: current_snapshot_word = pre_height;
+					35: current_snapshot_word = pre_hmin;
+					36: current_snapshot_word = pre_hmax;
+					37: current_snapshot_word = pre_vmin;
+					38: current_snapshot_word = pre_vmax;
+					39: current_snapshot_word = {2'd0, pre_stride};
+					40: current_snapshot_word = post_base[15:0];
+					41: current_snapshot_word = post_base[31:16];
+					42: current_snapshot_word = post_route_flags;
+					43: current_snapshot_word = post_width;
+					44: current_snapshot_word = post_height;
+					45: current_snapshot_word = {2'd0, post_stride};
+					46: current_snapshot_word = control_fault_flags;
+					default: current_snapshot_word = 16'd0;
+				endcase
+			end
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
+				if(word_count < 31)
+					current_snapshot_word =
+						avalon_snapshot_payload_async[word_count*16 +: 16];
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
+				if(word_count < 31)
+					current_snapshot_word =
+						output_snapshot_payload_async[word_count*16 +: 16];
+			default: current_snapshot_word = 16'd0;
+		endcase
+	end
 
 	always @(*) begin
 		response_data = 16'd0;

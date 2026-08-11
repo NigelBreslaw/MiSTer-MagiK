@@ -160,11 +160,12 @@ def main() -> None:
     output_source = diagnostics_output.read_text()
     if re.search(r"\bvbuf_(?:read|write)data\b", avalon_source):
         fail("passive Avalon diagnostics source must not expose framebuffer data")
-    if avalon_source.count('ASYNC_REG = "TRUE"') < 5:
+    sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
+    if "ASYNC_REG" in avalon_source or avalon_source.count(sync_assignment) != 5:
         fail("passive Avalon diagnostics synchronizers are not explicitly identified")
-    if output_source.count('ASYNC_REG = "TRUE"') < 8:
+    if "ASYNC_REG" in output_source or output_source.count(sync_assignment) != 8:
         fail("final HDMI diagnostics synchronizers are not explicitly identified")
-    if control_source.count('ASYNC_REG = "TRUE"') < 9:
+    if "ASYNC_REG" in control_source or control_source.count(sync_assignment) != 9:
         fail("control diagnostics synchronizers are not explicitly identified")
     control_cdc_bindings = {
         "hdmi_vbl": "control_vbl_meta <= hdmi_vbl;",
@@ -188,6 +189,14 @@ def main() -> None:
         fail("diagnostic bundled-data skew constraint is missing")
     if diagnostics_sdc_text.count("magik_require_registers") < 8:
         fail("diagnostic CDC constraints do not reject empty node collections")
+    diagnostic_hierarchies = (
+        "mister_magik_video_diagnostics_control:magik_video_diagnostics|",
+        "mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|",
+        "mister_magik_video_diagnostics_output:magik_video_diagnostics_output|",
+    )
+    for hierarchy in diagnostic_hierarchies:
+        if hierarchy not in diagnostics_sdc_text:
+            fail(f"diagnostic SDC does not use synthesized hierarchy {hierarchy}")
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
