@@ -106,9 +106,9 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     prepare_local_checkout(repository, &source_root, &main_revision)?;
     let baseline_root = local_root.join("sources/pre-observer");
     prepare_local_checkout(repository, &baseline_root, &baseline_revision)?;
-    let stock_identity = synthesis_files_identity(&source_root, false)?;
-    let baseline_identity = synthesis_files_identity(&baseline_root, true)?;
-    let patched_identity = synthesis_files_identity(&source_root, true)?;
+    let stock_identity = synthesis_files_identity(&source_root, false, false)?;
+    let baseline_identity = synthesis_files_identity(&baseline_root, true, false)?;
+    let patched_identity = synthesis_files_identity(&source_root, true, true)?;
     let stock_manifest = cache_manifest("stock", &stock_identity, &menu_revision, None);
     let baseline_manifest = cache_manifest(
         "pre-observer",
@@ -213,7 +213,11 @@ fn cache_manifest(
     )
 }
 
-fn synthesis_files_identity(repository: &Path, apply_patch: bool) -> AgentResult<String> {
+fn synthesis_files_identity(
+    repository: &Path,
+    apply_patch: bool,
+    include_diagnostics: bool,
+) -> AgentResult<String> {
     let mut paths = vec![
         "scripts/build-fpga-vblank-latch-core.sh",
         "mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl",
@@ -226,6 +230,10 @@ fn synthesis_files_identity(repository: &Path, apply_patch: bool) -> AgentResult
             "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh",
+        ]);
+    }
+    if include_diagnostics {
+        paths.extend([
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv",
