@@ -36,9 +36,11 @@ set magik_diag_avalon_source [magik_require_registers avalon_payload [list \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|maximum_waitrequest*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|oldest_request*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|no_read_frames*} \
-	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|fault_burstcount*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|fault_flags*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|frame_count*}]]
+# The pinned ascal drives vbuf_burstcount from constant BLEN=128, so Quartus
+# folds the fault_burstcount payload word to a constant; no CDC source register
+# exists or needs a bundled-data constraint.
 set magik_diag_avalon_destination [magik_require_registers avalon_payload_destination [list \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|avalon_verify_candidate*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|avalon_verify_sample*} \
@@ -115,6 +117,6 @@ set magik_diag_analyses [list \
 foreach analysis $magik_diag_analyses {
 	lassign $analysis label source destination
 	set_net_delay -max -from $source -to $destination 8.000
-	set_max_skew -from $source -to $destination 2.000
+	set_max_skew -from $source -to $destination -exclude {ccpp} 2.000
 	post_message -type info "MagiK diagnostics CDC analysis applied: $label"
 }
