@@ -55,7 +55,7 @@ set magik_diag_avalon_source [magik_require_registers avalon_payload [list \
 set magik_diag_avalon_destination [magik_require_registers avalon_payload_destination [list \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|avalon_verify_candidate*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|avalon_verify_sample*} \
-	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|tx_crc*} \
+	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|crc_word*} \
 	{*io_dout_sys*}]]
 set magik_diag_output_source [magik_require_registers output_payload [list \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|frozen*} \
@@ -76,7 +76,7 @@ set magik_diag_output_source [magik_require_registers output_payload [list \
 set magik_diag_output_destination [magik_require_registers output_payload_destination [list \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|output_verify_candidate*} \
 	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|output_verify_sample*} \
-	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|tx_crc*} \
+	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|crc_word*} \
 	{*io_dout_sys*}]]
 set magik_diag_output_coherence_source [magik_require_registers output_payload_coherence [list \
 	{*mister_magik_video_diagnostics_output:magik_video_diagnostics_output|snapshot_generation*}]]
