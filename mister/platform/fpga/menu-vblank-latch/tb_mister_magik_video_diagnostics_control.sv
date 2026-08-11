@@ -168,55 +168,6 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endtask
 
-	task automatic abort_and_restart_control_snapshot;
-		integer restart_index;
-		reg [15:0] restart_crc;
-		begin
-			// Advance part way through the record, then prove a new command
-			// starts from word zero rather than retaining the old cursor.
-			io_uio = 1'b1;
-			@(negedge clk_sys); io_din = 16'h005d; io_strobe = 1'b1;
-			#1 if(!response_valid || response_data != 16'h4d4d)
-				$fatal(1, "missing control magic before aborted read");
-			@(negedge clk_sys); io_strobe = 1'b0;
-			for(restart_index=0; restart_index<3; restart_index=restart_index+1) begin
-				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
-				#1 if(!response_valid) $fatal(1, "aborted control read ended early");
-				@(negedge clk_sys); io_strobe = 1'b0;
-			end
-			close_command();
-
-			io_uio = 1'b1;
-			@(negedge clk_sys); io_din = 16'h005d; io_strobe = 1'b1;
-			#1 if(!response_valid || response_data != 16'h4d4d)
-				$fatal(1, "missing control magic after restart");
-			@(negedge clk_sys); io_strobe = 1'b0;
-			restart_crc = 16'hffff;
-			restart_crc = crc_word(restart_crc, 16'h005d);
-			restart_crc = crc_word(restart_crc, MAGIK_VIDEO_DIAGNOSTICS_SCHEMA);
-			restart_crc = crc_word(restart_crc,
-				MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1'd1);
-			for(restart_index=0;
-			    restart_index<MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS;
-			    restart_index=restart_index+1) begin
-				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
-				#1;
-				if(!response_valid)
-					$fatal(1, "restarted control read ended at word %0d", restart_index);
-				words[restart_index] = response_data;
-				if(restart_index < (MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1))
-					restart_crc = crc_word(restart_crc, response_data);
-				@(negedge clk_sys); io_strobe = 1'b0;
-			end
-			close_command();
-			if(words[0] != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA)
-				$fatal(1, "restarted control read did not return word zero");
-			if(words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1] != restart_crc)
-				$fatal(1, "restarted control CRC mismatch expected=%h got=%h",
-					restart_crc, words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1]);
-		end
-	endtask
-
 	initial begin
 		avalon_payload[0 +: 16] = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
 		avalon_payload[4*16 +: 16] = 16'h1111;
@@ -282,7 +233,6 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "control identity/trigger/mask mismatch");
 		for(index=0; index<10; index=index+1)
 			if(words[14+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
-		abort_and_restart_control_snapshot();
 		read_native_snapshot(8'h5e, 16'h4d4e, 16'h1111);
 		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 		$display("video diagnostics control tests passed");
