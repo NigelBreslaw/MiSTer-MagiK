@@ -2171,6 +2171,7 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framebuffer::target::FramebufferTargetGeometry;
     use crate::test_support::arcade_game;
 
     fn game(system_id: &str, path: &str, title: &str) -> ArcadeGameEntry {
