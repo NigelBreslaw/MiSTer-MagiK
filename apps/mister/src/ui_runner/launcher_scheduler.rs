@@ -238,6 +238,26 @@ enum OpenedSystemEntry {
     },
 }
 
+fn publish_prepared_system_collection(
+    base_catalog: &ArcadeCatalog,
+    requested_collection_id: &str,
+    artifact_system_id: &str,
+    collection: Arc<arcade_catalog::SystemCollection>,
+) -> ArcadeCatalog {
+    let mut catalog = base_catalog.with_system_collection_for_id(
+        requested_collection_id.to_string(),
+        Arc::clone(&collection),
+    );
+    if artifact_system_id == "arcade" {
+        for alias in ["arcade", arcade_catalog::MENU_ARCADE_SYSTEM_ID] {
+            if alias != requested_collection_id {
+                catalog = catalog.with_system_collection_for_id(alias, Arc::clone(&collection));
+            }
+        }
+    }
+    catalog
+}
+
 fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let load_started = Instant::now();
     let worker_system_id = request.system_id;
@@ -385,8 +405,12 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let replacement_started = Instant::now();
             let replacement_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog =
-                base_catalog.with_system_collection_for_id(worker_system_id.clone(), collection);
+            let catalog = publish_prepared_system_collection(
+                &base_catalog,
+                &worker_system_id,
+                &artifact_system_id,
+                collection,
+            );
             drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
@@ -451,8 +475,12 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let replacement_started = Instant::now();
             let replacement_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
-            let catalog = base_catalog
-                .with_system_collection_for_id(worker_system_id.clone(), Arc::new(collection));
+            let catalog = publish_prepared_system_collection(
+                &base_catalog,
+                &worker_system_id,
+                &artifact_system_id,
+                Arc::new(collection),
+            );
             drop(replacement_pmu);
             let catalog_replacement_us = elapsed_us(replacement_started);
             let allocations = crate::allocation_metrics::finish();
@@ -1473,6 +1501,53 @@ mod tests {
         ));
         assert!(scheduler.system_shard_queue.is_empty());
         assert!(!scheduler.system_shard_attempted("c64"));
+    }
+
+    #[test]
+    fn arcade_publication_binds_direct_and_home_collection_aliases() {
+        for requested in ["arcade", arcade_catalog::MENU_ARCADE_SYSTEM_ID] {
+            let game = arcade_catalog::ArcadeGameEntry {
+                title: "Fixture".into(),
+                mra_path: "/media/fat/_Arcade/Fixture.mra".into(),
+                preview_archive_path: "/media/fat/preview/arcade.zip".into(),
+                preview_asset_key: "Fixture".into(),
+                has_preview: true,
+                system_id: "arcade".into(),
+                year: None,
+                manufacturer: "".into(),
+                category: "".into(),
+                players: None,
+                control: "".into(),
+                is_new: false,
+            };
+            let collection = Arc::new(arcade_catalog::SystemCollection::new(
+                "arcade",
+                vec![game],
+                Vec::new(),
+                arcade_catalog::PlatformKind::Arcade,
+            ));
+
+            let catalog = publish_prepared_system_collection(
+                &empty_arcade_catalog("/tmp"),
+                requested,
+                "arcade",
+                collection,
+            );
+
+            assert_eq!(catalog.system_game_count("arcade"), 1);
+            assert_eq!(
+                catalog.system_game_count(arcade_catalog::MENU_ARCADE_SYSTEM_ID),
+                1
+            );
+            assert_eq!(
+                catalog
+                    .system_game_at(arcade_catalog::MENU_ARCADE_SYSTEM_ID, 0)
+                    .unwrap()
+                    .system_id
+                    .as_ref(),
+                "arcade"
+            );
+        }
     }
 
     #[test]
