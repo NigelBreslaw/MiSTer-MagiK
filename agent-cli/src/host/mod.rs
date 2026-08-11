@@ -7604,8 +7604,8 @@ enum SystemEntryRepeatedMode {
 impl SystemEntryRepeatedMode {
     const fn schema(self) -> &'static str {
         match self {
-            Self::CriticalConfirm => "mister-magik-system-entry-critical-confirm-benchmark-v1",
-            Self::Qualification => "mister-magik-system-entry-qualification-benchmark-v1",
+            Self::CriticalConfirm => "mister-magik-system-entry-critical-confirm-benchmark-v2",
+            Self::Qualification => "mister-magik-system-entry-qualification-benchmark-v2",
         }
     }
 
@@ -7737,7 +7737,7 @@ fn profile_installed_system_entry_critical(
         })
         .collect::<Vec<_>>();
     let summary = json!({
-        "schema": "mister-magik-system-entry-critical-benchmark-v2",
+        "schema": "mister-magik-system-entry-critical-benchmark-v3",
         "status": if passed { "passed" } else { "failed" },
         "measurement": "direct collection-entry request to first Main-confirmed frame with full list and terminal selected screenshot",
         "cache_policy": "fresh launcher process per system; operating-system filesystem cache is not flushed",
@@ -8068,6 +8068,7 @@ fn summarize_repeated_system_entry(system: &str, games: u64, samples: &[Value]) 
             "rows_loaded": summarize_system_entry_timing(samples, "rows_ready_ms"),
             "first_list_frame": summarize_system_entry_timing(samples, "first_list_presented_ms"),
             "selected_screenshot_terminal": summarize_system_entry_timing(samples, "preview_ready_ms"),
+            "destination_prepared": summarize_system_entry_timing(samples, "destination_prepared_ms"),
             "complete_ready": summarize_system_entry_timing(samples, "ready_presented_ms"),
         },
         "failed_samples": failed_samples,
@@ -8232,6 +8233,8 @@ fn run_system_entry_sample(
             None
         };
         let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
+        let destination_prepared =
+            system_entry_trace_row(&trace, "system_entry_destination_prepared")?;
         let enter_input = system_entry_trace_row(&trace, "arcade_enter_input")?;
         let rows_ready = system_entry_trace_row(&trace, "arcade_rows_ready")?;
         let preview_ready = system_entry_trace_row(&trace, "arcade_preview_exact")?;
@@ -8274,6 +8277,18 @@ fn run_system_entry_sample(
         let ready_main_sequence = system_entry_detail_u64(ready, "main_sequence")?;
         let catalog_generation = system_entry_detail_u64(ready, "catalog_generation")?;
         let preview_generation = system_entry_detail_u64(ready, "preview_generation")?;
+        let destination_catalog_generation =
+            system_entry_detail_u64(destination_prepared, "catalog_generation")?;
+        let destination_preview_generation =
+            system_entry_detail_u64(destination_prepared, "preview_generation")?;
+        if destination_catalog_generation != catalog_generation
+            || destination_preview_generation != preview_generation
+        {
+            return Err(format!(
+                "system-entry {system} destination generations catalog={destination_catalog_generation} preview={destination_preview_generation} do not match confirmed frame catalog={catalog_generation} preview={preview_generation}"
+            )
+            .into());
+        }
         let capture_active_sequence = capture
             .result
             .get("capture_source")
@@ -8283,6 +8298,8 @@ fn run_system_entry_sample(
         let rows_ready_ms = system_entry_delta_ms(&trace, "arcade_rows_ready")?;
         let first_list_presented_ms = system_entry_delta_ms(&trace, "arcade_enter_presented")?;
         let preview_ready_ms = system_entry_delta_ms(&trace, "arcade_preview_exact")?;
+        let destination_prepared_ms =
+            system_entry_delta_ms(&trace, "system_entry_destination_prepared")?;
         let ready_presented_ms = system_entry_delta_ms(&trace, "system_entry_ready_presented")?;
         let first_list_prepare_us = system_entry_trace_prepare_us(system_entry_trace_row(
             &trace,
@@ -8303,17 +8320,20 @@ fn run_system_entry_sample(
             "rows_ready_ms": rows_ready_ms,
             "first_list_presented_ms": first_list_presented_ms,
             "preview_ready_ms": preview_ready_ms,
+            "destination_prepared_ms": destination_prepared_ms,
             "ready_presented_ms": ready_presented_ms,
             "timings_ms": {
                 "rows_loaded": rows_ready_ms,
                 "first_list_frame": first_list_presented_ms,
                 "selected_screenshot_terminal": preview_ready_ms,
+                "destination_prepared": destination_prepared_ms,
                 "complete_ready": ready_presented_ms,
             },
             "stage_breakdown": {
                 "catalog": catalog_profile,
                 "preview": preview_timing,
                 "first_list_frame_prepare_us": first_list_prepare_us,
+                "cpu1_handoff_ms": ready_presented_ms.saturating_sub(destination_prepared_ms),
                 "destination_publication_ms": ready_presented_ms.saturating_sub(prerequisites_ready_ms),
             },
             "selected_has_preview": selected_has_preview,
@@ -8331,6 +8351,7 @@ fn run_system_entry_sample(
                 "preview": preview_provenance,
             },
             "ready_frame": ready_frame,
+            "destination_prepared_frame": system_entry_trace_frame(destination_prepared)?,
             "ready_main_sequence": ready_main_sequence,
             "catalog_generation": catalog_generation,
             "preview_generation": preview_generation,
@@ -18155,6 +18176,7 @@ mod tests {
                 "rows_ready_ms": 1,
                 "first_list_presented_ms": 30,
                 "preview_ready_ms": 2,
+                "destination_prepared_ms": 31,
                 "catalog_residency": "resident",
                 "preview_provenance": "decoded_cache",
             }),
@@ -18172,6 +18194,7 @@ mod tests {
         assert_eq!(summary["failed_samples"][0]["error"], "timeout");
         assert_eq!(summary["cache_provenance"]["catalog"]["resident"], 1);
         assert_eq!(summary["cache_provenance"]["preview"]["decoded_cache"], 1);
+        assert_eq!(summary["timings_ms"]["destination_prepared"]["p50"], 31);
     }
 
     #[test]

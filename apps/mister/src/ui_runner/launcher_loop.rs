@@ -618,6 +618,7 @@ impl ArcadeEntryLatencyTrace {
 struct ArcadeEntryLatencyTracker {
     trace: ArcadeEntryLatencyTrace,
     enter_input_at: Option<Instant>,
+    destination_prepared: bool,
     enter_presented: bool,
     rows_ready: bool,
     preview_exact: bool,
@@ -1002,6 +1003,7 @@ impl ArcadeEntryLatencyTracker {
         Self {
             trace: ArcadeEntryLatencyTrace::from_env(),
             enter_input_at: None,
+            destination_prepared: false,
             enter_presented: false,
             rows_ready: false,
             preview_exact: false,
@@ -1018,6 +1020,7 @@ impl ArcadeEntryLatencyTracker {
 
     fn cancel_enter(&mut self) {
         self.enter_input_at = None;
+        self.destination_prepared = false;
         self.enter_presented = false;
         self.rows_ready = false;
         self.preview_exact = false;
@@ -1239,6 +1242,54 @@ impl ArcadeEntryLatencyTracker {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn record_destination_prepared_frame(
+        &mut self,
+        start: Instant,
+        at: Instant,
+        lifecycle: &LauncherLifecycle,
+        catalog: &ArcadeCatalog,
+        nav: &LauncherNav,
+        preview: &PreviewState,
+        frame: u64,
+        prepare_us: u128,
+        copied_rows: u32,
+        catalog_generation: usize,
+    ) {
+        if !system_entry_destination_frame_eligible(
+            self.enter_input_at.is_some(),
+            self.rows_ready,
+            self.preview_exact,
+            self.destination_prepared,
+            nav.screen,
+            copied_rows,
+        ) {
+            return;
+        }
+        self.destination_prepared = true;
+        let system = Self::active_system_id(catalog, nav);
+        let asset_key = Self::selected_asset_key(catalog, nav);
+        self.trace.record(
+            start,
+            "system_entry_destination_prepared",
+            at,
+            self.enter_input_at,
+            Self::input_enabled_ms(lifecycle),
+            true,
+            &system,
+            nav.arcade.selected,
+            Some(frame),
+            Some(prepare_us),
+            preview.trace_cache_state(),
+            &asset_key,
+            format!(
+                "copied_rows={copied_rows} catalog_generation={} preview_generation={}",
+                catalog_generation,
+                preview.presentation_generation(),
+            ),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn record_presented_frame(
         &mut self,
         start: Instant,
@@ -1310,15 +1361,17 @@ impl ArcadeEntryLatencyTracker {
         catalog_generation: usize,
         main_sequence: u16,
     ) -> bool {
-        if !system_entry_ready_frame_eligible(
-            self.enter_input_at.is_some(),
-            self.rows_ready,
-            self.preview_exact,
-            self.ready_presented,
-            nav.screen,
-            copied_rows,
-            main_active_confirmed,
-        ) {
+        if !self.destination_prepared
+            || !system_entry_ready_frame_eligible(
+                self.enter_input_at.is_some(),
+                self.rows_ready,
+                self.preview_exact,
+                self.ready_presented,
+                nav.screen,
+                copied_rows,
+                main_active_confirmed,
+            )
+        {
             return false;
         }
         self.ready_presented = true;
@@ -1348,6 +1401,22 @@ impl ArcadeEntryLatencyTracker {
         );
         true
     }
+}
+
+fn system_entry_destination_frame_eligible(
+    entered: bool,
+    rows_ready: bool,
+    preview_terminal: bool,
+    already_recorded: bool,
+    screen: Screen,
+    copied_rows: u32,
+) -> bool {
+    entered
+        && rows_ready
+        && preview_terminal
+        && !already_recorded
+        && screen == Screen::Arcade
+        && copied_rows > 0
 }
 
 fn system_entry_ready_frame_eligible(
@@ -9705,6 +9774,18 @@ pub(super) fn run_launcher_loop(
             apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
         }
         let presented_copied_rows = presentation.copied_rows;
+        arcade_entry_latency.record_destination_prepared_frame(
+            start,
+            frame_t4,
+            &lifecycle,
+            &catalog,
+            &nav,
+            &preview,
+            frames,
+            prepare_us,
+            presented_copied_rows,
+            catalog_version,
+        );
         arcade_entry_latency.record_presented_frame(
             start,
             frame_t4,
@@ -12182,6 +12263,34 @@ mod tests {
             Screen::Arcade,
             240,
             true,
+        ));
+    }
+
+    #[test]
+    fn system_entry_destination_requires_list_and_terminal_preview_in_one_frame() {
+        assert!(system_entry_destination_frame_eligible(
+            true,
+            true,
+            true,
+            false,
+            Screen::Arcade,
+            240,
+        ));
+        assert!(!system_entry_destination_frame_eligible(
+            true,
+            true,
+            false,
+            false,
+            Screen::Arcade,
+            240,
+        ));
+        assert!(!system_entry_destination_frame_eligible(
+            true,
+            true,
+            true,
+            false,
+            Screen::Arcade,
+            0,
         ));
     }
 

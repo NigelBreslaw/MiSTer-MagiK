@@ -150,6 +150,7 @@ enum SystemShardJobState {
     Running {
         system_id: String,
         generation: Option<String>,
+        sequence: u64,
     },
 }
 
@@ -168,12 +169,14 @@ pub(super) struct SystemEntryPreviewDispatch {
 }
 
 struct SystemEntryPrepareRequest {
+    sequence: u64,
     generation: Option<String>,
     request: SystemShardRequest,
 }
 
 enum SystemEntryPrepareCommand {
     Prepare(SystemEntryPrepareRequest),
+    RetireOutcome(SystemEntryPrepareOutcome),
     RetireCatalog(ArcadeCatalog),
     WarmEntryPreludes(
         mpsc::SyncSender<
@@ -182,23 +185,108 @@ enum SystemEntryPrepareCommand {
     ),
 }
 
-struct SystemEntryPrepareResult {
+struct PreparedSystemEntry {
+    sequence: u64,
     generation: Option<String>,
-    message: CatalogWorkerMessage,
+    system_id: String,
+    catalog: ArcadeCatalog,
+    base_catalog_version: usize,
+    game_count: usize,
+    prepare_us: u64,
+    profile: SystemEntryCatalogProfile,
+    preview_prelude: Option<SystemEntryPreviewPrelude>,
+}
+
+struct FailedSystemEntry {
+    sequence: u64,
+    generation: Option<String>,
+    system_id: String,
+    error: String,
+}
+
+enum SystemEntryPrepareOutcome {
+    Prepared(PreparedSystemEntry),
+    Failed(FailedSystemEntry),
+}
+
+impl SystemEntryPrepareOutcome {
+    fn sequence(&self) -> u64 {
+        match self {
+            Self::Prepared(entry) => entry.sequence,
+            Self::Failed(failure) => failure.sequence,
+        }
+    }
+
+    fn generation(&self) -> Option<&str> {
+        match self {
+            Self::Prepared(entry) => entry.generation.as_deref(),
+            Self::Failed(failure) => failure.generation.as_deref(),
+        }
+    }
+
+    fn into_message(self) -> CatalogWorkerMessage {
+        match self {
+            Self::Prepared(entry) => CatalogWorkerMessage::SystemShardReady {
+                system_id: entry.system_id,
+                catalog: entry.catalog,
+                base_catalog_version: entry.base_catalog_version,
+                game_count: entry.game_count,
+                prepare_us: entry.prepare_us,
+                profile: entry.profile,
+                preview_prelude: entry.preview_prelude,
+            },
+            Self::Failed(failure) => CatalogWorkerMessage::SystemShardFailed {
+                system_id: failure.system_id,
+                error: failure.error,
+            },
+        }
+    }
+}
+
+#[derive(Default)]
+struct PreparedSystemEntryMailbox {
+    newest: Mutex<Option<SystemEntryPrepareOutcome>>,
+}
+
+impl PreparedSystemEntryMailbox {
+    fn publish(&self, outcome: SystemEntryPrepareOutcome) {
+        let mut newest = self
+            .newest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if newest
+            .as_ref()
+            .is_some_and(|current| current.sequence() > outcome.sequence())
+        {
+            return;
+        }
+        *newest = Some(outcome);
+    }
+
+    fn take(&self) -> Option<SystemEntryPrepareOutcome> {
+        self.newest
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+    }
 }
 
 struct SystemEntryPrepareWorker {
     requests: mpsc::Sender<SystemEntryPrepareCommand>,
-    results: mpsc::Receiver<SystemEntryPrepareResult>,
+    results: Arc<PreparedSystemEntryMailbox>,
+    liveness: mpsc::Receiver<()>,
 }
 
 impl SystemEntryPrepareWorker {
     fn start() -> Option<Self> {
         let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareCommand>();
-        let (result_tx, result_rx) = mpsc::channel::<SystemEntryPrepareResult>();
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
+        let worker_results = Arc::clone(&results);
+        let (liveness_tx, liveness_rx) = mpsc::channel::<()>();
         std::thread::Builder::new()
             .name("system-entry-prepare".to_string())
             .spawn(move || {
+                let _liveness = liveness_tx;
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
                 );
@@ -209,16 +297,13 @@ impl SystemEntryPrepareWorker {
                                 "system-entry-prepare",
                             );
                             let message = prepare_system_shard(work.request);
-                            if result_tx
-                                .send(SystemEntryPrepareResult {
-                                    generation: work.generation,
-                                    message,
-                                })
-                                .is_err()
-                            {
-                                break;
-                            }
+                            worker_results.publish(system_entry_prepare_outcome(
+                                work.sequence,
+                                work.generation,
+                                message,
+                            ));
                         }
+                        SystemEntryPrepareCommand::RetireOutcome(outcome) => drop(outcome),
                         SystemEntryPrepareCommand::RetireCatalog(catalog) => drop(catalog),
                         SystemEntryPrepareCommand::WarmEntryPreludes(reply) => {
                             let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
@@ -237,8 +322,46 @@ impl SystemEntryPrepareWorker {
             .ok()?;
         Some(Self {
             requests: request_tx,
-            results: result_rx,
+            results,
+            liveness: liveness_rx,
         })
+    }
+}
+
+fn system_entry_prepare_outcome(
+    sequence: u64,
+    generation: Option<String>,
+    message: CatalogWorkerMessage,
+) -> SystemEntryPrepareOutcome {
+    match message {
+        CatalogWorkerMessage::SystemShardReady {
+            system_id,
+            catalog,
+            base_catalog_version,
+            game_count,
+            prepare_us,
+            profile,
+            preview_prelude,
+        } => SystemEntryPrepareOutcome::Prepared(PreparedSystemEntry {
+            sequence,
+            generation,
+            system_id,
+            catalog,
+            base_catalog_version,
+            game_count,
+            prepare_us,
+            profile,
+            preview_prelude,
+        }),
+        CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
+            SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+                sequence,
+                generation,
+                system_id,
+                error,
+            })
+        }
+        _ => unreachable!("system-entry preparation produced a non-terminal message"),
     }
 }
 
@@ -581,6 +704,7 @@ pub(super) struct LauncherScheduler {
     system_shard_attempted: BTreeSet<String>,
     system_shard_queue: VecDeque<SystemShardRequest>,
     system_shard_generation: Option<String>,
+    next_system_entry_sequence: u64,
     system_entry_prepare: Option<SystemEntryPrepareWorker>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
@@ -599,6 +723,7 @@ impl LauncherScheduler {
             system_shard_attempted: BTreeSet::new(),
             system_shard_queue: VecDeque::new(),
             system_shard_generation: None,
+            next_system_entry_sequence: 1,
             system_entry_prepare: SystemEntryPrepareWorker::start(),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
@@ -764,15 +889,19 @@ impl LauncherScheduler {
             request.requested_at.elapsed().as_micros()
         );
         let generation = self.system_shard_generation.clone();
+        let sequence = self.next_system_entry_sequence;
+        self.next_system_entry_sequence = self.next_system_entry_sequence.wrapping_add(1).max(1);
         self.system_shard = SystemShardJobState::Running {
             system_id,
             generation: generation.clone(),
+            sequence,
         };
         let dispatched = self.system_entry_prepare.as_ref().is_some_and(|worker| {
             worker
                 .requests
                 .send(SystemEntryPrepareCommand::Prepare(
                     SystemEntryPrepareRequest {
+                        sequence,
                         generation,
                         request,
                     },
@@ -928,24 +1057,32 @@ impl LauncherScheduler {
             && out.events.len() < CATALOG_MESSAGES_PER_FRAME
             && let Some(worker) = self.system_entry_prepare.as_ref()
         {
-            match worker.results.try_recv() {
-                Ok(result) => {
-                    shard_terminal = true;
-                    let generation_is_current = matches!(
-                        &self.system_shard,
-                        SystemShardJobState::Running { generation, .. }
-                            if generation == &result.generation
-                                && generation == &self.system_shard_generation
-                    );
-                    if generation_is_current {
-                        out.push(result.message);
-                    }
+            if let Some(outcome) = worker.results.take() {
+                shard_terminal = true;
+                let outcome_is_current = matches!(
+                    &self.system_shard,
+                    SystemShardJobState::Running {
+                        generation,
+                        sequence,
+                        ..
+                    } if *sequence == outcome.sequence()
+                        && generation.as_deref() == outcome.generation()
+                        && generation == &self.system_shard_generation
+                );
+                if outcome_is_current {
+                    out.push(outcome.into_message());
+                } else if let Err(error) = worker
+                    .requests
+                    .send(SystemEntryPrepareCommand::RetireOutcome(outcome))
+                {
+                    drop(error.0);
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    shard_terminal = true;
-                    self.system_entry_prepare = None;
-                }
+            } else if matches!(
+                worker.liveness.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            ) {
+                shard_terminal = true;
+                self.system_entry_prepare = None;
             }
         }
         if shard_terminal {
@@ -1407,6 +1544,27 @@ mod tests {
     }
 
     #[test]
+    fn prepared_system_entry_mailbox_keeps_only_the_newest_sequence() {
+        let mailbox = PreparedSystemEntryMailbox::default();
+        for (sequence, error) in [(4, "four"), (6, "six"), (5, "five")] {
+            mailbox.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+                sequence,
+                generation: Some("generation-a".to_string()),
+                system_id: "c64".to_string(),
+                error: error.to_string(),
+            }));
+        }
+
+        let outcome = mailbox.take().expect("newest outcome");
+        assert_eq!(outcome.sequence(), 6);
+        assert!(matches!(
+            outcome,
+            SystemEntryPrepareOutcome::Failed(FailedSystemEntry { error, .. }) if error == "six"
+        ));
+        assert!(mailbox.take().is_none());
+    }
+
+    #[test]
     fn scheduler_starts_with_idle_system_entry_worker() {
         let scheduler = LauncherScheduler::new(false);
 
@@ -1424,6 +1582,7 @@ mod tests {
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 1,
         };
         let now = Instant::now();
 
@@ -1455,6 +1614,7 @@ mod tests {
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 1,
         };
         let now = Instant::now();
         assert!(scheduler.request_system_shard(
@@ -1486,6 +1646,7 @@ mod tests {
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 1,
         };
         assert!(scheduler.request_system_shard(
             "c64".to_string(),
@@ -1508,6 +1669,7 @@ mod tests {
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 1,
         };
         scheduler.system_shard_attempted.insert("c64".to_string());
 
@@ -1585,58 +1747,64 @@ mod tests {
 
     #[test]
     fn stale_generation_shard_completion_is_discarded() {
-        let (tx, rx) = mpsc::channel();
-        let (requests, _request_rx) = mpsc::channel();
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
+        let (requests, request_rx) = mpsc::channel();
+        let (_liveness_tx, liveness) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
-            results: rx,
+            results: Arc::clone(&results),
+            liveness,
         });
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "c64".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 7,
         };
         let _ = scheduler.set_system_shard_generation(Some("generation-b"));
-        tx.send(SystemEntryPrepareResult {
+        results.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+            sequence: 7,
             generation: Some("generation-a".to_string()),
-            message: CatalogWorkerMessage::SystemShardFailed {
-                system_id: "c64".to_string(),
-                error: "stale".to_string(),
-            },
-        })
-        .unwrap();
+            system_id: "c64".to_string(),
+            error: "stale".to_string(),
+        }));
         let mut events = CatalogJobEventBuf::new();
 
         scheduler.poll_catalog(&mut events);
 
         assert!(events.events.is_empty());
         assert!(!scheduler.system_shard_loading("c64"));
+        assert!(matches!(
+            request_rx.try_recv(),
+            Ok(SystemEntryPrepareCommand::RetireOutcome(_))
+        ));
     }
 
     #[test]
     fn terminal_failure_becomes_idle_before_same_frame_retry() {
-        let (tx, rx) = mpsc::channel();
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
         let (requests, _request_rx) = mpsc::channel();
+        let (_liveness_tx, liveness) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
             requests,
-            results: rx,
+            results: Arc::clone(&results),
+            liveness,
         });
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard_attempted.insert("c64".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "c64".to_string(),
             generation: Some("generation-a".to_string()),
+            sequence: 9,
         };
-        tx.send(SystemEntryPrepareResult {
+        results.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+            sequence: 9,
             generation: Some("generation-a".to_string()),
-            message: CatalogWorkerMessage::SystemShardFailed {
-                system_id: "c64".to_string(),
-                error: "temporary".to_string(),
-            },
-        })
-        .unwrap();
+            system_id: "c64".to_string(),
+            error: "temporary".to_string(),
+        }));
         let mut events = CatalogJobEventBuf::new();
 
         scheduler.poll_catalog(&mut events);
