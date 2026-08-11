@@ -201,14 +201,16 @@ struct PagedSqliteRow {
 #[derive(Debug)]
 struct NavPackRow {
     game: ArcadeGameEntry,
-    metadata: ArcadeGameMetadataKey,
-    launch_plan: Option<StructuredLaunchPlan>,
+    launch_index: Option<usize>,
+    launch_plan: OnceLock<Option<StructuredLaunchPlan>>,
 }
 
 struct NavPackSystemRows {
     pack: Arc<crate::navpack::MappedNavPack>,
     system_id: Arc<str>,
-    rows: Vec<OnceLock<NavPackRow>>,
+    count: usize,
+    row_pages: Vec<OnceLock<Box<[OnceLock<NavPackRow>]>>>,
+    metadata_pages: Vec<OnceLock<Box<[OnceLock<ArcadeGameMetadataKey>]>>>,
     preview_ordinals: OnceLock<Vec<usize>>,
 }
 
@@ -226,17 +228,15 @@ impl std::fmt::Debug for NavPackSystemRows {
         formatter
             .debug_struct("NavPackSystemRows")
             .field("system_id", &self.system_id)
-            .field("count", &self.rows.len())
-            .field(
-                "resident_rows",
-                &self.rows.iter().filter(|row| row.get().is_some()).count(),
-            )
+            .field("count", &self.count)
+            .field("resident_rows", &self.resident_rows())
             .finish()
     }
 }
 
 impl NavPackSystemRows {
     const FIRST_VIEWPORT_ROWS: usize = 10;
+    const PAGE_ROWS: usize = 64;
 
     fn open(
         path: &Path,
@@ -253,13 +253,17 @@ impl NavPackSystemRows {
             expected_generation,
             expected_count,
         )?;
-        let rows = std::iter::repeat_with(OnceLock::new)
-            .take(expected_count)
-            .collect();
+        let page_count = expected_count.div_ceil(Self::PAGE_ROWS);
         let collection = Self {
             pack: Arc::new(pack),
             system_id: Arc::from(expected_system_id),
-            rows,
+            count: expected_count,
+            row_pages: std::iter::repeat_with(OnceLock::new)
+                .take(page_count)
+                .collect(),
+            metadata_pages: std::iter::repeat_with(OnceLock::new)
+                .take(page_count)
+                .collect(),
             preview_ordinals: OnceLock::new(),
         };
         let viewport_started = std::time::Instant::now();
@@ -279,7 +283,7 @@ impl NavPackSystemRows {
     }
 
     fn len(&self) -> usize {
-        self.rows.len()
+        self.count
     }
 
     fn get(&self, ordinal: usize) -> Option<&ArcadeGameEntry> {
@@ -287,23 +291,35 @@ impl NavPackSystemRows {
     }
 
     fn metadata_at(&self, ordinal: usize) -> Option<&ArcadeGameMetadataKey> {
-        self.materialize(ordinal).ok().map(|row| &row.metadata)
+        let slot = self.metadata_slot(ordinal)?;
+        if let Some(metadata) = slot.get() {
+            return Some(metadata);
+        }
+        let cold = self.pack.metadata(ordinal).ok()?;
+        let _ = slot.set(ArcadeGameMetadataKey {
+            year: cold.year,
+            manufacturer: cold.manufacturer.to_string(),
+            category: cold.category.to_string(),
+            players: cold.players,
+            control: cold.control.to_string(),
+        });
+        slot.get()
     }
 
     fn launch_plan_for_ref(&self, launch_ref: &str) -> Option<&StructuredLaunchPlan> {
-        if let Some(plan) = self.rows.iter().filter_map(OnceLock::get).find_map(|row| {
-            row.launch_plan
-                .as_ref()
-                .filter(|plan| plan.launch_ref.as_ref() == launch_ref)
-        }) {
-            return Some(plan);
+        for page in self.row_pages.iter().filter_map(OnceLock::get) {
+            for row in page.iter().filter_map(OnceLock::get) {
+                if row.game.mra_path.as_ref() == launch_ref {
+                    return self.launch_plan(row);
+                }
+            }
         }
         let ordinal = (0..self.len()).find(|ordinal| {
             self.pack
                 .row(*ordinal)
                 .is_ok_and(|row| row.launch_ref == launch_ref)
         })?;
-        self.materialize(ordinal).ok()?.launch_plan.as_ref()
+        self.launch_plan(self.materialize(ordinal).ok()?)
     }
 
     fn preview_ordinals(&self) -> &[usize] {
@@ -316,14 +332,12 @@ impl NavPackSystemRows {
 
     fn materialize(&self, ordinal: usize) -> Result<&NavPackRow, String> {
         let slot = self
-            .rows
-            .get(ordinal)
+            .row_slot(ordinal)
             .ok_or_else(|| "NavPack row ordinal is out of bounds".to_string())?;
         if let Some(row) = slot.get() {
             return Ok(row);
         }
         let hot = self.pack.row(ordinal)?;
-        let cold = self.pack.metadata(ordinal)?;
         let title = Arc::<str>::from(hot.title);
         let launch_ref = Arc::<str>::from(hot.launch_ref);
         let preview_asset_key = if hot.preview_asset_key == hot.title {
@@ -331,32 +345,6 @@ impl NavPackSystemRows {
         } else {
             Arc::from(hot.preview_asset_key)
         };
-        let launch_plan = hot
-            .launch_index
-            .map(|index| self.pack.launch(index))
-            .transpose()?
-            .map(|plan| StructuredLaunchPlan {
-                launch_ref: if plan.launch_ref == hot.launch_ref {
-                    Arc::clone(&launch_ref)
-                } else {
-                    Arc::from(plan.launch_ref)
-                },
-                title: if plan.title == hot.title {
-                    Arc::clone(&title)
-                } else {
-                    Arc::from(plan.title)
-                },
-                system_id: if plan.system_id == self.system_id.as_ref() {
-                    Arc::clone(&self.system_id)
-                } else {
-                    Arc::from(plan.system_id)
-                },
-                core_path: Arc::from(plan.core_path),
-                payload_path: Arc::from(plan.payload_path),
-                mount_kind: Arc::from(plan.mount_kind),
-                mount_index: plan.mount_index,
-                delay_secs: plan.delay_secs,
-            });
         let row = NavPackRow {
             game: ArcadeGameEntry {
                 title,
@@ -372,18 +360,83 @@ impl NavPackSystemRows {
                 control: Arc::from(""),
                 is_new: hot.is_new,
             },
-            metadata: ArcadeGameMetadataKey {
-                year: cold.year,
-                manufacturer: cold.manufacturer.to_string(),
-                category: cold.category.to_string(),
-                players: cold.players,
-                control: cold.control.to_string(),
-            },
-            launch_plan,
+            launch_index: hot.launch_index,
+            launch_plan: OnceLock::new(),
         };
         let _ = slot.set(row);
         slot.get()
             .ok_or_else(|| "NavPack row publication failed".to_string())
+    }
+
+    fn row_slot(&self, ordinal: usize) -> Option<&OnceLock<NavPackRow>> {
+        let page_index = ordinal / Self::PAGE_ROWS;
+        let in_page = ordinal % Self::PAGE_ROWS;
+        let page = self.row_pages.get(page_index)?.get_or_init(|| {
+            let count = self
+                .count
+                .saturating_sub(page_index * Self::PAGE_ROWS)
+                .min(Self::PAGE_ROWS);
+            std::iter::repeat_with(OnceLock::new)
+                .take(count)
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        });
+        page.get(in_page)
+    }
+
+    fn metadata_slot(&self, ordinal: usize) -> Option<&OnceLock<ArcadeGameMetadataKey>> {
+        let page_index = ordinal / Self::PAGE_ROWS;
+        let in_page = ordinal % Self::PAGE_ROWS;
+        let page = self.metadata_pages.get(page_index)?.get_or_init(|| {
+            let count = self
+                .count
+                .saturating_sub(page_index * Self::PAGE_ROWS)
+                .min(Self::PAGE_ROWS);
+            std::iter::repeat_with(OnceLock::new)
+                .take(count)
+                .collect::<Vec<_>>()
+                .into_boxed_slice()
+        });
+        page.get(in_page)
+    }
+
+    fn launch_plan<'a>(&self, row: &'a NavPackRow) -> Option<&'a StructuredLaunchPlan> {
+        row.launch_plan
+            .get_or_init(|| {
+                let plan = self.pack.launch(row.launch_index?).ok()?;
+                Some(StructuredLaunchPlan {
+                    launch_ref: if plan.launch_ref == row.game.mra_path.as_ref() {
+                        Arc::clone(&row.game.mra_path)
+                    } else {
+                        Arc::from(plan.launch_ref)
+                    },
+                    title: if plan.title == row.game.title.as_ref() {
+                        Arc::clone(&row.game.title)
+                    } else {
+                        Arc::from(plan.title)
+                    },
+                    system_id: if plan.system_id == self.system_id.as_ref() {
+                        Arc::clone(&self.system_id)
+                    } else {
+                        Arc::from(plan.system_id)
+                    },
+                    core_path: Arc::from(plan.core_path),
+                    payload_path: Arc::from(plan.payload_path),
+                    mount_kind: Arc::from(plan.mount_kind),
+                    mount_index: plan.mount_index,
+                    delay_secs: plan.delay_secs,
+                })
+            })
+            .as_ref()
+    }
+
+    fn resident_rows(&self) -> usize {
+        self.row_pages
+            .iter()
+            .filter_map(OnceLock::get)
+            .flat_map(|page| page.iter())
+            .filter(|row| row.get().is_some())
+            .count()
     }
 }
 
@@ -836,7 +889,10 @@ impl SystemCollection {
                 })
                 .collect(),
             SystemCollectionRows::NavPack(games) => (0..games.len())
-                .filter_map(|ordinal| games.materialize(ordinal).ok()?.launch_plan.clone())
+                .filter_map(|ordinal| {
+                    let row = games.materialize(ordinal).ok()?;
+                    games.launch_plan(row).cloned()
+                })
                 .collect(),
         }
     }
@@ -3252,10 +3308,7 @@ mod tests {
         let SystemCollectionRows::NavPack(rows) = &collection.games else {
             panic!("expected NavPack collection");
         };
-        assert_eq!(
-            rows.rows.iter().filter(|row| row.get().is_some()).count(),
-            NavPackSystemRows::FIRST_VIEWPORT_ROWS
-        );
+        assert_eq!(rows.resident_rows(), NavPackSystemRows::FIRST_VIEWPORT_ROWS);
         assert!(timing.first_viewport_us <= timing.total_us);
         assert_eq!(collection.game_at(129).unwrap().title.as_ref(), "Game 129");
         assert_eq!(collection.metadata_at(129).unwrap().year, Some(1989));
