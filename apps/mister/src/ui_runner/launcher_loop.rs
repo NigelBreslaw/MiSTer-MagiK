@@ -674,6 +674,13 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
+fn system_entry_preview_work_allowed(
+    background_work_allowed: bool,
+    system_entry_in_progress: bool,
+) -> bool {
+    background_work_allowed || system_entry_in_progress
+}
+
 fn configure_arcade_list_renderer_geometry(
     renderer: &mut ArcadeListRenderer,
     nav: &LauncherNav,
@@ -1010,6 +1017,10 @@ impl ArcadeEntryLatencyTracker {
         self.first_nav_input_at = None;
         self.first_nav_presented = false;
         self.catalog_resident_at_input = None;
+    }
+
+    fn entry_in_progress(&self) -> bool {
+        self.enter_input_at.is_some() && !self.ready_presented
     }
 
     fn active_system_id(catalog: &ArcadeCatalog, nav: &LauncherNav) -> String {
@@ -7975,8 +7986,12 @@ pub(super) fn run_launcher_loop(
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
+        let preview_result_work_allowed = system_entry_preview_work_allowed(
+            background_work_allowed,
+            arcade_entry_latency.entry_in_progress(),
+        );
         let preview_apply_dirty = if !launching
-            && background_work_allowed
+            && preview_result_work_allowed
             && !arcade_search_active
             && !memory_guard.active()
             && preview_route.allows_preview_work()
@@ -13001,6 +13016,13 @@ mod tests {
         assert!(should_defer_or_preserve_selected_preview(
             true, false, false,
         ));
+    }
+
+    #[test]
+    fn active_system_entry_can_adopt_its_preview_while_background_work_is_gated() {
+        assert!(system_entry_preview_work_allowed(false, true));
+        assert!(system_entry_preview_work_allowed(true, false));
+        assert!(!system_entry_preview_work_allowed(false, false));
     }
 
     #[test]
