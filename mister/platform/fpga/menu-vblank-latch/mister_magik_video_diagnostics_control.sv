@@ -148,7 +148,7 @@ module mister_magik_video_diagnostics_control #(
 	reg [3:0] legacy_disposition = MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_NONE;
 
 	reg [31:0] pre_base = 32'd0, post_base = 32'd0;
-	reg [15:0] pre_route_flags = 16'd0, post_route_flags = 16'd0;
+	reg [4:0] pre_route_flags = 5'd0, post_route_flags = 5'd0;
 	reg [11:0] pre_width = 12'd0, pre_height = 12'd0;
 	reg [11:0] pre_hmin = 12'd0, pre_hmax = 12'd0;
 	reg [11:0] pre_vmin = 12'd0, pre_vmax = 12'd0;
@@ -160,7 +160,8 @@ module mister_magik_video_diagnostics_control #(
 	reg freeze_pending = 1'b0;
 	reg [31:0] frozen_vblank_count = 32'd0;
 	reg [15:0] frozen_active_seq = 16'd0, frozen_post_count = 16'd0;
-	reg [15:0] frozen_active_route_epoch = 16'd0, frozen_route_state_flags = 16'd0;
+	reg [15:0] frozen_active_route_epoch = 16'd0;
+	reg [4:0] frozen_route_state_flags = 5'd0;
 
 	reg avalon_verify_pending = 1'b0, output_verify_pending = 1'b0;
 	reg avalon_sample_pending = 1'b0, output_sample_pending = 1'b0;
@@ -251,7 +252,7 @@ module mister_magik_video_diagnostics_control #(
 					13: current_snapshot_word = legacy_abort;
 					14: current_snapshot_word = {6'd0, legacy_mask};
 					15: current_snapshot_word = {12'd0, legacy_disposition};
-					16: current_snapshot_word = frozen_route_state_flags;
+					16: current_snapshot_word = {11'd0, frozen_route_state_flags};
 					17: current_snapshot_word = frozen_active_seq;
 					18: current_snapshot_word = frozen_post_count;
 					19: current_snapshot_word = frozen_active_route_epoch;
@@ -265,7 +266,7 @@ module mister_magik_video_diagnostics_control #(
 					27: current_snapshot_word = legacy_words[7];
 					28: current_snapshot_word = legacy_words[8];
 					29: current_snapshot_word = legacy_words[9];
-					30: current_snapshot_word = pre_route_flags;
+					30: current_snapshot_word = {11'd0, pre_route_flags};
 					31: current_snapshot_word = pre_base[15:0];
 					32: current_snapshot_word = pre_base[31:16];
 					33: current_snapshot_word = pre_width;
@@ -277,7 +278,7 @@ module mister_magik_video_diagnostics_control #(
 					39: current_snapshot_word = {2'd0, pre_stride};
 					40: current_snapshot_word = post_base[15:0];
 					41: current_snapshot_word = post_base[31:16];
-					42: current_snapshot_word = post_route_flags;
+					42: current_snapshot_word = {11'd0, post_route_flags};
 					43: current_snapshot_word = post_width;
 					44: current_snapshot_word = post_height;
 					45: current_snapshot_word = {2'd0, post_stride};
@@ -285,14 +286,46 @@ module mister_magik_video_diagnostics_control #(
 					default: current_snapshot_word = 16'd0;
 				endcase
 			end
-			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
-				if(word_count < (MAGIK_VIDEO_DIAGNOSTICS_AVALON_WORDS - 1'd1))
-					current_snapshot_word =
-						avalon_snapshot_payload_async[word_count*16 +: 16];
-			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
-				if(word_count < (MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_WORDS - 1'd1))
-					current_snapshot_word =
-						output_snapshot_payload_async[word_count*16 +: 16];
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON: begin
+				case(word_count)
+					0: current_snapshot_word = avalon_snapshot_payload_async[15:0];
+					1: current_snapshot_word = avalon_snapshot_payload_async[31:16];
+					2: current_snapshot_word = avalon_snapshot_payload_async[47:32];
+					3: current_snapshot_word = avalon_snapshot_payload_async[63:48];
+					4: current_snapshot_word = avalon_snapshot_payload_async[79:64];
+					5: current_snapshot_word = avalon_snapshot_payload_async[95:80];
+					6: current_snapshot_word = avalon_snapshot_payload_async[111:96];
+					7: current_snapshot_word = avalon_snapshot_payload_async[127:112];
+					8: current_snapshot_word = avalon_snapshot_payload_async[143:128];
+					9: current_snapshot_word = avalon_snapshot_payload_async[159:144];
+					10: current_snapshot_word = avalon_snapshot_payload_async[175:160];
+					11: current_snapshot_word = avalon_snapshot_payload_async[191:176];
+					12: current_snapshot_word = avalon_snapshot_payload_async[207:192];
+					13: current_snapshot_word = avalon_snapshot_payload_async[223:208];
+					14: current_snapshot_word = avalon_snapshot_payload_async[239:224];
+					default: current_snapshot_word = 16'd0;
+				endcase
+			end
+			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT: begin
+				case(word_count)
+					0: current_snapshot_word = output_snapshot_payload_async[15:0];
+					1: current_snapshot_word = output_snapshot_payload_async[31:16];
+					2: current_snapshot_word = output_snapshot_payload_async[47:32];
+					3: current_snapshot_word = output_snapshot_payload_async[63:48];
+					4: current_snapshot_word = output_snapshot_payload_async[79:64];
+					5: current_snapshot_word = output_snapshot_payload_async[95:80];
+					6: current_snapshot_word = output_snapshot_payload_async[111:96];
+					7: current_snapshot_word = output_snapshot_payload_async[127:112];
+					8: current_snapshot_word = output_snapshot_payload_async[143:128];
+					9: current_snapshot_word = output_snapshot_payload_async[159:144];
+					10: current_snapshot_word = output_snapshot_payload_async[175:160];
+					11: current_snapshot_word = output_snapshot_payload_async[191:176];
+					12: current_snapshot_word = output_snapshot_payload_async[207:192];
+					13: current_snapshot_word = output_snapshot_payload_async[223:208];
+					14: current_snapshot_word = output_snapshot_payload_async[239:224];
+					default: current_snapshot_word = 16'd0;
+				endcase
+			end
 			default: current_snapshot_word = 16'd0;
 		endcase
 	end
@@ -407,7 +440,7 @@ module mister_magik_video_diagnostics_control #(
 				legacy_mask <= 10'd0;
 				legacy_owned_at_start <= ownership;
 				pre_base <= lfb_base;
-				pre_route_flags <= {11'd0, lfb_flt, 1'b0, lfb_en, pending, ownership};
+				pre_route_flags <= {lfb_flt, 1'b0, lfb_en, pending, ownership};
 				pre_width <= lfb_width;
 				pre_height <= lfb_height;
 				pre_hmin <= lfb_hmin;
@@ -426,7 +459,19 @@ module mister_magik_video_diagnostics_control #(
 		else if(command_data) begin
 			word_count <= word_count + 1'd1;
 			if((command == 8'h2f) && legacy_open && (word_count < 10)) begin
-				legacy_words[word_count] <= io_din;
+				case(word_count)
+					0: legacy_words[0] <= io_din;
+					1: legacy_words[1] <= io_din;
+					2: legacy_words[2] <= io_din;
+					3: legacy_words[3] <= io_din;
+					4: legacy_words[4] <= io_din;
+					5: legacy_words[5] <= io_din;
+					6: legacy_words[6] <= io_din;
+					7: legacy_words[7] <= io_din;
+					8: legacy_words[8] <= io_din;
+					9: legacy_words[9] <= io_din;
+					default: begin end
+				endcase
 				legacy_mask[word_count] <= 1'b1;
 				ownership <= 1'b0;
 			end
@@ -443,7 +488,7 @@ module mister_magik_video_diagnostics_control #(
 				legacy_open <= 1'b0;
 				legacy_total <= legacy_total + 1'd1;
 				post_base <= lfb_base;
-				post_route_flags <= {11'd0, lfb_flt, 1'b0, lfb_en, pending, ownership};
+				post_route_flags <= {lfb_flt, 1'b0, lfb_en, pending, ownership};
 				post_width <= lfb_width;
 				post_height <= lfb_height;
 				post_stride <= lfb_stride;
@@ -529,8 +574,8 @@ module mister_magik_video_diagnostics_control #(
 			freeze_clock <= clock_count;
 			frozen_vblank_count <= vblank_count;
 			frozen_route_state_flags <= apply_accepted ?
-				{11'd0, route_flt, 1'b1, route_en, 1'b0, 1'b1} :
-				{11'd0, route_flt, 1'b0, route_en, pending, ownership};
+				{route_flt, 1'b1, route_en, 1'b0, 1'b1} :
+				{route_flt, 1'b0, route_en, pending, ownership};
 			frozen_active_seq <= apply_accepted ? pending_seq : active_seq;
 			frozen_post_count <= post_count;
 			frozen_active_route_epoch <= apply_accepted ?

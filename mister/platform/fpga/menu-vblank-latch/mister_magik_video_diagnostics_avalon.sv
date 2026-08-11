@@ -47,7 +47,8 @@ module mister_magik_video_diagnostics_avalon (
 	reg [15:0] snapshot_generation = 16'd0;
 
 	reg [31:0] expected_base = 32'd0, expected_slot_end = 32'd0;
-	reg [15:0] route_epoch = 16'd0, route_flags = 16'd0;
+	reg [15:0] route_epoch = 16'd0;
+	reg [4:0] route_flags = 5'd0;
 	reg [15:0] accepted_bursts = 16'd0, returned_beats = 16'd0;
 	reg [20:0] outstanding = 21'd0, stall_age = 21'd0;
 	reg [27:0] first_address = 28'd0, last_address = 28'd0;
@@ -63,7 +64,7 @@ module mister_magik_video_diagnostics_avalon (
 		(route_sync != route_seen) || route_capture_pending ||
 		({expected_base, expected_slot_end, route_epoch, route_flags} !=
 		 {expected_base_async, expected_slot_end_async,
-		  expected_route_epoch_async, expected_route_flags_async});
+		  expected_route_epoch_async, expected_route_flags_async[4:0]});
 
 	wire [15:0] snapshot_state_word =
 		(frozen ? (MAGIK_VIDEO_DIAGNOSTICS_STATE_FROZEN |
@@ -78,7 +79,7 @@ module mister_magik_video_diagnostics_avalon (
 		{4'd0, last_address[27:16]}, last_address[15:0],
 		{4'd0, first_address[27:16]}, first_address[15:0],
 		expected_base[31:16], expected_base[15:0],
-		route_flags, route_epoch, snapshot_generation, {8'd0, fault_trigger},
+		{11'd0, route_flags}, route_epoch, snapshot_generation, {8'd0, fault_trigger},
 		snapshot_state_word, MAGIK_VIDEO_DIAGNOSTICS_SCHEMA};
 
 	task automatic request_freeze;
@@ -121,25 +122,25 @@ module mister_magik_video_diagnostics_avalon (
 		   (!route_capture_pending &&
 		    ({expected_base, expected_slot_end, route_epoch, route_flags} !=
 		     {expected_base_async, expected_slot_end_async,
-		      expected_route_epoch_async, expected_route_flags_async})))) begin
+		      expected_route_epoch_async, expected_route_flags_async[4:0]})))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
 			expected_base <= expected_base_async;
 			expected_slot_end <= expected_slot_end_async;
 			route_epoch <= expected_route_epoch_async;
-			route_flags <= expected_route_flags_async;
+			route_flags <= expected_route_flags_async[4:0];
 			route_capture_pending <= 1'b1;
 		end
 		else if(!frozen && route_capture_pending) begin
 			if({expected_base, expected_slot_end, route_epoch, route_flags} ==
 			   {expected_base_async, expected_slot_end_async,
-				expected_route_epoch_async, expected_route_flags_async})
+				expected_route_epoch_async, expected_route_flags_async[4:0]})
 				route_capture_pending <= 1'b0;
 			else begin
 				expected_base <= expected_base_async;
 				expected_slot_end <= expected_slot_end_async;
 				route_epoch <= expected_route_epoch_async;
-				route_flags <= expected_route_flags_async;
+				route_flags <= expected_route_flags_async[4:0];
 			end
 		end
 
@@ -199,9 +200,9 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(vbuf_write && !vbuf_waitrequest && !frozen) begin
 			observed_flags_now = observed_flags_now |
-				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_WRITE_SEEN |
+				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_WRITE_SEEN[9:0] |
 				((vbuf_byteenable != 16'hffff) ?
-				 MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_BAD_BYTEENABLE : 10'd0);
+				 MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_BAD_BYTEENABLE[9:0] : 10'd0);
 		end
 
 		if(request_sync != request_seen) begin
